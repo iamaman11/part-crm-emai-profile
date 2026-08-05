@@ -78,6 +78,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cloudflare-adapters"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
+ "worker",
+]
+
+[[package]]
 name = "contracts"
 version = "0.1.0"
 dependencies = [
