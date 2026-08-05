@@ -38,23 +38,27 @@ impl VerifiedRequestIdentity {
 }
 
 pub async fn session_response(request: &Request, env: &Env) -> Result<Response> {
-    let Some(verified) = verify_request_identity(request, env, None).await? else {
-        let correlation_id = correlation_hint(request);
-        return neutral_not_found(&correlation_id);
+    let Some(resolved) = resolve_active_request_actor(request, env, None).await? else {
+        return neutral_not_found(&correlation_hint(request));
     };
-    let repository = D1IdentityAclRepository::new(env.d1(D1_CATALOG_BINDING)?);
-    let Some(resolved) = repository
+    Response::from_json(&ActorSessionResponse::from(&resolved))
+}
+
+pub async fn resolve_active_request_actor(
+    request: &Request,
+    env: &Env,
+    path_tenant_id: Option<&str>,
+) -> Result<Option<ResolvedActor>> {
+    let Some(verified) = verify_request_identity(request, env, path_tenant_id).await? else {
+        return Ok(None);
+    };
+    D1IdentityAclRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .resolve_active_actor(
             verified.scope().clone(),
             verified.identity(),
             verified.correlation_id().clone(),
         )
-        .await?
-    else {
-        return neutral_not_found(verified.correlation_id().as_str());
-    };
-
-    Response::from_json(&ActorSessionResponse::from(&resolved))
+        .await
 }
 
 pub async fn verify_request_identity(
@@ -156,15 +160,28 @@ struct Problem<'a> {
     correlation_id: &'a str,
 }
 
-pub fn neutral_not_found(correlation_id: &str) -> Result<Response> {
+pub fn problem(
+    correlation_id: &str,
+    status: u16,
+    code: &'static str,
+    title: &'static str,
+) -> Result<Response> {
     Response::from_json(&Problem {
-        problem_type: "urn:part-crm:problem:not-found",
-        title: "Not Found",
-        status: 404,
-        code: "not_found",
+        problem_type: match code {
+            "conflict" => "urn:part-crm:problem:conflict",
+            "invalid_request" => "urn:part-crm:problem:invalid-request",
+            _ => "urn:part-crm:problem:not-found",
+        },
+        title,
+        status,
+        code,
         correlation_id,
     })
-    .map(|response| response.with_status(404))
+    .map(|response| response.with_status(status))
+}
+
+pub fn neutral_not_found(correlation_id: &str) -> Result<Response> {
+    problem(correlation_id, 404, "not_found", "Not Found")
 }
 
 pub fn correlation_hint(request: &Request) -> String {
