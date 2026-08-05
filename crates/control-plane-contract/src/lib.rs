@@ -121,7 +121,11 @@ mod tests {
     #[test]
     fn owner_member_and_acl_routes_are_versioned_and_authenticated() {
         let routes = [
-            ("GET", "/api/v1/session", RouteClass::AuthenticatedSessionApi),
+            (
+                "GET",
+                "/api/v1/session",
+                RouteClass::AuthenticatedSessionApi,
+            ),
             (
                 "POST",
                 "/api/v1/tenants/tenant_01/owner/bootstrap",
