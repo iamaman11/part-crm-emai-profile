@@ -237,6 +237,7 @@ def test_constraints_and_concealment() -> None:
             "UPDATE clients SET status = 'ACTIVE' WHERE tenant_id = ? AND client_id = ?",
             (TENANT_A, CLIENT_A),
         )
+        connection.commit()
         connection.execute(
             """
             INSERT INTO profile_client_assignments (
@@ -246,6 +247,7 @@ def test_constraints_and_concealment() -> None:
             """,
             (TENANT_A, PROFILE_A, CLIENT_A, OWNER_A),
         )
+        connection.commit()
         expect_integrity_error(
             lambda: connection.execute(
                 """
@@ -325,36 +327,34 @@ def test_optimistic_version_and_mutation_envelope() -> None:
             (OWNER_A, TENANT_A, CLIENT_A),
         )
         assert stale.rowcount == 0
-        assert (
-            connection.execute(
-                "SELECT display_name, version FROM clients WHERE tenant_id = ? AND client_id = ?",
-                (TENANT_A, CLIENT_A),
-            ).fetchone()
-            == ("Updated Client", 2)
-        )
+        updated = connection.execute(
+            "SELECT display_name, version FROM clients WHERE tenant_id = ? AND client_id = ?",
+            (TENANT_A, CLIENT_A),
+        ).fetchone()
+        assert (updated["display_name"], updated["version"]) == ("Updated Client", 2)
         connection.commit()
 
-        rollback_client = "client_rollback_catalog"
         try:
             connection.execute("BEGIN")
-            connection.execute(
+            rolled_back_update = connection.execute(
                 """
-                INSERT INTO clients (
-                    tenant_id, client_id, kind, display_name, status, version,
-                    created_by_actor_id, updated_by_actor_id, created_at_ms, updated_at_ms
-                ) VALUES (?, ?, 'PERSON', 'Rollback Client', 'ACTIVE', 1, ?, ?, 110, 110)
+                UPDATE clients
+                SET display_name = 'Rollback Candidate', version = version + 1,
+                    updated_by_actor_id = ?, updated_at_ms = 110
+                WHERE tenant_id = ? AND client_id = ? AND version = 2
                 """,
-                (TENANT_A, rollback_client, OWNER_A, OWNER_A),
+                (OWNER_A, TENANT_A, CLIENT_A),
             )
+            assert rolled_back_update.rowcount == 1
             connection.execute(
                 """
                 INSERT INTO idempotency_records (
                     tenant_id, actor_id, idempotency_key, command_name, request_digest,
                     result_code, result_reference, created_at_ms, expires_at_ms
-                ) VALUES (?, ?, 'idem_rollback_catalog', 'client.create',
-                          '0123456789abcdef', 'created', ?, 110, 1000)
+                ) VALUES (?, ?, 'idem_rollback_catalog', 'client.update',
+                          '0123456789abcdef', 'updated', ?, 110, 1000)
                 """,
-                (TENANT_A, OWNER_A, rollback_client),
+                (TENANT_A, OWNER_A, CLIENT_A),
             )
             connection.execute(
                 """
@@ -362,19 +362,19 @@ def test_optimistic_version_and_mutation_envelope() -> None:
                     tenant_id, audit_event_id, correlation_id, actor_id, action,
                     resource_type, resource_id, result_code, occurred_at_ms
                 ) VALUES (?, 'audit_rollback_catalog', 'corr_rollback_catalog', ?,
-                          'client.create', 'client', ?, 'created', 110)
+                          'client.update', 'client', ?, 'updated', 110)
                 """,
-                (TENANT_A, OWNER_A, rollback_client),
+                (TENANT_A, OWNER_A, CLIENT_A),
             )
             connection.execute(
                 """
                 INSERT INTO outbox_events (
                     tenant_id, outbox_event_id, aggregate_type, aggregate_id,
                     aggregate_version, event_type, payload_json, created_at_ms
-                ) VALUES (?, 'outbox_rollback_catalog', 'client', ?, 1,
-                          'client.created.v1', '{}', 110)
+                ) VALUES (?, 'outbox_rollback_catalog', 'client', ?, 3,
+                          'client.updated.v1', '{}', 110)
                 """,
-                (TENANT_A, rollback_client),
+                (TENANT_A, CLIENT_A),
             )
             connection.execute(
                 """
@@ -384,15 +384,22 @@ def test_optimistic_version_and_mutation_envelope() -> None:
                 ) VALUES (?, 'audit_rollback_catalog', 'corr_duplicate_catalog', ?,
                           'forced.failure', 'client', ?, 'failed', 111)
                 """,
-                (TENANT_A, OWNER_A, rollback_client),
+                (TENANT_A, OWNER_A, CLIENT_A),
             )
         except sqlite3.IntegrityError:
             connection.rollback()
         else:
             raise AssertionError("forced mutation envelope failure unexpectedly committed")
 
+        rolled_back_client = connection.execute(
+            "SELECT display_name, version FROM clients WHERE tenant_id = ? AND client_id = ?",
+            (TENANT_A, CLIENT_A),
+        ).fetchone()
+        assert (rolled_back_client["display_name"], rolled_back_client["version"]) == (
+            "Updated Client",
+            2,
+        )
         for table, column, value in (
-            ("clients", "client_id", rollback_client),
             ("idempotency_records", "idempotency_key", "idem_rollback_catalog"),
             ("audit_events", "audit_event_id", "audit_rollback_catalog"),
             ("outbox_events", "outbox_event_id", "outbox_rollback_catalog"),
@@ -403,26 +410,26 @@ def test_optimistic_version_and_mutation_envelope() -> None:
             ).fetchone()[0]
             assert count == 0, f"{table} escaped transaction rollback"
 
-        committed_client = "client_committed_catalog"
         with connection:
-            connection.execute(
+            committed_update = connection.execute(
                 """
-                INSERT INTO clients (
-                    tenant_id, client_id, kind, display_name, status, version,
-                    created_by_actor_id, updated_by_actor_id, created_at_ms, updated_at_ms
-                ) VALUES (?, ?, 'ORGANIZATION', 'Committed Client', 'ACTIVE', 1, ?, ?, 120, 120)
+                UPDATE clients
+                SET display_name = 'Committed Client', version = version + 1,
+                    updated_by_actor_id = ?, updated_at_ms = 120
+                WHERE tenant_id = ? AND client_id = ? AND version = 2
                 """,
-                (TENANT_A, committed_client, OWNER_A, OWNER_A),
+                (OWNER_A, TENANT_A, CLIENT_A),
             )
+            assert committed_update.rowcount == 1
             connection.execute(
                 """
                 INSERT INTO idempotency_records (
                     tenant_id, actor_id, idempotency_key, command_name, request_digest,
                     result_code, result_reference, created_at_ms, expires_at_ms
-                ) VALUES (?, ?, 'idem_committed_catalog', 'client.create',
-                          'fedcba9876543210', 'created', ?, 120, 1000)
+                ) VALUES (?, ?, 'idem_committed_catalog', 'client.update',
+                          'fedcba9876543210', 'updated', ?, 120, 1000)
                 """,
-                (TENANT_A, OWNER_A, committed_client),
+                (TENANT_A, OWNER_A, CLIENT_A),
             )
             connection.execute(
                 """
@@ -430,25 +437,29 @@ def test_optimistic_version_and_mutation_envelope() -> None:
                     tenant_id, audit_event_id, correlation_id, actor_id, action,
                     resource_type, resource_id, result_code, occurred_at_ms
                 ) VALUES (?, 'audit_committed_catalog', 'corr_committed_catalog', ?,
-                          'client.create', 'client', ?, 'created', 120)
+                          'client.update', 'client', ?, 'updated', 120)
                 """,
-                (TENANT_A, OWNER_A, committed_client),
+                (TENANT_A, OWNER_A, CLIENT_A),
             )
             connection.execute(
                 """
                 INSERT INTO outbox_events (
                     tenant_id, outbox_event_id, aggregate_type, aggregate_id,
                     aggregate_version, event_type, payload_json, created_at_ms
-                ) VALUES (?, 'outbox_committed_catalog', 'client', ?, 1,
-                          'client.created.v1', '{}', 120)
+                ) VALUES (?, 'outbox_committed_catalog', 'client', ?, 3,
+                          'client.updated.v1', '{}', 120)
                 """,
-                (TENANT_A, committed_client),
+                (TENANT_A, CLIENT_A),
             )
 
-        assert connection.execute(
-            "SELECT COUNT(*) FROM clients WHERE tenant_id = ? AND client_id = ?",
-            (TENANT_A, committed_client),
-        ).fetchone()[0] == 1
+        committed_client = connection.execute(
+            "SELECT display_name, version FROM clients WHERE tenant_id = ? AND client_id = ?",
+            (TENANT_A, CLIENT_A),
+        ).fetchone()
+        assert (committed_client["display_name"], committed_client["version"]) == (
+            "Committed Client",
+            3,
+        )
         assert connection.execute(
             "SELECT COUNT(*) FROM idempotency_records WHERE tenant_id = ? AND idempotency_key = 'idem_committed_catalog'",
             (TENANT_A,),
