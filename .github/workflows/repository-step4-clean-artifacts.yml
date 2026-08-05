@@ -1,0 +1,45 @@
+name: Repository Step 4 Clean Artifacts
+
+on:
+  push:
+    branches:
+      - repository-step-4-identity-clients-acl
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repository-step4-clean-artifacts
+  cancel-in-progress: true
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-4-identity-clients-acl
+          persist-credentials: true
+
+      - name: Remove tracked build and trigger artifacts
+        run: |
+          git rm -r --ignore-unmatch target
+          rm -f tests/identity-acl/exact-head-trigger.md
+          rm -f tests/identity-acl/final-source-boundary.md
+          rm -f tests/identity-acl/governed-writes.md
+          rm -f tests/identity-acl/http-boundary.md
+          rm -f tests/identity-acl/post-hardening-gate.md
+          rm -f tests/identity-acl/technical-gate-trigger.md
+          rm -f tests/identity-acl/webcrypto-boundary.md
+          rm -f .github/workflows/repository-step4-clean-artifacts.yml
+          git add -A
+          python scripts/check-no-temporary-step4.py
+          python scripts/check-step4-governed-writes.py
+
+      - name: Commit cleaned source head
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Repository Step 4: remove generated build artifacts"
+          git push origin HEAD:repository-step-4-identity-clients-acl
