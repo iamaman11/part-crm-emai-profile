@@ -20,9 +20,14 @@ RAW_D1_TOKENS = (
 
 def check(root: Path) -> list[str]:
     errors: list[str] = []
+    repository_root = root.resolve() == Path.cwd().resolve()
+
     for path in sorted(root.rglob("*.rs")):
         relative = path.relative_to(root)
         text = path.read_text(encoding="utf-8")
+
+        if repository_root and relative.parts[:2] == ("tests", "d1-boundary"):
+            continue
 
         if relative.parts[:2] == ("crates", "cloudflare-adapters"):
             continue
