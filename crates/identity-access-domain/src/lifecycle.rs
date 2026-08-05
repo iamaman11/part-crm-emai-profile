@@ -1,7 +1,6 @@
 use super::{Membership, MembershipRole, MembershipStatus};
-use profile_platform_primitives::{
-    ActorContext, ActorId, CorrelationId, TenantScope,
-};
+use core::fmt;
+use profile_platform_primitives::{ActorContext, ActorId, CorrelationId, TenantScope};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TenantBoundarySummary {
@@ -216,12 +215,30 @@ pub enum MembershipLifecycleError {
     InvalidTransition,
 }
 
+impl fmt::Display for MembershipLifecycleError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::TenantMismatch => "membership tenant mismatch",
+            Self::MembershipInactive => "membership is not active",
+            Self::BoundaryNotEmpty => "tenant boundary is not empty",
+            Self::OwnerRequired => "active tenant owner is required",
+            Self::InvalidSuccessor => "owner successor must be a different active member",
+            Self::OwnerInvariantViolation => "tenant owner invariant is violated",
+            Self::LastActiveOwner => "last active owner cannot be suspended or revoked",
+            Self::InvalidTransition => "membership status transition is invalid",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for MembershipLifecycleError {}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MembershipCommand, MembershipLifecycleError, OwnerBootstrapDecision,
-        TenantBoundarySummary, decide_membership_status_change, decide_owner_bootstrap,
-        decide_owner_transfer, resolve_actor_context,
+        MembershipCommand, MembershipLifecycleError, OwnerBootstrapDecision, TenantBoundarySummary,
+        decide_membership_status_change, decide_owner_bootstrap, decide_owner_transfer,
+        resolve_actor_context,
     };
     use crate::{Membership, MembershipRole, MembershipStatus};
     use profile_platform_primitives::{
@@ -266,8 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_is_empty_boundary_only_and_idempotent()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn bootstrap_is_empty_boundary_only_and_idempotent() -> Result<(), Box<dyn std::error::Error>> {
         let fixture = fixture()?;
         let decision = decide_owner_bootstrap(
             &fixture.scope,
