@@ -522,19 +522,13 @@ impl ProfileCoordinatorState {
         if expires_at <= now {
             return Err(CoordinatorError::InvalidIntentExpiry);
         }
-        if self.active_lease.is_some()
-            || matches!(
-                self.status,
-                CoordinatorStatus::Active
-                    | CoordinatorStatus::Draining
-                    | CoordinatorStatus::Dirty
-                    | CoordinatorStatus::Uncertain
-            )
-        {
+        if self.active_lease.is_some() || self.status != CoordinatorStatus::Idle {
             return Err(CoordinatorError::CoordinatorUnavailable);
         }
-        if let Some(intent) = &self.pending_intent
-            && intent.expires_at > now
+        if self
+            .pending_intent
+            .as_ref()
+            .is_some_and(|intent| intent.expires_at > now)
         {
             return Err(CoordinatorError::PendingIntentExists);
         }
@@ -618,7 +612,7 @@ impl ProfileCoordinatorState {
         }
         let lease = self
             .active_lease
-            .as_mut()
+            .as_ref()
             .ok_or(CoordinatorError::NoActiveLease)?;
         if !lease.accepts_writer(session_id, epoch, fencing_token) {
             return Err(CoordinatorError::StaleWriter);
@@ -626,17 +620,17 @@ impl ProfileCoordinatorState {
         if now < lease.last_heartbeat_at {
             return Err(CoordinatorError::ReorderedHeartbeat);
         }
-        if now >= lease.hard_expires_at {
-            return Err(CoordinatorError::HardTtlExpired);
+        if let Some(outcome) = self.timeout_if_due(now) {
+            return Ok(outcome);
         }
 
         let proposed_idle = add_millis(now, self.config.idle_timeout_ms)?;
+        let lease = self
+            .active_lease
+            .as_mut()
+            .ok_or(CoordinatorError::NoActiveLease)?;
         lease.last_heartbeat_at = now;
-        lease.idle_expires_at = if proposed_idle < lease.hard_expires_at {
-            proposed_idle
-        } else {
-            lease.hard_expires_at
-        };
+        lease.idle_expires_at = proposed_idle.min(lease.hard_expires_at);
         Ok(CoordinatorOutcome::HeartbeatAccepted {
             idle_expires_at: lease.idle_expires_at,
         })
@@ -648,7 +642,7 @@ impl ProfileCoordinatorState {
         epoch: u64,
         fencing_token: &FencingToken,
         disposition: ReleaseDisposition,
-        _now: UnixMillis,
+        now: UnixMillis,
     ) -> Result<CoordinatorOutcome, CoordinatorError> {
         let lease = self
             .active_lease
@@ -656,6 +650,9 @@ impl ProfileCoordinatorState {
             .ok_or(CoordinatorError::NoActiveLease)?;
         if !lease.accepts_writer(session_id, epoch, fencing_token) {
             return Err(CoordinatorError::StaleWriter);
+        }
+        if let Some(outcome) = self.timeout_if_due(now) {
+            return Ok(outcome);
         }
 
         self.active_lease = None;
@@ -673,24 +670,38 @@ impl ProfileCoordinatorState {
         if self.status != CoordinatorStatus::Active || self.active_lease.is_none() {
             return Err(CoordinatorError::NoActiveLease);
         }
-        let deadline = add_millis(now, self.config.drain_timeout_ms)?;
+        if let Some(outcome) = self.timeout_if_due(now) {
+            return Ok(outcome);
+        }
+        let proposed_deadline = add_millis(now, self.config.drain_timeout_ms)?;
+        let hard_expires_at = self
+            .active_lease
+            .as_ref()
+            .ok_or(CoordinatorError::NoActiveLease)?
+            .hard_expires_at;
+        let deadline = proposed_deadline.min(hard_expires_at);
         self.status = CoordinatorStatus::Draining;
         self.drain_deadline = Some(deadline);
         Ok(CoordinatorOutcome::DrainStarted { deadline })
     }
 
     fn tick(&mut self, now: UnixMillis) -> Result<CoordinatorOutcome, CoordinatorError> {
-        if let Some(intent) = &self.pending_intent
-            && now > intent.expires_at
+        if self
+            .pending_intent
+            .as_ref()
+            .is_some_and(|intent| now >= intent.expires_at)
         {
             self.pending_intent = None;
             return Ok(CoordinatorOutcome::LaunchIntentExpired);
         }
+        Ok(self
+            .timeout_if_due(now)
+            .unwrap_or(CoordinatorOutcome::NoChange))
+    }
 
-        let Some(lease) = &self.active_lease else {
-            return Ok(CoordinatorOutcome::NoChange);
-        };
-        let timeout = if self.status == CoordinatorStatus::Draining
+    fn timeout_if_due(&mut self, now: UnixMillis) -> Option<CoordinatorOutcome> {
+        let lease = self.active_lease.as_ref()?;
+        let kind = if self.status == CoordinatorStatus::Draining
             && self.drain_deadline.is_some_and(|deadline| now >= deadline)
         {
             Some(TimeoutKind::Drain)
@@ -700,19 +711,19 @@ impl ProfileCoordinatorState {
             Some(TimeoutKind::Idle)
         } else {
             None
-        };
+        }?;
 
-        if let Some(kind) = timeout {
-            self.active_lease = None;
-            self.pending_intent = None;
-            self.drain_deadline = None;
-            self.status = CoordinatorStatus::Uncertain;
-            return Ok(CoordinatorOutcome::TimedOut { kind });
-        }
-        Ok(CoordinatorOutcome::NoChange)
+        self.active_lease = None;
+        self.pending_intent = None;
+        self.drain_deadline = None;
+        self.status = CoordinatorStatus::Uncertain;
+        Some(CoordinatorOutcome::TimedOut { kind })
     }
 
-    fn mark_recovered(&mut self, _now: UnixMillis) -> Result<CoordinatorOutcome, CoordinatorError> {
+    fn mark_recovered(
+        &mut self,
+        _now: UnixMillis,
+    ) -> Result<CoordinatorOutcome, CoordinatorError> {
         if self.active_lease.is_some() {
             return Err(CoordinatorError::CoordinatorUnavailable);
         }
@@ -768,7 +779,6 @@ pub enum CoordinatorError {
     NoActiveLease,
     StaleWriter,
     ReorderedHeartbeat,
-    HardTtlExpired,
     RecoveryNotRequired,
 }
 
@@ -796,7 +806,6 @@ impl fmt::Display for CoordinatorError {
             Self::NoActiveLease => "no active coordinator lease exists",
             Self::StaleWriter => "lease epoch or fencing token is stale",
             Self::ReorderedHeartbeat => "heartbeat time is older than the accepted heartbeat",
-            Self::HardTtlExpired => "hard lease TTL has expired",
             Self::RecoveryNotRequired => "coordinator does not require recovery",
         })
     }
@@ -817,10 +826,16 @@ mod tests {
     };
 
     fn coordinator() -> Result<ProfileCoordinatorState, Box<dyn std::error::Error>> {
+        coordinator_with_config(CoordinatorConfig::new(10, 100, 20)?)
+    }
+
+    fn coordinator_with_config(
+        config: CoordinatorConfig,
+    ) -> Result<ProfileCoordinatorState, Box<dyn std::error::Error>> {
         Ok(ProfileCoordinatorState::new(
             TenantId::parse("tenant_01JCOORDINATOR")?,
             ProfileId::parse("profile_01JCOORDINATOR")?,
-            CoordinatorConfig::new(10, 100, 20)?,
+            config,
         ))
     }
 
@@ -882,8 +897,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_id_maps_to_one_deterministic_object_name() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn profile_id_maps_to_one_deterministic_object_name() -> Result<(), Box<dyn std::error::Error>> {
         let profile_id = ProfileId::parse("profile_01JCOORDINATOR")?;
         assert_eq!(
             coordinator_object_name(&profile_id),
@@ -893,8 +907,8 @@ mod tests {
     }
 
     #[test]
-    fn first_claim_issues_epoch_and_duplicate_is_idempotent()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn first_claim_issues_epoch_and_duplicate_is_idempotent(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator()?;
         issue(&mut state, 1, 1, 10)?;
         let command = envelope(
@@ -977,14 +991,17 @@ mod tests {
         )?);
         assert_eq!(stale, Err(CoordinatorError::StaleWriter));
         assert_eq!(
-            state.active_lease().map(super::CoordinatorLease::epoch),
+            state
+                .active_lease()
+                .map(super::CoordinatorLease::epoch),
             Some(2)
         );
         Ok(())
     }
 
     #[test]
-    fn reordered_commands_and_key_reuse_are_rejected() -> Result<(), Box<dyn std::error::Error>> {
+    fn reordered_commands_and_key_reuse_are_rejected(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator()?;
         issue(&mut state, 1, 1, 10)?;
         let gap = state.apply(envelope(
@@ -1010,8 +1027,8 @@ mod tests {
     }
 
     #[test]
-    fn idle_timeout_preserves_uncertain_state_until_recovery()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn idle_timeout_preserves_uncertain_state_until_recovery(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator()?;
         issue(&mut state, 1, 1, 10)?;
         claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
@@ -1060,6 +1077,33 @@ mod tests {
     }
 
     #[test]
+    fn late_clean_release_becomes_uncertain() -> Result<(), Box<dyn std::error::Error>> {
+        let mut state = coordinator()?;
+        issue(&mut state, 1, 1, 10)?;
+        claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
+        let release = state.apply(envelope(
+            "idem_late_release_01JCOORDINATOR",
+            3,
+            3,
+            CoordinatorCommand::Release {
+                session_id: SessionId::parse("session_01JCOORDINATOR")?,
+                epoch: 1,
+                fencing_token: FencingToken::parse("fence_01JCOORDINATOR")?,
+                disposition: ReleaseDisposition::Clean,
+                now: UnixMillis::new(21),
+            },
+        )?)?;
+        assert_eq!(
+            release.outcome(),
+            &CoordinatorOutcome::TimedOut {
+                kind: TimeoutKind::Idle
+            }
+        );
+        assert_eq!(state.status(), CoordinatorStatus::Uncertain);
+        Ok(())
+    }
+
+    #[test]
     fn drain_timeout_never_reports_a_clean_release() -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator()?;
         issue(&mut state, 1, 1, 10)?;
@@ -1092,7 +1136,7 @@ mod tests {
 
     #[test]
     fn hard_ttl_caps_heartbeat_extension() -> Result<(), Box<dyn std::error::Error>> {
-        let mut state = coordinator()?;
+        let mut state = coordinator_with_config(CoordinatorConfig::new(100, 100, 20)?)?;
         issue(&mut state, 1, 1, 10)?;
         claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
         let heartbeat = state.apply(envelope(
