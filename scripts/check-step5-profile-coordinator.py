@@ -58,6 +58,7 @@ ALLOWED_DURABLE_OBJECT_FILES = {
     "apps/control-plane-worker/src/lib.rs",
     "apps/control-plane-worker/src/profile_coordinator.rs",
 }
+FIXTURE_PREFIX = "tests/profile-coordinator/fixtures/"
 
 
 def parse_args() -> argparse.Namespace:
@@ -72,10 +73,13 @@ def relative(root: Path, path: Path) -> str:
 
 def main() -> int:
     root = parse_args().root.resolve()
+    repository_root = (root / "Cargo.toml").exists()
     errors: list[str] = []
 
     for path in root.rglob("*.rs"):
         rel = relative(root, path)
+        if repository_root and rel.startswith(FIXTURE_PREFIX):
+            continue
         text = path.read_text(encoding="utf-8")
         if path.name == "profile_coordinator.rs":
             for marker in FORBIDDEN_COORDINATOR_AUTH_MARKERS:
@@ -86,7 +90,7 @@ def main() -> int:
         if "durable_object(" in text and rel not in ALLOWED_DURABLE_OBJECT_FILES:
             errors.append(f"raw Durable Object API escaped Worker composition: {rel}")
 
-    if (root / "Cargo.toml").exists():
+    if repository_root:
         for rel, markers in REPOSITORY_REQUIRED.items():
             path = root / rel
             if not path.exists():
