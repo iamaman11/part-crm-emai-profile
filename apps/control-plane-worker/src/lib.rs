@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
     STATIC_ASSETS_BINDING, VERIFICATION_QUEUE_BINDING, classify_route,
@@ -23,7 +24,8 @@ pub async fn main(request: Request, env: Env, _context: Context) -> Result<Respo
 }
 
 fn binding_probe(env: &Env) -> Result<Response> {
-    let _catalog = env.d1(D1_CATALOG_BINDING)?;
+    let catalog = env.d1(D1_CATALOG_BINDING)?;
+    let _catalog_repository = D1CatalogRepository::new(catalog);
     let _objects = env.bucket(R2_PROFILES_BINDING)?;
     let _verification = env.queue(VERIFICATION_QUEUE_BINDING)?;
     let coordinator = env.durable_object(PROFILE_COORDINATOR_BINDING)?;
