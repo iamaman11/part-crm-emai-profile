@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod lifecycle;
+
 use profile_platform_primitives::{ActorContext, ActorId, ClientId, ProfileId, TenantId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
