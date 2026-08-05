@@ -16,6 +16,7 @@ smoke test does not promote unrelated production gates.
 | Repository Step 0 / PR #4 | accepted | exact Rust `1.97.1` locked workspace; Linux fmt/Clippy/tests; Windows tests; primitives WASM compile; status validation; current-tree high-confidence secret scan | Cloudflare SDK compatibility, Windows Bridge, historical secret remediation or production security |
 | Repository Step 1 / PR #6 | accepted | exact `worker 0.8.5` D1/R2/Queue/Durable Object/Static Assets compile and `worker-build 0.8.5` release artifact | real Cloudflare deployment, binding behavior, migrations, DO consistency, remote rollback or production readiness |
 | Repository Step 2 / PR #9 | accepted | typed pure domain/application boundaries, native+WASM state-machine tests, active architecture and immutable v1 contract compatibility gates | D1 persistence, Access, distributed fencing, Bridge/runtime or production completeness |
+| Repository Step 3 / PR #12 | passed in PR, pending merge | strict D1 schema, migration replay, tenant constraints, typed adapter boundary, optimistic CAS and synthetic transaction envelope | remote D1, Access identity, full API ACL slice, backup/restore or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -68,6 +69,27 @@ supply-chain review item; it is not a Worker runtime dependency claim.
 - detailed report:
   [`evidence/2026-08-05-repository-step-2-domain-contract-skeleton.md`](evidence/2026-08-05-repository-step-2-domain-contract-skeleton.md);
 - Cloudflare credentials, storage resources or user data involved: no.
+
+### Repository Step 3 Evidence
+
+- baseline: `313a94aa59d10fa6a2d3e9a6da80bd9315e33fc4`;
+- technical evidence head: `40d84c5cf5d7832a3db964ab639e822f2e055031`;
+- technical Quality Gate run: `31043260598`, conclusion `success`;
+- jobs: `Rust Linux and WASM`, `D1 Catalog Migrations`, `Rust Windows`,
+  `Cloudflare Worker Release Build`;
+- Wrangler `4.94.0` applies `0001_catalog.sql` from empty state and replay is a
+  no-op;
+- deterministic SQLite schema, foreign-key/integrity, tenant constraints,
+  optimistic CAS and rollback/commit envelope: passed;
+- real typed D1 adapter boundary: passed;
+- deliberately raw-D1 use-case fixture: rejected as required;
+- Worker with the D1 adapter in its dependency graph: checked and release packaged;
+- detailed report:
+  [`evidence/2026-08-05-repository-step-3-d1-catalog-foundation.md`](evidence/2026-08-05-repository-step-3-d1-catalog-foundation.md);
+- Cloudflare credentials, remote resources or user data involved: no.
+
+Final accepted source head, final Quality Gate and squash merge are recorded only
+after PR #12 is green on its documentation-complete head and merged.
 
 ## 2. Required Permanent CI Evidence
 
