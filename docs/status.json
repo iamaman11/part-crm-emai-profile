@@ -1,22 +1,21 @@
 {
   "schema_version": 1,
-  "as_of": "2026-08-05",
+  "as_of": "2026-08-06",
   "repository_step": {
-    "number": 3,
-    "name": "D1 catalog foundation",
-    "status": "completed",
-    "tracking_issue": 10,
-    "baseline": "313a94aa59d10fa6a2d3e9a6da80bd9315e33fc4",
-    "technical_evidence_head": "40d84c5cf5d7832a3db964ab639e822f2e055031",
-    "accepted_source_head": "bff2109448d8109b963e9bd2077da273e54e8da2",
-    "technical_quality_gate_run_id": 31043260598,
-    "final_quality_gate_run_id": 31043753595,
-    "squash_merge": "189f36cdce092a05bccf5757e368eee87a0e2c50"
-  },
-  "next_repository_step": {
     "number": 4,
     "name": "Identity, clients and ACL slice",
+    "status": "completed",
     "tracking_issue": 13,
+    "baseline": "5667779d59413d4736e58d6eb83a892dfdd2f522",
+    "technical_evidence_head": "5b187ebd786cdca068ed209b79642ecaaebe3be6",
+    "accepted_source_head": "1174a0720bc1c44fbb0c8e22b5c0cbac5f0810ad",
+    "technical_quality_gate_run_id": 31052479944,
+    "final_quality_gate_run_id": 31052742660,
+    "squash_merge": "bd3db24ffc62d50654e385e587cab3e6a01b928c"
+  },
+  "next_repository_step": {
+    "number": 5,
+    "name": "Profile coordinator",
     "status": "planned"
   },
   "accepted_steps": [
@@ -50,6 +49,13 @@
       "accepted_source_head": "bff2109448d8109b963e9bd2077da273e54e8da2",
       "quality_gate_run_id": 31043753595,
       "squash_merge": "189f36cdce092a05bccf5757e368eee87a0e2c50"
+    },
+    {
+      "number": 4,
+      "name": "Identity, clients and ACL slice",
+      "accepted_source_head": "1174a0720bc1c44fbb0c8e22b5c0cbac5f0810ad",
+      "quality_gate_run_id": 31052742660,
+      "squash_merge": "bd3db24ffc62d50654e385e587cab3e6a01b928c"
     }
   ],
   "product": {
@@ -60,26 +66,33 @@
   "implementation": {
     "production_code": false,
     "rust_workspace": "accepted_step_0",
-    "cloudflare_worker": "accepted_cold_build_worker_0_8_5",
+    "cloudflare_worker": "accepted_step_4_authenticated_worker",
     "domain_contract_skeleton": "accepted_step_2",
     "d1_catalog": "accepted_step_3",
+    "identity_clients_acl": "accepted_step_4",
     "windows_bridge": "not_started",
     "frontend": "not_started"
   },
   "evidence": {
     "foundation_linux_windows_wasm": "passed",
     "tracked_file_secret_scan": "passed_limited_to_current_tree",
-    "cloudflare_worker_build": "accepted_quality_gate_run_31036967681",
+    "cloudflare_worker_build": "accepted_final_run_31052742660",
     "cloudflare_bindings_compile": "d1_r2_queue_durable_object_static_assets_passed",
-    "cloudflare_release_artifact": "shim_and_wasm_verified",
+    "cloudflare_release_artifact": "authenticated_worker_shim_and_wasm_verified",
     "domain_state_machines": "accepted_quality_gate_run_31039802642",
-    "architecture_dependency_gate": "positive_and_negative_accepted_run_31039802642",
-    "contract_compatibility_gate": "positive_and_breaking_fixture_accepted_run_31039802642",
-    "contract_baseline_immutability": "accepted_run_31039802642",
-    "d1_schema_migrations": "accepted_final_run_31043753595",
-    "d1_tenant_constraints": "accepted_final_run_31043753595",
-    "d1_transaction_envelope": "accepted_synthetic_run_31043753595",
-    "d1_typed_adapter": "accepted_wasm_release_run_31043753595",
+    "architecture_dependency_gate": "positive_and_negative_accepted_run_31052742660",
+    "contract_compatibility_gate": "positive_and_breaking_fixture_accepted_run_31052742660",
+    "contract_baseline_immutability": "accepted_run_31052742660",
+    "d1_schema_migrations": "accepted_final_run_31052742660",
+    "d1_tenant_constraints": "accepted_final_run_31052742660",
+    "d1_transaction_envelope": "accepted_governed_command_run_31052742660",
+    "d1_typed_adapter": "accepted_wasm_release_run_31052742660",
+    "access_identity_adapter": "accepted_rs256_jwk_webcrypto_run_31052742660",
+    "membership_actor_resolution": "accepted_active_tenant_membership_run_31052742660",
+    "owner_bootstrap_transfer": "accepted_atomic_last_owner_guard_run_31052742660",
+    "client_profile_acl": "accepted_explicit_grant_and_neutral_concealment_run_31052742660",
+    "assignment_authorization_separation": "accepted_positive_and_negative_run_31052742660",
+    "step4_source_hygiene": "accepted_run_31052742660",
     "cloudflare_remote_staging": "not_proven_external_gate",
     "single_device_cloud_smoke": "passed_with_documented_limitations",
     "multi_device": "not_proven",
