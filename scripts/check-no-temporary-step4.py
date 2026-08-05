@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject temporary Step 4 artifacts from accepted source heads."""
+"""Reject temporary Step 4/5 artifacts from accepted source heads."""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FORBIDDEN_FILES = (
     ROOT / "step4-diagnostics.txt",
+    ROOT / "step5-diagnostics.txt",
     ROOT / "docs" / "step4-progress.md",
+    ROOT / "docs" / "step5-progress.md",
 )
 FORBIDDEN_TEST_MARKERS = (
     "exact-head-trigger.md",
@@ -38,7 +40,7 @@ def main() -> int:
     errors: list[str] = []
     for path in FORBIDDEN_FILES:
         if path.exists():
-            errors.append(f"temporary Step 4 file remains: {path.relative_to(ROOT)}")
+            errors.append(f"temporary repository-step file remains: {path.relative_to(ROOT)}")
 
     gitignore_lines = {
         line.strip()
@@ -53,10 +55,14 @@ def main() -> int:
         "step4-*.yaml",
         "repository-step4-*.yml",
         "repository-step4-*.yaml",
+        "step5-*.yml",
+        "step5-*.yaml",
+        "repository-step5-*.yml",
+        "repository-step5-*.yaml",
     )
     for pattern in patterns:
         for path in sorted(workflow_root.glob(pattern)):
-            errors.append(f"temporary Step 4 workflow remains: {path.relative_to(ROOT)}")
+            errors.append(f"temporary repository-step workflow remains: {path.relative_to(ROOT)}")
 
     marker_root = ROOT / "tests" / "identity-acl"
     for name in FORBIDDEN_TEST_MARKERS:
@@ -72,7 +78,7 @@ def main() -> int:
             print(error, file=sys.stderr)
         return 1
 
-    print("No temporary Step 4 workflows, diagnostics, gate markers or build artifacts remain.")
+    print("No temporary Step 4/5 workflows, diagnostics, gate markers or build artifacts remain.")
     return 0
 
 
