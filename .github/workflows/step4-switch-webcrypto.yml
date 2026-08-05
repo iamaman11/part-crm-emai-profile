@@ -1,0 +1,49 @@
+name: Step 4 Switch WebCrypto Boundary
+
+on:
+  push:
+    branches:
+      - repository-step-4-identity-clients-acl
+
+permissions:
+  contents: write
+
+concurrency:
+  group: step4-switch-webcrypto
+  cancel-in-progress: true
+
+jobs:
+  switch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-4-identity-clients-acl
+          persist-credentials: true
+
+      - name: Select reflection-based WebCrypto module
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/cloudflare-adapters/src/lib.rs")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              "pub mod access_webcrypto;",
+              '#[path = "access_webcrypto_reflect.rs"]\npub mod access_webcrypto;',
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+          cargo fmt --all
+          cargo check --locked -p cloudflare-adapters --lib
+          cargo check --locked -p browser-profile-control-plane-worker --target wasm32-unknown-unknown
+
+      - name: Remove one-shot workflow and commit
+        run: |
+          rm -f .github/workflows/step4-switch-webcrypto.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Repository Step 4: use stable WebCrypto reflection boundary"
+          git push origin HEAD:repository-step-4-identity-clients-acl
