@@ -1,4 +1,4 @@
-name: Temporary Step 5 Edge Semantics Fix
+name: Temporary Step 5 Normalize Sources
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  patch:
+  normalize:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout branch
@@ -17,38 +17,38 @@ jobs:
         with:
           ref: repository-step-5-profile-coordinator
 
-      - name: Apply exact edge fixes
+      - name: Normalize source and lockfile
         run: |
           python - <<'PY'
           from pathlib import Path
 
           domain = Path("crates/session-domain/src/coordinator.rs")
           text = domain.read_text(encoding="utf-8")
-          old = "if now > intent.expires_at {"
-          if text.count(old) != 2:
-              raise SystemExit("unexpected intent expiry comparison count")
-          domain.write_text(text.replace(old, "if now >= intent.expires_at {"), encoding="utf-8")
+          text = text.replace("if now > intent.expires_at {", "if now >= intent.expires_at {")
+          domain.write_text(text, encoding="utf-8")
 
           adapter = Path("crates/cloudflare-adapters/src/profile_coordinator.rs")
           text = adapter.read_text(encoding="utf-8")
-          old = "    pub fn journal_len(&self) -> usize {\n        self.journal.len()\n    }"
-          new = "    pub fn journal_len(&self) -> usize {\n        self.journal.len()\n    }\n\n    #[must_use]\n    pub fn is_journal_empty(&self) -> bool {\n        self.journal.is_empty()\n    }"
-          if text.count(old) != 1:
-              raise SystemExit("unexpected journal length method shape")
-          text = text.replace(old, new)
-          old = "#[derive(Debug)]\npub enum CoordinatorAdapterError"
-          new = "#[derive(Debug, Eq, PartialEq)]\npub enum CoordinatorAdapterError"
-          if text.count(old) != 1:
-              raise SystemExit("unexpected adapter error derive shape")
-          adapter.write_text(text.replace(old, new), encoding="utf-8")
+          if "pub fn is_journal_empty" not in text:
+              marker = "    pub fn journal_len(&self) -> usize {\n        self.journal.len()\n    }"
+              replacement = marker + "\n\n    #[must_use]\n    pub fn is_journal_empty(&self) -> bool {\n        self.journal.is_empty()\n    }"
+              if marker not in text:
+                  raise SystemExit("unexpected journal API shape")
+              text = text.replace(marker, replacement)
+          text = text.replace(
+              "#[derive(Debug)]\npub enum CoordinatorAdapterError",
+              "#[derive(Debug, Eq, PartialEq)]\npub enum CoordinatorAdapterError",
+          )
+          adapter.write_text(text, encoding="utf-8")
           PY
           cargo fmt --all
+          cargo generate-lockfile
           rm .github/workflows/step5-fix-edge-semantics.yml
 
-      - name: Commit fixes and workflow removal
+      - name: Commit normalized sources
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/session-domain/src/coordinator.rs crates/cloudflare-adapters/src/profile_coordinator.rs .github/workflows/step5-fix-edge-semantics.yml
-          git commit -m "Step 5: tighten expiry and adapter edge semantics"
+          git add Cargo.lock crates/session-domain/src/coordinator.rs crates/cloudflare-adapters/src/profile_coordinator.rs apps/control-plane-worker/src/profile_coordinator.rs apps/control-plane-worker/src/lib.rs crates/control-plane-contract/src/lib.rs .github/workflows/step5-fix-edge-semantics.yml
+          git commit -m "Step 5: normalize coordinator sources and lockfile"
           git push origin HEAD:repository-step-5-profile-coordinator
