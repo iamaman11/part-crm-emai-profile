@@ -234,7 +234,7 @@ pub struct CoordinatorCommandEnvelope {
 }
 
 impl CoordinatorCommandEnvelope {
-    pub const fn new(
+    pub fn new(
         idempotency_key: IdempotencyKey,
         sequence: u64,
         expected_version: AggregateVersion,
@@ -914,7 +914,7 @@ mod tests {
         let duplicate = state.apply(command)?;
         assert_eq!(first, duplicate);
         let CoordinatorOutcome::LeaseClaimed { lease } = first.outcome() else {
-            return Err("claim did not return a lease".into());
+            return Err(CoordinatorError::NoActiveLease.into());
         };
         assert_eq!(lease.epoch(), 1);
         assert_eq!(state.status(), CoordinatorStatus::Active);
