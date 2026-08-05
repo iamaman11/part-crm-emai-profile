@@ -24,6 +24,7 @@ name = "browser-profile-control-plane-worker"
 version = "0.1.0"
 dependencies = [
  "control-plane-contract",
+ "wasm-bindgen",
  "worker",
 ]
 
