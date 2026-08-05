@@ -10,7 +10,7 @@ adapters, а не переносит Camoufox или локальный browser 
 
 ## Текущий Статус
 
-**Repository Steps 0–3 приняты.**
+**Repository Steps 0–4 приняты.**
 
 - Step 0 создал exact Rust workspace, pure primitives и постоянный
   Linux/Windows/WASM quality gate.
@@ -22,14 +22,20 @@ adapters, а не переносит Camoufox или локальный browser 
 - Step 3 добавил strict D1 catalog migrations, tenant-inclusive constraints,
   typed Cloudflare adapter, optimistic versions, idempotency/audit/outbox envelope
   и постоянные migration/isolation negative gates.
+- Step 4 добавил Cloudflare Access RS256 identity adapter, active membership to
+  `ActorContext` resolution, owner bootstrap/transfer, invitations and membership
+  lifecycle, explicit client/profile ACL, neutral foreign-resource concealment,
+  governed atomic D1 commands and versioned authenticated Worker API.
 
-Accepted Step 3 source head: `bff2109448d8109b963e9bd2077da273e54e8da2`.
-Final Quality Gate run: `31043753595`. Squash merge:
-`189f36cdce092a05bccf5757e368eee87a0e2c50`.
+Accepted Step 4 source head: `1174a0720bc1c44fbb0c8e22b5c0cbac5f0810ad`.
+Technical Quality Gate run: `31052479944`. Final exact-head Quality Gate run:
+`31052742660`. Squash merge:
+`bd3db24ffc62d50654e385e587cab3e6a01b928c`.
 
-Следующий этап — **Repository Step 4: Identity, clients and ACL slice** (issue
-#13). Cloudflare Access identity, React UI, Windows Profile Bridge и remote D1
-staging ещё не реализованы. Машиночитаемый статус:
+Следующий этап — **Repository Step 5: Profile Coordinator**: one Durable Object
+per profile, monotonic lease epoch/fencing token, heartbeat/TTL/drain и D1
+projection reconciliation. Remote Cloudflare staging, Windows Profile Bridge и
+production readiness ещё не доказаны. Машиночитаемый статус:
 [`docs/status.json`](docs/status.json).
 
 Единственный разрешенный источник legacy-профилей:
@@ -71,6 +77,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Cloudflare cold-build evidence](docs/evidence/2026-08-05-repository-step-1-cloudflare-cold-build.md)
 - [Domain and contract evidence](docs/evidence/2026-08-05-repository-step-2-domain-contract-skeleton.md)
 - [D1 catalog evidence](docs/evidence/2026-08-05-repository-step-3-d1-catalog-foundation.md)
+- [Identity, clients and ACL evidence](docs/evidence/2026-08-06-repository-step-4-identity-clients-acl.md)
 - [Проверенные выводы исследования](docs/RESEARCH_FINDINGS.md)
 - [Cloud profile smoke test](docs/CLOUD_PROFILE_SMOKE_TEST.md)
 - [Текущая проверка готовности плана](docs/PLAN_READINESS_REVIEW.md)
@@ -102,8 +109,9 @@ Standalone v1 не требует отдельной VM, PostgreSQL или Keycl
 - `worker 0.8.5`, direct `wasm-bindgen 0.2.126` и `worker-build 0.8.5` для
   Cloudflare Worker baseline;
 - pure Rust domains and application ports, compiled natively and for Workers WASM;
-- typed Cloudflare D1 adapter with direct `serde 1.0.229` macro dependency;
+- typed Cloudflare D1 adapters with direct `serde 1.0.229` macro dependency;
 - forward-only strict D1 migrations tested with Wrangler `4.94.0` and SQLite;
+- Cloudflare Access RS256/JWK identity verification through Workers WebCrypto;
 - Tokio только в native Profile Bridge и локальных tools;
 - Cloudflare Workers Static Assets для React SPA и same-origin API;
 - Cloudflare Access identity отдельно от application memberships/grants;
@@ -115,9 +123,10 @@ Standalone v1 не требует отдельной VM, PostgreSQL или Keycl
 
 Step 1 подтвердил reproducible repository cold build Cloudflare pins. Step 2
 добавил immutable v1 compatibility floor. Step 3 подтвердил local D1 migration
-replay, tenant constraints, typed adapter compilation and Worker packaging.
-Remote staging, binding behavior under load, backup/restore and account recovery
-пока не считаются выполненными.
+replay, tenant constraints, typed adapter compilation and Worker packaging. Step
+4 подтвердил authenticated owner/member Worker slice, explicit ACL and
+transaction-fatal governed D1 mutations. Remote staging, binding behavior under
+load, backup/restore and account recovery пока не считаются выполненными.
 
 ## Ключевые Инварианты
 
@@ -137,10 +146,12 @@ Remote staging, binding behavior under load, backup/restore and account recovery
 11. Пароли, proxy credentials и OAuth tokens хранятся только как secret handles.
 12. Assignment профиля клиенту не является правом доступа.
 13. Member без явного grant не видит и не запускает профиль.
-14. Pure domains не зависят от Cloudflare, Windows, Python, browser или storage SDK.
-15. D1, Durable Objects и R2 связываются idempotency, immutable objects, outbox и
+14. Missing, foreign и unauthorized resources имеют одинаковую neutral disclosure
+    форму там, где раскрытие запрещено.
+15. Pure domains не зависят от Cloudflare, Windows, Python, browser или storage SDK.
+16. D1, Durable Objects и R2 связываются idempotency, immutable objects, outbox и
     reconciliation, а не фиктивной общей транзакцией.
-16. Статус ADR и readiness берётся из `ADR_STATUS.md` и `status.json`.
+17. Статус ADR и readiness берётся из `ADR_STATUS.md` и `status.json`.
 
 ## Безопасность До Реализации
 
