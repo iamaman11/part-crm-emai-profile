@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod coordinator;
+
 use core::fmt;
 use profile_platform_primitives::{
     ActorContext, ActorId, DeviceId, FencingToken, LaunchIntentId, ProfileId, SessionId, TenantId,
