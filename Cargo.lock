@@ -38,6 +38,8 @@ version = "0.1.0"
 dependencies = [
  "cloudflare-adapters",
  "control-plane-contract",
+ "profile-platform-primitives",
+ "serde",
  "wasm-bindgen",
  "worker",
 ]
