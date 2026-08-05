@@ -4,7 +4,16 @@
   "repository_step": {
     "number": 0,
     "name": "Executable foundation",
-    "status": "in_progress"
+    "status": "completed",
+    "accepted_source_head": "c8927bc79ab7f68123fc122409792326043e29b3",
+    "quality_gate_run_id": 31035179366,
+    "squash_merge": "dc2dc2e1a7acd07d89550328309833988bb05a2e"
+  },
+  "next_repository_step": {
+    "number": 1,
+    "name": "Cloudflare cold-build and binding spike",
+    "tracking_issue": 2,
+    "status": "planned"
   },
   "product": {
     "name": "Browser Profile Platform",
@@ -13,12 +22,14 @@
   },
   "implementation": {
     "production_code": false,
-    "rust_workspace": "introduced_on_step_0_branch",
+    "rust_workspace": "accepted_step_0",
     "cloudflare_worker": "not_started",
     "windows_bridge": "not_started",
     "frontend": "not_started"
   },
   "evidence": {
+    "foundation_linux_windows_wasm": "passed",
+    "tracked_file_secret_scan": "passed_limited_to_current_tree",
     "single_device_cloud_smoke": "passed_with_documented_limitations",
     "multi_device": "not_proven",
     "concurrent_writer_fencing": "not_proven",
@@ -34,11 +45,11 @@
     "adr_0006": "proposed_blocks_production"
   },
   "external_gates": {
-    "legacy_credential_rotation": "required_unverified",
-    "cloudflare_staging_account": "required_later",
-    "trusted_windows_code_signing": "required_for_stable_release",
-    "second_physical_windows_host": "required_for_multi_device",
-    "offline_key_escrow": "required_for_production_cloud"
+    "legacy_credential_rotation": "required_unverified_issue_1",
+    "cloudflare_staging_account": "required_later_issue_3",
+    "trusted_windows_code_signing": "required_for_stable_release_issue_3",
+    "second_physical_windows_host": "required_for_multi_device_issue_3",
+    "offline_key_escrow": "required_for_production_cloud_issue_3"
   },
   "production_ready": false
 }
