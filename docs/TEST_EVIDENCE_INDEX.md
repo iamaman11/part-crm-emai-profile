@@ -15,7 +15,7 @@ smoke test does not promote unrelated production gates.
 | ADR-0002 evidence | accepted partial | locally executed immutable cloud generation model is viable | arbitrary runtime/device portability |
 | Repository Step 0 / PR #4 | accepted | exact Rust `1.97.1` locked workspace; Linux fmt/Clippy/tests; Windows tests; primitives WASM compile; status validation; current-tree high-confidence secret scan | Cloudflare SDK compatibility, Windows Bridge, historical secret remediation or production security |
 | Repository Step 1 / PR #6 | accepted | exact `worker 0.8.5` D1/R2/Queue/Durable Object/Static Assets compile and `worker-build 0.8.5` release artifact | real Cloudflare deployment, binding behavior, migrations, DO consistency, remote rollback or production readiness |
-| Repository Step 2 / PR #9 | passed in PR, pending merge | typed pure domain/application boundaries, native+WASM state-machine tests, active architecture and v1 contract breaking-change gates | D1 persistence, Access, distributed fencing, Bridge/runtime or production completeness |
+| Repository Step 2 / PR #9 | accepted | typed pure domain/application boundaries, native+WASM state-machine tests, active architecture and immutable v1 contract compatibility gates | D1 persistence, Access, distributed fencing, Bridge/runtime or production completeness |
 
 ### Repository Step 0 Evidence
 
@@ -55,19 +55,19 @@ supply-chain review item; it is not a Worker runtime dependency claim.
 
 - baseline: `29956f6a71ea5f76618e97c651276f2a43698870`;
 - technical evidence head: `a3d0852e11708297bb7d5e04ed23ff981e774d7c`;
+- accepted source head: `70fdbe8b494f61aeda639e004e54ea088e4ddc3e`;
 - technical Quality Gate run: `31039199212`, conclusion `success`;
+- final Quality Gate run: `31039802642`, conclusion `success`;
+- squash merge: `14e96a7841c3652767f37ee76151c3cf39be6301`;
 - jobs: `Rust Linux and WASM`, `Rust Windows`, `Cloudflare Worker Release Build`;
 - positive architecture and contract checks: passed;
 - deliberately forbidden domain dependency fixture: rejected as required;
 - deliberately breaking protobuf fixture: rejected as required;
+- accepted v1 contract baseline immutability gate: passed;
 - all governed pure crates: native tests and `wasm32-unknown-unknown` check passed;
 - detailed report:
   [`evidence/2026-08-05-repository-step-2-domain-contract-skeleton.md`](evidence/2026-08-05-repository-step-2-domain-contract-skeleton.md);
 - Cloudflare credentials, storage resources or user data involved: no.
-
-Final accepted source head, final Quality Gate and squash merge are recorded only
-after the PR is fully green and merged. The v1 baseline immutability check is part
-of the final candidate gate.
 
 ## 2. Required Permanent CI Evidence
 
