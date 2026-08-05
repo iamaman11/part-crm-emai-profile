@@ -32,9 +32,14 @@ jobs:
           scripts/check-architecture.py
           scripts/check-contract-compatibility.py
           scripts/check-d1-boundary.py
+          scripts/check-step4-governed-writes.py
+          scripts/check-no-temporary-step4.py
           scripts/test-d1-schema.py
           scripts/test-step4-identity-acl.py
           scripts/test-step4-command-guards.py
+
+      - name: Reject temporary Step 4 artifacts
+        run: python scripts/check-no-temporary-step4.py
 
       - name: Enforce architecture dependency boundaries
         run: python scripts/check-architecture.py
@@ -48,6 +53,9 @@ jobs:
 
       - name: Enforce typed D1 adapter boundary
         run: python scripts/check-d1-boundary.py
+
+      - name: Enforce governed Step 4 write surfaces
+        run: python scripts/check-step4-governed-writes.py
 
       - name: Prove raw D1 use-case fixture is rejected
         run: |
