@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-08-05",
+  "repository_step": {
+    "number": 0,
+    "name": "Executable foundation",
+    "status": "in_progress"
+  },
+  "product": {
+    "name": "Browser Profile Platform",
+    "primary_capability": "governed browser profile lifecycle",
+    "mailbox_role": "provider-neutral secondary capability"
+  },
+  "implementation": {
+    "production_code": false,
+    "rust_workspace": "introduced_on_step_0_branch",
+    "cloudflare_worker": "not_started",
+    "windows_bridge": "not_started",
+    "frontend": "not_started"
+  },
+  "evidence": {
+    "single_device_cloud_smoke": "passed_with_documented_limitations",
+    "multi_device": "not_proven",
+    "concurrent_writer_fencing": "not_proven",
+    "production_key_recovery": "blocked",
+    "production_fingerprint_certification": "blocked"
+  },
+  "decisions": {
+    "adr_0001": "proposed",
+    "adr_0002": "accepted_partial_evidence",
+    "adr_0003": "accepted",
+    "adr_0004": "accepted",
+    "adr_0005": "accepted",
+    "adr_0006": "proposed_blocks_production"
+  },
+  "external_gates": {
+    "legacy_credential_rotation": "required_unverified",
+    "cloudflare_staging_account": "required_later",
+    "trusted_windows_code_signing": "required_for_stable_release",
+    "second_physical_windows_host": "required_for_multi_device",
+    "offline_key_escrow": "required_for_production_cloud"
+  },
+  "production_ready": false
+}
