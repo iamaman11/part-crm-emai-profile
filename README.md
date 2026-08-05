@@ -10,7 +10,7 @@ adapters, а не переносит Camoufox или локальный browser 
 
 ## Текущий Статус
 
-**Repository Steps 0–4 приняты.**
+**Repository Steps 0–5 приняты.**
 
 - Step 0 создал exact Rust workspace, pure primitives и постоянный
   Linux/Windows/WASM quality gate.
@@ -26,16 +26,20 @@ adapters, а не переносит Camoufox или локальный browser 
   `ActorContext` resolution, owner bootstrap/transfer, invitations and membership
   lifecycle, explicit client/profile ACL, neutral foreign-resource concealment,
   governed atomic D1 commands and versioned authenticated Worker API.
+- Step 5 добавил one Durable Object per profile, monotonic lease epoch и
+  server-generated fencing token, launch/heartbeat/TTL/drain/recovery state
+  machine, stale-writer rejection, authenticated profile ACL boundary и
+  idempotently repairable D1 projection/outbox reconciliation.
 
-Accepted Step 4 source head: `1174a0720bc1c44fbb0c8e22b5c0cbac5f0810ad`.
-Technical Quality Gate run: `31052479944`. Final exact-head Quality Gate run:
-`31052742660`. Squash merge:
-`bd3db24ffc62d50654e385e587cab3e6a01b928c`.
+Accepted Step 5 source head: `e338186e53f02784d1d685ae3cd761f3cef34ef7`.
+Exact-head Quality Gate run: `31056722531`. Squash merge:
+`78931f529152c209ebececbcbef1aca770b7e3e0`.
 
-Следующий этап — **Repository Step 5: Profile Coordinator**: one Durable Object
-per profile, monotonic lease epoch/fencing token, heartbeat/TTL/drain и D1
-projection reconciliation. Remote Cloudflare staging, Windows Profile Bridge и
-production readiness ещё не доказаны. Машиночитаемый статус:
+Следующий этап — **Repository Step 6: Windows Bridge Feasibility**:
+Windows-native Rust executable, single-use custom URI enrollment, device-key
+abstraction, process/job supervision, encrypted local workspace, SQLite outbox и
+fake typed Camouhost IPC. Remote Cloudflare staging, физический multi-device
+runtime и production readiness ещё не доказаны. Машиночитаемый статус:
 [`docs/status.json`](docs/status.json).
 
 Единственный разрешенный источник legacy-профилей:
@@ -69,6 +73,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Целевой жизненный цикл профиля](PROFILE_LIFECYCLE_PLAN.md)
 - [Contract compatibility policy](docs/CONTRACT_POLICY.md)
 - [D1 catalog boundary](docs/D1_CATALOG.md)
+- [Profile Coordinator boundary](docs/PROFILE_COORDINATOR.md)
 - [ADR status registry](docs/ADR_STATUS.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Data classification](docs/DATA_CLASSIFICATION.md)
@@ -78,6 +83,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Domain and contract evidence](docs/evidence/2026-08-05-repository-step-2-domain-contract-skeleton.md)
 - [D1 catalog evidence](docs/evidence/2026-08-05-repository-step-3-d1-catalog-foundation.md)
 - [Identity, clients and ACL evidence](docs/evidence/2026-08-06-repository-step-4-identity-clients-acl.md)
+- [Profile Coordinator evidence](docs/evidence/2026-08-06-repository-step-5-profile-coordinator.md)
 - [Проверенные выводы исследования](docs/RESEARCH_FINDINGS.md)
 - [Cloud profile smoke test](docs/CLOUD_PROFILE_SMOKE_TEST.md)
 - [Текущая проверка готовности плана](docs/PLAN_READINESS_REVIEW.md)
@@ -125,8 +131,12 @@ Step 1 подтвердил reproducible repository cold build Cloudflare pins. 
 добавил immutable v1 compatibility floor. Step 3 подтвердил local D1 migration
 replay, tenant constraints, typed adapter compilation and Worker packaging. Step
 4 подтвердил authenticated owner/member Worker slice, explicit ACL and
-transaction-fatal governed D1 mutations. Remote staging, binding behavior under
-load, backup/restore and account recovery пока не считаются выполненными.
+transaction-fatal governed D1 mutations. Step 5 подтвердил repository-local
+Durable Object coordinator, monotonic epoch/fencing, timeout uncertainty,
+assignment-independent authorization, repairable D1 projection и release Worker
+packaging. Remote staging, production binding behavior under load,
+backup/restore, physical multi-device runtime and account recovery пока не
+считаются выполненными.
 
 ## Ключевые Инварианты
 
