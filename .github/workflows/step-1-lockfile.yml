@@ -1,6 +1,7 @@
 name: Step 1 Lockfile
 
 on:
+  pull_request:
   push:
     branches:
       - repository-step-1-cloudflare-cold-build
