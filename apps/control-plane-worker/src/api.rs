@@ -2,9 +2,8 @@ use crate::access_session::{
     correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
     verify_request_identity,
 };
-use client_domain::{ClientKind, ClientRecord};
 use cloudflare_adapters::d1_catalog::{
-    CreateClientMutation, D1CatalogRepository, MutationEnvelope as CatalogEnvelope,
+    CatalogClientKind, CreateClientMutation, D1CatalogRepository,
 };
 use cloudflare_adapters::d1_governed_commands::D1GovernedCommandRepository;
 use cloudflare_adapters::d1_identity_acl::{
@@ -22,8 +21,8 @@ use cloudflare_adapters::d1_invitation_acceptance::{
 };
 use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
 use profile_platform_primitives::{
-    ActorId, AggregateVersion, AssignmentId, AuditEventId, ClientId, CorrelationId, IdempotencyKey,
-    IdentityId, InvitationId, OutboxEventId, ProfileId, TenantId, UnixMillis,
+    ActorId, AggregateVersion, AssignmentId, AuditEventId, ClientId, IdempotencyKey, IdentityId,
+    InvitationId, OutboxEventId, ProfileId, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
 use worker::{Date, Env, Error, Request, Response, Result};
@@ -421,19 +420,13 @@ async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Res
         Err(_) => return invalid_request(request),
     };
     let kind = match body.kind.as_str() {
-        "PERSON" => ClientKind::Person,
-        "ORGANIZATION" => ClientKind::Organization,
+        "PERSON" => CatalogClientKind::Person,
+        "ORGANIZATION" => CatalogClientKind::Organization,
         _ => return invalid_request(request),
     };
-    let record = match ClientRecord::create(
-        actor.actor().tenant_scope().tenant_id().clone(),
-        client_id.clone(),
-        kind,
-        body.display_name,
-    ) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
+    if body.display_name.trim().is_empty() || body.display_name.len() > 200 {
+        return invalid_request(request);
+    }
     let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
@@ -441,17 +434,17 @@ async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Res
     if let Some(response) = replay_response(env, &actor, &envelope, 1).await? {
         return Ok(response);
     }
-    let catalog_envelope = CatalogEnvelope {
+    let mutation = CreateClientMutation {
+        client_id: &client_id,
+        kind,
+        display_name: &body.display_name,
         idempotency_key: &envelope.idempotency_key,
         request_digest: &envelope.request_digest,
         audit_event_id: &envelope.audit_event_id,
         outbox_event_id: &envelope.outbox_event_id,
+        event_payload_json: &envelope.payload_json,
         now: envelope.now,
         idempotency_expires_at: envelope.expires_at,
-    };
-    let mutation = CreateClientMutation {
-        client: record,
-        envelope: catalog_envelope,
     };
     if D1CatalogRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .create_client(actor.actor(), mutation)
