@@ -3,12 +3,15 @@ use crate::access_session::{
 };
 use cloudflare_adapters::d1_identity_acl::ResolvedMembershipRole;
 use cloudflare_adapters::d1_identity_queries::D1IdentityQueryRepository;
+use cloudflare_adapters::d1_profile_coordinator::{
+    CoordinatorProjectionMutation, CoordinatorProjectionOutcome, D1ProfileCoordinatorRepository,
+};
 use cloudflare_adapters::profile_coordinator::{
     CoordinatorAdapterError, CoordinatorProjection, StoredCoordinatorCommand,
     StoredCoordinatorDocument, StoredCoordinatorEnvelope, StoredReleaseDisposition, outcome_name,
 };
 use control_plane_contract::{D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING};
-use profile_platform_primitives::{ProfileId, TenantId, UnixMillis};
+use profile_platform_primitives::{OutboxEventId, ProfileId, TenantId, TenantScope, UnixMillis};
 use serde::{Deserialize, Serialize};
 use session_domain::coordinator::{CoordinatorConfig, CoordinatorOutcome, coordinator_object_name};
 use worker::wasm_bindgen::{JsCast, JsValue};
@@ -53,7 +56,7 @@ pub async fn dispatch(
     let Some(profile) = visible_profile else {
         return neutral_not_found(actor.actor().correlation_id().as_str());
     };
-    if profile.status() != "ACTIVE" {
+    if !profile_is_coordinatable(profile.status()) {
         return problem(
             actor.actor().correlation_id().as_str(),
             409,
@@ -66,7 +69,7 @@ pub async fn dispatch(
     let object_id = namespace.id_from_name(&coordinator_object_name(&profile_id))?;
     let stub = object_id.get_stub()?;
 
-    match request.method() {
+    let response = match request.method() {
         Method::Get => {
             let internal = internal_request(
                 "/snapshot",
@@ -75,7 +78,7 @@ pub async fn dispatch(
                     profile_id: profile_id.as_str(),
                 },
             )?;
-            stub.fetch_with_request(internal).await
+            stub.fetch_with_request(internal).await?
         }
         Method::Post => {
             let body = match request.json::<CoordinatorCommandRequest>().await {
@@ -108,10 +111,69 @@ pub async fn dispatch(
                     ),
                 },
             )?;
-            stub.fetch_with_request(internal).await
+            stub.fetch_with_request(internal).await?
         }
-        _ => neutral_not_found(actor.actor().correlation_id().as_str()),
+        _ => return neutral_not_found(actor.actor().correlation_id().as_str()),
+    };
+
+    project_and_respond(
+        response,
+        env,
+        actor.actor().tenant_scope(),
+        &profile_id,
+    )
+    .await
+}
+
+fn profile_is_coordinatable(status: &str) -> bool {
+    matches!(status, "READY" | "IN_USE" | "DIRTY_LOCAL" | "SYNCING")
+}
+
+async fn project_and_respond(
+    mut response: Response,
+    env: &Env,
+    scope: &TenantScope,
+    profile_id: &ProfileId,
+) -> Result<Response> {
+    if response.status_code() >= 400 {
+        return Ok(response);
     }
+    let payload = response.json::<CoordinatorObjectResponse>().await?;
+    let outcome = projection_outcome(&payload.outcome)?;
+    let outbox_event_id = generate_outbox_event_id().map_err(request_error)?;
+    D1ProfileCoordinatorRepository::new(env.d1(D1_CATALOG_BINDING)?)
+        .project(
+            scope,
+            CoordinatorProjectionMutation {
+                profile_id,
+                projection: &payload.projection,
+                outcome,
+                outbox_event_id: &outbox_event_id,
+                projected_at: UnixMillis::new(Date::now().as_millis()),
+            },
+        )
+        .await?;
+    Response::from_json(&payload)
+}
+
+fn projection_outcome(value: &str) -> Result<CoordinatorProjectionOutcome> {
+    Ok(match value {
+        "snapshot" => CoordinatorProjectionOutcome::Snapshot,
+        "launch_intent_issued" => CoordinatorProjectionOutcome::LaunchIntentIssued,
+        "lease_claimed" => CoordinatorProjectionOutcome::LeaseClaimed,
+        "heartbeat_accepted" => CoordinatorProjectionOutcome::HeartbeatAccepted,
+        "released" => CoordinatorProjectionOutcome::Released,
+        "drain_started" => CoordinatorProjectionOutcome::DrainStarted,
+        "timed_out" => CoordinatorProjectionOutcome::TimedOut,
+        "launch_intent_expired" => CoordinatorProjectionOutcome::LaunchIntentExpired,
+        "recovered" => CoordinatorProjectionOutcome::Recovered,
+        "no_change" => CoordinatorProjectionOutcome::NoChange,
+        _ => {
+            return Err(Error::RustError(
+                "unknown coordinator projection outcome".to_owned(),
+            ));
+        }
+    })
 }
 
 #[derive(Deserialize)]
@@ -221,14 +283,24 @@ enum CoordinatorRequestError {
     InvalidIntentTtl,
     TimeOverflow,
     CryptoUnavailable,
+    InvalidGeneratedId,
 }
 
 fn generate_fencing_token() -> Result<String, CoordinatorRequestError> {
+    Ok(format!("fence_{}", random_uuid()?))
+}
+
+fn generate_outbox_event_id() -> Result<OutboxEventId, CoordinatorRequestError> {
+    OutboxEventId::parse(format!("outbox_{}", random_uuid()?))
+        .map_err(|_| CoordinatorRequestError::InvalidGeneratedId)
+}
+
+fn random_uuid() -> Result<String, CoordinatorRequestError> {
     let global: WorkerGlobalScope = worker::js_sys::global().unchecked_into();
     let crypto = global
         .crypto()
         .map_err(|_| CoordinatorRequestError::CryptoUnavailable)?;
-    Ok(format!("fence_{}", crypto.random_uuid()))
+    Ok(crypto.random_uuid())
 }
 
 #[derive(Serialize)]
@@ -314,9 +386,8 @@ impl ProfileCoordinator {
         let tenant_id = TenantId::parse(body.tenant_id).map_err(identifier_error)?;
         let profile_id = ProfileId::parse(body.profile_id).map_err(identifier_error)?;
         let document = self.load_document(&tenant_id, &profile_id).await?;
-        Response::from_json(&CoordinatorSnapshotResponse {
-            projection: document.projection().map_err(adapter_error)?,
-        })
+        let projection = document.projection().map_err(adapter_error)?;
+        Response::from_json(&CoordinatorObjectResponse::from_snapshot(projection))
     }
 
     async fn command(&self, request: &mut Request) -> Result<Response> {
@@ -373,14 +444,9 @@ struct CoordinatorInternalCommandOwned {
     envelope: StoredCoordinatorEnvelope,
 }
 
-#[derive(Serialize)]
-struct CoordinatorSnapshotResponse {
-    projection: CoordinatorProjection,
-}
-
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct CoordinatorObjectResponse {
-    outcome: &'static str,
+    outcome: String,
     version: u64,
     sequence: u64,
     replayed: bool,
@@ -390,6 +456,18 @@ struct CoordinatorObjectResponse {
 }
 
 impl CoordinatorObjectResponse {
+    fn from_snapshot(projection: CoordinatorProjection) -> Self {
+        Self {
+            outcome: "snapshot".to_owned(),
+            version: projection.version,
+            sequence: projection.sequence,
+            replayed: true,
+            fencing_token: None,
+            epoch: projection.active_epoch,
+            projection,
+        }
+    }
+
     fn from_applied(
         applied: &cloudflare_adapters::profile_coordinator::CoordinatorApplied,
     ) -> Self {
@@ -401,7 +479,7 @@ impl CoordinatorObjectResponse {
             _ => (None, None),
         };
         Self {
-            outcome: outcome_name(applied.decision().outcome()),
+            outcome: outcome_name(applied.decision().outcome()).to_owned(),
             version: applied.decision().version().value(),
             sequence: applied.decision().sequence(),
             replayed: !applied.appended(),
@@ -469,6 +547,10 @@ fn adapter_error(error: CoordinatorAdapterError) -> Error {
 
 fn domain_error(error: session_domain::coordinator::CoordinatorError) -> Error {
     Error::RustError(error.to_string())
+}
+
+fn request_error(error: CoordinatorRequestError) -> Error {
+    Error::RustError(format!("coordinator request error: {error:?}"))
 }
 
 fn json_error(error: serde_json::Error) -> Error {
