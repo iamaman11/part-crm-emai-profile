@@ -7,7 +7,11 @@ on:
       - repository-step-1-cloudflare-cold-build
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: step-1-lockfile-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   generate:
@@ -16,7 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Show pinned toolchain
         run: rustup show active-toolchain
@@ -26,10 +30,16 @@ jobs:
           cargo generate-lockfile
           cargo metadata --locked --format-version 1 >/dev/null
 
-      - name: Upload lockfile
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: step-1-cargo-lock
-          path: Cargo.lock
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit lockfile when changed
+        shell: bash
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock is already current."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "build: lock Cloudflare worker dependencies"
+          git push origin "HEAD:${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
