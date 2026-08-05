@@ -1,6 +1,11 @@
 #![forbid(unsafe_code)]
 
+mod access_session;
+mod api;
+
+use access_session::session_response;
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
+use cloudflare_adapters::d1_identity_acl::D1IdentityAclRepository;
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
     STATIC_ASSETS_BINDING, VERIFICATION_QUEUE_BINDING, classify_route,
@@ -10,22 +15,38 @@ use worker::{
 };
 
 #[event(fetch, respond_with_errors)]
-pub async fn main(request: Request, env: Env, _context: Context) -> Result<Response> {
-    match classify_route(&request.path()) {
-        RouteClass::ApiHealth => Response::ok("control-plane-ready"),
-        RouteClass::ApiBindingProbe => binding_probe(&env),
+pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
+    let route = classify_route(request.method().as_ref(), &request.path());
+    match route {
+        RouteClass::HealthApi => Response::ok("control-plane-ready"),
+        RouteClass::BindingProbeApi => binding_probe(&env),
         RouteClass::BridgeDeniedByDefault => Response::error("Not Found", 404),
-        RouteClass::BrowserAsset => {
+        RouteClass::StaticAssets => {
             env.assets(STATIC_ASSETS_BINDING)?
                 .fetch_request(request)
                 .await
         }
+        RouteClass::AuthenticatedSessionApi => session_response(&request, &env).await,
+        RouteClass::OwnerBootstrapApi
+        | RouteClass::OwnerTransferApi
+        | RouteClass::InvitationCollectionApi
+        | RouteClass::InvitationAcceptApi
+        | RouteClass::MembershipStatusApi
+        | RouteClass::ClientCollectionApi
+        | RouteClass::ClientResourceApi
+        | RouteClass::ClientGrantApi
+        | RouteClass::ProfileCollectionApi
+        | RouteClass::ProfileResourceApi
+        | RouteClass::ProfileAssignmentApi
+        | RouteClass::ProfileGrantApi => api::dispatch(route, &mut request, &env).await,
     }
 }
 
 fn binding_probe(env: &Env) -> Result<Response> {
     let catalog = env.d1(D1_CATALOG_BINDING)?;
     let _catalog_repository = D1CatalogRepository::new(catalog);
+    let identity_catalog = env.d1(D1_CATALOG_BINDING)?;
+    let _identity_acl_repository = D1IdentityAclRepository::new(identity_catalog);
     let _objects = env.bucket(R2_PROFILES_BINDING)?;
     let _verification = env.queue(VERIFICATION_QUEUE_BINDING)?;
     let coordinator = env.durable_object(PROFILE_COORDINATOR_BINDING)?;

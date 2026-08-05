@@ -9,8 +9,11 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+client-domain.workspace = true
 cloudflare-adapters.workspace = true
 control-plane-contract = { path = "../../crates/control-plane-contract" }
+profile-platform-primitives.workspace = true
+serde = "=1.0.229"
 wasm-bindgen.workspace = true
 worker.workspace = true
 

@@ -8,6 +8,8 @@ publish = false
 [dependencies]
 profile-platform-primitives.workspace = true
 serde = "=1.0.229"
+serde_json = "=1.0.151"
+web-sys = { version = "=0.3.103", features = ["Crypto", "CryptoKey", "SubtleCrypto", "WorkerGlobalScope"] }
 worker.workspace = true
 
 [lints]

@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod identity_acl;
+
 use client_domain::{ClientError, ClientKind, ClientRecord};
 use contracts::ProblemCode;
 use core::fmt;

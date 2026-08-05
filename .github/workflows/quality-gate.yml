@@ -32,7 +32,14 @@ jobs:
           scripts/check-architecture.py
           scripts/check-contract-compatibility.py
           scripts/check-d1-boundary.py
+          scripts/check-step4-governed-writes.py
+          scripts/check-no-temporary-step4.py
           scripts/test-d1-schema.py
+          scripts/test-step4-identity-acl.py
+          scripts/test-step4-command-guards.py
+
+      - name: Reject temporary Step 4 artifacts
+        run: python scripts/check-no-temporary-step4.py
 
       - name: Enforce architecture dependency boundaries
         run: python scripts/check-architecture.py
@@ -46,6 +53,9 @@ jobs:
 
       - name: Enforce typed D1 adapter boundary
         run: python scripts/check-d1-boundary.py
+
+      - name: Enforce governed Step 4 write surfaces
+        run: python scripts/check-step4-governed-writes.py
 
       - name: Prove raw D1 use-case fixture is rejected
         run: |
@@ -70,6 +80,19 @@ jobs:
       - name: Test D1 schema and transaction invariants
         run: python scripts/test-d1-schema.py
 
+      - name: Test identity owner-transfer and ACL invariants
+        run: python scripts/test-step4-identity-acl.py
+
+      - name: Test governed command trigger atomicity
+        run: python scripts/test-step4-command-guards.py
+
+      - name: Prove assignment-as-ACL fixture is rejected
+        run: |
+          if python scripts/test-step4-identity-acl.py --negative-fixture tests/identity-acl/fixtures/assignment-authorizes.sql; then
+            echo "Assignment-as-ACL fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
       - name: Format
         run: cargo fmt --all -- --check
 
@@ -84,6 +107,9 @@ jobs:
           cargo test --locked --workspace --all-targets
           --exclude browser-profile-control-plane-worker
           --exclude cloudflare-adapters
+
+      - name: Test Cloudflare adapter logic
+        run: cargo test --locked -p cloudflare-adapters --lib
 
       - name: Check pure crates for Workers target
         run: >-
@@ -151,7 +177,7 @@ jobs:
           --local
           --config deploy/cloudflare/wrangler.d1-test.jsonc
           --persist-to .wrangler/d1-test-state
-          --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT name FROM d1_migrations ORDER BY id;"
+          --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT COUNT(*) AS invitation_acceptances FROM invitation_acceptances; SELECT COUNT(*) AS governed_owner_transfers FROM owner_transfer_commands; SELECT COUNT(*) AS governed_profile_grants FROM profile_grant_commands; SELECT name FROM d1_migrations ORDER BY id;"
 
   cloudflare-worker:
     name: Cloudflare Worker Release Build

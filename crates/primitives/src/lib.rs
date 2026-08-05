@@ -158,6 +158,14 @@ pub struct AggregateVersion(u64);
 impl AggregateVersion {
     pub const INITIAL: Self = Self(1);
 
+    pub const fn new(value: u64) -> Result<Self, ZeroAggregateVersion> {
+        if value == 0 {
+            Err(ZeroAggregateVersion)
+        } else {
+            Ok(Self(value))
+        }
+    }
+
     #[must_use]
     pub const fn from_value(value: u64) -> Self {
         Self(value)
@@ -172,6 +180,17 @@ impl AggregateVersion {
         self.0.checked_add(1).map(Self).ok_or(VersionOverflow)
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ZeroAggregateVersion;
+
+impl fmt::Display for ZeroAggregateVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("aggregate version must be greater than zero")
+    }
+}
+
+impl std::error::Error for ZeroAggregateVersion {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VersionOverflow;
@@ -228,7 +247,8 @@ mod tests {
 
     #[test]
     fn aggregate_versions_increment_without_wraparound() -> Result<(), Box<dyn std::error::Error>> {
-        assert_eq!(AggregateVersion::INITIAL.next()?.value(), 2);
+        assert_eq!(AggregateVersion::new(1)?.next()?.value(), 2);
+        assert!(AggregateVersion::new(0).is_err());
         assert!(AggregateVersion::from_value(u64::MAX).next().is_err());
         Ok(())
     }
