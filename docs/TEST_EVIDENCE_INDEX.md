@@ -13,7 +13,20 @@ smoke test does not promote unrelated production gates.
 | `RESEARCH_FINDINGS.md` | verified baseline | corpus inventory, runtime observations, known prototype defects | production implementation or unchanged historical source tree |
 | `CLOUD_PROFILE_SMOKE_TEST.md` | passed with limitations | synthetic one-device create/close/encrypt/R2/restore/replay and bounded fingerprint replay | multi-device, production keys, fencing, disaster recovery, full fingerprint certification |
 | ADR-0002 evidence | accepted partial | locally executed immutable cloud generation model is viable | arbitrary runtime/device portability |
-| Step 0 Quality Gate | pending PR CI | exact Rust workspace on Linux/Windows, primitives on WASM, status and tracked-secret checks | Cloudflare SDK compatibility, Windows Bridge or production security |
+| Repository Step 0 / PR #4 | accepted | exact Rust `1.97.1` locked workspace; Linux fmt/Clippy/tests; Windows tests; primitives WASM compile; status validation; current-tree high-confidence secret scan | Cloudflare SDK compatibility, Windows Bridge, historical secret remediation or production security |
+
+### Repository Step 0 Evidence
+
+- baseline: `3fef715c5b74f723d8a30c16471bf62a3609a34b`;
+- accepted source head: `c8927bc79ab7f68123fc122409792326043e29b3`;
+- permanent Quality Gate run: `31035179366`, conclusion `success`;
+- squash merge: `dc2dc2e1a7acd07d89550328309833988bb05a2e`;
+- jobs: `Rust Linux and WASM`, `Rust Windows`;
+- user/legacy profile data involved: no.
+
+The tracked-file scan covers the accepted tree only. It does not prove that the
+known legacy credential was rotated or absent from repository history; that
+external remediation remains issue #1.
 
 ## 2. Required Permanent CI Evidence
 

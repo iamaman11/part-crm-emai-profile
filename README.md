@@ -10,14 +10,14 @@ adapters, а не переносит Camoufox или локальный browser 
 
 ## Текущий Статус
 
-Выполняется **Repository Step 0 — Executable Foundation**. В ветке Step 0 создан
-минимальный locked Rust workspace, pure primitives crate и постоянный Linux,
-Windows и WASM quality gate. Product functionality, Cloudflare Worker, React UI
-и Windows Profile Bridge ещё не реализованы.
+**Repository Step 0 — Executable Foundation принят.** Exact Rust workspace,
+pure primitives crate и постоянный Linux/Windows/WASM quality gate подтверждены
+PR #4 и merged evidence. Следующий шаг — **Repository Step 1: Cloudflare
+cold-build and binding spike** (issue #2).
 
-Машиночитаемый статус: [`docs/status.json`](docs/status.json). Готовность может
-повышаться только после merge и проверяемого CI/evidence, а не формулировкой в
-Markdown.
+Product functionality, Cloudflare Worker, React UI и Windows Profile Bridge ещё
+не реализованы. Машиночитаемый статус: [`docs/status.json`](docs/status.json).
+Готовность повышается только после merge и проверяемого CI/evidence.
 
 Единственный разрешенный источник legacy-профилей:
 
@@ -121,9 +121,9 @@ upgrade channel.
 
 В legacy-скриптах и истории репозитория обнаружен hardcoded proxy credential.
 Он считается скомпрометированным и должен быть отозван/ротирован владельцем с
-provider-side подтверждением. Удаление строки из Git не является remediation.
-Значение секрета запрещено переносить в новую конфигурацию, документацию, тесты,
-issues или логи.
+provider-side подтверждением (issue #1). Удаление строки из Git не является
+remediation. Значение секрета запрещено переносить в новую конфигурацию,
+документацию, тесты, issues или логи.
 
 До production cloud sync ADR-0006 должен стать accepted, а clean-environment
 restore drill должен подтвердить root wrapping key, tenant KEK, rotation,
