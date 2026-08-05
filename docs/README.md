@@ -39,6 +39,9 @@
   результаты canary и ограничения доказательств.
 - [`CLOUD_PROFILE_SMOKE_TEST.md`](CLOUD_PROFILE_SMOKE_TEST.md): фактический
   encrypted R2 create/sync/restore/replay test и его границы.
+- [`evidence/2026-08-05-repository-step-1-cloudflare-cold-build.md`](evidence/2026-08-05-repository-step-1-cloudflare-cold-build.md):
+  exact Rust/`workers-rs` cold build, binding compile surface, release artifact,
+  найденные дефекты, ограничения и supply-chain observation.
 - [`PLAN_READINESS_REVIEW.md`](PLAN_READINESS_REVIEW.md): readiness review,
   corrected status claims and external gates.
 
@@ -57,6 +60,15 @@
   accepted Cloudflare-native standalone topology.
 - [`adr/ADR-0006-cloud-profile-key-management.md`](adr/ADR-0006-cloud-profile-key-management.md):
   proposed key hierarchy, rotation and offline recovery; blocks production cloud.
+
+## Executable Baseline
+
+- Rust `1.97.1`, edition `2024`, exact `rust-toolchain.toml`;
+- committed workspace `Cargo.lock`;
+- `worker 0.8.5`, direct `wasm-bindgen 0.2.126`, `worker-build 0.8.5`;
+- permanent Linux/WASM, Windows and Cloudflare Worker release-build jobs;
+- binding contract for D1, R2, Queue, Durable Object and Static Assets;
+- remote Cloudflare deployment remains a separate external evidence gate.
 
 ## Правила Ведения
 

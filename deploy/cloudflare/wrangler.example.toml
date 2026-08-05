@@ -1,0 +1,35 @@
+name = "browser-profile-control-plane"
+main = "../../apps/control-plane-worker/build/worker/shim.mjs"
+compatibility_date = "2026-08-05"
+workers_dev = false
+
+[build]
+command = "cargo install worker-build --version 0.8.5 --locked && worker-build --release"
+
+[assets]
+directory = "../../frontend/dist"
+binding = "ASSETS"
+run_worker_first = true
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "CATALOG_DB"
+database_name = "REPLACE_WITH_D1_DATABASE_NAME"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[[r2_buckets]]
+binding = "PROFILE_OBJECTS"
+bucket_name = "REPLACE_WITH_R2_BUCKET_NAME"
+
+[[queues.producers]]
+binding = "GENERATION_VERIFICATION"
+queue = "REPLACE_WITH_VERIFICATION_QUEUE_NAME"
+
+[durable_objects]
+bindings = [
+  { name = "PROFILE_COORDINATOR", class_name = "ProfileCoordinator" },
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["ProfileCoordinator"]
