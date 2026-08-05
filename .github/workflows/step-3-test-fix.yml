@@ -1,0 +1,100 @@
+name: Step 3 Schema Fixture Fix
+
+on:
+  push:
+    branches:
+      - repository-step-3-d1-catalog-foundation
+
+permissions:
+  contents: write
+
+concurrency:
+  group: step-3-schema-fixture-fix
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-3-d1-catalog-foundation
+          persist-credentials: true
+
+      - name: Patch transaction fixture boundaries
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/test-d1-schema.py")
+          text = path.read_text(encoding="utf-8")
+
+          old = '''        connection.execute(
+              "UPDATE clients SET status = 'ACTIVE' WHERE tenant_id = ? AND client_id = ?",
+              (TENANT_A, CLIENT_A),
+          )
+          connection.execute(
+              """
+              INSERT INTO profile_client_assignments (
+                  tenant_id, assignment_id, profile_id, client_id,
+                  assigned_by_actor_id, assigned_at_ms, reason
+              ) VALUES (?, 'assignment_primary_one', ?, ?, ?, 70, 'primary assignment')
+              """,
+              (TENANT_A, PROFILE_A, CLIENT_A, OWNER_A),
+          )
+          expect_integrity_error(
+  '''
+          new = '''        connection.execute(
+              "UPDATE clients SET status = 'ACTIVE' WHERE tenant_id = ? AND client_id = ?",
+              (TENANT_A, CLIENT_A),
+          )
+          connection.commit()
+          connection.execute(
+              """
+              INSERT INTO profile_client_assignments (
+                  tenant_id, assignment_id, profile_id, client_id,
+                  assigned_by_actor_id, assigned_at_ms, reason
+              ) VALUES (?, 'assignment_primary_one', ?, ?, ?, 70, 'primary assignment')
+              """,
+              (TENANT_A, PROFILE_A, CLIENT_A, OWNER_A),
+          )
+          connection.commit()
+          expect_integrity_error(
+  '''
+          if old not in text:
+              print("Fixture boundary patch already applied or source changed.")
+          else:
+              text = text.replace(old, new, 1)
+
+          old_row = '''        assert (
+              connection.execute(
+                  "SELECT display_name, version FROM clients WHERE tenant_id = ? AND client_id = ?",
+                  (TENANT_A, CLIENT_A),
+              ).fetchone()
+              == ("Updated Client", 2)
+          )
+  '''
+          new_row = '''        updated = connection.execute(
+              "SELECT display_name, version FROM clients WHERE tenant_id = ? AND client_id = ?",
+              (TENANT_A, CLIENT_A),
+          ).fetchone()
+          assert (updated["display_name"], updated["version"]) == ("Updated Client", 2)
+  '''
+          if old_row in text:
+              text = text.replace(old_row, new_row, 1)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Commit fixture correction when changed
+        run: |
+          if git diff --quiet; then
+            echo "Schema fixture already corrected."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/test-d1-schema.py
+          git commit -m "test: isolate D1 constraint fixture transactions"
+          git push origin HEAD:repository-step-3-d1-catalog-foundation
