@@ -1,0 +1,38 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Breaking Fixture",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Problem": {
+        "type": "object",
+        "required": [
+          "code",
+          "correlation_id"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

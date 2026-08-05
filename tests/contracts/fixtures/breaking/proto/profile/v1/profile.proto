@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package browser_profile.profile.v1;
+
+message TenantActorContext {
+  string tenant_id = 1;
+  string actor_id = 2;
+}
+
+message ProfileReference {
+  string profile_id = 1;
+  string generation_id = 2;
+}

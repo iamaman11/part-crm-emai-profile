@@ -2,21 +2,18 @@
   "schema_version": 1,
   "as_of": "2026-08-05",
   "repository_step": {
-    "number": 1,
-    "name": "Cloudflare cold-build and binding spike",
-    "status": "completed",
-    "tracking_issue": 2,
-    "baseline": "cc345301baaa1e549caf4045ce16739402edca02",
-    "technical_evidence_head": "196804579bd6535b75dd964bc50fd184703b52cb",
-    "accepted_source_head": "990fe8262f933b1a20a0c786a6a5ebc26f4fe7e2",
-    "technical_quality_gate_run_id": 31036328555,
-    "final_quality_gate_run_id": 31036967681,
-    "squash_merge": "cba724a0d7fd116859a30d9e0101e56349c1358c"
-  },
-  "next_repository_step": {
     "number": 2,
     "name": "Domain and contract skeleton",
+    "status": "in_progress",
     "tracking_issue": 7,
+    "baseline": "29956f6a71ea5f76618e97c651276f2a43698870",
+    "technical_evidence_head": "a3d0852e11708297bb7d5e04ed23ff981e774d7c",
+    "technical_quality_gate_run_id": 31039199212
+  },
+  "next_repository_step": {
+    "number": 3,
+    "name": "D1 catalog foundation",
+    "tracking_issue": 10,
     "status": "planned"
   },
   "accepted_steps": [
@@ -33,7 +30,8 @@
       "name": "Cloudflare cold-build and binding spike",
       "accepted_source_head": "990fe8262f933b1a20a0c786a6a5ebc26f4fe7e2",
       "quality_gate_run_id": 31036967681,
-      "squash_merge": "cba724a0d7fd116859a30d9e0101e56349c1358c"
+      "squash_merge": "cba724a0d7fd116859a30d9e0101e56349c1358c",
+      "evidence_sync_merge": "29956f6a71ea5f76618e97c651276f2a43698870"
     }
   ],
   "product": {
@@ -45,6 +43,8 @@
     "production_code": false,
     "rust_workspace": "accepted_step_0",
     "cloudflare_worker": "accepted_cold_build_worker_0_8_5",
+    "domain_contract_skeleton": "technical_gate_passed_pr_9",
+    "d1_catalog": "not_started",
     "windows_bridge": "not_started",
     "frontend": "not_started"
   },
@@ -54,10 +54,14 @@
     "cloudflare_worker_build": "accepted_quality_gate_run_31036967681",
     "cloudflare_bindings_compile": "d1_r2_queue_durable_object_static_assets_passed",
     "cloudflare_release_artifact": "shim_and_wasm_verified",
+    "domain_state_machines": "passed_quality_gate_run_31039199212",
+    "architecture_dependency_gate": "positive_and_negative_passed_run_31039199212",
+    "contract_compatibility_gate": "positive_and_breaking_fixture_passed_run_31039199212",
+    "contract_baseline_immutability": "pending_final_step_2_quality_gate",
     "cloudflare_remote_staging": "not_proven_external_gate",
     "single_device_cloud_smoke": "passed_with_documented_limitations",
     "multi_device": "not_proven",
-    "concurrent_writer_fencing": "not_proven",
+    "concurrent_writer_fencing": "domain_rule_only_not_distributed_proof",
     "production_key_recovery": "blocked",
     "production_fingerprint_certification": "blocked"
   },

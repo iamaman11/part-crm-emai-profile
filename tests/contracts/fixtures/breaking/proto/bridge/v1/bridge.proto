@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package browser_profile.bridge.v1;
+
+message ClaimLaunchIntentRequest {
+  string launch_intent_id = 1;
+  string device_id = 2;
+}
+
+message ClaimLaunchIntentResponse {
+  string profile_id = 1;
+  uint64 lease_epoch = 2;
+  string fencing_token = 3;
+}
