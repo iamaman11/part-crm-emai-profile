@@ -136,10 +136,7 @@ mod tests {
             classify_route("GET", "/bridge/claim/code"),
             RouteClass::BridgeDeniedByDefault
         );
-        assert_eq!(
-            classify_route("GET", "/profiles"),
-            RouteClass::StaticAssets
-        );
+        assert_eq!(classify_route("GET", "/profiles"), RouteClass::StaticAssets);
     }
 
     #[test]
