@@ -1,11 +1,14 @@
 # Repository Step 2 — Domain And Contract Skeleton Evidence
 
 **Дата:** 2026-08-05  
-**Статус:** passed for technical PR scope; merge acceptance pending  
+**Статус:** accepted for bounded domain/contract scope  
 **Baseline:** `29956f6a71ea5f76618e97c651276f2a43698870`  
 **Technical evidence head:** `a3d0852e11708297bb7d5e04ed23ff981e774d7c`  
+**Accepted source head:** `70fdbe8b494f61aeda639e004e54ea088e4ddc3e`  
 **Pull request:** #9  
-**Technical Quality Gate run:** `31039199212`
+**Technical Quality Gate run:** `31039199212`  
+**Final Quality Gate run:** `31039802642`  
+**Squash merge:** `14e96a7841c3652767f37ee76151c3cf39be6301`
 
 ## 1. Реализованные Pure Boundaries
 
@@ -95,7 +98,11 @@ allowlist.
 
 ## 4. Permanent CI Result
 
-Quality Gate run `31039199212` succeeded for the technical implementation head:
+Quality Gate run `31039199212` succeeded for the technical implementation head.
+Quality Gate run `31039802642` repeated the complete gate on the exact accepted
+source head after evidence, status and immutable-baseline governance were added.
+
+Both accepted runs covered:
 
 1. `Rust Linux and WASM`
    - repository policy scripts compile;
@@ -103,6 +110,7 @@ Quality Gate run `31039199212` succeeded for the technical implementation head:
    - forbidden architecture fixture is rejected;
    - current v1 contracts pass;
    - breaking protobuf fixture is rejected;
+   - accepted v1 baseline immutability gate;
    - rustfmt and Clippy with warnings denied;
    - all native pure-crate tests;
    - all governed pure crates compile for `wasm32-unknown-unknown`;
@@ -130,6 +138,7 @@ Quality Gate run `31039199212` succeeded for the technical implementation head:
 - profile, session and mailbox transitions fail closed for the covered cases;
 - storage/provider SDKs have not entered pure domain/application boundaries;
 - current v1 contracts have a machine-enforced compatibility floor;
+- accepted v1 baseline cannot be silently rewritten by an ordinary later PR;
 - negative architecture and compatibility fixtures are actually rejected;
 - the accepted Step 1 Worker build remains green after the domain expansion.
 
