@@ -2,6 +2,7 @@
 
 use client_domain::{ClientError, ClientKind, ClientRecord};
 use contracts::ProblemCode;
+use core::fmt;
 use identity_access_domain::{
     AuthorizationDecision, Membership, ProfileCapability, ProfileGrant, authorize_profile,
 };
@@ -152,6 +153,14 @@ impl ApplicationError {
         self.code
     }
 }
+
+impl fmt::Display for ApplicationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.code.stable_code())
+    }
+}
+
+impl std::error::Error for ApplicationError {}
 
 #[cfg(test)]
 mod tests {
