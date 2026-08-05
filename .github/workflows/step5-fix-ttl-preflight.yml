@@ -1,0 +1,238 @@
+name: Temporary Step 5 TTL Preflight Fix
+
+on:
+  push:
+    branches:
+      - repository-step-5-profile-coordinator
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-5-profile-coordinator
+
+      - name: Patch coordinator TTL semantics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/session-domain/src/coordinator.rs")
+          text = path.read_text(encoding="utf-8")
+
+          old = '''        let lease = self
+            .active_lease
+            .as_mut()
+            .ok_or(CoordinatorError::NoActiveLease)?;
+        if !lease.accepts_writer(session_id, epoch, fencing_token) {
+            return Err(CoordinatorError::StaleWriter);
+        }
+        if now < lease.last_heartbeat_at {
+            return Err(CoordinatorError::ReorderedHeartbeat);
+        }
+        if now >= lease.hard_expires_at {
+            return Err(CoordinatorError::HardTtlExpired);
+        }
+
+        let proposed_idle = add_millis(now, self.config.idle_timeout_ms)?;
+        lease.last_heartbeat_at = now;
+'''
+          new = '''        let lease = self
+            .active_lease
+            .as_ref()
+            .ok_or(CoordinatorError::NoActiveLease)?;
+        if !lease.accepts_writer(session_id, epoch, fencing_token) {
+            return Err(CoordinatorError::StaleWriter);
+        }
+        if now < lease.last_heartbeat_at {
+            return Err(CoordinatorError::ReorderedHeartbeat);
+        }
+        if let Some(outcome) = self.timeout_if_due(now) {
+            return Ok(outcome);
+        }
+
+        let proposed_idle = add_millis(now, self.config.idle_timeout_ms)?;
+        let lease = self
+            .active_lease
+            .as_mut()
+            .ok_or(CoordinatorError::NoActiveLease)?;
+        lease.last_heartbeat_at = now;
+'''
+          if text.count(old) != 1:
+              raise SystemExit("unexpected heartbeat shape")
+          text = text.replace(old, new)
+
+          old = '''        disposition: ReleaseDisposition,
+        _now: UnixMillis,
+    ) -> Result<CoordinatorOutcome, CoordinatorError> {
+        let lease = self
+            .active_lease
+            .as_ref()
+            .ok_or(CoordinatorError::NoActiveLease)?;
+        if !lease.accepts_writer(session_id, epoch, fencing_token) {
+            return Err(CoordinatorError::StaleWriter);
+        }
+
+        self.active_lease = None;
+'''
+          new = '''        disposition: ReleaseDisposition,
+        now: UnixMillis,
+    ) -> Result<CoordinatorOutcome, CoordinatorError> {
+        let lease = self
+            .active_lease
+            .as_ref()
+            .ok_or(CoordinatorError::NoActiveLease)?;
+        if !lease.accepts_writer(session_id, epoch, fencing_token) {
+            return Err(CoordinatorError::StaleWriter);
+        }
+        if let Some(outcome) = self.timeout_if_due(now) {
+            return Ok(outcome);
+        }
+
+        self.active_lease = None;
+'''
+          if text.count(old) != 1:
+              raise SystemExit("unexpected release shape")
+          text = text.replace(old, new)
+
+          old = '''    fn begin_drain(&mut self, now: UnixMillis) -> Result<CoordinatorOutcome, CoordinatorError> {
+        if self.status != CoordinatorStatus::Active || self.active_lease.is_none() {
+            return Err(CoordinatorError::NoActiveLease);
+        }
+        let deadline = add_millis(now, self.config.drain_timeout_ms)?;
+'''
+          new = '''    fn begin_drain(&mut self, now: UnixMillis) -> Result<CoordinatorOutcome, CoordinatorError> {
+        if self.status != CoordinatorStatus::Active || self.active_lease.is_none() {
+            return Err(CoordinatorError::NoActiveLease);
+        }
+        if let Some(outcome) = self.timeout_if_due(now) {
+            return Ok(outcome);
+        }
+        let deadline = add_millis(now, self.config.drain_timeout_ms)?;
+'''
+          if text.count(old) != 1:
+              raise SystemExit("unexpected begin_drain shape")
+          text = text.replace(old, new)
+
+          old = '''        if let Some(intent) = &self.pending_intent
+            && now > intent.expires_at
+        {
+            self.pending_intent = None;
+            return Ok(CoordinatorOutcome::LaunchIntentExpired);
+        }
+
+        let Some(lease) = &self.active_lease else {
+            return Ok(CoordinatorOutcome::NoChange);
+        };
+        let timeout = if self.status == CoordinatorStatus::Draining
+            && self.drain_deadline.is_some_and(|deadline| now >= deadline)
+        {
+            Some(TimeoutKind::Drain)
+        } else if now >= lease.hard_expires_at {
+            Some(TimeoutKind::Hard)
+        } else if now >= lease.idle_expires_at {
+            Some(TimeoutKind::Idle)
+        } else {
+            None
+        };
+
+        if let Some(kind) = timeout {
+            self.active_lease = None;
+            self.pending_intent = None;
+            self.drain_deadline = None;
+            self.status = CoordinatorStatus::Uncertain;
+            return Ok(CoordinatorOutcome::TimedOut { kind });
+        }
+        Ok(CoordinatorOutcome::NoChange)
+    }
+
+    fn mark_recovered'''
+          new = '''        if let Some(intent) = &self.pending_intent
+            && now >= intent.expires_at
+        {
+            self.pending_intent = None;
+            return Ok(CoordinatorOutcome::LaunchIntentExpired);
+        }
+        Ok(self
+            .timeout_if_due(now)
+            .unwrap_or(CoordinatorOutcome::NoChange))
+    }
+
+    fn timeout_if_due(&mut self, now: UnixMillis) -> Option<CoordinatorOutcome> {
+        let lease = self.active_lease.as_ref()?;
+        let kind = if self.status == CoordinatorStatus::Draining
+            && self.drain_deadline.is_some_and(|deadline| now >= deadline)
+        {
+            Some(TimeoutKind::Drain)
+        } else if now >= lease.hard_expires_at {
+            Some(TimeoutKind::Hard)
+        } else if now >= lease.idle_expires_at {
+            Some(TimeoutKind::Idle)
+        } else {
+            None
+        }?;
+
+        self.active_lease = None;
+        self.pending_intent = None;
+        self.drain_deadline = None;
+        self.status = CoordinatorStatus::Uncertain;
+        Some(CoordinatorOutcome::TimedOut { kind })
+    }
+
+    fn mark_recovered'''
+          if text.count(old) != 1:
+              raise SystemExit("unexpected tick shape")
+          text = text.replace(old, new)
+
+          marker = '''    #[test]
+    fn drain_timeout_never_reports_a_clean_release() -> Result<(), Box<dyn std::error::Error>> {'''
+          test = '''    #[test]
+    fn late_clean_release_becomes_uncertain() -> Result<(), Box<dyn std::error::Error>> {
+        let mut state = coordinator()?;
+        issue(&mut state, 1, 1, 10)?;
+        claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
+        let release = state.apply(envelope(
+            "idem_late_release_01JCOORDINATOR",
+            3,
+            3,
+            CoordinatorCommand::Release {
+                session_id: SessionId::parse("session_01JCOORDINATOR")?,
+                epoch: 1,
+                fencing_token: FencingToken::parse("fence_01JCOORDINATOR")?,
+                disposition: ReleaseDisposition::Clean,
+                now: UnixMillis::new(21),
+            },
+        )?)?;
+        assert_eq!(
+            release.outcome(),
+            &CoordinatorOutcome::TimedOut {
+                kind: TimeoutKind::Idle
+            }
+        );
+        assert_eq!(state.status(), CoordinatorStatus::Uncertain);
+        Ok(())
+    }
+
+    #[test]
+    fn drain_timeout_never_reports_a_clean_release() -> Result<(), Box<dyn std::error::Error>> {'''
+          if text.count(marker) != 1:
+              raise SystemExit("unexpected test insertion marker")
+          text = text.replace(marker, test)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+          cargo fmt --all
+          rm .github/workflows/step5-fix-ttl-preflight.yml
+
+      - name: Commit TTL fix and workflow removal
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/session-domain/src/coordinator.rs .github/workflows/step5-fix-ttl-preflight.yml
+          git commit -m "Step 5: enforce lease TTL before writer transitions"
+          git push origin HEAD:repository-step-5-profile-coordinator
