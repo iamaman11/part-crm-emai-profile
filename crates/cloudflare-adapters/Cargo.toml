@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+identity-access-domain.workspace = true
 profile-platform-primitives.workspace = true
 serde = "=1.0.229"
 worker.workspace = true
