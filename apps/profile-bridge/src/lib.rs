@@ -96,9 +96,10 @@ mod tests {
         let device_id = DeviceId::parse("device_01JBRIDGE")?;
         let identity = FakeDeviceIdentity::new(device_id.clone());
         let mut keys = FakeDeviceKeyStore::default();
-        assert_eq!(identity.device_id()?, device_id);
-        let first = keys.ensure_key_handle(identity.device_id()?.borrow())?;
-        let second = keys.ensure_key_handle(identity.device_id()?.borrow())?;
+        let resolved = identity.device_id()?;
+        assert_eq!(resolved, device_id);
+        let first = keys.ensure_key_handle(&resolved)?;
+        let second = keys.ensure_key_handle(&resolved)?;
         assert_eq!(first, second);
         Ok(())
     }
