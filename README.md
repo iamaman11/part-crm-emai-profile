@@ -12,12 +12,18 @@ adapters, а не переносит Camoufox или локальный browser 
 
 **Repository Step 0 — Executable Foundation принят.** Exact Rust workspace,
 pure primitives crate и постоянный Linux/Windows/WASM quality gate подтверждены
-PR #4 и merged evidence. Следующий шаг — **Repository Step 1: Cloudflare
-cold-build and binding spike** (issue #2).
+PR #4 и merged evidence.
 
-Product functionality, Cloudflare Worker, React UI и Windows Profile Bridge ещё
-не реализованы. Машиночитаемый статус: [`docs/status.json`](docs/status.json).
-Готовность повышается только после merge и проверяемого CI/evidence.
+**Repository Step 1 — Cloudflare cold-build and binding spike выполняется в PR
+#6.** Permanent Quality Gate run `31036328555` подтвердил exact
+`worker 0.8.5`, D1/R2/Queue/Durable Object/Static Assets API surface и release
+artifact через `worker-build 0.8.5`. Это repository cold-build evidence, а не
+доказательство remote Cloudflare deployment.
+
+Минимальный Worker skeleton существует только в Step 1 branch до merge. React UI,
+Windows Profile Bridge, D1 migrations и product use cases ещё не реализованы.
+Машиночитаемый статус: [`docs/status.json`](docs/status.json). Готовность
+повышается только после merge и проверяемого CI/evidence.
 
 Единственный разрешенный источник legacy-профилей:
 
@@ -53,6 +59,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Data classification](docs/DATA_CLASSIFICATION.md)
 - [Privacy and retention governance](docs/PRIVACY_AND_RETENTION.md)
 - [Test and evidence index](docs/TEST_EVIDENCE_INDEX.md)
+- [Cloudflare cold-build evidence](docs/evidence/2026-08-05-repository-step-1-cloudflare-cold-build.md)
 - [Проверенные выводы исследования](docs/RESEARCH_FINDINGS.md)
 - [Cloud profile smoke test](docs/CLOUD_PROFILE_SMOKE_TEST.md)
 - [Текущая проверка готовности плана](docs/PLAN_READINESS_REVIEW.md)
@@ -81,7 +88,8 @@ Standalone v1 не требует отдельной VM, PostgreSQL или Keycl
 ## Базовый Стек
 
 - Rust `1.97.1`, edition `2024`, exact toolchain;
-- `workers-rs`/WASM для Cloudflare Worker после Step 1 cold-build pin;
+- `worker 0.8.5`, direct `wasm-bindgen 0.2.126` и `worker-build 0.8.5` для
+  Cloudflare Worker baseline;
 - Tokio только в native Profile Bridge и локальных tools;
 - Cloudflare Workers Static Assets для React SPA и same-origin API;
 - Cloudflare Access identity отдельно от application memberships/grants;
@@ -91,9 +99,10 @@ Standalone v1 не требует отдельной VM, PostgreSQL или Keycl
 - embedded Python/Camoufox runtime как отдельный signed bundle;
 - OpenAPI для web API и protobuf для Bridge/CRM contracts.
 
-Exact Cloudflare package versions принимаются только после воспроизводимого Step
-1 cold-build. Исследованный browser/runtime baseline не является автоматическим
-upgrade channel.
+Step 1 подтвердил reproducible repository cold build этих Cloudflare pins.
+Каждое обновление SDK остаётся отдельным compatibility gate. Remote staging,
+binding behavior и account recovery подтверждаются отдельным evidence и пока не
+считаются выполненными.
 
 ## Ключевые Инварианты
 
