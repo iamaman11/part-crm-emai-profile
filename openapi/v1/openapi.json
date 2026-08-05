@@ -1278,7 +1278,7 @@
           "title",
           "status",
           "code",
-          "correlationId"
+          "correlation_id"
         ],
         "properties": {
           "type": {
@@ -1305,7 +1305,7 @@
               "internal_failure"
             ]
           },
-          "correlationId": {
+          "correlation_id": {
             "type": "string",
             "minLength": 1
           }
