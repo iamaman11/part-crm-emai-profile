@@ -18,6 +18,7 @@ smoke test does not promote unrelated production gates.
 | Repository Step 2 / PR #9 | accepted | typed pure domain/application boundaries, native+WASM state-machine tests, active architecture and immutable v1 contract compatibility gates | D1 persistence, Access, distributed fencing, Bridge/runtime or production completeness |
 | Repository Step 3 / PR #12 | accepted | strict D1 schema, migration replay, tenant constraints, typed adapter boundary, optimistic CAS and synthetic transaction envelope | remote D1, Access identity, full API ACL slice, backup/restore or production readiness |
 | Repository Step 4 / PR #15 | accepted | Access JWT and fake identity convergence, active membership resolution, owner bootstrap/transfer, membership lifecycle, explicit client/profile ACL, neutral concealment, governed atomic commands and authenticated Worker packaging | remote Access policy, remote D1, Profile Coordinator, Bridge/runtime, multi-device or production readiness |
+| Repository Step 5 / PR #18 | accepted | per-profile Durable Object coordinator, monotonic epoch/fencing, stale-writer and timeout uncertainty rules, authenticated explicit profile ACL, replayable storage, repairable D1 projection/outbox and release Worker packaging | remote Durable Object behavior, physical multi-device runtime, Windows Bridge, encrypted generations or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -50,8 +51,8 @@ external remediation remains issue #1.
 - user/legacy profile data involved: no.
 
 The upstream `worker-build 0.8.5` installation emitted yanked-package warnings
-for two build-tool transitive versions. This is documented as an upgrade and
-supply-chain review item; it is not a Worker runtime dependency claim.
+for two build-tool transitive versions. This remains an upgrade and supply-chain
+review item; it is not a Worker runtime dependency claim.
 
 ### Repository Step 2 Evidence
 
@@ -102,7 +103,7 @@ supply-chain review item; it is not a Worker runtime dependency claim.
 - squash merge: `bd3db24ffc62d50654e385e587cab3e6a01b928c`;
 - jobs: `Rust Linux and WASM`, `D1 Catalog Migrations`, `Rust Windows`,
   `Cloudflare Worker Release Build`;
-- Access RS256/JWK/WebCrypto adapter and deterministic fake adapter converge on
+- Access RS256/JWK/WebCrypto and deterministic fake identity adapters converge on
   the same verified external identity contract;
 - active tenant membership resolves to `ActorContext`; missing, suspended and
   revoked membership is denied for covered flows;
@@ -122,6 +123,36 @@ supply-chain review item; it is not a Worker runtime dependency claim.
 - detailed report:
   [`evidence/2026-08-06-repository-step-4-identity-clients-acl.md`](evidence/2026-08-06-repository-step-4-identity-clients-acl.md);
 - Cloudflare credentials, remote resources or user data involved: no.
+
+### Repository Step 5 Evidence
+
+- baseline: `bd292093778c954f2126c2165fd65c78cbe37f65`;
+- accepted source head: `e338186e53f02784d1d685ae3cd761f3cef34ef7`;
+- exact-head Quality Gate run: `31056722531`, conclusion `success`;
+- squash merge: `78931f529152c209ebececbcbef1aca770b7e3e0`;
+- jobs: `Rust Linux and WASM`, `D1 Catalog Migrations`, `Rust Windows`,
+  `Cloudflare Worker Release Build`;
+- deterministic opaque-profile Durable Object naming and replayable typed journal:
+  passed;
+- monotonic epoch, server-generated fencing token and delayed stale-writer
+  rejection after turnover: passed;
+- duplicate, reordered, stale-version and conflicting-idempotency commands:
+  rejected as required;
+- idle, hard and drain TTL uncertainty, including late nominally clean release:
+  passed;
+- active actor and explicit profile ACL are resolved before Durable Object access;
+- deliberate assignment-derived coordinator authorization fixture: rejected as
+  required;
+- migration `0004` applies and replays; append-only projection commands,
+  materialized latest projection and outbox evidence are verified;
+- stale projection, same-sequence conflict and repair-from-authoritative-snapshot
+  tests: passed;
+- real Worker dependency graph checks for WASM and packages a verified release
+  shim and Wasm artifact;
+- detailed report:
+  [`evidence/2026-08-06-repository-step-5-profile-coordinator.md`](evidence/2026-08-06-repository-step-5-profile-coordinator.md);
+- Cloudflare credentials, remote resources, physical devices or user data
+  involved: no.
 
 ## 2. Required Permanent CI Evidence
 
