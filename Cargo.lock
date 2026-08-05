@@ -3,6 +3,19 @@
 version = 4
 
 [[package]]
+name = "application-ports"
+version = "0.1.0"
+dependencies = [
+ "client-domain",
+ "contracts",
+ "identity-access-domain",
+ "mailbox-domain",
+ "profile-domain",
+ "profile-platform-primitives",
+ "session-domain",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.91"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -55,6 +68,20 @@ dependencies = [
  "js-sys",
  "num-traits",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "client-domain"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
+]
+
+[[package]]
+name = "contracts"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
 ]
 
 [[package]]
@@ -257,6 +284,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "identity-access-domain"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
+]
+
+[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -299,6 +333,13 @@ name = "litemap"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
+
+[[package]]
+name = "mailbox-domain"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
+]
 
 [[package]]
 name = "matchit"
@@ -375,6 +416,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "profile-domain"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
 ]
 
 [[package]]
@@ -466,6 +514,13 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "session-domain"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
 ]
 
 [[package]]
@@ -575,6 +630,19 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+]
+
+[[package]]
+name = "use-cases"
+version = "0.1.0"
+dependencies = [
+ "application-ports",
+ "client-domain",
+ "contracts",
+ "identity-access-domain",
+ "profile-domain",
+ "profile-platform-primitives",
+ "session-domain",
 ]
 
 [[package]]
