@@ -1,6 +1,6 @@
 use crate::d1_identity_acl::{
-    ClientGrantMutation, CreateInvitationMutation, CreateProfileMutation, MembershipStatusMutation,
-    MutationEnvelope, OwnerTransferMutation, ProfileGrantMutation, AssignProfileMutation,
+    AssignProfileMutation, ClientGrantMutation, CreateInvitationMutation, CreateProfileMutation,
+    MembershipStatusMutation, MutationEnvelope, OwnerTransferMutation, ProfileGrantMutation,
 };
 use profile_platform_primitives::{ActorContext, AggregateVersion};
 use worker::d1::{D1Database, D1Result};
