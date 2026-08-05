@@ -416,7 +416,10 @@ async fn schedule_alarm(state: &State, deadline: Option<UnixMillis>) -> Result<(
     match deadline {
         Some(deadline) => {
             let date = Date::new(DateInit::Millis(deadline.value()));
-            state.storage().set_alarm(ScheduledTime::new(date)).await
+            state
+                .storage()
+                .set_alarm(ScheduledTime::new(date.into()))
+                .await
         }
         None => state.storage().delete_alarm().await,
     }
