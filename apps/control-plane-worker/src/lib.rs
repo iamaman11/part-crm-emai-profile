@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
 mod access_session;
+mod api;
 
-use access_session::{correlation_hint, neutral_not_found, session_response};
+use access_session::session_response;
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use cloudflare_adapters::d1_identity_acl::D1IdentityAclRepository;
 use control_plane_contract::{
@@ -14,7 +15,7 @@ use worker::{
 };
 
 #[event(fetch, respond_with_errors)]
-pub async fn main(request: Request, env: Env, _context: Context) -> Result<Response> {
+pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
     let route = classify_route(request.method().as_ref(), &request.path());
     match route {
         RouteClass::HealthApi => Response::ok("control-plane-ready"),
@@ -37,14 +38,8 @@ pub async fn main(request: Request, env: Env, _context: Context) -> Result<Respo
         | RouteClass::ProfileCollectionApi
         | RouteClass::ProfileResourceApi
         | RouteClass::ProfileAssignmentApi
-        | RouteClass::ProfileGrantApi => authenticated_api_boundary(&request, &env),
+        | RouteClass::ProfileGrantApi => api::dispatch(route, &mut request, &env).await,
     }
-}
-
-fn authenticated_api_boundary(request: &Request, env: &Env) -> Result<Response> {
-    let catalog = env.d1(D1_CATALOG_BINDING)?;
-    let _identity_acl_repository = D1IdentityAclRepository::new(catalog);
-    neutral_not_found(&correlation_hint(request))
 }
 
 fn binding_probe(env: &Env) -> Result<Response> {
