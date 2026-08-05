@@ -14,6 +14,7 @@ smoke test does not promote unrelated production gates.
 | `CLOUD_PROFILE_SMOKE_TEST.md` | passed with limitations | synthetic one-device create/close/encrypt/R2/restore/replay and bounded fingerprint replay | multi-device, production keys, fencing, disaster recovery, full fingerprint certification |
 | ADR-0002 evidence | accepted partial | locally executed immutable cloud generation model is viable | arbitrary runtime/device portability |
 | Repository Step 0 / PR #4 | accepted | exact Rust `1.97.1` locked workspace; Linux fmt/Clippy/tests; Windows tests; primitives WASM compile; status validation; current-tree high-confidence secret scan | Cloudflare SDK compatibility, Windows Bridge, historical secret remediation or production security |
+| Repository Step 1 / PR #6 | passed in PR, pending merge | exact `worker 0.8.5` D1/R2/Queue/Durable Object/Static Assets compile and `worker-build 0.8.5` release artifact | real Cloudflare deployment, binding behavior, migrations, DO consistency, remote rollback or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -27,6 +28,24 @@ smoke test does not promote unrelated production gates.
 The tracked-file scan covers the accepted tree only. It does not prove that the
 known legacy credential was rotated or absent from repository history; that
 external remediation remains issue #1.
+
+### Repository Step 1 Evidence
+
+- baseline: `cc345301baaa1e549caf4045ce16739402edca02`;
+- technical evidence head: `196804579bd6535b75dd964bc50fd184703b52cb`;
+- permanent Quality Gate run: `31036328555`, conclusion `success`;
+- jobs: `Rust Linux and WASM`, `Rust Windows`, `Cloudflare Worker Release Build`;
+- exact runtime/build pins: Rust `1.97.1`, `worker 0.8.5`,
+  `wasm-bindgen 0.2.126`, `worker-build 0.8.5`;
+- output checks: `build/worker/shim.mjs` and generated Wasm present;
+- detailed report:
+  [`evidence/2026-08-05-repository-step-1-cloudflare-cold-build.md`](evidence/2026-08-05-repository-step-1-cloudflare-cold-build.md);
+- Cloudflare credentials or real resources involved: no;
+- user/legacy profile data involved: no.
+
+The upstream `worker-build 0.8.5` installation emitted yanked-package warnings
+for two build-tool transitive versions. This is documented as an upgrade and
+supply-chain review item; it is not a Worker runtime dependency claim.
 
 ## 2. Required Permanent CI Evidence
 
