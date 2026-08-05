@@ -1,0 +1,37 @@
+# ==============================================================================
+# Camoufox Anti-Detect Browser Profile Lifecycle Management - .gitignore
+# ==============================================================================
+
+# Private Browser Profiles & Cookies (CRITICAL: EXCLUDE ALL SESSION DATA)
+browser_profiles/
+temp/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.bin
+*.lz4
+lock
+.parentlock
+
+# Secrets & Environment Variables
+.env
+*.pem
+*.key
+
+# Python Virtual Environment & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# IDE & Editor Settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs & Temporary Files
+*.log
+scratch/
