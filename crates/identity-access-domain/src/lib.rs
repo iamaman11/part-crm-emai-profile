@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod invitation;
 pub mod lifecycle;
 
 use profile_platform_primitives::{ActorContext, ActorId, ClientId, ProfileId, TenantId};
@@ -91,6 +92,26 @@ impl ProfileGrant {
             role,
         }
     }
+
+    #[must_use]
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+
+    #[must_use]
+    pub const fn actor_id(&self) -> &ActorId {
+        &self.actor_id
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn role(&self) -> ProfileGrantRole {
+        self.role
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,6 +142,26 @@ impl ClientGrant {
             client_id,
             role,
         }
+    }
+
+    #[must_use]
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+
+    #[must_use]
+    pub const fn actor_id(&self) -> &ActorId {
+        &self.actor_id
+    }
+
+    #[must_use]
+    pub const fn client_id(&self) -> &ClientId {
+        &self.client_id
+    }
+
+    #[must_use]
+    pub const fn role(&self) -> ClientGrantRole {
+        self.role
     }
 }
 
@@ -181,17 +222,17 @@ pub fn authorize_profile(
         return AuthorizationDecision::Denied(DenyReason::GrantMissing);
     };
 
-    if &grant.tenant_id != actor.tenant_scope().tenant_id() {
+    if grant.tenant_id() != actor.tenant_scope().tenant_id() {
         return AuthorizationDecision::Denied(DenyReason::TenantMismatch);
     }
-    if &grant.actor_id != actor.actor_id() {
+    if grant.actor_id() != actor.actor_id() {
         return AuthorizationDecision::Denied(DenyReason::ActorMismatch);
     }
-    if &grant.profile_id != profile_id {
+    if grant.profile_id() != profile_id {
         return AuthorizationDecision::Denied(DenyReason::GrantMissing);
     }
 
-    match (grant.role, capability) {
+    match (grant.role(), capability) {
         (ProfileGrantRole::Viewer, ProfileCapability::View)
         | (ProfileGrantRole::Operator, ProfileCapability::View | ProfileCapability::Operate) => {
             AuthorizationDecision::Allowed
@@ -225,17 +266,17 @@ pub fn authorize_client(
         return AuthorizationDecision::Denied(DenyReason::GrantMissing);
     };
 
-    if &grant.tenant_id != actor.tenant_scope().tenant_id() {
+    if grant.tenant_id() != actor.tenant_scope().tenant_id() {
         return AuthorizationDecision::Denied(DenyReason::TenantMismatch);
     }
-    if &grant.actor_id != actor.actor_id() {
+    if grant.actor_id() != actor.actor_id() {
         return AuthorizationDecision::Denied(DenyReason::ActorMismatch);
     }
-    if &grant.client_id != client_id {
+    if grant.client_id() != client_id {
         return AuthorizationDecision::Denied(DenyReason::GrantMissing);
     }
 
-    match (grant.role, capability) {
+    match (grant.role(), capability) {
         (ClientGrantRole::Viewer, ClientCapability::View)
         | (ClientGrantRole::Editor, ClientCapability::View | ClientCapability::Edit) => {
             AuthorizationDecision::Allowed
