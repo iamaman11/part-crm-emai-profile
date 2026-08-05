@@ -1,8 +1,15 @@
 #![forbid(unsafe_code)]
 
+pub const D1_CATALOG_BINDING: &str = "CATALOG_DB";
+pub const R2_PROFILES_BINDING: &str = "PROFILE_OBJECTS";
+pub const VERIFICATION_QUEUE_BINDING: &str = "GENERATION_VERIFICATION";
+pub const PROFILE_COORDINATOR_BINDING: &str = "PROFILE_COORDINATOR";
+pub const STATIC_ASSETS_BINDING: &str = "ASSETS";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteClass {
     HealthApi,
+    BindingProbeApi,
     AuthenticatedSessionApi,
     OwnerBootstrapApi,
     OwnerTransferApi,
@@ -16,6 +23,7 @@ pub enum RouteClass {
     ProfileResourceApi,
     ProfileAssignmentApi,
     ProfileGrantApi,
+    BridgeDeniedByDefault,
     StaticAssets,
 }
 
@@ -23,6 +31,12 @@ pub enum RouteClass {
 pub fn classify_route(method: &str, path: &str) -> RouteClass {
     if method == "GET" && path == "/api/v1/health" {
         return RouteClass::HealthApi;
+    }
+    if method == "GET" && path == "/api/v1/bindings" {
+        return RouteClass::BindingProbeApi;
+    }
+    if path.starts_with("/bridge/") {
+        return RouteClass::BridgeDeniedByDefault;
     }
     if method == "GET" && path == "/api/v1/session" {
         return RouteClass::AuthenticatedSessionApi;
@@ -81,7 +95,13 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
 
 #[must_use]
 pub const fn is_authenticated_api(route: RouteClass) -> bool {
-    !matches!(route, RouteClass::HealthApi | RouteClass::StaticAssets)
+    !matches!(
+        route,
+        RouteClass::HealthApi
+            | RouteClass::BindingProbeApi
+            | RouteClass::BridgeDeniedByDefault
+            | RouteClass::StaticAssets
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,11 +123,27 @@ mod tests {
     use super::{RouteClass, classify_route, health_payload, is_authenticated_api};
 
     #[test]
-    fn only_exact_health_route_is_classified_as_health() {
+    fn preserves_foundation_routes() {
         assert_eq!(
             classify_route("GET", "/api/v1/health"),
             RouteClass::HealthApi
         );
+        assert_eq!(
+            classify_route("GET", "/api/v1/bindings"),
+            RouteClass::BindingProbeApi
+        );
+        assert_eq!(
+            classify_route("GET", "/bridge/claim/code"),
+            RouteClass::BridgeDeniedByDefault
+        );
+        assert_eq!(
+            classify_route("GET", "/profiles"),
+            RouteClass::StaticAssets
+        );
+    }
+
+    #[test]
+    fn only_exact_health_route_is_classified_as_health() {
         assert_eq!(
             classify_route("POST", "/api/v1/health"),
             RouteClass::StaticAssets
