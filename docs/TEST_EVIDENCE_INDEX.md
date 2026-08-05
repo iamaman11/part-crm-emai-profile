@@ -1,7 +1,7 @@
 # Test And Evidence Index
 
 **Статус:** normative evidence registry  
-**Дата:** 2026-08-05
+**Дата:** 2026-08-06
 
 A claim is accepted only within the scope of its referenced evidence. Passing one
 smoke test does not promote unrelated production gates.
@@ -17,6 +17,7 @@ smoke test does not promote unrelated production gates.
 | Repository Step 1 / PR #6 | accepted | exact `worker 0.8.5` D1/R2/Queue/Durable Object/Static Assets compile and `worker-build 0.8.5` release artifact | real Cloudflare deployment, binding behavior, migrations, DO consistency, remote rollback or production readiness |
 | Repository Step 2 / PR #9 | accepted | typed pure domain/application boundaries, native+WASM state-machine tests, active architecture and immutable v1 contract compatibility gates | D1 persistence, Access, distributed fencing, Bridge/runtime or production completeness |
 | Repository Step 3 / PR #12 | accepted | strict D1 schema, migration replay, tenant constraints, typed adapter boundary, optimistic CAS and synthetic transaction envelope | remote D1, Access identity, full API ACL slice, backup/restore or production readiness |
+| Repository Step 4 / PR #15 | accepted | Access JWT and fake identity convergence, active membership resolution, owner bootstrap/transfer, membership lifecycle, explicit client/profile ACL, neutral concealment, governed atomic commands and authenticated Worker packaging | remote Access policy, remote D1, Profile Coordinator, Bridge/runtime, multi-device or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -89,6 +90,37 @@ supply-chain review item; it is not a Worker runtime dependency claim.
 - Worker with the D1 adapter in its dependency graph: checked and release packaged;
 - detailed report:
   [`evidence/2026-08-05-repository-step-3-d1-catalog-foundation.md`](evidence/2026-08-05-repository-step-3-d1-catalog-foundation.md);
+- Cloudflare credentials, remote resources or user data involved: no.
+
+### Repository Step 4 Evidence
+
+- baseline: `5667779d59413d4736e58d6eb83a892dfdd2f522`;
+- technical evidence head: `5b187ebd786cdca068ed209b79642ecaaebe3be6`;
+- accepted source head: `1174a0720bc1c44fbb0c8e22b5c0cbac5f0810ad`;
+- technical Quality Gate run: `31052479944`, conclusion `success`;
+- final exact-head Quality Gate run: `31052742660`, conclusion `success`;
+- squash merge: `bd3db24ffc62d50654e385e587cab3e6a01b928c`;
+- jobs: `Rust Linux and WASM`, `D1 Catalog Migrations`, `Rust Windows`,
+  `Cloudflare Worker Release Build`;
+- Access RS256/JWK/WebCrypto adapter and deterministic fake adapter converge on
+  the same verified external identity contract;
+- active tenant membership resolves to `ActorContext`; missing, suspended and
+  revoked membership is denied for covered flows;
+- empty-boundary owner bootstrap, atomic owner transfer and last-active-owner
+  protection: passed;
+- invitation, membership lifecycle, client/profile metadata, historical
+  assignment and explicit grant/revoke flows: passed within the repository-local
+  synthetic boundary;
+- stale optimistic preconditions and downstream envelope failures abort full
+  governed command transactions;
+- foreign, missing and unauthorized client/profile reads use the same neutral
+  disclosure result;
+- deliberate assignment-as-authorization fixture: rejected as required;
+- raw D1, superseded unguarded writes, temporary workflows and tracked Rust build
+  output: rejected by permanent gates;
+- authenticated Worker with the Step 4 adapters: checked and release packaged;
+- detailed report:
+  [`evidence/2026-08-06-repository-step-4-identity-clients-acl.md`](evidence/2026-08-06-repository-step-4-identity-clients-acl.md);
 - Cloudflare credentials, remote resources or user data involved: no.
 
 ## 2. Required Permanent CI Evidence
