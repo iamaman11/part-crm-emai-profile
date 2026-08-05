@@ -2,8 +2,16 @@
 members = [
     "apps/control-plane-worker",
     "apps/foundation-check",
+    "crates/application-ports",
+    "crates/client-domain",
+    "crates/contracts",
     "crates/control-plane-contract",
+    "crates/identity-access-domain",
+    "crates/mailbox-domain",
     "crates/primitives",
+    "crates/profile-domain",
+    "crates/session-domain",
+    "crates/use-cases",
 ]
 resolver = "3"
 
@@ -12,6 +20,14 @@ edition = "2024"
 rust-version = "1.97.1"
 
 [workspace.dependencies]
+application-ports = { path = "crates/application-ports" }
+client-domain = { path = "crates/client-domain" }
+contracts = { path = "crates/contracts" }
+identity-access-domain = { path = "crates/identity-access-domain" }
+mailbox-domain = { path = "crates/mailbox-domain" }
+profile-domain = { path = "crates/profile-domain" }
+profile-platform-primitives = { path = "crates/primitives" }
+session-domain = { path = "crates/session-domain" }
 wasm-bindgen = "=0.2.126"
 worker = { version = "=0.8.5", features = ["d1", "queue"] }
 
