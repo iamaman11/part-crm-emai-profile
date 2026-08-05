@@ -23,11 +23,7 @@ pub struct StoredCoordinatorDocument {
 }
 
 impl StoredCoordinatorDocument {
-    pub fn new(
-        tenant_id: &TenantId,
-        profile_id: &ProfileId,
-        config: CoordinatorConfig,
-    ) -> Self {
+    pub fn new(tenant_id: &TenantId, profile_id: &ProfileId, config: CoordinatorConfig) -> Self {
         Self {
             tenant_id: tenant_id.as_str().to_owned(),
             profile_id: profile_id.as_str().to_owned(),
@@ -96,6 +92,11 @@ impl StoredCoordinatorDocument {
     #[must_use]
     pub fn journal_len(&self) -> usize {
         self.journal.len()
+    }
+
+    #[must_use]
+    pub fn is_journal_empty(&self) -> bool {
+        self.journal.is_empty()
     }
 }
 
@@ -379,7 +380,7 @@ fn next_alarm_at(state: &ProfileCoordinatorState) -> Option<UnixMillis> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum CoordinatorAdapterError {
     Identifier(profile_platform_primitives::ParseOpaqueIdError),
     ZeroVersion(profile_platform_primitives::ZeroAggregateVersion),
@@ -442,8 +443,8 @@ mod tests {
     }
 
     #[test]
-    fn journal_replays_and_preserves_idempotent_decision(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn journal_replays_and_preserves_idempotent_decision() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut document = document()?;
         let issue = StoredCoordinatorEnvelope::new(
             "idem_issue_01JADAPTER",

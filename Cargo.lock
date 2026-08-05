@@ -41,6 +41,8 @@ dependencies = [
  "control-plane-contract",
  "profile-platform-primitives",
  "serde",
+ "serde_json",
+ "session-domain",
  "wasm-bindgen",
  "worker",
 ]
@@ -88,6 +90,7 @@ dependencies = [
  "profile-platform-primitives",
  "serde",
  "serde_json",
+ "session-domain",
  "web-sys",
  "worker",
 ]

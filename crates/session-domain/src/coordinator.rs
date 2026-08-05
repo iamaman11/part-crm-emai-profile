@@ -575,7 +575,7 @@ impl ProfileCoordinatorState {
         if intent.device_id != *device_id {
             return Err(CoordinatorError::DeviceMismatch);
         }
-        if now > intent.expires_at {
+        if now >= intent.expires_at {
             return Err(CoordinatorError::LaunchIntentExpired);
         }
 

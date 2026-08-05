@@ -30,9 +30,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
                 .await
         }
         RouteClass::AuthenticatedSessionApi => session_response(&request, &env).await,
-        RouteClass::ProfileCoordinatorApi => {
-            dispatch_profile_coordinator(&mut request, &env).await
-        }
+        RouteClass::ProfileCoordinatorApi => dispatch_profile_coordinator(&mut request, &env).await,
         RouteClass::OwnerBootstrapApi
         | RouteClass::OwnerTransferApi
         | RouteClass::InvitationCollectionApi

@@ -88,7 +88,10 @@ pub async fn dispatch(
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             }
             let now_ms = Date::now().as_millis();
-            let command = match body.command.into_stored(actor.actor().actor_id().as_str(), now_ms) {
+            let command = match body
+                .command
+                .into_stored(actor.actor().actor_id().as_str(), now_ms)
+            {
                 Ok(value) => value,
                 Err(_) => return invalid_request(request),
             };
@@ -413,10 +416,7 @@ async fn schedule_alarm(state: &State, deadline: Option<UnixMillis>) -> Result<(
     match deadline {
         Some(deadline) => {
             let date = Date::new(DateInit::Millis(deadline.value()));
-            state
-                .storage()
-                .set_alarm(ScheduledTime::new(date))
-                .await
+            state.storage().set_alarm(ScheduledTime::new(date)).await
         }
         None => state.storage().delete_alarm().await,
     }
