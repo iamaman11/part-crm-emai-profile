@@ -1,0 +1,13 @@
+[package]
+name = "cloudflare-adapters"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+profile-platform-primitives.workspace = true
+worker.workspace = true
+
+[lints]
+workspace = true
