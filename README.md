@@ -10,20 +10,20 @@ adapters, а не переносит Camoufox или локальный browser 
 
 ## Текущий Статус
 
-**Repository Step 0 — Executable Foundation принят.** Exact Rust workspace,
-pure primitives crate и постоянный Linux/Windows/WASM quality gate подтверждены
-PR #4 и merged evidence.
+**Repository Steps 0–1 приняты.**
 
-**Repository Step 1 — Cloudflare cold-build and binding spike выполняется в PR
-#6.** Permanent Quality Gate run `31036328555` подтвердил exact
-`worker 0.8.5`, D1/R2/Queue/Durable Object/Static Assets API surface и release
-artifact через `worker-build 0.8.5`. Это repository cold-build evidence, а не
-доказательство remote Cloudflare deployment.
+- Step 0 создал exact Rust workspace, pure primitives и постоянный
+  Linux/Windows/WASM quality gate.
+- Step 1 добавил минимальный Rust Cloudflare Worker и доказал repository cold
+  build D1/R2/Queue/Durable Object/Static Assets boundary через PR #6.
 
-Минимальный Worker skeleton существует только в Step 1 branch до merge. React UI,
-Windows Profile Bridge, D1 migrations и product use cases ещё не реализованы.
-Машиночитаемый статус: [`docs/status.json`](docs/status.json). Готовность
-повышается только после merge и проверяемого CI/evidence.
+Accepted Step 1 source head: `990fe8262f933b1a20a0c786a6a5ebc26f4fe7e2`.
+Final Quality Gate run: `31036967681`. Squash merge:
+`cba724a0d7fd116859a30d9e0101e56349c1358c`.
+
+Следующий этап — **Repository Step 2: Domain and contract skeleton** (issue #7).
+React UI, Windows Profile Bridge, D1 migrations и product use cases ещё не
+реализованы. Машиночитаемый статус: [`docs/status.json`](docs/status.json).
 
 Единственный разрешенный источник legacy-профилей:
 

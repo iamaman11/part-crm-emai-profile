@@ -1,11 +1,14 @@
 # Repository Step 1 — Cloudflare Cold-Build Evidence
 
 **Дата:** 2026-08-05  
-**Статус:** passed for repository cold-build scope  
+**Статус:** accepted for repository cold-build scope  
 **Baseline:** `cc345301baaa1e549caf4045ce16739402edca02`  
-**Implementation head:** `196804579bd6535b75dd964bc50fd184703b52cb`  
+**Technical implementation head:** `196804579bd6535b75dd964bc50fd184703b52cb`  
+**Accepted source head:** `990fe8262f933b1a20a0c786a6a5ebc26f4fe7e2`  
 **Pull request:** #6  
-**Permanent Quality Gate run:** `31036328555`
+**Technical Quality Gate run:** `31036328555`  
+**Final Quality Gate run:** `31036967681`  
+**Squash merge:** `cba724a0d7fd116859a30d9e0101e56349c1358c`
 
 ## 1. Проверенный Стек
 
@@ -35,7 +38,9 @@ The binding names and route classification are also represented in a pure native
 
 ## 3. Permanent CI Result
 
-All jobs in Quality Gate run `31036328555` succeeded:
+All jobs in both accepted Quality Gate runs succeeded. Run `31036328555` proved
+the technical implementation head; run `31036967681` repeated the full gate on
+the exact accepted source head after evidence and status synchronization.
 
 1. `Rust Linux and WASM`
    - rustfmt;

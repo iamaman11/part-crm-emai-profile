@@ -4,11 +4,20 @@
   "repository_step": {
     "number": 1,
     "name": "Cloudflare cold-build and binding spike",
-    "status": "in_progress",
+    "status": "completed",
     "tracking_issue": 2,
     "baseline": "cc345301baaa1e549caf4045ce16739402edca02",
     "technical_evidence_head": "196804579bd6535b75dd964bc50fd184703b52cb",
-    "quality_gate_run_id": 31036328555
+    "accepted_source_head": "990fe8262f933b1a20a0c786a6a5ebc26f4fe7e2",
+    "technical_quality_gate_run_id": 31036328555,
+    "final_quality_gate_run_id": 31036967681,
+    "squash_merge": "cba724a0d7fd116859a30d9e0101e56349c1358c"
+  },
+  "next_repository_step": {
+    "number": 2,
+    "name": "Domain and contract skeleton",
+    "tracking_issue": 7,
+    "status": "planned"
   },
   "accepted_steps": [
     {
@@ -18,6 +27,13 @@
       "quality_gate_run_id": 31035179366,
       "squash_merge": "dc2dc2e1a7acd07d89550328309833988bb05a2e",
       "evidence_sync_merge": "cc345301baaa1e549caf4045ce16739402edca02"
+    },
+    {
+      "number": 1,
+      "name": "Cloudflare cold-build and binding spike",
+      "accepted_source_head": "990fe8262f933b1a20a0c786a6a5ebc26f4fe7e2",
+      "quality_gate_run_id": 31036967681,
+      "squash_merge": "cba724a0d7fd116859a30d9e0101e56349c1358c"
     }
   ],
   "product": {
@@ -28,14 +44,14 @@
   "implementation": {
     "production_code": false,
     "rust_workspace": "accepted_step_0",
-    "cloudflare_worker": "cold_build_passed_pr_6_worker_0_8_5",
+    "cloudflare_worker": "accepted_cold_build_worker_0_8_5",
     "windows_bridge": "not_started",
     "frontend": "not_started"
   },
   "evidence": {
     "foundation_linux_windows_wasm": "passed",
     "tracked_file_secret_scan": "passed_limited_to_current_tree",
-    "cloudflare_worker_build": "passed_quality_gate_run_31036328555",
+    "cloudflare_worker_build": "accepted_quality_gate_run_31036967681",
     "cloudflare_bindings_compile": "d1_r2_queue_durable_object_static_assets_passed",
     "cloudflare_release_artifact": "shim_and_wasm_verified",
     "cloudflare_remote_staging": "not_proven_external_gate",
