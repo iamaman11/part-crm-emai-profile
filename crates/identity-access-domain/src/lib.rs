@@ -159,9 +159,7 @@ pub fn authorize_profile(
     grant: Option<&ProfileGrant>,
     capability: ProfileCapability,
 ) -> AuthorizationDecision {
-    if actor.tenant_scope().tenant_id() != membership.tenant_id()
-        || actor.tenant_scope().tenant_id() != &membership.tenant_id
-    {
+    if actor.tenant_scope().tenant_id() != membership.tenant_id() {
         return AuthorizationDecision::Denied(DenyReason::TenantMismatch);
     }
 
