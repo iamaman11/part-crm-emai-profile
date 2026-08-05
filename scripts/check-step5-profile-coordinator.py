@@ -16,6 +16,7 @@ REPOSITORY_REQUIRED = {
         "fn delayed_writer_is_rejected_after_turnover",
         "fn reordered_commands_and_key_reuse_are_rejected",
         "fn idle_timeout_preserves_uncertain_state_until_recovery",
+        "fn late_clean_release_becomes_uncertain",
     ),
     "crates/cloudflare-adapters/src/profile_coordinator.rs": (
         "pub struct StoredCoordinatorDocument",
