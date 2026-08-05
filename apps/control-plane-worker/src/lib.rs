@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod access_session;
+
+use access_session::{correlation_hint, neutral_not_found, session_response};
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use cloudflare_adapters::d1_identity_acl::D1IdentityAclRepository;
 use control_plane_contract::{
@@ -22,8 +25,8 @@ pub async fn main(request: Request, env: Env, _context: Context) -> Result<Respo
                 .fetch_request(request)
                 .await
         }
-        RouteClass::AuthenticatedSessionApi
-        | RouteClass::OwnerBootstrapApi
+        RouteClass::AuthenticatedSessionApi => session_response(&request, &env).await,
+        RouteClass::OwnerBootstrapApi
         | RouteClass::OwnerTransferApi
         | RouteClass::InvitationCollectionApi
         | RouteClass::InvitationAcceptApi
@@ -34,14 +37,14 @@ pub async fn main(request: Request, env: Env, _context: Context) -> Result<Respo
         | RouteClass::ProfileCollectionApi
         | RouteClass::ProfileResourceApi
         | RouteClass::ProfileAssignmentApi
-        | RouteClass::ProfileGrantApi => authenticated_api_boundary(&env),
+        | RouteClass::ProfileGrantApi => authenticated_api_boundary(&request, &env),
     }
 }
 
-fn authenticated_api_boundary(env: &Env) -> Result<Response> {
+fn authenticated_api_boundary(request: &Request, env: &Env) -> Result<Response> {
     let catalog = env.d1(D1_CATALOG_BINDING)?;
     let _identity_acl_repository = D1IdentityAclRepository::new(catalog);
-    Response::error("Not Found", 404)
+    neutral_not_found(&correlation_hint(request))
 }
 
 fn binding_probe(env: &Env) -> Result<Response> {
