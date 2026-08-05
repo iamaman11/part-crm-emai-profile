@@ -23,6 +23,7 @@ pub enum RouteClass {
     ProfileResourceApi,
     ProfileAssignmentApi,
     ProfileGrantApi,
+    ProfileCoordinatorApi,
     BridgeDeniedByDefault,
     StaticAssets,
 }
@@ -76,6 +77,11 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
         }
         ["api", "v1", "tenants", _, "profiles"] if method == "POST" => {
             Some(RouteClass::ProfileCollectionApi)
+        }
+        ["api", "v1", "tenants", _, "profiles", _, "coordinator"]
+            if matches!(method, "GET" | "POST") =>
+        {
+            Some(RouteClass::ProfileCoordinatorApi)
         }
         ["api", "v1", "tenants", _, "profiles", _] if method == "GET" => {
             Some(RouteClass::ProfileResourceApi)
@@ -152,7 +158,7 @@ mod tests {
     }
 
     #[test]
-    fn owner_member_and_acl_routes_are_versioned_and_authenticated() {
+    fn owner_member_acl_and_coordinator_routes_are_versioned_and_authenticated() {
         let routes = [
             (
                 "GET",
@@ -184,6 +190,16 @@ mod tests {
                 "/api/v1/tenants/tenant_01/profiles/profile_01/grants/actor_01",
                 RouteClass::ProfileGrantApi,
             ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/coordinator",
+                RouteClass::ProfileCoordinatorApi,
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/coordinator",
+                RouteClass::ProfileCoordinatorApi,
+            ),
         ];
 
         for (method, path, expected) in routes {
@@ -191,6 +207,17 @@ mod tests {
             assert_eq!(actual, expected);
             assert!(is_authenticated_api(actual));
         }
+    }
+
+    #[test]
+    fn coordinator_route_does_not_fall_back_to_static_assets() {
+        assert_eq!(
+            classify_route(
+                "DELETE",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/coordinator"
+            ),
+            RouteClass::StaticAssets
+        );
     }
 
     #[test]

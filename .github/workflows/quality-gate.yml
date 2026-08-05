@@ -33,12 +33,14 @@ jobs:
           scripts/check-contract-compatibility.py
           scripts/check-d1-boundary.py
           scripts/check-step4-governed-writes.py
+          scripts/check-step5-profile-coordinator.py
           scripts/check-no-temporary-step4.py
           scripts/test-d1-schema.py
           scripts/test-step4-identity-acl.py
           scripts/test-step4-command-guards.py
+          scripts/test-step5-coordinator-projection.py
 
-      - name: Reject temporary Step 4 artifacts
+      - name: Reject temporary Step 4 and Step 5 artifacts
         run: python scripts/check-no-temporary-step4.py
 
       - name: Enforce architecture dependency boundaries
@@ -56,6 +58,16 @@ jobs:
 
       - name: Enforce governed Step 4 write surfaces
         run: python scripts/check-step4-governed-writes.py
+
+      - name: Enforce Step 5 coordinator boundaries
+        run: python scripts/check-step5-profile-coordinator.py
+
+      - name: Prove assignment-derived coordinator authorization is rejected
+        run: |
+          if python scripts/check-step5-profile-coordinator.py --root tests/profile-coordinator/fixtures/assignment-authorizes; then
+            echo "Assignment-derived coordinator authorization unexpectedly passed." >&2
+            exit 1
+          fi
 
       - name: Prove raw D1 use-case fixture is rejected
         run: |
@@ -85,6 +97,9 @@ jobs:
 
       - name: Test governed command trigger atomicity
         run: python scripts/test-step4-command-guards.py
+
+      - name: Test coordinator projection and reconciliation invariants
+        run: python scripts/test-step5-coordinator-projection.py
 
       - name: Prove assignment-as-ACL fixture is rejected
         run: |
@@ -177,7 +192,7 @@ jobs:
           --local
           --config deploy/cloudflare/wrangler.d1-test.jsonc
           --persist-to .wrangler/d1-test-state
-          --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT COUNT(*) AS invitation_acceptances FROM invitation_acceptances; SELECT COUNT(*) AS governed_owner_transfers FROM owner_transfer_commands; SELECT COUNT(*) AS governed_profile_grants FROM profile_grant_commands; SELECT name FROM d1_migrations ORDER BY id;"
+          --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT COUNT(*) AS invitation_acceptances FROM invitation_acceptances; SELECT COUNT(*) AS governed_owner_transfers FROM owner_transfer_commands; SELECT COUNT(*) AS governed_profile_grants FROM profile_grant_commands; SELECT COUNT(*) AS coordinator_projection_commands FROM profile_coordinator_projection_commands; SELECT COUNT(*) AS coordinator_projections FROM profile_coordinator_projections; SELECT name FROM d1_migrations ORDER BY id;"
 
   cloudflare-worker:
     name: Cloudflare Worker Release Build

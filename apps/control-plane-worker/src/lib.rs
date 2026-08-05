@@ -2,6 +2,9 @@
 
 mod access_session;
 mod api;
+mod profile_coordinator;
+
+pub use profile_coordinator::ProfileCoordinator;
 
 use access_session::session_response;
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
@@ -10,9 +13,9 @@ use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
     STATIC_ASSETS_BINDING, VERIFICATION_QUEUE_BINDING, classify_route,
 };
-use worker::{
-    Context, DurableObject, Env, Request, Response, Result, State, durable_object, event,
-};
+use profile_platform_primitives::ProfileId;
+use session_domain::coordinator::coordinator_object_name;
+use worker::{Context, Env, Request, Response, Result, event};
 
 #[event(fetch, respond_with_errors)]
 pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
@@ -27,6 +30,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
                 .await
         }
         RouteClass::AuthenticatedSessionApi => session_response(&request, &env).await,
+        RouteClass::ProfileCoordinatorApi => dispatch_profile_coordinator(&mut request, &env).await,
         RouteClass::OwnerBootstrapApi
         | RouteClass::OwnerTransferApi
         | RouteClass::InvitationCollectionApi
@@ -42,6 +46,18 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
     }
 }
 
+async fn dispatch_profile_coordinator(request: &mut Request, env: &Env) -> Result<Response> {
+    let path = request.path();
+    let segments: Vec<&str> = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let tenant_id = segments.get(3).copied().unwrap_or_default();
+    let profile_id = segments.get(5).copied().unwrap_or_default();
+    profile_coordinator::dispatch(request, env, tenant_id, profile_id).await
+}
+
 fn binding_probe(env: &Env) -> Result<Response> {
     let catalog = env.d1(D1_CATALOG_BINDING)?;
     let _catalog_repository = D1CatalogRepository::new(catalog);
@@ -50,26 +66,11 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _objects = env.bucket(R2_PROFILES_BINDING)?;
     let _verification = env.queue(VERIFICATION_QUEUE_BINDING)?;
     let coordinator = env.durable_object(PROFILE_COORDINATOR_BINDING)?;
-    let _stub = coordinator.id_from_name("profile-foundation")?.get_stub()?;
+    let probe_profile = ProfileId::parse("profile_foundation")
+        .map_err(|error| worker::Error::RustError(error.to_string()))?;
+    let _stub = coordinator
+        .id_from_name(&coordinator_object_name(&probe_profile))?
+        .get_stub()?;
 
     Response::ok("bindings-ready")
-}
-
-#[durable_object(fetch)]
-pub struct ProfileCoordinator {
-    _state: State,
-    _env: Env,
-}
-
-impl DurableObject for ProfileCoordinator {
-    fn new(state: State, env: Env) -> Self {
-        Self {
-            _state: state,
-            _env: env,
-        }
-    }
-
-    async fn fetch(&self, _request: Request) -> Result<Response> {
-        Response::ok("profile-coordinator-ready")
-    }
 }
