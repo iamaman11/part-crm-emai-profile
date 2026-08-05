@@ -2,19 +2,22 @@
   "schema_version": 1,
   "as_of": "2026-08-05",
   "repository_step": {
-    "number": 0,
-    "name": "Executable foundation",
-    "status": "completed",
-    "accepted_source_head": "c8927bc79ab7f68123fc122409792326043e29b3",
-    "quality_gate_run_id": 31035179366,
-    "squash_merge": "dc2dc2e1a7acd07d89550328309833988bb05a2e"
-  },
-  "next_repository_step": {
     "number": 1,
     "name": "Cloudflare cold-build and binding spike",
+    "status": "in_progress",
     "tracking_issue": 2,
-    "status": "planned"
+    "baseline": "cc345301baaa1e549caf4045ce16739402edca02"
   },
+  "accepted_steps": [
+    {
+      "number": 0,
+      "name": "Executable foundation",
+      "accepted_source_head": "c8927bc79ab7f68123fc122409792326043e29b3",
+      "quality_gate_run_id": 31035179366,
+      "squash_merge": "dc2dc2e1a7acd07d89550328309833988bb05a2e",
+      "evidence_sync_merge": "cc345301baaa1e549caf4045ce16739402edca02"
+    }
+  ],
   "product": {
     "name": "Browser Profile Platform",
     "primary_capability": "governed browser profile lifecycle",
@@ -23,13 +26,15 @@
   "implementation": {
     "production_code": false,
     "rust_workspace": "accepted_step_0",
-    "cloudflare_worker": "not_started",
+    "cloudflare_worker": "cold_build_in_progress_worker_0_8_5",
     "windows_bridge": "not_started",
     "frontend": "not_started"
   },
   "evidence": {
     "foundation_linux_windows_wasm": "passed",
     "tracked_file_secret_scan": "passed_limited_to_current_tree",
+    "cloudflare_worker_build": "pending",
+    "cloudflare_remote_staging": "not_proven_external_gate",
     "single_device_cloud_smoke": "passed_with_documented_limitations",
     "multi_device": "not_proven",
     "concurrent_writer_fencing": "not_proven",
