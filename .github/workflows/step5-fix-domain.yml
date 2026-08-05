@@ -1,0 +1,49 @@
+name: Temporary Step 5 Domain Fix
+
+on:
+  push:
+    branches:
+      - repository-step-5-profile-coordinator
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-5-profile-coordinator
+
+      - name: Apply exact domain fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/session-domain/src/coordinator.rs")
+          text = path.read_text(encoding="utf-8")
+          old = "impl CoordinatorCommandEnvelope {\n    pub const fn new("
+          new = "impl CoordinatorCommandEnvelope {\n    pub fn new("
+          if text.count(old) != 1:
+              raise SystemExit("unexpected CoordinatorCommandEnvelope constructor shape")
+          text = text.replace(old, new)
+
+          old_error = 'return Err("claim did not return a lease".into());'
+          new_error = "return Err(CoordinatorError::NoActiveLease.into());"
+          if text.count(old_error) != 1:
+              raise SystemExit("unexpected claim test error shape")
+          text = text.replace(old_error, new_error)
+          path.write_text(text, encoding="utf-8")
+          PY
+          cargo fmt --all
+          rm .github/workflows/step5-fix-domain.yml
+
+      - name: Commit exact fixes and workflow removal
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/session-domain/src/coordinator.rs .github/workflows/step5-fix-domain.yml
+          git commit -m "Step 5: fix coordinator envelope compilation"
+          git push origin HEAD:repository-step-5-profile-coordinator
