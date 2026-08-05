@@ -24,11 +24,11 @@ The coordinator rejects sequence gaps, delayed or reordered timestamps, reused i
 A claim consumes a live launch intent and issues:
 
 - a monotonically increasing lease epoch;
-- an opaque fencing token;
+- an opaque fencing token generated inside the authenticated Worker boundary;
 - an idle deadline;
 - a non-extendable hard deadline.
 
-A heartbeat or release is accepted only when session ID, epoch and fencing token all match the current lease. Once turnover occurs, every prior writer is permanently fenced from refreshing or committing against the coordinator.
+A heartbeat or release is accepted only when session ID, epoch and fencing token all match the current lease. Once turnover occurs, every prior writer is permanently fenced from refreshing or committing against the coordinator. Clients never choose or reuse the fencing token issued for a new claim.
 
 ## Lifecycle
 
@@ -41,6 +41,12 @@ The state machine distinguishes:
 - `Uncertain` — idle, hard or drain timeout prevented proof of a clean close.
 
 Dirty and uncertain outcomes never silently become idle. An explicit, evidenced recovery command is required before the next launch.
+
+## HTTP Boundary
+
+The versioned route is `GET|POST /api/v1/tenants/{tenant_id}/profiles/{profile_id}/coordinator`. Before resolving the Durable Object stub, the Worker verifies the external identity, resolves an active membership and checks explicit profile visibility through the existing ACL query. Missing, cross-tenant and unauthorized profiles share the same neutral disclosure response.
+
+A `POST` accepts an idempotency key, object-local sequence, expected version and one typed coordinator command. Server time is used for all transitions. Recovery is restricted to the tenant owner; ordinary active members may only coordinate profiles for which they have an explicit profile grant.
 
 ## Persistence And Reconciliation
 
