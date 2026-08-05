@@ -31,6 +31,10 @@
 - [`adr/ADR-0004-tenant-access-and-client-ownership.md`](adr/ADR-0004-tenant-access-and-client-ownership.md):
   модель администратора, resource grants, client cards и историческое назначение
   профиля клиенту.
+- [`adr/ADR-0005-cloudflare-native-control-plane.md`](adr/ADR-0005-cloudflare-native-control-plane.md):
+  почему standalone использует Workers/Access/D1/DO/Queues/R2 без отдельной VM.
+- [`adr/ADR-0006-cloud-profile-key-management.md`](adr/ADR-0006-cloud-profile-key-management.md):
+  proposed key hierarchy, rotation и offline recovery gate для cloud profiles.
 
 ## Правила Ведения
 

@@ -1,6 +1,6 @@
 # ADR-0004: Tenant Access И Client Ownership
 
-**Статус:** proposed
+**Статус:** accepted
 
 **Дата:** 2026-08-05
 
@@ -31,8 +31,8 @@ Standalone-приложению уже нужны администратор, н
 8. Standalone `Client Registry` временно владеет client card. После CRM
    integration authoritative owner становится Party/Customer Master, а profile
    service хранит stable `party_ref` и read projection.
-9. Tenant isolation обеспечивается одновременно application authorization и
-   PostgreSQL `FORCE ROW LEVEL SECURITY`.
+9. Tenant isolation в standalone обеспечивается typed D1 repository scope,
+   application authorization и mandatory IDOR/cross-tenant tests.
 
 ## Роли MVP
 
@@ -60,10 +60,15 @@ intents немедленно; active session переводится в drain с�
 
 ## Последствия
 
-- PostgreSQL используется как central authoritative catalog уже в standalone;
+- D1 используется как central authoritative catalog в standalone;
 - локальный SQLite Profile Bridge является только cache/outbox;
 - UI явно разделяет `назначить клиента` и `выдать доступ пользователю`;
 - первая версия немного сложнее CRUD, но CRM integration не требует менять IDs,
   ACL semantics или profile payload;
 - delegated admins и team grants можно добавить совместимо как новые subject и
   capability types.
+
+Cloudflare Access подтверждает identity, но не выдает resource rights. Первый
+standalone deployment обслуживает одну организацию. Добавление второго tenant
+требует отдельного D1 isolation/sharding ADR; при CRM integration PostgreSQL
+adapter добавляет `FORCE ROW LEVEL SECURITY` без изменения domain semantics.

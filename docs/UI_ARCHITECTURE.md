@@ -9,6 +9,11 @@ standalone administration и работу пользователя. Устано
 Windows-компьютере, где будет запускаться Camoufox: небольшой Profile Bridge
 регистрирует custom protocol и открывает browser как отдельное окно.
 
+React SPA и browser-facing Rust API публикуются одним Cloudflare Workers Static
+Assets deployment на одном origin и защищаются Cloudflare Access. Device-bound
+Bridge routes используют отдельную Worker policy. UI не хранит пароль, Access
+token или R2 credentials в Web Storage.
+
 Мобильный web UI поддерживает каталог, clients, access, history, mailbox и audit.
 Кнопка запуска Camoufox доступна только при совместимом enrolled desktop device.
 
@@ -29,7 +34,7 @@ Windows-компьютере, где будет запускаться Camoufox:
 | `/audit` | security/business audit explorer | owner only |
 | `/settings` | tenant policy, retention and release channel | owner only |
 
-Маршрут не является authorization boundary. Server всегда повторно проверяет
+Маршрут не является authorization boundary. Worker всегда повторно проверяет
 membership/grant; недоступный и чужой resource возвращаются одинаково.
 
 ## 3. Основные Экраны
@@ -71,7 +76,7 @@ membership/grant; недоступный и чужой resource возвраща
 
 ### First Run
 
-1. Owner входит через Keycloak.
+1. Owner входит через Cloudflare Access approved IdP или email OTP.
 2. UI проверяет наличие Profile Bridge.
 3. Guided flow скачивает signed installer и enroll-ит device.
 4. Doctor показывает Bridge/runtime/network readiness без раскрытия fingerprint
@@ -90,7 +95,7 @@ membership/grant; недоступный и чужой resource возвраща
 
 1. UI показывает размер download/runtime requirements до запуска.
 2. Custom URI активирует Bridge.
-3. UI polling/subscription получает server-side progress.
+3. UI polling/subscription получает cloud control-plane progress.
 4. Отмена до browser start освобождает materialization lease безопасно.
 5. После открытия UI показывает actor/device и close policy.
 
@@ -127,14 +132,14 @@ frontend/src/
 
 Feature не импортирует sibling feature internals. Общая бизнес-модель не
 дублируется вручную: DTO/enums генерируются из OpenAPI. Domain decisions всегда
-выполняет server.
+выполняет Rust Worker/domain core.
 
 ## 6. State Management
 
-- TanStack Query владеет server state, invalidation and bounded retry;
+- TanStack Query владеет remote state, invalidation and bounded retry;
 - TanStack Router владеет URL, filters and navigation state;
 - component/form state остается локальным;
-- активная session progress приходит через server polling, позже SSE при
+- активная session progress приходит через Worker polling, позже SSE при
   доказанной необходимости;
 - глобальный mutable business store запрещен;
 - optimistic UI допускается только для обратимых display mutations, но не для
@@ -159,7 +164,7 @@ Feature не импортирует sibling feature internals. Общая биз
 - accessibility scan плюс keyboard-only critical flows;
 - responsive desktop/mobile smoke;
 - custom URI flow с fake Bridge adapter в CI и Windows-native acceptance lane;
-- forbidden-action test доказывает server rejection даже при вручную вызванном
+- forbidden-action test доказывает Worker rejection даже при вручную вызванном
   endpoint;
 - no-secret/no-PII snapshot and telemetry scan.
 

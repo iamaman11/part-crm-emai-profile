@@ -1,7 +1,8 @@
 # Целевой Жизненный Цикл Browser Profile
 
-**Статус:** proposed
-**Связанные решения:** ADR-0001, ADR-0002, ADR-0003, ADR-0004
+**Статус:** normative target
+**Связанные решения:** ADR-0001, ADR-0002, ADR-0003, ADR-0004, ADR-0005;
+ADR-0006 остается production key-management gate
 
 Перед любой profile-командой application устанавливает проверенный tenant/actor
 context и применяет актуальный `ProfileAccessGrant`. Client assignment является
@@ -48,7 +49,7 @@ DISCOVERED
 
 1. Application проверяет owner permission и optional active client assignment.
 2. Application создает opaque profile ID и generation ID.
-3. Secret Vault/KMS adapter создает profile entropy root.
+3. `KeyProviderPort` создает versioned profile entropy root/seed handle.
 4. Runtime registry выбирает certified runtime bundle.
 5. BrowserForge создает согласованный fingerprint candidate.
 6. ADR-0001 materializer разделяет stable, origin-deterministic,
@@ -84,7 +85,7 @@ audit-команды.
 1. Проверить tenant membership, live grant, device и session policy.
 2. Проверить profile status и certification validity.
 3. Проверить runtime bundle availability и compatibility.
-4. Получить lease с новым epoch и fencing token.
+4. Получить у profile Durable Object lease с новым epoch и fencing token.
 5. Получить OS lock на generation directory.
 6. Выполнить local integrity/preflight checks.
 7. Проверить network-bound coherence до target navigation.
@@ -98,7 +99,7 @@ audit-команды.
 
 ## 6. Открытие Cloud-Only Профиля
 
-1. Получить materialization lease.
+1. Получить у profile Durable Object materialization lease.
 2. Скачать manifest и encrypted snapshot в staging.
 3. Проверить schema, runtime bundle, digest и retention state.
 4. Расшифровать и безопасно распаковать.
@@ -135,7 +136,7 @@ Runtime не может:
 
 1. Application переводит session в `DRAINING`.
 2. Новые команды перестают приниматься.
-3. Worker завершает активные typed operations.
+3. Profile Bridge/Camouhost завершает активные typed operations.
 4. Browser context закрывается штатно.
 5. Runtime подтверждает закрытие process handles.
 6. Проверяется отсутствие открытых descriptors.
@@ -156,8 +157,9 @@ Lock-файлы не удаляются application-кодом. Их освоб�
 7. Загрузить immutable object с conditional create.
 8. Проверить remote digest и restore-readability.
 9. Записать manifest/certification references.
-10. В одной catalog transaction активировать новый generation, outbox и audit.
-11. Освободить lease.
+10. D1 compare-and-set активирует новый generation, audit и outbox только при
+    актуальных profile version и fencing token.
+11. Profile Durable Object закрывает lease после подтвержденного D1 result.
 12. Разрешить eviction только после статуса `SYNCED`.
 
 При недоступном R2 профиль остается `DIRTY_LOCAL` или `SYNC_RETRY_PENDING`. Его
@@ -174,7 +176,7 @@ SQLite/IndexedDB вместо close запрещено.
 
 После restart supervisor:
 
-1. находит expired leases;
+1. сверяет локальные sessions с Durable Object/D1 projection;
 2. проверяет существование runtime process;
 3. не удаляет locks вслепую;
 4. помечает generation `RECOVERY_REQUIRED`;
@@ -225,3 +227,6 @@ Migration всегда выполняется на clone:
 - runtime upgrade не изменяет previous generation;
 - cloud restore и local replay дают одинаковый logical inventory;
 - certification evidence всегда связано с exact runtime/profile generation.
+- Durable Object eviction не теряет lease epoch или pending transition;
+- duplicate Queue message и повтор command не создают второе поколение;
+- orphan R2 object не становится active и удаляется reconciler.

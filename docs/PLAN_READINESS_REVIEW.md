@@ -1,46 +1,70 @@
 # Plan Readiness Review
 
-**Статус:** approved for phased execution
+**Статус:** approved for Phase 0 and phased execution
 
 **Дата review:** 2026-08-05
 
+**Актуальная архитектура:** ADR-0005 Cloudflare-native control plane без VM
+
 ## Проверено
 
-- основной implementation plan и порядок phases;
-- ADR-0001..ADR-0004;
-- profile lifecycle и encrypted R2 smoke evidence;
-- фактические Rust/frontend/OIDC baselines текущего `part_crm` checkout;
-- authorization, client assignment, Profile Bridge, cloud, key management,
-  certification, packaging и CRM integration boundaries.
+- README, implementation plan, architecture map, UI, ADR-0001..ADR-0005 и
+  proposed ADR-0006;
+- сохранение локального Camoufox runtime при Cloudflare control plane;
+- `workers-rs` support для D1, R2, Queues и Durable Objects;
+- one-origin hosting через Workers Static Assets;
+- Cloudflare Access identity отдельно от application memberships/grants;
+- D1 catalog boundary и отсутствие PostgreSQL RLS;
+- Durable Object per-profile coordination и fencing;
+- partial-failure protocol между D1, DO, Queue и R2;
+- encrypted R2 materialization, forgotten-window и multi-device flows;
+- будущая замена adapters на CRM OIDC/PostgreSQL без переписывания domain.
 
-## Исправленные Замечания
+## Исправленные Противоречия
 
-1. Frontend baseline синхронизирован с текущим CRM: React `19.2.7`, TypeScript
-   `7.0.2`, Vite `8.1.5`, TanStack Query `5.101.2`.
-2. Зафиксировано расхождение toolchain: новый проект требует exact Rust `1.97.1`,
-   тогда как parent checkout использует `stable`, а локальный WSL на дату review
-   предоставляет Rust `1.95.0`.
-3. Fingerprint certification перемещена перед production cloud/multi-device
-   promotion.
-4. Выбор production key manager, rotation и disaster recovery оформлен как
-   обязательный gate до cloud phase; smoke Secret Vault key не считается
-   production multi-device solution.
-5. Launch intent явно привязан к tenant, actor, device, profile, capability,
-   expiry и nonce.
-6. BFF session оставлена целевой web-моделью, а совместимость с CRM определена
-   через identity и versioned contract boundary, не через browser token storage.
+Предыдущая версия документов одновременно предполагала выбранную Cloudflare-only
+архитектуру и VM/PostgreSQL/Keycloak/Axum. Теперь нормативный standalone stack
+един: Rust Worker/WASM, Static Assets, Access, D1, Durable Objects, Queues,
+Scheduled Workers, R2 и локальный Windows Bridge.
 
-## Внешние Предпосылки
+Также явно зафиксировано:
 
-- установка exact Rust toolchain и locked dependencies;
-- trusted Windows code-signing certificate до stable release;
-- второй Windows-native acceptance host до multi-device gate;
-- production domain/TLS, backup и observability targets;
-- явное approval перед отзывом существующих Cloudflare credentials.
+1. D1 является бизнес-каталогом, Durable Object только profile coordinator.
+2. D1/DO/R2 не имеют общей транзакции; требуются saga, idempotency, fencing,
+   immutable objects, outbox и reconciliation.
+3. D1 не имеет RLS; первая deployment single-tenant, а typed scope и IDOR suite
+   являются обязательными компенсирующими controls.
+4. Access login не является profile grant и не делает профили общими.
+5. Cloudflare Workers не запускает Camoufox; browser остается Windows-native.
+6. Workers Secret не считается готовой disaster-recoverable key system.
+7. Production Worker пишется на Rust `workers-rs`, без TypeScript/Rust domain
+   duplication; TypeScript остается только frontend/test tooling.
+
+## Phase Gates
+
+- отозвать legacy proxy credential до использования прототипа;
+- проверить cold build `workers-rs` на exact Rust `1.97.1` и pin dependencies;
+- довести ADR-0006 key hierarchy/recovery до accepted и пройти restore drill;
+- создать Cloudflare dev/staging/prod resources, Access policy и cost limits;
+- получить trusted Windows code-signing certificate до stable release;
+- использовать второй independent Windows host для multi-device proof;
+- завершить fingerprint certification до production runtime promotion;
+- принять отдельный isolation ADR до добавления второго independent tenant.
+
+## Остаточные Риски
+
+- Cloudflare limits/pricing должны быть подтверждены load/cost test на реальных
+  profile sizes и command rates;
+- Rust SDK/runtime compatibility является upgrade gate;
+- Cloudflare account recovery входит в disaster recovery;
+- D1 adapter не дает defense-in-depth RLS до CRM/PostgreSQL migration;
+- production key root и offline escrow пока являются планом, не реализованным
+  доказательством;
+- multi-device доказан архитектурно, но текущий smoke выполнен на одном device.
 
 ## Вердикт
 
-Блокирующих архитектурных противоречий не найдено. Phase 0 и первый vertical
-slice можно начинать. Каждая более поздняя внешняя предпосылка привязана к
-конкретному gate, поэтому она не превращается в скрытый риск и не блокирует
-раннюю реализацию.
+Архитектура послойна, модульна и не содержит блокирующего противоречия. Phase 0
+и первый vertical slice готовы к разработке. Cloud profile production,
+multi-device и stable installer сознательно закрыты отдельными проверяемыми
+gates; их нельзя считать выполненными только на основании документации.

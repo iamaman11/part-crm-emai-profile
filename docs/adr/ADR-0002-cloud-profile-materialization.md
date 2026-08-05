@@ -175,7 +175,7 @@ Exclusion list versioned и записывается в manifest. Неизвес
 10. Загрузить по новому immutable key с conditional create.
 11. Проверить remote size, checksum и decryptable canary range/full restore.
 12. Записать manifest и certification evidence.
-13. Атомарно активировать новый catalog pointer.
+13. D1 compare-and-set активирует catalog pointer при актуальном fencing token.
 14. Только после этого разрешить eviction предыдущего local generation.
 
 ## Restore Protocol
@@ -196,7 +196,7 @@ Restore никогда не перезаписывает активный кат
 
 Один profile generation имеет одного writer. Защита состоит из:
 
-- database lease;
+- profile Durable Object lease;
 - monotonically increasing lease epoch;
 - opaque fencing token;
 - OS-level profile lock;
@@ -214,7 +214,7 @@ profile archive шифруется приложением, потому что c
 эквивалентны секретам.
 
 - per-generation Data Encryption Key;
-- key wrapping через Secret Vault/KMS adapter;
+- key wrapping через `KeyProviderPort` по ADR-0006;
 - AEAD authenticated streaming format;
 - key ID без самого ключа в manifest;
 - отдельные права read/write/delete;
@@ -233,7 +233,7 @@ profile archive шифруется приложением, потому что c
 
 Для пользователя поддержка облачных профилей будет полной: cloud-only profile
 можно открыть, изменить, синхронизировать, восстановить и продолжить на другом
-worker.
+authorized Windows Profile Bridge.
 
 Технически исполнение всегда частично локальное, потому что Firefox не может
 безопасно работать непосредственно из R2. Это не функциональное ограничение, а

@@ -103,8 +103,8 @@ Session-dynamic signals контролируются диапазонами и c
 Он:
 
 - генерируется CSPRNG;
-- хранится только через Secret Vault/KMS port: локальный Secret Vault допустим
-  для one-device smoke, production multi-device использует выбранный key manager;
+- хранится только через `KeyProviderPort` по ADR-0006: локальный Secret Vault
+  допустим для one-device smoke, production требует accepted recovery policy;
 - в metadata представлен opaque secret handle;
 - не попадает в protobuf events, audit, logs или R2 manifest;
 - никогда не используется повторно другим profile ID;

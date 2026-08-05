@@ -1,6 +1,6 @@
 # ADR-0003: Desktop Runtime Distribution
 
-**Статус:** proposed
+**Статус:** accepted
 **Дата:** 2026-08-05
 
 ## Контекст
@@ -16,11 +16,11 @@ application не может предоставить эти свойства и�
 Profile Bridge:
 
 ```text
-React web UI -> Rust API/BFF
+React web UI -> Cloudflare Rust Worker API
   -> one-time launch intent
     -> profilebridge://claim/<opaque-code>
       -> native Rust Profile Bridge/supervisor
-        -> authenticated HTTPS control plane
+        -> authenticated Cloudflare HTTPS control plane
         -> local cache, materialization, sync and updater
         -> managed IPC to embedded Python 3.12 Camouhost
           -> separate visible Camoufox window
@@ -34,8 +34,9 @@ status, generations, сертификацию и mailbox operations. Browser ses
 Bridge не поднимает доступный web page localhost HTTP/WebSocket API. Custom URI
 содержит только случайный single-use code с TTL 30-60 секунд. Profile ID, JWT,
 email, R2 credentials и keys в URI запрещены. Bridge погашает code по HTTPS с
-device-bound identity; web UI получает session status от server, а не от local
-process.
+device-bound identity; web UI получает session status от cloud control plane, а
+не от local process. Identity perimeter выполняет Cloudflare Access, но Bridge
+использует device-bound application protocol и не зависит от browser cookie.
 
 ## Runtime Bundle
 
@@ -81,10 +82,10 @@ Cloud profile доступен на другом компьютере тольк
 6. network/proxy policy совместима с fingerprint;
 7. предыдущий dirty writer отсутствует или разрешен recovery workflow.
 
-Production client не получает постоянный R2 bucket token. Backend выдает
-short-lived scoped credentials или presigned operations. Per-generation DEK
-wrap выполняется tenant KEK через KMS/account key; device revocation запрещает
-новые unwrap.
+Production client не получает постоянный R2 bucket token. Cloud control plane
+выдает short-lived scoped credentials или presigned operations. Per-generation
+DEK wrap выполняется tenant KEK через `KeyProviderPort` по ADR-0006; device
+revocation запрещает новые unwrap.
 
 Текущий smoke использует локальный Secret Vault key и поэтому доказан только на
 одном компьютере.
