@@ -39,7 +39,8 @@ impl VerifiedRequestIdentity {
 
 pub async fn session_response(request: &Request, env: &Env) -> Result<Response> {
     let Some(verified) = verify_request_identity(request, env, None).await? else {
-        return neutral_not_found(correlation_hint(request));
+        let correlation_id = correlation_hint(request);
+        return neutral_not_found(&correlation_id);
     };
     let repository = D1IdentityAclRepository::new(env.d1(D1_CATALOG_BINDING)?);
     let Some(resolved) = repository
@@ -63,19 +64,19 @@ pub async fn verify_request_identity(
 ) -> Result<Option<VerifiedRequestIdentity>> {
     let tenant_value = match path_tenant_id {
         Some(value) => value.to_owned(),
-        None => request
-            .headers()
-            .get(TENANT_HEADER)?
-            .ok_or_else(|| Error::RustError("tenant header missing".to_owned()))?,
+        None => {
+            let Some(value) = request.headers().get(TENANT_HEADER)? else {
+                return Ok(None);
+            };
+            value
+        }
     };
-    let correlation_value = request
-        .headers()
-        .get(CORRELATION_HEADER)?
-        .ok_or_else(|| Error::RustError("correlation header missing".to_owned()))?;
-    let token = request
-        .headers()
-        .get(ACCESS_TOKEN_HEADER)?
-        .ok_or_else(|| Error::RustError("Access assertion missing".to_owned()))?;
+    let Some(correlation_value) = request.headers().get(CORRELATION_HEADER)? else {
+        return Ok(None);
+    };
+    let Some(token) = request.headers().get(ACCESS_TOKEN_HEADER)? else {
+        return Ok(None);
+    };
 
     let tenant_id = match TenantId::parse(tenant_value) {
         Ok(value) => value,
@@ -166,12 +167,11 @@ pub fn neutral_not_found(correlation_id: &str) -> Result<Response> {
     .map(|response| response.with_status(404))
 }
 
-fn correlation_hint(request: &Request) -> &str {
+pub fn correlation_hint(request: &Request) -> String {
     request
         .headers()
         .get(CORRELATION_HEADER)
         .ok()
         .flatten()
-        .as_deref()
-        .unwrap_or("corr_unknown")
+        .unwrap_or_else(|| "corr_unknown".to_owned())
 }
