@@ -26,6 +26,29 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show active-toolchain
 
+      - name: Compile repository policy scripts
+        run: python -m py_compile scripts/check-architecture.py scripts/check-contract-compatibility.py
+
+      - name: Enforce architecture dependency boundaries
+        run: python scripts/check-architecture.py
+
+      - name: Prove forbidden dependency fixture is rejected
+        run: |
+          if python scripts/check-architecture.py --root tests/architecture/fixtures/forbidden-domain; then
+            echo "Forbidden architecture fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Lint and compare v1 contracts
+        run: python scripts/check-contract-compatibility.py
+
+      - name: Prove breaking contract fixture is rejected
+        run: |
+          if python scripts/check-contract-compatibility.py --current-root tests/contracts/fixtures/breaking; then
+            echo "Breaking contract fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
       - name: Format
         run: cargo fmt --all -- --check
 
@@ -39,8 +62,19 @@ jobs:
           cargo test --locked --workspace --all-targets
           --exclude browser-profile-control-plane-worker
 
-      - name: Check domain primitives for Workers target
-        run: cargo check --locked -p profile-platform-primitives --target wasm32-unknown-unknown
+      - name: Check pure crates for Workers target
+        run: >-
+          cargo check --locked --target wasm32-unknown-unknown
+          -p profile-platform-primitives
+          -p contracts
+          -p control-plane-contract
+          -p identity-access-domain
+          -p client-domain
+          -p profile-domain
+          -p session-domain
+          -p mailbox-domain
+          -p application-ports
+          -p use-cases
 
       - name: Validate delivery status
         run: |
