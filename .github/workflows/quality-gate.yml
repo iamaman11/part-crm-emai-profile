@@ -29,11 +29,15 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
-      - name: Clippy
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Clippy native crates
+        run: >-
+          cargo clippy --locked --workspace --all-targets
+          --exclude browser-profile-control-plane-worker -- -D warnings
 
-      - name: Test
-        run: cargo test --locked --workspace --all-targets
+      - name: Test native crates
+        run: >-
+          cargo test --locked --workspace --all-targets
+          --exclude browser-profile-control-plane-worker
 
       - name: Check domain primitives for Workers target
         run: cargo check --locked -p profile-platform-primitives --target wasm32-unknown-unknown
@@ -46,13 +50,44 @@ jobs:
           from pathlib import Path
 
           status = json.loads(Path("docs/status.json").read_text(encoding="utf-8"))
+          step = status["repository_step"]
           assert status["production_ready"] is False
-          assert status["repository_step"]["number"] == 0
+          assert isinstance(step["number"], int) and step["number"] >= 0
+          assert step["status"] in {"in_progress", "completed"}
           assert status["decisions"]["adr_0006"].startswith("proposed")
           PY
 
       - name: Scan tracked files for high-confidence secrets
         run: bash scripts/check-tracked-secrets.sh
+
+  cloudflare-worker:
+    name: Cloudflare Worker Release Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Show pinned toolchain
+        run: rustup show active-toolchain
+
+      - name: Check Worker for WASM
+        run: >-
+          cargo check --locked -p browser-profile-control-plane-worker
+          --target wasm32-unknown-unknown
+
+      - name: Install pinned worker-build
+        run: cargo install worker-build --version 0.8.5 --locked
+
+      - name: Build release Worker artifact
+        working-directory: apps/control-plane-worker
+        run: worker-build --release
+
+      - name: Verify Worker artifact
+        run: |
+          test -f apps/control-plane-worker/build/worker/shim.mjs
+          find apps/control-plane-worker/build -type f -name '*.wasm' -print -quit | grep -q .
 
   rust-windows:
     name: Rust Windows
@@ -66,5 +101,7 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show active-toolchain
 
-      - name: Check and test
-        run: cargo test --locked --workspace --all-targets
+      - name: Check and test native crates
+        run: >-
+          cargo test --locked --workspace --all-targets
+          --exclude browser-profile-control-plane-worker
