@@ -89,6 +89,9 @@ where
         let header = decode_json_segment(header_segment)?;
         let payload = decode_json_segment(payload_segment)?;
         let signature = decode_base64url(signature_segment)?;
+        if signature.is_empty() {
+            return Err(AccessIdentityError::MalformedToken);
+        }
 
         let algorithm = json_string(&header, "alg")?;
         let key_id = json_string(&header, "kid")?;
@@ -116,8 +119,8 @@ where
         if expires_at <= now_epoch_seconds {
             return Err(AccessIdentityError::Expired);
         }
-        if let Some(not_before) = json_optional_u64(&payload, "nbf")?
-            && not_before > now_epoch_seconds
+        if json_optional_u64(&payload, "nbf")?
+            .is_some_and(|not_before| not_before > now_epoch_seconds)
         {
             return Err(AccessIdentityError::NotYetValid);
         }
@@ -126,8 +129,8 @@ where
         if !valid_claim(&subject) {
             return Err(AccessIdentityError::InvalidSubject);
         }
-        let contact_hint = json_optional_string(&payload, "email")?
-            .filter(|value| valid_claim(value));
+        let contact_hint =
+            json_optional_string(&payload, "email")?.filter(|value| valid_claim(value));
 
         Ok(VerifiedExternalIdentity::new(subject, contact_hint))
     }
@@ -206,6 +209,10 @@ fn decode_json_segment(segment: &str) -> Result<String, AccessIdentityError> {
 }
 
 fn decode_base64url(value: &str) -> Result<Vec<u8>, AccessIdentityError> {
+    if value.len() % 4 == 1 {
+        return Err(AccessIdentityError::MalformedToken);
+    }
+
     let mut accumulator = 0_u32;
     let mut bits = 0_u8;
     let mut output = Vec::with_capacity(value.len().saturating_mul(3) / 4);
@@ -237,10 +244,7 @@ fn json_string(document: &str, key: &str) -> Result<String, AccessIdentityError>
     json_optional_string(document, key)?.ok_or(AccessIdentityError::MalformedToken)
 }
 
-fn json_optional_string(
-    document: &str,
-    key: &str,
-) -> Result<Option<String>, AccessIdentityError> {
+fn json_optional_string(document: &str, key: &str) -> Result<Option<String>, AccessIdentityError> {
     let Some(value_start) = json_value_start(document, key) else {
         return Ok(None);
     };
@@ -251,16 +255,13 @@ fn json_u64(document: &str, key: &str) -> Result<u64, AccessIdentityError> {
     json_optional_u64(document, key)?.ok_or(AccessIdentityError::MalformedToken)
 }
 
-fn json_optional_u64(
-    document: &str,
-    key: &str,
-) -> Result<Option<u64>, AccessIdentityError> {
+fn json_optional_u64(document: &str, key: &str) -> Result<Option<u64>, AccessIdentityError> {
     let Some(start) = json_value_start(document, key) else {
         return Ok(None);
     };
     let digits: String = document[start..]
         .chars()
-        .take_while(char::is_ascii_digit)
+        .take_while(|character| character.is_ascii_digit())
         .collect();
     if digits.is_empty() {
         return Err(AccessIdentityError::MalformedToken);
@@ -271,10 +272,7 @@ fn json_optional_u64(
         .map_err(|_| AccessIdentityError::MalformedToken)
 }
 
-fn json_audience_contains(
-    document: &str,
-    expected: &str,
-) -> Result<bool, AccessIdentityError> {
+fn json_audience_contains(document: &str, expected: &str) -> Result<bool, AccessIdentityError> {
     let start = json_value_start(document, "aud").ok_or(AccessIdentityError::MalformedToken)?;
     let bytes = document.as_bytes();
     match bytes.get(start) {
@@ -401,8 +399,8 @@ mod tests {
     }
 
     #[test]
-    fn access_and_fake_adapters_produce_identical_verified_identity(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn access_and_fake_adapters_produce_identical_verified_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
         let signature = vec![1, 2, 3, 4];
         let adapter = CloudflareAccessJwtAdapter::new(
             AccessJwtConfig::new("https://team.cloudflareaccess.com", "app-aud")?,
@@ -426,8 +424,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_signature_and_expired_or_wrong_audience(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_bad_signature_and_expired_or_wrong_audience()
+    -> Result<(), Box<dyn std::error::Error>> {
         let adapter = CloudflareAccessJwtAdapter::new(
             AccessJwtConfig::new("https://team.cloudflareaccess.com", "app-aud")?,
             DeterministicVerifier {
