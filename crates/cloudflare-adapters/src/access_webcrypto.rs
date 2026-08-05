@@ -34,10 +34,7 @@ impl AccessJwks {
     }
 }
 
-pub async fn verify_rs256(
-    prepared: &PreparedAccessJwt,
-    key: &AccessRsaJwk,
-) -> Result<bool> {
+pub async fn verify_rs256(prepared: &PreparedAccessJwt, key: &AccessRsaJwk) -> Result<bool> {
     if key.kid != prepared.key_id()
         || key.kty != "RSA"
         || key.alg != "RS256"
@@ -93,13 +90,9 @@ fn rsa_algorithm_object() -> Result<Object> {
 }
 
 fn set_string(target: &Object, name: &str, value: &str) -> Result<()> {
-    Reflect::set(
-        target,
-        &JsValue::from_str(name),
-        &JsValue::from_str(value),
-    )
-    .map(|_| ())
-    .map_err(js_error)
+    Reflect::set(target, &JsValue::from_str(name), &JsValue::from_str(value))
+        .map(|_| ())
+        .map_err(js_error)
 }
 
 fn js_error(value: JsValue) -> Error {

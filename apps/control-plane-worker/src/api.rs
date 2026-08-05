@@ -22,8 +22,8 @@ use cloudflare_adapters::d1_invitation_acceptance::{
 };
 use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
 use profile_platform_primitives::{
-    ActorId, AggregateVersion, AssignmentId, AuditEventId, ClientId, CorrelationId, IdentityId,
-    IdempotencyKey, InvitationId, OutboxEventId, ProfileId, TenantId, UnixMillis,
+    ActorId, AggregateVersion, AssignmentId, AuditEventId, ClientId, CorrelationId, IdempotencyKey,
+    IdentityId, InvitationId, OutboxEventId, ProfileId, TenantId, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
 use worker::{Date, Env, Error, Request, Response, Result};
@@ -31,11 +31,7 @@ use worker::{Date, Env, Error, Request, Response, Result};
 const IDEMPOTENCY_HEADER: &str = "Idempotency-Key";
 const IDEMPOTENCY_TTL_MS: u64 = 86_400_000;
 
-pub async fn dispatch(
-    route: RouteClass,
-    request: &mut Request,
-    env: &Env,
-) -> Result<Response> {
+pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
     let segments: Vec<&str> = path
         .trim_matches('/')
@@ -148,10 +144,19 @@ async fn bootstrap_owner(request: &mut Request, env: &Env, tenant_id: &str) -> R
         identity_id: &identity_id,
         envelope: envelope.identity(),
     };
-    if repository.bootstrap_owner(&context, mutation).await.is_err() {
+    if repository
+        .bootstrap_owner(&context, mutation)
+        .await
+        .is_err()
+    {
         return conflict(request);
     }
-    mutation_receipt("bootstrapped", verified.scope().tenant_id().as_str(), 1, 201)
+    mutation_receipt(
+        "bootstrapped",
+        verified.scope().tenant_id().as_str(),
+        1,
+        201,
+    )
 }
 
 async fn transfer_owner(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Response> {
@@ -209,11 +214,7 @@ async fn transfer_owner(request: &mut Request, env: &Env, tenant_id: &str) -> Re
     )
 }
 
-async fn create_invitation(
-    request: &mut Request,
-    env: &Env,
-    tenant_id: &str,
-) -> Result<Response> {
+async fn create_invitation(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Response> {
     let Some(actor) = active_owner(request, env, tenant_id).await? else {
         return neutral_not_found(&correlation_hint(request));
     };
@@ -895,14 +896,16 @@ struct EnvelopeOwned {
 impl EnvelopeOwned {
     fn from_request(request: &Request, request_digest: String) -> Result<Self> {
         if !(16..=256).contains(&request_digest.len()) {
-            return Err(Error::RustError("request digest length is invalid".to_owned()));
+            return Err(Error::RustError(
+                "request digest length is invalid".to_owned(),
+            ));
         }
         let key = request
             .headers()
             .get(IDEMPOTENCY_HEADER)?
             .ok_or_else(|| Error::RustError("idempotency key missing".to_owned()))?;
-        let idempotency_key = IdempotencyKey::parse(key)
-            .map_err(|error| Error::RustError(error.to_string()))?;
+        let idempotency_key =
+            IdempotencyKey::parse(key).map_err(|error| Error::RustError(error.to_string()))?;
         let audit_event_id = AuditEventId::parse(prefixed_id("audit", idempotency_key.as_str()))
             .map_err(|error| Error::RustError(error.to_string()))?;
         let outbox_event_id = OutboxEventId::parse(prefixed_id("outbox", idempotency_key.as_str()))
