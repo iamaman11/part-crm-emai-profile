@@ -10,7 +10,7 @@ adapters, а не переносит Camoufox или локальный browser 
 
 ## Текущий Статус
 
-**Repository Steps 0–2 приняты. Repository Step 3 выполняется в PR #12.**
+**Repository Steps 0–3 приняты.**
 
 - Step 0 создал exact Rust workspace, pure primitives и постоянный
   Linux/Windows/WASM quality gate.
@@ -19,18 +19,18 @@ adapters, а не переносит Camoufox или локальный browser 
 - Step 2 добавил typed IDs и actor context, pure identity/client/profile/session/
   mailbox domains, application ports, initial use cases, OpenAPI/protobuf v1 roots
   и активные architecture/contract breaking-change gates.
-- Step 3 добавляет strict D1 catalog migrations, tenant-inclusive constraints,
+- Step 3 добавил strict D1 catalog migrations, tenant-inclusive constraints,
   typed Cloudflare adapter, optimistic versions, idempotency/audit/outbox envelope
   и постоянные migration/isolation negative gates.
 
-Technical Step 3 Quality Gate run `31043260598` полностью зелёный на head
-`40d84c5cf5d7832a3db964ab639e822f2e055031`: Linux/WASM, Windows, local Wrangler
-D1 migration/replay и release Worker с подключённым D1 adapter. Merge acceptance
-ещё не выполнен. Следующий этап после приёмки — **Repository Step 4: Identity,
-clients and ACL slice** (issue #13).
+Accepted Step 3 source head: `bff2109448d8109b963e9bd2077da273e54e8da2`.
+Final Quality Gate run: `31043753595`. Squash merge:
+`189f36cdce092a05bccf5757e368eee87a0e2c50`.
 
-Cloudflare Access identity, React UI, Windows Profile Bridge и remote D1 staging
-ещё не реализованы. Машиночитаемый статус: [`docs/status.json`](docs/status.json).
+Следующий этап — **Repository Step 4: Identity, clients and ACL slice** (issue
+#13). Cloudflare Access identity, React UI, Windows Profile Bridge и remote D1
+staging ещё не реализованы. Машиночитаемый статус:
+[`docs/status.json`](docs/status.json).
 
 Единственный разрешенный источник legacy-профилей:
 
@@ -114,10 +114,10 @@ Standalone v1 не требует отдельной VM, PostgreSQL или Keycl
 - OpenAPI v1 для web API и protobuf v1 для Bridge/CRM contracts.
 
 Step 1 подтвердил reproducible repository cold build Cloudflare pins. Step 2
-добавил immutable v1 compatibility floor. Step 3 technical gate подтвердил local
-D1 migration replay, typed adapter compilation and Worker packaging. Remote
-staging, binding behavior under load, backup/restore and account recovery пока не
-считаются выполненными.
+добавил immutable v1 compatibility floor. Step 3 подтвердил local D1 migration
+replay, tenant constraints, typed adapter compilation and Worker packaging.
+Remote staging, binding behavior under load, backup/restore and account recovery
+пока не считаются выполненными.
 
 ## Ключевые Инварианты
 
