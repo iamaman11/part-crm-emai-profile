@@ -95,11 +95,7 @@ impl D1ProfileCoordinatorRepository {
         let outcome = mutation.outcome.database_value();
 
         let existing = self
-            .projection_command(
-                scope,
-                mutation.profile_id,
-                mutation.projection.sequence,
-            )
+            .projection_command(scope, mutation.profile_id, mutation.projection.sequence)
             .await?;
         if let Some(existing) = existing {
             return verify_replay(existing, outcome, &projection_json);
@@ -121,11 +117,7 @@ impl D1ProfileCoordinatorRepository {
         .await?;
 
         let stored = self
-            .projection_command(
-                scope,
-                mutation.profile_id,
-                mutation.projection.sequence,
-            )
+            .projection_command(scope, mutation.profile_id, mutation.projection.sequence)
             .await?
             .ok_or_else(|| {
                 Error::RustError("coordinator projection command was not persisted".to_owned())

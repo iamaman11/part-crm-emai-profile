@@ -720,10 +720,7 @@ impl ProfileCoordinatorState {
         Some(CoordinatorOutcome::TimedOut { kind })
     }
 
-    fn mark_recovered(
-        &mut self,
-        _now: UnixMillis,
-    ) -> Result<CoordinatorOutcome, CoordinatorError> {
+    fn mark_recovered(&mut self, _now: UnixMillis) -> Result<CoordinatorOutcome, CoordinatorError> {
         if self.active_lease.is_some() {
             return Err(CoordinatorError::CoordinatorUnavailable);
         }
@@ -897,7 +894,8 @@ mod tests {
     }
 
     #[test]
-    fn profile_id_maps_to_one_deterministic_object_name() -> Result<(), Box<dyn std::error::Error>> {
+    fn profile_id_maps_to_one_deterministic_object_name() -> Result<(), Box<dyn std::error::Error>>
+    {
         let profile_id = ProfileId::parse("profile_01JCOORDINATOR")?;
         assert_eq!(
             coordinator_object_name(&profile_id),
@@ -907,8 +905,8 @@ mod tests {
     }
 
     #[test]
-    fn first_claim_issues_epoch_and_duplicate_is_idempotent(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn first_claim_issues_epoch_and_duplicate_is_idempotent()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator()?;
         issue(&mut state, 1, 1, 10)?;
         let command = envelope(
@@ -991,17 +989,14 @@ mod tests {
         )?);
         assert_eq!(stale, Err(CoordinatorError::StaleWriter));
         assert_eq!(
-            state
-                .active_lease()
-                .map(super::CoordinatorLease::epoch),
+            state.active_lease().map(super::CoordinatorLease::epoch),
             Some(2)
         );
         Ok(())
     }
 
     #[test]
-    fn reordered_commands_and_key_reuse_are_rejected(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn reordered_commands_and_key_reuse_are_rejected() -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator()?;
         issue(&mut state, 1, 1, 10)?;
         let gap = state.apply(envelope(
@@ -1027,8 +1022,8 @@ mod tests {
     }
 
     #[test]
-    fn idle_timeout_preserves_uncertain_state_until_recovery(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn idle_timeout_preserves_uncertain_state_until_recovery()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator()?;
         issue(&mut state, 1, 1, 10)?;
         claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;

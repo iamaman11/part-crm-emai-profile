@@ -116,13 +116,7 @@ pub async fn dispatch(
         _ => return neutral_not_found(actor.actor().correlation_id().as_str()),
     };
 
-    project_and_respond(
-        response,
-        env,
-        actor.actor().tenant_scope(),
-        &profile_id,
-    )
-    .await
+    project_and_respond(response, env, actor.actor().tenant_scope(), &profile_id).await
 }
 
 fn profile_is_coordinatable(status: &str) -> bool {
