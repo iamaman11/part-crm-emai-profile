@@ -20,6 +20,8 @@
   создания, запуска, snapshot, restore и cloud sync.
 - [`CONTRACT_POLICY.md`](CONTRACT_POLICY.md): OpenAPI/protobuf v1 roots, stable
   problem taxonomy, compatibility rules and baseline governance.
+- [`D1_CATALOG.md`](D1_CATALOG.md): authoritative catalog boundary, tenant
+  isolation model, migrations, transaction envelope and evidence limits.
 - [`ADR_STATUS.md`](ADR_STATUS.md): authoritative acceptance status всех ADR.
 
 ## Security, Privacy И Operations Governance
@@ -47,6 +49,9 @@
 - [`evidence/2026-08-05-repository-step-2-domain-contract-skeleton.md`](evidence/2026-08-05-repository-step-2-domain-contract-skeleton.md):
   typed domain boundaries, state machines, native/WASM evidence, architecture and
   contract negative gates, defects and explicit limitations.
+- [`evidence/2026-08-05-repository-step-3-d1-catalog-foundation.md`](evidence/2026-08-05-repository-step-3-d1-catalog-foundation.md):
+  strict catalog schema, Wrangler migration replay, tenant constraints, typed D1
+  adapter, CAS and transaction-envelope evidence.
 - [`PLAN_READINESS_REVIEW.md`](PLAN_READINESS_REVIEW.md): readiness review,
   corrected status claims and external gates.
 
@@ -74,9 +79,12 @@
 - typed primitives and pure identity/client/profile/session/mailbox domains;
 - provider-independent application ports and initial use-case decisions;
 - OpenAPI/protobuf v1 contract roots and immutable accepted baseline;
-- permanent positive and deliberately negative architecture/contract gates;
-- permanent Linux/WASM, Windows and Cloudflare Worker release-build jobs;
-- remote Cloudflare deployment and D1 persistence remain later evidence gates.
+- strict forward-only D1 catalog migration and typed Cloudflare adapter;
+- Wrangler `4.94.0` migration apply/replay plus deterministic SQLite invariants;
+- permanent positive and deliberately negative architecture/contract/D1 gates;
+- permanent Linux/WASM, D1 migration, Windows and Cloudflare Worker release jobs;
+- remote Cloudflare deployment, Access identity and production recovery remain
+  later evidence gates.
 
 ## Правила Ведения
 
@@ -87,7 +95,8 @@
 4. Статус шага подтверждается green permanent CI и merge, не branch Markdown.
 5. Accepted v1 contract baseline не меняется обычным PR; incompatibility требует
    нового major root или отдельно управляемого migration/cutover.
-6. Документы не содержат email профилей, proxy endpoints, credentials, cookies,
+6. Raw D1 statements не выходят за typed Cloudflare adapter boundary.
+7. Документы не содержат email профилей, proxy endpoints, credentials, cookies,
    message content или другие secrets/PII.
-7. Устаревший документ помечается superseded и перестает быть источником истины.
-8. External action не отмечается выполненной без reviewable evidence reference.
+8. Устаревший документ помечается superseded и перестает быть источником истины.
+9. External action не отмечается выполненной без reviewable evidence reference.
