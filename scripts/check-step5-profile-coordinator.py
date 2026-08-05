@@ -45,7 +45,7 @@ REPOSITORY_REQUIRED = {
     "docs/PROFILE_COORDINATOR.md": (
         "Durable Object storage is authoritative",
         "neutral disclosure response",
-        "no cross-service transaction",
+        "must not claim atomicity across Durable Objects and D1",
     ),
 }
 
