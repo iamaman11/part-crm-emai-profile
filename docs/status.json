@@ -6,7 +6,9 @@
     "name": "Cloudflare cold-build and binding spike",
     "status": "in_progress",
     "tracking_issue": 2,
-    "baseline": "cc345301baaa1e549caf4045ce16739402edca02"
+    "baseline": "cc345301baaa1e549caf4045ce16739402edca02",
+    "technical_evidence_head": "196804579bd6535b75dd964bc50fd184703b52cb",
+    "quality_gate_run_id": 31036328555
   },
   "accepted_steps": [
     {
@@ -26,14 +28,16 @@
   "implementation": {
     "production_code": false,
     "rust_workspace": "accepted_step_0",
-    "cloudflare_worker": "cold_build_in_progress_worker_0_8_5",
+    "cloudflare_worker": "cold_build_passed_pr_6_worker_0_8_5",
     "windows_bridge": "not_started",
     "frontend": "not_started"
   },
   "evidence": {
     "foundation_linux_windows_wasm": "passed",
     "tracked_file_secret_scan": "passed_limited_to_current_tree",
-    "cloudflare_worker_build": "pending",
+    "cloudflare_worker_build": "passed_quality_gate_run_31036328555",
+    "cloudflare_bindings_compile": "d1_r2_queue_durable_object_static_assets_passed",
+    "cloudflare_release_artifact": "shim_and_wasm_verified",
     "cloudflare_remote_staging": "not_proven_external_gate",
     "single_device_cloud_smoke": "passed_with_documented_limitations",
     "multi_device": "not_proven",
