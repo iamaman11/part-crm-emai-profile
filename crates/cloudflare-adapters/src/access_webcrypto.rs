@@ -34,7 +34,10 @@ impl AccessJwks {
     }
 }
 
-pub async fn verify_rs256(prepared: &PreparedAccessJwt, key: &AccessRsaJwk) -> Result<bool> {
+pub async fn verify_rs256(
+    prepared: &PreparedAccessJwt,
+    key: &AccessRsaJwk,
+) -> Result<bool> {
     if key.kid != prepared.key_id()
         || key.kty != "RSA"
         || key.alg != "RS256"
@@ -50,27 +53,25 @@ pub async fn verify_rs256(prepared: &PreparedAccessJwt, key: &AccessRsaJwk) -> R
     let usages = Array::new();
     usages.push(&JsValue::from_str("verify"));
 
-    let imported = JsFuture::from(subtle.import_key_with_object(
-        "jwk",
-        &jwk,
-        &algorithm,
-        false,
-        usages.as_ref(),
-    ))
-    .await
-    .map_err(js_error)?;
+    let import_promise = subtle
+        .import_key_with_object("jwk", &jwk, &algorithm, false, usages.as_ref())
+        .map_err(js_error)?;
+    let imported = JsFuture::from(import_promise).await.map_err(js_error)?;
     let crypto_key: CryptoKey = imported.dyn_into().map_err(js_error)?;
 
-    JsFuture::from(subtle.verify_with_str_and_u8_array_and_u8_array(
-        "RSASSA-PKCS1-v1_5",
-        &crypto_key,
-        prepared.signature(),
-        prepared.signing_input().as_bytes(),
-    )?)
-    .await
-    .map_err(js_error)?
-    .as_bool()
-    .ok_or_else(|| Error::RustError("WebCrypto verification returned a non-boolean".to_owned()))
+    let verify_promise = subtle
+        .verify_with_str_and_u8_array_and_u8_array(
+            "RSASSA-PKCS1-v1_5",
+            &crypto_key,
+            prepared.signature(),
+            prepared.signing_input().as_bytes(),
+        )
+        .map_err(js_error)?;
+    JsFuture::from(verify_promise)
+        .await
+        .map_err(js_error)?
+        .as_bool()
+        .ok_or_else(|| Error::RustError("WebCrypto verification returned a non-boolean".to_owned()))
 }
 
 fn rsa_jwk_object(key: &AccessRsaJwk) -> Result<Object> {
@@ -92,9 +93,13 @@ fn rsa_algorithm_object() -> Result<Object> {
 }
 
 fn set_string(target: &Object, name: &str, value: &str) -> Result<()> {
-    Reflect::set(target, &JsValue::from_str(name), &JsValue::from_str(value))
-        .map(|_| ())
-        .map_err(js_error)
+    Reflect::set(
+        target,
+        &JsValue::from_str(name),
+        &JsValue::from_str(value),
+    )
+    .map(|_| ())
+    .map_err(js_error)
 }
 
 fn js_error(value: JsValue) -> Error {
