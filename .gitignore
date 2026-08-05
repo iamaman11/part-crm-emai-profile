@@ -5,6 +5,8 @@
 # Private Browser Profiles & Cookies (CRITICAL: EXCLUDE ALL SESSION DATA)
 browser_profiles/
 temp/
+state/
+artifacts/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
@@ -23,6 +25,7 @@ lock
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
 .venv/
 venv/
 
