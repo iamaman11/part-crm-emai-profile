@@ -1,0 +1,226 @@
+name: Step 3 Transaction Fixture Fix
+
+on:
+  push:
+    branches:
+      - repository-step-3-d1-catalog-foundation
+
+permissions:
+  contents: write
+
+concurrency:
+  group: step-3-transaction-fixture-fix
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-3-d1-catalog-foundation
+          persist-credentials: true
+
+      - name: Replace transaction envelope fixture
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/test-d1-schema.py")
+          text = path.read_text(encoding="utf-8")
+          start = text.index("def test_optimistic_version_and_mutation_envelope() -> None:\n")
+          end = text.index("\ndef test_file_backed_restore_shape() -> None:\n", start)
+          replacement = r'''def test_optimistic_version_and_mutation_envelope() -> None:
+              connection = open_database()
+              try:
+                  apply_migrations(connection)
+                  seed_catalog(connection)
+
+                  fresh = connection.execute(
+                      """
+                      UPDATE clients
+                      SET display_name = 'Updated Client', version = version + 1,
+                          updated_by_actor_id = ?, updated_at_ms = 100
+                      WHERE tenant_id = ? AND client_id = ? AND version = 1
+                      """,
+                      (OWNER_A, TENANT_A, CLIENT_A),
+                  )
+                  assert fresh.rowcount == 1
+                  stale = connection.execute(
+                      """
+                      UPDATE clients
+                      SET display_name = 'Stale Overwrite', version = version + 1,
+                          updated_by_actor_id = ?, updated_at_ms = 101
+                      WHERE tenant_id = ? AND client_id = ? AND version = 1
+                      """,
+                      (OWNER_A, TENANT_A, CLIENT_A),
+                  )
+                  assert stale.rowcount == 0
+                  updated = connection.execute(
+                      "SELECT display_name, version FROM clients WHERE tenant_id = ? AND client_id = ?",
+                      (TENANT_A, CLIENT_A),
+                  ).fetchone()
+                  assert (updated["display_name"], updated["version"]) == ("Updated Client", 2)
+                  connection.commit()
+
+                  try:
+                      connection.execute("BEGIN")
+                      rolled_back_update = connection.execute(
+                          """
+                          UPDATE clients
+                          SET display_name = 'Rollback Candidate', version = version + 1,
+                              updated_by_actor_id = ?, updated_at_ms = 110
+                          WHERE tenant_id = ? AND client_id = ? AND version = 2
+                          """,
+                          (OWNER_A, TENANT_A, CLIENT_A),
+                      )
+                      assert rolled_back_update.rowcount == 1
+                      connection.execute(
+                          """
+                          INSERT INTO idempotency_records (
+                              tenant_id, actor_id, idempotency_key, command_name, request_digest,
+                              result_code, result_reference, created_at_ms, expires_at_ms
+                          ) VALUES (?, ?, 'idem_rollback_catalog', 'client.update',
+                                    '0123456789abcdef', 'updated', ?, 110, 1000)
+                          """,
+                          (TENANT_A, OWNER_A, CLIENT_A),
+                      )
+                      connection.execute(
+                          """
+                          INSERT INTO audit_events (
+                              tenant_id, audit_event_id, correlation_id, actor_id, action,
+                              resource_type, resource_id, result_code, occurred_at_ms
+                          ) VALUES (?, 'audit_rollback_catalog', 'corr_rollback_catalog', ?,
+                                    'client.update', 'client', ?, 'updated', 110)
+                          """,
+                          (TENANT_A, OWNER_A, CLIENT_A),
+                      )
+                      connection.execute(
+                          """
+                          INSERT INTO outbox_events (
+                              tenant_id, outbox_event_id, aggregate_type, aggregate_id,
+                              aggregate_version, event_type, payload_json, created_at_ms
+                          ) VALUES (?, 'outbox_rollback_catalog', 'client', ?, 3,
+                                    'client.updated.v1', '{}', 110)
+                          """,
+                          (TENANT_A, CLIENT_A),
+                      )
+                      connection.execute(
+                          """
+                          INSERT INTO audit_events (
+                              tenant_id, audit_event_id, correlation_id, actor_id, action,
+                              resource_type, resource_id, result_code, occurred_at_ms
+                          ) VALUES (?, 'audit_rollback_catalog', 'corr_duplicate_catalog', ?,
+                                    'forced.failure', 'client', ?, 'failed', 111)
+                          """,
+                          (TENANT_A, OWNER_A, CLIENT_A),
+                      )
+                  except sqlite3.IntegrityError:
+                      connection.rollback()
+                  else:
+                      raise AssertionError("forced mutation envelope failure unexpectedly committed")
+
+                  rolled_back_client = connection.execute(
+                      "SELECT display_name, version FROM clients WHERE tenant_id = ? AND client_id = ?",
+                      (TENANT_A, CLIENT_A),
+                  ).fetchone()
+                  assert (rolled_back_client["display_name"], rolled_back_client["version"]) == (
+                      "Updated Client",
+                      2,
+                  )
+                  for table, column, value in (
+                      ("idempotency_records", "idempotency_key", "idem_rollback_catalog"),
+                      ("audit_events", "audit_event_id", "audit_rollback_catalog"),
+                      ("outbox_events", "outbox_event_id", "outbox_rollback_catalog"),
+                  ):
+                      count = connection.execute(
+                          f"SELECT COUNT(*) FROM {table} WHERE tenant_id = ? AND {column} = ?",
+                          (TENANT_A, value),
+                      ).fetchone()[0]
+                      assert count == 0, f"{table} escaped transaction rollback"
+
+                  with connection:
+                      committed_update = connection.execute(
+                          """
+                          UPDATE clients
+                          SET display_name = 'Committed Client', version = version + 1,
+                              updated_by_actor_id = ?, updated_at_ms = 120
+                          WHERE tenant_id = ? AND client_id = ? AND version = 2
+                          """,
+                          (OWNER_A, TENANT_A, CLIENT_A),
+                      )
+                      assert committed_update.rowcount == 1
+                      connection.execute(
+                          """
+                          INSERT INTO idempotency_records (
+                              tenant_id, actor_id, idempotency_key, command_name, request_digest,
+                              result_code, result_reference, created_at_ms, expires_at_ms
+                          ) VALUES (?, ?, 'idem_committed_catalog', 'client.update',
+                                    'fedcba9876543210', 'updated', ?, 120, 1000)
+                          """,
+                          (TENANT_A, OWNER_A, CLIENT_A),
+                      )
+                      connection.execute(
+                          """
+                          INSERT INTO audit_events (
+                              tenant_id, audit_event_id, correlation_id, actor_id, action,
+                              resource_type, resource_id, result_code, occurred_at_ms
+                          ) VALUES (?, 'audit_committed_catalog', 'corr_committed_catalog', ?,
+                                    'client.update', 'client', ?, 'updated', 120)
+                          """,
+                          (TENANT_A, OWNER_A, CLIENT_A),
+                      )
+                      connection.execute(
+                          """
+                          INSERT INTO outbox_events (
+                              tenant_id, outbox_event_id, aggregate_type, aggregate_id,
+                              aggregate_version, event_type, payload_json, created_at_ms
+                          ) VALUES (?, 'outbox_committed_catalog', 'client', ?, 3,
+                                    'client.updated.v1', '{}', 120)
+                          """,
+                          (TENANT_A, CLIENT_A),
+                      )
+
+                  committed_client = connection.execute(
+                      "SELECT display_name, version FROM clients WHERE tenant_id = ? AND client_id = ?",
+                      (TENANT_A, CLIENT_A),
+                  ).fetchone()
+                  assert (committed_client["display_name"], committed_client["version"]) == (
+                      "Committed Client",
+                      3,
+                  )
+                  assert connection.execute(
+                      "SELECT COUNT(*) FROM idempotency_records WHERE tenant_id = ? AND idempotency_key = 'idem_committed_catalog'",
+                      (TENANT_A,),
+                  ).fetchone()[0] == 1
+                  assert connection.execute(
+                      "SELECT COUNT(*) FROM audit_events WHERE tenant_id = ? AND audit_event_id = 'audit_committed_catalog'",
+                      (TENANT_A,),
+                  ).fetchone()[0] == 1
+                  assert connection.execute(
+                      "SELECT COUNT(*) FROM outbox_events WHERE tenant_id = ? AND outbox_event_id = 'outbox_committed_catalog'",
+                      (TENANT_A,),
+                  ).fetchone()[0] == 1
+              finally:
+                  connection.close()
+          '''
+          replacement = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in replacement.splitlines()
+          ) + "\n"
+          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+          PY
+
+      - name: Run corrected schema suite
+        run: python scripts/test-d1-schema.py
+
+      - name: Remove temporary diagnostics and commit correction
+        run: |
+          git rm -f .github/workflows/step-3-d1-debug.yml
+          git rm -f .github/workflows/step-3-transaction-fixture-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/test-d1-schema.py
+          git commit -m "test: model D1 mutation envelope on existing aggregate"
+          git push origin HEAD:repository-step-3-d1-catalog-foundation
