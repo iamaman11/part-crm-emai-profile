@@ -495,6 +495,16 @@
           "409": {
             "$ref": "#/components/responses/Conflict"
           }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientGrantRequest"
+              }
+            }
+          }
         }
       }
     },
@@ -722,6 +732,16 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileGrantRequest"
+              }
+            }
           }
         }
       }

@@ -239,7 +239,7 @@ def test_invitation_and_resource_guards(connection: sqlite3.Connection) -> None:
             """,
             (TENANT, MEMBER, OWNER, PROFILE),
         ),
-        "profile_grant_target_not_active_member",
+        "profile_grant_version_mismatch",
     )
     connection.rollback()
 
