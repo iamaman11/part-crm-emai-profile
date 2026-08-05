@@ -10,21 +10,21 @@ adapters, а не переносит Camoufox или локальный browser 
 
 ## Текущий Статус
 
-**Repository Steps 0–1 приняты. Repository Step 2 выполняется в PR #9.**
+**Repository Steps 0–2 приняты.**
 
 - Step 0 создал exact Rust workspace, pure primitives и постоянный
   Linux/Windows/WASM quality gate.
 - Step 1 добавил минимальный Rust Cloudflare Worker и доказал repository cold
   build D1/R2/Queue/Durable Object/Static Assets boundary.
-- Step 2 добавляет typed IDs и actor context, pure identity/client/profile/session/
+- Step 2 добавил typed IDs и actor context, pure identity/client/profile/session/
   mailbox domains, application ports, initial use cases, OpenAPI/protobuf v1 roots
   и активные architecture/contract breaking-change gates.
 
-Technical Step 2 Quality Gate run `31039199212` полностью зелёный для native
-Linux/Windows, всех governed pure crates на WASM и существующего Cloudflare
-Worker release artifact. Merge acceptance ещё не выполнен. Следующий этап после
-приёмки — **Repository Step 3: D1 catalog foundation** (issue #10).
+Accepted Step 2 source head: `70fdbe8b494f61aeda639e004e54ea088e4ddc3e`.
+Final Quality Gate run: `31039802642`. Squash merge:
+`14e96a7841c3652767f37ee76151c3cf39be6301`.
 
+Следующий этап — **Repository Step 3: D1 catalog foundation** (issue #10).
 React UI, Windows Profile Bridge, D1 migrations и production use cases ещё не
 реализованы. Машиночитаемый статус: [`docs/status.json`](docs/status.json).
 
@@ -106,7 +106,7 @@ Standalone v1 не требует отдельной VM, PostgreSQL или Keycl
 - OpenAPI v1 для web API и protobuf v1 для Bridge/CRM contracts.
 
 Step 1 подтвердил reproducible repository cold build Cloudflare pins. Step 2
-добавляет immutable v1 compatibility floor: обычный PR не может тихо переписать
+добавил immutable v1 compatibility floor: обычный PR не может тихо переписать
 accepted baseline. Каждое SDK или contract major обновление остаётся отдельным
 compatibility gate. Remote staging, binding behavior и account recovery пока не
 считаются выполненными.
