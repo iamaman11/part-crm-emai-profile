@@ -1,11 +1,14 @@
 # Repository Step 3 — D1 Catalog Foundation Evidence
 
 **Дата:** 2026-08-05  
-**Статус:** technical scope passed; merge acceptance pending  
+**Статус:** accepted  
 **Baseline:** `313a94aa59d10fa6a2d3e9a6da80bd9315e33fc4`  
 **Technical evidence head:** `40d84c5cf5d7832a3db964ab639e822f2e055031`  
+**Accepted source head:** `bff2109448d8109b963e9bd2077da273e54e8da2`  
 **Pull request:** #12  
-**Technical Quality Gate run:** `31043260598`
+**Technical Quality Gate run:** `31043260598`  
+**Final Quality Gate run:** `31043753595`  
+**Squash merge:** `189f36cdce092a05bccf5757e368eee87a0e2c50`
 
 ## 1. Реализованная Catalog Boundary
 
@@ -90,8 +93,12 @@ and replay evidence.
 
 ## 6. Permanent CI Result
 
-Quality Gate run `31043260598` succeeded on technical head
+Technical Quality Gate run `31043260598` succeeded on implementation head
 `40d84c5cf5d7832a3db964ab639e822f2e055031`.
+
+Final Quality Gate run `31043753595` repeated the complete four-job gate on the
+accepted documentation-complete source head
+`bff2109448d8109b963e9bd2077da273e54e8da2` and succeeded.
 
 ### Rust Linux and WASM
 
@@ -133,7 +140,7 @@ Quality Gate run `31043260598` succeeded on technical head
 - Wrangler local D1 denied integrity PRAGMAs, so the gate was separated into
   authorized Wrangler shape queries and the existing strict SQLite integrity
   suite;
-- all temporary write/debug workflows were removed before the technical run.
+- all temporary write/debug workflows were removed before acceptance.
 
 ## 8. Что Не Доказано
 
