@@ -445,7 +445,9 @@ impl ProcessSupervisor {
         successful_exit: bool,
     ) -> Result<ProcessCloseOutcome, ProcessSupervisorError> {
         let outcome = match &self.state {
-            SupervisedProcessState::Closing { session_id: active, .. } => {
+            SupervisedProcessState::Closing {
+                session_id: active, ..
+            } => {
                 if active != session_id {
                     return Err(ProcessSupervisorError::SessionMismatch);
                 }
@@ -455,7 +457,9 @@ impl ProcessSupervisor {
                     ProcessCloseOutcome::Crash
                 }
             }
-            SupervisedProcessState::Starting { session_id: active, .. }
+            SupervisedProcessState::Starting {
+                session_id: active, ..
+            }
             | SupervisedProcessState::Ready { session_id: active } => {
                 if active != session_id {
                     return Err(ProcessSupervisorError::SessionMismatch);
@@ -538,10 +542,7 @@ pub enum CamouhostMessage {
     Launch { session_id: SessionId },
     Ready { session_id: SessionId },
     Close { session_id: SessionId },
-    Closed {
-        session_id: SessionId,
-        clean: bool,
-    },
+    Closed { session_id: SessionId, clean: bool },
 }
 
 impl CamouhostMessage {
@@ -683,8 +684,8 @@ mod tests {
     }
 
     #[test]
-    fn exact_claim_uri_is_accepted_without_exposing_secret_debug(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn exact_claim_uri_is_accepted_without_exposing_secret_debug()
+    -> Result<(), Box<dyn std::error::Error>> {
         let uri = ClaimUri::parse("profilebridge://claim/claim_01JBRIDGE_FEASIBILITY")?;
         assert_eq!(format!("{:?}", uri.claim_code()), "ClaimCode([REDACTED])");
         Ok(())
@@ -702,18 +703,18 @@ mod tests {
             "profilebridge://claim/claim%5F01JBRIDGE_FEASIBILITY",
         ];
         for value in invalid {
-            assert!(ClaimUri::parse(value).is_err(), "unexpected valid URI: {value}");
+            assert!(
+                ClaimUri::parse(value).is_err(),
+                "unexpected valid URI: {value}"
+            );
         }
     }
 
     #[test]
     fn claim_is_single_use_and_device_bound() -> Result<(), Box<dyn std::error::Error>> {
         let code = claim_code()?;
-        let mut claim = EnrollmentClaim::issue(
-            code.clone(),
-            UnixMillis::new(10),
-            UnixMillis::new(100),
-        )?;
+        let mut claim =
+            EnrollmentClaim::issue(code.clone(), UnixMillis::new(10), UnixMillis::new(100))?;
         let first_device = DeviceId::parse("device_01JBRIDGE")?;
         let second_device = DeviceId::parse("device_02JBRIDGE")?;
         claim.redeem(&code, &first_device, UnixMillis::new(20))?;
@@ -731,11 +732,8 @@ mod tests {
     #[test]
     fn claim_expiry_is_strict_at_boundary() -> Result<(), Box<dyn std::error::Error>> {
         let code = claim_code()?;
-        let mut claim = EnrollmentClaim::issue(
-            code.clone(),
-            UnixMillis::new(10),
-            UnixMillis::new(100),
-        )?;
+        let mut claim =
+            EnrollmentClaim::issue(code.clone(), UnixMillis::new(10), UnixMillis::new(100))?;
         assert_eq!(
             claim.redeem(
                 &code,
@@ -764,8 +762,8 @@ mod tests {
     }
 
     #[test]
-    fn stale_workspace_release_cannot_unlock_new_writer(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn stale_workspace_release_cannot_unlock_new_writer() -> Result<(), Box<dyn std::error::Error>>
+    {
         let device = DeviceId::parse("device_01JBRIDGE")?;
         let first_token = WorkspaceLockToken::parse("lock_01JBRIDGE_FEASIBILITY")?;
         let second_token = WorkspaceLockToken::parse("lock_02JBRIDGE_FEASIBILITY")?;
@@ -782,8 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn graceful_close_and_forced_timeout_are_distinct(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn graceful_close_and_forced_timeout_are_distinct() -> Result<(), Box<dyn std::error::Error>> {
         let session_id = SessionId::parse("session_01JBRIDGE")?;
         let mut graceful = ProcessSupervisor::new();
         graceful.begin_start(session_id.clone(), UnixMillis::new(10), 20)?;
@@ -813,8 +810,7 @@ mod tests {
     }
 
     #[test]
-    fn unexpected_successful_exit_is_still_a_crash(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn unexpected_successful_exit_is_still_a_crash() -> Result<(), Box<dyn std::error::Error>> {
         let session_id = SessionId::parse("session_01JBRIDGE")?;
         let mut supervisor = ProcessSupervisor::new();
         supervisor.begin_start(session_id.clone(), UnixMillis::new(10), 20)?;
@@ -827,8 +823,8 @@ mod tests {
     }
 
     #[test]
-    fn versioned_camouhost_frames_parse_and_malformed_frames_fail_closed(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn versioned_camouhost_frames_parse_and_malformed_frames_fail_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
         let hello = CamouhostMessage::parse("hello|1")?;
         hello.validate_version()?;
         assert_eq!(
