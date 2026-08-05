@@ -1,0 +1,34 @@
+name: Step 1 Lockfile
+
+on:
+  push:
+    branches:
+      - repository-step-1-cloudflare-cold-build
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Show pinned toolchain
+        run: rustup show active-toolchain
+
+      - name: Generate dependency lock
+        run: |
+          cargo generate-lockfile
+          cargo metadata --locked --format-version 1 >/dev/null
+
+      - name: Upload lockfile
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: step-1-cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 1
