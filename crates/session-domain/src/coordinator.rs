@@ -1,7 +1,7 @@
 use core::fmt;
 use profile_platform_primitives::{
-    ActorId, AggregateVersion, DeviceId, FencingToken, IdempotencyKey, LaunchIntentId,
-    ProfileId, SessionId, TenantId, UnixMillis,
+    ActorId, AggregateVersion, DeviceId, FencingToken, IdempotencyKey, LaunchIntentId, ProfileId,
+    SessionId, TenantId, UnixMillis,
 };
 
 const RECEIPT_LIMIT: usize = 32;
@@ -274,24 +274,12 @@ impl CoordinatorCommandEnvelope {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CoordinatorOutcome {
-    LaunchIntentIssued {
-        launch_intent_id: LaunchIntentId,
-    },
-    LeaseClaimed {
-        lease: CoordinatorLease,
-    },
-    HeartbeatAccepted {
-        idle_expires_at: UnixMillis,
-    },
-    Released {
-        disposition: ReleaseDisposition,
-    },
-    DrainStarted {
-        deadline: UnixMillis,
-    },
-    TimedOut {
-        kind: TimeoutKind,
-    },
+    LaunchIntentIssued { launch_intent_id: LaunchIntentId },
+    LeaseClaimed { lease: CoordinatorLease },
+    HeartbeatAccepted { idle_expires_at: UnixMillis },
+    Released { disposition: ReleaseDisposition },
+    DrainStarted { deadline: UnixMillis },
+    TimedOut { kind: TimeoutKind },
     LaunchIntentExpired,
     Recovered,
     NoChange,
@@ -488,13 +476,7 @@ impl ProfileCoordinatorState {
                 device_id,
                 now,
                 expires_at,
-            } => self.issue_launch_intent(
-                launch_intent_id,
-                actor_id,
-                device_id,
-                *now,
-                *expires_at,
-            ),
+            } => self.issue_launch_intent(launch_intent_id, actor_id, device_id, *now, *expires_at),
             CoordinatorCommand::Claim {
                 launch_intent_id,
                 actor_id,
@@ -522,13 +504,7 @@ impl ProfileCoordinatorState {
                 fencing_token,
                 disposition,
                 now,
-            } => self.release(
-                session_id,
-                *epoch,
-                fencing_token,
-                *disposition,
-                *now,
-            ),
+            } => self.release(session_id, *epoch, fencing_token, *disposition, *now),
             CoordinatorCommand::BeginDrain { now } => self.begin_drain(*now),
             CoordinatorCommand::Tick { now } => self.tick(*now),
             CoordinatorCommand::MarkRecovered { now } => self.mark_recovered(*now),
@@ -693,10 +669,7 @@ impl ProfileCoordinatorState {
         Ok(CoordinatorOutcome::Released { disposition })
     }
 
-    fn begin_drain(
-        &mut self,
-        now: UnixMillis,
-    ) -> Result<CoordinatorOutcome, CoordinatorError> {
+    fn begin_drain(&mut self, now: UnixMillis) -> Result<CoordinatorOutcome, CoordinatorError> {
         if self.status != CoordinatorStatus::Active || self.active_lease.is_none() {
             return Err(CoordinatorError::NoActiveLease);
         }
@@ -739,10 +712,7 @@ impl ProfileCoordinatorState {
         Ok(CoordinatorOutcome::NoChange)
     }
 
-    fn mark_recovered(
-        &mut self,
-        _now: UnixMillis,
-    ) -> Result<CoordinatorOutcome, CoordinatorError> {
+    fn mark_recovered(&mut self, _now: UnixMillis) -> Result<CoordinatorOutcome, CoordinatorError> {
         if self.active_lease.is_some() {
             return Err(CoordinatorError::CoordinatorUnavailable);
         }
@@ -912,7 +882,8 @@ mod tests {
     }
 
     #[test]
-    fn profile_id_maps_to_one_deterministic_object_name() -> Result<(), Box<dyn std::error::Error>> {
+    fn profile_id_maps_to_one_deterministic_object_name() -> Result<(), Box<dyn std::error::Error>>
+    {
         let profile_id = ProfileId::parse("profile_01JCOORDINATOR")?;
         assert_eq!(
             coordinator_object_name(&profile_id),
@@ -922,8 +893,8 @@ mod tests {
     }
 
     #[test]
-    fn first_claim_issues_epoch_and_duplicate_is_idempotent(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn first_claim_issues_epoch_and_duplicate_is_idempotent()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator()?;
         issue(&mut state, 1, 1, 10)?;
         let command = envelope(
@@ -1005,13 +976,15 @@ mod tests {
             },
         )?);
         assert_eq!(stale, Err(CoordinatorError::StaleWriter));
-        assert_eq!(state.active_lease().map(super::CoordinatorLease::epoch), Some(2));
+        assert_eq!(
+            state.active_lease().map(super::CoordinatorLease::epoch),
+            Some(2)
+        );
         Ok(())
     }
 
     #[test]
-    fn reordered_commands_and_key_reuse_are_rejected(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn reordered_commands_and_key_reuse_are_rejected() -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator()?;
         issue(&mut state, 1, 1, 10)?;
         let gap = state.apply(envelope(
@@ -1037,8 +1010,8 @@ mod tests {
     }
 
     #[test]
-    fn idle_timeout_preserves_uncertain_state_until_recovery(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn idle_timeout_preserves_uncertain_state_until_recovery()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut state = coordinator()?;
         issue(&mut state, 1, 1, 10)?;
         claim(&mut state, 2, 2, 11, "fence_01JCOORDINATOR")?;
