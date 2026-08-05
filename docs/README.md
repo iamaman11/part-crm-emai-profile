@@ -18,6 +18,8 @@
   Definition of Done; порядок delivery уточняется `DELIVERY_ROADMAP.md`.
 - [`../PROFILE_LIFECYCLE_PLAN.md`](../PROFILE_LIFECYCLE_PLAN.md): state machine
   создания, запуска, snapshot, restore и cloud sync.
+- [`CONTRACT_POLICY.md`](CONTRACT_POLICY.md): OpenAPI/protobuf v1 roots, stable
+  problem taxonomy, compatibility rules and baseline governance.
 - [`ADR_STATUS.md`](ADR_STATUS.md): authoritative acceptance status всех ADR.
 
 ## Security, Privacy И Operations Governance
@@ -42,6 +44,9 @@
 - [`evidence/2026-08-05-repository-step-1-cloudflare-cold-build.md`](evidence/2026-08-05-repository-step-1-cloudflare-cold-build.md):
   exact Rust/`workers-rs` cold build, binding compile surface, release artifact,
   найденные дефекты, ограничения и supply-chain observation.
+- [`evidence/2026-08-05-repository-step-2-domain-contract-skeleton.md`](evidence/2026-08-05-repository-step-2-domain-contract-skeleton.md):
+  typed domain boundaries, state machines, native/WASM evidence, architecture and
+  contract negative gates, defects and explicit limitations.
 - [`PLAN_READINESS_REVIEW.md`](PLAN_READINESS_REVIEW.md): readiness review,
   corrected status claims and external gates.
 
@@ -66,9 +71,12 @@
 - Rust `1.97.1`, edition `2024`, exact `rust-toolchain.toml`;
 - committed workspace `Cargo.lock`;
 - `worker 0.8.5`, direct `wasm-bindgen 0.2.126`, `worker-build 0.8.5`;
+- typed primitives and pure identity/client/profile/session/mailbox domains;
+- provider-independent application ports and initial use-case decisions;
+- OpenAPI/protobuf v1 contract roots and immutable accepted baseline;
+- permanent positive and deliberately negative architecture/contract gates;
 - permanent Linux/WASM, Windows and Cloudflare Worker release-build jobs;
-- binding contract for D1, R2, Queue, Durable Object and Static Assets;
-- remote Cloudflare deployment remains a separate external evidence gate.
+- remote Cloudflare deployment and D1 persistence remain later evidence gates.
 
 ## Правила Ведения
 
@@ -77,7 +85,9 @@
 3. ADR status определяется `ADR_STATUS.md`, а implementation readiness —
    `status.json` и merged evidence.
 4. Статус шага подтверждается green permanent CI и merge, не branch Markdown.
-5. Документы не содержат email профилей, proxy endpoints, credentials, cookies,
+5. Accepted v1 contract baseline не меняется обычным PR; incompatibility требует
+   нового major root или отдельно управляемого migration/cutover.
+6. Документы не содержат email профилей, proxy endpoints, credentials, cookies,
    message content или другие secrets/PII.
-6. Устаревший документ помечается superseded и перестает быть источником истины.
-7. External action не отмечается выполненной без reviewable evidence reference.
+7. Устаревший документ помечается superseded и перестает быть источником истины.
+8. External action не отмечается выполненной без reviewable evidence reference.
