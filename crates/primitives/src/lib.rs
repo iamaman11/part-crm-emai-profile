@@ -197,8 +197,7 @@ impl UnixMillis {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActorContext, ActorId, AggregateVersion, CorrelationId, OpaqueId, TenantId,
-        TenantScope,
+        ActorContext, ActorId, AggregateVersion, CorrelationId, OpaqueId, TenantId, TenantScope,
     };
 
     #[test]

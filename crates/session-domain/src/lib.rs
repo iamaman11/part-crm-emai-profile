@@ -2,8 +2,8 @@
 
 use core::fmt;
 use profile_platform_primitives::{
-    ActorContext, ActorId, DeviceId, FencingToken, LaunchIntentId, ProfileId, SessionId,
-    TenantId, UnixMillis,
+    ActorContext, ActorId, DeviceId, FencingToken, LaunchIntentId, ProfileId, SessionId, TenantId,
+    UnixMillis,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -203,8 +203,8 @@ impl std::error::Error for LeaseError {}
 mod tests {
     use super::{LaunchIntent, LaunchIntentError, ProfileLease};
     use profile_platform_primitives::{
-        ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, LaunchIntentId,
-        ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
+        ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, LaunchIntentId, ProfileId,
+        SessionId, TenantId, TenantScope, UnixMillis,
     };
 
     fn actor() -> Result<ActorContext, Box<dyn std::error::Error>> {

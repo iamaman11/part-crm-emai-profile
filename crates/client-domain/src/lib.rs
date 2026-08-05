@@ -88,7 +88,10 @@ impl ClientRecord {
             return Err(ClientError::InvalidStatusTransition);
         }
         self.status = ClientStatus::Archived;
-        self.version = self.version.next().map_err(|_| ClientError::VersionOverflow)?;
+        self.version = self
+            .version
+            .next()
+            .map_err(|_| ClientError::VersionOverflow)?;
         Ok(())
     }
 }
@@ -231,9 +234,7 @@ impl std::error::Error for AssignmentError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AssignmentError, ClientKind, ClientRecord, ClientStatus, ProfileClientAssignment,
-    };
+    use super::{AssignmentError, ClientKind, ClientRecord, ClientStatus, ProfileClientAssignment};
     use profile_platform_primitives::{ActorId, ClientId, ProfileId, TenantId, UnixMillis};
 
     fn active_client() -> Result<ClientRecord, Box<dyn std::error::Error>> {

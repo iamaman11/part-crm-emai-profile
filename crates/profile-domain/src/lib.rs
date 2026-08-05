@@ -164,16 +164,25 @@ impl BrowserProfile {
 pub const fn is_allowed_transition(current: ProfileStatus, next: ProfileStatus) -> bool {
     matches!(
         (current, next),
-        (ProfileStatus::Draft, ProfileStatus::Quarantined | ProfileStatus::Ready)
-            | (ProfileStatus::Quarantined, ProfileStatus::Ready | ProfileStatus::Suspended)
-            | (
-                ProfileStatus::Ready,
-                ProfileStatus::InUse | ProfileStatus::Suspended | ProfileStatus::Deleting
-            )
-            | (ProfileStatus::InUse, ProfileStatus::DirtyLocal)
+        (
+            ProfileStatus::Draft,
+            ProfileStatus::Quarantined | ProfileStatus::Ready
+        ) | (
+            ProfileStatus::Quarantined,
+            ProfileStatus::Ready | ProfileStatus::Suspended
+        ) | (
+            ProfileStatus::Ready,
+            ProfileStatus::InUse | ProfileStatus::Suspended | ProfileStatus::Deleting
+        ) | (ProfileStatus::InUse, ProfileStatus::DirtyLocal)
             | (ProfileStatus::DirtyLocal, ProfileStatus::Syncing)
-            | (ProfileStatus::Syncing, ProfileStatus::Ready | ProfileStatus::Quarantined)
-            | (ProfileStatus::Suspended, ProfileStatus::Ready | ProfileStatus::Deleting)
+            | (
+                ProfileStatus::Syncing,
+                ProfileStatus::Ready | ProfileStatus::Quarantined
+            )
+            | (
+                ProfileStatus::Suspended,
+                ProfileStatus::Ready | ProfileStatus::Deleting
+            )
             | (ProfileStatus::Deleting, ProfileStatus::Deleted)
     )
 }
@@ -254,7 +263,10 @@ mod tests {
         );
         profile.activate_generation(&generation)?;
         assert_eq!(profile.status(), ProfileStatus::Ready);
-        assert_eq!(profile.active_generation_id(), Some(generation.generation_id()));
+        assert_eq!(
+            profile.active_generation_id(),
+            Some(generation.generation_id())
+        );
         Ok(())
     }
 }

@@ -254,10 +254,7 @@ mod tests {
         ActorContext, ActorId, CorrelationId, ProfileId, TenantId, TenantScope,
     };
 
-    fn fixture() -> Result<
-        (ActorContext, Membership, ProfileId),
-        Box<dyn std::error::Error>,
-    > {
+    fn fixture() -> Result<(ActorContext, Membership, ProfileId), Box<dyn std::error::Error>> {
         let tenant_id = TenantId::parse("tenant_01JDOMAIN")?;
         let actor_id = ActorId::parse("actor_01JDOMAIN")?;
         let actor = ActorContext::new(

@@ -6,9 +6,7 @@ use identity_access_domain::{
     AuthorizationDecision, Membership, ProfileCapability, ProfileGrant, authorize_profile,
 };
 use profile_domain::{BrowserProfile, ProfileStatus};
-use profile_platform_primitives::{
-    ActorContext, ClientId, DeviceId, ProfileId, TenantId,
-};
+use profile_platform_primitives::{ActorContext, ClientId, DeviceId, ProfileId, TenantId};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OpenProfileCommand {
@@ -133,9 +131,7 @@ pub fn decide_create_client(
 fn map_client_error(error: ClientError) -> ApplicationError {
     match error {
         ClientError::InvalidDisplayName => ApplicationError::new(ProblemCode::InvalidRequest),
-        ClientError::InvalidStatusTransition => {
-            ApplicationError::new(ProblemCode::InvalidState)
-        }
+        ClientError::InvalidStatusTransition => ApplicationError::new(ProblemCode::InvalidState),
         ClientError::VersionOverflow => ApplicationError::new(ProblemCode::InternalFailure),
     }
 }

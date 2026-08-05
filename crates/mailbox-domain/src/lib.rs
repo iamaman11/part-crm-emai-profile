@@ -100,7 +100,10 @@ impl MailboxJob {
         if binding.status() != MailboxBindingStatus::Active {
             return Err(MailboxError::BindingRevoked);
         }
-        if cursor.as_ref().is_some_and(|value| value.len() > MAX_CURSOR_LENGTH) {
+        if cursor
+            .as_ref()
+            .is_some_and(|value| value.len() > MAX_CURSOR_LENGTH)
+        {
             return Err(MailboxError::CursorTooLong);
         }
 
@@ -201,7 +204,10 @@ mod tests {
     fn revoked_binding_cannot_start_job() -> Result<(), Box<dyn std::error::Error>> {
         let mut binding = binding()?;
         binding.revoke()?;
-        assert_eq!(MailboxJob::create(&binding, None), Err(MailboxError::BindingRevoked));
+        assert_eq!(
+            MailboxJob::create(&binding, None),
+            Err(MailboxError::BindingRevoked)
+        );
         Ok(())
     }
 

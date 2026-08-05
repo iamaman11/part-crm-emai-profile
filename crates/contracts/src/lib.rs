@@ -119,7 +119,10 @@ mod tests {
 
     #[test]
     fn problem_codes_are_stable_machine_values() {
-        assert_eq!(ProblemCode::VersionConflict.stable_code(), "version_conflict");
+        assert_eq!(
+            ProblemCode::VersionConflict.stable_code(),
+            "version_conflict"
+        );
         assert_eq!(ProblemCode::ReplayRejected.stable_code(), "replay_rejected");
     }
 
