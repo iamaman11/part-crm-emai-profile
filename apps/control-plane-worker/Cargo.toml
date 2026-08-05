@@ -1,0 +1,16 @@
+[package]
+name = "browser-profile-control-plane-worker"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+control-plane-contract = { path = "../../crates/control-plane-contract" }
+worker.workspace = true
+
+[lints]
+workspace = true
