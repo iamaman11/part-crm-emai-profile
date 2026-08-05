@@ -6,7 +6,15 @@
     "name": "D1 catalog foundation",
     "status": "in_progress",
     "tracking_issue": 10,
-    "baseline": "313a94aa59d10fa6a2d3e9a6da80bd9315e33fc4"
+    "baseline": "313a94aa59d10fa6a2d3e9a6da80bd9315e33fc4",
+    "technical_evidence_head": "40d84c5cf5d7832a3db964ab639e822f2e055031",
+    "technical_quality_gate_run_id": 31043260598
+  },
+  "next_repository_step": {
+    "number": 4,
+    "name": "Identity, clients and ACL slice",
+    "tracking_issue": 13,
+    "status": "planned"
   },
   "accepted_steps": [
     {
@@ -44,7 +52,7 @@
     "rust_workspace": "accepted_step_0",
     "cloudflare_worker": "accepted_cold_build_worker_0_8_5",
     "domain_contract_skeleton": "accepted_step_2",
-    "d1_catalog": "in_progress",
+    "d1_catalog": "technical_gate_passed_pr_12",
     "windows_bridge": "not_started",
     "frontend": "not_started"
   },
@@ -58,10 +66,10 @@
     "architecture_dependency_gate": "positive_and_negative_accepted_run_31039802642",
     "contract_compatibility_gate": "positive_and_breaking_fixture_accepted_run_31039802642",
     "contract_baseline_immutability": "accepted_run_31039802642",
-    "d1_schema_migrations": "pending_step_3_quality_gate",
-    "d1_tenant_constraints": "pending_step_3_quality_gate",
-    "d1_transaction_envelope": "pending_step_3_quality_gate",
-    "d1_typed_adapter": "pending_step_3_quality_gate",
+    "d1_schema_migrations": "passed_technical_run_31043260598",
+    "d1_tenant_constraints": "passed_technical_run_31043260598",
+    "d1_transaction_envelope": "passed_synthetic_run_31043260598",
+    "d1_typed_adapter": "wasm_and_release_build_passed_run_31043260598",
     "cloudflare_remote_staging": "not_proven_external_gate",
     "single_device_cloud_smoke": "passed_with_documented_limitations",
     "multi_device": "not_proven",
