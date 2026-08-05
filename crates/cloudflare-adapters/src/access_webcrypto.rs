@@ -34,10 +34,7 @@ impl AccessJwks {
     }
 }
 
-pub async fn verify_rs256(
-    prepared: &PreparedAccessJwt,
-    key: &AccessRsaJwk,
-) -> Result<bool> {
+pub async fn verify_rs256(prepared: &PreparedAccessJwt, key: &AccessRsaJwk) -> Result<bool> {
     if key.kid != prepared.key_id()
         || key.kty != "RSA"
         || key.alg != "RS256"
@@ -64,14 +61,12 @@ pub async fn verify_rs256(
     .map_err(js_error)?;
     let crypto_key: CryptoKey = imported.dyn_into().map_err(js_error)?;
 
-    JsFuture::from(
-        subtle.verify_with_str_and_u8_array_and_u8_array(
-            "RSASSA-PKCS1-v1_5",
-            &crypto_key,
-            prepared.signature(),
-            prepared.signing_input().as_bytes(),
-        )?,
-    )
+    JsFuture::from(subtle.verify_with_str_and_u8_array_and_u8_array(
+        "RSASSA-PKCS1-v1_5",
+        &crypto_key,
+        prepared.signature(),
+        prepared.signing_input().as_bytes(),
+    )?)
     .await
     .map_err(js_error)?
     .as_bool()
@@ -97,13 +92,9 @@ fn rsa_algorithm_object() -> Result<Object> {
 }
 
 fn set_string(target: &Object, name: &str, value: &str) -> Result<()> {
-    Reflect::set(
-        target,
-        &JsValue::from_str(name),
-        &JsValue::from_str(value),
-    )
-    .map(|_| ())
-    .map_err(js_error)
+    Reflect::set(target, &JsValue::from_str(name), &JsValue::from_str(value))
+        .map(|_| ())
+        .map_err(js_error)
 }
 
 fn js_error(value: JsValue) -> Error {
@@ -140,7 +131,10 @@ mod tests {
                 },
             ],
         };
-        assert_eq!(keys.matching_key("key-01").map(|key| key.kid.as_str()), Some("key-01"));
+        assert_eq!(
+            keys.matching_key("key-01").map(|key| key.kid.as_str()),
+            Some("key-01")
+        );
         assert!(keys.matching_key("missing").is_none());
     }
 }
