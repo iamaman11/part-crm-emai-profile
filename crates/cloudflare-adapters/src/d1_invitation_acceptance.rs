@@ -1,5 +1,6 @@
+use crate::access_identity::VerifiedExternalIdentity;
 use crate::d1_identity_acl::{MutationEnvelope, VerifiedBootstrapContext};
-use profile_platform_primitives::{IdentityId, InvitationId};
+use profile_platform_primitives::{CorrelationId, IdentityId, InvitationId};
 use worker::d1::{D1Database, D1Result};
 use worker::{Result, query};
 
@@ -62,6 +63,8 @@ impl D1InvitationAcceptanceRepository {
     pub async fn accept(
         &self,
         context: &VerifiedBootstrapContext,
+        identity: &VerifiedExternalIdentity,
+        correlation_id: &CorrelationId,
         mutation: AcceptInvitationMutation<'_>,
     ) -> Result<Vec<D1Result>> {
         let tenant_id = context.scope().tenant_id().as_str();
@@ -73,8 +76,8 @@ impl D1InvitationAcceptanceRepository {
                 &self.database,
                 IDENTITY_CREATE,
                 mutation.identity_id.as_str(),
-                context.access_subject(),
-                context.contact_hint(),
+                identity.subject(),
+                identity.contact_hint(),
                 now
             )?,
             query!(
@@ -111,7 +114,7 @@ impl D1InvitationAcceptanceRepository {
                 AUDIT_CREATE,
                 tenant_id,
                 mutation.envelope.audit_event_id.as_str(),
-                context.correlation_id().as_str(),
+                correlation_id.as_str(),
                 actor_id,
                 mutation.invitation_id.as_str(),
                 now
