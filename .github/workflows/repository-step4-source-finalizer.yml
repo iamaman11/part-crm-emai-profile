@@ -22,6 +22,68 @@ jobs:
           ref: repository-step-4-identity-clients-acl
           persist-credentials: true
 
+      - name: Align Worker client creation with accepted adapter API
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path("apps/control-plane-worker/src/api.rs")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace("use client_domain::{ClientKind, ClientRecord};\n", "")
+          text = text.replace(
+              "use cloudflare_adapters::d1_catalog::{\n"
+              "    CreateClientMutation, D1CatalogRepository, MutationEnvelope as CatalogEnvelope,\n"
+              "};",
+              "use cloudflare_adapters::d1_catalog::{\n"
+              "    CatalogClientKind, CreateClientMutation, D1CatalogRepository,\n"
+              "};",
+          )
+          text = text.replace("CorrelationId, ", "")
+          text = text.replace("ProfileId, TenantId, UnixMillis", "ProfileId, UnixMillis")
+
+          pattern = re.compile(
+              r"    let kind = match body\.kind\.as_str\(\) \{.*?"
+              r"    let mutation = CreateClientMutation \{\n"
+              r"        client: record,\n"
+              r"        envelope: catalog_envelope,\n"
+              r"    \};",
+              re.S,
+          )
+          replacement = '''    let kind = match body.kind.as_str() {
+        "PERSON" => CatalogClientKind::Person,
+        "ORGANIZATION" => CatalogClientKind::Organization,
+        _ => return invalid_request(request),
+    };
+    if body.display_name.trim().is_empty() || body.display_name.len() > 200 {
+        return invalid_request(request);
+    }
+    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(request),
+    };
+    if let Some(response) = replay_response(env, &actor, &envelope, 1).await? {
+        return Ok(response);
+    }
+    let mutation = CreateClientMutation {
+        client_id: &client_id,
+        kind,
+        display_name: &body.display_name,
+        idempotency_key: &envelope.idempotency_key,
+        request_digest: &envelope.request_digest,
+        audit_event_id: &envelope.audit_event_id,
+        outbox_event_id: &envelope.outbox_event_id,
+        event_payload_json: &envelope.payload_json,
+        now: envelope.now,
+        idempotency_expires_at: envelope.expires_at,
+    };'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f"expected one create-client compatibility block, replaced {count}")
+          path.write_text(text, encoding="utf-8")
+          PY
+          cargo fmt --all
+
       - name: Require source-level Step 4 gates
         run: |
           python -m py_compile \
@@ -63,29 +125,36 @@ jobs:
           rm -f .github/workflows/step4-switch-webcrypto.yml
           rm -f .github/workflows/repository-step4-source-finalizer.yml
 
-      - name: Wire permanent temporary-artifact gate
+      - name: Wire permanent source hygiene gates
         run: |
           python - <<'PY'
           from pathlib import Path
 
           path = Path(".github/workflows/quality-gate.yml")
           text = path.read_text(encoding="utf-8")
-          compile_anchor = "          scripts/check-step4-governed-writes.py\n"
-          compile_line = "          scripts/check-no-temporary-step4.py\n"
-          if compile_line not in text:
-              text = text.replace(compile_anchor, compile_anchor + compile_line)
-          step = """
+          compile_anchor = "          scripts/check-d1-boundary.py\n"
+          compile_lines = (
+              "          scripts/check-step4-governed-writes.py\n"
+              "          scripts/check-no-temporary-step4.py\n"
+          )
+          if "scripts/check-step4-governed-writes.py" not in text:
+              text = text.replace(compile_anchor, compile_anchor + compile_lines)
+
+          steps = """
+      - name: Enforce governed Step 4 write surfaces
+        run: python scripts/check-step4-governed-writes.py
+
       - name: Reject temporary Step 4 artifacts
         run: python scripts/check-no-temporary-step4.py
+
 """
-          anchor = """
-      - name: Enforce architecture dependency boundaries
-"""
-          if "Reject temporary Step 4 artifacts" not in text:
-              text = text.replace(anchor, step + anchor)
+          anchor = "      - name: Prove raw D1 use-case fixture is rejected\n"
+          if "Enforce governed Step 4 write surfaces" not in text:
+              text = text.replace(anchor, steps + anchor)
           path.write_text(text, encoding="utf-8")
           PY
           python scripts/check-no-temporary-step4.py
+          python scripts/check-step4-governed-writes.py
 
       - name: Commit finalized source
         run: |
