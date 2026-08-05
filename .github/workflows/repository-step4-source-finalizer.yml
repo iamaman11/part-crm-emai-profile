@@ -1,0 +1,96 @@
+name: Repository Step 4 Source Finalizer
+
+on:
+  push:
+    branches:
+      - repository-step-4-identity-clients-acl
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repository-step4-source-finalizer
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-4-identity-clients-acl
+          persist-credentials: true
+
+      - name: Require source-level Step 4 gates
+        run: |
+          python -m py_compile \
+            scripts/check-contract-compatibility.py \
+            scripts/check-d1-boundary.py \
+            scripts/check-step4-governed-writes.py \
+            scripts/check-no-temporary-step4.py \
+            scripts/test-step4-identity-acl.py \
+            scripts/test-step4-command-guards.py
+          python scripts/check-contract-compatibility.py
+          python scripts/check-d1-boundary.py
+          python scripts/check-step4-governed-writes.py
+          python scripts/test-step4-identity-acl.py
+          python scripts/test-step4-command-guards.py
+          if python scripts/test-step4-identity-acl.py --negative-fixture tests/identity-acl/fixtures/assignment-authorizes.sql; then
+            echo "Assignment-as-ACL fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Require Rust and Worker checks
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked --workspace --all-targets \
+            --exclude browser-profile-control-plane-worker \
+            --exclude cloudflare-adapters
+          cargo test --locked -p cloudflare-adapters --lib
+          cargo check --locked -p browser-profile-control-plane-worker --target wasm32-unknown-unknown
+
+      - name: Remove temporary source artifacts
+        run: |
+          rm -f step4-diagnostics.txt
+          rm -f docs/step4-progress.md
+          rm -f .github/workflows/step4-format-fix.yml
+          rm -f .github/workflows/step4-semantic-autofix.yml
+          rm -f .github/workflows/step4-green-cleanup.yml
+          rm -f .github/workflows/step4-quality-controller.yml
+          rm -f .github/workflows/step4-remove-legacy-writes.yml
+          rm -f .github/workflows/step4-wire-governed-gate.yml
+          rm -f .github/workflows/step4-switch-webcrypto.yml
+          rm -f .github/workflows/repository-step4-source-finalizer.yml
+
+      - name: Wire permanent temporary-artifact gate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/workflows/quality-gate.yml")
+          text = path.read_text(encoding="utf-8")
+          compile_anchor = "          scripts/check-step4-governed-writes.py\n"
+          compile_line = "          scripts/check-no-temporary-step4.py\n"
+          if compile_line not in text:
+              text = text.replace(compile_anchor, compile_anchor + compile_line)
+          step = """
+      - name: Reject temporary Step 4 artifacts
+        run: python scripts/check-no-temporary-step4.py
+"""
+          anchor = """
+      - name: Enforce architecture dependency boundaries
+"""
+          if "Reject temporary Step 4 artifacts" not in text:
+              text = text.replace(anchor, step + anchor)
+          path.write_text(text, encoding="utf-8")
+          PY
+          python scripts/check-no-temporary-step4.py
+
+      - name: Commit finalized source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Repository Step 4: finalize permanent source head"
+          git push origin HEAD:repository-step-4-identity-clients-acl
