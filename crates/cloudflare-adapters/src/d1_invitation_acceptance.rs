@@ -2,7 +2,7 @@ use crate::access_identity::VerifiedExternalIdentity;
 use crate::d1_identity_acl::{MutationEnvelope, VerifiedBootstrapContext};
 use profile_platform_primitives::{CorrelationId, IdentityId, InvitationId};
 use worker::d1::{D1Database, D1Result};
-use worker::{Result, query};
+use worker::{Error, Result, query};
 
 const IDENTITY_CREATE: &str = r#"
 INSERT INTO identities (
@@ -69,8 +69,8 @@ impl D1InvitationAcceptanceRepository {
     ) -> Result<Vec<D1Result>> {
         let tenant_id = context.scope().tenant_id().as_str();
         let actor_id = context.actor_id().as_str();
-        let now = i64::try_from(mutation.envelope.now.value())?;
-        let expires_at = i64::try_from(mutation.envelope.idempotency_expires_at.value())?;
+        let now = sqlite_integer(mutation.envelope.now.value())?;
+        let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
         let statements = vec![
             query!(
                 &self.database,
@@ -131,4 +131,8 @@ impl D1InvitationAcceptanceRepository {
         ];
         self.database.batch(statements).await
     }
+}
+
+fn sqlite_integer(value: u64) -> Result<i64> {
+    i64::try_from(value).map_err(|_| Error::RustError("value exceeds SQLite INTEGER".to_owned()))
 }
