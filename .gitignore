@@ -16,6 +16,9 @@ artifacts/
 lock
 .parentlock
 
+# Rust build outputs
+/target/
+
 # Secrets & Environment Variables
 .env
 *.pem
