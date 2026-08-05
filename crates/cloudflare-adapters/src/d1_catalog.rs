@@ -90,11 +90,7 @@ impl D1CatalogRepository {
         Self { database }
     }
 
-    pub async fn client_exists(
-        &self,
-        scope: &TenantScope,
-        client_id: &ClientId,
-    ) -> Result<bool> {
+    pub async fn client_exists(&self, scope: &TenantScope, client_id: &ClientId) -> Result<bool> {
         let statement = query!(
             &self.database,
             "SELECT client_id FROM clients WHERE tenant_id = ? AND client_id = ?",
