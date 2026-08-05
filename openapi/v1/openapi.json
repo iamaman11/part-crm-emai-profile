@@ -2,44 +2,1312 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Browser Profile Control Plane API",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "description": "Versioned control-plane contracts for health, authenticated tenant identity, clients, profiles and explicit ACL management."
   },
+  "servers": [
+    {
+      "url": "https://control.example.invalid"
+    }
+  ],
   "paths": {
     "/api/v1/health": {
       "get": {
         "operationId": "getHealth",
         "responses": {
           "200": {
-            "description": "Control plane process is available",
+            "description": "Service is healthy",
             "content": {
-              "text/plain": {
+              "application/json": {
                 "schema": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/HealthResponse"
                 }
               }
             }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          }
+        }
+      }
+    },
+    "/api/v1/session": {
+      "get": {
+        "operationId": "getAuthenticatedSession",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantHeader"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verified identity resolved to an active tenant membership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorSession"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/owner/bootstrap": {
+      "post": {
+        "operationId": "bootstrapTenantOwner",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerBootstrapRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing idempotent owner bootstrap result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Owner bootstrapped for an empty tenant boundary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/owner/transfer": {
+      "post": {
+        "operationId": "transferTenantOwner",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerTransferRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Owner transfer committed atomically",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/invitations": {
+      "post": {
+        "operationId": "createTenantInvitation",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Invitation created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/invitations/{invitationId}/accept": {
+      "post": {
+        "operationId": "acceptTenantInvitation",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/InvitationPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationAcceptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Invitation accepted and member activated atomically",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/members/{actorId}/status": {
+      "put": {
+        "operationId": "updateMembershipStatus",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ActorPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MembershipStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Membership status updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/clients": {
+      "post": {
+        "operationId": "createClient",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Client created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/clients/{clientId}": {
+      "get": {
+        "operationId": "getClient",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ClientPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant-scoped client visible to owner or explicitly granted member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientView"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/clients/{clientId}/grants/{actorId}": {
+      "put": {
+        "operationId": "grantClientAccess",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ClientPath"
+          },
+          {
+            "$ref": "#/components/parameters/ActorPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientGrantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Explicit client grant created or replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "revokeClientAccess",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ClientPath"
+          },
+          {
+            "$ref": "#/components/parameters/ActorPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Explicit client grant revoked"
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/profiles": {
+      "post": {
+        "operationId": "createProfileMetadata",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Profile metadata created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}": {
+      "get": {
+        "operationId": "getProfileMetadata",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant-scoped profile visible to owner or explicitly granted member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileView"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}/assignment": {
+      "put": {
+        "operationId": "assignProfileToClient",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Historical profile/client assignment updated without changing authorization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}/grants/{actorId}": {
+      "put": {
+        "operationId": "grantProfileAccess",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/ActorPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileGrantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Explicit profile grant created or replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "revokeProfileAccess",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/ActorPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Explicit profile grant revoked"
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           }
         }
       }
     }
   },
   "components": {
+    "securitySchemes": {
+      "cloudflareAccessJwt": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Cf-Access-Jwt-Assertion",
+        "description": "Cloudflare Access JWT verified by the Worker identity adapter."
+      }
+    },
+    "parameters": {
+      "TenantHeader": {
+        "name": "X-Tenant-Id",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "CorrelationHeader": {
+        "name": "X-Correlation-Id",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "IdempotencyHeader": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "TenantPath": {
+        "name": "tenantId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "ActorPath": {
+        "name": "actorId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "InvitationPath": {
+        "name": "invitationId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "ClientPath": {
+        "name": "clientId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "ProfilePath": {
+        "name": "profileId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      }
+    },
+    "responses": {
+      "NeutralNotFound": {
+        "description": "Missing, foreign or unauthorized resource; disclosure-neutral shape",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Optimistic version, idempotency or state conflict",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "InternalFailure": {
+        "description": "Internal failure",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
+    },
     "schemas": {
+      "OpaqueId": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 96,
+        "pattern": "^[A-Za-z0-9_-]+$"
+      },
+      "AggregateVersion": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "HealthResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "contractVersion"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok"
+          },
+          "contractVersion": {
+            "type": "string",
+            "const": "v1"
+          }
+        }
+      },
+      "ActorSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenantId",
+          "actorId",
+          "role"
+        ],
+        "properties": {
+          "tenantId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "actorId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "TENANT_OWNER",
+              "MEMBER"
+            ]
+          }
+        }
+      },
+      "MutationReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resultCode",
+          "resourceId",
+          "aggregateVersion"
+        ],
+        "properties": {
+          "resultCode": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "resourceId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "aggregateVersion": {
+            "$ref": "#/components/schemas/AggregateVersion"
+          }
+        }
+      },
+      "OwnerBootstrapRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "actorId",
+          "identityId",
+          "tenantDisplayName",
+          "requestDigest"
+        ],
+        "properties": {
+          "actorId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "identityId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "tenantDisplayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "requestDigest": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256
+          }
+        }
+      },
+      "OwnerTransferRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "nextOwnerActorId",
+          "currentOwnerVersion",
+          "nextOwnerVersion",
+          "requestDigest"
+        ],
+        "properties": {
+          "nextOwnerActorId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "currentOwnerVersion": {
+            "$ref": "#/components/schemas/AggregateVersion"
+          },
+          "nextOwnerVersion": {
+            "$ref": "#/components/schemas/AggregateVersion"
+          },
+          "requestDigest": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256
+          }
+        }
+      },
+      "InvitationCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "invitationId",
+          "invitedContactHmac",
+          "expiresAtMs",
+          "expectedTenantVersion",
+          "requestDigest"
+        ],
+        "properties": {
+          "invitationId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "invitedContactHmac": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "expiresAtMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedTenantVersion": {
+            "$ref": "#/components/schemas/AggregateVersion"
+          },
+          "requestDigest": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256
+          }
+        }
+      },
+      "InvitationAcceptRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "identityId",
+          "actorId",
+          "requestDigest"
+        ],
+        "properties": {
+          "identityId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "actorId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "requestDigest": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256
+          }
+        }
+      },
+      "MembershipStatusRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "expectedVersion",
+          "requestDigest"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "SUSPENDED",
+              "REVOKED"
+            ]
+          },
+          "expectedVersion": {
+            "$ref": "#/components/schemas/AggregateVersion"
+          },
+          "requestDigest": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256
+          }
+        }
+      },
+      "ClientCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clientId",
+          "kind",
+          "displayName",
+          "requestDigest"
+        ],
+        "properties": {
+          "clientId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "PERSON",
+              "ORGANIZATION"
+            ]
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "requestDigest": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256
+          }
+        }
+      },
+      "ClientView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clientId",
+          "kind",
+          "displayName",
+          "status",
+          "version"
+        ],
+        "properties": {
+          "clientId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "PERSON",
+              "ORGANIZATION"
+            ]
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "ARCHIVED",
+              "MERGED"
+            ]
+          },
+          "version": {
+            "$ref": "#/components/schemas/AggregateVersion"
+          }
+        }
+      },
+      "ClientGrantRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "role",
+          "reason",
+          "expectedClientVersion",
+          "requestDigest"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "CLIENT_VIEWER",
+              "CLIENT_EDITOR"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "expectedClientVersion": {
+            "$ref": "#/components/schemas/AggregateVersion"
+          },
+          "requestDigest": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256
+          }
+        }
+      },
+      "ProfileCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profileId",
+          "requestDigest"
+        ],
+        "properties": {
+          "profileId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "requestDigest": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256
+          }
+        }
+      },
+      "ProfileView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profileId",
+          "status",
+          "version"
+        ],
+        "properties": {
+          "profileId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "QUARANTINED",
+              "READY",
+              "IN_USE",
+              "DIRTY_LOCAL",
+              "SYNCING",
+              "SUSPENDED",
+              "DELETING",
+              "DELETED"
+            ]
+          },
+          "version": {
+            "$ref": "#/components/schemas/AggregateVersion"
+          },
+          "linkedClientId": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "AssignmentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "assignmentId",
+          "clientId",
+          "reason",
+          "expectedProfileVersion",
+          "requestDigest"
+        ],
+        "properties": {
+          "assignmentId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "clientId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "expectedProfileVersion": {
+            "$ref": "#/components/schemas/AggregateVersion"
+          },
+          "requestDigest": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256
+          }
+        }
+      },
+      "ProfileGrantRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "role",
+          "reason",
+          "expectedProfileVersion",
+          "requestDigest"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "PROFILE_VIEWER",
+              "PROFILE_OPERATOR"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "expectedProfileVersion": {
+            "$ref": "#/components/schemas/AggregateVersion"
+          },
+          "requestDigest": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256
+          }
+        }
+      },
       "Problem": {
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "type",
+          "title",
+          "status",
           "code",
-          "correlation_id"
+          "correlationId"
         ],
         "properties": {
-          "code": {
+          "type": {
+            "type": "string",
+            "format": "uri"
+          },
+          "title": {
             "type": "string"
           },
-          "correlation_id": {
+          "status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "code": {
             "type": "string",
-            "minLength": 8,
-            "maxLength": 96
+            "enum": [
+              "invalid_request",
+              "unauthorized",
+              "forbidden",
+              "not_found",
+              "conflict",
+              "invalid_state",
+              "internal_failure"
+            ]
+          },
+          "correlationId": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }
