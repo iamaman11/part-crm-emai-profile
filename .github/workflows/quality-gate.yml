@@ -49,6 +49,9 @@ jobs:
             exit 1
           fi
 
+      - name: Protect accepted v1 contract baseline
+        run: bash scripts/check-contract-baseline-immutable.sh
+
       - name: Format
         run: cargo fmt --all -- --check
 
