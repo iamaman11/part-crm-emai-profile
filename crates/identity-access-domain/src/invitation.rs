@@ -209,8 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_invitation_cannot_activate_membership()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn expired_invitation_cannot_activate_membership() -> Result<(), Box<dyn std::error::Error>> {
         let (actor, owner) = owner_fixture()?;
         let mut invitation = Invitation::create(
             &actor,

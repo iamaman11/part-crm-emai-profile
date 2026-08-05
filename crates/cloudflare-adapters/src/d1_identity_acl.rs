@@ -1,7 +1,7 @@
 use crate::access_identity::VerifiedExternalIdentity;
 use profile_platform_primitives::{
-    ActorContext, ActorId, AggregateVersion, AuditEventId, ClientId, CorrelationId, IdentityId,
-    IdempotencyKey, InvitationId, OutboxEventId, ProfileId, TenantScope, UnixMillis,
+    ActorContext, ActorId, AggregateVersion, AuditEventId, ClientId, CorrelationId, IdempotencyKey,
+    IdentityId, InvitationId, OutboxEventId, ProfileId, TenantScope, UnixMillis,
 };
 use serde::Deserialize;
 use worker::d1::{D1Database, D1Result};
@@ -619,7 +619,8 @@ impl D1IdentityAclRepository {
         let now = sqlite_integer(mutation.envelope.now)?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at)?;
         let invitation_expires_at = sqlite_integer(mutation.expires_at)?;
-        let expected_tenant_version = sqlite_integer_value(mutation.tenant_expected_version.value())?;
+        let expected_tenant_version =
+            sqlite_integer_value(mutation.tenant_expected_version.value())?;
         let next_tenant_version = sqlite_integer_value(
             mutation
                 .tenant_expected_version

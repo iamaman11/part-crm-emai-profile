@@ -330,10 +330,7 @@ mod tests {
             ClientKind::Person,
             "Synthetic ACL Client",
         )?;
-        let profile = BrowserProfile::create(
-            tenant_id,
-            ProfileId::parse("profile_01JACLTEST")?,
-        );
+        let profile = BrowserProfile::create(tenant_id, ProfileId::parse("profile_01JACLTEST")?);
         Ok(Fixture {
             owner_actor,
             member_actor,
@@ -390,8 +387,8 @@ mod tests {
     }
 
     #[test]
-    fn assignment_never_grants_client_or_profile_access()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn assignment_never_grants_client_or_profile_access() -> Result<(), Box<dyn std::error::Error>>
+    {
         let fixture = fixture()?;
         let assignment = decide_assign_profile_to_client(
             &fixture.owner_actor,
