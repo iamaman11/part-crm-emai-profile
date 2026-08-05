@@ -40,6 +40,13 @@ def main() -> int:
         if path.exists():
             errors.append(f"temporary Step 4 file remains: {path.relative_to(ROOT)}")
 
+    gitignore_lines = {
+        line.strip()
+        for line in (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    }
+    if "/target/" not in gitignore_lines:
+        errors.append(".gitignore must exclude the repository Rust /target/ directory")
+
     workflow_root = ROOT / ".github" / "workflows"
     patterns = (
         "step4-*.yml",
