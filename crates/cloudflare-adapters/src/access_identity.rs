@@ -1,4 +1,5 @@
 use core::fmt;
+use serde::Deserialize;
 
 const ACCESS_JWT_ALGORITHM: &str = "RS256";
 const MAX_CLAIM_LENGTH: usize = 512;
@@ -46,6 +47,96 @@ impl AccessJwtConfig {
         }
         Ok(Self { issuer, audience })
     }
+
+    pub fn prepare(
+        &self,
+        token: &str,
+        now_epoch_seconds: u64,
+    ) -> Result<PreparedAccessJwt, AccessIdentityError> {
+        let mut segments = token.split('.');
+        let header_segment = segments.next().ok_or(AccessIdentityError::MalformedToken)?;
+        let payload_segment = segments.next().ok_or(AccessIdentityError::MalformedToken)?;
+        let signature_segment = segments.next().ok_or(AccessIdentityError::MalformedToken)?;
+        if segments.next().is_some()
+            || header_segment.is_empty()
+            || payload_segment.is_empty()
+            || signature_segment.is_empty()
+        {
+            return Err(AccessIdentityError::MalformedToken);
+        }
+
+        let header: AccessHeader = decode_json_segment(header_segment)?;
+        let claims: AccessClaims = decode_json_segment(payload_segment)?;
+        let signature = decode_base64url(signature_segment)?;
+        if signature.is_empty() {
+            return Err(AccessIdentityError::MalformedToken);
+        }
+        if header.algorithm != ACCESS_JWT_ALGORITHM || !valid_claim(&header.key_id) {
+            return Err(AccessIdentityError::UnsupportedToken);
+        }
+        if claims.issuer != self.issuer {
+            return Err(AccessIdentityError::IssuerMismatch);
+        }
+        if !claims.audience.contains(&self.audience) {
+            return Err(AccessIdentityError::AudienceMismatch);
+        }
+        if claims.expires_at <= now_epoch_seconds {
+            return Err(AccessIdentityError::Expired);
+        }
+        if claims
+            .not_before
+            .is_some_and(|not_before| not_before > now_epoch_seconds)
+        {
+            return Err(AccessIdentityError::NotYetValid);
+        }
+        if !valid_claim(&claims.subject) {
+            return Err(AccessIdentityError::InvalidSubject);
+        }
+        let contact_hint = claims.contact_hint.filter(|value| valid_claim(value));
+
+        Ok(PreparedAccessJwt {
+            key_id: header.key_id,
+            signing_input: format!("{header_segment}.{payload_segment}"),
+            signature,
+            identity: VerifiedExternalIdentity::new(claims.subject, contact_hint),
+        })
+    }
+
+    pub fn accept_verified(
+        &self,
+        prepared: PreparedAccessJwt,
+        signature_valid: bool,
+    ) -> Result<VerifiedExternalIdentity, AccessIdentityError> {
+        if !signature_valid {
+            return Err(AccessIdentityError::InvalidSignature);
+        }
+        Ok(prepared.identity)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedAccessJwt {
+    key_id: String,
+    signing_input: String,
+    signature: Vec<u8>,
+    identity: VerifiedExternalIdentity,
+}
+
+impl PreparedAccessJwt {
+    #[must_use]
+    pub fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    #[must_use]
+    pub fn signing_input(&self) -> &str {
+        &self.signing_input
+    }
+
+    #[must_use]
+    pub fn signature(&self) -> &[u8] {
+        &self.signature
+    }
 }
 
 pub trait AccessJwtSignatureVerifier {
@@ -74,65 +165,13 @@ where
         token: &str,
         now_epoch_seconds: u64,
     ) -> Result<VerifiedExternalIdentity, AccessIdentityError> {
-        let mut segments = token.split('.');
-        let header_segment = segments.next().ok_or(AccessIdentityError::MalformedToken)?;
-        let payload_segment = segments.next().ok_or(AccessIdentityError::MalformedToken)?;
-        let signature_segment = segments.next().ok_or(AccessIdentityError::MalformedToken)?;
-        if segments.next().is_some()
-            || header_segment.is_empty()
-            || payload_segment.is_empty()
-            || signature_segment.is_empty()
-        {
-            return Err(AccessIdentityError::MalformedToken);
-        }
-
-        let header = decode_json_segment(header_segment)?;
-        let payload = decode_json_segment(payload_segment)?;
-        let signature = decode_base64url(signature_segment)?;
-        if signature.is_empty() {
-            return Err(AccessIdentityError::MalformedToken);
-        }
-
-        let algorithm = json_string(&header, "alg")?;
-        let key_id = json_string(&header, "kid")?;
-        if algorithm != ACCESS_JWT_ALGORITHM || !valid_claim(&key_id) {
-            return Err(AccessIdentityError::UnsupportedToken);
-        }
-
-        let signing_input = format!("{header_segment}.{payload_segment}");
-        if !self
-            .signature_verifier
-            .verify_rs256(&key_id, &signing_input, &signature)
-        {
-            return Err(AccessIdentityError::InvalidSignature);
-        }
-
-        let issuer = json_string(&payload, "iss")?;
-        if issuer != self.config.issuer {
-            return Err(AccessIdentityError::IssuerMismatch);
-        }
-        if !json_audience_contains(&payload, &self.config.audience)? {
-            return Err(AccessIdentityError::AudienceMismatch);
-        }
-
-        let expires_at = json_u64(&payload, "exp")?;
-        if expires_at <= now_epoch_seconds {
-            return Err(AccessIdentityError::Expired);
-        }
-        if json_optional_u64(&payload, "nbf")?
-            .is_some_and(|not_before| not_before > now_epoch_seconds)
-        {
-            return Err(AccessIdentityError::NotYetValid);
-        }
-
-        let subject = json_string(&payload, "sub")?;
-        if !valid_claim(&subject) {
-            return Err(AccessIdentityError::InvalidSubject);
-        }
-        let contact_hint =
-            json_optional_string(&payload, "email")?.filter(|value| valid_claim(value));
-
-        Ok(VerifiedExternalIdentity::new(subject, contact_hint))
+        let prepared = self.config.prepare(token, now_epoch_seconds)?;
+        let signature_valid = self.signature_verifier.verify_rs256(
+            prepared.key_id(),
+            prepared.signing_input(),
+            prepared.signature(),
+        );
+        self.config.accept_verified(prepared, signature_valid)
     }
 }
 
@@ -199,13 +238,56 @@ impl fmt::Display for AccessIdentityError {
 
 impl std::error::Error for AccessIdentityError {}
 
+#[derive(Deserialize)]
+struct AccessHeader {
+    #[serde(rename = "alg")]
+    algorithm: String,
+    #[serde(rename = "kid")]
+    key_id: String,
+}
+
+#[derive(Deserialize)]
+struct AccessClaims {
+    #[serde(rename = "iss")]
+    issuer: String,
+    #[serde(rename = "aud")]
+    audience: AudienceClaim,
+    #[serde(rename = "sub")]
+    subject: String,
+    #[serde(rename = "email")]
+    contact_hint: Option<String>,
+    #[serde(rename = "exp")]
+    expires_at: u64,
+    #[serde(rename = "nbf")]
+    not_before: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AudienceClaim {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl AudienceClaim {
+    fn contains(&self, expected: &str) -> bool {
+        match self {
+            Self::Single(value) => value == expected,
+            Self::Multiple(values) => values.iter().any(|value| value == expected),
+        }
+    }
+}
+
 fn valid_claim(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= MAX_CLAIM_LENGTH && !value.contains('\0')
 }
 
-fn decode_json_segment(segment: &str) -> Result<String, AccessIdentityError> {
+fn decode_json_segment<T>(segment: &str) -> Result<T, AccessIdentityError>
+where
+    T: for<'de> Deserialize<'de>,
+{
     let bytes = decode_base64url(segment)?;
-    String::from_utf8(bytes).map_err(|_| AccessIdentityError::MalformedToken)
+    serde_json::from_slice(&bytes).map_err(|_| AccessIdentityError::MalformedToken)
 }
 
 fn decode_base64url(value: &str) -> Result<Vec<u8>, AccessIdentityError> {
@@ -238,115 +320,6 @@ fn decode_base64url(value: &str) -> Result<Vec<u8>, AccessIdentityError> {
         return Err(AccessIdentityError::MalformedToken);
     }
     Ok(output)
-}
-
-fn json_string(document: &str, key: &str) -> Result<String, AccessIdentityError> {
-    json_optional_string(document, key)?.ok_or(AccessIdentityError::MalformedToken)
-}
-
-fn json_optional_string(document: &str, key: &str) -> Result<Option<String>, AccessIdentityError> {
-    let Some(value_start) = json_value_start(document, key) else {
-        return Ok(None);
-    };
-    parse_json_string(document, value_start).map(Some)
-}
-
-fn json_u64(document: &str, key: &str) -> Result<u64, AccessIdentityError> {
-    json_optional_u64(document, key)?.ok_or(AccessIdentityError::MalformedToken)
-}
-
-fn json_optional_u64(document: &str, key: &str) -> Result<Option<u64>, AccessIdentityError> {
-    let Some(start) = json_value_start(document, key) else {
-        return Ok(None);
-    };
-    let digits: String = document[start..]
-        .chars()
-        .take_while(|character| character.is_ascii_digit())
-        .collect();
-    if digits.is_empty() {
-        return Err(AccessIdentityError::MalformedToken);
-    }
-    digits
-        .parse::<u64>()
-        .map(Some)
-        .map_err(|_| AccessIdentityError::MalformedToken)
-}
-
-fn json_audience_contains(document: &str, expected: &str) -> Result<bool, AccessIdentityError> {
-    let start = json_value_start(document, "aud").ok_or(AccessIdentityError::MalformedToken)?;
-    let bytes = document.as_bytes();
-    match bytes.get(start) {
-        Some(b'"') => Ok(parse_json_string(document, start)? == expected),
-        Some(b'[') => {
-            let mut cursor = start + 1;
-            loop {
-                cursor = skip_whitespace(document, cursor);
-                match bytes.get(cursor) {
-                    Some(b']') => return Ok(false),
-                    Some(b'"') => {
-                        let value = parse_json_string(document, cursor)?;
-                        if value == expected {
-                            return Ok(true);
-                        }
-                        cursor = string_end(document, cursor)?;
-                        cursor = skip_whitespace(document, cursor);
-                        match bytes.get(cursor) {
-                            Some(b',') => cursor += 1,
-                            Some(b']') => return Ok(false),
-                            _ => return Err(AccessIdentityError::MalformedToken),
-                        }
-                    }
-                    _ => return Err(AccessIdentityError::MalformedToken),
-                }
-            }
-        }
-        _ => Err(AccessIdentityError::MalformedToken),
-    }
-}
-
-fn json_value_start(document: &str, key: &str) -> Option<usize> {
-    let needle = format!("\"{key}\"");
-    let key_start = document.find(&needle)?;
-    let after_key = skip_whitespace(document, key_start + needle.len());
-    if document.as_bytes().get(after_key) != Some(&b':') {
-        return None;
-    }
-    Some(skip_whitespace(document, after_key + 1))
-}
-
-fn skip_whitespace(document: &str, mut cursor: usize) -> usize {
-    while document
-        .as_bytes()
-        .get(cursor)
-        .is_some_and(u8::is_ascii_whitespace)
-    {
-        cursor += 1;
-    }
-    cursor
-}
-
-fn parse_json_string(document: &str, start: usize) -> Result<String, AccessIdentityError> {
-    let end = string_end(document, start)?;
-    let raw = &document[start + 1..end - 1];
-    if raw.contains('\\') || raw.chars().any(char::is_control) {
-        return Err(AccessIdentityError::MalformedToken);
-    }
-    Ok(raw.to_owned())
-}
-
-fn string_end(document: &str, start: usize) -> Result<usize, AccessIdentityError> {
-    if document.as_bytes().get(start) != Some(&b'"') {
-        return Err(AccessIdentityError::MalformedToken);
-    }
-    for (offset, byte) in document.as_bytes()[start + 1..].iter().enumerate() {
-        if *byte == b'\\' {
-            return Err(AccessIdentityError::MalformedToken);
-        }
-        if *byte == b'"' {
-            return Ok(start + offset + 2);
-        }
-    }
-    Err(AccessIdentityError::MalformedToken)
 }
 
 #[cfg(test)]
@@ -398,6 +371,10 @@ mod tests {
         format!("{header}.{payload}.{signature}")
     }
 
+    fn valid_payload() -> &'static str {
+        r#"{"iss":"https://team.cloudflareaccess.com","aud":["other","app-aud"],"sub":"access-subject-01","email":"member@example.test","exp":2000,"nbf":900}"#
+    }
+
     #[test]
     fn access_and_fake_adapters_produce_identical_verified_identity()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -408,11 +385,7 @@ mod tests {
                 expected_signature: signature.clone(),
             },
         );
-        let jwt = token(
-            r#"{"iss":"https://team.cloudflareaccess.com","aud":["other","app-aud"],"sub":"access-subject-01","email":"member@example.test","exp":2000,"nbf":900}"#,
-            &signature,
-        );
-        let access_identity = adapter.verify(&jwt, 1000)?;
+        let access_identity = adapter.verify(&token(valid_payload(), &signature), 1000)?;
         let fake_identity = DeterministicFakeIdentityAdapter::new(
             "access-subject-01",
             Some("member@example.test".to_owned()),
@@ -424,7 +397,20 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_signature_and_expired_or_wrong_audience()
+    fn prepared_token_requires_verified_signature()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let config = AccessJwtConfig::new("https://team.cloudflareaccess.com", "app-aud")?;
+        let prepared = config.prepare(&token(valid_payload(), &[1, 2, 3]), 1000)?;
+        assert_eq!(prepared.key_id(), "key-01");
+        assert_eq!(
+            config.accept_verified(prepared, false),
+            Err(AccessIdentityError::InvalidSignature)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_bad_signature_expiry_and_wrong_audience()
     -> Result<(), Box<dyn std::error::Error>> {
         let adapter = CloudflareAccessJwtAdapter::new(
             AccessJwtConfig::new("https://team.cloudflareaccess.com", "app-aud")?,
@@ -432,27 +418,25 @@ mod tests {
                 expected_signature: vec![9],
             },
         );
-        let signature = [1_u8];
-        let valid_payload = r#"{"iss":"https://team.cloudflareaccess.com","aud":"app-aud","sub":"access-subject-01","exp":2000}"#;
         assert_eq!(
-            adapter.verify(&token(valid_payload, &signature), 1000),
+            adapter.verify(&token(valid_payload(), &[1]), 1000),
             Err(AccessIdentityError::InvalidSignature)
         );
 
         let accepting = CloudflareAccessJwtAdapter::new(
             AccessJwtConfig::new("https://team.cloudflareaccess.com", "app-aud")?,
             DeterministicVerifier {
-                expected_signature: signature.to_vec(),
+                expected_signature: vec![1],
             },
         );
         let expired = r#"{"iss":"https://team.cloudflareaccess.com","aud":"app-aud","sub":"access-subject-01","exp":1000}"#;
         assert_eq!(
-            accepting.verify(&token(expired, &signature), 1000),
+            accepting.verify(&token(expired, &[1]), 1000),
             Err(AccessIdentityError::Expired)
         );
         let wrong_audience = r#"{"iss":"https://team.cloudflareaccess.com","aud":"foreign-aud","sub":"access-subject-01","exp":2000}"#;
         assert_eq!(
-            accepting.verify(&token(wrong_audience, &signature), 1000),
+            accepting.verify(&token(wrong_audience, &[1]), 1000),
             Err(AccessIdentityError::AudienceMismatch)
         );
         Ok(())
