@@ -27,7 +27,12 @@ jobs:
         run: rustup show active-toolchain
 
       - name: Compile repository policy scripts
-        run: python -m py_compile scripts/check-architecture.py scripts/check-contract-compatibility.py
+        run: >-
+          python -m py_compile
+          scripts/check-architecture.py
+          scripts/check-contract-compatibility.py
+          scripts/check-d1-boundary.py
+          scripts/test-d1-schema.py
 
       - name: Enforce architecture dependency boundaries
         run: python scripts/check-architecture.py
@@ -36,6 +41,16 @@ jobs:
         run: |
           if python scripts/check-architecture.py --root tests/architecture/fixtures/forbidden-domain; then
             echo "Forbidden architecture fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Enforce typed D1 adapter boundary
+        run: python scripts/check-d1-boundary.py
+
+      - name: Prove raw D1 use-case fixture is rejected
+        run: |
+          if python scripts/check-d1-boundary.py --root tests/d1-boundary/fixtures/raw-use-case; then
+            echo "Raw D1 use-case fixture unexpectedly passed." >&2
             exit 1
           fi
 
@@ -52,18 +67,23 @@ jobs:
       - name: Protect accepted v1 contract baseline
         run: bash scripts/check-contract-baseline-immutable.sh
 
+      - name: Test D1 schema and transaction invariants
+        run: python scripts/test-d1-schema.py
+
       - name: Format
         run: cargo fmt --all -- --check
 
       - name: Clippy native crates
         run: >-
           cargo clippy --locked --workspace --all-targets
-          --exclude browser-profile-control-plane-worker -- -D warnings
+          --exclude browser-profile-control-plane-worker
+          --exclude cloudflare-adapters -- -D warnings
 
       - name: Test native crates
         run: >-
           cargo test --locked --workspace --all-targets
           --exclude browser-profile-control-plane-worker
+          --exclude cloudflare-adapters
 
       - name: Check pure crates for Workers target
         run: >-
@@ -96,6 +116,42 @@ jobs:
 
       - name: Scan tracked files for high-confidence secrets
         run: bash scripts/check-tracked-secrets.sh
+
+  d1-catalog:
+    name: D1 Catalog Migrations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Show Node and npm versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Apply migrations to isolated local D1
+        run: >-
+          npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB
+          --local
+          --config deploy/cloudflare/wrangler.d1-test.jsonc
+          --persist-to .wrangler/d1-test-state
+
+      - name: Prove migration replay is a no-op
+        run: >-
+          npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB
+          --local
+          --config deploy/cloudflare/wrangler.d1-test.jsonc
+          --persist-to .wrangler/d1-test-state
+
+      - name: Verify migrated D1 catalog shape
+        run: >-
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB
+          --local
+          --config deploy/cloudflare/wrangler.d1-test.jsonc
+          --persist-to .wrangler/d1-test-state
+          --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT name FROM d1_migrations ORDER BY id;"
 
   cloudflare-worker:
     name: Cloudflare Worker Release Build
@@ -142,3 +198,4 @@ jobs:
         run: >-
           cargo test --locked --workspace --all-targets
           --exclude browser-profile-control-plane-worker
+          --exclude cloudflare-adapters

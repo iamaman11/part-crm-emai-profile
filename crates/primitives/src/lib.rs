@@ -79,15 +79,20 @@ macro_rules! define_typed_id {
 
 define_typed_id!(TenantId);
 define_typed_id!(ActorId);
+define_typed_id!(IdentityId);
+define_typed_id!(InvitationId);
 define_typed_id!(ClientId);
 define_typed_id!(ProfileId);
 define_typed_id!(GenerationId);
+define_typed_id!(AssignmentId);
 define_typed_id!(SessionId);
 define_typed_id!(DeviceId);
 define_typed_id!(MailboxBindingId);
 define_typed_id!(LaunchIntentId);
 define_typed_id!(CorrelationId);
 define_typed_id!(IdempotencyKey);
+define_typed_id!(AuditEventId);
+define_typed_id!(OutboxEventId);
 define_typed_id!(FencingToken);
 define_typed_id!(SecretHandle);
 

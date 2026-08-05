@@ -4,6 +4,7 @@ members = [
     "apps/foundation-check",
     "crates/application-ports",
     "crates/client-domain",
+    "crates/cloudflare-adapters",
     "crates/contracts",
     "crates/control-plane-contract",
     "crates/identity-access-domain",
@@ -22,6 +23,7 @@ rust-version = "1.97.1"
 [workspace.dependencies]
 application-ports = { path = "crates/application-ports" }
 client-domain = { path = "crates/client-domain" }
+cloudflare-adapters = { path = "crates/cloudflare-adapters" }
 contracts = { path = "crates/contracts" }
 identity-access-domain = { path = "crates/identity-access-domain" }
 mailbox-domain = { path = "crates/mailbox-domain" }
