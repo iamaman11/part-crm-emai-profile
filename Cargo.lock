@@ -87,6 +87,7 @@ dependencies = [
  "profile-platform-primitives",
  "serde",
  "serde_json",
+ "web-sys",
  "worker",
 ]
 
