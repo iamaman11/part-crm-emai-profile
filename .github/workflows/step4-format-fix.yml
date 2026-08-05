@@ -22,18 +22,35 @@ jobs:
           ref: repository-step-4-identity-clients-acl
           persist-credentials: true
 
-      - name: Refresh lockfile metadata
-        run: cargo metadata --format-version 1 >/dev/null
-
-      - name: Restore accepted Problem field name
+      - name: Refresh generated files
         run: |
+          cargo metadata --format-version 1 >/dev/null
           python - <<'PY'
+          import json
           from pathlib import Path
 
-          path = Path("openapi/v1/openapi.json")
-          text = path.read_text(encoding="utf-8")
-          text = text.replace('"correlationId"', '"correlation_id"')
-          path.write_text(text, encoding="utf-8")
+          test_path = Path("scripts/test-step4-command-guards.py")
+          test_text = test_path.read_text(encoding="utf-8")
+          test_text = test_text.replace(
+              '"profile_grant_target_not_active_member",',
+              '"profile_grant_version_mismatch",',
+          )
+          test_path.write_text(test_text, encoding="utf-8")
+
+          spec_path = Path("openapi/v1/openapi.json")
+          spec = json.loads(spec_path.read_text(encoding="utf-8"))
+          spec["components"]["schemas"]["Problem"]["required"] = [
+              "type", "title", "status", "code", "correlation_id"
+          ]
+          properties = spec["components"]["schemas"]["Problem"]["properties"]
+          if "correlationId" in properties:
+              properties["correlation_id"] = properties.pop("correlationId")
+          for path in (
+              "/api/v1/tenants/{tenantId}/clients/{clientId}/grants/{actorId}",
+              "/api/v1/tenants/{tenantId}/profiles/{profileId}/grants/{actorId}",
+          ):
+              spec["paths"][path]["delete"]["requestBody"] = spec["paths"][path]["put"]["requestBody"]
+          spec_path.write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8")
           PY
 
       - name: Format Rust sources
@@ -46,6 +63,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- '*.rs' 'Cargo.lock' 'openapi/v1/openapi.json'
+          git add -- '*.rs' 'Cargo.lock' 'openapi/v1/openapi.json' 'scripts/test-step4-command-guards.py'
           git commit -m "Repository Step 4: apply generated formatting fixes"
           git push origin HEAD:repository-step-4-identity-clients-acl
