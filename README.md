@@ -8,11 +8,16 @@
 она подключается к CRM через версионированные contracts/events и заменяемые
 adapters, а не переносит Camoufox или локальный browser lifecycle в процесс CRM.
 
-## Статус
+## Текущий Статус
 
-Проект находится в исследовательской и архитектурной фазе. Production-код новой
-системы еще не создан. Существующие Python-скрипты являются legacy-прототипом и
-не задают целевую архитектуру.
+Выполняется **Repository Step 0 — Executable Foundation**. В ветке Step 0 создан
+минимальный locked Rust workspace, pure primitives crate и постоянный Linux,
+Windows и WASM quality gate. Product functionality, Cloudflare Worker, React UI
+и Windows Profile Bridge ещё не реализованы.
+
+Машиночитаемый статус: [`docs/status.json`](docs/status.json). Готовность может
+повышаться только после merge и проверяемого CI/evidence, а не формулировкой в
+Markdown.
 
 Единственный разрешенный источник legacy-профилей:
 
@@ -24,16 +29,34 @@ temp/browser_profiles/
 исправлять, очищать или мигрировать на месте. Все эксперименты выполняются на
 изолированных копиях с новым generation ID.
 
-## Документация
+## Порядок Разработки
 
-- [Проверенные выводы исследования](docs/RESEARCH_FINDINGS.md)
-- [План реализации](IMPLEMENTATION_PLAN.md)
+Работа выполняется последовательными Repository Steps через GitHub branch, PR,
+постоянный CI и squash merge. Нормативный порядок находится в
+[`docs/DELIVERY_ROADMAP.md`](docs/DELIVERY_ROADMAP.md).
+
+Текущая среда позволяет автономно выполнять repository code, tests, workflows,
+issues, PR review fixes и merge. Внешние операции не симулируются: credential
+rotation, Cloudflare account provisioning, физический Windows host, trusted code
+signing и offline key escrow требуют отдельного подтверждаемого evidence.
+
+## Основная Документация
+
+- [Product boundary](docs/PRODUCT.md)
+- [Delivery roadmap](docs/DELIVERY_ROADMAP.md)
+- [Экспертный implementation plan](IMPLEMENTATION_PLAN.md)
 - [Архитектурная карта](docs/ARCHITECTURE.md)
 - [Архитектура standalone UI](docs/UI_ARCHITECTURE.md)
 - [Целевой жизненный цикл профиля](PROFILE_LIFECYCLE_PLAN.md)
+- [ADR status registry](docs/ADR_STATUS.md)
+- [Threat model](docs/THREAT_MODEL.md)
+- [Data classification](docs/DATA_CLASSIFICATION.md)
+- [Privacy and retention governance](docs/PRIVACY_AND_RETENTION.md)
+- [Test and evidence index](docs/TEST_EVIDENCE_INDEX.md)
+- [Проверенные выводы исследования](docs/RESEARCH_FINDINGS.md)
+- [Cloud profile smoke test](docs/CLOUD_PROFILE_SMOKE_TEST.md)
 - [Текущая проверка готовности плана](docs/PLAN_READINESS_REVIEW.md)
-- [ADR key management и recovery](docs/adr/ADR-0006-cloud-profile-key-management.md)
-- [Индекс ADR и документов](docs/README.md)
+- [Полный индекс документов](docs/README.md)
 
 ## Целевая Форма Системы
 
@@ -57,25 +80,20 @@ Standalone v1 не требует отдельной VM, PostgreSQL или Keycl
 
 ## Базовый Стек
 
-- Rust `1.97.1`, edition `2024`, `rust-version = "1.97.1"`;
-- `workers-rs`/WebAssembly для Cloudflare Worker, D1, R2, Queues и Durable
-  Objects; без Tokio/Axum/SQLx в cloud runtime;
+- Rust `1.97.1`, edition `2024`, exact toolchain;
+- `workers-rs`/WASM для Cloudflare Worker после Step 1 cold-build pin;
 - Tokio только в native Profile Bridge и локальных tools;
 - Cloudflare Workers Static Assets для React SPA и same-origin API;
-- Cloudflare Access для browser workforce identity; Bridge routes используют
-  отдельную device-proof policy; app membership/grants остаются authoritative;
-- D1 для каталога и audit, Durable Object на профиль для single-writer
-  coordination, R2 для encrypted immutable generations;
-- SQLite WAL только для локального rebuildable cache/outbox Profile Bridge;
-- Python `3.12.3`, Camoufox official `0.5.4`, BrowserForge `1.2.4`,
-  Playwright `1.59.0`;
-- React `19.2.7`, TypeScript `7.0.2`, Vite `8.1.5`, pnpm и TanStack Query
-  `5.101.2`, синхронизированные с текущим CRM baseline;
+- Cloudflare Access identity отдельно от application memberships/grants;
+- D1 для каталога/audit, Durable Object на профиль, R2 для encrypted immutable
+  generations;
+- SQLite WAL только для локального rebuildable cache/outbox Bridge;
+- embedded Python/Camoufox runtime как отдельный signed bundle;
 - OpenAPI для web API и protobuf для Bridge/CRM contracts.
 
-Версии новых Cloudflare crates/packages pin-ятся только после Phase 0 cold-build
-spike на Rust `1.97.1`; документация не выдает непроверенный version pin за
-принятое решение.
+Exact Cloudflare package versions принимаются только после воспроизводимого Step
+1 cold-build. Исследованный browser/runtime baseline не является автоматическим
+upgrade channel.
 
 ## Ключевые Инварианты
 
@@ -87,25 +105,27 @@ spike на Rust `1.97.1`; документация не выдает непро�
 5. R2 не используется как live filesystem: generation сначала материализуется
    на локальный диск.
 6. Cookies, localStorage, IndexedDB, fingerprint data и mailbox secrets являются
-   secret-bearing данными.
+   credential-equivalent данными.
 7. Пароли, proxy credentials и OAuth tokens хранятся только как secret handles.
-8. Качество профиля утверждается только versioned certification report; обещание
-   абсолютной невидимости или идеального fingerprint запрещено.
-9. У профиля не более одного active primary client assignment; assignment не
-   является правом доступа.
+8. Качество профиля утверждается только versioned certification report;
+   абсолютная невидимость не обещается.
+9. Assignment профиля клиенту не является правом доступа.
 10. Member без явного grant не видит и не запускает профиль.
-11. D1 не имеет PostgreSQL RLS: каждый repository API требует typed tenant scope,
-    а cross-tenant/IDOR negative tests являются release gate.
-12. D1, Durable Objects и R2 не образуют общую транзакцию: операции используют
-    idempotency, immutable objects, outbox и compensating reconciliation.
+11. Каждый tenant-owned repository API требует typed tenant scope; cross-tenant и
+    IDOR negative tests являются release gate.
+12. D1, Durable Objects и R2 связываются idempotency, immutable objects, outbox и
+    reconciliation, а не фиктивной общей транзакцией.
+13. Статус ADR и readiness берётся из `ADR_STATUS.md` и `status.json`.
 
 ## Безопасность До Реализации
 
 В legacy-скриптах и истории репозитория обнаружен hardcoded proxy credential.
-Его необходимо отозвать до любого использования прототипа. Значение секрета
-нельзя переносить в новую конфигурацию, документацию, тесты или логи.
+Он считается скомпрометированным и должен быть отозван/ротирован владельцем с
+provider-side подтверждением. Удаление строки из Git не является remediation.
+Значение секрета запрещено переносить в новую конфигурацию, документацию, тесты,
+issues или логи.
 
-До production cloud sync ADR-0006 должен стать accepted, а restore drill должен
-подтвердить root wrapping key, tenant KEK, rotation, offline recovery escrow и
-key-loss policy. Обычный Workers Secret сам по себе не считается завершенной
-key-management системой.
+До production cloud sync ADR-0006 должен стать accepted, а clean-environment
+restore drill должен подтвердить root wrapping key, tenant KEK, rotation,
+offline recovery escrow и key-loss policy. Обычный Workers Secret сам по себе не
+считается завершенной key-management системой.
