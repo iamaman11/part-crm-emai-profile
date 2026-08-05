@@ -397,8 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_token_requires_verified_signature()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn prepared_token_requires_verified_signature() -> Result<(), Box<dyn std::error::Error>> {
         let config = AccessJwtConfig::new("https://team.cloudflareaccess.com", "app-aud")?;
         let prepared = config.prepare(&token(valid_payload(), &[1, 2, 3]), 1000)?;
         assert_eq!(prepared.key_id(), "key-01");
@@ -410,8 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_signature_expiry_and_wrong_audience()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_bad_signature_expiry_and_wrong_audience() -> Result<(), Box<dyn std::error::Error>> {
         let adapter = CloudflareAccessJwtAdapter::new(
             AccessJwtConfig::new("https://team.cloudflareaccess.com", "app-aud")?,
             DeterministicVerifier {
