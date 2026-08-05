@@ -14,7 +14,7 @@ smoke test does not promote unrelated production gates.
 | `CLOUD_PROFILE_SMOKE_TEST.md` | passed with limitations | synthetic one-device create/close/encrypt/R2/restore/replay and bounded fingerprint replay | multi-device, production keys, fencing, disaster recovery, full fingerprint certification |
 | ADR-0002 evidence | accepted partial | locally executed immutable cloud generation model is viable | arbitrary runtime/device portability |
 | Repository Step 0 / PR #4 | accepted | exact Rust `1.97.1` locked workspace; Linux fmt/Clippy/tests; Windows tests; primitives WASM compile; status validation; current-tree high-confidence secret scan | Cloudflare SDK compatibility, Windows Bridge, historical secret remediation or production security |
-| Repository Step 1 / PR #6 | passed in PR, pending merge | exact `worker 0.8.5` D1/R2/Queue/Durable Object/Static Assets compile and `worker-build 0.8.5` release artifact | real Cloudflare deployment, binding behavior, migrations, DO consistency, remote rollback or production readiness |
+| Repository Step 1 / PR #6 | accepted | exact `worker 0.8.5` D1/R2/Queue/Durable Object/Static Assets compile and `worker-build 0.8.5` release artifact | real Cloudflare deployment, binding behavior, migrations, DO consistency, remote rollback or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -32,8 +32,11 @@ external remediation remains issue #1.
 ### Repository Step 1 Evidence
 
 - baseline: `cc345301baaa1e549caf4045ce16739402edca02`;
-- technical evidence head: `196804579bd6535b75dd964bc50fd184703b52cb`;
-- permanent Quality Gate run: `31036328555`, conclusion `success`;
+- technical implementation head: `196804579bd6535b75dd964bc50fd184703b52cb`;
+- accepted source head: `990fe8262f933b1a20a0c786a6a5ebc26f4fe7e2`;
+- technical Quality Gate run: `31036328555`, conclusion `success`;
+- final Quality Gate run: `31036967681`, conclusion `success`;
+- squash merge: `cba724a0d7fd116859a30d9e0101e56349c1358c`;
 - jobs: `Rust Linux and WASM`, `Rust Windows`, `Cloudflare Worker Release Build`;
 - exact runtime/build pins: Rust `1.97.1`, `worker 0.8.5`,
   `wasm-bindgen 0.2.126`, `worker-build 0.8.5`;
