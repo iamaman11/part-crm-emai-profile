@@ -1,6 +1,6 @@
 # Plan Readiness Review
 
-**Статус:** approved for Repository Step 0 and bounded feasibility work  
+**Статус:** Repository Step 0 accepted; Step 1 cold build passed in PR  
 **Дата review:** 2026-08-05  
 **Актуальная архитектура:** ADR-0005 Cloudflare-native control plane без VM
 
@@ -14,16 +14,20 @@
 - partial-failure protocol between D1, DO, Queue and R2;
 - encrypted R2 materialization, forgotten-window and multi-device targets;
 - future replacement of Cloudflare adapters by CRM identity/PostgreSQL adapters;
-- current GitHub execution environment and evidence limitations.
+- current GitHub execution environment and evidence limitations;
+- exact Rust/Cloudflare repository cold build in Quality Gate run `31036328555`.
 
 ## Corrected Readiness Meaning
 
-The architecture contains no known contradiction blocking Repository Step 0 or a
-Cloudflare/Windows feasibility spike. This does **not** mean the application,
-cloud control plane, Bridge, key recovery or production profile lifecycle exists.
+The architecture contains no known contradiction blocking repository execution.
+Repository Step 0 established the executable workspace and permanent CI.
+Repository Step 1 proved that Rust `1.97.1`, `worker 0.8.5`, direct
+`wasm-bindgen 0.2.126` and `worker-build 0.8.5` can compile and package the
+selected D1/R2/Queue/Durable Object/Static Assets boundary.
 
-Repository Step 0 introduces the first executable workspace and permanent CI.
-The product remains pre-functional until later steps merge.
+This still does **not** mean the application, remote Cloudflare deployment,
+Bridge, key recovery or production profile lifecycle exists. The current Worker
+is a binding/route skeleton without business data or production credentials.
 
 ## ADR Status Corrections
 
@@ -31,7 +35,7 @@ The product remains pre-functional until later steps merge.
   certification claims.
 - ADR-0002 is accepted with bounded one-device smoke evidence only.
 - ADR-0003, ADR-0004 and ADR-0005 are accepted architecture decisions, not
-  completed implementation.
+  completed product implementation.
 - ADR-0006 remains `proposed` and blocks production cloud generations and
   multi-device key delivery.
 
@@ -47,23 +51,35 @@ offline escrow and legal approval require separate evidence.
 
 The detailed order is `DELIVERY_ROADMAP.md`.
 
-## Repository Step 0 Gate
+## Accepted Step 0 Gate
 
-Step 0 is accepted only when:
+Step 0 proved:
 
-- exact Rust `1.97.1` workspace and lockfile build reproducibly;
-- formatting, Clippy and tests pass on Linux;
-- workspace tests pass on Windows;
-- pure domain primitive compiles for `wasm32-unknown-unknown`;
-- machine-readable status validates;
-- tracked files pass the high-confidence credential pattern check;
-- product/security/privacy/evidence documentation is indexed and consistent;
-- permanent GitHub workflow is green on the PR.
+- exact Rust `1.97.1` workspace and committed lockfile;
+- formatting, Clippy and tests on Linux;
+- workspace tests on Windows;
+- pure domain primitive for `wasm32-unknown-unknown`;
+- machine-readable status and tracked-file secret checks;
+- indexed product/security/privacy/evidence governance.
+
+## Step 1 Evidence Scope
+
+Permanent Quality Gate run `31036328555` proved:
+
+- exact Worker dependency graph compiles for WASM;
+- D1, R2, Queue, Durable Object and Static Assets bindings coexist in the Worker;
+- generated Durable Object export compiles;
+- `worker-build --release` produces an optimized Wasm package and JS shim;
+- permanent CI remains read-only and requires no Cloudflare credential.
+
+It did not prove real binding IDs, Access, D1 migrations, Durable Object storage,
+Queue delivery, R2 operations, remote deploy/rollback or cost limits. Full scope
+is recorded in the Step 1 evidence report.
 
 ## Mandatory Later Gates
 
 - revoke/rotate the legacy proxy credential before any prototype reuse;
-- perform `workers-rs` cold build and pin exact Cloudflare dependencies;
+- deploy the accepted Worker to isolated Cloudflare staging and prove bindings;
 - complete threat review before processing production data;
 - accept ADR-0006 and pass clean-environment key recovery;
 - provision separate Cloudflare environments and cost limits;
@@ -76,7 +92,9 @@ Step 0 is accepted only when:
 
 ## Residual Risks
 
-- Cloudflare SDK/runtime compatibility remains unproven until Step 1 CI;
+- remote Cloudflare runtime compatibility and binding behavior remain unproven;
+- the published `worker-build 0.8.5` tool lock emitted yanked transitive-package
+  warnings and needs upgrade/supply-chain review;
 - Cloudflare account recovery is part of disaster recovery;
 - D1 adapter lacks defense-in-depth RLS;
 - production key root/offline escrow is a plan, not evidence;
@@ -88,7 +106,8 @@ Step 0 is accepted only when:
 
 ## Verdict
 
-Proceed with Repository Step 0 and then the two highest-risk feasibility lanes:
-Cloudflare cold build and Windows Bridge skeleton. Do not begin production cloud
-profile handling, claim multi-device support or reuse the leaked credential until
-their explicit gates are satisfied.
+Accept Step 1 after its final PR quality gate and review, then proceed to the
+pure domain/contract skeleton and the Windows Bridge feasibility lane according
+to `DELIVERY_ROADMAP.md`. Do not begin production cloud profile handling, claim
+remote deployment/multi-device support or reuse the leaked credential until their
+explicit gates are satisfied.
