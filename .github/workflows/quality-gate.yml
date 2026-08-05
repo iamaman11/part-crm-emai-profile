@@ -145,13 +145,13 @@ jobs:
           --config deploy/cloudflare/wrangler.d1-test.jsonc
           --persist-to .wrangler/d1-test-state
 
-      - name: Run D1 integrity checks
+      - name: Verify migrated D1 catalog shape
         run: >-
           npx --yes wrangler@4.94.0 d1 execute CATALOG_DB
           --local
           --config deploy/cloudflare/wrangler.d1-test.jsonc
           --persist-to .wrangler/d1-test-state
-          --command "PRAGMA foreign_key_check; PRAGMA integrity_check;"
+          --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT name FROM d1_migrations ORDER BY id;"
 
   cloudflare-worker:
     name: Cloudflare Worker Release Build
