@@ -1,0 +1,538 @@
+name: Step 9 Security Review Bootstrap
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-9-encrypted-cloud-generations
+          persist-credentials: true
+
+      - name: Apply security review findings
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_one(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          container = Path("crates/encrypted-generation-domain/src/container.rs")
+          text = container.read_text(encoding="utf-8")
+          text = replace_one(
+              text,
+              "use zeroize::Zeroize;",
+              "use zeroize::{Zeroize, Zeroizing};",
+              "zeroizing import",
+          )
+          text = replace_one(
+              text,
+              "pub struct GenerationDek {\n",
+              '''#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+          pub(crate) struct NonceDomain([u8; 32]);
+
+          pub struct GenerationDek {
+          ''',
+              "nonce domain type",
+          )
+          text = replace_one(
+              text,
+              '''    pub const fn key_id(&self) -> &KeyId {
+                  &self.key_id
+              }
+
+              fn cipher(&self) -> Result<XChaCha20Poly1305, EncryptedGenerationError> {
+          ''',
+              '''    pub const fn key_id(&self) -> &KeyId {
+                  &self.key_id
+              }
+
+              pub(crate) fn nonce_domain(&self) -> NonceDomain {
+                  let mut digest = Sha256::new();
+                  digest.update(b"profile-platform-generation-nonce-domain-v1");
+                  digest.update(&self.bytes);
+                  NonceDomain(digest.finalize().into())
+              }
+
+              fn cipher(&self) -> Result<XChaCha20Poly1305, EncryptedGenerationError> {
+          ''',
+              "nonce domain derivation",
+          )
+          text = replace_one(
+              text,
+              '''#[derive(Clone, Debug, Eq, PartialEq)]
+          pub struct OpenedGeneration {
+              metadata: GenerationMetadata,
+              plaintext: Vec<u8>,
+          }
+          ''',
+              '''pub struct OpenedGeneration {
+              metadata: GenerationMetadata,
+              plaintext: Zeroizing<Vec<u8>>,
+          }
+          ''',
+              "opened generation no debug",
+          )
+          text = replace_one(
+              text,
+              '''    #[must_use]
+              pub fn into_plaintext(self) -> Vec<u8> {
+                  self.plaintext
+              }
+          }
+          ''',
+              '''    pub(crate) fn into_parts(self) -> (GenerationMetadata, Zeroizing<Vec<u8>>) {
+                  (self.metadata, self.plaintext)
+              }
+          }
+          ''',
+              "opened generation parts",
+          )
+          text = replace_one(
+              text,
+              "    let mut plaintext = Vec::with_capacity(\n",
+              "    let mut plaintext = Zeroizing::new(Vec::with_capacity(\n",
+              "plaintext zeroizing start",
+          )
+          text = replace_one(
+              text,
+              '''        usize::try_from(metadata.plaintext_bytes())
+                      .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?,
+              );
+          ''',
+              '''        usize::try_from(metadata.plaintext_bytes())
+                      .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?,
+              ));
+          ''',
+              "plaintext zeroizing close",
+          )
+          text = replace_one(
+              text,
+              '''        let opened = cipher
+                  .decrypt(
+          ''',
+              '''        let opened = Zeroizing::new(cipher
+                  .decrypt(
+          ''',
+              "chunk zeroizing start",
+          )
+          text = replace_one(
+              text,
+              '''                },
+                      )
+                      .map_err(|_| EncryptedGenerationError::AuthenticationFailed)?;
+
+                  match record_type {
+          ''',
+              '''                },
+                      )
+                      .map_err(|_| EncryptedGenerationError::AuthenticationFailed)?);
+
+                  match record_type {
+          ''',
+              "chunk zeroizing close",
+          )
+          container.write_text(text, encoding="utf-8")
+
+          lifecycle = Path("crates/encrypted-generation-domain/src/lifecycle.rs")
+          text = lifecycle.read_text(encoding="utf-8")
+          text = replace_one(
+              text,
+              '''use crate::{
+              ContainerDigest, EncryptedGenerationError, GenerationDek, GenerationMetadata, KeyId,
+              NoncePrefix, open_generation_expected, seal_generation,
+          };
+          ''',
+              '''use crate::container::NonceDomain;
+          use crate::{
+              ContainerDigest, EncryptedGenerationError, GenerationDek, GenerationMetadata,
+              NoncePrefix, open_generation_expected, seal_generation,
+          };
+          ''',
+              "lifecycle nonce import",
+          )
+          text = replace_one(
+              text,
+              "use std::collections::{BTreeMap, BTreeSet};\n",
+              "use std::collections::{BTreeMap, BTreeSet};\nuse zeroize::Zeroizing;\n",
+              "lifecycle zeroizing import",
+          )
+          text = replace_one(
+              text,
+              '''#[derive(Clone, Debug, Eq, PartialEq)]
+          pub struct RestoreResult {
+              metadata: GenerationMetadata,
+              plaintext: Vec<u8>,
+          }
+          ''',
+              '''pub struct RestoreResult {
+              metadata: GenerationMetadata,
+              plaintext: Zeroizing<Vec<u8>>,
+          }
+          ''',
+              "restore result no debug",
+          )
+          text = replace_one(
+              text,
+              '''
+              #[must_use]
+              pub fn into_plaintext(self) -> Vec<u8> {
+                  self.plaintext
+              }
+          }
+          ''',
+              '''
+          }
+          ''',
+              "restore raw plaintext extraction",
+          )
+          text = replace_one(
+              text,
+              "#[derive(Clone, Debug, Default, Eq, PartialEq)]\npub struct CloudGenerationRepository {",
+              "#[derive(Clone, Default, Eq, PartialEq)]\npub struct CloudGenerationRepository {",
+              "repository no nonce debug",
+          )
+          text = replace_one(
+              text,
+              "    nonce_claims: BTreeMap<(KeyId, NoncePrefix), GenerationId>,",
+              "    nonce_claims: BTreeMap<(NonceDomain, NoncePrefix), GenerationId>,",
+              "nonce claim key type",
+          )
+          text = replace_one(
+              text,
+              "        let nonce_claim = (metadata.key_id().clone(), metadata.nonce_prefix());",
+              "        let nonce_claim = (key.nonce_domain(), metadata.nonce_prefix());",
+              "nonce claim derivation",
+          )
+          text = replace_one(
+              text,
+              '''        let opened = match open_generation_expected(
+                  container,
+                  key,
+                  record.metadata.tenant_id(),
+                  record.metadata.profile_id(),
+                  generation_id,
+              ) {
+                  Ok(opened) => opened,
+                  Err(error) => {
+                      self.quarantine(generation_id)?;
+                      return Err(error);
+                  }
+              };
+          ''',
+              '''        let opened = open_generation_expected(
+                  container,
+                  key,
+                  record.metadata.tenant_id(),
+                  record.metadata.profile_id(),
+                  generation_id,
+              )?;
+          ''',
+              "wrong key does not quarantine",
+          )
+          text = replace_one(
+              text,
+              '''        Ok(RestoreResult {
+                  metadata: opened.metadata().clone(),
+                  plaintext: opened.into_plaintext(),
+              })
+          ''',
+              '''        let (metadata, plaintext) = opened.into_parts();
+              Ok(RestoreResult {
+                  metadata,
+                  plaintext,
+              })
+          ''',
+              "zeroizing restore transfer",
+          )
+          lifecycle.write_text(text, encoding="utf-8")
+
+          tests = Path("crates/encrypted-generation-domain/src/tests.rs")
+          text = tests.read_text(encoding="utf-8")
+          text = replace_one(
+              text,
+              '''fn key(byte: u8) -> Result<GenerationDek, EncryptedGenerationError> {
+              Ok(GenerationDek::new(key_id()?, [byte; 32]))
+          }
+          ''',
+              '''fn key(byte: u8) -> Result<GenerationDek, EncryptedGenerationError> {
+              Ok(GenerationDek::new(key_id()?, [byte; 32]))
+          }
+
+          fn key_with_id(
+              value: &str,
+              byte: u8,
+          ) -> Result<GenerationDek, EncryptedGenerationError> {
+              Ok(GenerationDek::new(KeyId::parse(value)?, [byte; 32]))
+          }
+          ''',
+              "key alias helper",
+          )
+          replacements = {
+              '''    assert_eq!(
+                  open_generation(&tampered, &key(0x48)?),
+                  Err(EncryptedGenerationError::AuthenticationFailed)
+              );
+          ''': '''    assert!(matches!(
+                  open_generation(&tampered, &key(0x48)?),
+                  Err(EncryptedGenerationError::AuthenticationFailed)
+              ));
+          ''',
+              '''    assert_eq!(
+                  open_generation(&container, &key(0x50)?),
+                  Err(EncryptedGenerationError::InvalidContainer)
+              );
+          ''': '''    assert!(matches!(
+                  open_generation(&container, &key(0x50)?),
+                  Err(EncryptedGenerationError::InvalidContainer)
+              ));
+          ''',
+              '''    assert_eq!(
+                  open_generation(&container, &key(0x51)?),
+                  Err(EncryptedGenerationError::AuthenticationFailed)
+              );
+          ''': '''    assert!(matches!(
+                  open_generation(&container, &key(0x51)?),
+                  Err(EncryptedGenerationError::AuthenticationFailed)
+              ));
+          ''',
+              '''    assert_eq!(
+                  open_generation(sealed.container(), &key(0x53)?),
+                  Err(EncryptedGenerationError::AuthenticationFailed)
+              );
+          ''': '''    assert!(matches!(
+                  open_generation(sealed.container(), &key(0x53)?),
+                  Err(EncryptedGenerationError::AuthenticationFailed)
+              ));
+          ''',
+              '''    assert_eq!(
+                  open_generation_expected(
+                      sealed.container(),
+                      &key(0x52)?,
+                      &tenant_id,
+                      &profile_id,
+                      &other,
+                  ),
+                  Err(EncryptedGenerationError::IdentityMismatch)
+              );
+          ''': '''    assert!(matches!(
+                  open_generation_expected(
+                      sealed.container(),
+                      &key(0x52)?,
+                      &tenant_id,
+                      &profile_id,
+                      &other,
+                  ),
+                  Err(EncryptedGenerationError::IdentityMismatch)
+              ));
+          ''',
+          }
+          for old, new in replacements.items():
+              text = replace_one(text, old, new, "plaintext result assertion")
+
+          nonce_test_anchor = '''#[test]
+          fn pointer_compare_and_swap_and_rollback_are_strict()
+          '''
+          nonce_test = '''#[test]
+          fn nonce_reuse_is_detected_across_key_id_aliases()
+          -> Result<(), Box<dyn std::error::Error>> {
+              let mut repository = CloudGenerationRepository::default();
+              let plaintext = b"same key bytes, first alias";
+              let first = metadata("generation_01JSTEP9ALIAS1", 0x4a, plaintext)?;
+              repository.publish(first, &key_with_id("generation_key_01JSTEP9", 0x5a)?, plaintext, UnixMillis::new(1))?;
+
+              let (tenant_id, profile_id, generation_id) = ids("generation_01JSTEP9ALIAS2")?;
+              let alternate_key_id = KeyId::parse("alternate_key_01JSTEP9")?;
+              let second = GenerationMetadata::for_plaintext(
+                  GenerationIdentity::new(tenant_id, profile_id, generation_id, None),
+                  alternate_key_id,
+                  NoncePrefix::new([0x4a; 16]),
+                  1_024,
+                  b"same key bytes, second alias",
+              )?;
+              assert_eq!(
+                  repository.publish(
+                      second,
+                      &key_with_id("alternate_key_01JSTEP9", 0x5a)?,
+                      b"same key bytes, second alias",
+                      UnixMillis::new(2),
+                  ),
+                  Err(EncryptedGenerationError::NonceReuse)
+              );
+              Ok(())
+          }
+
+          #[test]
+          fn pointer_compare_and_swap_and_rollback_are_strict()
+          '''
+          text = replace_one(text, nonce_test_anchor, nonce_test, "nonce alias test")
+
+          wrong_key_anchor = '''#[test]
+          fn corruption_is_quarantined_and_cannot_become_current()
+          '''
+          wrong_key_test = '''#[test]
+          fn wrong_key_does_not_quarantine_unchanged_object()
+          -> Result<(), Box<dyn std::error::Error>> {
+              let mut repository = CloudGenerationRepository::default();
+              let metadata = metadata("generation_01JSTEP9WRONGKEY", 0x4b, b"healthy object")?;
+              repository.publish(
+                  metadata.clone(),
+                  &key(0x5b)?,
+                  b"healthy object",
+                  UnixMillis::new(1),
+              )?;
+              assert!(matches!(
+                  repository.restore(metadata.generation_id(), &key(0x5c)?, UnixMillis::new(2)),
+                  Err(EncryptedGenerationError::AuthenticationFailed)
+              ));
+              assert_eq!(
+                  repository
+                      .record(metadata.generation_id())
+                      .ok_or(EncryptedGenerationError::MissingGeneration)?
+                      .status(),
+                  CloudGenerationStatus::Verified
+              );
+              assert_eq!(
+                  repository
+                      .restore(metadata.generation_id(), &key(0x5b)?, UnixMillis::new(3))?
+                      .plaintext(),
+                  b"healthy object"
+              );
+              Ok(())
+          }
+
+          #[test]
+          fn corruption_is_quarantined_and_cannot_become_current()
+          '''
+          text = replace_one(text, wrong_key_anchor, wrong_key_test, "wrong key quarantine test")
+          tests.write_text(text, encoding="utf-8")
+
+          policy = Path("scripts/check-step9-encrypted-generation.py")
+          text = policy.read_text(encoding="utf-8")
+          text = replace_one(
+              text,
+              '''    "zeroize",
+          )
+          ''',
+              '''    "zeroize",
+              "Zeroizing",
+              "nonce_domain",
+          )
+          ''',
+              "policy required security fragments",
+          )
+          text = replace_one(
+              text,
+              '''GENERATION_DEK_DEBUG = re.compile(
+              r"#\\[derive\\([^\\]]*Debug[^\\]]*\\)\\]\\s*pub\\s+struct\\s+GenerationDek",
+              re.MULTILINE,
+          )
+          ''',
+              '''SENSITIVE_RESULT_DEBUG = re.compile(
+              r"#\\[derive\\([^\\]]*Debug[^\\]]*\\)\\]\\s*pub\\s+struct\\s+(?:GenerationDek|OpenedGeneration|RestoreResult)",
+              re.MULTILINE,
+          )
+          ''',
+              "policy sensitive debug regex",
+          )
+          text = replace_one(
+              text,
+              '''    if GENERATION_DEK_DEBUG.search(source_text):
+                  failures.append("GenerationDek must not derive Debug")
+          ''',
+              '''    if SENSITIVE_RESULT_DEBUG.search(source_text):
+                  failures.append("key and plaintext-bearing types must not derive Debug")
+          ''',
+              "policy sensitive debug use",
+          )
+          text = replace_one(
+              text,
+              '''            'zeroize = { version = "=1.9.0"',
+          ''',
+              '''            'zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }',
+          ''',
+              "policy zeroize pin",
+          )
+          text = replace_one(
+              text,
+              '''    bootstrap = root / ".github/workflows/step9-lockfile-bootstrap.yml"
+              if bootstrap.exists():
+                  failures.append("temporary Step 9 lockfile bootstrap workflow must be removed")
+          ''',
+              '''    bootstrap_workflows = sorted((root / ".github/workflows").glob("step9-*-bootstrap.yml"))
+              if bootstrap_workflows:
+                  failures.append("temporary Step 9 bootstrap workflows must be removed")
+          ''',
+              "policy temporary workflows",
+          )
+          policy.write_text(text, encoding="utf-8")
+
+          docs = Path("docs/ENCRYPTED_CLOUD_GENERATIONS.md")
+          text = docs.read_text(encoding="utf-8")
+          text = replace_one(
+              text,
+              '''must supply a synthetic 256-bit generation DEK, an opaque key ID and a unique
+          128-bit nonce prefix. The repository lifecycle rejects reuse of the same nonce
+          prefix with the same key ID for a different generation.
+          ''',
+              '''must supply a synthetic 256-bit generation DEK, an opaque key ID and a unique
+          128-bit nonce prefix. The repository lifecycle derives an internal, non-exported
+          nonce domain from the actual DEK bytes and rejects reuse of the same nonce prefix
+          with the same DEK even when callers try different key IDs.
+          ''',
+              "docs nonce domain",
+          )
+          text = replace_one(
+              text,
+              '''A correct key with corrupted bytes fails authentication or digest validation. A
+          wrong key with the same opaque key ID fails authentication. A caller supplying a
+          different key ID fails before decryption and does not quarantine the object.
+          ''',
+              '''A correct key with corrupted bytes fails authentication or digest validation. A
+          wrong key with the same opaque key ID fails authentication but does not quarantine
+          an object whose cataloged container digest still matches; this prevents a wrong-key
+          attempt from converting a healthy immutable object into a denial-of-service state.
+          A caller supplying a different key ID fails before decryption.
+          ''',
+              "docs wrong key quarantine",
+          )
+          text = replace_one(
+              text,
+              '''`GenerationDek` does not implement `Clone` or `Debug`, exposes no key-byte getter
+          and zeroizes its fixed-size byte array on drop. Source policy rejects random/key
+          provider coupling, debug/output macros, legacy profile paths and temporary
+          lockfile bootstrap workflows in the pure crate.
+          ''',
+              '''`GenerationDek` does not implement `Clone` or `Debug`, exposes no key-byte getter
+          and zeroizes its fixed-size byte array on drop. Plaintext-bearing open/restore
+          results also do not implement `Clone` or `Debug`; their bounded vectors use
+          `Zeroizing` and clear on drop. Source policy rejects random/key provider coupling,
+          sensitive result debug output, debug/output macros, legacy profile paths and all
+          temporary Step 9 bootstrap workflows in the pure crate.
+          ''',
+              "docs zeroizing results",
+          )
+          docs.write_text(text, encoding="utf-8")
+          PY
+          cargo fmt --all
+          cargo test --locked -p encrypted-generation-domain
+
+      - name: Commit reviewed boundary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/encrypted-generation-domain scripts/check-step9-encrypted-generation.py docs/ENCRYPTED_CLOUD_GENERATIONS.md
+          git commit -m "Repository Step 9: harden nonce and plaintext boundaries"
+          git fetch origin repository-step-9-encrypted-cloud-generations
+          git rebase origin/repository-step-9-encrypted-cloud-generations
+          git push origin HEAD:repository-step-9-encrypted-cloud-generations
