@@ -20,20 +20,17 @@ ID_RE = re.compile(r"ev-[0-9]{8}-[a-z0-9][a-z0-9-]{2,47}\Z")
 TOKEN_RE = re.compile(r"[a-z][a-z0-9._-]{2,95}\Z")
 LOGIN_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-EMAIL_RE = re.compile(
-    r"(?i)(?<![a-z0-9._%+-])[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}(?![a-z0-9.-])"
+REVIEW_FRAGMENT_RE = re.compile(
+    r"(?:issuecomment-[0-9]+|pullrequestreview-[0-9]+|discussion_r[0-9]+)\Z"
 )
+EMAIL_RE = re.compile(r"(?i)(?<![a-z0-9._%+-])[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}(?![a-z0-9.-])")
 WINDOWS_USER_PATH_RE = re.compile(r"(?i)[a-z]:\\users\\")
 UNIX_USER_PATH_RE = re.compile(r"/(?:home|users)/[^/\s]+")
 PEM_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*(?:PRIVATE KEY|CERTIFICATE)-----")
 AUTH_RE = re.compile(r"(?i)\b(?:authorization|bearer|basic)\s*[:= ]")
 URI_CREDENTIAL_RE = re.compile(r"(?i)[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@")
-HEX_SECRET_RE = re.compile(
-    r"(?i)\b(?:key|secret|token|password)[-_ ]?[=:][-_ ]?[0-9a-f]{24,}\b"
-)
-BASE64_SECRET_RE = re.compile(
-    r"(?i)\b(?:key|secret|token|password)[-_ ]?[=:][-_ ]?[A-Za-z0-9+/]{24,}={0,2}\b"
-)
+HEX_SECRET_RE = re.compile(r"(?i)\b(?:key|secret|token|password)[-_ ]?[=:][-_ ]?[0-9a-f]{24,}\b")
+BASE64_SECRET_RE = re.compile(r"(?i)\b(?:key|secret|token|password)[-_ ]?[=:][-_ ]?[A-Za-z0-9+/]{24,}={0,2}\b")
 
 GATE_CHECKS: dict[str, tuple[str, ...]] = {
     "legacy_credential_rotation": (
@@ -171,12 +168,7 @@ def object_no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def require_exact_fields(
-    value: dict[str, Any],
-    required: set[str],
-    optional: set[str],
-    where: str,
-) -> None:
+def require_exact_fields(value: dict[str, Any], required: set[str], optional: set[str], where: str) -> None:
     missing = sorted(required - value.keys())
     unknown = sorted(value.keys() - required - optional)
     if missing or unknown:
@@ -208,14 +200,16 @@ def validate_reference(value: Any, where: str, github_only: bool = False) -> str
         parsed = urlsplit(text)
         if parsed.scheme != "https" or parsed.netloc != "github.com":
             raise ValidationError(f"{where}: invalid GitHub reference")
-        if parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise ValidationError(
-                f"{where}: reference must not contain credentials, query or fragment"
-            )
+        if parsed.username or parsed.password or parsed.query:
+            raise ValidationError(f"{where}: reference must not contain credentials or query")
+        if parsed.fragment and not REVIEW_FRAGMENT_RE.fullmatch(parsed.fragment):
+            raise ValidationError(f"{where}: unsupported GitHub fragment")
         parts = [part for part in parsed.path.split("/") if part]
         if len(parts) < 4 or any(not part or part in {".", ".."} for part in parts):
+            raise ValidationError(f"{where}: reference must identify a reviewable GitHub object")
+        if github_only and not REVIEW_FRAGMENT_RE.fullmatch(parsed.fragment):
             raise ValidationError(
-                f"{where}: reference must identify a reviewable GitHub object"
+                f"{where}: terminal review must identify an exact GitHub review/comment"
             )
         return text
     if github_only:
@@ -247,11 +241,7 @@ def reject_sensitive_text(raw: str, where: str) -> None:
     for pattern, label in checks:
         if pattern.search(raw):
             raise ValidationError(f"{where}: prohibited {label}")
-    candidates = re.findall(
-        r"(?<![0-9A-Za-z])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9A-Za-z])",
-        raw,
-    )
-    for token in candidates:
+    for token in re.findall(r"(?<![0-9A-Za-z])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9A-Za-z])", raw):
         try:
             ipaddress.ip_address(token)
         except ValueError:
@@ -279,9 +269,7 @@ def validate_record(path: Path) -> Record:
     if not isinstance(data, dict):
         raise ValidationError(f"{path}: top-level value must be an object")
     if raw != canonical_json(data):
-        raise ValidationError(
-            f"{path}: JSON must be canonical (sorted keys, two-space indent, final newline)"
-        )
+        raise ValidationError(f"{path}: JSON must be canonical (sorted keys, two-space indent, final newline)")
 
     require_exact_fields(data, TOP_LEVEL_REQUIRED, TOP_LEVEL_OPTIONAL, str(path))
     if data["schema_version"] != SCHEMA_VERSION:
@@ -289,9 +277,7 @@ def validate_record(path: Path) -> Record:
 
     evidence_id = require_string(data["evidence_id"], f"{path}.evidence_id")
     if not ID_RE.fullmatch(evidence_id) or path.stem != evidence_id:
-        raise ValidationError(
-            f"{path}: evidence_id must match the filename and approved pattern"
-        )
+        raise ValidationError(f"{path}: evidence_id must match the filename and approved pattern")
 
     gate = require_string(data["gate"], f"{path}.gate")
     if gate not in GATE_CHECKS:
@@ -310,9 +296,7 @@ def validate_record(path: Path) -> Record:
         raise ValidationError(f"{path}.scope.environment: unsupported value")
     subject_id = require_string(scope["subject_id"], f"{path}.scope.subject_id")
     if subject_id != "none" and not TOKEN_RE.fullmatch(subject_id):
-        raise ValidationError(
-            f"{path}.scope.subject_id: must be opaque and token-shaped"
-        )
+        raise ValidationError(f"{path}.scope.subject_id: must be opaque and token-shaped")
 
     checks = data["checks"]
     if not isinstance(checks, list):
@@ -328,9 +312,7 @@ def validate_record(path: Path) -> Record:
         code = require_string(check["code"], f"{where}.code")
         outcome = require_string(check["outcome"], f"{where}.outcome")
         if code not in allowed_codes:
-            raise ValidationError(
-                f"{where}: check code is not defined for gate {gate}"
-            )
+            raise ValidationError(f"{where}: check code is not defined for gate {gate}")
         if code in seen_codes:
             raise ValidationError(f"{where}: duplicate check code {code}")
         if outcome not in OUTCOMES:
@@ -341,23 +323,16 @@ def validate_record(path: Path) -> Record:
     references = data["references"]
     if not isinstance(references, list) or not (1 <= len(references) <= 10):
         raise ValidationError(f"{path}.references: expected 1..10 references")
-    validated_references = [
-        validate_reference(value, f"{path}.references[{index}]")
-        for index, value in enumerate(references)
-    ]
+    validated_references = [validate_reference(value, f"{path}.references[{index}]") for index, value in enumerate(references)]
     if len(set(validated_references)) != len(validated_references):
         raise ValidationError(f"{path}.references: duplicate reference")
 
     digests = data["artifact_digests_sha256"]
     if not isinstance(digests, list) or len(digests) > 10:
-        raise ValidationError(
-            f"{path}.artifact_digests_sha256: expected at most 10 digests"
-        )
+        raise ValidationError(f"{path}.artifact_digests_sha256: expected at most 10 digests")
     for index, digest in enumerate(digests):
         if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
-            raise ValidationError(
-                f"{path}.artifact_digests_sha256[{index}]: invalid SHA-256"
-            )
+            raise ValidationError(f"{path}.artifact_digests_sha256[{index}]: invalid SHA-256")
     if len(set(digests)) != len(digests):
         raise ValidationError(f"{path}.artifact_digests_sha256: duplicate digest")
 
@@ -366,65 +341,39 @@ def validate_record(path: Path) -> Record:
         raise ValidationError(f"{path}.limitations: expected at most 20 tokens")
     for index, limitation in enumerate(limitations):
         if not isinstance(limitation, str) or not TOKEN_RE.fullmatch(limitation):
-            raise ValidationError(
-                f"{path}.limitations[{index}]: use a bounded token, not free text"
-            )
+            raise ValidationError(f"{path}.limitations[{index}]: use a bounded token, not free text")
     if len(set(limitations)) != len(limitations):
         raise ValidationError(f"{path}.limitations: duplicate token")
 
     review = data.get("review")
     if status == "pending":
         if review is not None:
-            raise ValidationError(
-                f"{path}: pending evidence must not contain terminal review"
-            )
+            raise ValidationError(f"{path}: pending evidence must not contain terminal review")
         if any(outcome == "fail" for outcome in outcomes.values()):
-            raise ValidationError(
-                f"{path}: pending evidence cannot contain a final fail result"
-            )
+            raise ValidationError(f"{path}: pending evidence cannot contain a final fail result")
     else:
         if not isinstance(review, dict):
             raise ValidationError(f"{path}: terminal evidence requires review")
         require_exact_fields(review, REVIEW_FIELDS, set(), f"{path}.review")
-        login = require_string(
-            review["github_login"], f"{path}.review.github_login"
-        )
+        login = require_string(review["github_login"], f"{path}.review.github_login")
         if not LOGIN_RE.fullmatch(login):
-            raise ValidationError(
-                f"{path}.review.github_login: invalid GitHub login"
-            )
-        validate_reference(
-            review["review_reference"],
-            f"{path}.review.review_reference",
-            github_only=True,
-        )
-        reviewed_at = parse_utc(
-            review["reviewed_at"], f"{path}.review.reviewed_at"
-        )
+            raise ValidationError(f"{path}.review.github_login: invalid GitHub login")
+        validate_reference(review["review_reference"], f"{path}.review.review_reference", github_only=True)
+        reviewed_at = parse_utc(review["reviewed_at"], f"{path}.review.reviewed_at")
         if reviewed_at < observed_at:
-            raise ValidationError(
-                f"{path}: reviewed_at must not precede observed_at"
-            )
+            raise ValidationError(f"{path}: reviewed_at must not precede observed_at")
 
     required_codes = set(GATE_CHECKS[gate])
     if status == "passed":
         missing = sorted(required_codes - outcomes.keys())
-        failed = sorted(
-            code for code, outcome in outcomes.items() if outcome != "pass"
-        )
+        failed = sorted(code for code, outcome in outcomes.items() if outcome != "pass")
         if missing or failed:
-            raise ValidationError(
-                f"{path}: passed evidence missing={missing}, failed={failed}"
-            )
+            raise ValidationError(f"{path}: passed evidence missing={missing}, failed={failed}")
         if not digests:
-            raise ValidationError(
-                f"{path}: passed evidence requires at least one artifact digest"
-            )
+            raise ValidationError(f"{path}: passed evidence requires at least one artifact digest")
     elif status == "failed":
         if not any(outcome == "fail" for outcome in outcomes.values()):
-            raise ValidationError(
-                f"{path}: failed evidence requires at least one failed check"
-            )
+            raise ValidationError(f"{path}: failed evidence requires at least one failed check")
 
     supersedes_raw = data.get("supersedes")
     supersedes: str | None
@@ -435,15 +384,7 @@ def validate_record(path: Path) -> Record:
         if not ID_RE.fullmatch(supersedes) or supersedes == evidence_id:
             raise ValidationError(f"{path}.supersedes: invalid evidence ID")
 
-    return Record(
-        path,
-        data,
-        evidence_id,
-        gate,
-        status,
-        observed_at,
-        supersedes,
-    )
+    return Record(path, data, evidence_id, gate, status, observed_at, supersedes)
 
 
 def validate_lineage(records: list[Record]) -> None:
@@ -459,23 +400,15 @@ def validate_lineage(records: list[Record]) -> None:
             continue
         previous = by_id.get(record.supersedes)
         if previous is None:
-            raise ValidationError(
-                f"{record.path}: dangling supersedes {record.supersedes}"
-            )
+            raise ValidationError(f"{record.path}: dangling supersedes {record.supersedes}")
         if previous.gate != record.gate:
-            raise ValidationError(
-                f"{record.path}: supersedes must stay within one gate"
-            )
+            raise ValidationError(f"{record.path}: supersedes must stay within one gate")
         if record.observed_at <= previous.observed_at:
-            raise ValidationError(
-                f"{record.path}: superseding evidence must be newer"
-            )
+            raise ValidationError(f"{record.path}: superseding evidence must be newer")
         existing_child = child_by_parent.get(previous.evidence_id)
         if existing_child is not None:
             raise ValidationError(
-                "forked evidence lineage: "
-                f"{previous.evidence_id} is superseded by "
-                f"{existing_child} and {record.evidence_id}"
+                f"forked evidence lineage: {previous.evidence_id} is superseded by {existing_child} and {record.evidence_id}"
             )
         child_by_parent[previous.evidence_id] = record.evidence_id
 
@@ -484,9 +417,7 @@ def validate_lineage(records: list[Record]) -> None:
         current = record
         while current.supersedes is not None:
             if current.evidence_id in seen:
-                raise ValidationError(
-                    f"cycle in evidence lineage at {current.evidence_id}"
-                )
+                raise ValidationError(f"cycle in evidence lineage at {current.evidence_id}")
             seen.add(current.evidence_id)
             current = by_id[current.supersedes]
 
@@ -494,13 +425,9 @@ def validate_lineage(records: list[Record]) -> None:
     for record in records:
         if record.evidence_id not in child_by_parent:
             leaves_by_gate.setdefault(record.gate, []).append(record.evidence_id)
-    forks = {
-        gate: ids for gate, ids in leaves_by_gate.items() if len(ids) > 1
-    }
+    forks = {gate: ids for gate, ids in leaves_by_gate.items() if len(ids) > 1}
     if forks:
-        raise ValidationError(
-            f"multiple active evidence lineages per gate: {forks}"
-        )
+        raise ValidationError(f"multiple active evidence lineages per gate: {forks}")
 
 
 def validate_tree(root: Path) -> int:
@@ -513,12 +440,8 @@ def validate_tree(root: Path) -> int:
         if path.name not in {"README.md", ".gitkeep"} and path.suffix != ".json"
     ]
     if unexpected:
-        raise ValidationError(
-            f"unexpected files in records directory: {unexpected}"
-        )
-    records = [
-        validate_record(path) for path in sorted(records_dir.glob("*.json"))
-    ]
+        raise ValidationError(f"unexpected files in records directory: {unexpected}")
+    records = [validate_record(path) for path in sorted(records_dir.glob("*.json"))]
     validate_lineage(records)
     print(f"external evidence gate passed: {len(records)} immutable record(s)")
     return 0
