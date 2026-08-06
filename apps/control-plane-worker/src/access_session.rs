@@ -160,6 +160,24 @@ struct Problem<'a> {
     correlation_id: &'a str,
 }
 
+#[must_use]
+fn problem_type_for_code(code: &str) -> &'static str {
+    match code {
+        "not_found" => "urn:part-crm:problem:not-found",
+        "forbidden" => "urn:part-crm:problem:forbidden",
+        "invalid_request" => "urn:part-crm:problem:invalid-request",
+        "invalid_state" => "urn:part-crm:problem:invalid-state",
+        "version_conflict" => "urn:part-crm:problem:version-conflict",
+        "lease_conflict" => "urn:part-crm:problem:lease-conflict",
+        "replay_rejected" => "urn:part-crm:problem:replay-rejected",
+        "dependency_unavailable" => "urn:part-crm:problem:dependency-unavailable",
+        "integrity_failure" => "urn:part-crm:problem:integrity-failure",
+        "internal_failure" => "urn:part-crm:problem:internal-failure",
+        "conflict" => "urn:part-crm:problem:conflict",
+        _ => "urn:part-crm:problem:internal-failure",
+    }
+}
+
 pub fn problem(
     correlation_id: &str,
     status: u16,
@@ -167,13 +185,7 @@ pub fn problem(
     title: &'static str,
 ) -> Result<Response> {
     Response::from_json(&Problem {
-        problem_type: match code {
-            "conflict" => "urn:part-crm:problem:conflict",
-            "invalid_request" => "urn:part-crm:problem:invalid-request",
-            "internal_failure" => "urn:part-crm:problem:internal-failure",
-            "forbidden" => "urn:part-crm:problem:forbidden",
-            _ => "urn:part-crm:problem:not-found",
-        },
+        problem_type: problem_type_for_code(code),
         title,
         status,
         code,
@@ -197,14 +209,32 @@ pub fn correlation_hint(request: &Request) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::problem;
+    use super::problem_type_for_code;
 
     #[test]
-    fn problem_type_matches_stable_code() -> Result<(), Box<dyn std::error::Error>> {
-        let internal = problem("corr_problem_test", 500, "internal_failure", "Internal Failure")?;
-        assert_eq!(internal.status_code(), 500);
-        let forbidden = problem("corr_problem_test", 403, "forbidden", "Forbidden")?;
-        assert_eq!(forbidden.status_code(), 403);
-        Ok(())
+    fn every_stable_problem_code_has_its_own_type() {
+        let cases = [
+            ("not_found", "urn:part-crm:problem:not-found"),
+            ("forbidden", "urn:part-crm:problem:forbidden"),
+            ("invalid_request", "urn:part-crm:problem:invalid-request"),
+            ("invalid_state", "urn:part-crm:problem:invalid-state"),
+            ("version_conflict", "urn:part-crm:problem:version-conflict"),
+            ("lease_conflict", "urn:part-crm:problem:lease-conflict"),
+            ("replay_rejected", "urn:part-crm:problem:replay-rejected"),
+            (
+                "dependency_unavailable",
+                "urn:part-crm:problem:dependency-unavailable",
+            ),
+            ("integrity_failure", "urn:part-crm:problem:integrity-failure"),
+            ("internal_failure", "urn:part-crm:problem:internal-failure"),
+            ("conflict", "urn:part-crm:problem:conflict"),
+        ];
+        for (code, expected) in cases {
+            assert_eq!(problem_type_for_code(code), expected);
+        }
+        assert_eq!(
+            problem_type_for_code("unknown_code"),
+            "urn:part-crm:problem:internal-failure"
+        );
     }
 }
