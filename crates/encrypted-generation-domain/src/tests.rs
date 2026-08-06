@@ -23,6 +23,10 @@ fn key(byte: u8) -> Result<GenerationDek, EncryptedGenerationError> {
     Ok(GenerationDek::new(key_id()?, [byte; 32]))
 }
 
+fn key_with_id(value: &str, byte: u8) -> Result<GenerationDek, EncryptedGenerationError> {
+    Ok(GenerationDek::new(KeyId::parse(value)?, [byte; 32]))
+}
+
 fn metadata(
     generation: &str,
     prefix_byte: u8,
@@ -271,6 +275,39 @@ fn repository_rejects_nonce_reuse_and_immutable_conflict() -> Result<(), Box<dyn
             UnixMillis::new(3),
         ),
         Err(EncryptedGenerationError::ImmutableConflict)
+    );
+    Ok(())
+}
+
+#[test]
+fn nonce_reuse_is_detected_across_key_id_aliases() -> Result<(), Box<dyn std::error::Error>> {
+    let mut repository = CloudGenerationRepository::default();
+    let first_plaintext = b"same key bytes first alias";
+    let first = metadata("generation_01JSTEP9ALIAS1", 0x4a, first_plaintext)?;
+    repository.publish(
+        first,
+        &key_with_id("generation_key_01JSTEP9", 0x5a)?,
+        first_plaintext,
+        UnixMillis::new(1),
+    )?;
+
+    let (tenant_id, profile_id, generation_id) = ids("generation_01JSTEP9ALIAS2")?;
+    let second_plaintext = b"same key bytes second alias";
+    let second = GenerationMetadata::for_plaintext(
+        GenerationIdentity::new(tenant_id, profile_id, generation_id, None),
+        KeyId::parse("alternate_key_01JSTEP9")?,
+        NoncePrefix::new([0x4a; 16]),
+        1_024,
+        second_plaintext,
+    )?;
+    assert_eq!(
+        repository.publish(
+            second,
+            &key_with_id("alternate_key_01JSTEP9", 0x5a)?,
+            second_plaintext,
+            UnixMillis::new(2),
+        ),
+        Err(EncryptedGenerationError::NonceReuse)
     );
     Ok(())
 }

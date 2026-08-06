@@ -1,6 +1,7 @@
+use crate::container::NonceDomain;
 use crate::{
-    ContainerDigest, EncryptedGenerationError, GenerationDek, GenerationMetadata, KeyId,
-    NoncePrefix, open_generation_expected, seal_generation,
+    ContainerDigest, EncryptedGenerationError, GenerationDek, GenerationMetadata, NoncePrefix,
+    open_generation_expected, seal_generation,
 };
 use profile_platform_primitives::{GenerationId, UnixMillis};
 use std::collections::{BTreeMap, BTreeSet};
@@ -200,11 +201,11 @@ impl FakeImmutableObjectStore {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct CloudGenerationRepository {
     objects: FakeImmutableObjectStore,
     records: BTreeMap<GenerationId, CloudGenerationRecord>,
-    nonce_claims: BTreeMap<(KeyId, NoncePrefix), GenerationId>,
+    nonce_claims: BTreeMap<(NonceDomain, NoncePrefix), GenerationId>,
     pointer: PointerSnapshot,
 }
 
@@ -227,7 +228,7 @@ impl CloudGenerationRepository {
         observed_at: UnixMillis,
     ) -> Result<PublishResult, EncryptedGenerationError> {
         let sealed = seal_generation(&metadata, key, plaintext)?;
-        let nonce_claim = (metadata.key_id().clone(), metadata.nonce_prefix());
+        let nonce_claim = (key.nonce_domain(), metadata.nonce_prefix());
         if let Some(claimed_generation_id) = self.nonce_claims.get(&nonce_claim)
             && claimed_generation_id != metadata.generation_id()
         {

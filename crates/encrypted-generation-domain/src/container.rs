@@ -42,6 +42,9 @@ impl KeyId {
     }
 }
 
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct NonceDomain([u8; 32]);
+
 pub struct GenerationDek {
     key_id: KeyId,
     bytes: [u8; 32],
@@ -56,6 +59,13 @@ impl GenerationDek {
     #[must_use]
     pub const fn key_id(&self) -> &KeyId {
         &self.key_id
+    }
+
+    pub(crate) fn nonce_domain(&self) -> NonceDomain {
+        let mut digest = Sha256::new();
+        digest.update(b"profile-platform-generation-nonce-domain-v1");
+        digest.update(self.bytes);
+        NonceDomain(digest.finalize().into())
     }
 
     fn cipher(&self) -> Result<XChaCha20Poly1305, EncryptedGenerationError> {
