@@ -1,0 +1,7 @@
+[workspace]
+resolver = "3"
+
+[workspace.dependencies]
+chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "zeroize"] }
+sha2 = { version = "=0.11.0", default-features = false }
+zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
