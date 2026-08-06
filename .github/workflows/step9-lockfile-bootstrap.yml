@@ -1,0 +1,29 @@
+name: Step 9 Lockfile Bootstrap
+
+on:
+  push:
+    branches:
+      - repository-step-9-encrypted-cloud-generations
+
+permissions:
+  contents: read
+
+jobs:
+  generate-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Generate locked dependency graph
+        run: cargo generate-lockfile
+
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: step9-cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 1
