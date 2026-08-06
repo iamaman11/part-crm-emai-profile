@@ -36,6 +36,8 @@
   metadata-only intake, review and lineage rules for external production gates.
 - [`EXTERNAL_EVIDENCE_READINESS.md`](EXTERNAL_EVIDENCE_READINESS.md): deterministic
   active-record projection, mandatory production matrix and readiness interlock.
+- [`EXTERNAL_REVIEW_ATTESTATIONS.md`](EXTERNAL_REVIEW_ATTESTATIONS.md): canonical
+  terminal claim digest and same-repository GitHub review identity verification.
 - [`TEST_EVIDENCE_INDEX.md`](TEST_EVIDENCE_INDEX.md): accepted evidence scope and
   promotion rules.
 - [`../SECURITY.md`](../SECURITY.md): vulnerability and credential incident policy.
