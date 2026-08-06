@@ -1,12 +1,13 @@
 use crate::access_session::{
     correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
 };
+use crate::request_evidence::{audit_event_id, outbox_event_id};
 use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use cloudflare_adapters::d1_identity_acl::{MutationEnvelope, ResolvedActor, ResolvedMembershipRole};
 use cloudflare_adapters::d1_profile_generations::{
-    ActivateGenerationMutation, D1ProfileGenerationRepository, GenerationProjection,
-    GenerationStatus, QuarantineGenerationMutation, RegisterGenerationMutation,
-    VerifyGenerationMutation,
+    ActivateGenerationMutation, D1ProfileGenerationRepository, DeactivateGenerationMutation,
+    GenerationProjection, GenerationStatus, QuarantineGenerationMutation,
+    RegisterGenerationMutation, VerifyGenerationMutation,
 };
 use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
 use profile_platform_primitives::{
@@ -72,6 +73,15 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
             };
             activate_generation(request, env, &actor, &profile_id, &generation_id).await
         }
+        RouteClass::ProfileGenerationDeactivateApi => {
+            if actor.role() != ResolvedMembershipRole::TenantOwner {
+                return neutral_not_found(actor.actor().correlation_id().as_str());
+            }
+            let Some(generation_id) = generation_id else {
+                return neutral_not_found(actor.actor().correlation_id().as_str());
+            };
+            deactivate_generation(request, env, &actor, &profile_id, &generation_id).await
+        }
         RouteClass::ProfileGenerationQuarantineApi => {
             if actor.role() != ResolvedMembershipRole::TenantOwner {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
@@ -127,7 +137,7 @@ async fn register_generation(
     {
         return invalid_request(request);
     }
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
@@ -138,6 +148,7 @@ async fn register_generation(
         &envelope,
         generation_id.as_str(),
         1,
+        201,
     )
     .await?
     {
@@ -151,14 +162,13 @@ async fn register_generation(
         container_digest: &body.container_digest,
         envelope: envelope.identity(),
     };
-    if D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    match D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .register(actor.actor(), mutation)
         .await
-        .is_err()
     {
-        return conflict(request);
+        Ok(_) => mutation_receipt("registered", generation_id.as_str(), 1, 201),
+        Err(error) => mutation_failure(request, error),
     }
-    mutation_receipt("registered", generation_id.as_str(), 1, 201)
 }
 
 async fn verify_generation(
@@ -183,7 +193,7 @@ async fn verify_generation(
         Some(value) => value,
         None => return internal_failure(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
@@ -194,6 +204,7 @@ async fn verify_generation(
         &envelope,
         generation_id.as_str(),
         response_version,
+        200,
     )
     .await?
     {
@@ -206,19 +217,18 @@ async fn verify_generation(
         verification_reference: &body.verification_reference,
         envelope: envelope.identity(),
     };
-    if D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    match D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .verify(actor.actor(), mutation)
         .await
-        .is_err()
     {
-        return conflict(request);
+        Ok(_) => mutation_receipt(
+            "verified",
+            generation_id.as_str(),
+            response_version,
+            200,
+        ),
+        Err(error) => mutation_failure(request, error),
     }
-    mutation_receipt(
-        "verified",
-        generation_id.as_str(),
-        response_version,
-        200,
-    )
 }
 
 async fn activate_generation(
@@ -240,7 +250,7 @@ async fn activate_generation(
         Some(value) => value,
         None => return internal_failure(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
@@ -251,6 +261,7 @@ async fn activate_generation(
         &envelope,
         generation_id.as_str(),
         response_version,
+        200,
     )
     .await?
     {
@@ -262,19 +273,74 @@ async fn activate_generation(
         expected_profile_version: expected_version,
         envelope: envelope.identity(),
     };
-    if D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    match D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .activate(actor.actor(), mutation)
         .await
-        .is_err()
     {
-        return conflict(request);
+        Ok(_) => mutation_receipt(
+            "activated",
+            generation_id.as_str(),
+            response_version,
+            200,
+        ),
+        Err(error) => mutation_failure(request, error),
     }
-    mutation_receipt(
-        "activated",
+}
+
+async fn deactivate_generation(
+    request: &mut Request,
+    env: &Env,
+    actor: &ResolvedActor,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+) -> Result<Response> {
+    let body = match request.json::<DeactivateGenerationRequest>().await {
+        Ok(value) => value,
+        Err(_) => return invalid_request(request),
+    };
+    let expected_version = match AggregateVersion::new(body.expected_profile_version) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(request),
+    };
+    let response_version = match next_version(expected_version) {
+        Some(value) => value,
+        None => return internal_failure(request),
+    };
+    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(request),
+    };
+    if let Some(response) = replay_response(
+        env,
+        actor,
+        "profile_generation.deactivate",
+        &envelope,
         generation_id.as_str(),
         response_version,
         200,
     )
+    .await?
+    {
+        return Ok(response);
+    }
+    let mutation = DeactivateGenerationMutation {
+        profile_id,
+        generation_id,
+        expected_profile_version: expected_version,
+        envelope: envelope.identity(),
+    };
+    match D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
+        .deactivate(actor.actor(), mutation)
+        .await
+    {
+        Ok(_) => mutation_receipt(
+            "deactivated",
+            generation_id.as_str(),
+            response_version,
+            200,
+        ),
+        Err(error) => mutation_failure(request, error),
+    }
 }
 
 async fn quarantine_generation(
@@ -296,7 +362,7 @@ async fn quarantine_generation(
         Some(value) => value,
         None => return internal_failure(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
@@ -307,6 +373,7 @@ async fn quarantine_generation(
         &envelope,
         generation_id.as_str(),
         response_version,
+        200,
     )
     .await?
     {
@@ -318,19 +385,18 @@ async fn quarantine_generation(
         expected_generation_version: expected_version,
         envelope: envelope.identity(),
     };
-    if D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    match D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .quarantine(actor.actor(), mutation)
         .await
-        .is_err()
     {
-        return conflict(request);
+        Ok(_) => mutation_receipt(
+            "quarantined",
+            generation_id.as_str(),
+            response_version,
+            200,
+        ),
+        Err(error) => mutation_failure(request, error),
     }
-    mutation_receipt(
-        "quarantined",
-        generation_id.as_str(),
-        response_version,
-        200,
-    )
 }
 
 async fn replay_response(
@@ -340,6 +406,7 @@ async fn replay_response(
     envelope: &EnvelopeOwned,
     resource_id: &str,
     aggregate_version: u64,
+    success_status: u16,
 ) -> Result<Option<Response>> {
     let decision = D1IdempotencyRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .decide(
@@ -357,7 +424,7 @@ async fn replay_response(
             receipt.result_code(),
             receipt.result_reference().unwrap_or(resource_id),
             aggregate_version,
-            200,
+            success_status,
         )
         .map(Some),
         IdempotencyDecision::Conflict => problem(
@@ -367,6 +434,73 @@ async fn replay_response(
             "Conflict",
         )
         .map(Some),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MutationFailureClass {
+    NeutralNotFound,
+    VersionConflict,
+    InvalidState,
+    Conflict,
+    IntegrityFailure,
+    DependencyUnavailable,
+}
+
+fn classify_mutation_failure(message: &str) -> MutationFailureClass {
+    if message.contains("owner_required") || message.contains("profile_missing") {
+        return MutationFailureClass::NeutralNotFound;
+    }
+    if message.contains("state_mismatch") {
+        return MutationFailureClass::VersionConflict;
+    }
+    if message.contains("not_verified")
+        || message.contains("active_profile_generation_cannot_be_quarantined")
+        || message.contains("time_regression")
+    {
+        return MutationFailureClass::InvalidState;
+    }
+    if message.contains("UNIQUE constraint failed") {
+        return MutationFailureClass::Conflict;
+    }
+    if message.contains("CHECK constraint failed")
+        || message.contains("FOREIGN KEY constraint failed")
+        || message.contains("not_governed")
+        || message.contains("identity_immutable")
+    {
+        return MutationFailureClass::IntegrityFailure;
+    }
+    MutationFailureClass::DependencyUnavailable
+}
+
+fn mutation_failure(request: &Request, error: Error) -> Result<Response> {
+    match classify_mutation_failure(&error.to_string()) {
+        MutationFailureClass::NeutralNotFound => neutral_not_found(&correlation_hint(request)),
+        MutationFailureClass::VersionConflict => problem(
+            &correlation_hint(request),
+            409,
+            "version_conflict",
+            "Version Conflict",
+        ),
+        MutationFailureClass::InvalidState => problem(
+            &correlation_hint(request),
+            409,
+            "invalid_state",
+            "Invalid State",
+        ),
+        MutationFailureClass::Conflict => conflict(request),
+        MutationFailureClass::IntegrityFailure => problem(
+            &correlation_hint(request),
+            500,
+            "integrity_failure",
+            "Integrity Failure",
+        ),
+        MutationFailureClass::DependencyUnavailable => problem(
+            &correlation_hint(request),
+            503,
+            "dependency_unavailable",
+            "Dependency Unavailable",
+        ),
     }
 }
 
@@ -431,7 +565,11 @@ struct EnvelopeOwned {
 }
 
 impl EnvelopeOwned {
-    fn from_request(request: &Request, request_digest: String) -> Result<Self> {
+    fn from_request(
+        request: &Request,
+        actor: &ResolvedActor,
+        request_digest: String,
+    ) -> Result<Self> {
         if !valid_digest(&request_digest) {
             return Err(Error::RustError("request digest is invalid".to_owned()));
         }
@@ -441,10 +579,16 @@ impl EnvelopeOwned {
             .ok_or_else(|| Error::RustError("idempotency key missing".to_owned()))?;
         let idempotency_key =
             IdempotencyKey::parse(key).map_err(|error| Error::RustError(error.to_string()))?;
-        let audit_event_id = AuditEventId::parse(prefixed_id("audit", idempotency_key.as_str()))
-            .map_err(|error| Error::RustError(error.to_string()))?;
-        let outbox_event_id = OutboxEventId::parse(prefixed_id("outbox", idempotency_key.as_str()))
-            .map_err(|error| Error::RustError(error.to_string()))?;
+        let audit_event_id = audit_event_id(
+            actor.actor().tenant_scope().tenant_id(),
+            actor.actor().actor_id(),
+            &idempotency_key,
+        )?;
+        let outbox_event_id = outbox_event_id(
+            actor.actor().tenant_scope().tenant_id(),
+            actor.actor().actor_id(),
+            &idempotency_key,
+        )?;
         let now = Date::now().as_millis();
         let expires_at = now
             .checked_add(IDEMPOTENCY_TTL_MS)
@@ -474,7 +618,7 @@ impl EnvelopeOwned {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RegisterGenerationRequest {
     generation_id: String,
     object_key: String,
@@ -484,7 +628,7 @@ struct RegisterGenerationRequest {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VerifyGenerationRequest {
     expected_generation_version: u64,
     verification_reference: String,
@@ -492,14 +636,21 @@ struct VerifyGenerationRequest {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ActivateGenerationRequest {
     expected_profile_version: u64,
     request_digest: String,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeactivateGenerationRequest {
+    expected_profile_version: u64,
+    request_digest: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct QuarantineGenerationRequest {
     expected_generation_version: u64,
     request_digest: String,
@@ -533,12 +684,6 @@ fn next_version(version: AggregateVersion) -> Option<u64> {
     version.next().ok().map(AggregateVersion::value)
 }
 
-fn prefixed_id(prefix: &str, value: &str) -> String {
-    let remaining = 96_usize.saturating_sub(prefix.len() + 1);
-    let suffix: String = value.chars().take(remaining).collect();
-    format!("{prefix}_{suffix}")
-}
-
 fn invalid_request(request: &Request) -> Result<Response> {
     problem(
         &correlation_hint(request),
@@ -563,7 +708,10 @@ fn internal_failure(request: &Request) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_version, valid_digest, valid_object_key, valid_verification_reference};
+    use super::{
+        ActivateGenerationRequest, MutationFailureClass, classify_mutation_failure, next_version,
+        valid_digest, valid_object_key, valid_verification_reference,
+    };
     use profile_platform_primitives::AggregateVersion;
 
     #[test]
@@ -571,6 +719,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         assert!(valid_object_key("profiles/v1/generation.enc"));
         assert!(!valid_object_key("../generation.enc"));
+        assert!(!valid_object_key("profiles\\generation.enc"));
         assert!(valid_digest(&"a".repeat(64)));
         assert!(!valid_digest(&"A".repeat(64)));
         assert!(valid_verification_reference("review:generation_01"));
@@ -578,5 +727,34 @@ mod tests {
         assert_eq!(next_version(AggregateVersion::INITIAL), Some(2));
         assert_eq!(next_version(AggregateVersion::new(u64::MAX)?), None);
         Ok(())
+    }
+
+    #[test]
+    fn request_dtos_reject_unknown_fields() {
+        let digest = "a".repeat(64);
+        let payload = format!(
+            r#"{{"expectedProfileVersion":1,"requestDigest":"{digest}","unexpected":true}}"#
+        );
+        assert!(serde_json::from_str::<ActivateGenerationRequest>(&payload).is_err());
+    }
+
+    #[test]
+    fn d1_failures_are_classified_without_public_provider_details() {
+        assert_eq!(
+            classify_mutation_failure("profile_generation_activate_profile_state_mismatch"),
+            MutationFailureClass::VersionConflict
+        );
+        assert_eq!(
+            classify_mutation_failure("profile_generation_not_verified"),
+            MutationFailureClass::InvalidState
+        );
+        assert_eq!(
+            classify_mutation_failure("profile_generation_activation_not_governed"),
+            MutationFailureClass::IntegrityFailure
+        );
+        assert_eq!(
+            classify_mutation_failure("network request failed"),
+            MutationFailureClass::DependencyUnavailable
+        );
     }
 }
