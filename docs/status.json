@@ -71,7 +71,7 @@
       "name": "Windows Bridge feasibility",
       "accepted_source_head": "cceb7e97da980c905739eb02366019015f247d6e",
       "quality_gate_run_id": 31058767330,
-      "squash_merge": "d0e2e0b1d11eb589b57f8ebaaefd591a6a7b6bab"
+      "squash_merge": "d0e2e0b1d11eb689b57f8ebaaefd591a6a7b6bab"
     },
     {
       "number": 7,
