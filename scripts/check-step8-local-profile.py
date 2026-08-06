@@ -7,7 +7,9 @@ import argparse
 import re
 from pathlib import Path
 
-SOURCE = Path("apps/profile-bridge/src/local_profile.rs")
+SOURCE_ROOT = Path("apps/profile-bridge/src")
+SOURCE_ENTRY = SOURCE_ROOT / "local_profile.rs"
+SOURCE_MODULE = SOURCE_ROOT / "local_profile"
 
 REQUIRED_FRAGMENTS = (
     "MaterializationRoot",
@@ -37,13 +39,25 @@ BROWSER_LOCK_DELETE = re.compile(
 )
 
 
-def check(root: Path) -> list[str]:
+def source_text(root: Path) -> tuple[str, list[str]]:
     failures: list[str] = []
-    source = root / SOURCE
-    if not source.is_file():
-        return [f"missing Step 8 source: {SOURCE}"]
+    entry = root / SOURCE_ENTRY
+    module = root / SOURCE_MODULE
+    files = [entry]
+    if module.is_dir():
+        files.extend(sorted(module.rglob("*.rs")))
+    missing = [path for path in files if not path.is_file()]
+    if missing or not entry.is_file():
+        failures.append(f"missing Step 8 source entry: {SOURCE_ENTRY}")
+        return "", failures
+    return "\n".join(path.read_text(encoding="utf-8") for path in files), failures
 
-    text = source.read_text(encoding="utf-8")
+
+def check(root: Path) -> list[str]:
+    text, failures = source_text(root)
+    if failures:
+        return failures
+
     for fragment in REQUIRED_FRAGMENTS:
         if fragment not in text:
             failures.append(f"missing required Step 8 boundary: {fragment}")
