@@ -13,6 +13,7 @@ members = [
     "crates/mailbox-domain",
     "crates/primitives",
     "crates/profile-domain",
+    "crates/runtime-bundle-domain",
     "crates/session-domain",
     "crates/use-cases",
 ]
@@ -32,6 +33,7 @@ identity-access-domain = { path = "crates/identity-access-domain" }
 mailbox-domain = { path = "crates/mailbox-domain" }
 profile-domain = { path = "crates/profile-domain" }
 profile-platform-primitives = { path = "crates/primitives" }
+runtime-bundle-domain = { path = "crates/runtime-bundle-domain" }
 session-domain = { path = "crates/session-domain" }
 wasm-bindgen = "=0.2.126"
 worker = { version = "=0.8.5", features = ["d1", "queue"] }
