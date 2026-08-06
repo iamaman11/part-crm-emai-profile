@@ -34,13 +34,15 @@ jobs:
           scripts/check-d1-boundary.py
           scripts/check-step4-governed-writes.py
           scripts/check-step5-profile-coordinator.py
+          scripts/check-step6-windows-bridge.py
           scripts/check-no-temporary-step4.py
           scripts/test-d1-schema.py
           scripts/test-step4-identity-acl.py
           scripts/test-step4-command-guards.py
           scripts/test-step5-coordinator-projection.py
+          scripts/test-step6-bridge-local.py
 
-      - name: Reject temporary Step 4 and Step 5 artifacts
+      - name: Reject temporary Step 4, Step 5 and Step 6 artifacts
         run: python scripts/check-no-temporary-step4.py
 
       - name: Enforce architecture dependency boundaries
@@ -66,6 +68,16 @@ jobs:
         run: |
           if python scripts/check-step5-profile-coordinator.py --root tests/profile-coordinator/fixtures/assignment-authorizes; then
             echo "Assignment-derived coordinator authorization unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Enforce Step 6 Windows Bridge boundaries
+        run: python scripts/check-step6-windows-bridge.py
+
+      - name: Prove browser lock deletion fixture is rejected
+        run: |
+          if python scripts/check-step6-windows-bridge.py --root tests/windows-bridge/fixtures/deletes-browser-lock; then
+            echo "Browser runtime lock deletion fixture unexpectedly passed." >&2
             exit 1
           fi
 
@@ -100,6 +112,9 @@ jobs:
 
       - name: Test coordinator projection and reconciliation invariants
         run: python scripts/test-step5-coordinator-projection.py
+
+      - name: Test local Bridge SQLite and outbox invariants
+        run: python scripts/test-step6-bridge-local.py
 
       - name: Prove assignment-as-ACL fixture is rejected
         run: |
@@ -137,6 +152,7 @@ jobs:
           -p profile-domain
           -p session-domain
           -p mailbox-domain
+          -p bridge-domain
           -p application-ports
           -p use-cases
 
@@ -224,7 +240,7 @@ jobs:
           find apps/control-plane-worker/build -type f -name '*.wasm' -print -quit | grep -q .
 
   rust-windows:
-    name: Rust Windows
+    name: Rust Windows And Profile Bridge Artifact
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -240,3 +256,18 @@ jobs:
           cargo test --locked --workspace --all-targets
           --exclude browser-profile-control-plane-worker
           --exclude cloudflare-adapters
+
+      - name: Build release Profile Bridge executable
+        run: cargo build --locked --release -p profile-bridge
+
+      - name: Verify Windows Profile Bridge artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "target/release/profile-bridge.exe")) {
+            throw "profile-bridge.exe was not produced"
+          }
+          $artifact = Get-Item "target/release/profile-bridge.exe"
+          if ($artifact.Length -le 0) {
+            throw "profile-bridge.exe is empty"
+          }
+          Write-Host "Verified Profile Bridge artifact: $($artifact.FullName) ($($artifact.Length) bytes)"
