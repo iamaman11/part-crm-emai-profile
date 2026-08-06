@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - profile-generation-registry-api
+  pull_request:
+    branches:
+      - repository-quality-hardening
 
 permissions:
   contents: write
@@ -14,7 +17,10 @@ concurrency:
 
 jobs:
   format:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      (github.event_name == 'push' ||
+       github.event.pull_request.head.ref == 'profile-generation-registry-api')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout feature branch
