@@ -3,7 +3,9 @@ use crate::access_session::{
 };
 use crate::request_evidence::{audit_event_id, outbox_event_id};
 use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
-use cloudflare_adapters::d1_identity_acl::{MutationEnvelope, ResolvedActor, ResolvedMembershipRole};
+use cloudflare_adapters::d1_identity_acl::{
+    MutationEnvelope, ResolvedActor, ResolvedMembershipRole,
+};
 use cloudflare_adapters::d1_profile_generations::{
     ActivateGenerationMutation, D1ProfileGenerationRepository, DeactivateGenerationMutation,
     GenerationProjection, GenerationStatus, QuarantineGenerationMutation,
@@ -221,12 +223,7 @@ async fn verify_generation(
         .verify(actor.actor(), mutation)
         .await
     {
-        Ok(_) => mutation_receipt(
-            "verified",
-            generation_id.as_str(),
-            response_version,
-            200,
-        ),
+        Ok(_) => mutation_receipt("verified", generation_id.as_str(), response_version, 200),
         Err(error) => mutation_failure(request, error),
     }
 }
@@ -277,12 +274,7 @@ async fn activate_generation(
         .activate(actor.actor(), mutation)
         .await
     {
-        Ok(_) => mutation_receipt(
-            "activated",
-            generation_id.as_str(),
-            response_version,
-            200,
-        ),
+        Ok(_) => mutation_receipt("activated", generation_id.as_str(), response_version, 200),
         Err(error) => mutation_failure(request, error),
     }
 }
@@ -333,12 +325,7 @@ async fn deactivate_generation(
         .deactivate(actor.actor(), mutation)
         .await
     {
-        Ok(_) => mutation_receipt(
-            "deactivated",
-            generation_id.as_str(),
-            response_version,
-            200,
-        ),
+        Ok(_) => mutation_receipt("deactivated", generation_id.as_str(), response_version, 200),
         Err(error) => mutation_failure(request, error),
     }
 }
@@ -389,12 +376,7 @@ async fn quarantine_generation(
         .quarantine(actor.actor(), mutation)
         .await
     {
-        Ok(_) => mutation_receipt(
-            "quarantined",
-            generation_id.as_str(),
-            response_version,
-            200,
-        ),
+        Ok(_) => mutation_receipt("quarantined", generation_id.as_str(), response_version, 200),
         Err(error) => mutation_failure(request, error),
     }
 }

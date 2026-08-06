@@ -1,6 +1,4 @@
-use profile_platform_primitives::{
-    ActorId, AuditEventId, IdempotencyKey, OutboxEventId, TenantId,
-};
+use profile_platform_primitives::{ActorId, AuditEventId, IdempotencyKey, OutboxEventId, TenantId};
 use worker::{Error, Result};
 
 const EVIDENCE_DOMAIN: &[u8] = b"part-crm:evidence-id:v1";
@@ -299,8 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn actors_and_long_key_suffixes_cannot_collide()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn actors_and_long_key_suffixes_cannot_collide() -> Result<(), Box<dyn std::error::Error>> {
         let tenant = TenantId::parse("tenant_01JEVIDENCE")?;
         let actor_a = ActorId::parse("actor_01JEVIDENCE_A")?;
         let actor_b = ActorId::parse("actor_01JEVIDENCE_B")?;

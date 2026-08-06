@@ -88,29 +88,51 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
         ["api", "v1", "tenants", _, "profiles", _, "generations"] if method == "POST" => {
             Some(RouteClass::ProfileGenerationCollectionApi)
         }
-        ["api", "v1", "tenants", _, "profiles", _, "generations", _, "verify"]
-            if method == "POST" =>
-        {
-            Some(RouteClass::ProfileGenerationVerifyApi)
-        }
-        ["api", "v1", "tenants", _, "profiles", _, "generations", _, "activate"]
-            if method == "POST" =>
-        {
-            Some(RouteClass::ProfileGenerationActivateApi)
-        }
-        ["api", "v1", "tenants", _, "profiles", _, "generations", _, "deactivate"]
-            if method == "POST" =>
-        {
-            Some(RouteClass::ProfileGenerationDeactivateApi)
-        }
-        ["api", "v1", "tenants", _, "profiles", _, "generations", _, "quarantine"]
-            if method == "POST" =>
-        {
-            Some(RouteClass::ProfileGenerationQuarantineApi)
-        }
-        ["api", "v1", "tenants", _, "profiles", _, "generations", _]
-            if method == "GET" =>
-        {
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generations",
+            _,
+            "verify",
+        ] if method == "POST" => Some(RouteClass::ProfileGenerationVerifyApi),
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generations",
+            _,
+            "activate",
+        ] if method == "POST" => Some(RouteClass::ProfileGenerationActivateApi),
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generations",
+            _,
+            "deactivate",
+        ] if method == "POST" => Some(RouteClass::ProfileGenerationDeactivateApi),
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generations",
+            _,
+            "quarantine",
+        ] if method == "POST" => Some(RouteClass::ProfileGenerationQuarantineApi),
+        ["api", "v1", "tenants", _, "profiles", _, "generations", _] if method == "GET" => {
             Some(RouteClass::ProfileGenerationResourceApi)
         }
         ["api", "v1", "tenants", _, "profiles", _, "coordinator"]
@@ -142,10 +164,7 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
 
 #[must_use]
 fn is_dynamic_path(path: &str) -> bool {
-    path == "/api"
-        || path.starts_with("/api/")
-        || path == "/auth"
-        || path.starts_with("/auth/")
+    path == "/api" || path.starts_with("/api/") || path == "/auth" || path.starts_with("/auth/")
 }
 
 #[must_use]

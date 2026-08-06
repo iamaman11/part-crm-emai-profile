@@ -14,8 +14,7 @@ pub struct GenerationObjectKey(String);
 impl GenerationObjectKey {
     pub fn parse(value: impl Into<String>) -> Result<Self, GenerationRegistryError> {
         let value = value.into();
-        let valid_length =
-            (MIN_OBJECT_KEY_LENGTH..=MAX_OBJECT_KEY_LENGTH).contains(&value.len());
+        let valid_length = (MIN_OBJECT_KEY_LENGTH..=MAX_OBJECT_KEY_LENGTH).contains(&value.len());
         let valid_chars = value.bytes().all(|byte| {
             byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':')
         });
@@ -64,12 +63,11 @@ pub struct VerificationReference(String);
 impl VerificationReference {
     pub fn parse(value: impl Into<String>) -> Result<Self, GenerationRegistryError> {
         let value = value.into();
-        let valid_length = (MIN_VERIFICATION_REFERENCE_LENGTH
-            ..=MAX_VERIFICATION_REFERENCE_LENGTH)
+        let valid_length = (MIN_VERIFICATION_REFERENCE_LENGTH..=MAX_VERIFICATION_REFERENCE_LENGTH)
             .contains(&value.len());
-        let valid_chars = value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b':')
-        });
+        let valid_chars = value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b':'));
         if !valid_length || !valid_chars {
             return Err(GenerationRegistryError::InvalidVerificationReference);
         }
@@ -266,10 +264,8 @@ mod tests {
     use crate::{BrowserProfile, ProfileError, ProfileStatus};
     use profile_platform_primitives::{AggregateVersion, GenerationId, ProfileId, TenantId};
 
-    const DIGEST_A: &str =
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const DIGEST_B: &str =
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const DIGEST_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const DIGEST_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     fn profile() -> Result<BrowserProfile, Box<dyn std::error::Error>> {
         Ok(BrowserProfile::create(
@@ -302,8 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn only_verified_registry_record_activates_profile()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn only_verified_registry_record_activates_profile() -> Result<(), Box<dyn std::error::Error>> {
         let mut profile = profile()?;
         let mut record = record(&profile)?;
         assert_eq!(
@@ -313,10 +308,7 @@ mod tests {
         record.verify(VerificationReference::parse("review:01JREGISTRY")?)?;
         profile.activate_generation(&record.profile_generation())?;
         assert_eq!(profile.status(), ProfileStatus::Ready);
-        assert_eq!(
-            profile.active_generation_id(),
-            Some(record.generation_id())
-        );
+        assert_eq!(profile.active_generation_id(), Some(record.generation_id()));
         Ok(())
     }
 

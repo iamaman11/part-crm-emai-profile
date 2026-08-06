@@ -229,7 +229,10 @@ mod tests {
                 "dependency_unavailable",
                 "urn:part-crm:problem:dependency-unavailable",
             ),
-            ("integrity_failure", "urn:part-crm:problem:integrity-failure"),
+            (
+                "integrity_failure",
+                "urn:part-crm:problem:integrity-failure",
+            ),
             ("internal_failure", "urn:part-crm:problem:internal-failure"),
             ("conflict", "urn:part-crm:problem:conflict"),
         ];
@@ -243,8 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn problem_response_uses_problem_json_media_type()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn problem_response_uses_problem_json_media_type() -> Result<(), Box<dyn std::error::Error>> {
         let response = problem("corr_problem_test", 409, "conflict", "Conflict")?;
         assert_eq!(response.status_code(), 409);
         assert_eq!(

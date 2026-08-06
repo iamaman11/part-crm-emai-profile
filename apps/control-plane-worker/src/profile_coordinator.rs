@@ -56,10 +56,7 @@ pub async fn dispatch(
     let Some(profile) = visible_profile else {
         return neutral_not_found(actor.actor().correlation_id().as_str());
     };
-    if !profile_is_coordinatable(
-        profile.status(),
-        profile.active_generation_id().is_some(),
-    ) {
+    if !profile_is_coordinatable(profile.status(), profile.active_generation_id().is_some()) {
         return problem(
             actor.actor().correlation_id().as_str(),
             409,

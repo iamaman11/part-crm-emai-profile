@@ -255,8 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn creation_normalizes_bounded_display_name()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn creation_normalizes_bounded_display_name() -> Result<(), Box<dyn std::error::Error>> {
         let client = ClientRecord::create(
             TenantId::parse("tenant_01JCLIENT")?,
             ClientId::parse("client_02JCLIENT")?,
@@ -268,8 +267,8 @@ mod tests {
     }
 
     #[test]
-    fn archive_overflow_does_not_partially_mutate_client()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn archive_overflow_does_not_partially_mutate_client() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut client = active_client()?;
         client.version = AggregateVersion::new(u64::MAX)?;
         assert_eq!(client.archive(), Err(ClientError::VersionOverflow));
@@ -312,8 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_assignment_preserves_normalized_history()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn closing_assignment_preserves_normalized_history() -> Result<(), Box<dyn std::error::Error>> {
         let client = active_client()?;
         let mut assignment = ProfileClientAssignment::assign(
             client.tenant_id(),
