@@ -39,7 +39,7 @@ jobs:
       - name: Run offline GitHub API attestation fixtures
         run: python tests/external-review-attestations/test-attestations.py
 
-      - name: Verify repository terminal records against GitHub
+      - name: Verify active terminal records against GitHub
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
