@@ -2,7 +2,7 @@
 
 **Статус:** normative developer orientation  
 **Дата:** 2026-08-06  
-**Tracking issue:** #41
+**Tracking issues:** #41, #44
 
 ## 1. Зачем Нужен Этот Документ
 
@@ -28,7 +28,8 @@ boundaries. Слово `accepted` означает, что конкретный 
 | **Target** | Нормативно спроектировано, но executable implementation отсутствует или неполна. |
 | **External** | Требует provider, physical host, policy, signing или независимого evidence вне GitHub CI. |
 
-Ни один уровень сам по себе не означает production readiness.
+Ни один уровень сам по себе не означает production readiness. Branch/PR capability
+становится accepted только после exact-head green и merge.
 
 ## 3. Текущая Capability Matrix
 
@@ -37,14 +38,15 @@ boundaries. Слово `accepted` означает, что конкретный 
 | Rust workspace и pure primitives | Composed | Exact toolchain, typed opaque IDs, tenant/actor context, positive aggregate versions, strict lint policy. | Нет внешнего runtime dependency. |
 | Identity, memberships и ACL | Composed | Access identity adapter, memberships, owner lifecycle, invitations, profile/client grants, neutral disclosure, governed D1 commands. | Реальный production Access/IdP deployment остаётся External. |
 | Client Registry | Composed | Create/query/assignment/grant bounded Worker paths и D1 schema. | Полный CRM Customer Master, merge UI и advanced contact workflows — Target. |
-| Profile catalog | Composed | Create/query/grant/assignment metadata paths и profile state domain. | Пользовательский create-generation/activate-generation API пока не скомпонован. |
+| Profile catalog | Composed | Create/query/grant/assignment metadata paths, typed profile state и active generation pointer. | Реальные encrypted object operations выполняются не catalog, а будущим R2/provider flow. |
+| Profile generation registry | Composed | Metadata-only register/query/verify/activate/quarantine routes, exact idempotency replay, command journals, audit/outbox, monotonic time, immutable digests/object identity, verified-pointer integrity. | Production R2 object verification, device unwrap и cross-device execution — External. |
 | Profile Coordinator | Composed | Durable Object journal, monotonic sequence/version/epoch, fencing, timeout/drain/recovery, D1 projection. | Remote production concurrency evidence — External. |
-| Windows Profile Bridge executable | Library | `profile-bridge.exe` build, strict redacted claim-URI CLI, local-profile/runtime modules and Windows lane. | Текущий `main` executable только принимает claim URI; complete enrollment/network/device-key/runtime composition отсутствует. |
+| Windows Profile Bridge executable | Library | `profile-bridge.exe` build, strict redacted claim-URI CLI, local-profile/runtime modules and Windows lane. | Текущий executable только принимает claim URI; complete enrollment/network/device-key/runtime composition отсутствует. |
 | Device identity/key ports | Synthetic | Typed ports и deterministic fake implementations. | Production CNG/DPAPI/TPM unwrap/revoke/recovery — External. |
 | Camouhost IPC и process supervision | Synthetic | Versioned messages, fake Camouhost, process state machine, generated subprocess/runtime fixtures. | Real bundled Python/Camoufox lifecycle на physical host — External. |
 | Runtime bundle | Synthetic | Canonical manifest, inventory, path/case safety, digest checks, approval/rollback tests. | Trusted signed distribution/update channel — External. |
 | Local profile lifecycle | Library / Synthetic | Marked workspace, inventory, lock ownership, clone-only recovery, quota/support policies and Bridge library tests. | Full kernel-lock/real-browser integration on physical Windows hosts — External. |
-| Encrypted cloud generations | Synthetic | XChaCha20-Poly1305 container, metadata authentication, nonce domain, immutable in-memory lifecycle, pointer/rollback/quarantine/orphan policies. | Production R2 object adapter, device unwrap and remote R2/D1 atomicity — External. |
+| Encrypted cloud generations | Synthetic | XChaCha20-Poly1305 container, metadata authentication, nonce domain, immutable in-memory lifecycle, pointer/rollback/quarantine/orphan policies. | Production R2 adapter, device unwrap and remote R2/D1 atomicity — External. |
 | Certification | Synthetic | Typed policy, deterministic matrix, prohibited/incomplete/drift outcomes, privacy-safe summary and update rollback state. | Real Camoufox observations, specialized-site review and independent certification — External. |
 | Mailbox operations | Library | Provider-neutral binding/job domain and mailbox provider port. | Gmail/IMAP/browser adapters, API routes, scheduling, persistence and user workflow are not composed. |
 | React web UI | Target | UI architecture and route contracts are documented. | В репозитории нет `frontend/package.json`; current Worker has no composed React build. |
@@ -68,9 +70,11 @@ crates/use-cases
 
 crates/cloudflare-adapters
   D1, Access, Durable Object serialization/projection and Worker-facing adapters.
+  Storage validation may duplicate pure value checks as defense-in-depth, but may
+  not import domain policy into provider code.
 
 apps/control-plane-worker
-  Cloudflare Worker composition root and route/DTO mapping.
+  Cloudflare Worker composition root and route/DTO/problem mapping.
 
 apps/profile-bridge
   Windows executable plus Bridge-local libraries; current CLI composition is
@@ -89,6 +93,7 @@ HTTP request
   -> fail-closed route classification
   -> Access identity verification
   -> active membership/grant resolution
+  -> exact idempotency decision for new generation mutations
   -> typed D1 or Durable Object adapter
   -> governed transaction/projection
   -> stable response/problem shape
@@ -96,6 +101,19 @@ HTTP request
 
 This path is repository-built and integration-tested, but not a claim of deployed
 production infrastructure.
+
+### Profile generation path
+
+```text
+register immutable metadata
+  -> governed verification decision
+  -> atomic verified generation activation
+  -> READY profile pointer
+  -> coordinator eligibility
+```
+
+The registry proves catalog/lifecycle consistency. It does not prove that a real
+R2 object exists, decrypts on a device or launches successfully in Camoufox.
 
 ### Profile Bridge path
 
@@ -116,8 +134,8 @@ A capability is not considered fully composed until all applicable items exist:
 1. versioned contract or typed command;
 2. pure domain decision and negative tests;
 3. minimal owned application ports;
-4. authorization, idempotency and stable error mapping;
-5. concrete adapter plus migration where required;
+4. authorization, exact idempotency and stable error mapping;
+5. concrete adapter plus forward-only migration where required;
 6. executable composition-root wiring;
 7. replay, failure, forbidden-access and boundary tests;
 8. developer documentation updated in this matrix;
@@ -133,6 +151,6 @@ external-evidence lanes.
 
 ## 8. Audit Exclusion
 
-Repository quality hardening under issue #41 does not inspect, modify or operate
-the legacy proxy credential/provider. That external blocker remains separate and
-has no effect on the repository-local architecture findings documented here.
+Repository quality and composition work under issues #41, #43 and #44 does not
+inspect, modify or operate the legacy proxy credential/provider. That external
+item remains separate and has no effect on repository-local architecture findings.
