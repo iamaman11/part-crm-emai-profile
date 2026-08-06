@@ -1,20 +1,22 @@
 name: Temporary Feature Branch Autoformat
 
 on:
-  push:
+  pull_request:
     branches:
-      - profile-generation-registry-api
+      - repository-quality-hardening
 
 permissions:
   contents: write
 
 concurrency:
-  group: temporary-feature-autoformat-${{ github.ref }}
+  group: temporary-feature-autoformat-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   format:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      github.event.pull_request.head.ref == 'profile-generation-registry-api'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout feature branch
