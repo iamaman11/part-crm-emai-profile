@@ -28,6 +28,7 @@ pub enum RouteClass {
     ProfileGenerationResourceApi,
     ProfileGenerationVerifyApi,
     ProfileGenerationActivateApi,
+    ProfileGenerationDeactivateApi,
     ProfileGenerationQuarantineApi,
     DynamicRouteNotFound,
     BridgeDeniedByDefault,
@@ -96,6 +97,11 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
             if method == "POST" =>
         {
             Some(RouteClass::ProfileGenerationActivateApi)
+        }
+        ["api", "v1", "tenants", _, "profiles", _, "generations", _, "deactivate"]
+            if method == "POST" =>
+        {
+            Some(RouteClass::ProfileGenerationDeactivateApi)
         }
         ["api", "v1", "tenants", _, "profiles", _, "generations", _, "quarantine"]
             if method == "POST" =>
@@ -281,6 +287,11 @@ mod tests {
             ),
             (
                 "POST",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate",
+                RouteClass::ProfileGenerationDeactivateApi,
+            ),
+            (
+                "POST",
                 "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/quarantine",
                 RouteClass::ProfileGenerationQuarantineApi,
             ),
@@ -306,6 +317,10 @@ mod tests {
             (
                 "PUT",
                 "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/verify",
+            ),
+            (
+                "DELETE",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate",
             ),
         ] {
             assert_eq!(
