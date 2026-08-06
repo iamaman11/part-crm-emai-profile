@@ -1,0 +1,67 @@
+name: Profile Generation Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profile-generation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile-generation:
+    name: Registry Domain D1 And Adapter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Show pinned toolchain
+        run: rustup show active-toolchain
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test generation domain
+        run: cargo test --locked -p profile-domain
+
+      - name: Test Cloudflare generation adapter
+        run: cargo test --locked -p cloudflare-adapters --lib
+
+      - name: Check adapter for WASM
+        run: >-
+          cargo check --locked -p cloudflare-adapters
+          --target wasm32-unknown-unknown
+
+      - name: Compile registry test
+        run: python -m py_compile scripts/test-profile-generation-registry.py
+
+      - name: Prove governed registry and activation
+        run: python scripts/test-profile-generation-registry.py
+
+      - name: Reject migration gaps and unsafe registry storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          files = sorted(Path('migrations/d1').glob('[0-9][0-9][0-9][0-9]_*.sql'))
+          versions = [int(path.name.split('_', 1)[0]) for path in files]
+          expected = list(range(1, len(files) + 1))
+          if versions != expected:
+              raise SystemExit(f'non-contiguous D1 migrations: {versions}; expected {expected}')
+          PY
+          grep -q 'CREATE TABLE profile_generations' migrations/d1/0006_profile_generation_registry.sql
+          grep -q 'active_profile_generation_cannot_be_quarantined' migrations/d1/0006_profile_generation_registry.sql
+          if grep -R --line-number -E '(plaintext|private_key|secret_key|profile_bytes)[[:space:]]+TEXT' \
+            migrations/d1/0006_profile_generation_registry.sql; then
+            echo 'Generation registry must remain metadata-only.' >&2
+            exit 1
+          fi
