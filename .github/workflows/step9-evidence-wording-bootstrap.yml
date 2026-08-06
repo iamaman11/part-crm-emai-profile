@@ -1,0 +1,51 @@
+name: Step 9 Evidence Wording Bootstrap
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  correct-wording:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout evidence branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-9-evidence-sync
+          persist-credentials: true
+
+      - name: Correct ADR wording
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("README.md")
+          text = path.read_text(encoding="utf-8")
+          old = "unwrap/revoke contracts и signed-update rollback boundary. Accepted ADR-0001,\nвторой независимый Windows host и trusted signing остаются внешними gates"
+          new = "unwrap/revoke contracts и signed-update rollback boundary. Принятие ADR-0001,\nвторой независимый Windows host и trusted signing остаются внешними gates"
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one ADR wording match, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
+      - name: Remove temporary workflow
+        run: git rm .github/workflows/step9-evidence-wording-bootstrap.yml .step9-evidence-wording-trigger
+
+      - name: Validate wording and status
+        run: |
+          grep -F "Принятие ADR-0001" README.md
+          ! grep -F "Accepted ADR-0001" README.md
+          python -m json.tool docs/status.json >/dev/null
+          git diff --check
+
+      - name: Commit wording correction
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Repository Step 9: clarify proposed ADR boundary"
+          git fetch origin repository-step-9-evidence-sync
+          git rebase origin/repository-step-9-evidence-sync
+          git push origin HEAD:repository-step-9-evidence-sync
