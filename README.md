@@ -10,7 +10,7 @@ adapters, а не переносит Camoufox или локальный browser 
 
 ## Текущий Статус
 
-**Repository Steps 0–5 приняты.**
+**Repository Steps 0–6 приняты.**
 
 - Step 0 создал exact Rust workspace, pure primitives и постоянный
   Linux/Windows/WASM quality gate.
@@ -30,17 +30,21 @@ adapters, а не переносит Camoufox или локальный browser 
   server-generated fencing token, launch/heartbeat/TTL/drain/recovery state
   machine, stale-writer rejection, authenticated profile ACL boundary и
   idempotently repairable D1 projection/outbox reconciliation.
+- Step 6 добавил pure Bridge domain и Windows-native `profile-bridge.exe`,
+  fail-closed redacted custom URI enrollment, single-use device-bound claim,
+  one-writer workspace epoch, clean/crash/timeout supervision, versioned fake
+  Camouhost IPC и локальный idempotent SQLite command/outbox protocol.
 
-Accepted Step 5 source head: `e338186e53f02784d1d685ae3cd761f3cef34ef7`.
-Exact-head Quality Gate run: `31056722531`. Squash merge:
-`78931f529152c209ebececbcbef1aca770b7e3e0`.
+Accepted Step 6 source head: `cceb7e97da980c905739eb02366019015f247d6e`.
+Exact-head Quality Gate run: `31058767330`. Squash merge:
+`d0e2e0b1d11eb689b57f8ebaaefd591a6a7b6bab`.
 
-Следующий этап — **Repository Step 6: Windows Bridge Feasibility**:
-Windows-native Rust executable, single-use custom URI enrollment, device-key
-abstraction, process/job supervision, encrypted local workspace, SQLite outbox и
-fake typed Camouhost IPC. Remote Cloudflare staging, физический multi-device
-runtime и production readiness ещё не доказаны. Машиночитаемый статус:
-[`docs/status.json`](docs/status.json).
+Следующий этап — **Repository Step 7: Camouhost Runtime Bundle**: embedded
+Python/Camouhost packaging boundary, versioned typed IPC implementation,
+content-addressed development bundle, disposable synthetic profile lifecycle и
+незатрагиваемый legacy corpus. Real Camoufox execution on an approved Windows
+host, trusted signing, physical multi-device runtime и production readiness ещё
+не доказаны. Машиночитаемый статус: [`docs/status.json`](docs/status.json).
 
 Единственный разрешенный источник legacy-профилей:
 
@@ -74,6 +78,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Contract compatibility policy](docs/CONTRACT_POLICY.md)
 - [D1 catalog boundary](docs/D1_CATALOG.md)
 - [Profile Coordinator boundary](docs/PROFILE_COORDINATOR.md)
+- [Windows Bridge feasibility boundary](docs/WINDOWS_BRIDGE_FEASIBILITY.md)
 - [ADR status registry](docs/ADR_STATUS.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Data classification](docs/DATA_CLASSIFICATION.md)
@@ -84,6 +89,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [D1 catalog evidence](docs/evidence/2026-08-05-repository-step-3-d1-catalog-foundation.md)
 - [Identity, clients and ACL evidence](docs/evidence/2026-08-06-repository-step-4-identity-clients-acl.md)
 - [Profile Coordinator evidence](docs/evidence/2026-08-06-repository-step-5-profile-coordinator.md)
+- [Windows Bridge feasibility evidence](docs/evidence/2026-08-06-repository-step-6-windows-bridge-feasibility.md)
 - [Проверенные выводы исследования](docs/RESEARCH_FINDINGS.md)
 - [Cloud profile smoke test](docs/CLOUD_PROFILE_SMOKE_TEST.md)
 - [Текущая проверка готовности плана](docs/PLAN_READINESS_REVIEW.md)
@@ -130,13 +136,15 @@ Standalone v1 не требует отдельной VM, PostgreSQL или Keycl
 Step 1 подтвердил reproducible repository cold build Cloudflare pins. Step 2
 добавил immutable v1 compatibility floor. Step 3 подтвердил local D1 migration
 replay, tenant constraints, typed adapter compilation and Worker packaging. Step
-4 подтвердил authenticated owner/member Worker slice, explicit ACL and
+4 подтвердил authenticated owner/member Worker slice, explicit ACL и
 transaction-fatal governed D1 mutations. Step 5 подтвердил repository-local
 Durable Object coordinator, monotonic epoch/fencing, timeout uncertainty,
 assignment-independent authorization, repairable D1 projection и release Worker
-packaging. Remote staging, production binding behavior under load,
-backup/restore, physical multi-device runtime and account recovery пока не
-считаются выполненными.
+packaging. Step 6 подтвердил provider-free Bridge boundaries, redacted
+single-use enrollment, local writer/process/outbox semantics и non-empty Windows
+release executable. Remote staging, production binding behavior under load,
+real Camouhost/Camoufox, trusted signing, backup/restore, physical multi-device
+runtime и account recovery пока не считаются выполненными.
 
 ## Ключевые Инварианты
 
