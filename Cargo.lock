@@ -448,6 +448,7 @@ name = "profile-bridge"
 version = "0.1.0"
 dependencies = [
  "bridge-domain",
+ "profile-platform-primitives",
 ]
 
 [[package]]

@@ -91,8 +91,8 @@ mod tests {
     use profile_platform_primitives::{DeviceId, SessionId};
 
     #[test]
-    fn fake_device_identity_and_key_handle_are_deterministic(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn fake_device_identity_and_key_handle_are_deterministic()
+    -> Result<(), Box<dyn std::error::Error>> {
         let device_id = DeviceId::parse("device_01JBRIDGE")?;
         let identity = FakeDeviceIdentity::new(device_id.clone());
         let mut keys = FakeDeviceKeyStore::default();
@@ -105,8 +105,8 @@ mod tests {
     }
 
     #[test]
-    fn fake_camouhost_requires_version_negotiation_and_preserves_session(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn fake_camouhost_requires_version_negotiation_and_preserves_session()
+    -> Result<(), Box<dyn std::error::Error>> {
         let session_id = SessionId::parse("session_01JBRIDGE")?;
         let mut runtime = FakeCamouhost::default();
         assert_eq!(
