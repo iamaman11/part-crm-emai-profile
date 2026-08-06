@@ -6,16 +6,19 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL_PATH = ROOT / "tools" / "runtime_bundle.py"
+FAKE_CAMOUHOST = ROOT / "runtime" / "camouhost" / "main.py"
 SPEC = importlib.util.spec_from_file_location("runtime_bundle", TOOL_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError("runtime bundle tool could not be loaded")
 RUNTIME_BUNDLE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = RUNTIME_BUNDLE
 SPEC.loader.exec_module(RUNTIME_BUNDLE)
 
 BundleError = RUNTIME_BUNDLE.BundleError
@@ -27,9 +30,7 @@ def write_synthetic_source(root: Path) -> None:
         RUNTIME_BUNDLE.SOURCE_MARKER_CONTENT, encoding="utf-8"
     )
     (root / "camouhost").mkdir()
-    (root / "camouhost" / "main.py").write_text(
-        "print('synthetic camouhost')\n", encoding="utf-8", newline="\n"
-    )
+    (root / "camouhost" / "main.py").write_bytes(FAKE_CAMOUHOST.read_bytes())
     (root / "runtime").mkdir()
     (root / "runtime" / "NOTICE.txt").write_text(
         "synthetic runtime fixture\n", encoding="utf-8", newline="\n"
@@ -185,7 +186,8 @@ def main() -> None:
             "must be empty",
         )
 
-        manifest_bytes = zipfile.ZipFile(first).read(RUNTIME_BUNDLE.MANIFEST_NAME)
+        with zipfile.ZipFile(first, "r") as archive:
+            manifest_bytes = archive.read(RUNTIME_BUNDLE.MANIFEST_NAME)
         parsed = json.loads(manifest_bytes)
         assert parsed["ipc_version"] == 1
         assert parsed["platform"] == "windows-x86_64"
