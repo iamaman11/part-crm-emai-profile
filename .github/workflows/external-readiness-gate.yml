@@ -1,0 +1,61 @@
+name: External Readiness Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-readiness-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  external-readiness:
+    name: External Readiness Projection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Compile readiness policy and fixtures
+        run: |
+          python -m py_compile scripts/check-external-readiness-summary.py
+          python -m py_compile tests/external-readiness/test-summary.py
+
+      - name: Revalidate repository external evidence intake
+        run: |
+          python scripts/check-external-evidence.py
+          python scripts/check-external-evidence-scope.py
+
+      - name: Verify committed external readiness projection
+        run: python scripts/check-external-readiness-summary.py
+
+      - name: Verify canonical empty fixture
+        run: |
+          python scripts/check-external-evidence.py --root tests/external-readiness/fixtures/empty
+          python scripts/check-external-evidence-scope.py --root tests/external-readiness/fixtures/empty
+          python scripts/check-external-readiness-summary.py \
+            --root tests/external-readiness/fixtures/empty \
+            --summary expected-summary.json \
+            --status status.json
+
+      - name: Prove false production readiness is rejected
+        shell: bash
+        run: |
+          set -euo pipefail
+          if python scripts/check-external-readiness-summary.py \
+            --root tests/external-readiness/fixtures/empty \
+            --summary expected-summary.json \
+            --status status-production-ready.json; then
+            echo "Ineligible production_ready=true fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Run synthetic readiness fixtures
+        run: python tests/external-readiness/test-summary.py

@@ -34,6 +34,8 @@
   retention gates, export/delete and support-access requirements.
 - [`EXTERNAL_EVIDENCE_PROTOCOL.md`](EXTERNAL_EVIDENCE_PROTOCOL.md): immutable
   metadata-only intake, review and lineage rules for external production gates.
+- [`EXTERNAL_EVIDENCE_READINESS.md`](EXTERNAL_EVIDENCE_READINESS.md): deterministic
+  active-record projection, mandatory production matrix and readiness interlock.
 - [`TEST_EVIDENCE_INDEX.md`](TEST_EVIDENCE_INDEX.md): accepted evidence scope and
   promotion rules.
 - [`../SECURITY.md`](../SECURITY.md): vulnerability and credential incident policy.
