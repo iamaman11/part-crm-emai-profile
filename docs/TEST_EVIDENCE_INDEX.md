@@ -19,6 +19,7 @@ smoke test does not promote unrelated production gates.
 | Repository Step 3 / PR #12 | accepted | strict D1 schema, migration replay, tenant constraints, typed adapter boundary, optimistic CAS and synthetic transaction envelope | remote D1, Access identity, full API ACL slice, backup/restore or production readiness |
 | Repository Step 4 / PR #15 | accepted | Access JWT and fake identity convergence, active membership resolution, owner bootstrap/transfer, membership lifecycle, explicit client/profile ACL, neutral concealment, governed atomic commands and authenticated Worker packaging | remote Access policy, remote D1, Profile Coordinator, Bridge/runtime, multi-device or production readiness |
 | Repository Step 5 / PR #18 | accepted | per-profile Durable Object coordinator, monotonic epoch/fencing, stale-writer and timeout uncertainty rules, authenticated explicit profile ACL, replayable storage, repairable D1 projection/outbox and release Worker packaging | remote Durable Object behavior, physical multi-device runtime, Windows Bridge, encrypted generations or production readiness |
+| Repository Step 6 / PR #21 | accepted | redacted single-use custom URI enrollment, device-bound claim, local writer epochs, process close/crash/timeout rules, versioned fake Camouhost IPC, SQLite outbox and verified Windows release executable | registry installation, production device keys, real process/job behavior, real Camouhost/Camoufox, trusted signing, multi-device or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -153,6 +154,33 @@ review item; it is not a Worker runtime dependency claim.
   [`evidence/2026-08-06-repository-step-5-profile-coordinator.md`](evidence/2026-08-06-repository-step-5-profile-coordinator.md);
 - Cloudflare credentials, remote resources, physical devices or user data
   involved: no.
+
+### Repository Step 6 Evidence
+
+- baseline: `aac9f994cd79b5d6534f6ae9ec1669cdfeb8b73c`;
+- accepted source head: `cceb7e97da980c905739eb02366019015f247d6e`;
+- exact-head Quality Gate run: `31058767330`, conclusion `success`;
+- squash merge: `d0e2e0b1d11eb689b57f8ebaaefd591a6a7b6bab`;
+- jobs: `Rust Linux and WASM`, `D1 Catalog Migrations`,
+  `Rust Windows And Profile Bridge Artifact`, `Cloudflare Worker Release Build`;
+- exact custom URI parsing, token redaction, strict expiry, single use and device
+  binding: passed;
+- one-writer workspace epoch and stale release rejection: passed;
+- graceful close, unexpected crash and forced timeout remain distinct: passed;
+- versioned fake Camouhost negotiation/launch/ready/close and malformed-message
+  rejection: passed;
+- local SQLite exact replay, conflicting idempotency, stale version, reordered
+  sequence, append-only commands and immutable outbox payload tests: passed;
+- deliberate known browser-lock deletion fixture: rejected as required;
+- Windows-only safe adapter test: passed;
+- pinned Windows runner produced and verified a non-empty release
+  `profile-bridge.exe`;
+- all Step 0–5 D1, Worker, ACL, coordinator and contract regression gates remained
+  green;
+- detailed report:
+  [`evidence/2026-08-06-repository-step-6-windows-bridge-feasibility.md`](evidence/2026-08-06-repository-step-6-windows-bridge-feasibility.md);
+- production credentials, remote resources, real browser runtime, legacy profile
+  data or physical multi-device evidence involved: no.
 
 ## 2. Required Permanent CI Evidence
 
