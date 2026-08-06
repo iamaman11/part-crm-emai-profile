@@ -20,11 +20,13 @@ jobs:
           ref: repository-step-10-certification-multi-device
           persist-credentials: true
 
-      - name: Register Step 10 workspace boundary
-        run: python scripts/bootstrap-step10.py
+      - name: Register and correct Step 10 workspace boundary
+        run: |
+          python scripts/bootstrap-step10.py
+          python scripts/fix-step10-clippy.py
 
       - name: Remove temporary bootstrap files
-        run: git rm .github/workflows/step10-workspace-bootstrap.yml scripts/bootstrap-step10.py .step10-workspace-trigger
+        run: git rm .github/workflows/step10-workspace-bootstrap.yml scripts/bootstrap-step10.py scripts/fix-step10-clippy.py .step10-workspace-trigger
 
       - name: Format and resolve workspace lock
         run: |
