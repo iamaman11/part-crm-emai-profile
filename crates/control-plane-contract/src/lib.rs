@@ -107,7 +107,7 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
 }
 
 #[must_use]
-const fn is_dynamic_path(path: &str) -> bool {
+fn is_dynamic_path(path: &str) -> bool {
     path == "/api"
         || path.starts_with("/api/")
         || path == "/auth"
