@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify terminal external evidence records against exact GitHub attestations."""
+"""Verify active terminal external evidence against exact GitHub attestations."""
 
 from __future__ import annotations
 
@@ -22,9 +22,7 @@ ISSUE_COMMENT_RE = re.compile(r"issuecomment-([0-9]+)\Z")
 PULL_REVIEW_RE = re.compile(r"pullrequestreview-([0-9]+)\Z")
 REVIEW_COMMENT_RE = re.compile(r"discussion_r([0-9]+)\Z")
 LOGIN_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
-REPOSITORY_RE = re.compile(
-    r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)\Z"
-)
+REPOSITORY_RE = re.compile(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)\Z")
 
 
 class AttestationError(ValueError):
@@ -57,7 +55,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
     parser.add_argument("--api-base", default="https://api.github.com")
-    parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"),
+    )
     parser.add_argument("--print-claims", action="store_true")
     return parser.parse_args()
 
@@ -78,8 +79,9 @@ def load_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def parse_record(path: Path) -> TerminalRecord | None:
-    data = load_json(path)
+def parse_record(path: Path, data: dict[str, Any] | None = None) -> TerminalRecord | None:
+    if data is None:
+        data = load_json(path)
     status = require_string(data.get("status"), f"{path}.status")
     if status == "pending":
         return None
@@ -135,7 +137,7 @@ def claim_body(record: TerminalRecord) -> str:
 
 def parse_repository(value: str | None) -> tuple[str, str]:
     if value is None:
-        raise AttestationError("repository is required when terminal records exist")
+        raise AttestationError("repository is required when active terminal records exist")
     match = REPOSITORY_RE.fullmatch(value)
     if match is None:
         raise AttestationError("repository must use owner/name form")
@@ -148,7 +150,9 @@ def parse_review_target(reference: str, expected_repository: tuple[str, str]) ->
         raise AttestationError(f"invalid GitHub review reference: {reference}")
     parts = [part for part in parsed.path.split("/") if part]
     if len(parts) != 4 or parts[2] not in {"issues", "pull"} or not parts[3].isdigit():
-        raise AttestationError(f"review reference must identify one issue or pull request: {reference}")
+        raise AttestationError(
+            f"review reference must identify one issue or pull request: {reference}"
+        )
     owner, repository = parts[0], parts[1]
     if (owner.lower(), repository.lower()) != (
         expected_repository[0].lower(),
@@ -265,7 +269,8 @@ def verify_record(
         )
     if timestamp != record.reviewed_at:
         raise AttestationError(
-            f"{record.path}: review timestamp mismatch, record={record.reviewed_at}, GitHub={timestamp}"
+            f"{record.path}: review timestamp mismatch, record={record.reviewed_at}, "
+            f"GitHub={timestamp}"
         )
     expected_body = claim_body(record)
     if body != expected_body:
@@ -275,13 +280,26 @@ def verify_record(
         )
 
 
-def load_terminal_records(root: Path) -> list[TerminalRecord]:
+def load_active_terminal_records(root: Path) -> list[TerminalRecord]:
     records_dir = root / "evidence" / "external" / "records"
     if not records_dir.is_dir():
         raise AttestationError(f"missing records directory: {records_dir}")
-    terminal: list[TerminalRecord] = []
+
+    entries: list[tuple[Path, dict[str, Any], str]] = []
+    superseded: set[str] = set()
     for path in sorted(records_dir.glob("*.json")):
-        record = parse_record(path)
+        data = load_json(path)
+        evidence_id = require_string(data.get("evidence_id"), f"{path}.evidence_id")
+        entries.append((path, data, evidence_id))
+        supersedes = data.get("supersedes")
+        if supersedes is not None:
+            superseded.add(require_string(supersedes, f"{path}.supersedes"))
+
+    terminal: list[TerminalRecord] = []
+    for path, data, evidence_id in entries:
+        if evidence_id in superseded:
+            continue
+        record = parse_record(path, data)
         if record is not None:
             terminal.append(record)
     return terminal
@@ -294,21 +312,24 @@ def verify_tree(
     token: str | None,
     print_claims: bool,
 ) -> int:
-    records = load_terminal_records(root)
+    records = load_active_terminal_records(root)
     if print_claims:
         for record in records:
             print(f"# {record.path}")
             print(claim_body(record))
             print()
-        print(f"printed {len(records)} terminal review claim(s)")
+        print(f"printed {len(records)} active terminal review claim(s)")
         return 0
     if not records:
-        print("external review attestation gate passed: 0 terminal record(s)")
+        print("external review attestation gate passed: 0 active terminal record(s)")
         return 0
     repository = parse_repository(repository_value)
     for record in records:
         verify_record(record, repository, api_base, token)
-    print(f"external review attestation gate passed: {len(records)} terminal record(s)")
+    print(
+        "external review attestation gate passed: "
+        f"{len(records)} active terminal record(s)"
+    )
     return 0
 
 
