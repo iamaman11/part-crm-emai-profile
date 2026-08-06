@@ -158,17 +158,13 @@ pub struct AggregateVersion(u64);
 impl AggregateVersion {
     pub const INITIAL: Self = Self(1);
 
+    /// Restores or creates a strictly positive aggregate version.
     pub const fn new(value: u64) -> Result<Self, ZeroAggregateVersion> {
         if value == 0 {
             Err(ZeroAggregateVersion)
         } else {
             Ok(Self(value))
         }
-    }
-
-    #[must_use]
-    pub const fn from_value(value: u64) -> Self {
-        Self(value)
     }
 
     #[must_use]
@@ -246,10 +242,11 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_versions_increment_without_wraparound() -> Result<(), Box<dyn std::error::Error>> {
+    fn aggregate_versions_are_strictly_positive_and_never_wrap()
+    -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(AggregateVersion::new(1)?.next()?.value(), 2);
         assert!(AggregateVersion::new(0).is_err());
-        assert!(AggregateVersion::from_value(u64::MAX).next().is_err());
+        assert!(AggregateVersion::new(u64::MAX)?.next().is_err());
         Ok(())
     }
 }
