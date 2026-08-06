@@ -4,23 +4,17 @@ on:
   push:
     branches:
       - repository-quality-hardening
-  pull_request:
-    branches:
-      - main
 
 permissions:
   contents: write
 
 concurrency:
-  group: temporary-hardening-autoformat
+  group: temporary-hardening-autoformat-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   format:
-    if: >-
-      github.actor != 'github-actions[bot]' &&
-      (github.event_name == 'push' ||
-       github.event.pull_request.head.ref == 'repository-quality-hardening')
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout hardening branch
