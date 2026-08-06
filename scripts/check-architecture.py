@@ -18,6 +18,7 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
     "session-domain": {"profile-platform-primitives", "contracts"},
     "mailbox-domain": {"profile-platform-primitives", "contracts"},
     "bridge-domain": {"profile-platform-primitives"},
+    "runtime-bundle-domain": set(),
     "application-ports": {
         "profile-platform-primitives",
         "contracts",
