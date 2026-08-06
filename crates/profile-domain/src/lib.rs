@@ -115,11 +115,19 @@ impl BrowserProfile {
     }
 
     pub fn transition(&mut self, next: ProfileStatus) -> Result<(), ProfileError> {
+        if next == ProfileStatus::Ready {
+            return Err(ProfileError::VerifiedGenerationRequired);
+        }
         if !is_allowed_transition(self.status, next) {
             return Err(ProfileError::InvalidStatusTransition);
         }
+        let next_version = self
+            .version
+            .next()
+            .map_err(|_| ProfileError::VersionOverflow)?;
         self.status = next;
-        self.bump_version()
+        self.version = next_version;
+        Ok(())
     }
 
     pub fn activate_generation(
@@ -139,23 +147,19 @@ impl BrowserProfile {
             self.status,
             ProfileStatus::InUse
                 | ProfileStatus::DirtyLocal
-                | ProfileStatus::Syncing
                 | ProfileStatus::Deleting
                 | ProfileStatus::Deleted
         ) {
             return Err(ProfileError::InvalidStatusTransition);
         }
 
-        self.active_generation_id = Some(generation.generation_id().clone());
-        self.status = ProfileStatus::Ready;
-        self.bump_version()
-    }
-
-    fn bump_version(&mut self) -> Result<(), ProfileError> {
-        self.version = self
+        let next_version = self
             .version
             .next()
             .map_err(|_| ProfileError::VersionOverflow)?;
+        self.active_generation_id = Some(generation.generation_id().clone());
+        self.status = ProfileStatus::Ready;
+        self.version = next_version;
         Ok(())
     }
 }
@@ -164,25 +168,16 @@ impl BrowserProfile {
 pub const fn is_allowed_transition(current: ProfileStatus, next: ProfileStatus) -> bool {
     matches!(
         (current, next),
-        (
-            ProfileStatus::Draft,
-            ProfileStatus::Quarantined | ProfileStatus::Ready
-        ) | (
-            ProfileStatus::Quarantined,
-            ProfileStatus::Ready | ProfileStatus::Suspended
-        ) | (
-            ProfileStatus::Ready,
-            ProfileStatus::InUse | ProfileStatus::Suspended | ProfileStatus::Deleting
-        ) | (ProfileStatus::InUse, ProfileStatus::DirtyLocal)
+        (ProfileStatus::Draft, ProfileStatus::Quarantined)
+            | (ProfileStatus::Quarantined, ProfileStatus::Suspended)
+            | (
+                ProfileStatus::Ready,
+                ProfileStatus::InUse | ProfileStatus::Suspended | ProfileStatus::Deleting
+            )
+            | (ProfileStatus::InUse, ProfileStatus::DirtyLocal)
             | (ProfileStatus::DirtyLocal, ProfileStatus::Syncing)
-            | (
-                ProfileStatus::Syncing,
-                ProfileStatus::Ready | ProfileStatus::Quarantined
-            )
-            | (
-                ProfileStatus::Suspended,
-                ProfileStatus::Ready | ProfileStatus::Deleting
-            )
+            | (ProfileStatus::Syncing, ProfileStatus::Quarantined)
+            | (ProfileStatus::Suspended, ProfileStatus::Deleting)
             | (ProfileStatus::Deleting, ProfileStatus::Deleted)
     )
 }
@@ -190,6 +185,7 @@ pub const fn is_allowed_transition(current: ProfileStatus, next: ProfileStatus) 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProfileError {
     InvalidStatusTransition,
+    VerifiedGenerationRequired,
     TenantMismatch,
     ProfileMismatch,
     GenerationNotVerified,
@@ -200,6 +196,9 @@ impl fmt::Display for ProfileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::InvalidStatusTransition => "profile status transition is invalid",
+            Self::VerifiedGenerationRequired => {
+                "profile can become ready only by activating a verified generation"
+            }
             Self::TenantMismatch => "generation tenant differs from profile tenant",
             Self::ProfileMismatch => "generation belongs to another profile",
             Self::GenerationNotVerified => "generation is not verified",
@@ -215,7 +214,7 @@ mod tests {
     use super::{
         BrowserProfile, GenerationVerification, ProfileError, ProfileGeneration, ProfileStatus,
     };
-    use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+    use profile_platform_primitives::{AggregateVersion, GenerationId, ProfileId, TenantId};
 
     fn profile() -> Result<BrowserProfile, Box<dyn std::error::Error>> {
         Ok(BrowserProfile::create(
@@ -224,10 +223,36 @@ mod tests {
         ))
     }
 
+    fn verified_generation(
+        profile: &BrowserProfile,
+    ) -> Result<ProfileGeneration, Box<dyn std::error::Error>> {
+        Ok(ProfileGeneration::new(
+            profile.tenant_id().clone(),
+            profile.profile_id().clone(),
+            GenerationId::parse("generation_01JPROFILE")?,
+            GenerationVerification::Verified,
+        ))
+    }
+
+    #[test]
+    fn direct_ready_transition_is_rejected_without_generation_activation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut profile = profile()?;
+        assert_eq!(
+            profile.transition(ProfileStatus::Ready),
+            Err(ProfileError::VerifiedGenerationRequired)
+        );
+        assert_eq!(profile.status(), ProfileStatus::Draft);
+        assert!(profile.active_generation_id().is_none());
+        assert_eq!(profile.version(), AggregateVersion::INITIAL);
+        Ok(())
+    }
+
     #[test]
     fn live_profile_cannot_skip_dirty_state() -> Result<(), Box<dyn std::error::Error>> {
         let mut profile = profile()?;
-        profile.transition(ProfileStatus::Ready)?;
+        let generation = verified_generation(&profile)?;
+        profile.activate_generation(&generation)?;
         profile.transition(ProfileStatus::InUse)?;
         assert_eq!(
             profile.transition(ProfileStatus::Syncing),
@@ -249,24 +274,51 @@ mod tests {
             profile.activate_generation(&generation),
             Err(ProfileError::GenerationNotVerified)
         );
+        assert_eq!(profile.status(), ProfileStatus::Draft);
+        assert!(profile.active_generation_id().is_none());
         Ok(())
     }
 
     #[test]
     fn verified_generation_activates_atomically() -> Result<(), Box<dyn std::error::Error>> {
         let mut profile = profile()?;
-        let generation = ProfileGeneration::new(
-            profile.tenant_id().clone(),
-            profile.profile_id().clone(),
-            GenerationId::parse("generation_01JPROFILE")?,
-            GenerationVerification::Verified,
-        );
+        let generation = verified_generation(&profile)?;
         profile.activate_generation(&generation)?;
         assert_eq!(profile.status(), ProfileStatus::Ready);
         assert_eq!(
             profile.active_generation_id(),
             Some(generation.generation_id())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn activation_overflow_does_not_partially_mutate_profile()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut profile = profile()?;
+        let generation = verified_generation(&profile)?;
+        profile.version = AggregateVersion::new(u64::MAX)?;
+        assert_eq!(
+            profile.activate_generation(&generation),
+            Err(ProfileError::VersionOverflow)
+        );
+        assert_eq!(profile.status(), ProfileStatus::Draft);
+        assert!(profile.active_generation_id().is_none());
+        assert_eq!(profile.version().value(), u64::MAX);
+        Ok(())
+    }
+
+    #[test]
+    fn transition_overflow_does_not_partially_mutate_profile()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut profile = profile()?;
+        profile.version = AggregateVersion::new(u64::MAX)?;
+        assert_eq!(
+            profile.transition(ProfileStatus::Quarantined),
+            Err(ProfileError::VersionOverflow)
+        );
+        assert_eq!(profile.status(), ProfileStatus::Draft);
+        assert_eq!(profile.version().value(), u64::MAX);
         Ok(())
     }
 }
