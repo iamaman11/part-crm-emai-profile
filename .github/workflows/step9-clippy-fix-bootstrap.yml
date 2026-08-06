@@ -1,0 +1,253 @@
+name: Step 9 Clippy Fix Bootstrap
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fixes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-9-encrypted-cloud-generations
+          persist-credentials: true
+
+      - name: Apply exact Clippy-driven refactor
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_one(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          container = Path("crates/encrypted-generation-domain/src/container.rs")
+          text = container.read_text(encoding="utf-8")
+          text = replace_one(
+              text,
+              "use crate::{ALGORITHM_SUITE, CONTAINER_VERSION, EncryptedGenerationError};",
+              "use crate::{CONTAINER_VERSION, EncryptedGenerationError};",
+              "container import",
+          )
+          identity = '''#[derive(Clone, Debug, Eq, PartialEq)]
+          pub struct GenerationIdentity {
+              tenant_id: TenantId,
+              profile_id: ProfileId,
+              generation_id: GenerationId,
+              base_generation_id: Option<GenerationId>,
+          }
+
+          impl GenerationIdentity {
+              #[must_use]
+              pub const fn new(
+                  tenant_id: TenantId,
+                  profile_id: ProfileId,
+                  generation_id: GenerationId,
+                  base_generation_id: Option<GenerationId>,
+              ) -> Self {
+                  Self {
+                      tenant_id,
+                      profile_id,
+                      generation_id,
+                      base_generation_id,
+                  }
+              }
+          }
+
+          '''
+          text = replace_one(
+              text,
+              "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct GenerationMetadata {",
+              identity + "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct GenerationMetadata {",
+              "generation identity insertion",
+          )
+          old_constructor = '''    pub fn for_plaintext(
+                  tenant_id: TenantId,
+                  profile_id: ProfileId,
+                  generation_id: GenerationId,
+                  base_generation_id: Option<GenerationId>,
+                  key_id: KeyId,
+                  nonce_prefix: NoncePrefix,
+                  chunk_size: u32,
+                  plaintext: &[u8],
+              ) -> Result<Self, EncryptedGenerationError> {
+          '''
+          new_constructor = '''    pub fn for_plaintext(
+                  identity: GenerationIdentity,
+                  key_id: KeyId,
+                  nonce_prefix: NoncePrefix,
+                  chunk_size: u32,
+                  plaintext: &[u8],
+              ) -> Result<Self, EncryptedGenerationError> {
+          '''
+          text = replace_one(text, old_constructor, new_constructor, "metadata constructor")
+          text = replace_one(
+              text,
+              '''        let plaintext_bytes = u64::try_from(plaintext.len())
+                      .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
+                  Ok(Self {
+          ''',
+              '''        let plaintext_bytes = u64::try_from(plaintext.len())
+                      .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
+                  let GenerationIdentity {
+                      tenant_id,
+                      profile_id,
+                      generation_id,
+                      base_generation_id,
+                  } = identity;
+                  Ok(Self {
+          ''',
+              "identity destructure",
+          )
+          nonce_old = "XNonce::from_slice(&nonce_bytes),"
+          if text.count(nonce_old) != 3:
+              raise SystemExit(f"nonce calls: expected three matches, found {text.count(nonce_old)}")
+          text = text.replace(nonce_old, "&nonce_from_bytes(&nonce_bytes)?,")
+          text = replace_one(
+              text,
+              "fn validate_chunk_size(chunk_size: u32) -> Result<(), EncryptedGenerationError> {",
+              '''fn nonce_from_bytes(
+                  bytes: &[u8; NONCE_BYTES],
+              ) -> Result<XNonce, EncryptedGenerationError> {
+                  XNonce::try_from(bytes.as_slice())
+                      .map_err(|_| EncryptedGenerationError::InvalidContainer)
+              }
+
+              fn validate_chunk_size(chunk_size: u32) -> Result<(), EncryptedGenerationError> {''',
+              "nonce helper",
+          )
+          text = replace_one(
+              text,
+              '''
+          #[must_use]
+          pub const fn algorithm_suite() -> &'static str {
+              ALGORITHM_SUITE
+          }
+          ''',
+              "\n",
+              "unused algorithm helper",
+          )
+          container.write_text(text, encoding="utf-8")
+
+          lifecycle = Path("crates/encrypted-generation-domain/src/lifecycle.rs")
+          text = lifecycle.read_text(encoding="utf-8")
+          text = replace_one(
+              text,
+              '''        if let Some(claimed_generation_id) = self.nonce_claims.get(&nonce_claim) {
+                      if claimed_generation_id != metadata.generation_id() {
+                          return Err(EncryptedGenerationError::NonceReuse);
+                      }
+                  }
+          ''',
+              '''        if let Some(claimed_generation_id) = self.nonce_claims.get(&nonce_claim)
+                      && claimed_generation_id != metadata.generation_id()
+                  {
+                      return Err(EncryptedGenerationError::NonceReuse);
+                  }
+          ''',
+              "nonce claim guard",
+          )
+          lifecycle.write_text(text, encoding="utf-8")
+
+          lib = Path("crates/encrypted-generation-domain/src/lib.rs")
+          text = lib.read_text(encoding="utf-8")
+          text = replace_one(
+              text,
+              "ContainerDigest, GenerationDek, GenerationMetadata, KeyId, NoncePrefix, OpenedGeneration,",
+              "ContainerDigest, GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix, OpenedGeneration,",
+              "lib identity export",
+          )
+          lib.write_text(text, encoding="utf-8")
+
+          tests = Path("crates/encrypted-generation-domain/src/tests.rs")
+          text = tests.read_text(encoding="utf-8")
+          text = replace_one(
+              text,
+              "GenerationDek, GenerationMetadata, KeyId, NoncePrefix, PlaintextDigest, PublishResult,",
+              "GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix, PlaintextDigest,\n    PublishResult,",
+              "tests identity import",
+          )
+          text = replace_one(
+              text,
+              '''    Ok(GenerationMetadata::for_plaintext(
+                  tenant_id,
+                  profile_id,
+                  generation_id,
+                  None,
+                  key_id()?,
+          ''',
+              '''    Ok(GenerationMetadata::for_plaintext(
+                  GenerationIdentity::new(tenant_id, profile_id, generation_id, None),
+                  key_id()?,
+          ''',
+              "metadata helper identity",
+          )
+          text = replace_one(
+              text,
+              '''    let reused = GenerationMetadata::for_plaintext(
+                  tenant_id,
+                  profile_id,
+                  generation_id,
+                  None,
+                  key_id()?,
+          ''',
+              '''    let reused = GenerationMetadata::for_plaintext(
+                  GenerationIdentity::new(tenant_id, profile_id, generation_id, None),
+                  key_id()?,
+          ''',
+              "reused identity",
+          )
+          text = replace_one(
+              text,
+              '''    let conflicting = GenerationMetadata::for_plaintext(
+                  first.tenant_id().clone(),
+                  first.profile_id().clone(),
+                  first.generation_id().clone(),
+                  None,
+                  key_id()?,
+          ''',
+              '''    let conflicting = GenerationMetadata::for_plaintext(
+                  GenerationIdentity::new(
+                      first.tenant_id().clone(),
+                      first.profile_id().clone(),
+                      first.generation_id().clone(),
+                      None,
+                  ),
+                  key_id()?,
+          ''',
+              "conflicting identity",
+          )
+          text = replace_one(
+              text,
+              '''        GenerationMetadata::for_plaintext(
+                      tenant_id,
+                      profile_id,
+                      generation_id,
+                      None,
+                      key_id()?,
+          ''',
+              '''        GenerationMetadata::for_plaintext(
+                      GenerationIdentity::new(tenant_id, profile_id, generation_id, None),
+                      key_id()?,
+          ''',
+              "invalid size identity",
+          )
+          tests.write_text(text, encoding="utf-8")
+          PY
+          cargo fmt --all
+
+      - name: Commit refactor
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/encrypted-generation-domain
+          git commit -m "Repository Step 9: resolve initial Clippy findings"
+          git fetch origin repository-step-9-encrypted-cloud-generations
+          git rebase origin/repository-step-9-encrypted-cloud-generations
+          git push origin HEAD:repository-step-9-encrypted-cloud-generations
