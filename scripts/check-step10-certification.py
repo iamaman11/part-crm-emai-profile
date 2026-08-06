@@ -48,6 +48,7 @@ FORBIDDEN_FRAGMENTS = (
     "reqwest::",
     "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct ObservationSet",
     "matrix_digest={}",
+    "RollbackUnavailable",
 )
 
 

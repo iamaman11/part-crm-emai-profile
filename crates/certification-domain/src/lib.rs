@@ -972,7 +972,6 @@ pub enum CertificationError {
     MissingStagedRelease,
     MissingActiveRelease,
     ReleaseIdentityMismatch,
-    RollbackUnavailable,
     VerificationEvidenceMismatch,
 }
 
@@ -1003,7 +1002,6 @@ impl fmt::Display for CertificationError {
             Self::MissingStagedRelease => "staged release is missing",
             Self::MissingActiveRelease => "active release is missing",
             Self::ReleaseIdentityMismatch => "release identity does not match",
-            Self::RollbackUnavailable => "rollback release is unavailable",
             Self::VerificationEvidenceMismatch => {
                 "signature verification evidence does not match the release"
             }
