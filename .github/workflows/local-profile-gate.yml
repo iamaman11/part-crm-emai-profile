@@ -1,0 +1,73 @@
+name: Local Profile Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-profile-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-profile-linux:
+    name: Local Profile Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Compile Step 8 policy
+        run: python -m py_compile scripts/check-step8-local-profile.py
+
+      - name: Enforce Step 8 local lifecycle boundary
+        run: python scripts/check-step8-local-profile.py
+
+      - name: Prove browser-lock deletion fixture is rejected
+        run: |
+          if python scripts/check-step8-local-profile.py --root tests/local-profile/fixtures/deletes-browser-lock; then
+            echo "Browser-owned lock deletion fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy Profile Bridge
+        run: cargo clippy --locked -p profile-bridge --all-targets -- -D warnings
+
+      - name: Test local profile lifecycle
+        run: cargo test --locked -p profile-bridge local_profile
+
+  local-profile-windows:
+    name: Local Profile Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Test local profile lifecycle
+        run: cargo test --locked -p profile-bridge local_profile
+
+      - name: Build release Profile Bridge executable
+        run: cargo build --locked --release -p profile-bridge
+
+      - name: Verify Windows Profile Bridge artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "target/release/profile-bridge.exe")) {
+            throw "profile-bridge.exe was not produced"
+          }
+          $artifact = Get-Item "target/release/profile-bridge.exe"
+          if ($artifact.Length -le 0) {
+            throw "profile-bridge.exe is empty"
+          }
+          Write-Host "Verified Profile Bridge artifact: $($artifact.FullName) ($($artifact.Length) bytes)"
