@@ -10,8 +10,15 @@ pub enum CertificationOutcome {
     Prohibited,
 }
 pub struct MatrixDigest;
+pub struct DeviceGrantEvent;
 pub struct DeviceAuthorizationRegistry;
 pub struct PreverifiedSignatureEvidence;
+
+impl PreverifiedSignatureEvidence {
+    fn approves(&self) -> bool {
+        true
+    }
+}
 pub struct UpdateController;
 pub enum UpdateState {
     AwaitingHealth,
@@ -20,6 +27,7 @@ pub enum Error {
     StaleGrantVersion,
     GrantRevoked,
     RollbackUnavailable,
+    VerificationEvidenceMismatch,
 }
 
 pub fn evaluate_certification() -> CertificationOutcome {
@@ -27,6 +35,10 @@ pub fn evaluate_certification() -> CertificationOutcome {
 }
 
 impl DeviceAuthorizationRegistry {
+    pub fn history(&self) -> &[DeviceGrantEvent] {
+        &[]
+    }
+
     pub fn authorize_unwrap(&self) -> Result<(), Error> {
         Ok(())
     }

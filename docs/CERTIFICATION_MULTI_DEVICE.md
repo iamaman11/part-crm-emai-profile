@@ -69,7 +69,9 @@ tenant + profile + generation + device
 New grants start at version 1. Grant and revoke operations require the exact
 current version and strictly non-regressing time. Revocation advances the
 version and immediately denies new authorization using either the current
-revoked version or any stale version.
+revoked version or any stale version. Every successful grant, revoke and regrant
+appends an immutable in-memory event snapshot so prior versions remain available
+to repository-local audit tests instead of being reduced to a counter.
 
 A revoked device can be explicitly regranted only with the exact revoked version;
 the new active grant receives another monotonic version. A second synthetic
@@ -85,11 +87,14 @@ A release candidate contains:
 - bounded opaque release ID;
 - non-zero monotonic release version;
 - exact non-zero content digest;
-- opaque evidence that an external verifier already approved the signature.
+- opaque evidence that an external verifier already approved the exact release
+  ID, version and content digest.
 
 The pure domain does not parse certificates or verify signatures. The
 `PreverifiedSignatureEvidence` name is intentional: production adapters must
-supply the proof only after trusted signature and policy verification.
+supply the proof only after trusted signature and policy verification. The domain
+then rejects evidence whose approved release ID, version or content digest differs
+from the candidate, preventing reuse of one opaque approval for another artifact.
 
 Staging requires exact content identity and a version greater than every release
 previously seen by the controller. Activation is side-by-side and enters

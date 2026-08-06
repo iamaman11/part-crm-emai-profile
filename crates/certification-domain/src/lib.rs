@@ -447,10 +447,28 @@ impl DeviceGrantSnapshot {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceGrantEvent {
+    key: DeviceGrantKey,
+    snapshot: DeviceGrantSnapshot,
+}
+
+impl DeviceGrantEvent {
+    #[must_use]
+    pub const fn key(&self) -> &DeviceGrantKey {
+        &self.key
+    }
+
+    #[must_use]
+    pub const fn snapshot(&self) -> &DeviceGrantSnapshot {
+        &self.snapshot
+    }
+}
+
 #[derive(Default)]
 pub struct DeviceAuthorizationRegistry {
     grants: BTreeMap<DeviceGrantKey, DeviceGrantSnapshot>,
-    history_events: u64,
+    history: Vec<DeviceGrantEvent>,
 }
 
 impl DeviceAuthorizationRegistry {
@@ -491,11 +509,11 @@ impl DeviceAuthorizationRegistry {
                 }
             }
         };
-        self.grants.insert(key, next.clone());
-        self.history_events = self
-            .history_events
-            .checked_add(1)
-            .ok_or(CertificationError::CounterOverflow)?;
+        self.grants.insert(key.clone(), next.clone());
+        self.history.push(DeviceGrantEvent {
+            key,
+            snapshot: next.clone(),
+        });
         Ok(next)
     }
 
@@ -527,11 +545,16 @@ impl DeviceAuthorizationRegistry {
             changed_at: observed_at,
         };
         self.grants.insert(key.clone(), next.clone());
-        self.history_events = self
-            .history_events
-            .checked_add(1)
-            .ok_or(CertificationError::CounterOverflow)?;
+        self.history.push(DeviceGrantEvent {
+            key: key.clone(),
+            snapshot: next.clone(),
+        });
         Ok(next)
+    }
+
+    #[must_use]
+    pub fn history(&self) -> &[DeviceGrantEvent] {
+        &self.history
     }
 
     pub fn authorize_unwrap(
@@ -565,7 +588,7 @@ impl DeviceAuthorizationRegistry {
             self.grants.len(),
             active,
             revoked,
-            self.history_events,
+            self.history.len(),
         )
     }
 }
@@ -619,17 +642,29 @@ impl VerificationEvidenceId {
 pub struct PreverifiedSignatureEvidence {
     verifier: String,
     evidence_id: VerificationEvidenceId,
+    release_id: ReleaseId,
+    release_version: u64,
+    content_digest: ContentDigest,
 }
 
 impl PreverifiedSignatureEvidence {
     pub fn new(
         verifier: impl Into<String>,
         evidence_id: VerificationEvidenceId,
+        release_id: ReleaseId,
+        release_version: u64,
+        content_digest: ContentDigest,
     ) -> Result<Self, CertificationError> {
+        if release_version == 0 {
+            return Err(CertificationError::InvalidReleaseVersion);
+        }
         let verifier = parse_name(verifier.into())?;
         Ok(Self {
             verifier,
             evidence_id,
+            release_id,
+            release_version,
+            content_digest,
         })
     }
 
@@ -641,6 +676,32 @@ impl PreverifiedSignatureEvidence {
     #[must_use]
     pub const fn evidence_id(&self) -> &VerificationEvidenceId {
         &self.evidence_id
+    }
+
+    #[must_use]
+    pub const fn release_id(&self) -> &ReleaseId {
+        &self.release_id
+    }
+
+    #[must_use]
+    pub const fn release_version(&self) -> u64 {
+        self.release_version
+    }
+
+    #[must_use]
+    pub const fn content_digest(&self) -> &ContentDigest {
+        &self.content_digest
+    }
+
+    fn approves(
+        &self,
+        release_id: &ReleaseId,
+        release_version: u64,
+        content_digest: &ContentDigest,
+    ) -> bool {
+        self.release_id == *release_id
+            && self.release_version == release_version
+            && self.content_digest == *content_digest
     }
 }
 
@@ -661,6 +722,9 @@ impl ReleaseCandidate {
     ) -> Result<Self, CertificationError> {
         if version == 0 {
             return Err(CertificationError::InvalidReleaseVersion);
+        }
+        if !verification.approves(&release_id, version, &content_digest) {
+            return Err(CertificationError::VerificationEvidenceMismatch);
         }
         Ok(Self {
             release_id,
@@ -857,6 +921,7 @@ pub enum CertificationError {
     MissingActiveRelease,
     ReleaseIdentityMismatch,
     RollbackUnavailable,
+    VerificationEvidenceMismatch,
 }
 
 impl fmt::Display for CertificationError {
@@ -887,6 +952,9 @@ impl fmt::Display for CertificationError {
             Self::MissingActiveRelease => "active release is missing",
             Self::ReleaseIdentityMismatch => "release identity does not match",
             Self::RollbackUnavailable => "rollback release is unavailable",
+            Self::VerificationEvidenceMismatch => {
+                "signature verification evidence does not match the release"
+            }
         })
     }
 }
@@ -941,15 +1009,16 @@ mod tests {
     }
 
     fn candidate(id: &str, version: u64, byte: u8) -> Result<ReleaseCandidate, CertificationError> {
-        ReleaseCandidate::new(
-            ReleaseId::parse(id)?,
+        let release_id = ReleaseId::parse(id)?;
+        let content_digest = ContentDigest::new([byte; 32])?;
+        let verification = PreverifiedSignatureEvidence::new(
+            "synthetic_verifier_01",
+            VerificationEvidenceId::parse(format!("evidence_{id}"))?,
+            release_id.clone(),
             version,
-            ContentDigest::new([byte; 32])?,
-            PreverifiedSignatureEvidence::new(
-                "synthetic_verifier_01",
-                VerificationEvidenceId::parse(format!("evidence_{id}"))?,
-            )?,
-        )
+            content_digest.clone(),
+        )?;
+        ReleaseCandidate::new(release_id, version, content_digest, verification)
     }
 
     #[test]
@@ -961,7 +1030,10 @@ mod tests {
         let reverse = evaluate_certification(&policy()?, &[second, first])?;
         assert_eq!(forward.outcome(), CertificationOutcome::Stable);
         assert_eq!(forward.matrix_digest(), reverse.matrix_digest());
-        assert_eq!(forward.matrix_digest().to_hex().len(), 64);
+        assert_eq!(
+            forward.matrix_digest().to_hex(),
+            "6667869272890abc935bdfe135c849e03bcb1ba5c93cd76f588dc390fae9f765"
+        );
         Ok(())
     }
 
@@ -1055,6 +1127,14 @@ mod tests {
         let regranted = registry.grant(first_device.clone(), 2, UnixMillis::new(4))?;
         assert_eq!(regranted.version(), 3);
         registry.authorize_unwrap(&first_device, 3)?;
+        assert_eq!(registry.history().len(), 4);
+        assert_eq!(registry.history()[0].snapshot().version(), 1);
+        assert_eq!(
+            registry.history()[2].snapshot().status(),
+            DeviceGrantStatus::Revoked
+        );
+        assert_eq!(registry.history()[3].snapshot().version(), 3);
+        assert_eq!(registry.history()[3].key(), &first_device);
         Ok(())
     }
 
@@ -1082,6 +1162,26 @@ mod tests {
         assert_eq!(
             controller.stage(candidate("release_01JSTEP10B", 2, 0x22)?, &second_digest),
             Err(CertificationError::StaleReleaseVersion)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn update_evidence_is_bound_to_exact_release_identity() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let release_id = ReleaseId::parse("release_01JSTEP10BOUND")?;
+        let expected_digest = ContentDigest::new([0x66; 32])?;
+        let wrong_digest = ContentDigest::new([0x67; 32])?;
+        let verification = PreverifiedSignatureEvidence::new(
+            "synthetic_verifier_01",
+            VerificationEvidenceId::parse("evidence_release_01JSTEP10BOUND")?,
+            release_id.clone(),
+            7,
+            wrong_digest,
+        )?;
+        assert_eq!(
+            ReleaseCandidate::new(release_id, 7, expected_digest, verification),
+            Err(CertificationError::VerificationEvidenceMismatch)
         );
         Ok(())
     }
