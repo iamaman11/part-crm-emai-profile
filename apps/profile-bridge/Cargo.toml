@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 bridge-domain.workspace = true
 profile-platform-primitives.workspace = true
+runtime-bundle-domain.workspace = true
 
 [lints]
 workspace = true
