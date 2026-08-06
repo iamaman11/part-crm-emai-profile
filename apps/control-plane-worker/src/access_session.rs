@@ -170,6 +170,8 @@ pub fn problem(
         problem_type: match code {
             "conflict" => "urn:part-crm:problem:conflict",
             "invalid_request" => "urn:part-crm:problem:invalid-request",
+            "internal_failure" => "urn:part-crm:problem:internal-failure",
+            "forbidden" => "urn:part-crm:problem:forbidden",
             _ => "urn:part-crm:problem:not-found",
         },
         title,
@@ -191,4 +193,18 @@ pub fn correlation_hint(request: &Request) -> String {
         .ok()
         .flatten()
         .unwrap_or_else(|| "corr_unknown".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::problem;
+
+    #[test]
+    fn problem_type_matches_stable_code() -> Result<(), Box<dyn std::error::Error>> {
+        let internal = problem("corr_problem_test", 500, "internal_failure", "Internal Failure")?;
+        assert_eq!(internal.status_code(), 500);
+        let forbidden = problem("corr_problem_test", 403, "forbidden", "Forbidden")?;
+        assert_eq!(forbidden.status_code(), 403);
+        Ok(())
+    }
 }
