@@ -39,7 +39,8 @@ impl ClientRecord {
         display_name: impl Into<String>,
     ) -> Result<Self, ClientError> {
         let display_name = display_name.into();
-        if display_name.trim().is_empty() || display_name.len() > MAX_DISPLAY_NAME_LENGTH {
+        let display_name = display_name.trim();
+        if display_name.is_empty() || display_name.len() > MAX_DISPLAY_NAME_LENGTH {
             return Err(ClientError::InvalidDisplayName);
         }
 
@@ -48,7 +49,7 @@ impl ClientRecord {
             client_id,
             version: AggregateVersion::INITIAL,
             kind,
-            display_name,
+            display_name: display_name.to_owned(),
             status: ClientStatus::Active,
         })
     }
@@ -87,11 +88,12 @@ impl ClientRecord {
         if self.status != ClientStatus::Active {
             return Err(ClientError::InvalidStatusTransition);
         }
-        self.status = ClientStatus::Archived;
-        self.version = self
+        let next_version = self
             .version
             .next()
             .map_err(|_| ClientError::VersionOverflow)?;
+        self.status = ClientStatus::Archived;
+        self.version = next_version;
         Ok(())
     }
 }
@@ -131,7 +133,8 @@ impl ProfileClientAssignment {
         }
 
         let reason = reason.into();
-        if reason.trim().is_empty() || reason.len() > MAX_REASON_LENGTH {
+        let reason = reason.trim();
+        if reason.is_empty() || reason.len() > MAX_REASON_LENGTH {
             return Err(AssignmentError::InvalidReason);
         }
 
@@ -143,7 +146,7 @@ impl ProfileClientAssignment {
             assigned_by,
             assigned_at,
             closed_at: None,
-            reason,
+            reason: reason.to_owned(),
         })
     }
 
@@ -234,8 +237,13 @@ impl std::error::Error for AssignmentError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{AssignmentError, ClientKind, ClientRecord, ClientStatus, ProfileClientAssignment};
-    use profile_platform_primitives::{ActorId, ClientId, ProfileId, TenantId, UnixMillis};
+    use super::{
+        AssignmentError, ClientError, ClientKind, ClientRecord, ClientStatus,
+        ProfileClientAssignment,
+    };
+    use profile_platform_primitives::{
+        ActorId, AggregateVersion, ClientId, ProfileId, TenantId, UnixMillis,
+    };
 
     fn active_client() -> Result<ClientRecord, Box<dyn std::error::Error>> {
         Ok(ClientRecord::create(
@@ -244,6 +252,30 @@ mod tests {
             ClientKind::Person,
             "Synthetic Client",
         )?)
+    }
+
+    #[test]
+    fn creation_normalizes_bounded_display_name()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = ClientRecord::create(
+            TenantId::parse("tenant_01JCLIENT")?,
+            ClientId::parse("client_02JCLIENT")?,
+            ClientKind::Person,
+            "  Synthetic Client  ",
+        )?;
+        assert_eq!(client.display_name(), "Synthetic Client");
+        Ok(())
+    }
+
+    #[test]
+    fn archive_overflow_does_not_partially_mutate_client()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut client = active_client()?;
+        client.version = AggregateVersion::new(u64::MAX)?;
+        assert_eq!(client.archive(), Err(ClientError::VersionOverflow));
+        assert_eq!(client.status(), ClientStatus::Active);
+        assert_eq!(client.version().value(), u64::MAX);
+        Ok(())
     }
 
     #[test]
@@ -280,7 +312,8 @@ mod tests {
     }
 
     #[test]
-    fn closing_assignment_preserves_history() -> Result<(), Box<dyn std::error::Error>> {
+    fn closing_assignment_preserves_normalized_history()
+    -> Result<(), Box<dyn std::error::Error>> {
         let client = active_client()?;
         let mut assignment = ProfileClientAssignment::assign(
             client.tenant_id(),
@@ -288,7 +321,7 @@ mod tests {
             &client,
             ActorId::parse("actor_01JCLIENT")?,
             UnixMillis::new(10),
-            "initial assignment",
+            "  initial assignment  ",
         )?;
         assignment.close(UnixMillis::new(20))?;
         assert_eq!(assignment.reason(), "initial assignment");
