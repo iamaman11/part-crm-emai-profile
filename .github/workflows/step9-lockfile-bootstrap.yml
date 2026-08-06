@@ -1,6 +1,7 @@
 name: Step 9 Lockfile Bootstrap
 
 on:
+  pull_request:
   push:
     branches:
       - repository-step-9-encrypted-cloud-generations
