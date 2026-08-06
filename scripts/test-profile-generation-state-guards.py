@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove D1 rejects live profile rows without an active generation."""
+"""Prove D1 rejects invalid active generation and live profile states."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def expect_integrity_error(operation: Callable[[], object], fragment: str) -> No
                 f"expected integrity error containing {fragment!r}, got {error!r}"
             ) from error
     else:
-        raise AssertionError("invalid live profile state unexpectedly passed")
+        raise AssertionError("invalid profile state unexpectedly passed")
 
 
 def profile_row(connection: sqlite3.Connection) -> tuple[str, str | None, int]:
@@ -102,6 +102,21 @@ def main() -> None:
     connection = open_database()
     try:
         seed_profile(connection)
+
+        expect_integrity_error(
+            lambda: connection.execute(
+                """
+                UPDATE browser_profiles
+                SET active_generation_id = 'bad/generation',
+                    version = 2, updated_at_ms = 25
+                WHERE tenant_id = ? AND profile_id = ?
+                """,
+                (TENANT_ID, PROFILE_ID),
+            ),
+            "invalid_active_generation_id",
+        )
+        connection.rollback()
+        assert profile_row(connection) == ("DRAFT", None, 1)
 
         expect_integrity_error(
             lambda: connection.execute(
@@ -169,12 +184,26 @@ def main() -> None:
         )
         connection.rollback()
 
+        expect_integrity_error(
+            lambda: connection.execute(
+                """
+                INSERT INTO browser_profiles (
+                    tenant_id, profile_id, status, active_generation_id, version,
+                    created_by_actor_id, updated_by_actor_id, created_at_ms, updated_at_ms
+                ) VALUES (?, 'profile_quality_bad_id', 'READY', 'bad generation', 1, ?, ?, 50, 50)
+                """,
+                (TENANT_ID, OWNER_ID, OWNER_ID),
+            ),
+            "invalid_active_generation_id",
+        )
+        connection.rollback()
+
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
         connection.close()
 
-    print("D1 live profile generation state guards passed.")
+    print("D1 active generation and live profile state guards passed.")
 
 
 if __name__ == "__main__":
