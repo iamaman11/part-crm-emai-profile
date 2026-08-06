@@ -23,7 +23,7 @@ SPEC.loader.exec_module(MODULE)
 
 AttestationError = MODULE.AttestationError
 claim_body = MODULE.claim_body
-load_terminal_records = MODULE.load_terminal_records
+load_active_terminal_records = MODULE.load_active_terminal_records
 verify_tree = MODULE.verify_tree
 
 REPOSITORY = "acme/profile-platform"
@@ -59,14 +59,16 @@ def terminal_data(
     reference: str,
     reviewed_at: str = TIMESTAMP,
     github_login: str = REVIEWER,
+    observed_at: str = "2026-08-06T14:39:00Z",
+    supersedes: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    value: dict[str, Any] = {
         "artifact_digests_sha256": ["11" * 32],
         "checks": [{"code": "synthetic_check", "outcome": "pass"}],
         "evidence_id": evidence_id,
         "gate": gate,
         "limitations": ["synthetic_fixture_only"],
-        "observed_at": "2026-08-06T14:39:00Z",
+        "observed_at": observed_at,
         "references": ["review-report:sha256:" + "22" * 32],
         "review": {
             "github_login": github_login,
@@ -80,6 +82,9 @@ def terminal_data(
         },
         "status": status,
     }
+    if supersedes is not None:
+        value["supersedes"] = supersedes
+    return value
 
 
 def pending_data() -> dict[str, Any]:
@@ -102,7 +107,10 @@ def write_records(root: Path, values: list[dict[str, Any]]) -> None:
     directory.mkdir(parents=True)
     for value in values:
         path = directory / f"{value['evidence_id']}.json"
-        path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(value, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
 
 def response_for(record: object, kind: str) -> dict[str, Any]:
@@ -158,7 +166,7 @@ def main() -> int:
                 ),
             ]
             write_records(root, records_data)
-            records = load_terminal_records(root)
+            records = load_active_terminal_records(root)
             by_id = {record.evidence_id: record for record in records}
             Handler.responses = {
                 "/repos/acme/profile-platform/issues/comments/101": (
@@ -177,9 +185,8 @@ def main() -> int:
             verify_tree(root, REPOSITORY, api_base, None, False)
             assert len(Handler.requests_seen) == 3
 
-            issue_payload = Handler.responses[
-                "/repos/acme/profile-platform/issues/comments/101"
-            ][1]
+            issue_path = "/repos/acme/profile-platform/issues/comments/101"
+            issue_payload = Handler.responses[issue_path][1]
             original_issue_payload = json.loads(json.dumps(issue_payload))
 
             issue_payload["body"] = "external-evidence-review-v1\nwrong=true"
@@ -187,31 +194,27 @@ def main() -> int:
                 lambda: verify_tree(root, REPOSITORY, api_base, None, False),
                 "wrong claim body",
             )
-            Handler.responses[
-                "/repos/acme/profile-platform/issues/comments/101"
-            ] = (200, json.loads(json.dumps(original_issue_payload)))
+            Handler.responses[issue_path] = (
+                200,
+                json.loads(json.dumps(original_issue_payload)),
+            )
 
-            Handler.responses[
-                "/repos/acme/profile-platform/issues/comments/101"
-            ][1]["user"]["login"] = "another-reviewer"
+            Handler.responses[issue_path][1]["user"]["login"] = "another-reviewer"
             expect_failure(
                 lambda: verify_tree(root, REPOSITORY, api_base, None, False),
                 "wrong author",
             )
-            Handler.responses[
-                "/repos/acme/profile-platform/issues/comments/101"
-            ] = (200, json.loads(json.dumps(original_issue_payload)))
+            Handler.responses[issue_path] = (
+                200,
+                json.loads(json.dumps(original_issue_payload)),
+            )
 
-            Handler.responses[
-                "/repos/acme/profile-platform/issues/comments/101"
-            ][1]["updated_at"] = "2026-08-06T14:41:00Z"
+            Handler.responses[issue_path][1]["updated_at"] = "2026-08-06T14:41:00Z"
             expect_failure(
                 lambda: verify_tree(root, REPOSITORY, api_base, None, False),
                 "edited timestamp",
             )
-            Handler.responses[
-                "/repos/acme/profile-platform/issues/comments/101"
-            ] = (404, {"message": "Not Found"})
+            Handler.responses[issue_path] = (404, {"message": "Not Found"})
             expect_failure(
                 lambda: verify_tree(root, REPOSITORY, api_base, None, False),
                 "deleted review",
@@ -223,6 +226,39 @@ def main() -> int:
             before = len(Handler.requests_seen)
             verify_tree(pending_root, None, api_base, None, False)
             assert len(Handler.requests_seen) == before
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recovery_root = Path(temp_dir)
+            old_id = "ev-20260806-old-invalid-review"
+            old_record = terminal_data(
+                old_id,
+                "product_license",
+                "passed",
+                "https://github.com/acme/profile-platform/issues/9#issuecomment-404",
+                observed_at="2026-08-06T14:38:00Z",
+            )
+            active_record = terminal_data(
+                "ev-20260806-active-replacement",
+                "product_license",
+                "passed",
+                "https://github.com/acme/profile-platform/issues/9#issuecomment-505",
+                supersedes=old_id,
+            )
+            write_records(recovery_root, [old_record, active_record])
+            active = load_active_terminal_records(recovery_root)
+            assert [record.evidence_id for record in active] == [
+                "ev-20260806-active-replacement"
+            ]
+            Handler.responses = {
+                "/repos/acme/profile-platform/issues/comments/505": (
+                    200,
+                    response_for(active[0], "issue_comment"),
+                )
+            }
+            before = len(Handler.requests_seen)
+            verify_tree(recovery_root, REPOSITORY, api_base, None, False)
+            requested = Handler.requests_seen[before:]
+            assert requested == ["/repos/acme/profile-platform/issues/comments/505"]
 
         with tempfile.TemporaryDirectory() as temp_dir:
             foreign_root = Path(temp_dir)
