@@ -1,7 +1,5 @@
 use crate::ProcessControlPort;
-use bridge_domain::{
-    BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort,
-};
+use bridge_domain::{BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort};
 use profile_platform_primitives::SessionId;
 use runtime_bundle_domain::{
     InventoryError, RuntimeInventory, RuntimeManifest, RuntimeManifestError, Sha256Digest,
@@ -152,10 +150,7 @@ fn rollback_process<P: ProcessControlPort>(
 ) -> RuntimeLaunchError {
     match process.force_terminate(session_id) {
         Ok(()) => RuntimeLaunchError::Camouhost(source),
-        Err(rollback) => RuntimeLaunchError::Rollback {
-            source,
-            rollback,
-        },
+        Err(rollback) => RuntimeLaunchError::Rollback { source, rollback },
     }
 }
 
@@ -186,9 +181,7 @@ impl std::error::Error for RuntimeLaunchError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ApprovedRuntimeBundle, RuntimeBundleApprovalError, RuntimeSessionOrchestrator,
-    };
+    use super::{ApprovedRuntimeBundle, RuntimeBundleApprovalError, RuntimeSessionOrchestrator};
     use crate::{FakeCamouhost, FakeProcessControl, ProcessAction};
     use profile_platform_primitives::SessionId;
     use runtime_bundle_domain::{
@@ -210,11 +203,7 @@ mod tests {
             entrypoint.clone(),
             calculated.clone(),
         )?;
-        let inventory = RuntimeInventory::new([InventoryEntry::new(
-            entrypoint,
-            10,
-            digest('b')?,
-        )])?;
+        let inventory = RuntimeInventory::new([InventoryEntry::new(entrypoint, 10, digest('b')?)])?;
         Ok(ApprovedRuntimeBundle::validate(
             manifest,
             inventory,
@@ -223,8 +212,8 @@ mod tests {
     }
 
     #[test]
-    fn digest_mismatch_is_rejected_before_process_spawn(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn digest_mismatch_is_rejected_before_process_spawn() -> Result<(), Box<dyn std::error::Error>>
+    {
         let expected = digest('a')?;
         let entrypoint = BundleRelativePath::parse("camouhost/main.py")?;
         let manifest = RuntimeManifest::new(
@@ -234,11 +223,7 @@ mod tests {
             entrypoint.clone(),
             expected,
         )?;
-        let inventory = RuntimeInventory::new([InventoryEntry::new(
-            entrypoint,
-            10,
-            digest('b')?,
-        )])?;
+        let inventory = RuntimeInventory::new([InventoryEntry::new(entrypoint, 10, digest('b')?)])?;
         let result = ApprovedRuntimeBundle::validate(manifest, inventory, &digest('c')?);
         assert_eq!(
             result,
@@ -276,24 +261,14 @@ mod tests {
     }
 
     #[test]
-    fn approved_bundle_launches_and_closes_exact_session(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn approved_bundle_launches_and_closes_exact_session() -> Result<(), Box<dyn std::error::Error>>
+    {
         let bundle = approved_bundle()?;
         let session_id = SessionId::parse("session_01JSTEP7RUNTIME")?;
         let mut process = FakeProcessControl::default();
         let mut camouhost = FakeCamouhost::default();
-        RuntimeSessionOrchestrator::launch(
-            &bundle,
-            &session_id,
-            &mut process,
-            &mut camouhost,
-        )?;
-        RuntimeSessionOrchestrator::close(
-            &bundle,
-            &session_id,
-            &mut process,
-            &mut camouhost,
-        )?;
+        RuntimeSessionOrchestrator::launch(&bundle, &session_id, &mut process, &mut camouhost)?;
+        RuntimeSessionOrchestrator::close(&bundle, &session_id, &mut process, &mut camouhost)?;
         assert_eq!(
             process.actions(),
             [
