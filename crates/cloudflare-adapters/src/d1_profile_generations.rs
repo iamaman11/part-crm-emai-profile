@@ -3,7 +3,7 @@ use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, GenerationId, ProfileId, TenantScope,
 };
 use serde::Deserialize;
-use worker::d1::{D1Database, D1Result};
+use worker::d1::{D1Database, D1PreparedStatement, D1Result};
 use worker::{Error, Result, query};
 
 const REGISTER_COMMAND: &str = r#"
@@ -142,6 +142,16 @@ impl GenerationProjection {
     }
 }
 
+struct CommandEvidence<'a> {
+    command_name: &'static str,
+    result_code: &'static str,
+    resource_id: &'a str,
+    aggregate_type: &'static str,
+    aggregate_id: &'a str,
+    aggregate_version: i64,
+    event_type: &'static str,
+}
+
 pub struct D1ProfileGenerationRepository {
     database: D1Database,
 }
@@ -160,58 +170,35 @@ impl D1ProfileGenerationRepository {
         validate_object_key(mutation.object_key)?;
         validate_digest(mutation.metadata_digest)?;
         validate_digest(mutation.container_digest)?;
-        let tenant_id = actor.tenant_scope().tenant_id().as_str();
-        let actor_id = actor.actor_id().as_str();
         let now = sqlite_integer(mutation.envelope.now.value())?;
-        let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
-        let resource_id = mutation.generation_id.as_str();
-        let statements = vec![
-            query!(
-                &self.database,
-                REGISTER_COMMAND,
-                tenant_id,
-                mutation.envelope.idempotency_key.as_str(),
-                actor_id,
-                mutation.profile_id.as_str(),
-                resource_id,
-                mutation.object_key,
-                mutation.metadata_digest,
-                mutation.container_digest,
-                now
-            )?,
-            idempotency_statement(
-                &self.database,
-                tenant_id,
-                actor_id,
-                "profile_generation.register",
-                "registered",
-                resource_id,
-                &mutation.envelope,
-                now,
-                expires_at,
-            )?,
-            audit_statement(
-                &self.database,
-                tenant_id,
-                actor.correlation_id().as_str(),
-                actor_id,
-                "profile_generation.register",
-                resource_id,
-                "registered",
-                &mutation.envelope,
-                now,
-            )?,
-            outbox_statement(
-                &self.database,
-                tenant_id,
-                mutation.profile_id.as_str(),
-                1,
-                "profile_generation.registered.v1",
-                &mutation.envelope,
-                now,
-            )?,
-        ];
-        self.database.batch(statements).await
+        let command = query!(
+            &self.database,
+            REGISTER_COMMAND,
+            actor.tenant_scope().tenant_id().as_str(),
+            mutation.envelope.idempotency_key.as_str(),
+            actor.actor_id().as_str(),
+            mutation.profile_id.as_str(),
+            mutation.generation_id.as_str(),
+            mutation.object_key,
+            mutation.metadata_digest,
+            mutation.container_digest,
+            now
+        )?;
+        self.execute(
+            actor,
+            &mutation.envelope,
+            command,
+            CommandEvidence {
+                command_name: "profile_generation.register",
+                result_code: "registered",
+                resource_id: mutation.generation_id.as_str(),
+                aggregate_type: "profile_generation",
+                aggregate_id: mutation.generation_id.as_str(),
+                aggregate_version: 1,
+                event_type: "profile_generation.registered.v1",
+            },
+        )
+        .await
     }
 
     pub async fn verify(
@@ -220,59 +207,35 @@ impl D1ProfileGenerationRepository {
         mutation: VerifyGenerationMutation<'_>,
     ) -> Result<Vec<D1Result>> {
         validate_verification_reference(mutation.verification_reference)?;
-        let tenant_id = actor.tenant_scope().tenant_id().as_str();
-        let actor_id = actor.actor_id().as_str();
         let now = sqlite_integer(mutation.envelope.now.value())?;
-        let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
-        let expected_version = sqlite_version(mutation.expected_generation_version)?;
         let aggregate_version = next_version_value(mutation.expected_generation_version)?;
-        let resource_id = mutation.generation_id.as_str();
-        let statements = vec![
-            query!(
-                &self.database,
-                VERIFY_COMMAND,
-                tenant_id,
-                mutation.envelope.idempotency_key.as_str(),
-                actor_id,
-                mutation.profile_id.as_str(),
-                resource_id,
-                expected_version,
-                mutation.verification_reference,
-                now
-            )?,
-            idempotency_statement(
-                &self.database,
-                tenant_id,
-                actor_id,
-                "profile_generation.verify",
-                "verified",
-                resource_id,
-                &mutation.envelope,
-                now,
-                expires_at,
-            )?,
-            audit_statement(
-                &self.database,
-                tenant_id,
-                actor.correlation_id().as_str(),
-                actor_id,
-                "profile_generation.verify",
-                resource_id,
-                "verified",
-                &mutation.envelope,
-                now,
-            )?,
-            outbox_statement(
-                &self.database,
-                tenant_id,
-                mutation.profile_id.as_str(),
+        let command = query!(
+            &self.database,
+            VERIFY_COMMAND,
+            actor.tenant_scope().tenant_id().as_str(),
+            mutation.envelope.idempotency_key.as_str(),
+            actor.actor_id().as_str(),
+            mutation.profile_id.as_str(),
+            mutation.generation_id.as_str(),
+            sqlite_version(mutation.expected_generation_version)?,
+            mutation.verification_reference,
+            now
+        )?;
+        self.execute(
+            actor,
+            &mutation.envelope,
+            command,
+            CommandEvidence {
+                command_name: "profile_generation.verify",
+                result_code: "verified",
+                resource_id: mutation.generation_id.as_str(),
+                aggregate_type: "profile_generation",
+                aggregate_id: mutation.generation_id.as_str(),
                 aggregate_version,
-                "profile_generation.verified.v1",
-                &mutation.envelope,
-                now,
-            )?,
-        ];
-        self.database.batch(statements).await
+                event_type: "profile_generation.verified.v1",
+            },
+        )
+        .await
     }
 
     pub async fn activate(
@@ -280,58 +243,34 @@ impl D1ProfileGenerationRepository {
         actor: &ActorContext,
         mutation: ActivateGenerationMutation<'_>,
     ) -> Result<Vec<D1Result>> {
-        let tenant_id = actor.tenant_scope().tenant_id().as_str();
-        let actor_id = actor.actor_id().as_str();
         let now = sqlite_integer(mutation.envelope.now.value())?;
-        let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
-        let expected_version = sqlite_version(mutation.expected_profile_version)?;
         let aggregate_version = next_version_value(mutation.expected_profile_version)?;
-        let resource_id = mutation.generation_id.as_str();
-        let statements = vec![
-            query!(
-                &self.database,
-                ACTIVATE_COMMAND,
-                tenant_id,
-                mutation.envelope.idempotency_key.as_str(),
-                actor_id,
-                mutation.profile_id.as_str(),
-                resource_id,
-                expected_version,
-                now
-            )?,
-            idempotency_statement(
-                &self.database,
-                tenant_id,
-                actor_id,
-                "profile_generation.activate",
-                "activated",
-                resource_id,
-                &mutation.envelope,
-                now,
-                expires_at,
-            )?,
-            audit_statement(
-                &self.database,
-                tenant_id,
-                actor.correlation_id().as_str(),
-                actor_id,
-                "profile_generation.activate",
-                resource_id,
-                "activated",
-                &mutation.envelope,
-                now,
-            )?,
-            outbox_statement(
-                &self.database,
-                tenant_id,
-                mutation.profile_id.as_str(),
+        let command = query!(
+            &self.database,
+            ACTIVATE_COMMAND,
+            actor.tenant_scope().tenant_id().as_str(),
+            mutation.envelope.idempotency_key.as_str(),
+            actor.actor_id().as_str(),
+            mutation.profile_id.as_str(),
+            mutation.generation_id.as_str(),
+            sqlite_version(mutation.expected_profile_version)?,
+            now
+        )?;
+        self.execute(
+            actor,
+            &mutation.envelope,
+            command,
+            CommandEvidence {
+                command_name: "profile_generation.activate",
+                result_code: "activated",
+                resource_id: mutation.generation_id.as_str(),
+                aggregate_type: "profile",
+                aggregate_id: mutation.profile_id.as_str(),
                 aggregate_version,
-                "profile.generation_activated.v1",
-                &mutation.envelope,
-                now,
-            )?,
-        ];
-        self.database.batch(statements).await
+                event_type: "profile.generation_activated.v1",
+            },
+        )
+        .await
     }
 
     pub async fn quarantine(
@@ -339,33 +278,57 @@ impl D1ProfileGenerationRepository {
         actor: &ActorContext,
         mutation: QuarantineGenerationMutation<'_>,
     ) -> Result<Vec<D1Result>> {
+        let now = sqlite_integer(mutation.envelope.now.value())?;
+        let aggregate_version = next_version_value(mutation.expected_generation_version)?;
+        let command = query!(
+            &self.database,
+            QUARANTINE_COMMAND,
+            actor.tenant_scope().tenant_id().as_str(),
+            mutation.envelope.idempotency_key.as_str(),
+            actor.actor_id().as_str(),
+            mutation.profile_id.as_str(),
+            mutation.generation_id.as_str(),
+            sqlite_version(mutation.expected_generation_version)?,
+            now
+        )?;
+        self.execute(
+            actor,
+            &mutation.envelope,
+            command,
+            CommandEvidence {
+                command_name: "profile_generation.quarantine",
+                result_code: "quarantined",
+                resource_id: mutation.generation_id.as_str(),
+                aggregate_type: "profile_generation",
+                aggregate_id: mutation.generation_id.as_str(),
+                aggregate_version,
+                event_type: "profile_generation.quarantined.v1",
+            },
+        )
+        .await
+    }
+
+    async fn execute(
+        &self,
+        actor: &ActorContext,
+        envelope: &MutationEnvelope<'_>,
+        command: D1PreparedStatement,
+        evidence: CommandEvidence<'_>,
+    ) -> Result<Vec<D1Result>> {
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
-        let now = sqlite_integer(mutation.envelope.now.value())?;
-        let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
-        let expected_version = sqlite_version(mutation.expected_generation_version)?;
-        let aggregate_version = next_version_value(mutation.expected_generation_version)?;
-        let resource_id = mutation.generation_id.as_str();
+        let now = sqlite_integer(envelope.now.value())?;
+        let expires_at = sqlite_integer(envelope.idempotency_expires_at.value())?;
         let statements = vec![
-            query!(
-                &self.database,
-                QUARANTINE_COMMAND,
-                tenant_id,
-                mutation.envelope.idempotency_key.as_str(),
-                actor_id,
-                mutation.profile_id.as_str(),
-                resource_id,
-                expected_version,
-                now
-            )?,
+            command,
             idempotency_statement(
                 &self.database,
                 tenant_id,
                 actor_id,
-                "profile_generation.quarantine",
-                "quarantined",
-                resource_id,
-                &mutation.envelope,
+                evidence.command_name,
+                evidence.result_code,
+                evidence.resource_id,
+                envelope,
                 now,
                 expires_at,
             )?,
@@ -374,19 +337,20 @@ impl D1ProfileGenerationRepository {
                 tenant_id,
                 actor.correlation_id().as_str(),
                 actor_id,
-                "profile_generation.quarantine",
-                resource_id,
-                "quarantined",
-                &mutation.envelope,
+                evidence.command_name,
+                evidence.resource_id,
+                evidence.result_code,
+                envelope,
                 now,
             )?,
             outbox_statement(
                 &self.database,
                 tenant_id,
-                mutation.profile_id.as_str(),
-                aggregate_version,
-                "profile_generation.quarantined.v1",
-                &mutation.envelope,
+                evidence.aggregate_type,
+                evidence.aggregate_id,
+                evidence.aggregate_version,
+                evidence.event_type,
+                envelope,
                 now,
             )?,
         ];
@@ -530,7 +494,7 @@ fn idempotency_statement(
     envelope: &MutationEnvelope<'_>,
     now: i64,
     expires_at: i64,
-) -> Result<worker::D1PreparedStatement> {
+) -> Result<D1PreparedStatement> {
     query!(
         database,
         IDEMPOTENCY_CREATE,
@@ -557,7 +521,7 @@ fn audit_statement(
     result_code: &str,
     envelope: &MutationEnvelope<'_>,
     now: i64,
-) -> Result<worker::D1PreparedStatement> {
+) -> Result<D1PreparedStatement> {
     query!(
         database,
         AUDIT_CREATE,
@@ -577,19 +541,20 @@ fn audit_statement(
 fn outbox_statement(
     database: &D1Database,
     tenant_id: &str,
-    profile_id: &str,
+    aggregate_type: &str,
+    aggregate_id: &str,
     aggregate_version: i64,
     event_type: &str,
     envelope: &MutationEnvelope<'_>,
     now: i64,
-) -> Result<worker::D1PreparedStatement> {
+) -> Result<D1PreparedStatement> {
     query!(
         database,
         OUTBOX_CREATE,
         tenant_id,
         envelope.outbox_event_id.as_str(),
-        "profile",
-        profile_id,
+        aggregate_type,
+        aggregate_id,
         aggregate_version,
         event_type,
         envelope.payload_json,
