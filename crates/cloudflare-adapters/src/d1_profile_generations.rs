@@ -28,6 +28,13 @@ INSERT INTO profile_generation_activate_commands (
 ) VALUES (?, ?, ?, ?, ?, ?, ?)
 "#;
 
+const DEACTIVATE_COMMAND: &str = r#"
+INSERT INTO profile_generation_deactivate_commands (
+    tenant_id, command_id, command_actor_id, profile_id,
+    generation_id, expected_profile_version, executed_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+"#;
+
 const QUARANTINE_COMMAND: &str = r#"
 INSERT INTO profile_generation_quarantine_commands (
     tenant_id, command_id, command_actor_id, profile_id,
@@ -74,6 +81,13 @@ pub struct VerifyGenerationMutation<'a> {
 }
 
 pub struct ActivateGenerationMutation<'a> {
+    pub profile_id: &'a ProfileId,
+    pub generation_id: &'a GenerationId,
+    pub expected_profile_version: AggregateVersion,
+    pub envelope: MutationEnvelope<'a>,
+}
+
+pub struct DeactivateGenerationMutation<'a> {
     pub profile_id: &'a ProfileId,
     pub generation_id: &'a GenerationId,
     pub expected_profile_version: AggregateVersion,
@@ -268,6 +282,41 @@ impl D1ProfileGenerationRepository {
                 aggregate_id: mutation.profile_id.as_str(),
                 aggregate_version,
                 event_type: "profile.generation_activated.v1",
+            },
+        )
+        .await
+    }
+
+    pub async fn deactivate(
+        &self,
+        actor: &ActorContext,
+        mutation: DeactivateGenerationMutation<'_>,
+    ) -> Result<Vec<D1Result>> {
+        let now = sqlite_integer(mutation.envelope.now.value())?;
+        let aggregate_version = next_version_value(mutation.expected_profile_version)?;
+        let command = query!(
+            &self.database,
+            DEACTIVATE_COMMAND,
+            actor.tenant_scope().tenant_id().as_str(),
+            mutation.envelope.idempotency_key.as_str(),
+            actor.actor_id().as_str(),
+            mutation.profile_id.as_str(),
+            mutation.generation_id.as_str(),
+            sqlite_version(mutation.expected_profile_version)?,
+            now
+        )?;
+        self.execute(
+            actor,
+            &mutation.envelope,
+            command,
+            CommandEvidence {
+                command_name: "profile_generation.deactivate",
+                result_code: "deactivated",
+                resource_id: mutation.generation_id.as_str(),
+                aggregate_type: "profile",
+                aggregate_id: mutation.profile_id.as_str(),
+                aggregate_version,
+                event_type: "profile.generation_deactivated.v1",
             },
         )
         .await
@@ -609,6 +658,7 @@ mod tests {
         assert!(positive_version(-1).is_err());
         assert!(validate_object_key("profiles/v1/generation.enc").is_ok());
         assert!(validate_object_key("../generation.enc").is_err());
+        assert!(validate_object_key("profiles\\generation.enc").is_err());
         assert!(validate_digest(&"a".repeat(64)).is_ok());
         assert!(validate_digest(&"A".repeat(64)).is_err());
         assert!(validate_verification_reference("review:generation_01").is_ok());
