@@ -1,0 +1,29 @@
+{
+  "artifact_digests_sha256": [
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  "checks": [
+    {
+      "code": "repository_regression_scan_passed",
+      "outcome": "pass"
+    }
+  ],
+  "evidence_id": "ev-20260806-invalid-passed",
+  "gate": "legacy_credential_rotation",
+  "limitations": [],
+  "observed_at": "2026-08-06T13:00:00Z",
+  "references": [
+    "https://github.com/iamaman11/part-crm-emai-profile/issues/1"
+  ],
+  "review": {
+    "github_login": "iamaman11",
+    "review_reference": "https://github.com/iamaman11/part-crm-emai-profile/issues/1",
+    "reviewed_at": "2026-08-06T13:05:00Z"
+  },
+  "schema_version": 1,
+  "scope": {
+    "environment": "none",
+    "subject_id": "legacy-proxy-credential"
+  },
+  "status": "passed"
+}
