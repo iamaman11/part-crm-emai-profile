@@ -21,6 +21,7 @@ smoke test does not promote unrelated production gates.
 | Repository Step 5 / PR #18 | accepted | per-profile Durable Object coordinator, monotonic epoch/fencing, stale-writer and timeout uncertainty rules, authenticated explicit profile ACL, replayable storage, repairable D1 projection/outbox and release Worker packaging | remote Durable Object behavior, physical multi-device runtime, Windows Bridge, encrypted generations or production readiness |
 | Repository Step 6 / PR #21 | accepted | redacted single-use custom URI enrollment, device-bound claim, local writer epochs, process close/crash/timeout rules, versioned fake Camouhost IPC, SQLite outbox and verified Windows release executable | registry installation, production device keys, real process/job behavior, real Camouhost/Camoufox, trusted signing, multi-device or production readiness |
 | Repository Step 7 / PR #24 | accepted | deterministic content-addressed synthetic runtime bundle, safe manifest/path/extraction validation, Bridge approval before spawn, fake Camouhost exact-session lifecycle and active/clean evidence | real Camoufox, redistribution rights, production Python resolution, real legacy profiles, trusted signing, multi-device or production readiness |
+| Repository Step 8 / PR #27 | accepted | marked opaque local materialization, atomic Bridge lock-file protocol, deterministic inventory, clone-only recovery, explicit dirty/recovery states, safe quota and metadata-only support evidence | kernel advisory locks, real browser/database recovery, real legacy profiles, encrypted cloud generations, trusted signing, multi-device or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -208,6 +209,35 @@ review item; it is not a Worker runtime dependency claim.
   [`evidence/2026-08-06-repository-step-7-camouhost-runtime-bundle.md`](evidence/2026-08-06-repository-step-7-camouhost-runtime-bundle.md);
 - production credentials, network dependency resolution, real Camoufox, real
   legacy profiles or physical multi-device evidence involved: no.
+
+### Repository Step 8 Evidence
+
+- baseline: `ef8777b69ff6c89c176b79b04adecce17bc6c68e`;
+- accepted source head: `dbf3770f58c45b9f247579191b2b2d5f342c1bc8`;
+- exact-head Quality Gate run: `31068856595`, conclusion `success`;
+- exact-head Local Profile Gate run: `31068856619`, conclusion `success`;
+- exact-head Runtime Bundle regression run: `31068856601`, conclusion `success`;
+- squash merge: `eb55f67d742661019438891764c388dc19f62d96`;
+- marked absolute root and typed opaque tenant/profile/generation paths: passed;
+- symlinked roots, components, control markers and inventory entries: rejected as
+  required;
+- atomic Bridge lock acquisition, second-writer rejection and ownership-tamper
+  failure without deletion: passed;
+- browser-owned `.parentlock`, `parent.lock` and `lock` files are preserved;
+- deliberate browser-lock deletion fixture: rejected as required;
+- deterministic regular-file inventory and clone-only source/clone integrity:
+  passed;
+- graceful close preserves `DIRTY_LOCAL`; crash preserves `RECOVERY_REQUIRED`;
+- forgotten-window no-action/warn/drain/force-close progression: passed;
+- dirty, active, recovery-required and locked synced generations are excluded from
+  quota candidates;
+- support summary contains aggregate metadata only;
+- Linux and Windows dedicated lifecycle jobs passed; Profile Bridge executable,
+  Runtime Bundle and Cloudflare Worker release regressions remained green;
+- detailed report:
+  [`evidence/2026-08-06-repository-step-8-local-profile-lifecycle.md`](evidence/2026-08-06-repository-step-8-local-profile-lifecycle.md);
+- production credentials, remote resources, real browser runtime, legacy profile
+  data or physical multi-device evidence involved: no.
 
 ## 2. Required Permanent CI Evidence
 
