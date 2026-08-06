@@ -19,6 +19,15 @@ REPOSITORY_REQUIRED = {
         "fn unsafe_and_windows_reserved_paths_fail_closed",
         "fn case_colliding_inventory_is_rejected",
     ),
+    "apps/profile-bridge/src/runtime_bundle.rs": (
+        "pub struct ApprovedRuntimeBundle",
+        "validate_inventory_digest",
+        "validate_entrypoint",
+        "process.spawn(session_id)",
+        "rollback_process",
+        "fn digest_mismatch_is_rejected_before_process_spawn",
+        "fn approved_bundle_launches_and_closes_exact_session",
+    ),
     "tools/runtime_bundle.py": (
         'SOURCE_MARKER = ".synthetic-runtime-root"',
         'DESTINATION_MARKER = ".synthetic-runtime-destination"',
@@ -31,8 +40,12 @@ REPOSITORY_REQUIRED = {
     ),
     "runtime/camouhost/main.py": (
         'IPC_VERSION = "1"',
+        'PROFILE_MARKER = ".synthetic-profile-root"',
+        'ACTIVE_STATE = ".runtime-active.json"',
+        'CLEAN_STATE = ".runtime-closed-clean.json"',
         'emit(f"hello_ack|{IPC_VERSION}")',
         'emit(f"ready|{active_session}")',
+        'write_state(profile_root, CLEAN_STATE, "closed_clean", active_session)',
         'emit(f"closed|{active_session}|true")',
         "return 3 if negotiated or active_session is not None else 0",
     ),
@@ -48,6 +61,9 @@ REPOSITORY_REQUIRED = {
         "unsupported_version",
         "session_mismatch",
         "premature_eof",
+        '"state": "closed_clean"',
+        '"state": "active"',
+        "error|profile",
     ),
 }
 
@@ -64,6 +80,7 @@ NETWORK_INSTALL_MARKERS = (
 )
 STEP7_ROOTS = (
     "crates/runtime-bundle-domain",
+    "apps/profile-bridge/src/runtime_bundle.rs",
     "tools/runtime_bundle.py",
     "runtime/camouhost",
     "scripts/test-step7-runtime-bundle.py",
@@ -127,6 +144,9 @@ def main() -> int:
         cargo = (root / "Cargo.toml").read_text(encoding="utf-8")
         if '"crates/runtime-bundle-domain"' not in cargo:
             errors.append("runtime-bundle-domain is missing from the workspace")
+        bridge_cargo = (root / "apps/profile-bridge/Cargo.toml").read_text(encoding="utf-8")
+        if "runtime-bundle-domain.workspace = true" not in bridge_cargo:
+            errors.append("Profile Bridge does not compose typed runtime bundle validation")
 
     if errors:
         for error in errors:
