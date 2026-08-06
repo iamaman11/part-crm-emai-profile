@@ -1,0 +1,32 @@
+name: Temporary Step 6 Renormalize
+
+on:
+  push:
+    branches:
+      - repository-step-6-windows-bridge
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-6-windows-bridge
+
+      - name: Format and regenerate lockfile
+        run: |
+          cargo fmt --all
+          cargo generate-lockfile
+          rm .github/workflows/step6-renormalize.yml
+
+      - name: Commit normalization and workflow removal
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock apps/profile-bridge crates/bridge-domain .github/workflows/step6-renormalize.yml
+          git commit -m "Step 6: refresh Bridge formatting and lockfile"
+          git push origin HEAD:repository-step-6-windows-bridge
