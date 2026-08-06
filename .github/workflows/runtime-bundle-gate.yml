@@ -1,0 +1,80 @@
+name: Runtime Bundle Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-bundle-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime-bundle-linux:
+    name: Runtime Bundle Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Compile Step 7 Python sources
+        run: >-
+          python -m py_compile
+          tools/runtime_bundle.py
+          runtime/camouhost/main.py
+          scripts/check-step7-runtime-bundle.py
+          scripts/test-step7-runtime-bundle.py
+          scripts/test-step7-fake-camouhost.py
+
+      - name: Enforce Step 7 runtime bundle boundaries
+        run: python scripts/check-step7-runtime-bundle.py
+
+      - name: Prove legacy corpus fixture is rejected
+        run: |
+          if python scripts/check-step7-runtime-bundle.py --root tests/runtime-bundle/fixtures/legacy-corpus-reference; then
+            echo "Legacy corpus reference fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Test deterministic bundle build verify and extraction
+        run: python scripts/test-step7-runtime-bundle.py
+
+      - name: Test fake Camouhost subprocess lifecycle
+        run: python scripts/test-step7-fake-camouhost.py
+
+      - name: Check runtime bundle domain for WASM
+        run: >-
+          cargo check --locked --target wasm32-unknown-unknown
+          -p runtime-bundle-domain
+
+  runtime-bundle-windows:
+    name: Runtime Bundle Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Test runtime bundle domain
+        run: cargo test --locked -p runtime-bundle-domain
+
+      - name: Test fake Camouhost subprocess lifecycle
+        run: python scripts/test-step7-fake-camouhost.py
+
+      - name: Rebuild Profile Bridge release artifact
+        run: cargo build --locked --release -p profile-bridge
+
+      - name: Verify Profile Bridge executable remains present
+        shell: pwsh
+        run: |
+          $artifact = Get-Item "target/release/profile-bridge.exe"
+          if ($artifact.Length -le 0) {
+            throw "profile-bridge.exe is empty"
+          }
