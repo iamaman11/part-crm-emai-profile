@@ -16,17 +16,28 @@ Rules:
    artifact identities;
 4. do not store screenshots, logs, credentials, IP addresses, account names,
    browser data, host paths, certificates, keys or free-form provider output;
-5. terminal `passed`/`failed` records require an exact GitHub review/comment URL;
+5. terminal `passed`/`failed` records require an exact same-repository GitHub
+   review/comment whose author, effective timestamp and canonical claim body match;
 6. `scripts/check-external-evidence.py` is the normative base schema, check catalog,
    privacy and immutable-lineage validator;
 7. `scripts/check-external-evidence-scope.py` is the normative strict timestamp,
    evidence-date, gate/environment and IPv6 scope validator;
-8. every local review must run both commands from the repository root:
+8. `scripts/check-external-readiness-summary.py` regenerates the canonical active
+   record/readiness projection;
+9. `scripts/check-external-review-attestations.py` verifies every terminal record
+   against the exact GitHub API object;
+10. every local terminal review must run the full sequence from repository root:
 
    ```text
    python scripts/check-external-evidence.py
    python scripts/check-external-evidence-scope.py
+   python scripts/check-external-readiness-summary.py --write
+   python scripts/check-external-review-attestations.py \
+     --repository iamaman11/part-crm-emai-profile
    ```
 
-The permanent External Evidence Gate runs both validators and their positive and
-negative fixtures.
+Use `python scripts/check-external-review-attestations.py --print-claims` to obtain
+the exact bounded claim body before posting the final GitHub review/comment.
+
+Permanent External Evidence, External Readiness and External Review Attestation
+workflows enforce these boundaries independently.
