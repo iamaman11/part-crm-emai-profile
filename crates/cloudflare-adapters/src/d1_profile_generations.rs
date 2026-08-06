@@ -1,7 +1,4 @@
 use crate::d1_identity_acl::{MutationEnvelope, ResolvedMembershipRole};
-use profile_domain::registry::{
-    GenerationDigest, GenerationObjectKey, GenerationRegistryStatus, VerificationReference,
-};
 use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, GenerationId, ProfileId, TenantScope,
 };
@@ -62,9 +59,9 @@ INSERT INTO outbox_events (
 pub struct RegisterGenerationMutation<'a> {
     pub profile_id: &'a ProfileId,
     pub generation_id: &'a GenerationId,
-    pub object_key: &'a GenerationObjectKey,
-    pub metadata_digest: &'a GenerationDigest,
-    pub container_digest: &'a GenerationDigest,
+    pub object_key: &'a str,
+    pub metadata_digest: &'a str,
+    pub container_digest: &'a str,
     pub envelope: MutationEnvelope<'a>,
 }
 
@@ -72,7 +69,7 @@ pub struct VerifyGenerationMutation<'a> {
     pub profile_id: &'a ProfileId,
     pub generation_id: &'a GenerationId,
     pub expected_generation_version: AggregateVersion,
-    pub verification_reference: &'a VerificationReference,
+    pub verification_reference: &'a str,
     pub envelope: MutationEnvelope<'a>,
 }
 
@@ -90,15 +87,22 @@ pub struct QuarantineGenerationMutation<'a> {
     pub envelope: MutationEnvelope<'a>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GenerationStatus {
+    Registered,
+    Verified,
+    Quarantined,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GenerationProjection {
     generation_id: GenerationId,
-    object_key: GenerationObjectKey,
-    metadata_digest: GenerationDigest,
-    container_digest: GenerationDigest,
-    status: GenerationRegistryStatus,
+    object_key: String,
+    metadata_digest: String,
+    container_digest: String,
+    status: GenerationStatus,
     version: AggregateVersion,
-    verification_reference: Option<VerificationReference>,
+    verification_reference: Option<String>,
 }
 
 impl GenerationProjection {
@@ -108,22 +112,22 @@ impl GenerationProjection {
     }
 
     #[must_use]
-    pub const fn object_key(&self) -> &GenerationObjectKey {
+    pub fn object_key(&self) -> &str {
         &self.object_key
     }
 
     #[must_use]
-    pub const fn metadata_digest(&self) -> &GenerationDigest {
+    pub fn metadata_digest(&self) -> &str {
         &self.metadata_digest
     }
 
     #[must_use]
-    pub const fn container_digest(&self) -> &GenerationDigest {
+    pub fn container_digest(&self) -> &str {
         &self.container_digest
     }
 
     #[must_use]
-    pub const fn status(&self) -> GenerationRegistryStatus {
+    pub const fn status(&self) -> GenerationStatus {
         self.status
     }
 
@@ -133,8 +137,8 @@ impl GenerationProjection {
     }
 
     #[must_use]
-    pub const fn verification_reference(&self) -> Option<&VerificationReference> {
-        self.verification_reference.as_ref()
+    pub fn verification_reference(&self) -> Option<&str> {
+        self.verification_reference.as_deref()
     }
 }
 
@@ -153,6 +157,9 @@ impl D1ProfileGenerationRepository {
         actor: &ActorContext,
         mutation: RegisterGenerationMutation<'_>,
     ) -> Result<Vec<D1Result>> {
+        validate_object_key(mutation.object_key)?;
+        validate_digest(mutation.metadata_digest)?;
+        validate_digest(mutation.container_digest)?;
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
         let now = sqlite_integer(mutation.envelope.now.value())?;
@@ -167,9 +174,9 @@ impl D1ProfileGenerationRepository {
                 actor_id,
                 mutation.profile_id.as_str(),
                 resource_id,
-                mutation.object_key.as_str(),
-                mutation.metadata_digest.as_str(),
-                mutation.container_digest.as_str(),
+                mutation.object_key,
+                mutation.metadata_digest,
+                mutation.container_digest,
                 now
             )?,
             idempotency_statement(
@@ -212,6 +219,7 @@ impl D1ProfileGenerationRepository {
         actor: &ActorContext,
         mutation: VerifyGenerationMutation<'_>,
     ) -> Result<Vec<D1Result>> {
+        validate_verification_reference(mutation.verification_reference)?;
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
         let now = sqlite_integer(mutation.envelope.now.value())?;
@@ -229,7 +237,7 @@ impl D1ProfileGenerationRepository {
                 mutation.profile_id.as_str(),
                 resource_id,
                 expected_version,
-                mutation.verification_reference.as_str(),
+                mutation.verification_reference,
                 now
             )?,
             idempotency_statement(
@@ -438,31 +446,77 @@ struct GenerationProjectionRow {
 }
 
 fn generation_projection(row: GenerationProjectionRow) -> Result<GenerationProjection> {
+    validate_object_key(&row.object_key)?;
+    validate_digest(&row.metadata_digest)?;
+    validate_digest(&row.container_digest)?;
+    if let Some(reference) = row.verification_reference.as_deref() {
+        validate_verification_reference(reference)?;
+    }
     Ok(GenerationProjection {
         generation_id: GenerationId::parse(row.generation_id).map_err(identifier_error)?,
-        object_key: GenerationObjectKey::parse(row.object_key).map_err(registry_error)?,
-        metadata_digest: GenerationDigest::parse(row.metadata_digest).map_err(registry_error)?,
-        container_digest: GenerationDigest::parse(row.container_digest).map_err(registry_error)?,
+        object_key: row.object_key,
+        metadata_digest: row.metadata_digest,
+        container_digest: row.container_digest,
         status: parse_status(&row.status)?,
         version: AggregateVersion::new(positive_version(row.version)?)
             .map_err(|error| Error::RustError(error.to_string()))?,
-        verification_reference: row
-            .verification_reference
-            .map(VerificationReference::parse)
-            .transpose()
-            .map_err(registry_error)?,
+        verification_reference: row.verification_reference,
     })
 }
 
-fn parse_status(value: &str) -> Result<GenerationRegistryStatus> {
+fn parse_status(value: &str) -> Result<GenerationStatus> {
     match value {
-        "REGISTERED" => Ok(GenerationRegistryStatus::Registered),
-        "VERIFIED" => Ok(GenerationRegistryStatus::Verified),
-        "QUARANTINED" => Ok(GenerationRegistryStatus::Quarantined),
+        "REGISTERED" => Ok(GenerationStatus::Registered),
+        "VERIFIED" => Ok(GenerationStatus::Verified),
+        "QUARANTINED" => Ok(GenerationStatus::Quarantined),
         _ => Err(Error::RustError(
             "invalid profile generation status".to_owned(),
         )),
     }
+}
+
+fn validate_object_key(value: &str) -> Result<()> {
+    let valid_length = (16..=512).contains(&value.len());
+    let valid_chars = value.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':')
+    });
+    if !valid_length
+        || value.starts_with('/')
+        || value.contains("..")
+        || value.contains('\\')
+        || !valid_chars
+    {
+        return Err(Error::RustError(
+            "invalid profile generation object key".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_digest(value: &str) -> Result<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(Error::RustError(
+            "invalid lowercase SHA-256 generation digest".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_verification_reference(value: &str) -> Result<()> {
+    let valid_length = (8..=256).contains(&value.len());
+    let valid_chars = value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b':'));
+    if !valid_length || !valid_chars {
+        return Err(Error::RustError(
+            "invalid profile generation verification reference".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -571,24 +625,28 @@ fn identifier_error(error: profile_platform_primitives::ParseOpaqueIdError) -> E
     Error::RustError(error.to_string())
 }
 
-fn registry_error(error: profile_domain::registry::GenerationRegistryError) -> Error {
-    Error::RustError(error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{parse_status, positive_version};
-    use profile_domain::registry::GenerationRegistryStatus;
+    use super::{
+        GenerationStatus, parse_status, positive_version, validate_digest, validate_object_key,
+        validate_verification_reference,
+    };
 
     #[test]
-    fn storage_status_and_versions_fail_closed() {
+    fn storage_boundaries_fail_closed() {
         assert_eq!(
             parse_status("VERIFIED").expect("verified status"),
-            GenerationRegistryStatus::Verified
+            GenerationStatus::Verified
         );
         assert!(parse_status("UNKNOWN").is_err());
         assert_eq!(positive_version(1).expect("positive version"), 1);
         assert!(positive_version(0).is_err());
         assert!(positive_version(-1).is_err());
+        assert!(validate_object_key("profiles/v1/generation.enc").is_ok());
+        assert!(validate_object_key("../generation.enc").is_err());
+        assert!(validate_digest(&"a".repeat(64)).is_ok());
+        assert!(validate_digest(&"A".repeat(64)).is_err());
+        assert!(validate_verification_reference("review:generation_01").is_ok());
+        assert!(validate_verification_reference("review generation").is_err());
     }
 }
