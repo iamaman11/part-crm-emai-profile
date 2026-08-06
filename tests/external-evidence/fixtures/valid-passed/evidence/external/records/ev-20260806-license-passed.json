@@ -1,0 +1,38 @@
+{
+  "artifact_digests_sha256": [
+    "1111111111111111111111111111111111111111111111111111111111111111"
+  ],
+  "checks": [
+    {
+      "code": "license_selected",
+      "outcome": "pass"
+    },
+    {
+      "code": "third_party_notices_reviewed",
+      "outcome": "pass"
+    },
+    {
+      "code": "redistribution_rights_approved",
+      "outcome": "pass"
+    }
+  ],
+  "evidence_id": "ev-20260806-license-passed",
+  "gate": "product_license",
+  "limitations": [],
+  "observed_at": "2026-08-06T13:00:00Z",
+  "references": [
+    "review-report:sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "https://github.com/iamaman11/part-crm-emai-profile/issues/3"
+  ],
+  "review": {
+    "github_login": "iamaman11",
+    "review_reference": "https://github.com/iamaman11/part-crm-emai-profile/issues/3",
+    "reviewed_at": "2026-08-06T13:05:00Z"
+  },
+  "schema_version": 1,
+  "scope": {
+    "environment": "none",
+    "subject_id": "product-license-review"
+  },
+  "status": "passed"
+}
