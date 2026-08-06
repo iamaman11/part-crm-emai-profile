@@ -78,4 +78,8 @@ impl From<std::io::Error> for LocalProfileError {
 }
 
 #[cfg(test)]
+mod browser_lock_tests;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;
