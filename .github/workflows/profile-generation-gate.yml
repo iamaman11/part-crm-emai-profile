@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   profile-generation:
-    name: Registry Domain D1 And Adapter
+    name: Registry Domain D1 Adapter And Worker
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -35,9 +35,9 @@ jobs:
       - name: Test Cloudflare generation adapter
         run: cargo test --locked -p cloudflare-adapters --lib
 
-      - name: Check adapter for WASM
+      - name: Check composed Worker for WASM
         run: >-
-          cargo check --locked -p cloudflare-adapters
+          cargo check --locked -p browser-profile-control-plane-worker
           --target wasm32-unknown-unknown
 
       - name: Compile registry test
