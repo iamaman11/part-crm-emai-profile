@@ -140,10 +140,10 @@ fn chunk_tampering_and_truncation_are_rejected() -> Result<(), Box<dyn std::erro
         .get_mut(ciphertext_offset)
         .ok_or(EncryptedGenerationError::InvalidContainer)?;
     *byte ^= 0x01;
-    assert_eq!(
+    assert!(matches!(
         open_generation(&tampered, &key(0x48)?),
         Err(EncryptedGenerationError::AuthenticationFailed)
-    );
+    ));
 
     let mut truncated = sealed.into_container();
     truncated.pop();
@@ -165,10 +165,10 @@ fn reordered_chunk_index_is_rejected_before_decryption() -> Result<(), Box<dyn s
     *container
         .get_mut(index_last_byte)
         .ok_or(EncryptedGenerationError::InvalidContainer)? = 1;
-    assert_eq!(
+    assert!(matches!(
         open_generation(&container, &key(0x50)?),
         Err(EncryptedGenerationError::InvalidContainer)
-    );
+    ));
     Ok(())
 }
 
@@ -181,10 +181,10 @@ fn final_record_tampering_is_rejected() -> Result<(), Box<dyn std::error::Error>
         .last_mut()
         .ok_or(EncryptedGenerationError::InvalidContainer)?;
     *final_byte ^= 0x01;
-    assert_eq!(
+    assert!(matches!(
         open_generation(&container, &key(0x51)?),
         Err(EncryptedGenerationError::AuthenticationFailed)
-    );
+    ));
     Ok(())
 }
 
@@ -193,13 +193,13 @@ fn wrong_key_and_identity_are_rejected() -> Result<(), Box<dyn std::error::Error
     let plaintext = b"identity binding";
     let metadata = metadata("generation_01JSTEP9IDENTITY", 0x39, plaintext)?;
     let sealed = seal_generation(&metadata, &key(0x52)?, plaintext)?;
-    assert_eq!(
+    assert!(matches!(
         open_generation(sealed.container(), &key(0x53)?),
         Err(EncryptedGenerationError::AuthenticationFailed)
-    );
+    ));
     let (tenant_id, profile_id, _) = ids("generation_01JSTEP9IDENTITY")?;
     let other = GenerationId::parse("generation_01JSTEP9OTHER")?;
-    assert_eq!(
+    assert!(matches!(
         open_generation_expected(
             sealed.container(),
             &key(0x52)?,
@@ -208,7 +208,7 @@ fn wrong_key_and_identity_are_rejected() -> Result<(), Box<dyn std::error::Error
             &other,
         ),
         Err(EncryptedGenerationError::IdentityMismatch)
-    );
+    ));
     Ok(())
 }
 
@@ -352,6 +352,36 @@ fn pointer_compare_and_swap_and_rollback_are_strict() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn wrong_key_does_not_quarantine_unchanged_object() -> Result<(), Box<dyn std::error::Error>> {
+    let mut repository = CloudGenerationRepository::default();
+    let metadata = metadata("generation_01JSTEP9WRONGKEY", 0x4b, b"healthy object")?;
+    repository.publish(
+        metadata.clone(),
+        &key(0x5b)?,
+        b"healthy object",
+        UnixMillis::new(1),
+    )?;
+    assert!(matches!(
+        repository.restore(metadata.generation_id(), &key(0x5c)?, UnixMillis::new(2)),
+        Err(EncryptedGenerationError::AuthenticationFailed)
+    ));
+    assert_eq!(
+        repository
+            .record(metadata.generation_id())
+            .ok_or(EncryptedGenerationError::MissingGeneration)?
+            .status(),
+        CloudGenerationStatus::Verified
+    );
+    assert_eq!(
+        repository
+            .restore(metadata.generation_id(), &key(0x5b)?, UnixMillis::new(3))?
+            .plaintext(),
+        b"healthy object"
+    );
+    Ok(())
+}
+
+#[test]
 fn corruption_is_quarantined_and_cannot_become_current() -> Result<(), Box<dyn std::error::Error>> {
     let mut repository = CloudGenerationRepository::default();
     let metadata = metadata("generation_01JSTEP9CORRUPT", 0x43, b"corrupt me")?;
@@ -419,6 +449,39 @@ fn support_summary_is_metadata_only() -> Result<(), Box<dyn std::error::Error>> 
     assert!(!rendered.contains(metadata.key_id().as_str()));
     assert!(!rendered.contains("private payload"));
     assert!(!rendered.contains("tenants/"));
+    Ok(())
+}
+
+#[test]
+fn malformed_headers_and_trailing_bytes_fail_closed() -> Result<(), Box<dyn std::error::Error>> {
+    let plaintext = b"strict parser";
+    let metadata = metadata("generation_01JSTEP9MALFORMED", 0x4c, plaintext)?;
+    let sealed = seal_generation(&metadata, &key(0x5d)?, plaintext)?;
+    let mut bad_magic = sealed.container().to_vec();
+    bad_magic[0] ^= 0x01;
+    assert!(matches!(
+        open_generation(&bad_magic, &key(0x5d)?),
+        Err(EncryptedGenerationError::InvalidContainer)
+    ));
+    let mut unsupported_version = sealed.container().to_vec();
+    unsupported_version[12] = 0;
+    unsupported_version[13] = 2;
+    assert!(matches!(
+        open_generation(&unsupported_version, &key(0x5d)?),
+        Err(EncryptedGenerationError::UnsupportedVersion)
+    ));
+    let mut oversized_metadata = b"BPGC0001".to_vec();
+    oversized_metadata.extend_from_slice(&4_097_u32.to_be_bytes());
+    assert!(matches!(
+        open_generation(&oversized_metadata, &key(0x5d)?),
+        Err(EncryptedGenerationError::InvalidContainer)
+    ));
+    let mut trailing = sealed.into_container();
+    trailing.push(0);
+    assert!(matches!(
+        open_generation(&trailing, &key(0x5d)?),
+        Err(EncryptedGenerationError::InvalidContainer)
+    ));
     Ok(())
 }
 

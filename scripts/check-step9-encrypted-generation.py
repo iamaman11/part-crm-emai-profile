@@ -21,6 +21,12 @@ REQUIRED_FRAGMENTS = (
     "plan_orphans",
     "render_metadata_only",
     "zeroize",
+    "Zeroizing",
+    "nonce_domain",
+    "impl Drop for NonceDomain",
+    "let mut plaintext = Zeroizing::new(Vec::new())",
+    "wrong_key_does_not_quarantine_unchanged_object",
+    "malformed_headers_and_trailing_bytes_fail_closed",
 )
 
 FORBIDDEN_FRAGMENTS = (
@@ -33,8 +39,9 @@ FORBIDDEN_FRAGMENTS = (
     "dbg!",
 )
 
-GENERATION_DEK_DEBUG = re.compile(
-    r"#\[derive\([^\]]*Debug[^\]]*\)\]\s*pub\s+struct\s+GenerationDek",
+SENSITIVE_DEBUG = re.compile(
+    r"#\[derive\([^\]]*Debug[^\]]*\)\]\s*(?:pub(?:\(crate\))?\s+)?struct\s+"
+    r"(?:GenerationDek|OpenedGeneration|RestoreResult|NonceDomain)",
     re.MULTILINE,
 )
 GENERATION_DEK_BYTES = re.compile(
@@ -57,8 +64,8 @@ def check(root: Path) -> list[str]:
     for fragment in FORBIDDEN_FRAGMENTS:
         if fragment in source_text:
             failures.append(f"forbidden Step 9 source fragment: {fragment}")
-    if GENERATION_DEK_DEBUG.search(source_text):
-        failures.append("GenerationDek must not derive Debug")
+    if SENSITIVE_DEBUG.search(source_text):
+        failures.append("key and plaintext-bearing types must not derive Debug")
     if GENERATION_DEK_BYTES.search(source_text):
         failures.append("GenerationDek must not expose key bytes")
 
@@ -76,9 +83,9 @@ def check(root: Path) -> list[str]:
             if pin not in workspace_text:
                 failures.append(f"missing exact crypto dependency pin: {pin}")
 
-    bootstrap = root / ".github/workflows/step9-lockfile-bootstrap.yml"
-    if bootstrap.exists():
-        failures.append("temporary Step 9 lockfile bootstrap workflow must be removed")
+    bootstrap_workflows = sorted((root / ".github/workflows").glob("step9-*.yml"))
+    if bootstrap_workflows:
+        failures.append("temporary Step 9 workflows must be removed")
 
     return failures
 

@@ -3,7 +3,7 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use sha2::{Digest, Sha256};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 const MAGIC: [u8; 8] = *b"BPGC0001";
 const ALGORITHM_ID: u16 = 1;
@@ -42,8 +42,14 @@ impl KeyId {
     }
 }
 
-#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct NonceDomain([u8; 32]);
+
+impl Drop for NonceDomain {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 pub struct GenerationDek {
     key_id: KeyId,
@@ -64,7 +70,7 @@ impl GenerationDek {
     pub(crate) fn nonce_domain(&self) -> NonceDomain {
         let mut digest = Sha256::new();
         digest.update(b"profile-platform-generation-nonce-domain-v1");
-        digest.update(self.bytes);
+        digest.update(self.bytes.as_slice());
         NonceDomain(digest.finalize().into())
     }
 
@@ -386,10 +392,9 @@ impl SealedGeneration {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OpenedGeneration {
     metadata: GenerationMetadata,
-    plaintext: Vec<u8>,
+    plaintext: Zeroizing<Vec<u8>>,
 }
 
 impl OpenedGeneration {
@@ -403,9 +408,8 @@ impl OpenedGeneration {
         &self.plaintext
     }
 
-    #[must_use]
-    pub fn into_plaintext(self) -> Vec<u8> {
-        self.plaintext
+    pub(crate) fn into_parts(self) -> (GenerationMetadata, Zeroizing<Vec<u8>>) {
+        (self.metadata, self.plaintext)
     }
 }
 
@@ -523,10 +527,7 @@ pub fn open_generation(
     }
     let metadata_digest: [u8; 32] = Sha256::digest(metadata_bytes).into();
     let cipher = key.cipher()?;
-    let mut plaintext = Vec::with_capacity(
-        usize::try_from(metadata.plaintext_bytes())
-            .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?,
-    );
+    let mut plaintext = Zeroizing::new(Vec::new());
     let mut expected_index = 0_u64;
     let mut final_seen = false;
 
@@ -545,15 +546,17 @@ pub fn open_generation(
         let ciphertext = cursor.take(ciphertext_length)?;
         let aad = record_aad(&metadata_digest, record_type, index, plaintext_length);
         let nonce_bytes = metadata.nonce_prefix().nonce_for(index);
-        let opened = cipher
-            .decrypt(
-                &nonce_from_bytes(&nonce_bytes)?,
-                Payload {
-                    msg: ciphertext,
-                    aad: &aad,
-                },
-            )
-            .map_err(|_| EncryptedGenerationError::AuthenticationFailed)?;
+        let opened = Zeroizing::new(
+            cipher
+                .decrypt(
+                    &nonce_from_bytes(&nonce_bytes)?,
+                    Payload {
+                        msg: ciphertext,
+                        aad: &aad,
+                    },
+                )
+                .map_err(|_| EncryptedGenerationError::AuthenticationFailed)?,
+        );
 
         match record_type {
             RECORD_CHUNK => {

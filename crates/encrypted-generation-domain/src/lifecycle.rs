@@ -5,6 +5,7 @@ use crate::{
 };
 use profile_platform_primitives::{GenerationId, UnixMillis};
 use std::collections::{BTreeMap, BTreeSet};
+use zeroize::Zeroizing;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CloudGenerationStatus {
@@ -95,10 +96,9 @@ pub enum PublishResult {
     Idempotent,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RestoreResult {
     metadata: GenerationMetadata,
-    plaintext: Vec<u8>,
+    plaintext: Zeroizing<Vec<u8>>,
 }
 
 impl RestoreResult {
@@ -110,11 +110,6 @@ impl RestoreResult {
     #[must_use]
     pub fn plaintext(&self) -> &[u8] {
         &self.plaintext
-    }
-
-    #[must_use]
-    pub fn into_plaintext(self) -> Vec<u8> {
-        self.plaintext
     }
 }
 
@@ -201,7 +196,7 @@ impl FakeImmutableObjectStore {
     }
 }
 
-#[derive(Clone, Default, Eq, PartialEq)]
+#[derive(Default)]
 pub struct CloudGenerationRepository {
     objects: FakeImmutableObjectStore,
     records: BTreeMap<GenerationId, CloudGenerationRecord>,
@@ -315,19 +310,13 @@ impl CloudGenerationRepository {
             self.quarantine(generation_id)?;
             return Err(EncryptedGenerationError::DigestMismatch);
         }
-        let opened = match open_generation_expected(
+        let opened = open_generation_expected(
             container,
             key,
             record.metadata.tenant_id(),
             record.metadata.profile_id(),
             generation_id,
-        ) {
-            Ok(opened) => opened,
-            Err(error) => {
-                self.quarantine(generation_id)?;
-                return Err(error);
-            }
-        };
+        )?;
         if observed_at < record.created_at {
             return Err(EncryptedGenerationError::TimeRegression);
         }
@@ -337,9 +326,10 @@ impl CloudGenerationRepository {
             .ok_or(EncryptedGenerationError::MissingGeneration)?;
         current.status = CloudGenerationStatus::Verified;
         current.verified_at = Some(observed_at);
+        let (metadata, plaintext) = opened.into_parts();
         Ok(RestoreResult {
-            metadata: opened.metadata().clone(),
-            plaintext: opened.into_plaintext(),
+            metadata,
+            plaintext,
         })
     }
 

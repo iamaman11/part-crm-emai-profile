@@ -210,3 +210,13 @@ This boundary does not accept ADR-0006 and does not prove:
 All keys, IDs, plaintext and objects used by tests are synthetic. No production
 credential, remote resource, mailbox content, personal data or legacy profile is
 used. `production_ready` remains `false`.
+
+
+## Repository-local security hardening
+
+- nonce reuse claims are keyed by a non-exported digest of the actual DEK bytes, not caller-controlled key IDs;
+- nonce-domain values are not cloneable or printable and are zeroized on drop;
+- plaintext-bearing results do not implement `Clone` or `Debug`, and buffers use `Zeroizing`;
+- restore grows plaintext only after each record authenticates and never preallocates from unauthenticated size metadata;
+- a wrong DEK does not quarantine an immutable object while its cataloged digest still matches;
+- malformed headers and trailing bytes fail closed.
