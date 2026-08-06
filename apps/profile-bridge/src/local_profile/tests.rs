@@ -27,8 +27,7 @@ fn ids() -> Result<(TenantId, ProfileId), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn materialization_root_builds_opaque_generation_paths()
--> Result<(), Box<dyn std::error::Error>> {
+fn materialization_root_builds_opaque_generation_paths() -> Result<(), Box<dyn std::error::Error>> {
     let root_path = test_root("paths")?;
     let root = MaterializationRoot::open_or_create(&root_path)?;
     let (tenant_id, profile_id) = ids()?;
@@ -93,8 +92,7 @@ fn inventory_is_deterministic_and_includes_browser_owned_locks()
 }
 
 #[test]
-fn recovery_is_clone_only_and_detects_clone_mutation() -> Result<(), Box<dyn std::error::Error>>
-{
+fn recovery_is_clone_only_and_detects_clone_mutation() -> Result<(), Box<dyn std::error::Error>> {
     let root_path = test_root("recovery")?;
     let root = MaterializationRoot::open_or_create(&root_path)?;
     let (tenant_id, profile_id) = ids()?;
@@ -104,8 +102,7 @@ fn recovery_is_clone_only_and_detects_clone_mutation() -> Result<(), Box<dyn std
     fs::create_dir(source.path().join("storage"))?;
     fs::write(source.path().join("storage/state.bin"), b"accepted-state")?;
     let source_before = source.inventory()?;
-    let recovery =
-        RecoveryClone::create(&source, &root, &tenant_id, &profile_id, &recovery_id)?;
+    let recovery = RecoveryClone::create(&source, &root, &tenant_id, &profile_id, &recovery_id)?;
     assert_eq!(recovery.verify_clone_only()?, source_before);
     fs::write(
         recovery.workspace().path().join("storage/state.bin"),
