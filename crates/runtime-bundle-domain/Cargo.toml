@@ -5,8 +5,5 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
-[dependencies]
-profile-platform-primitives.workspace = true
-
 [lints]
 workspace = true
