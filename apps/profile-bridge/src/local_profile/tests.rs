@@ -139,6 +139,14 @@ fn quota_never_selects_dirty_recovery_in_use_or_locked_generation()
     recovery.begin_use(UnixMillis::new(21))?;
     recovery.observe_crash(UnixMillis::new(22))?;
 
+    let mut in_use = LocalGenerationRecord::new(
+        GenerationId::parse("generation_01JSTEP8O")?,
+        40,
+        UnixMillis::new(30),
+    );
+    in_use.set_locked(true)?;
+    in_use.begin_use(UnixMillis::new(31))?;
+
     let mut eligible = LocalGenerationRecord::new(
         GenerationId::parse("generation_01JSTEP8I")?,
         60,
@@ -160,15 +168,16 @@ fn quota_never_selects_dirty_recovery_in_use_or_locked_generation()
     locked_synced.graceful_close(UnixMillis::new(7))?;
     locked_synced.mark_synced(UnixMillis::new(8))?;
 
-    let records = [dirty, recovery, eligible.clone(), locked_synced];
-    let plan = QuotaPolicy::new(200)?.plan(&records)?;
-    assert_eq!(plan.total_bytes(), 260);
+    let records = [dirty, recovery, in_use, eligible.clone(), locked_synced];
+    let plan = QuotaPolicy::new(240)?.plan(&records)?;
+    assert_eq!(plan.total_bytes(), 300);
     assert_eq!(plan.bytes_to_reclaim(), 60);
     assert_eq!(plan.reclaimable_bytes(), 60);
     assert!(plan.is_satisfied());
     assert_eq!(plan.candidates(), [eligible.generation_id().clone()]);
     assert_eq!(records[0].state(), LocalGenerationState::DirtyLocal);
     assert_eq!(records[1].state(), LocalGenerationState::RecoveryRequired);
+    assert_eq!(records[2].state(), LocalGenerationState::InUse);
     Ok(())
 }
 
