@@ -5,6 +5,7 @@ members = [
     "apps/profile-bridge",
     "crates/application-ports",
     "crates/bridge-domain",
+    "crates/certification-domain",
     "crates/client-domain",
     "crates/cloudflare-adapters",
     "crates/contracts",
@@ -27,6 +28,7 @@ rust-version = "1.97.1"
 [workspace.dependencies]
 application-ports = { path = "crates/application-ports" }
 bridge-domain = { path = "crates/bridge-domain" }
+certification-domain = { path = "crates/certification-domain" }
 chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "zeroize"] }
 client-domain = { path = "crates/client-domain" }
 cloudflare-adapters = { path = "crates/cloudflare-adapters" }

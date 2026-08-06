@@ -17,9 +17,7 @@ impl SignalName {
         let value = value.into();
         let valid_length = (MIN_NAME_BYTES..=MAX_NAME_BYTES).contains(&value.len());
         let valid_chars = value.bytes().all(|byte| {
-            byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || matches!(byte, b'.' | b'-' | b'_')
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_')
         });
         if !valid_length || !valid_chars {
             return Err(CertificationError::InvalidName);
@@ -117,7 +115,6 @@ impl CertificationPolicy {
         self.version
     }
 
-    #[must_use]
     pub fn rules(&self) -> impl Iterator<Item = &SignalRule> {
         self.rules.values()
     }
@@ -130,10 +127,7 @@ pub struct ObservationSet {
 }
 
 impl ObservationSet {
-    pub fn new(
-        sequence: u32,
-        values: Vec<(SignalName, i64)>,
-    ) -> Result<Self, CertificationError> {
+    pub fn new(sequence: u32, values: Vec<(SignalName, i64)>) -> Result<Self, CertificationError> {
         if sequence == 0 {
             return Err(CertificationError::InvalidObservationSequence);
         }
@@ -316,8 +310,8 @@ pub fn evaluate_certification(
     } else {
         CertificationOutcome::Stable
     };
-    let observation_count = u32::try_from(ordered.len())
-        .map_err(|_| CertificationError::CounterOverflow)?;
+    let observation_count =
+        u32::try_from(ordered.len()).map_err(|_| CertificationError::CounterOverflow)?;
     let matrix_digest = calculate_matrix_digest(policy, &ordered)?;
 
     Ok(CertificationReport {
@@ -385,10 +379,7 @@ fn calculate_matrix_digest(
     Ok(MatrixDigest(digest.finalize().into()))
 }
 
-fn update_length_prefixed(
-    digest: &mut Sha256,
-    value: &[u8],
-) -> Result<(), CertificationError> {
+fn update_length_prefixed(digest: &mut Sha256, value: &[u8]) -> Result<(), CertificationError> {
     digest.update(
         u32::try_from(value.len())
             .map_err(|_| CertificationError::CounterOverflow)?
@@ -578,6 +569,11 @@ impl ReleaseId {
     pub fn parse(value: impl Into<String>) -> Result<Self, CertificationError> {
         parse_name(value.into()).map(Self)
     }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -590,6 +586,11 @@ impl ContentDigest {
         }
         Ok(Self(bytes))
     }
+
+    #[must_use]
+    pub const fn bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -598,6 +599,11 @@ pub struct VerificationEvidenceId(String);
 impl VerificationEvidenceId {
     pub fn parse(value: impl Into<String>) -> Result<Self, CertificationError> {
         parse_name(value.into()).map(Self)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -617,6 +623,16 @@ impl PreverifiedSignatureEvidence {
             verifier,
             evidence_id,
         })
+    }
+
+    #[must_use]
+    pub fn verifier(&self) -> &str {
+        &self.verifier
+    }
+
+    #[must_use]
+    pub const fn evidence_id(&self) -> &VerificationEvidenceId {
+        &self.evidence_id
     }
 }
 
@@ -645,10 +661,31 @@ impl ReleaseCandidate {
             verification,
         })
     }
+
+    #[must_use]
+    pub const fn release_id(&self) -> &ReleaseId {
+        &self.release_id
+    }
+
+    #[must_use]
+    pub const fn version(&self) -> u64 {
+        self.version
+    }
+
+    #[must_use]
+    pub const fn content_digest(&self) -> &ContentDigest {
+        &self.content_digest
+    }
+
+    #[must_use]
+    pub const fn verification(&self) -> &PreverifiedSignatureEvidence {
+        &self.verification
+    }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum UpdateState {
+    #[default]
     Idle,
     Staged,
     AwaitingHealth,
@@ -675,12 +712,6 @@ pub struct UpdateController {
     staged: Option<ReleaseCandidate>,
     highest_seen_version: u64,
     state: UpdateState,
-}
-
-impl Default for UpdateState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 impl UpdateController {
@@ -782,9 +813,9 @@ impl UpdateController {
 
 fn parse_name(value: String) -> Result<String, CertificationError> {
     let valid_length = (MIN_NAME_BYTES..=MAX_NAME_BYTES).contains(&value.len());
-    let valid_chars = value.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
-    });
+    let valid_chars = value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
     if !valid_length || !valid_chars {
         return Err(CertificationError::InvalidName);
     }
@@ -866,21 +897,9 @@ mod tests {
         CertificationPolicy::new(
             1,
             vec![
-                SignalRule::new(
-                    signal("canvas.hash")?,
-                    SignalRequirement::Required,
-                    2,
-                )?,
-                SignalRule::new(
-                    signal("timezone.offset")?,
-                    SignalRequirement::Optional,
-                    0,
-                )?,
-                SignalRule::new(
-                    signal("raw.secret")?,
-                    SignalRequirement::Prohibited,
-                    0,
-                )?,
+                SignalRule::new(signal("canvas.hash")?, SignalRequirement::Required, 2)?,
+                SignalRule::new(signal("timezone.offset")?, SignalRequirement::Optional, 0)?,
+                SignalRule::new(signal("raw.secret")?, SignalRequirement::Prohibited, 0)?,
             ],
         )
     }
@@ -913,11 +932,7 @@ mod tests {
         ))
     }
 
-    fn candidate(
-        id: &str,
-        version: u64,
-        byte: u8,
-    ) -> Result<ReleaseCandidate, CertificationError> {
+    fn candidate(id: &str, version: u64, byte: u8) -> Result<ReleaseCandidate, CertificationError> {
         ReleaseCandidate::new(
             ReleaseId::parse(id)?,
             version,
@@ -943,8 +958,7 @@ mod tests {
     }
 
     #[test]
-    fn drift_missing_and_prohibited_are_distinct()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn drift_missing_and_prohibited_are_distinct() -> Result<(), Box<dyn std::error::Error>> {
         let stable = observation(1, Some(100), None, None)?;
         let drifted = observation(2, Some(110), None, None)?;
         assert_eq!(
@@ -952,8 +966,11 @@ mod tests {
             CertificationOutcome::Drifted
         );
         assert_eq!(
-            evaluate_certification(&policy()?, &[stable.clone(), observation(2, None, None, None)?])?
-                .outcome(),
+            evaluate_certification(
+                &policy()?,
+                &[stable.clone(), observation(2, None, None, None)?]
+            )?
+            .outcome(),
             CertificationOutcome::Incomplete
         );
         assert_eq!(
@@ -968,18 +985,13 @@ mod tests {
     }
 
     #[test]
-    fn policy_and_observation_validation_fail_closed()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn policy_and_observation_validation_fail_closed() -> Result<(), Box<dyn std::error::Error>> {
         let duplicated = signal("canvas.hash")?;
         assert_eq!(
             CertificationPolicy::new(
                 1,
                 vec![
-                    SignalRule::new(
-                        duplicated.clone(),
-                        SignalRequirement::Required,
-                        0,
-                    )?,
+                    SignalRule::new(duplicated.clone(), SignalRequirement::Required, 0,)?,
                     SignalRule::new(duplicated, SignalRequirement::Optional, 0)?,
                 ],
             ),
@@ -998,8 +1010,7 @@ mod tests {
     }
 
     #[test]
-    fn device_grant_revoke_and_regrant_are_versioned()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn device_grant_revoke_and_regrant_are_versioned() -> Result<(), Box<dyn std::error::Error>> {
         let mut registry = DeviceAuthorizationRegistry::default();
         let first_device = grant_key("device_01JSTEP10A")?;
         let second_device = grant_key("device_01JSTEP10B")?;

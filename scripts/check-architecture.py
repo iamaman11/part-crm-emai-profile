@@ -19,6 +19,10 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
     "mailbox-domain": {"profile-platform-primitives", "contracts"},
     "bridge-domain": {"profile-platform-primitives"},
     "runtime-bundle-domain": set(),
+    "certification-domain": {
+        "profile-platform-primitives",
+        "sha2",
+    },
     "encrypted-generation-domain": {
         "profile-platform-primitives",
         "chacha20poly1305",
