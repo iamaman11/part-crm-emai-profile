@@ -66,6 +66,27 @@ fn bridge_lock_is_exclusive_and_preserves_browser_lock_files()
 }
 
 #[test]
+fn bridge_lock_rejects_ownership_tampering() -> Result<(), Box<dyn std::error::Error>> {
+    let root_path = test_root("lock-tamper")?;
+    let root = MaterializationRoot::open_or_create(&root_path)?;
+    let (tenant_id, profile_id) = ids()?;
+    let generation_id = GenerationId::parse("generation_01JSTEP8M")?;
+    let workspace = root.create_generation(&tenant_id, &profile_id, &generation_id)?;
+    let device_id = DeviceId::parse("device_01JSTEP8")?;
+    let lock = BridgeWorkspaceLock::acquire(&workspace, &device_id, 1)?;
+    let lock_path = workspace.path().join(".profile-platform.lock");
+    fs::write(&lock_path, b"tampered-lock")?;
+    assert_eq!(
+        lock.release(),
+        Err(LocalProfileError::LockOwnershipMismatch)
+    );
+    assert!(lock_path.exists());
+    fs::remove_file(lock_path)?;
+    fs::remove_dir_all(root_path)?;
+    Ok(())
+}
+
+#[test]
 fn inventory_is_deterministic_and_includes_browser_owned_locks()
 -> Result<(), Box<dyn std::error::Error>> {
     let root_path = test_root("inventory")?;
@@ -217,6 +238,29 @@ fn support_summary_contains_metadata_only() -> Result<(), Box<dyn std::error::Er
     assert!(!rendered.contains("user@example.com"));
     assert!(!rendered.contains("secret"));
     assert!(!rendered.contains('\\'));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn generation_marker_rejects_symbolic_links() -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::symlink;
+
+    let root_path = test_root("marker-symlink")?;
+    let root = MaterializationRoot::open_or_create(&root_path)?;
+    let (tenant_id, profile_id) = ids()?;
+    let generation_id = GenerationId::parse("generation_01JSTEP8N")?;
+    let workspace = root.create_generation(&tenant_id, &profile_id, &generation_id)?;
+    let marker = workspace.path().join(".profile-generation");
+    let external = root.path().join("external-marker");
+    fs::write(&external, b"profile-platform-generation-v1\n")?;
+    fs::remove_file(&marker)?;
+    symlink(&external, &marker)?;
+    assert_eq!(
+        root.open_generation(&tenant_id, &profile_id, &generation_id),
+        Err(LocalProfileError::SymbolicLinkRejected)
+    );
+    fs::remove_dir_all(root_path)?;
     Ok(())
 }
 
