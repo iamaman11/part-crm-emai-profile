@@ -85,6 +85,13 @@ BEGIN
           AND profile_id = NEW.profile_id
           AND status <> 'DELETED'
     );
+    SELECT RAISE(ABORT, 'profile_generation_time_regression')
+    WHERE EXISTS (
+        SELECT 1 FROM browser_profiles
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+          AND NEW.executed_at_ms < updated_at_ms
+    );
 END;
 
 CREATE TRIGGER profile_generation_register_command_apply
@@ -129,6 +136,14 @@ BEGIN
           AND actor_id = NEW.command_actor_id
           AND role = 'TENANT_OWNER'
           AND status = 'ACTIVE'
+    );
+    SELECT RAISE(ABORT, 'profile_generation_time_regression')
+    WHERE EXISTS (
+        SELECT 1 FROM profile_generations
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+          AND generation_id = NEW.generation_id
+          AND NEW.executed_at_ms < updated_at_ms
     );
     SELECT RAISE(ABORT, 'profile_generation_verify_state_mismatch')
     WHERE NOT EXISTS (
@@ -183,6 +198,19 @@ BEGIN
           AND actor_id = NEW.command_actor_id
           AND role = 'TENANT_OWNER'
           AND status = 'ACTIVE'
+    );
+    SELECT RAISE(ABORT, 'profile_generation_time_regression')
+    WHERE EXISTS (
+        SELECT 1 FROM profile_generations
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+          AND generation_id = NEW.generation_id
+          AND NEW.executed_at_ms < updated_at_ms
+    ) OR EXISTS (
+        SELECT 1 FROM browser_profiles
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+          AND NEW.executed_at_ms < updated_at_ms
     );
     SELECT RAISE(ABORT, 'profile_generation_not_verified')
     WHERE NOT EXISTS (
@@ -246,6 +274,14 @@ BEGIN
           AND actor_id = NEW.command_actor_id
           AND role = 'TENANT_OWNER'
           AND status = 'ACTIVE'
+    );
+    SELECT RAISE(ABORT, 'profile_generation_time_regression')
+    WHERE EXISTS (
+        SELECT 1 FROM profile_generations
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+          AND generation_id = NEW.generation_id
+          AND NEW.executed_at_ms < updated_at_ms
     );
     SELECT RAISE(ABORT, 'profile_generation_quarantine_state_mismatch')
     WHERE NOT EXISTS (
