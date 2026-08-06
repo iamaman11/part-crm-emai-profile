@@ -99,10 +99,19 @@ impl CertificationPolicy {
             return Err(CertificationError::InvalidPolicy);
         }
         let mut indexed = BTreeMap::new();
+        let mut required_rules = 0_u32;
         for rule in rules {
+            if rule.requirement == SignalRequirement::Required {
+                required_rules = required_rules
+                    .checked_add(1)
+                    .ok_or(CertificationError::CounterOverflow)?;
+            }
             if indexed.insert(rule.name.clone(), rule).is_some() {
                 return Err(CertificationError::DuplicateSignal);
             }
+        }
+        if required_rules == 0 {
+            return Err(CertificationError::InvalidPolicy);
         }
         Ok(Self {
             version,
@@ -120,7 +129,7 @@ impl CertificationPolicy {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct ObservationSet {
     sequence: u32,
     values: BTreeMap<SignalName, i64>,
@@ -215,7 +224,7 @@ impl CertificationReport {
     #[must_use]
     pub fn render_metadata_only(&self) -> String {
         format!(
-            "schema=certification-summary-v1\npolicy_version={}\nobservation_count={}\nevaluated_signals={}\ndrifted_signals={}\nmissing_required_signals={}\nprohibited_signals={}\noutcome={}\nmatrix_digest={}\n",
+            "schema=certification-summary-v1\npolicy_version={}\nobservation_count={}\nevaluated_signals={}\ndrifted_signals={}\nmissing_required_signals={}\nprohibited_signals={}\noutcome={}\n",
             self.policy_version,
             self.observation_count,
             self.evaluated_signals,
@@ -223,7 +232,6 @@ impl CertificationReport {
             self.missing_required_signals,
             self.prohibited_signals,
             self.outcome.as_str(),
-            self.matrix_digest.to_hex(),
         )
     }
 }
@@ -1001,6 +1009,17 @@ mod tests {
             SignalRule::new(signal("raw.secret")?, SignalRequirement::Prohibited, 1),
             Err(CertificationError::InvalidTolerance)
         );
+        assert_eq!(
+            CertificationPolicy::new(
+                1,
+                vec![SignalRule::new(
+                    signal("optional.signal")?,
+                    SignalRequirement::Optional,
+                    0,
+                )?],
+            ),
+            Err(CertificationError::InvalidPolicy)
+        );
         let unknown = ObservationSet::new(1, vec![(signal("unknown.signal")?, 1)])?;
         assert_eq!(
             evaluate_certification(&policy()?, &[unknown]),
@@ -1098,6 +1117,7 @@ mod tests {
         assert!(!certification.contains("canvas.hash"));
         assert!(!certification.contains("123456"));
         assert!(!certification.contains("raw.secret"));
+        assert!(!certification.contains(&report.matrix_digest().to_hex()));
 
         let mut registry = DeviceAuthorizationRegistry::default();
         registry.grant(grant_key("device_01JSTEP10PRIVATE")?, 0, UnixMillis::new(1))?;

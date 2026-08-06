@@ -23,8 +23,8 @@ No result from this step is a production fingerprint certification.
 
 ## 2. Certification Policy
 
-A policy has a non-zero version and a unique sorted set of signal rules. Every
-rule is exactly one of:
+A policy has a non-zero version, at least one required signal and a unique
+sorted set of signal rules. Every rule is exactly one of:
 
 - `required`: present in every observation and within tolerance;
 - `optional`: absence is allowed, but present values are evaluated for drift;
@@ -50,9 +50,10 @@ Observation input order does not affect the matrix identity. Observation
 sequences and signal names are canonicalized, and the policy plus bounded numeric
 observations are hashed with SHA-256 under an explicit schema domain.
 
-The report exposes only policy version, observation count, aggregate result
-counts, outcome and matrix digest. Raw signal names and values are not accepted
-by the metadata-only support renderer.
+The internal report exposes policy version, observation count, aggregate result
+counts, outcome and matrix digest for controlled evidence comparison. The
+metadata-only support renderer omits the matrix digest as well as raw signal names
+and values, preventing a value-derived identifier from becoming support telemetry.
 
 The numeric observations in tests are synthetic buckets. They do not model or
 certify actual canvas, WebGL, audio, timezone, font or network behavior.
@@ -100,7 +101,8 @@ A failed higher version cannot be replayed after rollback.
 ## 6. Privacy And Support Output
 
 Certification, device and update support summaries expose aggregate counts,
-versions, state and matrix digest only. They exclude:
+versions and state only. The certification matrix digest remains available to
+controlled internal evidence but is omitted from support output. They exclude:
 
 - raw signal names and values;
 - tenant, profile, generation and device IDs;

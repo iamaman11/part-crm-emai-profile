@@ -15,6 +15,7 @@ REQUIRED_FRAGMENTS = (
     "evaluate_certification",
     "MatrixDigest",
     "CertificationOutcome::Prohibited",
+    "required_rules",
     "DeviceAuthorizationRegistry",
     "authorize_unwrap",
     "StaleGrantVersion",
@@ -39,6 +40,8 @@ FORBIDDEN_FRAGMENTS = (
     "windows::",
     "worker::",
     "reqwest::",
+    "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct ObservationSet",
+    "matrix_digest={}",
 )
 
 
