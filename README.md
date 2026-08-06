@@ -10,7 +10,7 @@ adapters, а не переносит Camoufox или локальный browser 
 
 ## Текущий Статус
 
-**Repository Steps 0–7 приняты.**
+**Repository Steps 0–8 приняты.**
 
 - Step 0 создал exact Rust workspace, pure primitives и постоянный
   Linux/Windows/WASM quality gate.
@@ -38,18 +38,22 @@ adapters, а не переносит Camoufox или локальный browser 
   content-addressed synthetic bundle, safe path/extraction validation, typed
   Bridge approval before spawn, rollback on IPC failure, fake Camouhost subprocess
   и active/clean synthetic profile evidence.
+- Step 8 добавил marked opaque materialization paths, atomic Bridge-owned
+  lock-file protocol, deterministic regular-file inventory, clone-only recovery,
+  explicit dirty/recovery lifecycle, forgotten-window and safe quota policies,
+  metadata-only support evidence и отдельный Linux/Windows Local Profile Gate.
 
-Accepted Step 7 source head: `936d3c9529b897daac2ea5d13ba01f7babf07b8a`.
-Exact-head Quality Gate run: `31060683502`. Runtime Bundle Gate run:
-`31060683898`. Squash merge:
-`9d01ccb34598a8aeb9406570b623582d710c88e7`.
+Accepted Step 8 source head: `dbf3770f58c45b9f247579191b2b2d5f342c1bc8`.
+Exact-head Quality Gate run: `31068856595`. Local Profile Gate run:
+`31068856619`. Runtime Bundle regression run: `31068856601`. Squash merge:
+`eb55f67d742661019438891764c388dc19f62d96`.
 
-Следующий этап — **Repository Step 8: Local Profile Lifecycle**: safe
-materialization paths, local OS lock adapters, deterministic inventory,
-clone-only integrity/recovery, dirty-state preservation, quota and forgotten
-window policies. Real Camoufox execution, legacy profile compatibility, trusted
-signing, physical multi-device runtime и production readiness ещё не доказаны.
-Машиночитаемый статус: [`docs/status.json`](docs/status.json).
+Следующий этап — **Repository Step 9: Encrypted Cloud Generations**: accepted
+ADR-0006 implementation, reviewed streaming AEAD container, immutable R2 objects,
+pointer CAS, restore/rollback/orphan reconciliation и clean-environment restore
+evidence. Real Camoufox execution, legacy profile compatibility, kernel advisory
+locking, trusted signing, physical multi-device runtime и production readiness
+ещё не доказаны. Машиночитаемый статус: [`docs/status.json`](docs/status.json).
 
 Единственный разрешенный источник legacy-профилей:
 
@@ -85,6 +89,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Profile Coordinator boundary](docs/PROFILE_COORDINATOR.md)
 - [Windows Bridge feasibility boundary](docs/WINDOWS_BRIDGE_FEASIBILITY.md)
 - [Camouhost runtime bundle boundary](docs/CAMOUHOST_RUNTIME_BUNDLE.md)
+- [Local profile lifecycle boundary](docs/LOCAL_PROFILE_LIFECYCLE.md)
 - [ADR status registry](docs/ADR_STATUS.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Data classification](docs/DATA_CLASSIFICATION.md)
@@ -97,6 +102,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Profile Coordinator evidence](docs/evidence/2026-08-06-repository-step-5-profile-coordinator.md)
 - [Windows Bridge feasibility evidence](docs/evidence/2026-08-06-repository-step-6-windows-bridge-feasibility.md)
 - [Camouhost runtime bundle evidence](docs/evidence/2026-08-06-repository-step-7-camouhost-runtime-bundle.md)
+- [Local profile lifecycle evidence](docs/evidence/2026-08-06-repository-step-8-local-profile-lifecycle.md)
 - [Проверенные выводы исследования](docs/RESEARCH_FINDINGS.md)
 - [Cloud profile smoke test](docs/CLOUD_PROFILE_SMOKE_TEST.md)
 - [Текущая проверка готовности плана](docs/PLAN_READINESS_REVIEW.md)
@@ -151,8 +157,11 @@ packaging. Step 6 подтвердил provider-free Bridge boundaries, redacted
 single-use enrollment, local writer/process/outbox semantics и non-empty Windows
 release executable. Step 7 подтвердил deterministic synthetic runtime bundle,
 manifest/path/content verification, Bridge approval before spawn, rollback and
-active-versus-clean synthetic lifecycle. Remote staging, real Camoufox,
-third-party redistribution, trusted signing, backup/restore, physical
+active-versus-clean synthetic lifecycle. Step 8 подтвердил safe marked local
+materialization, atomic Bridge lock-file ownership, deterministic inventory,
+clone-only integrity evidence, dirty/recovery preservation, quota exclusion and
+metadata-only support output. Remote staging, real Camoufox, kernel advisory
+locking, third-party redistribution, trusted signing, backup/restore, physical
 multi-device runtime и account recovery пока не считаются выполненными.
 
 ## Ключевые Инварианты
@@ -163,7 +172,7 @@ multi-device runtime и account recovery пока не считаются вып
 4. Raw D1 statements принадлежат только Cloudflare adapter boundary.
 5. Tenant-owned D1 relations используют tenant-inclusive keys и foreign keys.
 6. Один профиль имеет только одного writer через Durable Object lease, monotonic
-   epoch/fencing token и локальный OS lock.
+   epoch/fencing token и локальный Bridge-owned lock protocol.
 7. Firefox lock-файлы никогда не удаляются автоматически.
 8. Snapshot создается только после graceful close и подтвержденного quiescence.
 9. R2 не используется как live filesystem: generation сначала материализуется
