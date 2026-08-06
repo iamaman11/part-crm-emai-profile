@@ -1,0 +1,18 @@
+{
+  "artifact_digests_sha256": [],
+  "checks": [],
+  "evidence_id": "ev-20260806-cloud-branch-b",
+  "gate": "cloudflare_environment",
+  "limitations": [],
+  "observed_at": "2026-08-06T12:20:00Z",
+  "references": [
+    "https://github.com/iamaman11/part-crm-emai-profile/issues/3"
+  ],
+  "schema_version": 1,
+  "scope": {
+    "environment": "staging",
+    "subject_id": "cloudflare-staging"
+  },
+  "status": "pending",
+  "supersedes": "ev-20260806-cloud-root"
+}
