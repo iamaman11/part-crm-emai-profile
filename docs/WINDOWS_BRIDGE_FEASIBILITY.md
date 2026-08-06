@@ -66,6 +66,12 @@ request. Exit during startup or normal running is a crash even when the OS exit
 code is zero. Start or close deadline expiry produces `ForcedTimeout`; it cannot
 silently become a clean profile close.
 
+The native composition layer exposes a replaceable process-control port and a
+deterministic fake that records spawn, graceful-close and forced-termination
+commands. A Windows-only safe adapter uses `std::os::windows` argument encoding
+without `unsafe` code. The pinned Windows job compiles and tests this module and
+verifies a non-empty release executable.
+
 ## Camouhost IPC
 
 Bridge and Camouhost exchange bounded, versioned typed messages. Step 6 defines
@@ -102,6 +108,7 @@ Permanent CI must prove:
 - deterministic SQLite migration, idempotency, ordering, append-only and outbox
   delivery tests;
 - deliberate browser-lock deletion fixture rejection;
+- Windows-only safe adapter tests;
 - release compilation and non-empty `profile-bridge.exe` verification on the
   pinned Windows runner;
 - unchanged Cloudflare Worker, D1 and existing repository gates.
