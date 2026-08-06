@@ -16,5 +16,17 @@ Rules:
    artifact identities;
 4. do not store screenshots, logs, credentials, IP addresses, account names,
    browser data, host paths, certificates, keys or free-form provider output;
-5. terminal `passed`/`failed` records require a GitHub review reference;
-6. `scripts/check-external-evidence.py` is the normative executable validator.
+5. terminal `passed`/`failed` records require an exact GitHub review/comment URL;
+6. `scripts/check-external-evidence.py` is the normative base schema, check catalog,
+   privacy and immutable-lineage validator;
+7. `scripts/check-external-evidence-scope.py` is the normative strict timestamp,
+   evidence-date, gate/environment and IPv6 scope validator;
+8. every local review must run both commands from the repository root:
+
+   ```text
+   python scripts/check-external-evidence.py
+   python scripts/check-external-evidence-scope.py
+   ```
+
+The permanent External Evidence Gate runs both validators and their positive and
+negative fixtures.
