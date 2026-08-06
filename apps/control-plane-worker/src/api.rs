@@ -178,18 +178,15 @@ async fn transfer_owner(request: &mut Request, env: &Env, tenant_id: &str) -> Re
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
+    let response_version = match next_aggregate_version(next_owner_version) {
+        Some(value) => value,
+        None => return internal_failure(request),
+    };
     let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(
-        env,
-        &actor,
-        &envelope,
-        next_owner_version.value().saturating_add(1),
-    )
-    .await?
-    {
+    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
         return Ok(response);
     }
     let mutation = OwnerTransferMutation {
@@ -208,7 +205,7 @@ async fn transfer_owner(request: &mut Request, env: &Env, tenant_id: &str) -> Re
     mutation_receipt(
         "transferred",
         next_owner_actor_id.as_str(),
-        next_owner_version.value().saturating_add(1),
+        response_version,
         200,
     )
 }
@@ -229,18 +226,15 @@ async fn create_invitation(request: &mut Request, env: &Env, tenant_id: &str) ->
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
+    let response_version = match next_aggregate_version(expected_tenant_version) {
+        Some(value) => value,
+        None => return internal_failure(request),
+    };
     let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(
-        env,
-        &actor,
-        &envelope,
-        expected_tenant_version.value().saturating_add(1),
-    )
-    .await?
-    {
+    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
         return Ok(response);
     }
     let mutation = CreateInvitationMutation {
@@ -260,7 +254,7 @@ async fn create_invitation(request: &mut Request, env: &Env, tenant_id: &str) ->
     mutation_receipt(
         "created",
         invitation_id.as_str(),
-        expected_tenant_version.value().saturating_add(1),
+        response_version,
         201,
     )
 }
@@ -366,6 +360,10 @@ async fn update_membership_status(
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
+    let response_version = match next_aggregate_version(expected_version) {
+        Some(value) => value,
+        None => return internal_failure(request),
+    };
     let next_status = match body.status.as_str() {
         "ACTIVE" => MembershipStatusValue::Active,
         "SUSPENDED" => MembershipStatusValue::Suspended,
@@ -376,14 +374,7 @@ async fn update_membership_status(
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(
-        env,
-        &actor,
-        &envelope,
-        expected_version.value().saturating_add(1),
-    )
-    .await?
-    {
+    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
         return Ok(response);
     }
     let mutation = MembershipStatusMutation {
@@ -402,7 +393,7 @@ async fn update_membership_status(
     mutation_receipt(
         "updated",
         target_actor_id.as_str(),
-        expected_version.value().saturating_add(1),
+        response_version,
         200,
     )
 }
@@ -572,18 +563,15 @@ async fn assign_profile(
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
+    let response_version = match next_aggregate_version(expected_profile_version) {
+        Some(value) => value,
+        None => return internal_failure(request),
+    };
     let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(
-        env,
-        &actor,
-        &envelope,
-        expected_profile_version.value().saturating_add(1),
-    )
-    .await?
-    {
+    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
         return Ok(response);
     }
     let mutation = AssignProfileMutation {
@@ -604,7 +592,7 @@ async fn assign_profile(
     mutation_receipt(
         "assigned",
         assignment_id.as_str(),
-        expected_profile_version.value().saturating_add(1),
+        response_version,
         200,
     )
 }
@@ -635,6 +623,10 @@ async fn update_profile_grant(
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
+    let response_version = match next_aggregate_version(expected_profile_version) {
+        Some(value) => value,
+        None => return internal_failure(request),
+    };
     let role = match body.role.as_str() {
         "PROFILE_VIEWER" => ProfileGrantValue::Viewer,
         "PROFILE_OPERATOR" => ProfileGrantValue::Operator,
@@ -644,14 +636,7 @@ async fn update_profile_grant(
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(
-        env,
-        &actor,
-        &envelope,
-        expected_profile_version.value().saturating_add(1),
-    )
-    .await?
-    {
+    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
         return Ok(response);
     }
     let mutation = ProfileGrantMutation {
@@ -677,12 +662,7 @@ async fn update_profile_grant(
     if revoke {
         Response::empty().map(|response| response.with_status(204))
     } else {
-        mutation_receipt(
-            "granted",
-            profile_id.as_str(),
-            expected_profile_version.value().saturating_add(1),
-            200,
-        )
+        mutation_receipt("granted", profile_id.as_str(), response_version, 200)
     }
 }
 
@@ -712,6 +692,10 @@ async fn update_client_grant(
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
+    let response_version = match next_aggregate_version(expected_client_version) {
+        Some(value) => value,
+        None => return internal_failure(request),
+    };
     let role = match body.role.as_str() {
         "CLIENT_VIEWER" => ClientGrantValue::Viewer,
         "CLIENT_EDITOR" => ClientGrantValue::Editor,
@@ -721,14 +705,7 @@ async fn update_client_grant(
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(
-        env,
-        &actor,
-        &envelope,
-        expected_client_version.value().saturating_add(1),
-    )
-    .await?
-    {
+    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
         return Ok(response);
     }
     let mutation = ClientGrantMutation {
@@ -754,12 +731,7 @@ async fn update_client_grant(
     if revoke {
         Response::empty().map(|response| response.with_status(204))
     } else {
-        mutation_receipt(
-            "granted",
-            client_id.as_str(),
-            expected_client_version.value().saturating_add(1),
-            200,
-        )
+        mutation_receipt("granted", client_id.as_str(), response_version, 200)
     }
 }
 
@@ -799,6 +771,10 @@ async fn replay_response(
         .transpose()
 }
 
+fn next_aggregate_version(version: AggregateVersion) -> Option<u64> {
+    version.next().ok().map(AggregateVersion::value)
+}
+
 fn invalid_request(request: &Request) -> Result<Response> {
     problem(
         &correlation_hint(request),
@@ -810,6 +786,15 @@ fn invalid_request(request: &Request) -> Result<Response> {
 
 fn conflict(request: &Request) -> Result<Response> {
     problem(&correlation_hint(request), 409, "conflict", "Conflict")
+}
+
+fn internal_failure(request: &Request) -> Result<Response> {
+    problem(
+        &correlation_hint(request),
+        500,
+        "internal_failure",
+        "Internal Failure",
+    )
 }
 
 #[derive(Serialize)]
@@ -1027,12 +1012,26 @@ struct ClientGrantRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::prefixed_id;
+    use super::{next_aggregate_version, prefixed_id};
+    use profile_platform_primitives::AggregateVersion;
 
     #[test]
     fn generated_envelope_ids_stay_within_opaque_id_limit() {
         let source = "x".repeat(96);
         assert!(prefixed_id("audit", &source).len() <= 96);
         assert!(prefixed_id("outbox", &source).len() <= 96);
+    }
+
+    #[test]
+    fn aggregate_response_versions_never_saturate() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            next_aggregate_version(AggregateVersion::INITIAL),
+            Some(2)
+        );
+        assert_eq!(
+            next_aggregate_version(AggregateVersion::new(u64::MAX)?),
+            None
+        );
+        Ok(())
     }
 }
