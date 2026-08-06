@@ -290,10 +290,7 @@ impl RuntimeInventory {
             .is_ok()
     }
 
-    pub fn validate_entrypoint(
-        &self,
-        manifest: &RuntimeManifest,
-    ) -> Result<(), InventoryError> {
+    pub fn validate_entrypoint(&self, manifest: &RuntimeManifest) -> Result<(), InventoryError> {
         if !self.contains(manifest.entrypoint()) {
             return Err(InventoryError::EntrypointMissing);
         }
@@ -435,10 +432,7 @@ mod tests {
 
     #[test]
     fn digest_requires_lowercase_sha256_shape() {
-        assert_eq!(
-            Sha256Digest::parse("A".repeat(64)),
-            Err(DigestError)
-        );
+        assert_eq!(Sha256Digest::parse("A".repeat(64)), Err(DigestError));
         assert_eq!(Sha256Digest::parse("a".repeat(63)), Err(DigestError));
     }
 
@@ -461,8 +455,8 @@ mod tests {
     }
 
     #[test]
-    fn manifest_requires_entrypoint_and_matching_inventory_digest(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn manifest_requires_entrypoint_and_matching_inventory_digest()
+    -> Result<(), Box<dyn std::error::Error>> {
         let inventory_digest = digest('c')?;
         let manifest = RuntimeManifest::new(
             "0.1.0",
