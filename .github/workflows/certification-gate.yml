@@ -1,0 +1,64 @@
+name: Certification Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: certification-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  certification-linux:
+    name: Certification Linux And WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Compile Step 10 policy
+        run: python -m py_compile scripts/check-step10-certification.py
+
+      - name: Enforce Step 10 certification boundary
+        run: python scripts/check-step10-certification.py
+
+      - name: Prove raw-signal output fixture is rejected
+        run: |
+          if python scripts/check-step10-certification.py --root tests/certification/fixtures/raw-signal-output; then
+            echo "Raw-signal output fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy certification crate
+        run: cargo clippy --locked -p certification-domain --all-targets -- -D warnings
+
+      - name: Test certification device and update contracts
+        run: cargo test --locked -p certification-domain
+
+      - name: Add Workers WASM target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Check pure certification crate for Workers WASM
+        run: cargo check --locked -p certification-domain --target wasm32-unknown-unknown
+
+  certification-windows:
+    name: Certification Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Test certification device and update contracts
+        run: cargo test --locked -p certification-domain
