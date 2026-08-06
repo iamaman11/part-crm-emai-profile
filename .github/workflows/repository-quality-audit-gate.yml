@@ -1,0 +1,74 @@
+name: Repository Quality Audit Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-quality-audit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-audit:
+    name: Invariants And Fail-Closed Boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Show pinned toolchain
+        run: rustup show active-toolchain
+
+      - name: Compile audit policy scripts
+        run: python -m py_compile scripts/test-profile-generation-state-guards.py
+
+      - name: Test hardened pure boundaries
+        run: >-
+          cargo test --locked
+          -p profile-platform-primitives
+          -p client-domain
+          -p profile-domain
+          -p session-domain
+          -p use-cases
+          -p control-plane-contract
+
+      - name: Test typed Cloudflare projections
+        run: cargo test --locked -p cloudflare-adapters --lib
+
+      - name: Check Worker fail-closed composition for WASM
+        run: >-
+          cargo check --locked -p browser-profile-control-plane-worker
+          --target wasm32-unknown-unknown
+
+      - name: Prove D1 live profile state guards
+        run: python scripts/test-profile-generation-state-guards.py
+
+      - name: Verify developer capability map exists
+        run: |
+          test -s docs/DEVELOPER_CAPABILITY_MATRIX.md
+          grep -q 'Composed' docs/DEVELOPER_CAPABILITY_MATRIX.md
+          grep -q 'Synthetic' docs/DEVELOPER_CAPABILITY_MATRIX.md
+          grep -q 'Target' docs/DEVELOPER_CAPABILITY_MATRIX.md
+          grep -q 'External' docs/DEVELOPER_CAPABILITY_MATRIX.md
+
+      - name: Reject masked version overflow and direct ready transitions
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R --line-number --fixed-strings '.saturating_add(1)' \
+            apps/control-plane-worker crates; then
+            echo 'Version increments must not saturate.' >&2
+            exit 1
+          fi
+          if grep -R --line-number --fixed-strings 'AggregateVersion::from_value' \
+            apps crates; then
+            echo 'Invariant-bypassing aggregate version constructor returned.' >&2
+            exit 1
+          fi
