@@ -1,0 +1,64 @@
+name: Encrypted Generation Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: encrypted-generation-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  encrypted-generation-linux:
+    name: Encrypted Generation Linux And WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Compile Step 9 policy
+        run: python -m py_compile scripts/check-step9-encrypted-generation.py
+
+      - name: Enforce Step 9 encrypted generation boundary
+        run: python scripts/check-step9-encrypted-generation.py
+
+      - name: Prove key-output fixture is rejected
+        run: |
+          if python scripts/check-step9-encrypted-generation.py --root tests/encrypted-generation/fixtures/logs-key; then
+            echo "Key-output fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy encrypted generation crate
+        run: cargo clippy --locked -p encrypted-generation-domain --all-targets -- -D warnings
+
+      - name: Test encrypted generation lifecycle
+        run: cargo test --locked -p encrypted-generation-domain
+
+      - name: Add Workers WASM target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Check pure encrypted generation crate for Workers WASM
+        run: cargo check --locked -p encrypted-generation-domain --target wasm32-unknown-unknown
+
+  encrypted-generation-windows:
+    name: Encrypted Generation Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Test encrypted generation lifecycle
+        run: cargo test --locked -p encrypted-generation-domain
