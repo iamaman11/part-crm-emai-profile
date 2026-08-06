@@ -2,7 +2,9 @@
 members = [
     "apps/control-plane-worker",
     "apps/foundation-check",
+    "apps/profile-bridge",
     "crates/application-ports",
+    "crates/bridge-domain",
     "crates/client-domain",
     "crates/cloudflare-adapters",
     "crates/contracts",
@@ -22,6 +24,7 @@ rust-version = "1.97.1"
 
 [workspace.dependencies]
 application-ports = { path = "crates/application-ports" }
+bridge-domain = { path = "crates/bridge-domain" }
 client-domain = { path = "crates/client-domain" }
 cloudflare-adapters = { path = "crates/cloudflare-adapters" }
 contracts = { path = "crates/contracts" }
