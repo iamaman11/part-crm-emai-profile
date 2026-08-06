@@ -10,7 +10,7 @@ adapters, а не переносит Camoufox или локальный browser 
 
 ## Текущий Статус
 
-**Repository Steps 0–6 приняты.**
+**Repository Steps 0–7 приняты.**
 
 - Step 0 создал exact Rust workspace, pure primitives и постоянный
   Linux/Windows/WASM quality gate.
@@ -34,17 +34,22 @@ adapters, а не переносит Camoufox или локальный browser 
   fail-closed redacted custom URI enrollment, single-use device-bound claim,
   one-writer workspace epoch, clean/crash/timeout supervision, versioned fake
   Camouhost IPC и локальный idempotent SQLite command/outbox protocol.
+- Step 7 добавил dependency-free runtime-bundle domain, deterministic
+  content-addressed synthetic bundle, safe path/extraction validation, typed
+  Bridge approval before spawn, rollback on IPC failure, fake Camouhost subprocess
+  и active/clean synthetic profile evidence.
 
-Accepted Step 6 source head: `cceb7e97da980c905739eb02366019015f247d6e`.
-Exact-head Quality Gate run: `31058767330`. Squash merge:
-`d0e2e0b1d11eb689b57f8ebaaefd591a6a7b6bab`.
+Accepted Step 7 source head: `936d3c9529b897daac2ea5d13ba01f7babf07b8a`.
+Exact-head Quality Gate run: `31060683502`. Runtime Bundle Gate run:
+`31060683898`. Squash merge:
+`9d01ccb34598a8aeb9406570b623582d710c88e7`.
 
-Следующий этап — **Repository Step 7: Camouhost Runtime Bundle**: embedded
-Python/Camouhost packaging boundary, versioned typed IPC implementation,
-content-addressed development bundle, disposable synthetic profile lifecycle и
-незатрагиваемый legacy corpus. Real Camoufox execution on an approved Windows
-host, trusted signing, physical multi-device runtime и production readiness ещё
-не доказаны. Машиночитаемый статус: [`docs/status.json`](docs/status.json).
+Следующий этап — **Repository Step 8: Local Profile Lifecycle**: safe
+materialization paths, local OS lock adapters, deterministic inventory,
+clone-only integrity/recovery, dirty-state preservation, quota and forgotten
+window policies. Real Camoufox execution, legacy profile compatibility, trusted
+signing, physical multi-device runtime и production readiness ещё не доказаны.
+Машиночитаемый статус: [`docs/status.json`](docs/status.json).
 
 Единственный разрешенный источник legacy-профилей:
 
@@ -79,6 +84,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [D1 catalog boundary](docs/D1_CATALOG.md)
 - [Profile Coordinator boundary](docs/PROFILE_COORDINATOR.md)
 - [Windows Bridge feasibility boundary](docs/WINDOWS_BRIDGE_FEASIBILITY.md)
+- [Camouhost runtime bundle boundary](docs/CAMOUHOST_RUNTIME_BUNDLE.md)
 - [ADR status registry](docs/ADR_STATUS.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Data classification](docs/DATA_CLASSIFICATION.md)
@@ -90,6 +96,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Identity, clients and ACL evidence](docs/evidence/2026-08-06-repository-step-4-identity-clients-acl.md)
 - [Profile Coordinator evidence](docs/evidence/2026-08-06-repository-step-5-profile-coordinator.md)
 - [Windows Bridge feasibility evidence](docs/evidence/2026-08-06-repository-step-6-windows-bridge-feasibility.md)
+- [Camouhost runtime bundle evidence](docs/evidence/2026-08-06-repository-step-7-camouhost-runtime-bundle.md)
 - [Проверенные выводы исследования](docs/RESEARCH_FINDINGS.md)
 - [Cloud profile smoke test](docs/CLOUD_PROFILE_SMOKE_TEST.md)
 - [Текущая проверка готовности плана](docs/PLAN_READINESS_REVIEW.md)
@@ -142,9 +149,11 @@ Durable Object coordinator, monotonic epoch/fencing, timeout uncertainty,
 assignment-independent authorization, repairable D1 projection и release Worker
 packaging. Step 6 подтвердил provider-free Bridge boundaries, redacted
 single-use enrollment, local writer/process/outbox semantics и non-empty Windows
-release executable. Remote staging, production binding behavior under load,
-real Camouhost/Camoufox, trusted signing, backup/restore, physical multi-device
-runtime и account recovery пока не считаются выполненными.
+release executable. Step 7 подтвердил deterministic synthetic runtime bundle,
+manifest/path/content verification, Bridge approval before spawn, rollback and
+active-versus-clean synthetic lifecycle. Remote staging, real Camoufox,
+third-party redistribution, trusted signing, backup/restore, physical
+multi-device runtime и account recovery пока не считаются выполненными.
 
 ## Ключевые Инварианты
 

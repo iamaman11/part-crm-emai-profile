@@ -20,6 +20,7 @@ smoke test does not promote unrelated production gates.
 | Repository Step 4 / PR #15 | accepted | Access JWT and fake identity convergence, active membership resolution, owner bootstrap/transfer, membership lifecycle, explicit client/profile ACL, neutral concealment, governed atomic commands and authenticated Worker packaging | remote Access policy, remote D1, Profile Coordinator, Bridge/runtime, multi-device or production readiness |
 | Repository Step 5 / PR #18 | accepted | per-profile Durable Object coordinator, monotonic epoch/fencing, stale-writer and timeout uncertainty rules, authenticated explicit profile ACL, replayable storage, repairable D1 projection/outbox and release Worker packaging | remote Durable Object behavior, physical multi-device runtime, Windows Bridge, encrypted generations or production readiness |
 | Repository Step 6 / PR #21 | accepted | redacted single-use custom URI enrollment, device-bound claim, local writer epochs, process close/crash/timeout rules, versioned fake Camouhost IPC, SQLite outbox and verified Windows release executable | registry installation, production device keys, real process/job behavior, real Camouhost/Camoufox, trusted signing, multi-device or production readiness |
+| Repository Step 7 / PR #24 | accepted | deterministic content-addressed synthetic runtime bundle, safe manifest/path/extraction validation, Bridge approval before spawn, fake Camouhost exact-session lifecycle and active/clean evidence | real Camoufox, redistribution rights, production Python resolution, real legacy profiles, trusted signing, multi-device or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -181,6 +182,32 @@ review item; it is not a Worker runtime dependency claim.
   [`evidence/2026-08-06-repository-step-6-windows-bridge-feasibility.md`](evidence/2026-08-06-repository-step-6-windows-bridge-feasibility.md);
 - production credentials, remote resources, real browser runtime, legacy profile
   data or physical multi-device evidence involved: no.
+
+### Repository Step 7 Evidence
+
+- baseline: `6f76109d48272109ea305c6f8690cc4c6540542f`;
+- accepted source head: `936d3c9529b897daac2ea5d13ba01f7babf07b8a`;
+- exact-head Quality Gate run: `31060683502`, conclusion `success`;
+- exact-head Runtime Bundle Gate run: `31060683898`, conclusion `success`;
+- squash merge: `9d01ccb34598a8aeb9406570b623582d710c88e7`;
+- deterministic canonical manifest, inventory and byte-identical bundle rebuild:
+  passed;
+- SHA-256 source/payload tamper detection: passed;
+- absolute, drive, traversal, reserved, symlink, duplicate and case-colliding
+  paths: rejected as required;
+- extraction requires a marked empty synthetic destination and remains contained;
+- typed Bridge bundle approval is required before spawn;
+- failed IPC negotiation invokes forced-termination rollback;
+- fake Camouhost IPC v1 exact-session hello/launch/ready/close: passed;
+- synthetic active evidence appears on launch and clean evidence only after exact
+  graceful close; mismatch and premature EOF remain active;
+- deliberate legacy-corpus reference fixture: rejected as required;
+- Linux and Windows dedicated runtime jobs passed; Profile Bridge executable and
+  Cloudflare Worker release artifacts remained verified;
+- detailed report:
+  [`evidence/2026-08-06-repository-step-7-camouhost-runtime-bundle.md`](evidence/2026-08-06-repository-step-7-camouhost-runtime-bundle.md);
+- production credentials, network dependency resolution, real Camoufox, real
+  legacy profiles or physical multi-device evidence involved: no.
 
 ## 2. Required Permanent CI Evidence
 
