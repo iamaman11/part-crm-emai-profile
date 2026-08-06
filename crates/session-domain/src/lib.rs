@@ -58,7 +58,7 @@ impl LaunchIntent {
         if self.redeemed_at.is_some() {
             return Err(LaunchIntentError::ReplayRejected);
         }
-        if now > self.expires_at {
+        if now >= self.expires_at {
             return Err(LaunchIntentError::Expired);
         }
 
@@ -218,18 +218,25 @@ mod tests {
         ))
     }
 
-    #[test]
-    fn launch_intent_is_single_use() -> Result<(), Box<dyn std::error::Error>> {
-        let actor = actor()?;
-        let device_id = DeviceId::parse("device_01JSESSION")?;
-        let mut intent = LaunchIntent::issue(
+    fn intent(
+        actor: &ActorContext,
+        device_id: &DeviceId,
+    ) -> Result<LaunchIntent, Box<dyn std::error::Error>> {
+        Ok(LaunchIntent::issue(
             actor.tenant_scope().tenant_id().clone(),
             LaunchIntentId::parse("intent_01JSESSION")?,
             actor.actor_id().clone(),
             device_id.clone(),
             ProfileId::parse("profile_01JSESSION")?,
             UnixMillis::new(100),
-        );
+        ))
+    }
+
+    #[test]
+    fn launch_intent_is_single_use() -> Result<(), Box<dyn std::error::Error>> {
+        let actor = actor()?;
+        let device_id = DeviceId::parse("device_01JSESSION")?;
+        let mut intent = intent(&actor, &device_id)?;
         intent.redeem(&actor, &device_id, UnixMillis::new(50))?;
         assert_eq!(
             intent.redeem(&actor, &device_id, UnixMillis::new(51)),
@@ -239,16 +246,21 @@ mod tests {
     }
 
     #[test]
+    fn launch_intent_expires_at_exact_deadline() -> Result<(), Box<dyn std::error::Error>> {
+        let actor = actor()?;
+        let device_id = DeviceId::parse("device_01JSESSION")?;
+        let mut intent = intent(&actor, &device_id)?;
+        assert_eq!(
+            intent.redeem(&actor, &device_id, UnixMillis::new(100)),
+            Err(LaunchIntentError::Expired)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn wrong_device_cannot_redeem_intent() -> Result<(), Box<dyn std::error::Error>> {
         let actor = actor()?;
-        let mut intent = LaunchIntent::issue(
-            actor.tenant_scope().tenant_id().clone(),
-            LaunchIntentId::parse("intent_01JSESSION")?,
-            actor.actor_id().clone(),
-            DeviceId::parse("device_01JSESSION")?,
-            ProfileId::parse("profile_01JSESSION")?,
-            UnixMillis::new(100),
-        );
+        let mut intent = intent(&actor, &DeviceId::parse("device_01JSESSION")?)?;
         assert_eq!(
             intent.redeem(
                 &actor,
