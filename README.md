@@ -54,7 +54,7 @@ regression run: `31072625892`. Squash merge: `bc5286e3fea767acf955fb2622dab6221e
 
 Следующий этап — **Repository Step 10: Certification And Multi-Device**:
 bounded certification policy, drift/repeatability evidence, device-scoped
-unwrap/revoke contracts и signed-update rollback boundary. Accepted ADR-0001,
+unwrap/revoke contracts и signed-update rollback boundary. Принятие ADR-0001,
 второй независимый Windows host и trusted signing остаются внешними gates и не
 считаются доказанными. ADR-0006 остаётся proposed; production key management,
 remote R2/D1 atomicity и clean-environment escrow restore ещё не доказаны.
