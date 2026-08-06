@@ -7,13 +7,44 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: profile-generation-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  temporary-format:
+    name: One Shot Pinned Formatter
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.actor != 'github-actions[bot]' &&
+      github.event.pull_request.head.ref == 'profile-generation-registry-api'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: profile-generation-registry-api
+          persist-credentials: true
+
+      - name: Apply pinned Rust formatting
+        run: cargo fmt --all
+
+      - name: Commit deterministic formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo 'No formatting changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- '*.rs'
+          git commit -m 'Apply pinned cargo fmt [skip ci]'
+          git push origin HEAD:profile-generation-registry-api
+
   profile-generation:
     name: Registry Domain D1 Adapter Worker And Contract
     runs-on: ubuntu-latest
@@ -34,6 +65,9 @@ jobs:
 
       - name: Test Cloudflare generation adapter
         run: cargo test --locked -p cloudflare-adapters --lib
+
+      - name: Test Worker request evidence and routing helpers
+        run: cargo test --locked -p browser-profile-control-plane-worker --lib
 
       - name: Check composed Worker for WASM
         run: >-
@@ -66,6 +100,7 @@ jobs:
           grep -q 'getProfileGeneration' /tmp/openapi-v1.json
           grep -q 'verifyProfileGeneration' /tmp/openapi-v1.json
           grep -q 'activateProfileGeneration' /tmp/openapi-v1.json
+          grep -q 'deactivateProfileGeneration' /tmp/openapi-v1.json
           grep -q 'quarantineProfileGeneration' /tmp/openapi-v1.json
 
       - name: Reject migration gaps and unsafe registry storage
@@ -85,9 +120,12 @@ jobs:
           grep -q 'profile_generation_time_regression' migrations/d1/0006_profile_generation_registry.sql
           grep -q 'profile_generation_insert_not_governed' migrations/d1/0007_profile_generation_integrity_guards.sql
           grep -q 'profile_generation_activation_not_governed' migrations/d1/0007_profile_generation_integrity_guards.sql
+          grep -q 'profile_generation_deactivate_commands' migrations/d1/0008_profile_generation_deactivation.sql
+          grep -q 'profile_generation_pointer_clear_not_governed' migrations/d1/0008_profile_generation_deactivation.sql
           if grep -R --line-number -E '(plaintext|private_key|secret_key|profile_bytes)[[:space:]]+TEXT' \
             migrations/d1/0006_profile_generation_registry.sql \
-            migrations/d1/0007_profile_generation_integrity_guards.sql; then
+            migrations/d1/0007_profile_generation_integrity_guards.sql \
+            migrations/d1/0008_profile_generation_deactivation.sql; then
             echo 'Generation registry must remain metadata-only.' >&2
             exit 1
           fi
