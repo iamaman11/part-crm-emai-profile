@@ -32,7 +32,14 @@ REPOSITORY_REQUIRED = {
         "pub struct FakeDeviceIdentity",
         "pub struct FakeDeviceKeyStore",
         "pub struct FakeCamouhost",
+        "pub struct FakeProcessControl",
+        "ProcessAction::ForceTerminate",
         "requires_version_negotiation",
+    ),
+    "apps/profile-bridge/src/windows_native.rs": (
+        "std::os::windows::ffi::OsStrExt",
+        "pub fn encode_wide_argument",
+        "windows_argument_encoding_is_nul_terminated_without_unsafe_code",
     ),
     "migrations/bridge/0001_local_state.sql": (
         "CREATE TABLE bridge_commands",
@@ -72,6 +79,7 @@ BROWSER_LOCK_MARKERS = (
 )
 
 FIXTURE_PREFIX = "tests/windows-bridge/fixtures/"
+POLICY_PATH = "scripts/check-step6-windows-bridge.py"
 
 
 def parse_args() -> argparse.Namespace:
@@ -100,7 +108,7 @@ def main() -> int:
         if not path.is_file() or path.suffix not in {".rs", ".py"}:
             continue
         rel = relative(root, path)
-        if repository_root and rel.startswith(FIXTURE_PREFIX):
+        if rel == POLICY_PATH or (repository_root and rel.startswith(FIXTURE_PREFIX)):
             continue
         text = path.read_text(encoding="utf-8")
         if any(marker in text for marker in DELETION_MARKERS) and any(
