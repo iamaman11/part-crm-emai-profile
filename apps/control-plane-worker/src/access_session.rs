@@ -184,14 +184,18 @@ pub fn problem(
     code: &'static str,
     title: &'static str,
 ) -> Result<Response> {
-    Response::from_json(&Problem {
+    let mut response = Response::from_json(&Problem {
         problem_type: problem_type_for_code(code),
         title,
         status,
         code,
         correlation_id,
-    })
-    .map(|response| response.with_status(status))
+    })?
+    .with_status(status);
+    response
+        .headers_mut()
+        .set("content-type", "application/problem+json")?;
+    Ok(response)
 }
 
 pub fn neutral_not_found(correlation_id: &str) -> Result<Response> {
@@ -209,7 +213,7 @@ pub fn correlation_hint(request: &Request) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::problem_type_for_code;
+    use super::{problem, problem_type_for_code};
 
     #[test]
     fn every_stable_problem_code_has_its_own_type() {
@@ -236,5 +240,17 @@ mod tests {
             problem_type_for_code("unknown_code"),
             "urn:part-crm:problem:internal-failure"
         );
+    }
+
+    #[test]
+    fn problem_response_uses_problem_json_media_type()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let response = problem("corr_problem_test", 409, "conflict", "Conflict")?;
+        assert_eq!(response.status_code(), 409);
+        assert_eq!(
+            response.headers().get("content-type")?.as_deref(),
+            Some("application/problem+json")
+        );
+        Ok(())
     }
 }
