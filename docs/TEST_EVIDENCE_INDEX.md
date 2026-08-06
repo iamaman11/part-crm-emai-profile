@@ -22,6 +22,7 @@ smoke test does not promote unrelated production gates.
 | Repository Step 6 / PR #21 | accepted | redacted single-use custom URI enrollment, device-bound claim, local writer epochs, process close/crash/timeout rules, versioned fake Camouhost IPC, SQLite outbox and verified Windows release executable | registry installation, production device keys, real process/job behavior, real Camouhost/Camoufox, trusted signing, multi-device or production readiness |
 | Repository Step 7 / PR #24 | accepted | deterministic content-addressed synthetic runtime bundle, safe manifest/path/extraction validation, Bridge approval before spawn, fake Camouhost exact-session lifecycle and active/clean evidence | real Camoufox, redistribution rights, production Python resolution, real legacy profiles, trusted signing, multi-device or production readiness |
 | Repository Step 8 / PR #27 | accepted | marked opaque local materialization, atomic Bridge lock-file protocol, deterministic inventory, clone-only recovery, explicit dirty/recovery states, safe quota and metadata-only support evidence | kernel advisory locks, real browser/database recovery, real legacy profiles, encrypted cloud generations, trusted signing, multi-device or production readiness |
+| Repository Step 9 / PR #30 | accepted bounded synthetic evidence | exact-pinned XChaCha20-Poly1305/SHA-256 container, authenticated chunk/final records, immutable lifecycle, strict pointer CAS/rollback/quarantine/orphan planning, DEK-bound nonce reuse, zeroizing plaintext boundaries and Linux/Windows/WASM gates | production entropy/key wrapping, remote R2/D1 atomicity, escrow/account-loss restore, independent cryptographic review, physical multi-device or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -238,6 +239,36 @@ review item; it is not a Worker runtime dependency claim.
   [`evidence/2026-08-06-repository-step-8-local-profile-lifecycle.md`](evidence/2026-08-06-repository-step-8-local-profile-lifecycle.md);
 - production credentials, remote resources, real browser runtime, legacy profile
   data or physical multi-device evidence involved: no.
+
+### Repository Step 9 Evidence
+
+- baseline: `e596fbe5692aa5b020700e7462c608dd23bacc15`;
+- accepted source head: `73685241a6d70cf6d8ec80210d94b66cf37b1b45`;
+- exact-head Quality Gate run: `31072625808`, conclusion `success`;
+- exact-head Encrypted Generation Gate run: `31072625852`, conclusion `success`;
+- exact-head Local Profile regression run: `31072625849`, conclusion `success`;
+- exact-head Runtime Bundle regression run: `31072625892`, conclusion `success`;
+- squash merge: `bc5286e3fea767acf955fb2622dab6221ecf1c3b`;
+- exact RustCrypto XChaCha20-Poly1305, SHA-256 and zeroization pins: passed;
+- canonical authenticated metadata, ordered chunks and mandatory final record: passed;
+- deterministic SHA-256 container regression vector: passed;
+- metadata/chunk/final tamper, truncation, reorder and identity mismatch: rejected;
+- invalid magic/version, oversized metadata and trailing bytes: rejected;
+- same DEK and nonce prefix across different key IDs: rejected as nonce reuse;
+- DEK and nonce-domain memory is non-printable and zeroized on drop;
+- plaintext-bearing results are non-`Debug` and use `Zeroizing` buffers;
+- restore grows plaintext only after authenticated records;
+- immutable conflict, stale pointer, invalid rollback and corrupt promotion: rejected;
+- wrong-key restore cannot quarantine an unchanged digest-matching object;
+- orphan planning protects current and rollback generations;
+- deliberate sensitive-output fixture: rejected as required;
+- Linux, Windows and Workers WASM dedicated jobs passed; Profile Bridge, Runtime
+  Bundle and Cloudflare Worker release regressions remained green;
+- detailed report:
+  [`evidence/2026-08-06-repository-step-9-encrypted-cloud-generations.md`](evidence/2026-08-06-repository-step-9-encrypted-cloud-generations.md);
+- production credentials, remote resources, real profiles, production keys or
+  physical multi-device evidence involved: no;
+- ADR-0006 and production readiness remain unaccepted.
 
 ## 2. Required Permanent CI Evidence
 
