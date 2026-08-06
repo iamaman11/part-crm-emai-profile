@@ -45,11 +45,13 @@ jobs:
           python -m py_compile
           scripts/test-profile-generation-registry.py
           scripts/test-profile-generation-registry-edge-cases.py
+          scripts/test-profile-generation-integrity-guards.py
 
       - name: Prove governed registry and activation
         run: |
           python scripts/test-profile-generation-registry.py
           python scripts/test-profile-generation-registry-edge-cases.py
+          python scripts/test-profile-generation-integrity-guards.py
 
       - name: Reject migration gaps and unsafe registry storage
         shell: bash
@@ -66,8 +68,11 @@ jobs:
           grep -q 'CREATE TABLE profile_generations' migrations/d1/0006_profile_generation_registry.sql
           grep -q 'active_profile_generation_cannot_be_quarantined' migrations/d1/0006_profile_generation_registry.sql
           grep -q 'profile_generation_time_regression' migrations/d1/0006_profile_generation_registry.sql
+          grep -q 'profile_generation_insert_not_governed' migrations/d1/0007_profile_generation_integrity_guards.sql
+          grep -q 'profile_generation_activation_not_governed' migrations/d1/0007_profile_generation_integrity_guards.sql
           if grep -R --line-number -E '(plaintext|private_key|secret_key|profile_bytes)[[:space:]]+TEXT' \
-            migrations/d1/0006_profile_generation_registry.sql; then
+            migrations/d1/0006_profile_generation_registry.sql \
+            migrations/d1/0007_profile_generation_integrity_guards.sql; then
             echo 'Generation registry must remain metadata-only.' >&2
             exit 1
           fi
