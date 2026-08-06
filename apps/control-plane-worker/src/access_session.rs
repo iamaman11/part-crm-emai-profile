@@ -161,19 +161,19 @@ struct Problem<'a> {
 }
 
 #[must_use]
-const fn problem_type_for_code(code: &str) -> &'static str {
-    match code.as_bytes() {
-        b"not_found" => "urn:part-crm:problem:not-found",
-        b"forbidden" => "urn:part-crm:problem:forbidden",
-        b"invalid_request" => "urn:part-crm:problem:invalid-request",
-        b"invalid_state" => "urn:part-crm:problem:invalid-state",
-        b"version_conflict" => "urn:part-crm:problem:version-conflict",
-        b"lease_conflict" => "urn:part-crm:problem:lease-conflict",
-        b"replay_rejected" => "urn:part-crm:problem:replay-rejected",
-        b"dependency_unavailable" => "urn:part-crm:problem:dependency-unavailable",
-        b"integrity_failure" => "urn:part-crm:problem:integrity-failure",
-        b"internal_failure" => "urn:part-crm:problem:internal-failure",
-        b"conflict" => "urn:part-crm:problem:conflict",
+fn problem_type_for_code(code: &str) -> &'static str {
+    match code {
+        "not_found" => "urn:part-crm:problem:not-found",
+        "forbidden" => "urn:part-crm:problem:forbidden",
+        "invalid_request" => "urn:part-crm:problem:invalid-request",
+        "invalid_state" => "urn:part-crm:problem:invalid-state",
+        "version_conflict" => "urn:part-crm:problem:version-conflict",
+        "lease_conflict" => "urn:part-crm:problem:lease-conflict",
+        "replay_rejected" => "urn:part-crm:problem:replay-rejected",
+        "dependency_unavailable" => "urn:part-crm:problem:dependency-unavailable",
+        "integrity_failure" => "urn:part-crm:problem:integrity-failure",
+        "internal_failure" => "urn:part-crm:problem:internal-failure",
+        "conflict" => "urn:part-crm:problem:conflict",
         _ => "urn:part-crm:problem:internal-failure",
     }
 }
