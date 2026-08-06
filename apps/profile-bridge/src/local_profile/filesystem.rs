@@ -40,7 +40,7 @@ impl MaterializationRoot {
 
         let marker = path.join(ROOT_MARKER);
         if marker.exists() {
-            if read_exact_text(&marker)? != ROOT_MARKER_CONTENT {
+            if read_control_text(&marker)? != ROOT_MARKER_CONTENT {
                 return Err(LocalProfileError::RootMarkerMismatch);
             }
         } else {
@@ -109,7 +109,7 @@ impl GenerationWorkspace {
         if !marker.exists() {
             return Err(LocalProfileError::GenerationMarkerMissing);
         }
-        if read_exact_text(&marker)? != GENERATION_MARKER_CONTENT {
+        if read_control_text(&marker)? != GENERATION_MARKER_CONTENT {
             return Err(LocalProfileError::GenerationMarkerMismatch);
         }
         Ok(Self {
@@ -167,7 +167,7 @@ impl BridgeWorkspaceLock {
     }
 
     pub fn release(self) -> Result<(), LocalProfileError> {
-        if read_exact_text(&self.lock_path)? != self.ownership {
+        if read_control_text(&self.lock_path)? != self.ownership {
             return Err(LocalProfileError::LockOwnershipMismatch);
         }
         fs::remove_file(self.lock_path)?;
@@ -323,7 +323,14 @@ fn write_new_text(path: &Path, content: &str) -> Result<(), LocalProfileError> {
     Ok(())
 }
 
-fn read_exact_text(path: &Path) -> Result<String, LocalProfileError> {
+fn read_control_text(path: &Path) -> Result<String, LocalProfileError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(LocalProfileError::SymbolicLinkRejected);
+    }
+    if !metadata.is_file() {
+        return Err(LocalProfileError::SpecialFileRejected);
+    }
     let mut content = String::new();
     File::open(path)?.read_to_string(&mut content)?;
     Ok(content)
@@ -366,13 +373,16 @@ fn collect_inventory(
             .strip_prefix(root)
             .map_err(|_| LocalProfileError::UnsafeRelativePath)?;
         let relative_path = normalized_relative_path(relative)?;
-        if is_bridge_control_file(&relative_path) {
-            continue;
-        }
         let metadata = fs::symlink_metadata(&path)?;
         let file_type = metadata.file_type();
         if file_type.is_symlink() {
             return Err(LocalProfileError::SymbolicLinkRejected);
+        }
+        if is_bridge_control_file(&relative_path) {
+            if !file_type.is_file() {
+                return Err(LocalProfileError::SpecialFileRejected);
+            }
+            continue;
         }
         if file_type.is_dir() {
             collect_inventory(root, &path, entries)?;
