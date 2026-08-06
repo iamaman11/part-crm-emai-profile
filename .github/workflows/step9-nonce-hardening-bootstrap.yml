@@ -85,6 +85,12 @@ jobs:
           )
           text = replace_one(
               text,
+              "#[derive(Clone, Debug, Default, Eq, PartialEq)]\npub struct CloudGenerationRepository {",
+              "#[derive(Clone, Default, Eq, PartialEq)]\npub struct CloudGenerationRepository {",
+              "repository debug removal",
+          )
+          text = replace_one(
+              text,
               "    nonce_claims: BTreeMap<(KeyId, NoncePrefix), GenerationId>,",
               "    nonce_claims: BTreeMap<(NonceDomain, NoncePrefix), GenerationId>,",
               "nonce claim map",
