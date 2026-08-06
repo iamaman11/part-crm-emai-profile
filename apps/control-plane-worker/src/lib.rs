@@ -4,6 +4,7 @@ mod access_session;
 mod api;
 mod profile_coordinator;
 mod profile_generations;
+mod request_evidence;
 
 pub use profile_coordinator::ProfileCoordinator;
 
