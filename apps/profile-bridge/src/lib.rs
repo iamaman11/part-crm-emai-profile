@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod runtime_bundle;
+
 #[cfg(windows)]
 pub mod windows_native;
 
