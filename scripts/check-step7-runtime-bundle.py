@@ -23,7 +23,7 @@ REPOSITORY_REQUIRED = {
         "pub struct ApprovedRuntimeBundle",
         "validate_inventory_digest",
         "validate_entrypoint",
-        "process.spawn(session_id)",
+        "spawn(session_id)",
         "rollback_process",
         "fn digest_mismatch_is_rejected_before_process_spawn",
         "fn approved_bundle_launches_and_closes_exact_session",
