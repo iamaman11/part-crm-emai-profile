@@ -56,7 +56,10 @@ pub async fn dispatch(
     let Some(profile) = visible_profile else {
         return neutral_not_found(actor.actor().correlation_id().as_str());
     };
-    if !profile_is_coordinatable(profile.status()) {
+    if !profile_is_coordinatable(
+        profile.status(),
+        profile.active_generation_id().is_some(),
+    ) {
         return problem(
             actor.actor().correlation_id().as_str(),
             409,
@@ -119,8 +122,8 @@ pub async fn dispatch(
     project_and_respond(response, env, actor.actor().tenant_scope(), &profile_id).await
 }
 
-fn profile_is_coordinatable(status: &str) -> bool {
-    matches!(status, "READY" | "IN_USE" | "DIRTY_LOCAL" | "SYNCING")
+fn profile_is_coordinatable(status: &str, has_active_generation: bool) -> bool {
+    has_active_generation && matches!(status, "READY" | "IN_USE" | "DIRTY_LOCAL" | "SYNCING")
 }
 
 async fn project_and_respond(
@@ -549,4 +552,24 @@ fn request_error(error: CoordinatorRequestError) -> Error {
 
 fn json_error(error: serde_json::Error) -> Error {
     Error::RustError(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::profile_is_coordinatable;
+
+    #[test]
+    fn coordinator_requires_an_active_generation_for_live_profile_states() {
+        for status in ["READY", "IN_USE", "DIRTY_LOCAL", "SYNCING"] {
+            assert!(profile_is_coordinatable(status, true));
+            assert!(!profile_is_coordinatable(status, false));
+        }
+    }
+
+    #[test]
+    fn coordinator_rejects_non_live_states_even_with_generation() {
+        for status in ["DRAFT", "QUARANTINED", "SUSPENDED", "DELETING", "DELETED"] {
+            assert!(!profile_is_coordinatable(status, true));
+        }
+    }
 }
