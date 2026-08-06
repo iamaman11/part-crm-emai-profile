@@ -80,6 +80,10 @@ BROWSER_LOCK_MARKERS = (
 
 FIXTURE_PREFIX = "tests/windows-bridge/fixtures/"
 POLICY_PATH = "scripts/check-step6-windows-bridge.py"
+BRIDGE_SOURCE_ROOTS = (
+    "apps/profile-bridge",
+    "crates/bridge-domain",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,6 +94,16 @@ def parse_args() -> argparse.Namespace:
 
 def relative(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
+
+
+def source_files(root: Path, repository_root: bool):
+    roots = [root / value for value in BRIDGE_SOURCE_ROOTS] if repository_root else [root]
+    for scan_root in roots:
+        if not scan_root.exists():
+            continue
+        for path in scan_root.rglob("*"):
+            if path.is_file() and path.suffix in {".rs", ".py"}:
+                yield path
 
 
 def main() -> int:
@@ -104,9 +118,7 @@ def main() -> int:
             if marker in pure:
                 errors.append(f"provider/runtime API escaped into Bridge domain: {marker}")
 
-    for path in root.rglob("*"):
-        if not path.is_file() or path.suffix not in {".rs", ".py"}:
-            continue
+    for path in source_files(root, repository_root):
         rel = relative(root, path)
         if rel == POLICY_PATH or (repository_root and rel.startswith(FIXTURE_PREFIX)):
             continue
