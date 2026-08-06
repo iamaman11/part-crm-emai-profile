@@ -2,22 +2,23 @@
   "schema_version": 1,
   "as_of": "2026-08-06",
   "repository_step": {
-    "number": 8,
-    "name": "Local profile lifecycle",
+    "number": 9,
+    "name": "Encrypted cloud generations",
     "status": "completed",
-    "tracking_issue": 26,
-    "baseline": "ef8777b69ff6c89c176b79b04adecce17bc6c68e",
-    "technical_evidence_head": "dbf3770f58c45b9f247579191b2b2d5f342c1bc8",
-    "accepted_source_head": "dbf3770f58c45b9f247579191b2b2d5f342c1bc8",
-    "technical_quality_gate_run_id": 31068856595,
-    "final_quality_gate_run_id": 31068856595,
-    "specialized_quality_gate_run_id": 31068856619,
-    "regression_quality_gate_run_id": 31068856601,
-    "squash_merge": "eb55f67d742661019438891764c388dc19f62d96"
+    "tracking_issue": 29,
+    "baseline": "e596fbe5692aa5b020700e7462c608dd23bacc15",
+    "technical_evidence_head": "73685241a6d70cf6d8ec80210d94b66cf37b1b45",
+    "accepted_source_head": "73685241a6d70cf6d8ec80210d94b66cf37b1b45",
+    "technical_quality_gate_run_id": 31072625808,
+    "final_quality_gate_run_id": 31072625808,
+    "specialized_quality_gate_run_id": 31072625852,
+    "local_profile_regression_quality_gate_run_id": 31072625849,
+    "runtime_bundle_regression_quality_gate_run_id": 31072625892,
+    "squash_merge": "bc5286e3fea767acf955fb2622dab6221ecf1c3b"
   },
   "next_repository_step": {
-    "number": 9,
-    "name": "Encrypted Cloud Generations",
+    "number": 10,
+    "name": "Certification and multi-device",
     "status": "planned"
   },
   "accepted_steps": [
@@ -89,6 +90,16 @@
       "specialized_quality_gate_run_id": 31068856619,
       "regression_quality_gate_run_id": 31068856601,
       "squash_merge": "eb55f67d742661019438891764c388dc19f62d96"
+    },
+    {
+      "number": 9,
+      "name": "Encrypted cloud generations",
+      "accepted_source_head": "73685241a6d70cf6d8ec80210d94b66cf37b1b45",
+      "quality_gate_run_id": 31072625808,
+      "specialized_quality_gate_run_id": 31072625852,
+      "local_profile_regression_quality_gate_run_id": 31072625849,
+      "runtime_bundle_regression_quality_gate_run_id": 31072625892,
+      "squash_merge": "bc5286e3fea767acf955fb2622dab6221ecf1c3b"
     }
   ],
   "product": {
@@ -107,7 +118,7 @@
     "windows_bridge": "accepted_step_6_feasibility",
     "camouhost_runtime": "accepted_step_7_synthetic_bundle",
     "local_profile_lifecycle": "accepted_step_8_synthetic_local_lifecycle",
-    "encrypted_cloud_generations": "not_started",
+    "encrypted_cloud_generations": "accepted_step_9_synthetic_cryptographic_review_candidate",
     "frontend": "not_started"
   },
   "evidence": {
@@ -166,11 +177,29 @@
     "real_legacy_profile_compatibility": "not_proven_and_not_touched",
     "local_kernel_locking": "not_proven_atomic_lock_file_protocol_only",
     "local_browser_database_recovery": "not_proven_clone_inventory_only",
-    "encrypted_cloud_generations": "not_proven_step_9",
+    "encrypted_cloud_generations": "accepted_synthetic_container_lifecycle_run_31072625852",
     "production_device_key_protection": "blocked",
     "trusted_windows_code_signing": "blocked",
     "production_key_recovery": "blocked",
-    "production_fingerprint_certification": "blocked"
+    "production_fingerprint_certification": "blocked",
+    "encrypted_generation_exact_crypto_pins": "accepted_rust_1_97_1_run_31072625808",
+    "encrypted_generation_container": "accepted_xchacha20poly1305_chunk_and_final_record_run_31072625852",
+    "encrypted_generation_test_vector": "accepted_deterministic_sha256_vector_run_31072625852",
+    "encrypted_generation_tamper_detection": "accepted_metadata_chunk_final_truncation_reorder_run_31072625852",
+    "encrypted_generation_strict_parser": "accepted_magic_version_oversize_trailing_rejection_run_31072625852",
+    "encrypted_generation_nonce_reuse": "accepted_actual_dek_domain_and_key_id_alias_run_31072625852",
+    "encrypted_generation_sensitive_memory": "accepted_zeroizing_non_debug_results_run_31072625852",
+    "encrypted_generation_immutable_objects": "accepted_idempotent_and_conflict_behavior_run_31072625852",
+    "encrypted_generation_pointer_cas": "accepted_commit_and_rollback_versioning_run_31072625852",
+    "encrypted_generation_quarantine": "accepted_corruption_quarantine_wrong_key_dos_protection_run_31072625852",
+    "encrypted_generation_orphan_planning": "accepted_current_and_rollback_protection_run_31072625852",
+    "encrypted_generation_support_summary": "accepted_metadata_only_run_31072625852",
+    "encrypted_generation_windows": "accepted_lifecycle_tests_run_31072625852",
+    "encrypted_generation_wasm": "accepted_pure_crate_workers_target_run_31072625852",
+    "production_encrypted_generation_remote_atomicity": "not_proven",
+    "production_entropy_and_key_wrapping": "not_proven",
+    "production_clean_environment_key_restore": "blocked_external_gate",
+    "independent_cryptographic_review": "not_proven"
   },
   "decisions": {
     "adr_0001": "proposed",

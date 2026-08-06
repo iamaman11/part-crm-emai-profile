@@ -10,7 +10,7 @@ adapters, а не переносит Camoufox или локальный browser 
 
 ## Текущий Статус
 
-**Repository Steps 0–8 приняты.**
+**Repository Steps 0–9 приняты.**
 
 - Step 0 создал exact Rust workspace, pure primitives и постоянный
   Linux/Windows/WASM quality gate.
@@ -42,18 +42,23 @@ adapters, а не переносит Camoufox или локальный browser 
   lock-file protocol, deterministic regular-file inventory, clone-only recovery,
   explicit dirty/recovery lifecycle, forgotten-window and safe quota policies,
   metadata-only support evidence и отдельный Linux/Windows Local Profile Gate.
+- Step 9 добавил exact-pinned XChaCha20-Poly1305/SHA-256 container,
+  authenticated canonical metadata и final record, immutable generation
+  lifecycle, strict pointer CAS/rollback/quarantine/orphan planning, DEK-bound
+  nonce-reuse policy, zeroizing plaintext boundaries и Linux/Windows/WASM gate.
 
-Accepted Step 8 source head: `dbf3770f58c45b9f247579191b2b2d5f342c1bc8`.
-Exact-head Quality Gate run: `31068856595`. Local Profile Gate run:
-`31068856619`. Runtime Bundle regression run: `31068856601`. Squash merge:
-`eb55f67d742661019438891764c388dc19f62d96`.
+Accepted Step 9 source head: `73685241a6d70cf6d8ec80210d94b66cf37b1b45`.
+Exact-head Quality Gate run: `31072625808`. Encrypted Generation Gate run:
+`31072625852`. Local Profile regression run: `31072625849`. Runtime Bundle
+regression run: `31072625892`. Squash merge: `bc5286e3fea767acf955fb2622dab6221ecf1c3b`.
 
-Следующий этап — **Repository Step 9: Encrypted Cloud Generations**: accepted
-ADR-0006 implementation, reviewed streaming AEAD container, immutable R2 objects,
-pointer CAS, restore/rollback/orphan reconciliation и clean-environment restore
-evidence. Real Camoufox execution, legacy profile compatibility, kernel advisory
-locking, trusted signing, physical multi-device runtime и production readiness
-ещё не доказаны. Машиночитаемый статус: [`docs/status.json`](docs/status.json).
+Следующий этап — **Repository Step 10: Certification And Multi-Device**:
+bounded certification policy, drift/repeatability evidence, device-scoped
+unwrap/revoke contracts и signed-update rollback boundary. Принятие ADR-0001,
+второй независимый Windows host и trusted signing остаются внешними gates и не
+считаются доказанными. ADR-0006 остаётся proposed; production key management,
+remote R2/D1 atomicity и clean-environment escrow restore ещё не доказаны.
+Машиночитаемый статус: [`docs/status.json`](docs/status.json).
 
 Единственный разрешенный источник legacy-профилей:
 
@@ -90,6 +95,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Windows Bridge feasibility boundary](docs/WINDOWS_BRIDGE_FEASIBILITY.md)
 - [Camouhost runtime bundle boundary](docs/CAMOUHOST_RUNTIME_BUNDLE.md)
 - [Local profile lifecycle boundary](docs/LOCAL_PROFILE_LIFECYCLE.md)
+- [Encrypted cloud generations boundary](docs/ENCRYPTED_CLOUD_GENERATIONS.md)
 - [ADR status registry](docs/ADR_STATUS.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Data classification](docs/DATA_CLASSIFICATION.md)
@@ -103,6 +109,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Windows Bridge feasibility evidence](docs/evidence/2026-08-06-repository-step-6-windows-bridge-feasibility.md)
 - [Camouhost runtime bundle evidence](docs/evidence/2026-08-06-repository-step-7-camouhost-runtime-bundle.md)
 - [Local profile lifecycle evidence](docs/evidence/2026-08-06-repository-step-8-local-profile-lifecycle.md)
+- [Encrypted cloud generations evidence](docs/evidence/2026-08-06-repository-step-9-encrypted-cloud-generations.md)
 - [Проверенные выводы исследования](docs/RESEARCH_FINDINGS.md)
 - [Cloud profile smoke test](docs/CLOUD_PROFILE_SMOKE_TEST.md)
 - [Текущая проверка готовности плана](docs/PLAN_READINESS_REVIEW.md)
@@ -160,7 +167,10 @@ manifest/path/content verification, Bridge approval before spawn, rollback and
 active-versus-clean synthetic lifecycle. Step 8 подтвердил safe marked local
 materialization, atomic Bridge lock-file ownership, deterministic inventory,
 clone-only integrity evidence, dirty/recovery preservation, quota exclusion and
-metadata-only support output. Remote staging, real Camoufox, kernel advisory
+metadata-only support output. Step 9 подтвердил synthetic authenticated encrypted-generation container,
+immutable lifecycle, DEK-bound nonce protection, zeroizing plaintext memory,
+strict parsing, pointer/rollback/quarantine/orphan behavior и native/WASM
+portability. Remote staging, real Camoufox, kernel advisory
 locking, third-party redistribution, trusted signing, backup/restore, physical
 multi-device runtime и account recovery пока не считаются выполненными.
 
