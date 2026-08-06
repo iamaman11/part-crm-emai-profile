@@ -56,9 +56,9 @@ fn sha256_plaintext_vector_is_stable() {
     assert_eq!(
         PlaintextDigest::calculate(b"abc").bytes(),
         [
-            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde,
-            0x5d, 0xae, 0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
-            0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
+            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+            0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+            0xf2, 0x00, 0x15, 0xad,
         ]
     );
 }
@@ -71,8 +71,8 @@ fn fixed_container_vector_is_stable() -> Result<(), Box<dyn std::error::Error>> 
     assert_eq!(
         sealed.container_digest().bytes(),
         [
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
         ]
     );
     Ok(())
@@ -90,7 +90,12 @@ fn chunked_round_trip_is_deterministic() -> Result<(), Box<dyn std::error::Error
     let opened = open_generation(first.container(), &key(0x44)?)?;
     assert_eq!(opened.metadata(), &metadata);
     assert_eq!(opened.plaintext(), plaintext);
-    assert!(!first.container().windows(plaintext.len()).any(|window| window == plaintext));
+    assert!(
+        !first
+            .container()
+            .windows(plaintext.len())
+            .any(|window| window == plaintext)
+    );
     Ok(())
 }
 
@@ -145,8 +150,7 @@ fn chunk_tampering_and_truncation_are_rejected() -> Result<(), Box<dyn std::erro
 }
 
 #[test]
-fn reordered_chunk_index_is_rejected_before_decryption()
--> Result<(), Box<dyn std::error::Error>> {
+fn reordered_chunk_index_is_rejected_before_decryption() -> Result<(), Box<dyn std::error::Error>> {
     let plaintext = vec![0x49; 2_048];
     let metadata = metadata("generation_01JSTEP9ORDER", 0x37, &plaintext)?;
     let mut container = seal_generation(&metadata, &key(0x50)?, &plaintext)?.into_container();
@@ -207,17 +211,27 @@ fn wrong_key_and_identity_are_rejected() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
-fn repository_rejects_nonce_reuse_and_immutable_conflict()
--> Result<(), Box<dyn std::error::Error>> {
+fn repository_rejects_nonce_reuse_and_immutable_conflict() -> Result<(), Box<dyn std::error::Error>>
+{
     let mut repository = CloudGenerationRepository::default();
     let first_plaintext = b"first generation";
     let first = metadata("generation_01JSTEP9NONCE1", 0x40, first_plaintext)?;
     assert_eq!(
-        repository.publish(first.clone(), &key(0x54)?, first_plaintext, UnixMillis::new(1))?,
+        repository.publish(
+            first.clone(),
+            &key(0x54)?,
+            first_plaintext,
+            UnixMillis::new(1)
+        )?,
         PublishResult::Created
     );
     assert_eq!(
-        repository.publish(first.clone(), &key(0x54)?, first_plaintext, UnixMillis::new(1))?,
+        repository.publish(
+            first.clone(),
+            &key(0x54)?,
+            first_plaintext,
+            UnixMillis::new(1)
+        )?,
         PublishResult::Idempotent
     );
 
@@ -265,8 +279,7 @@ fn repository_rejects_nonce_reuse_and_immutable_conflict()
 }
 
 #[test]
-fn pointer_compare_and_swap_and_rollback_are_strict()
--> Result<(), Box<dyn std::error::Error>> {
+fn pointer_compare_and_swap_and_rollback_are_strict() -> Result<(), Box<dyn std::error::Error>> {
     let mut repository = CloudGenerationRepository::default();
     let first = metadata("generation_01JSTEP9POINTER1", 0x41, b"first")?;
     let second = metadata("generation_01JSTEP9POINTER2", 0x42, b"second")?;
@@ -282,8 +295,14 @@ fn pointer_compare_and_swap_and_rollback_are_strict()
     );
     let pointer = repository.commit_current(1, second.generation_id())?;
     assert_eq!(pointer.version(), 2);
-    assert_eq!(pointer.current_generation_id(), Some(second.generation_id()));
-    assert_eq!(pointer.rollback_generation_id(), Some(first.generation_id()));
+    assert_eq!(
+        pointer.current_generation_id(),
+        Some(second.generation_id())
+    );
+    assert_eq!(
+        pointer.rollback_generation_id(),
+        Some(first.generation_id())
+    );
     assert_eq!(
         repository.rollback(2, second.generation_id()),
         Err(EncryptedGenerationError::InvalidRollback)
@@ -291,13 +310,15 @@ fn pointer_compare_and_swap_and_rollback_are_strict()
     let pointer = repository.rollback(2, first.generation_id())?;
     assert_eq!(pointer.version(), 3);
     assert_eq!(pointer.current_generation_id(), Some(first.generation_id()));
-    assert_eq!(pointer.rollback_generation_id(), Some(second.generation_id()));
+    assert_eq!(
+        pointer.rollback_generation_id(),
+        Some(second.generation_id())
+    );
     Ok(())
 }
 
 #[test]
-fn corruption_is_quarantined_and_cannot_become_current()
--> Result<(), Box<dyn std::error::Error>> {
+fn corruption_is_quarantined_and_cannot_become_current() -> Result<(), Box<dyn std::error::Error>> {
     let mut repository = CloudGenerationRepository::default();
     let metadata = metadata("generation_01JSTEP9CORRUPT", 0x43, b"corrupt me")?;
     repository.publish(
@@ -328,8 +349,8 @@ fn corruption_is_quarantined_and_cannot_become_current()
 }
 
 #[test]
-fn orphan_plan_protects_current_and_rollback_generations()
--> Result<(), Box<dyn std::error::Error>> {
+fn orphan_plan_protects_current_and_rollback_generations() -> Result<(), Box<dyn std::error::Error>>
+{
     let mut repository = CloudGenerationRepository::default();
     let first = metadata("generation_01JSTEP9ORPHAN1", 0x44, b"first")?;
     let second = metadata("generation_01JSTEP9ORPHAN2", 0x45, b"second")?;

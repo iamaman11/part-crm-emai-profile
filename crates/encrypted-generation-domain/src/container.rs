@@ -400,9 +400,14 @@ pub fn seal_generation(
 
     let mut chunk_count = 0_u64;
     for chunk in plaintext.chunks(chunk_size) {
-        let plaintext_length = u32::try_from(chunk.len())
-            .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
-        let aad = record_aad(&metadata_digest, RECORD_CHUNK, chunk_count, plaintext_length);
+        let plaintext_length =
+            u32::try_from(chunk.len()).map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
+        let aad = record_aad(
+            &metadata_digest,
+            RECORD_CHUNK,
+            chunk_count,
+            plaintext_length,
+        );
         let nonce_bytes = metadata.nonce_prefix().nonce_for(chunk_count);
         let ciphertext = cipher
             .encrypt(
@@ -443,8 +448,7 @@ pub fn seal_generation(
     push_u32(&mut container, 0);
     push_u32(
         &mut container,
-        u32::try_from(final_tag.len())
-            .map_err(|_| EncryptedGenerationError::InvalidContainer)?,
+        u32::try_from(final_tag.len()).map_err(|_| EncryptedGenerationError::InvalidContainer)?,
     );
     container.extend_from_slice(&final_tag);
     if container.len() > MAX_CONTAINER_BYTES {
@@ -553,8 +557,8 @@ pub fn open_generation(
     if !final_seen {
         return Err(EncryptedGenerationError::InvalidContainer);
     }
-    let plaintext_bytes = u64::try_from(plaintext.len())
-        .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
+    let plaintext_bytes =
+        u64::try_from(plaintext.len()).map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
     if plaintext_bytes != metadata.plaintext_bytes() {
         return Err(EncryptedGenerationError::DigestMismatch);
     }
@@ -606,7 +610,8 @@ fn record_aad(
 }
 
 fn push_string(output: &mut Vec<u8>, value: &str) -> Result<(), EncryptedGenerationError> {
-    let length = u16::try_from(value.len()).map_err(|_| EncryptedGenerationError::InvalidContainer)?;
+    let length =
+        u16::try_from(value.len()).map_err(|_| EncryptedGenerationError::InvalidContainer)?;
     push_u16(output, length);
     output.extend_from_slice(value.as_bytes());
     Ok(())
@@ -675,8 +680,8 @@ impl<'a> Cursor<'a> {
     fn read_string(&mut self) -> Result<String, EncryptedGenerationError> {
         let length = usize::from(self.read_u16()?);
         let bytes = self.take(length)?;
-        let value = core::str::from_utf8(bytes)
-            .map_err(|_| EncryptedGenerationError::InvalidContainer)?;
+        let value =
+            core::str::from_utf8(bytes).map_err(|_| EncryptedGenerationError::InvalidContainer)?;
         Ok(value.to_owned())
     }
 

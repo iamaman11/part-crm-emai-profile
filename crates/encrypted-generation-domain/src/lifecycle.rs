@@ -261,7 +261,8 @@ impl CloudGenerationRepository {
             created_at: observed_at,
             verified_at: None,
         };
-        self.records.insert(metadata.generation_id().clone(), record);
+        self.records
+            .insert(metadata.generation_id().clone(), record);
 
         let opened = open_generation_expected(
             self.objects.get(&object_key)?,
@@ -453,10 +454,7 @@ impl CloudGenerationRepository {
         })
     }
 
-    fn quarantine(
-        &mut self,
-        generation_id: &GenerationId,
-    ) -> Result<(), EncryptedGenerationError> {
+    fn quarantine(&mut self, generation_id: &GenerationId) -> Result<(), EncryptedGenerationError> {
         let record = self
             .records
             .get_mut(generation_id)
