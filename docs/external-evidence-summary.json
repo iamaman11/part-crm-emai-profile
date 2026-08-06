@@ -1,0 +1,114 @@
+{
+  "active_records": [],
+  "counts": {
+    "active_failed": 0,
+    "active_passed": 0,
+    "active_pending": 0,
+    "mandatory_requirements": 12,
+    "satisfied_requirements": 0,
+    "total_records": 0
+  },
+  "eligible_for_production_review": false,
+  "mandatory_requirements": [
+    {
+      "environment": "production",
+      "gate": "cloudflare_environment"
+    },
+    {
+      "environment": "none",
+      "gate": "independent_security_review"
+    },
+    {
+      "environment": "none",
+      "gate": "legacy_credential_rotation"
+    },
+    {
+      "environment": "production",
+      "gate": "offline_key_escrow_restore"
+    },
+    {
+      "environment": "none",
+      "gate": "privacy_retention_approval"
+    },
+    {
+      "environment": "none",
+      "gate": "product_license"
+    },
+    {
+      "environment": "production",
+      "gate": "production_device_key_unwrap"
+    },
+    {
+      "environment": "production",
+      "gate": "real_fingerprint_certification"
+    },
+    {
+      "environment": "production",
+      "gate": "remote_r2_d1_atomicity"
+    },
+    {
+      "environment": "production",
+      "gate": "trusted_windows_signing"
+    },
+    {
+      "environment": "production",
+      "gate": "windows_primary_host"
+    },
+    {
+      "environment": "production",
+      "gate": "windows_secondary_host"
+    }
+  ],
+  "missing_requirements": [
+    {
+      "environment": "production",
+      "gate": "cloudflare_environment"
+    },
+    {
+      "environment": "none",
+      "gate": "independent_security_review"
+    },
+    {
+      "environment": "none",
+      "gate": "legacy_credential_rotation"
+    },
+    {
+      "environment": "production",
+      "gate": "offline_key_escrow_restore"
+    },
+    {
+      "environment": "none",
+      "gate": "privacy_retention_approval"
+    },
+    {
+      "environment": "none",
+      "gate": "product_license"
+    },
+    {
+      "environment": "production",
+      "gate": "production_device_key_unwrap"
+    },
+    {
+      "environment": "production",
+      "gate": "real_fingerprint_certification"
+    },
+    {
+      "environment": "production",
+      "gate": "remote_r2_d1_atomicity"
+    },
+    {
+      "environment": "production",
+      "gate": "trusted_windows_signing"
+    },
+    {
+      "environment": "production",
+      "gate": "windows_primary_host"
+    },
+    {
+      "environment": "production",
+      "gate": "windows_secondary_host"
+    }
+  ],
+  "policy_version": 1,
+  "schema_version": 1
+}
