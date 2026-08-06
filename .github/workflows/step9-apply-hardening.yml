@@ -35,24 +35,14 @@ jobs:
 
           container = Path("crates/encrypted-generation-domain/src/container.rs")
           text = container.read_text(encoding="utf-8")
-          text = replace_once(
-              text,
-              "use zeroize::Zeroize;",
-              "use zeroize::{Zeroize, Zeroizing};",
-              "zeroizing import",
-          )
+          text = replace_once(text, "use zeroize::Zeroize;", "use zeroize::{Zeroize, Zeroizing};", "zeroizing import")
           text = replace_once(
               text,
               "#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]\npub(crate) struct NonceDomain([u8; 32]);",
               "#[derive(Eq, Hash, Ord, PartialEq, PartialOrd)]\npub(crate) struct NonceDomain([u8; 32]);\n\nimpl Drop for NonceDomain {\n    fn drop(&mut self) {\n        self.0.zeroize();\n    }\n}",
               "nonce-domain memory boundary",
           )
-          text = replace_once(
-              text,
-              "digest.update(self.bytes);",
-              "digest.update(self.bytes.as_slice());",
-              "nonce-domain digest borrowing",
-          )
+          text = replace_once(text, "digest.update(self.bytes);", "digest.update(self.bytes.as_slice());", "nonce-domain digest borrowing")
           text = replace_once(
               text,
               "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct OpenedGeneration {\n    metadata: GenerationMetadata,\n    plaintext: Vec<u8>,\n}",
@@ -81,12 +71,7 @@ jobs:
 
           lifecycle = Path("crates/encrypted-generation-domain/src/lifecycle.rs")
           text = lifecycle.read_text(encoding="utf-8")
-          text = replace_once(
-              text,
-              "use std::collections::{BTreeMap, BTreeSet};",
-              "use std::collections::{BTreeMap, BTreeSet};\nuse zeroize::Zeroizing;",
-              "restore zeroizing import",
-          )
+          text = replace_once(text, "use std::collections::{BTreeMap, BTreeSet};", "use std::collections::{BTreeMap, BTreeSet};\nuse zeroize::Zeroizing;", "restore zeroizing import")
           text = replace_once(
               text,
               "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct RestoreResult {\n    metadata: GenerationMetadata,\n    plaintext: Vec<u8>,\n}",
@@ -96,12 +81,7 @@ jobs:
           raw_extraction = "\n    #[must_use]\n    pub fn into_plaintext(self) -> Vec<u8> {\n        self.plaintext\n    }"
           if raw_extraction in text:
               text = text.replace(raw_extraction, "", 1)
-          text = replace_once(
-              text,
-              "#[derive(Clone, Default, Eq, PartialEq)]\npub struct CloudGenerationRepository {",
-              "#[derive(Default)]\npub struct CloudGenerationRepository {",
-              "repository sensitive-state derives",
-          )
+          text = replace_once(text, "#[derive(Clone, Default, Eq, PartialEq)]\npub struct CloudGenerationRepository {", "#[derive(Default)]\npub struct CloudGenerationRepository {", "repository sensitive-state derives")
           text = replace_once(
               text,
               "        let opened = match open_generation_expected(\n            container,\n            key,\n            record.metadata.tenant_id(),\n            record.metadata.profile_id(),\n            generation_id,\n        ) {\n            Ok(opened) => opened,\n            Err(error) => {\n                self.quarantine(generation_id)?;\n                return Err(error);\n            }\n        };",
@@ -145,83 +125,48 @@ jobs:
 
           if "fn wrong_key_does_not_quarantine_unchanged_object" not in text:
               anchor = "\n#[test]\nfn corruption_is_quarantined_and_cannot_become_current()"
-              proof = '''
-#[test]
-fn wrong_key_does_not_quarantine_unchanged_object()
--> Result<(), Box<dyn std::error::Error>> {
-    let mut repository = CloudGenerationRepository::default();
-    let metadata = metadata("generation_01JSTEP9WRONGKEY", 0x4b, b"healthy object")?;
-    repository.publish(
-        metadata.clone(),
-        &key(0x5b)?,
-        b"healthy object",
-        UnixMillis::new(1),
-    )?;
-    assert!(matches!(
-        repository.restore(metadata.generation_id(), &key(0x5c)?, UnixMillis::new(2)),
-        Err(EncryptedGenerationError::AuthenticationFailed)
-    ));
-    assert_eq!(
-        repository
-            .record(metadata.generation_id())
-            .ok_or(EncryptedGenerationError::MissingGeneration)?
-            .status(),
-        CloudGenerationStatus::Verified
-    );
-    assert_eq!(
-        repository
-            .restore(metadata.generation_id(), &key(0x5b)?, UnixMillis::new(3))?
-            .plaintext(),
-        b"healthy object"
-    );
-    Ok(())
-}
-'''
+              proof = (
+                  "\n#[test]\n"
+                  "fn wrong_key_does_not_quarantine_unchanged_object()\n"
+                  "-> Result<(), Box<dyn std::error::Error>> {\n"
+                  "    let mut repository = CloudGenerationRepository::default();\n"
+                  "    let metadata = metadata(\"generation_01JSTEP9WRONGKEY\", 0x4b, b\"healthy object\")?;\n"
+                  "    repository.publish(metadata.clone(), &key(0x5b)?, b\"healthy object\", UnixMillis::new(1))?;\n"
+                  "    assert!(matches!(repository.restore(metadata.generation_id(), &key(0x5c)?, UnixMillis::new(2)), Err(EncryptedGenerationError::AuthenticationFailed)));\n"
+                  "    assert_eq!(repository.record(metadata.generation_id()).ok_or(EncryptedGenerationError::MissingGeneration)?.status(), CloudGenerationStatus::Verified);\n"
+                  "    assert_eq!(repository.restore(metadata.generation_id(), &key(0x5b)?, UnixMillis::new(3))?.plaintext(), b\"healthy object\");\n"
+                  "    Ok(())\n"
+                  "}\n"
+              )
               if text.count(anchor) != 1:
                   raise SystemExit("wrong-key proof anchor is missing or duplicated")
               text = text.replace(anchor, proof + anchor, 1)
 
           if "fn malformed_headers_and_trailing_bytes_fail_closed" not in text:
               anchor = "\n#[test]\nfn invalid_key_id_and_chunk_size_fail_closed()"
-              proof = '''
-#[test]
-fn malformed_headers_and_trailing_bytes_fail_closed()
--> Result<(), Box<dyn std::error::Error>> {
-    let plaintext = b"strict parser";
-    let metadata = metadata("generation_01JSTEP9MALFORMED", 0x4c, plaintext)?;
-    let sealed = seal_generation(&metadata, &key(0x5d)?, plaintext)?;
-
-    let mut bad_magic = sealed.container().to_vec();
-    bad_magic[0] ^= 0x01;
-    assert!(matches!(
-        open_generation(&bad_magic, &key(0x5d)?),
-        Err(EncryptedGenerationError::InvalidContainer)
-    ));
-
-    let mut unsupported_version = sealed.container().to_vec();
-    unsupported_version[12] = 0;
-    unsupported_version[13] = 2;
-    assert!(matches!(
-        open_generation(&unsupported_version, &key(0x5d)?),
-        Err(EncryptedGenerationError::UnsupportedVersion)
-    ));
-
-    let mut oversized_metadata = b"BPGC0001".to_vec();
-    oversized_metadata.extend_from_slice(&4_097_u32.to_be_bytes());
-    assert!(matches!(
-        open_generation(&oversized_metadata, &key(0x5d)?),
-        Err(EncryptedGenerationError::InvalidContainer)
-    ));
-
-    let mut trailing = sealed.into_container();
-    trailing.push(0);
-    assert!(matches!(
-        open_generation(&trailing, &key(0x5d)?),
-        Err(EncryptedGenerationError::InvalidContainer)
-    ));
-    Ok(())
-}
-'''
+              proof = (
+                  "\n#[test]\n"
+                  "fn malformed_headers_and_trailing_bytes_fail_closed()\n"
+                  "-> Result<(), Box<dyn std::error::Error>> {\n"
+                  "    let plaintext = b\"strict parser\";\n"
+                  "    let metadata = metadata(\"generation_01JSTEP9MALFORMED\", 0x4c, plaintext)?;\n"
+                  "    let sealed = seal_generation(&metadata, &key(0x5d)?, plaintext)?;\n"
+                  "    let mut bad_magic = sealed.container().to_vec();\n"
+                  "    bad_magic[0] ^= 0x01;\n"
+                  "    assert!(matches!(open_generation(&bad_magic, &key(0x5d)?), Err(EncryptedGenerationError::InvalidContainer)));\n"
+                  "    let mut unsupported_version = sealed.container().to_vec();\n"
+                  "    unsupported_version[12] = 0;\n"
+                  "    unsupported_version[13] = 2;\n"
+                  "    assert!(matches!(open_generation(&unsupported_version, &key(0x5d)?), Err(EncryptedGenerationError::UnsupportedVersion)));\n"
+                  "    let mut oversized_metadata = b\"BPGC0001\".to_vec();\n"
+                  "    oversized_metadata.extend_from_slice(&4_097_u32.to_be_bytes());\n"
+                  "    assert!(matches!(open_generation(&oversized_metadata, &key(0x5d)?), Err(EncryptedGenerationError::InvalidContainer)));\n"
+                  "    let mut trailing = sealed.into_container();\n"
+                  "    trailing.push(0);\n"
+                  "    assert!(matches!(open_generation(&trailing, &key(0x5d)?), Err(EncryptedGenerationError::InvalidContainer)));\n"
+                  "    Ok(())\n"
+                  "}\n"
+              )
               if text.count(anchor) != 1:
                   raise SystemExit("malformed-container proof anchor is missing or duplicated")
               text = text.replace(anchor, proof + anchor, 1)
@@ -229,146 +174,44 @@ fn malformed_headers_and_trailing_bytes_fail_closed()
 
           docs = Path("docs/ENCRYPTED_CLOUD_GENERATIONS.md")
           text = docs.read_text(encoding="utf-8")
-          marker = "## Repository-local security hardening"
-          if marker not in text:
-              text += '''
-
-## Repository-local security hardening
-
-- nonce reuse claims are keyed by a non-exported digest of the actual DEK bytes,
-  not by caller-controlled key IDs;
-- the nonce-domain value is neither cloneable nor printable and is zeroized on
-  drop; production claims must be persisted atomically with immutable publish;
-- plaintext-bearing open and restore results do not implement `Clone` or
-  `Debug`, and plaintext buffers use `Zeroizing`;
-- restore grows its bounded plaintext buffer only after each record authenticates
-  and does not preallocate from unauthenticated size metadata;
-- a wrong DEK does not quarantine an immutable object while its cataloged
-  container digest remains unchanged;
-- malformed magic, versions, oversized metadata and bytes after the final record
-  fail closed.
-'''
+          if "## Repository-local security hardening" not in text:
+              text += (
+                  "\n\n## Repository-local security hardening\n\n"
+                  "- nonce reuse claims are keyed by a non-exported digest of the actual DEK bytes, not caller-controlled key IDs;\n"
+                  "- nonce-domain values are not cloneable or printable and are zeroized on drop;\n"
+                  "- plaintext-bearing results do not implement `Clone` or `Debug`, and buffers use `Zeroizing`;\n"
+                  "- restore grows plaintext only after each record authenticates and never preallocates from unauthenticated size metadata;\n"
+                  "- a wrong DEK does not quarantine an immutable object while its cataloged digest still matches;\n"
+                  "- malformed headers and trailing bytes fail closed.\n"
+              )
           docs.write_text(text, encoding="utf-8")
 
           policy = Path("scripts/check-step9-encrypted-generation.py")
-          policy.write_text('''#!/usr/bin/env python3
-"""Permanent policy checks for Repository Step 9 encrypted generations."""
-
-from __future__ import annotations
-
-import argparse
-import re
-import sys
-from pathlib import Path
-
-CRATE = Path("crates/encrypted-generation-domain")
-
-REQUIRED_FRAGMENTS = (
-    "XChaCha20Poly1305",
-    "RECORD_FINAL",
-    "record_aad",
-    "EncryptedGenerationError::NonceReuse",
-    "put_immutable",
-    "commit_current",
-    "rollback",
-    "plan_orphans",
-    "render_metadata_only",
-    "zeroize",
-    "Zeroizing",
-    "nonce_domain",
-    "impl Drop for NonceDomain",
-    "let mut plaintext = Zeroizing::new(Vec::new())",
-    "wrong_key_does_not_quarantine_unchanged_object",
-    "malformed_headers_and_trailing_bytes_fail_closed",
-)
-
-FORBIDDEN_FRAGMENTS = (
-    "temp/browser_profiles",
-    "temp\\\\browser_profiles",
-    "rand::",
-    "getrandom::",
-    "println!",
-    "eprintln!",
-    "dbg!",
-)
-
-SENSITIVE_DEBUG_DERIVE = re.compile(
-    r"#\\[derive\\([^\\]]*Debug[^\\]]*\\)\\]\\s*(?:pub(?:\\(crate\\))?\\s+)?struct\\s+"
-    r"(?:GenerationDek|OpenedGeneration|RestoreResult|NonceDomain)",
-    re.MULTILINE,
-)
-SENSITIVE_DEBUG_IMPL = re.compile(
-    r"impl\\s+(?:(?:core|std)::fmt::)?Debug\\s+for\\s+"
-    r"(?:GenerationDek|OpenedGeneration|RestoreResult|NonceDomain)",
-    re.MULTILINE,
-)
-GENERATION_DEK_BYTES = re.compile(
-    r"impl\\s+GenerationDek\\s*\\{(?:(?!\\n\\}).)*pub\\s+(?:const\\s+)?fn\\s+bytes\\s*\\(",
-    re.DOTALL,
-)
-
-
-def check(root: Path) -> list[str]:
-    failures: list[str] = []
-    crate = root / CRATE
-    sources = sorted((crate / "src").glob("*.rs"))
-    if not sources:
-        return [f"missing encrypted generation sources below {crate / 'src'}"]
-    source_text = "\\n".join(path.read_text(encoding="utf-8") for path in sources)
-
-    for fragment in REQUIRED_FRAGMENTS:
-        if fragment not in source_text:
-            failures.append(f"missing required Step 9 boundary: {fragment}")
-    for fragment in FORBIDDEN_FRAGMENTS:
-        if fragment in source_text:
-            failures.append(f"forbidden Step 9 source fragment: {fragment}")
-    if SENSITIVE_DEBUG_DERIVE.search(source_text) or SENSITIVE_DEBUG_IMPL.search(source_text):
-        failures.append("key and plaintext-bearing types must not implement Debug")
-    if GENERATION_DEK_BYTES.search(source_text):
-        failures.append("GenerationDek must not expose key bytes")
-
-    workspace = root / "Cargo.toml"
-    if not workspace.is_file():
-        failures.append("missing workspace Cargo.toml")
-    else:
-        workspace_text = workspace.read_text(encoding="utf-8")
-        exact_pins = (
-            'chacha20poly1305 = { version = "=0.11.0"',
-            'sha2 = { version = "=0.11.0"',
-            'zeroize = { version = "=1.9.0"',
-        )
-        for pin in exact_pins:
-            if pin not in workspace_text:
-                failures.append(f"missing exact crypto dependency pin: {pin}")
-
-    bootstrap_workflows = sorted((root / ".github/workflows").glob("step9-*-bootstrap.yml"))
-    if bootstrap_workflows:
-        failures.append("temporary Step 9 bootstrap workflows must be removed")
-
-    return failures
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path.cwd())
-    args = parser.parse_args()
-
-    failures = check(args.root.resolve())
-    if failures:
-        for failure in failures:
-            print(f"ERROR: {failure}", file=sys.stderr)
-        return 1
-    print("Repository Step 9 encrypted generation policy passed.")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-''', encoding="utf-8")
+          text = policy.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              "    \"zeroize\",\n)",
+              "    \"zeroize\",\n    \"Zeroizing\",\n    \"nonce_domain\",\n    \"impl Drop for NonceDomain\",\n    \"let mut plaintext = Zeroizing::new(Vec::new())\",\n    \"wrong_key_does_not_quarantine_unchanged_object\",\n    \"malformed_headers_and_trailing_bytes_fail_closed\",\n)",
+              "policy required hardening fragments",
+          )
+          text = replace_once(
+              text,
+              "GENERATION_DEK_DEBUG = re.compile(\n    r\"#\\[derive\\([^\\]]*Debug[^\\]]*\\)\\]\\s*pub\\s+struct\\s+GenerationDek\",\n    re.MULTILINE,\n)",
+              "SENSITIVE_DEBUG = re.compile(\n    r\"#\\[derive\\([^\\]]*Debug[^\\]]*\\)\\]\\s*(?:pub(?:\\(crate\\))?\\s+)?struct\\s+\"\n    r\"(?:GenerationDek|OpenedGeneration|RestoreResult|NonceDomain)\",\n    re.MULTILINE,\n)",
+              "sensitive Debug policy",
+          )
+          text = replace_once(text, "    if GENERATION_DEK_DEBUG.search(source_text):\n        failures.append(\"GenerationDek must not derive Debug\")", "    if SENSITIVE_DEBUG.search(source_text):\n        failures.append(\"key and plaintext-bearing types must not derive Debug\")", "sensitive Debug enforcement")
+          text = replace_once(
+              text,
+              "    bootstrap = root / \".github/workflows/step9-lockfile-bootstrap.yml\"\n    if bootstrap.exists():\n        failures.append(\"temporary Step 9 lockfile bootstrap workflow must be removed\")",
+              "    bootstrap_workflows = sorted((root / \".github/workflows\").glob(\"step9-*.yml\"))\n    if bootstrap_workflows:\n        failures.append(\"temporary Step 9 workflows must be removed\")",
+              "temporary workflow policy",
+          )
+          policy.write_text(text, encoding="utf-8")
           PY
 
-      - name: Remove bootstrap before policy checks
-        run: git rm .github/workflows/step9-apply-hardening.yml
+      - name: Remove temporary files before policy checks
+        run: git rm .github/workflows/step9-apply-hardening.yml .step9-hardening-trigger
 
       - name: Verify hardening
         run: |
