@@ -1,0 +1,46 @@
+name: External Review Attestation Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: external-review-attestation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  external-review-attestation:
+    name: External Review Attestations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Compile attestation policy and offline fixtures
+        run: |
+          python -m py_compile scripts/check-external-review-attestations.py
+          python -m py_compile tests/external-review-attestations/test-attestations.py
+
+      - name: Revalidate external evidence and readiness
+        run: |
+          python scripts/check-external-evidence.py
+          python scripts/check-external-evidence-scope.py
+          python scripts/check-external-readiness-summary.py
+
+      - name: Run offline GitHub API attestation fixtures
+        run: python tests/external-review-attestations/test-attestations.py
+
+      - name: Verify repository terminal records against GitHub
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python scripts/check-external-review-attestations.py
