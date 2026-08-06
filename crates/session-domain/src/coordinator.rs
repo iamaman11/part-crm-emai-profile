@@ -440,11 +440,12 @@ impl ProfileCoordinatorState {
             return Err(CoordinatorError::ReorderedTime);
         }
 
-        let outcome = self.apply_new(&envelope.command)?;
-        self.version = self
+        let next_version = self
             .version
             .next()
             .map_err(|_| CoordinatorError::VersionOverflow)?;
+        let outcome = self.apply_new(&envelope.command)?;
+        self.version = next_version;
         self.last_sequence = envelope.sequence;
         self.last_observed_at = envelope.command.observed_at();
 
@@ -901,6 +902,33 @@ mod tests {
             coordinator_object_name(&profile_id),
             "profile-coordinator-v1:profile_01JCOORDINATOR"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn version_overflow_does_not_partially_apply_command()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut state = coordinator()?;
+        state.version = AggregateVersion::new(u64::MAX)?;
+        let result = state.apply(envelope(
+            "idem_overflow_01JCOORDINATOR",
+            1,
+            u64::MAX,
+            CoordinatorCommand::IssueLaunchIntent {
+                launch_intent_id: LaunchIntentId::parse("intent_99JCOORDINATOR")?,
+                actor_id: ActorId::parse("actor_01JCOORDINATOR")?,
+                device_id: DeviceId::parse("device_01JCOORDINATOR")?,
+                now: UnixMillis::new(10),
+                expires_at: UnixMillis::new(20),
+            },
+        )?);
+        assert_eq!(result, Err(CoordinatorError::VersionOverflow));
+        assert_eq!(state.status(), CoordinatorStatus::Idle);
+        assert!(state.pending_intent().is_none());
+        assert!(state.active_lease().is_none());
+        assert_eq!(state.last_sequence(), 0);
+        assert_eq!(state.last_observed_at(), UnixMillis::new(0));
+        assert!(state.receipts.is_empty());
         Ok(())
     }
 
