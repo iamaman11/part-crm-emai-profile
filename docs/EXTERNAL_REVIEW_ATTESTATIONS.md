@@ -1,19 +1,19 @@
 # External Review Attestations
 
-**Статус:** normative terminal-review binding boundary  
+**Статус:** normative active terminal-review binding boundary  
 **Дата:** 2026-08-06  
 **Tracking issue:** #39  
 **Depends on:** `EXTERNAL_EVIDENCE_PROTOCOL.md`, `EXTERNAL_EVIDENCE_READINESS.md`
 
 ## 1. Назначение
 
-Terminal external evidence records (`passed` или `failed`) содержат GitHub reviewer
-login, exact review/comment URL и review timestamp. Structural validation alone не
-доказывает, что объект существует, принадлежит указанному reviewer и действительно
-утверждает exact record.
+Active terminal external evidence records (`passed` или `failed`) содержат GitHub
+reviewer login, exact review/comment URL и review timestamp. Structural validation
+alone не доказывает, что объект существует, принадлежит указанному reviewer и
+действительно утверждает exact record.
 
-Этот boundary добавляет cryptographic binding между immutable record и exact
-GitHub issue comment, pull-request review или pull-request review comment.
+Этот boundary добавляет cryptographic binding между active immutable record и
+exact GitHub issue comment, pull-request review или pull-request review comment.
 
 Он проверяет identity review attestation, но не проверяет raw provider evidence и
 не доказывает качество или независимость reviewer.
@@ -65,9 +65,9 @@ https://github.com/<owner>/<repo>/pull/<n>#discussion_r<id>
 Foreign repository, missing fragment, unsupported path или deleted object
 отклоняются.
 
-## 4. Identity И Timestamp Binding
+## 4. Identity, Timestamp И Recovery
 
-Verifier требует:
+Verifier требует для каждого **active terminal leaf**:
 
 - API `user.login` совпадает с `review.github_login` case-insensitively;
 - issue/review comments используют exact API `updated_at`;
@@ -75,15 +75,25 @@ Verifier требует:
 - API timestamp совпадает с `review.reviewed_at`;
 - API body совпадает с canonical claim.
 
-Если issue или inline review comment изменён после commit record, GitHub
-`updated_at` меняется и record перестаёт проходить. Нельзя тихо исправить accepted
-record: требуется новый immutable record/review flow.
+Если active issue или inline review comment изменён после commit record, GitHub
+`updated_at` меняется и active record перестаёт проходить. Recovery не редактирует
+accepted JSON in place:
+
+1. создать новый immutable record, который `supersedes` invalidated active record;
+2. получить новый exact GitHub review claim;
+3. regenerated readiness projection делает новый record active leaf;
+4. старый record остаётся в audit history, но его mutable GitHub object больше не
+   является current readiness dependency.
+
+Такой порядок предотвращает необратимый CI denial-of-service от исторического
+comment и одновременно запрещает тихо продолжать использовать изменённый active
+review.
 
 ## 5. Operator Workflow
 
 1. Подготовить terminal candidate record со всеми evidence metadata и временным
    structurally valid `review` object. Claim digest не зависит от `review`.
-2. Получить canonical claim template:
+2. Получить canonical claim template для active terminal candidates:
 
    ```text
    python scripts/check-external-review-attestations.py --print-claims
@@ -119,10 +129,12 @@ Workflow:
 
 1. повторно запускает intake, scope и readiness validators;
 2. выполняет offline mock HTTP fixtures;
-3. проверяет каждый repository terminal record через GitHub API.
+3. проверяет каждый active terminal record через GitHub API.
 
-Pending records не требуют network attestation. Пустой production record set
-проходит с zero terminal records и не создаёт readiness claim.
+Pending active records не требуют network attestation. Superseded historical
+records остаются в immutable lineage, но не являются current readiness dependency.
+Пустой production record set проходит с zero active terminal records и не создаёт
+readiness claim.
 
 ## 7. Offline Evidence
 
@@ -131,9 +143,11 @@ Mock HTTP tests доказывают:
 - issue comment, PR review и inline review comment positive paths;
 - pending record performs no request;
 - wrong body/digest, author и timestamp rejection;
-- edited comment rejection через changed `updated_at`;
-- deleted/404 object rejection;
-- foreign repository rejection.
+- edited active comment rejection через changed `updated_at`;
+- deleted/404 active object rejection;
+- foreign repository rejection;
+- invalid historical review не запрашивается после появления verified superseding
+  active record.
 
 Issue #39 содержит bounded synthetic example claim. Он является только примером
 claim format и не считается production evidence.
