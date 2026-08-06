@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tempfile
 from pathlib import Path
 from types import ModuleType
@@ -19,6 +20,7 @@ def load_checker() -> ModuleType:
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {CHECKER_PATH}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -34,7 +36,10 @@ def root_document() -> dict[str, object]:
         "info": {"title": "fixture", "version": "1.0.0"},
         "paths": {
             "/api/v1/base": {
-                "get": {"operationId": "getBase", "responses": {"200": {"description": "ok"}}}
+                "get": {
+                    "operationId": "getBase",
+                    "responses": {"200": {"description": "ok"}},
+                }
             }
         },
         "components": {"schemas": {"Base": {"type": "object"}}},
