@@ -2,24 +2,25 @@
   "schema_version": 1,
   "as_of": "2026-08-06",
   "repository_step": {
-    "number": 9,
-    "name": "Encrypted cloud generations",
+    "number": 10,
+    "name": "Certification and multi-device contracts",
     "status": "completed",
-    "tracking_issue": 29,
-    "baseline": "e596fbe5692aa5b020700e7462c608dd23bacc15",
-    "technical_evidence_head": "73685241a6d70cf6d8ec80210d94b66cf37b1b45",
-    "accepted_source_head": "73685241a6d70cf6d8ec80210d94b66cf37b1b45",
-    "technical_quality_gate_run_id": 31072625808,
-    "final_quality_gate_run_id": 31072625808,
-    "specialized_quality_gate_run_id": 31072625852,
-    "local_profile_regression_quality_gate_run_id": 31072625849,
-    "runtime_bundle_regression_quality_gate_run_id": 31072625892,
-    "squash_merge": "bc5286e3fea767acf955fb2622dab6221ecf1c3b"
+    "tracking_issue": 32,
+    "baseline": "71296404dd5ffb78faf9033cbbb6b6fa395f72cd",
+    "technical_evidence_head": "7d5ba8c2a00bac256a9365a40dee7e3c28ef5b56",
+    "accepted_source_head": "7d5ba8c2a00bac256a9365a40dee7e3c28ef5b56",
+    "technical_quality_gate_run_id": 31074745842,
+    "final_quality_gate_run_id": 31074745842,
+    "specialized_quality_gate_run_id": 31074745854,
+    "encrypted_generation_regression_quality_gate_run_id": 31074745859,
+    "local_profile_regression_quality_gate_run_id": 31074745880,
+    "runtime_bundle_regression_quality_gate_run_id": 31074745848,
+    "squash_merge": "3ddde2f48ddf82decf66c933ae5326a4455263e5"
   },
   "next_repository_step": {
-    "number": 10,
-    "name": "Certification and multi-device",
-    "status": "planned"
+    "number": null,
+    "name": "External production evidence gates",
+    "status": "blocked_external_gate"
   },
   "accepted_steps": [
     {
@@ -100,6 +101,17 @@
       "local_profile_regression_quality_gate_run_id": 31072625849,
       "runtime_bundle_regression_quality_gate_run_id": 31072625892,
       "squash_merge": "bc5286e3fea767acf955fb2622dab6221ecf1c3b"
+    },
+    {
+      "number": 10,
+      "name": "Certification and multi-device contracts",
+      "accepted_source_head": "7d5ba8c2a00bac256a9365a40dee7e3c28ef5b56",
+      "quality_gate_run_id": 31074745842,
+      "specialized_quality_gate_run_id": 31074745854,
+      "encrypted_generation_regression_quality_gate_run_id": 31074745859,
+      "local_profile_regression_quality_gate_run_id": 31074745880,
+      "runtime_bundle_regression_quality_gate_run_id": 31074745848,
+      "squash_merge": "3ddde2f48ddf82decf66c933ae5326a4455263e5"
     }
   ],
   "product": {
@@ -119,7 +131,8 @@
     "camouhost_runtime": "accepted_step_7_synthetic_bundle",
     "local_profile_lifecycle": "accepted_step_8_synthetic_local_lifecycle",
     "encrypted_cloud_generations": "accepted_step_9_synthetic_cryptographic_review_candidate",
-    "frontend": "not_started"
+    "frontend": "not_started",
+    "certification_multi_device": "accepted_step_10_synthetic_policy_and_state_machine_candidate"
   },
   "evidence": {
     "foundation_linux_windows_wasm": "passed",
@@ -171,17 +184,17 @@
     "step8_source_hygiene": "accepted_run_31068856595",
     "cloudflare_remote_staging": "not_proven_external_gate",
     "single_device_cloud_smoke": "passed_with_documented_limitations",
-    "multi_device": "not_proven",
+    "multi_device": "synthetic_contract_only_physical_multi_device_not_proven",
     "real_windows_process_supervision": "not_proven",
     "real_camouhost_runtime": "synthetic_only_real_camoufox_not_proven",
     "real_legacy_profile_compatibility": "not_proven_and_not_touched",
     "local_kernel_locking": "not_proven_atomic_lock_file_protocol_only",
     "local_browser_database_recovery": "not_proven_clone_inventory_only",
     "encrypted_cloud_generations": "accepted_synthetic_container_lifecycle_run_31072625852",
-    "production_device_key_protection": "blocked",
-    "trusted_windows_code_signing": "blocked",
+    "production_device_key_protection": "blocked_external_gate",
+    "trusted_windows_code_signing": "blocked_external_gate",
     "production_key_recovery": "blocked",
-    "production_fingerprint_certification": "blocked",
+    "production_fingerprint_certification": "blocked_external_gate",
     "encrypted_generation_exact_crypto_pins": "accepted_rust_1_97_1_run_31072625808",
     "encrypted_generation_container": "accepted_xchacha20poly1305_chunk_and_final_record_run_31072625852",
     "encrypted_generation_test_vector": "accepted_deterministic_sha256_vector_run_31072625852",
@@ -199,10 +212,28 @@
     "production_encrypted_generation_remote_atomicity": "not_proven",
     "production_entropy_and_key_wrapping": "not_proven",
     "production_clean_environment_key_restore": "blocked_external_gate",
-    "independent_cryptographic_review": "not_proven"
+    "independent_cryptographic_review": "not_proven",
+    "certification_policy": "accepted_required_optional_prohibited_run_31074745854",
+    "certification_required_signal_floor": "accepted_fail_closed_run_31074745854",
+    "certification_matrix": "accepted_deterministic_order_independent_run_31074745854",
+    "certification_matrix_vector": "accepted_sha256_regression_vector_run_31074745854",
+    "certification_distinct_outcomes": "accepted_stable_drifted_incomplete_prohibited_run_31074745854",
+    "certification_support_privacy": "accepted_no_raw_values_or_matrix_digest_run_31074745854",
+    "certification_negative_fixture": "accepted_raw_signal_output_rejection_run_31074745854",
+    "synthetic_device_authorization": "accepted_typed_grant_revoke_regrant_run_31074745854",
+    "synthetic_device_grant_journal": "accepted_immutable_event_history_run_31074745854",
+    "synthetic_two_device_contract": "accepted_independent_authorization_run_31074745854",
+    "preverified_update_evidence_binding": "accepted_exact_release_version_digest_run_31074745854",
+    "update_health_identity": "accepted_exact_release_version_digest_run_31074745854",
+    "update_rollback_state_machine": "accepted_restored_and_no_previous_outcomes_run_31074745854",
+    "certification_windows": "accepted_state_machine_tests_run_31074745854",
+    "certification_wasm": "accepted_pure_crate_workers_target_run_31074745854",
+    "production_signature_verification": "not_proven",
+    "second_physical_windows_host": "blocked_external_gate",
+    "independent_certification_security_review": "not_proven"
   },
   "decisions": {
-    "adr_0001": "proposed",
+    "adr_0001": "proposed_blocks_production_certification",
     "adr_0002": "accepted_partial_evidence",
     "adr_0003": "accepted",
     "adr_0004": "accepted",

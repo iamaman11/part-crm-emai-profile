@@ -23,6 +23,7 @@ smoke test does not promote unrelated production gates.
 | Repository Step 7 / PR #24 | accepted | deterministic content-addressed synthetic runtime bundle, safe manifest/path/extraction validation, Bridge approval before spawn, fake Camouhost exact-session lifecycle and active/clean evidence | real Camoufox, redistribution rights, production Python resolution, real legacy profiles, trusted signing, multi-device or production readiness |
 | Repository Step 8 / PR #27 | accepted | marked opaque local materialization, atomic Bridge lock-file protocol, deterministic inventory, clone-only recovery, explicit dirty/recovery states, safe quota and metadata-only support evidence | kernel advisory locks, real browser/database recovery, real legacy profiles, encrypted cloud generations, trusted signing, multi-device or production readiness |
 | Repository Step 9 / PR #30 | accepted bounded synthetic evidence | exact-pinned XChaCha20-Poly1305/SHA-256 container, authenticated chunk/final records, immutable lifecycle, strict pointer CAS/rollback/quarantine/orphan planning, DEK-bound nonce reuse, zeroizing plaintext boundaries and Linux/Windows/WASM gates | production entropy/key wrapping, remote R2/D1 atomicity, escrow/account-loss restore, independent cryptographic review, physical multi-device or production readiness |
+| Repository Step 10 / PR #33 | accepted bounded synthetic evidence | required/optional/prohibited certification policy, deterministic matrix/vector, privacy-safe support output, typed device grant journal, exact preverified update/health identity, rollback/fail-closed state and Linux/Windows/WASM gates | real fingerprint certification, physical second device, production unwrap, cryptographic signature verification, trusted signing or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -269,6 +270,37 @@ review item; it is not a Worker runtime dependency claim.
 - production credentials, remote resources, real profiles, production keys or
   physical multi-device evidence involved: no;
 - ADR-0006 and production readiness remain unaccepted.
+
+### Repository Step 10 Evidence
+
+- baseline: `71296404dd5ffb78faf9033cbbb6b6fa395f72cd`;
+- accepted source head: `7d5ba8c2a00bac256a9365a40dee7e3c28ef5b56`;
+- exact-head Quality Gate run: `31074745842`, conclusion `success`;
+- exact-head Certification Gate run: `31074745854`, conclusion `success`;
+- Encrypted Generation regression run: `31074745859`, conclusion `success`;
+- Local Profile regression run: `31074745880`, conclusion `success`;
+- Runtime Bundle regression run: `31074745848`, conclusion `success`;
+- squash merge: `3ddde2f48ddf82decf66c933ae5326a4455263e5`;
+- policy requires at least one required signal and rejects duplicate/unknown/
+  prohibited misuse;
+- stable, drifted, incomplete and prohibited outcomes are distinct;
+- canonical matrix is input-order independent and matches the committed SHA-256
+  regression vector;
+- raw observations are non-`Debug`; support output excludes raw values and matrix
+  digest;
+- two typed synthetic devices have independent grant versions and revoke behavior;
+- successful grant/revoke/regrant operations retain immutable event history;
+- preverified evidence and health results bind exact release ID/version/digest;
+- failed update restores the previous release; first-install failure enters explicit
+  `FAILED` state with no active release;
+- deliberate raw-signal-output fixture: rejected as required;
+- Linux, Windows and Workers WASM jobs passed; Step 7–9 and Windows/Cloudflare
+  release regressions remained green;
+- detailed report:
+  [`evidence/2026-08-06-repository-step-10-certification-multi-device.md`](evidence/2026-08-06-repository-step-10-certification-multi-device.md);
+- real browser signals, production keys, physical devices, trusted signatures or
+  user data involved: no;
+- ADR-0001/ADR-0006 and production readiness remain unaccepted.
 
 ## 2. Required Permanent CI Evidence
 
