@@ -1,0 +1,248 @@
+name: Step 9 Final Hardening Bootstrap
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: step9-final-hardening
+  cancel-in-progress: false
+
+jobs:
+  harden-and-clean:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: repository-step-9-encrypted-cloud-generations
+          persist-credentials: true
+
+      - name: Apply idempotent security hardening
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          def replace_required(text: str, old: str, new: str, present: str, label: str) -> str:
+              if present in text:
+                  return text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one fallback match, found {count}")
+              return text.replace(old, new, 1)
+
+          def regex_required(text: str, pattern: str, replacement: str, present: str, label: str) -> str:
+              if present in text:
+                  return text
+              changed, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one structural match, found {count}")
+              return changed
+
+          container = Path("crates/encrypted-generation-domain/src/container.rs")
+          text = container.read_text(encoding="utf-8")
+          text = replace_required(
+              text,
+              "use zeroize::Zeroize;",
+              "use zeroize::{Zeroize, Zeroizing};",
+              "Zeroizing",
+              "zeroizing import",
+          )
+          text = regex_required(
+              text,
+              r"#\[derive\(Clone, Debug, Eq, PartialEq\)\]\npub struct OpenedGeneration \{\n\s+metadata: GenerationMetadata,\n\s+plaintext: Vec<u8>,\n\}",
+              "pub struct OpenedGeneration {\n    metadata: GenerationMetadata,\n    plaintext: Zeroizing<Vec<u8>>,\n}",
+              "plaintext: Zeroizing<Vec<u8>>",
+              "opened result type",
+          )
+          text = regex_required(
+              text,
+              r"\n\s*#\[must_use\]\n\s*pub fn into_plaintext\(self\) -> Vec<u8> \{\n\s*self\.plaintext\n\s*\}\n\}",
+              "\n    pub(crate) fn into_parts(self) -> (GenerationMetadata, Zeroizing<Vec<u8>>) {\n        (self.metadata, self.plaintext)\n    }\n}",
+              "pub(crate) fn into_parts",
+              "opened result transfer",
+          )
+          text = regex_required(
+              text,
+              r"let mut plaintext = Vec::with_capacity\(\n\s*usize::try_from\(metadata\.plaintext_bytes\(\)\)\n\s*\.map_err\(\|_\| EncryptedGenerationError::PlaintextTooLarge\)\?,\n\s*\);",
+              "let mut plaintext = Zeroizing::new(Vec::with_capacity(\n        usize::try_from(metadata.plaintext_bytes())\n            .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?,\n    ));",
+              "let mut plaintext = Zeroizing::new",
+              "plaintext accumulator",
+          )
+          text = regex_required(
+              text,
+              r"let opened = cipher\n\s*\.decrypt\(\n\s*&nonce_from_bytes\(&nonce_bytes\)\?,\n\s*Payload \{\n\s*msg: ciphertext,\n\s*aad: &aad,\n\s*\},\n\s*\)\n\s*\.map_err\(\|_\| EncryptedGenerationError::AuthenticationFailed\)\?;",
+              "let opened = Zeroizing::new(\n            cipher\n                .decrypt(\n                    &nonce_from_bytes(&nonce_bytes)?,\n                    Payload {\n                        msg: ciphertext,\n                        aad: &aad,\n                    },\n                )\n                .map_err(|_| EncryptedGenerationError::AuthenticationFailed)?,\n        );",
+              "let opened = Zeroizing::new",
+              "decrypted chunk buffer",
+          )
+          text = text.replace("digest.update(self.bytes);", "digest.update(self.bytes.as_slice());")
+          container.write_text(text, encoding="utf-8")
+
+          lifecycle = Path("crates/encrypted-generation-domain/src/lifecycle.rs")
+          text = lifecycle.read_text(encoding="utf-8")
+          text = replace_required(
+              text,
+              "use std::collections::{BTreeMap, BTreeSet};",
+              "use std::collections::{BTreeMap, BTreeSet};\nuse zeroize::Zeroizing;",
+              "use zeroize::Zeroizing;",
+              "lifecycle zeroizing import",
+          )
+          text = regex_required(
+              text,
+              r"#\[derive\(Clone, Debug, Eq, PartialEq\)\]\npub struct RestoreResult \{\n\s+metadata: GenerationMetadata,\n\s+plaintext: Vec<u8>,\n\}",
+              "pub struct RestoreResult {\n    metadata: GenerationMetadata,\n    plaintext: Zeroizing<Vec<u8>>,\n}",
+              "pub struct RestoreResult {\n    metadata: GenerationMetadata,\n    plaintext: Zeroizing<Vec<u8>>",
+              "restore result type",
+          )
+          if "pub fn into_plaintext(self) -> Vec<u8>" in text:
+              text = re.sub(
+                  r"\n\s*#\[must_use\]\n\s*pub fn into_plaintext\(self\) -> Vec<u8> \{\n\s*self\.plaintext\n\s*\}",
+                  "",
+                  text,
+                  count=1,
+              )
+          text = regex_required(
+              text,
+              r"let opened = match open_generation_expected\(\n\s*container,\n\s*key,\n\s*record\.metadata\.tenant_id\(\),\n\s*record\.metadata\.profile_id\(\),\n\s*generation_id,\n\s*\) \{\n\s*Ok\(opened\) => opened,\n\s*Err\(error\) => \{\n\s*self\.quarantine\(generation_id\)\?;\n\s*return Err\(error\);\n\s*\}\n\s*\};",
+              "let opened = open_generation_expected(\n            container,\n            key,\n            record.metadata.tenant_id(),\n            record.metadata.profile_id(),\n            generation_id,\n        )?;",
+              "let opened = open_generation_expected(\n            container,",
+              "wrong key quarantine",
+          )
+          text = regex_required(
+              text,
+              r"Ok\(RestoreResult \{\n\s*metadata: opened\.metadata\(\)\.clone\(\),\n\s*plaintext: opened\.into_plaintext\(\),\n\s*\}\)",
+              "{\n            let (metadata, plaintext) = opened.into_parts();\n            Ok(RestoreResult {\n                metadata,\n                plaintext,\n            })\n        }",
+              "let (metadata, plaintext) = opened.into_parts();",
+              "restore zeroizing transfer",
+          )
+          lifecycle.write_text(text, encoding="utf-8")
+
+          tests = Path("crates/encrypted-generation-domain/src/tests.rs")
+          text = tests.read_text(encoding="utf-8")
+          conversions = (
+              (
+                  r"assert_eq!\(\n\s*open_generation\(&tampered, &key\(0x48\)\?\),\n\s*Err\(EncryptedGenerationError::AuthenticationFailed\)\n\s*\);",
+                  "assert!(matches!(\n        open_generation(&tampered, &key(0x48)?),\n        Err(EncryptedGenerationError::AuthenticationFailed)\n    ));",
+              ),
+              (
+                  r"assert_eq!\(\n\s*open_generation\(&container, &key\(0x50\)\?\),\n\s*Err\(EncryptedGenerationError::InvalidContainer\)\n\s*\);",
+                  "assert!(matches!(\n        open_generation(&container, &key(0x50)?),\n        Err(EncryptedGenerationError::InvalidContainer)\n    ));",
+              ),
+              (
+                  r"assert_eq!\(\n\s*open_generation\(&container, &key\(0x51\)\?\),\n\s*Err\(EncryptedGenerationError::AuthenticationFailed\)\n\s*\);",
+                  "assert!(matches!(\n        open_generation(&container, &key(0x51)?),\n        Err(EncryptedGenerationError::AuthenticationFailed)\n    ));",
+              ),
+              (
+                  r"assert_eq!\(\n\s*open_generation\(sealed\.container\(\), &key\(0x53\)\?\),\n\s*Err\(EncryptedGenerationError::AuthenticationFailed\)\n\s*\);",
+                  "assert!(matches!(\n        open_generation(sealed.container(), &key(0x53)?),\n        Err(EncryptedGenerationError::AuthenticationFailed)\n    ));",
+              ),
+              (
+                  r"assert_eq!\(\n\s*open_generation_expected\((.*?)\),\n\s*Err\(EncryptedGenerationError::IdentityMismatch\)\n\s*\);",
+                  "assert!(matches!(\n        open_generation_expected(\\1),\n        Err(EncryptedGenerationError::IdentityMismatch)\n    ));",
+              ),
+          )
+          for pattern, replacement in conversions:
+              text = re.sub(pattern, replacement, text, count=1, flags=re.DOTALL)
+
+          if "fn wrong_key_does_not_quarantine_unchanged_object" not in text:
+              anchor = "\n#[test]\nfn corruption_is_quarantined_and_cannot_become_current()"
+              regression = '''
+#[test]
+fn wrong_key_does_not_quarantine_unchanged_object()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut repository = CloudGenerationRepository::default();
+    let metadata = metadata("generation_01JSTEP9WRONGKEY", 0x4b, b"healthy object")?;
+    repository.publish(
+        metadata.clone(),
+        &key(0x5b)?,
+        b"healthy object",
+        UnixMillis::new(1),
+    )?;
+    assert!(matches!(
+        repository.restore(metadata.generation_id(), &key(0x5c)?, UnixMillis::new(2)),
+        Err(EncryptedGenerationError::AuthenticationFailed)
+    ));
+    assert_eq!(
+        repository
+            .record(metadata.generation_id())
+            .ok_or(EncryptedGenerationError::MissingGeneration)?
+            .status(),
+        CloudGenerationStatus::Verified
+    );
+    assert_eq!(
+        repository
+            .restore(metadata.generation_id(), &key(0x5b)?, UnixMillis::new(3))?
+            .plaintext(),
+        b"healthy object"
+    );
+    Ok(())
+}
+'''
+              if text.count(anchor) != 1:
+                  raise SystemExit(f"wrong-key test anchor: expected one match, found {text.count(anchor)}")
+              text = text.replace(anchor, regression + anchor, 1)
+          tests.write_text(text, encoding="utf-8")
+
+          policy = Path("scripts/check-step9-encrypted-generation.py")
+          text = policy.read_text(encoding="utf-8")
+          if '"Zeroizing"' not in text:
+              text = text.replace('    "zeroize",\n', '    "zeroize",\n    "Zeroizing",\n    "nonce_domain",\n', 1)
+          text = text.replace("GENERATION_DEK_DEBUG", "SENSITIVE_RESULT_DEBUG")
+          text = text.replace(
+              r'r"#\[derive\([^\]]*Debug[^\]]*\)\]\s*pub\s+struct\s+GenerationDek"',
+              r'r"#\[derive\([^\]]*Debug[^\]]*\)\]\s*pub\s+struct\s+(?:GenerationDek|OpenedGeneration|RestoreResult)"',
+          )
+          text = text.replace(
+              'failures.append("GenerationDek must not derive Debug")',
+              'failures.append("key and plaintext-bearing types must not derive Debug")',
+          )
+          text = text.replace(
+              '''    bootstrap = root / ".github/workflows/step9-lockfile-bootstrap.yml"
+    if bootstrap.exists():
+        failures.append("temporary Step 9 lockfile bootstrap workflow must be removed")
+''',
+              '''    bootstrap_workflows = sorted((root / ".github/workflows").glob("step9-*-bootstrap.yml"))
+    if bootstrap_workflows:
+        failures.append("temporary Step 9 bootstrap workflows must be removed")
+''',
+          )
+          policy.write_text(text, encoding="utf-8")
+
+          docs = Path("docs/ENCRYPTED_CLOUD_GENERATIONS.md")
+          text = docs.read_text(encoding="utf-8")
+          text = text.replace(
+              "The repository lifecycle rejects reuse of the same nonce\nprefix with the same key ID for a different generation.",
+              "The repository lifecycle derives a non-exported nonce domain from the actual\nDEK bytes and rejects reuse of the same nonce prefix with the same DEK even when\ncallers try different key IDs.",
+          )
+          text = text.replace(
+              "A wrong key with the same opaque key ID fails authentication. A caller supplying a\ndifferent key ID fails before decryption and does not quarantine the object.",
+              "A wrong key with the same opaque key ID fails authentication but does not\nquarantine an immutable object whose cataloged container digest still matches.\nA caller supplying a different key ID fails before decryption.",
+          )
+          text = text.replace(
+              "`GenerationDek` does not implement `Clone` or `Debug`, exposes no key-byte getter\nand zeroizes its fixed-size byte array on drop.",
+              "`GenerationDek` does not implement `Clone` or `Debug`, exposes no key-byte getter\nand zeroizes its fixed-size byte array on drop. Plaintext-bearing open/restore\nresults also do not implement `Clone` or `Debug`; bounded vectors use `Zeroizing`."
+          )
+          docs.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Verify hardening
+        run: |
+          cargo fmt --all
+          python -m py_compile scripts/check-step9-encrypted-generation.py
+          cargo clippy --locked -p encrypted-generation-domain --all-targets -- -D warnings
+          cargo test --locked -p encrypted-generation-domain
+
+      - name: Remove temporary workflows and commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f .github/workflows/step9-*-bootstrap.yml
+          git add Cargo.toml crates/encrypted-generation-domain scripts/check-step9-encrypted-generation.py docs/ENCRYPTED_CLOUD_GENERATIONS.md
+          git commit -m "Repository Step 9: harden key and plaintext lifecycle"
+          git fetch origin repository-step-9-encrypted-cloud-generations
+          git rebase origin/repository-step-9-encrypted-cloud-generations
+          git push origin HEAD:repository-step-9-encrypted-cloud-generations
