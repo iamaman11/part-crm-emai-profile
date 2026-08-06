@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject temporary Repository Step 4/5/6 artifacts from accepted source heads."""
+"""Reject temporary Repository Step 4/5/6/7 artifacts from accepted source heads."""
 
 from __future__ import annotations
 
@@ -12,9 +12,11 @@ FORBIDDEN_FILES = (
     ROOT / "step4-diagnostics.txt",
     ROOT / "step5-diagnostics.txt",
     ROOT / "step6-diagnostics.txt",
+    ROOT / "step7-diagnostics.txt",
     ROOT / "docs" / "step4-progress.md",
     ROOT / "docs" / "step5-progress.md",
     ROOT / "docs" / "step6-progress.md",
+    ROOT / "docs" / "step7-progress.md",
 )
 FORBIDDEN_TEST_MARKERS = (
     "exact-head-trigger.md",
@@ -65,6 +67,10 @@ def main() -> int:
         "step6-*.yaml",
         "repository-step6-*.yml",
         "repository-step6-*.yaml",
+        "step7-*.yml",
+        "step7-*.yaml",
+        "repository-step7-*.yml",
+        "repository-step7-*.yaml",
     )
     for pattern in patterns:
         for path in sorted(workflow_root.glob(pattern)):
@@ -84,7 +90,7 @@ def main() -> int:
             print(error, file=sys.stderr)
         return 1
 
-    print("No temporary Step 4/5/6 workflows, diagnostics, gate markers or build artifacts remain.")
+    print("No temporary Step 4/5/6/7 workflows, diagnostics, gate markers or build artifacts remain.")
     return 0
 
 
