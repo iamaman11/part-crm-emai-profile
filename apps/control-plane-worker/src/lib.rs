@@ -23,7 +23,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
     match route {
         RouteClass::HealthApi => Response::ok("control-plane-ready"),
         RouteClass::BindingProbeApi => binding_probe(&env),
-        RouteClass::BridgeDeniedByDefault => Response::error("Not Found", 404),
+        RouteClass::DynamicRouteNotFound | RouteClass::BridgeDeniedByDefault => {
+            Response::error("Not Found", 404)
+        }
         RouteClass::StaticAssets => {
             env.assets(STATIC_ASSETS_BINDING)?
                 .fetch_request(request)
