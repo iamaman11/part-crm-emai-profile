@@ -23,16 +23,22 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Compile external evidence policy
-        run: python -m py_compile scripts/check-external-evidence.py
+      - name: Compile external evidence policies
+        run: |
+          python -m py_compile scripts/check-external-evidence.py
+          python -m py_compile scripts/check-external-evidence-scope.py
 
       - name: Validate repository external evidence
-        run: python scripts/check-external-evidence.py
+        run: |
+          python scripts/check-external-evidence.py
+          python scripts/check-external-evidence-scope.py
 
       - name: Validate canonical fixtures
         run: |
-          python scripts/check-external-evidence.py --root tests/external-evidence/fixtures/valid
-          python scripts/check-external-evidence.py --root tests/external-evidence/fixtures/valid-passed
+          for fixture in valid valid-passed; do
+            python scripts/check-external-evidence.py --root "tests/external-evidence/fixtures/${fixture}"
+            python scripts/check-external-evidence-scope.py --root "tests/external-evidence/fixtures/${fixture}"
+          done
 
       - name: Prove unsafe and invalid fixtures are rejected
         shell: bash
@@ -41,6 +47,18 @@ jobs:
           for fixture in secret-bearing invalid-passed forked-lineage dangling-lineage; do
             if python scripts/check-external-evidence.py --root "tests/external-evidence/fixtures/${fixture}"; then
               echo "Negative fixture unexpectedly passed: ${fixture}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Prove strict scope fixtures pass the base schema and fail scope policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          for fixture in invalid-timestamp invalid-environment invalid-id-date invalid-ipv6; do
+            python scripts/check-external-evidence.py --root "tests/external-evidence/fixtures/${fixture}"
+            if python scripts/check-external-evidence-scope.py --root "tests/external-evidence/fixtures/${fixture}"; then
+              echo "Strict scope fixture unexpectedly passed: ${fixture}" >&2
               exit 1
             fi
           done
