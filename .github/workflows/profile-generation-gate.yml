@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   profile-generation:
-    name: Registry Domain D1 Adapter And Worker
+    name: Registry Domain D1 Adapter Worker And Contract
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -40,9 +40,12 @@ jobs:
           cargo check --locked -p browser-profile-control-plane-worker
           --target wasm32-unknown-unknown
 
-      - name: Compile registry tests
+      - name: Compile registry and contract tests
         run: >-
           python -m py_compile
+          scripts/check-contract-compatibility.py
+          scripts/render-openapi.py
+          scripts/test-openapi-fragments.py
           scripts/test-profile-generation-registry.py
           scripts/test-profile-generation-registry-edge-cases.py
           scripts/test-profile-generation-integrity-guards.py
@@ -52,6 +55,18 @@ jobs:
           python scripts/test-profile-generation-registry.py
           python scripts/test-profile-generation-registry-edge-cases.py
           python scripts/test-profile-generation-integrity-guards.py
+
+      - name: Verify additive OpenAPI contract
+        run: |
+          python scripts/test-openapi-fragments.py
+          python scripts/check-contract-compatibility.py
+          python scripts/render-openapi.py --output /tmp/openapi-v1.json
+          python -m json.tool /tmp/openapi-v1.json >/dev/null
+          grep -q 'registerProfileGeneration' /tmp/openapi-v1.json
+          grep -q 'getProfileGeneration' /tmp/openapi-v1.json
+          grep -q 'verifyProfileGeneration' /tmp/openapi-v1.json
+          grep -q 'activateProfileGeneration' /tmp/openapi-v1.json
+          grep -q 'quarantineProfileGeneration' /tmp/openapi-v1.json
 
       - name: Reject migration gaps and unsafe registry storage
         shell: bash
