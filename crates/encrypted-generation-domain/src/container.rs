@@ -1,4 +1,4 @@
-use crate::{ALGORITHM_SUITE, CONTAINER_VERSION, EncryptedGenerationError};
+use crate::{CONTAINER_VERSION, EncryptedGenerationError};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
@@ -123,6 +123,31 @@ impl ContainerDigest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenerationIdentity {
+    tenant_id: TenantId,
+    profile_id: ProfileId,
+    generation_id: GenerationId,
+    base_generation_id: Option<GenerationId>,
+}
+
+impl GenerationIdentity {
+    #[must_use]
+    pub const fn new(
+        tenant_id: TenantId,
+        profile_id: ProfileId,
+        generation_id: GenerationId,
+        base_generation_id: Option<GenerationId>,
+    ) -> Self {
+        Self {
+            tenant_id,
+            profile_id,
+            generation_id,
+            base_generation_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GenerationMetadata {
     tenant_id: TenantId,
     profile_id: ProfileId,
@@ -137,10 +162,7 @@ pub struct GenerationMetadata {
 
 impl GenerationMetadata {
     pub fn for_plaintext(
-        tenant_id: TenantId,
-        profile_id: ProfileId,
-        generation_id: GenerationId,
-        base_generation_id: Option<GenerationId>,
+        identity: GenerationIdentity,
         key_id: KeyId,
         nonce_prefix: NoncePrefix,
         chunk_size: u32,
@@ -152,6 +174,12 @@ impl GenerationMetadata {
         }
         let plaintext_bytes = u64::try_from(plaintext.len())
             .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
+        let GenerationIdentity {
+            tenant_id,
+            profile_id,
+            generation_id,
+            base_generation_id,
+        } = identity;
         Ok(Self {
             tenant_id,
             profile_id,
@@ -411,7 +439,7 @@ pub fn seal_generation(
         let nonce_bytes = metadata.nonce_prefix().nonce_for(chunk_count);
         let ciphertext = cipher
             .encrypt(
-                XNonce::from_slice(&nonce_bytes),
+                &nonce_from_bytes(&nonce_bytes)?,
                 Payload {
                     msg: chunk,
                     aad: &aad,
@@ -436,7 +464,7 @@ pub fn seal_generation(
     let nonce_bytes = metadata.nonce_prefix().nonce_for(chunk_count);
     let final_tag = cipher
         .encrypt(
-            XNonce::from_slice(&nonce_bytes),
+            &nonce_from_bytes(&nonce_bytes)?,
             Payload {
                 msg: &[],
                 aad: &aad,
@@ -509,7 +537,7 @@ pub fn open_generation(
         let nonce_bytes = metadata.nonce_prefix().nonce_for(index);
         let opened = cipher
             .decrypt(
-                XNonce::from_slice(&nonce_bytes),
+                &nonce_from_bytes(&nonce_bytes)?,
                 Payload {
                     msg: ciphertext,
                     aad: &aad,
@@ -586,6 +614,10 @@ pub fn open_generation_expected(
         return Err(EncryptedGenerationError::IdentityMismatch);
     }
     Ok(opened)
+}
+
+fn nonce_from_bytes(bytes: &[u8; NONCE_BYTES]) -> Result<XNonce, EncryptedGenerationError> {
+    XNonce::try_from(bytes.as_slice()).map_err(|_| EncryptedGenerationError::InvalidContainer)
 }
 
 fn validate_chunk_size(chunk_size: u32) -> Result<(), EncryptedGenerationError> {
@@ -688,9 +720,4 @@ impl<'a> Cursor<'a> {
     const fn is_finished(&self) -> bool {
         self.position == self.bytes.len()
     }
-}
-
-#[must_use]
-pub const fn algorithm_suite() -> &'static str {
-    ALGORITHM_SUITE
 }

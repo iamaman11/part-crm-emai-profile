@@ -228,10 +228,10 @@ impl CloudGenerationRepository {
     ) -> Result<PublishResult, EncryptedGenerationError> {
         let sealed = seal_generation(&metadata, key, plaintext)?;
         let nonce_claim = (metadata.key_id().clone(), metadata.nonce_prefix());
-        if let Some(claimed_generation_id) = self.nonce_claims.get(&nonce_claim) {
-            if claimed_generation_id != metadata.generation_id() {
-                return Err(EncryptedGenerationError::NonceReuse);
-            }
+        if let Some(claimed_generation_id) = self.nonce_claims.get(&nonce_claim)
+            && claimed_generation_id != metadata.generation_id()
+        {
+            return Err(EncryptedGenerationError::NonceReuse);
         }
 
         let object_key = metadata.object_key();

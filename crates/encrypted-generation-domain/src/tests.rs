@@ -1,7 +1,7 @@
 use super::{
     CloudGenerationRepository, CloudGenerationStatus, ContainerDigest, EncryptedGenerationError,
-    GenerationDek, GenerationMetadata, KeyId, NoncePrefix, PlaintextDigest, PublishResult,
-    open_generation, open_generation_expected, seal_generation,
+    GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix, PlaintextDigest,
+    PublishResult, open_generation, open_generation_expected, seal_generation,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId, UnixMillis};
 
@@ -30,10 +30,7 @@ fn metadata(
 ) -> Result<GenerationMetadata, Box<dyn std::error::Error>> {
     let (tenant_id, profile_id, generation_id) = ids(generation)?;
     Ok(GenerationMetadata::for_plaintext(
-        tenant_id,
-        profile_id,
-        generation_id,
-        None,
+        GenerationIdentity::new(tenant_id, profile_id, generation_id, None),
         key_id()?,
         NoncePrefix::new([prefix_byte; 16]),
         1_024,
@@ -237,10 +234,7 @@ fn repository_rejects_nonce_reuse_and_immutable_conflict() -> Result<(), Box<dyn
 
     let (tenant_id, profile_id, generation_id) = ids("generation_01JSTEP9NONCE2")?;
     let reused = GenerationMetadata::for_plaintext(
-        tenant_id,
-        profile_id,
-        generation_id,
-        None,
+        GenerationIdentity::new(tenant_id, profile_id, generation_id, None),
         key_id()?,
         first.nonce_prefix(),
         1_024,
@@ -257,10 +251,12 @@ fn repository_rejects_nonce_reuse_and_immutable_conflict() -> Result<(), Box<dyn
     );
 
     let conflicting = GenerationMetadata::for_plaintext(
-        first.tenant_id().clone(),
-        first.profile_id().clone(),
-        first.generation_id().clone(),
-        None,
+        GenerationIdentity::new(
+            first.tenant_id().clone(),
+            first.profile_id().clone(),
+            first.generation_id().clone(),
+            None,
+        ),
         key_id()?,
         first.nonce_prefix(),
         1_024,
@@ -397,10 +393,7 @@ fn invalid_key_id_and_chunk_size_fail_closed() -> Result<(), Box<dyn std::error:
     let (tenant_id, profile_id, generation_id) = ids("generation_01JSTEP9LIMIT")?;
     assert_eq!(
         GenerationMetadata::for_plaintext(
-            tenant_id,
-            profile_id,
-            generation_id,
-            None,
+            GenerationIdentity::new(tenant_id, profile_id, generation_id, None),
             key_id()?,
             NoncePrefix::new([0x48; 16]),
             1,
