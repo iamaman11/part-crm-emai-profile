@@ -420,6 +420,26 @@ impl DeviceGrantKey {
             device_id,
         }
     }
+
+    #[must_use]
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn generation_id(&self) -> &GenerationId {
+        &self.generation_id
+    }
+
+    #[must_use]
+    pub const fn device_id(&self) -> &DeviceId {
+        &self.device_id
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -444,6 +464,11 @@ impl DeviceGrantSnapshot {
     #[must_use]
     pub const fn status(&self) -> DeviceGrantStatus {
         self.status
+    }
+
+    #[must_use]
+    pub const fn changed_at(&self) -> UnixMillis {
+        self.changed_at
     }
 }
 
@@ -753,6 +778,23 @@ impl ReleaseCandidate {
     pub const fn verification(&self) -> &PreverifiedSignatureEvidence {
         &self.verification
     }
+
+    fn matches_identity(
+        &self,
+        release_id: &ReleaseId,
+        version: u64,
+        content_digest: &ContentDigest,
+    ) -> bool {
+        self.release_id == *release_id
+            && self.version == version
+            && self.content_digest == *content_digest
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RollbackOutcome {
+    Restored(u64),
+    NoPreviousRelease,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -763,6 +805,7 @@ pub enum UpdateState {
     AwaitingHealth,
     Healthy,
     RolledBack,
+    Failed,
 }
 
 impl UpdateState {
@@ -773,6 +816,7 @@ impl UpdateState {
             Self::AwaitingHealth => "awaiting_health",
             Self::Healthy => "healthy",
             Self::RolledBack => "rolled_back",
+            Self::Failed => "failed",
         }
     }
 }
@@ -822,7 +866,12 @@ impl UpdateController {
         Ok(version)
     }
 
-    pub fn confirm_health(&mut self, release_id: &ReleaseId) -> Result<(), CertificationError> {
+    pub fn confirm_health(
+        &mut self,
+        release_id: &ReleaseId,
+        version: u64,
+        content_digest: &ContentDigest,
+    ) -> Result<(), CertificationError> {
         if self.state != UpdateState::AwaitingHealth {
             return Err(CertificationError::InvalidUpdateTransition);
         }
@@ -830,7 +879,7 @@ impl UpdateController {
             .active
             .as_ref()
             .ok_or(CertificationError::MissingActiveRelease)?;
-        if &active.release_id != release_id {
+        if !active.matches_identity(release_id, version, content_digest) {
             return Err(CertificationError::ReleaseIdentityMismatch);
         }
         self.state = UpdateState::Healthy;
@@ -840,7 +889,9 @@ impl UpdateController {
     pub fn fail_health_and_rollback(
         &mut self,
         release_id: &ReleaseId,
-    ) -> Result<u64, CertificationError> {
+        version: u64,
+        content_digest: &ContentDigest,
+    ) -> Result<RollbackOutcome, CertificationError> {
         if self.state != UpdateState::AwaitingHealth {
             return Err(CertificationError::InvalidUpdateTransition);
         }
@@ -848,17 +899,18 @@ impl UpdateController {
             .active
             .as_ref()
             .ok_or(CertificationError::MissingActiveRelease)?;
-        if &active.release_id != release_id {
+        if !active.matches_identity(release_id, version, content_digest) {
             return Err(CertificationError::ReleaseIdentityMismatch);
         }
-        let previous = self
-            .previous
-            .take()
-            .ok_or(CertificationError::RollbackUnavailable)?;
-        let restored_version = previous.version;
-        self.active = Some(previous);
-        self.state = UpdateState::RolledBack;
-        Ok(restored_version)
+        if let Some(previous) = self.previous.take() {
+            let restored_version = previous.version;
+            self.active = Some(previous);
+            self.state = UpdateState::RolledBack;
+            return Ok(RollbackOutcome::Restored(restored_version));
+        }
+        self.active = None;
+        self.state = UpdateState::Failed;
+        Ok(RollbackOutcome::NoPreviousRelease)
     }
 
     #[must_use]
@@ -1135,6 +1187,14 @@ mod tests {
         );
         assert_eq!(registry.history()[3].snapshot().version(), 3);
         assert_eq!(registry.history()[3].key(), &first_device);
+        assert_eq!(
+            registry.history()[3].key().device_id(),
+            &DeviceId::parse("device_01JSTEP10A")?
+        );
+        assert_eq!(
+            registry.history()[3].snapshot().changed_at(),
+            UnixMillis::new(4)
+        );
         Ok(())
     }
 
@@ -1146,7 +1206,7 @@ mod tests {
         let first_digest = first.content_digest.clone();
         controller.stage(first, &first_digest)?;
         assert_eq!(controller.activate_staged()?, 1);
-        controller.confirm_health(&ReleaseId::parse("release_01JSTEP10A")?)?;
+        controller.confirm_health(&ReleaseId::parse("release_01JSTEP10A")?, 1, &first_digest)?;
         assert_eq!(controller.state(), UpdateState::Healthy);
 
         let second = candidate("release_01JSTEP10B", 2, 0x22)?;
@@ -1154,8 +1214,16 @@ mod tests {
         controller.stage(second, &second_digest)?;
         assert_eq!(controller.activate_staged()?, 2);
         assert_eq!(
-            controller.fail_health_and_rollback(&ReleaseId::parse("release_01JSTEP10B")?)?,
-            1
+            controller.confirm_health(&ReleaseId::parse("release_01JSTEP10B")?, 1, &second_digest,),
+            Err(CertificationError::ReleaseIdentityMismatch)
+        );
+        assert_eq!(
+            controller.fail_health_and_rollback(
+                &ReleaseId::parse("release_01JSTEP10B")?,
+                2,
+                &second_digest,
+            )?,
+            RollbackOutcome::Restored(1)
         );
         assert_eq!(controller.state(), UpdateState::RolledBack);
         assert_eq!(controller.active_version(), Some(1));
@@ -1198,9 +1266,15 @@ mod tests {
         controller.stage(first, &ContentDigest::new([0x33; 32])?)?;
         controller.activate_staged()?;
         assert_eq!(
-            controller.fail_health_and_rollback(&ReleaseId::parse("release_01JSTEP10C")?),
-            Err(CertificationError::RollbackUnavailable)
+            controller.fail_health_and_rollback(
+                &ReleaseId::parse("release_01JSTEP10C")?,
+                1,
+                &ContentDigest::new([0x33; 32])?,
+            )?,
+            RollbackOutcome::NoPreviousRelease
         );
+        assert_eq!(controller.state(), UpdateState::Failed);
+        assert_eq!(controller.active_version(), None);
         Ok(())
     }
 

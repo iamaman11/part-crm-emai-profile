@@ -22,6 +22,11 @@ impl PreverifiedSignatureEvidence {
 pub struct UpdateController;
 pub enum UpdateState {
     AwaitingHealth,
+    Failed,
+}
+
+pub enum RollbackOutcome {
+    NoPreviousRelease,
 }
 pub enum Error {
     StaleGrantVersion,
@@ -45,8 +50,12 @@ impl DeviceAuthorizationRegistry {
 }
 
 impl UpdateController {
-    pub fn fail_health_and_rollback(&self) -> Result<(), Error> {
-        Ok(())
+    fn matches_identity(&self) -> bool {
+        true
+    }
+
+    pub fn fail_health_and_rollback(&self) -> Result<RollbackOutcome, Error> {
+        Ok(RollbackOutcome::NoPreviousRelease)
     }
 }
 

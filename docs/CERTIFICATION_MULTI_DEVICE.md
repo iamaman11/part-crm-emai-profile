@@ -95,13 +95,17 @@ The pure domain does not parse certificates or verify signatures. The
 supply the proof only after trusted signature and policy verification. The domain
 then rejects evidence whose approved release ID, version or content digest differs
 from the candidate, preventing reuse of one opaque approval for another artifact.
+Health confirmation and failure signals are bound to the same exact release ID,
+version and digest, so a stale signal cannot approve a newer artifact that reused
+an opaque release ID.
 
 Staging requires exact content identity and a version greater than every release
 previously seen by the controller. Activation is side-by-side and enters
 `AWAITING_HEALTH`. Successful health confirmation marks the release healthy.
 Failed health confirmation restores the previous approved release. A first
-installation has no rollback target and fails closed rather than inventing one.
-A failed higher version cannot be replayed after rollback.
+installation has no rollback target, removes the failed candidate from the active
+slot and enters an explicit `FAILED` state rather than remaining ambiguously
+`AWAITING_HEALTH`. A failed higher version cannot be replayed after rollback.
 
 ## 6. Privacy And Support Output
 

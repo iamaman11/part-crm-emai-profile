@@ -27,8 +27,10 @@ REQUIRED_FRAGMENTS = (
     "fn approves(",
     "UpdateController",
     "AwaitingHealth",
+    "UpdateState::Failed",
+    "RollbackOutcome",
+    "matches_identity",
     "fail_health_and_rollback",
-    "RollbackUnavailable",
     "render_metadata_only",
 )
 
