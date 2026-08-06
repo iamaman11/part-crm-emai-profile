@@ -31,5 +31,7 @@ jobs:
             echo "Formatting is already current."
           else
             git commit -m "Repository Step 9: apply pinned rustfmt"
+            git fetch origin repository-step-9-encrypted-cloud-generations
+            git rebase origin/repository-step-9-encrypted-cloud-generations
             git push origin HEAD:repository-step-9-encrypted-cloud-generations
           fi
