@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[cfg(windows)]
+pub mod windows_native;
+
 use bridge_domain::{
     BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort, DeviceIdentityPort,
     DeviceKeyPort,
@@ -81,9 +84,68 @@ impl CamouhostPort for FakeCamouhost {
     }
 }
 
+pub trait ProcessControlPort {
+    fn spawn(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
+    fn request_graceful_close(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
+    fn force_terminate(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProcessAction {
+    Spawn(SessionId),
+    GracefulClose(SessionId),
+    ForceTerminate(SessionId),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FakeProcessControl {
+    active_session: Option<SessionId>,
+    actions: Vec<ProcessAction>,
+}
+
+impl FakeProcessControl {
+    #[must_use]
+    pub fn actions(&self) -> &[ProcessAction] {
+        &self.actions
+    }
+}
+
+impl ProcessControlPort for FakeProcessControl {
+    fn spawn(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
+        if self.active_session.is_some() {
+            return Err(BridgePortError::Unavailable);
+        }
+        self.active_session = Some(session_id.clone());
+        self.actions.push(ProcessAction::Spawn(session_id.clone()));
+        Ok(())
+    }
+
+    fn request_graceful_close(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
+        if self.active_session.as_ref() != Some(session_id) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        self.actions
+            .push(ProcessAction::GracefulClose(session_id.clone()));
+        Ok(())
+    }
+
+    fn force_terminate(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
+        if self.active_session.as_ref() != Some(session_id) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        self.actions
+            .push(ProcessAction::ForceTerminate(session_id.clone()));
+        self.active_session = None;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore};
+    use super::{
+        FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl, ProcessAction,
+        ProcessControlPort,
+    };
     use bridge_domain::{
         BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort,
         DeviceIdentityPort, DeviceKeyPort,
@@ -91,8 +153,8 @@ mod tests {
     use profile_platform_primitives::{DeviceId, SessionId};
 
     #[test]
-    fn fake_device_identity_and_key_handle_are_deterministic()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn fake_device_identity_and_key_handle_are_deterministic(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let device_id = DeviceId::parse("device_01JBRIDGE")?;
         let identity = FakeDeviceIdentity::new(device_id.clone());
         let mut keys = FakeDeviceKeyStore::default();
@@ -105,8 +167,8 @@ mod tests {
     }
 
     #[test]
-    fn fake_camouhost_requires_version_negotiation_and_preserves_session()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn fake_camouhost_requires_version_negotiation_and_preserves_session(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let session_id = SessionId::parse("session_01JBRIDGE")?;
         let mut runtime = FakeCamouhost::default();
         assert_eq!(
@@ -150,5 +212,24 @@ mod tests {
             runtime.exchange(&CamouhostMessage::Hello { version: 2 }),
             Err(BridgePortError::InvalidResponse)
         );
+    }
+
+    #[test]
+    fn fake_process_control_records_graceful_and_forced_paths(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = SessionId::parse("session_01JBRIDGE")?;
+        let mut process = FakeProcessControl::default();
+        process.spawn(&session_id)?;
+        process.request_graceful_close(&session_id)?;
+        process.force_terminate(&session_id)?;
+        assert_eq!(
+            process.actions(),
+            [
+                ProcessAction::Spawn(session_id.clone()),
+                ProcessAction::GracefulClose(session_id.clone()),
+                ProcessAction::ForceTerminate(session_id),
+            ]
+        );
+        Ok(())
     }
 }
