@@ -1,0 +1,64 @@
+name: External Evidence Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-evidence-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  external-evidence:
+    name: External Evidence Metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Compile external evidence policies
+        run: |
+          python -m py_compile scripts/check-external-evidence.py
+          python -m py_compile scripts/check-external-evidence-scope.py
+
+      - name: Validate repository external evidence
+        run: |
+          python scripts/check-external-evidence.py
+          python scripts/check-external-evidence-scope.py
+
+      - name: Validate canonical fixtures
+        run: |
+          for fixture in valid valid-passed; do
+            python scripts/check-external-evidence.py --root "tests/external-evidence/fixtures/${fixture}"
+            python scripts/check-external-evidence-scope.py --root "tests/external-evidence/fixtures/${fixture}"
+          done
+
+      - name: Prove unsafe and invalid fixtures are rejected
+        shell: bash
+        run: |
+          set -euo pipefail
+          for fixture in secret-bearing invalid-passed forked-lineage dangling-lineage; do
+            if python scripts/check-external-evidence.py --root "tests/external-evidence/fixtures/${fixture}"; then
+              echo "Negative fixture unexpectedly passed: ${fixture}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Prove strict scope fixtures pass the base schema and fail scope policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          for fixture in invalid-timestamp invalid-environment invalid-id-date invalid-ipv6; do
+            python scripts/check-external-evidence.py --root "tests/external-evidence/fixtures/${fixture}"
+            if python scripts/check-external-evidence-scope.py --root "tests/external-evidence/fixtures/${fixture}"; then
+              echo "Strict scope fixture unexpectedly passed: ${fixture}" >&2
+              exit 1
+            fi
+          done

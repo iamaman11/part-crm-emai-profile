@@ -1,0 +1,22 @@
+{
+  "artifact_digests_sha256": [],
+  "checks": [
+    {
+      "code": "license_selected",
+      "outcome": "pass"
+    }
+  ],
+  "evidence_id": "ev-20260805-invalid-id-date",
+  "gate": "product_license",
+  "limitations": [],
+  "observed_at": "2026-08-06T13:00:00Z",
+  "references": [
+    "https://github.com/iamaman11/part-crm-emai-profile/issues/3"
+  ],
+  "schema_version": 1,
+  "scope": {
+    "environment": "none",
+    "subject_id": "product-license-review"
+  },
+  "status": "pending"
+}
