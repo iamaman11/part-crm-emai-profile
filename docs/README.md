@@ -32,6 +32,8 @@
   storage/logging and credential-equivalent handling.
 - [`PRIVACY_AND_RETENTION.md`](PRIVACY_AND_RETENTION.md): privacy principles,
   retention gates, export/delete and support-access requirements.
+- [`EXTERNAL_EVIDENCE_PROTOCOL.md`](EXTERNAL_EVIDENCE_PROTOCOL.md): immutable
+  metadata-only intake, review and lineage rules for external production gates.
 - [`TEST_EVIDENCE_INDEX.md`](TEST_EVIDENCE_INDEX.md): accepted evidence scope and
   promotion rules.
 - [`../SECURITY.md`](../SECURITY.md): vulnerability and credential incident policy.
