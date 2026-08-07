@@ -15,6 +15,7 @@ OWNER_IDENTITY = "identity_owner_commands"
 MEMBER_IDENTITY = "identity_member_commands"
 CLIENT = "client_01_commands"
 PROFILE = "profile_01_commands"
+ROLLBACK_PROFILE = "profile_rollback_commands"
 
 
 def database() -> sqlite3.Connection:
@@ -160,6 +161,73 @@ def test_owner_transfer_guard(connection: sqlite3.Connection) -> None:
     }
 
 
+def test_complete_envelope_rolls_back_on_late_evidence_failure(
+    connection: sqlite3.Connection,
+) -> None:
+    key = "idem_rollback_commands"
+    audit_id = "audit_rollback_commands"
+    outbox_id = "outbox_rollback_commands"
+    try:
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO profile_create_commands (
+                    tenant_id, command_id, command_actor_id, profile_id, executed_at_ms
+                ) VALUES (?, ?, ?, ?, 125)
+                """,
+                (TENANT, key, MEMBER, ROLLBACK_PROFILE),
+            )
+            connection.execute(
+                """
+                INSERT INTO idempotency_records (
+                    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+                    result_code, result_reference, created_at_ms, expires_at_ms
+                ) VALUES (?, ?, ?, 'profile.create', 'digest_rollback_commands',
+                          'created', ?, 125, 1000)
+                """,
+                (TENANT, MEMBER, key, ROLLBACK_PROFILE),
+            )
+            connection.execute(
+                """
+                INSERT INTO audit_events (
+                    tenant_id, audit_event_id, correlation_id, actor_id, action,
+                    resource_type, resource_id, result_code, occurred_at_ms
+                ) VALUES (?, ?, 'corr_rollback_commands', ?, 'profile.create',
+                          'profile', ?, 'created', 125)
+                """,
+                (TENANT, audit_id, MEMBER, ROLLBACK_PROFILE),
+            )
+            connection.execute(
+                """
+                INSERT INTO outbox_events (
+                    tenant_id, outbox_event_id, aggregate_type, aggregate_id,
+                    aggregate_version, event_type, payload_json, created_at_ms
+                ) VALUES (?, ?, 'profile', ?, 1, 'profile.created.v1', '{', 125)
+                """,
+                (TENANT, outbox_id, ROLLBACK_PROFILE),
+            )
+    except sqlite3.IntegrityError as error:
+        assert "CHECK constraint failed" in str(error), str(error)
+    else:
+        raise AssertionError("invalid late outbox evidence unexpectedly committed")
+
+    checks = (
+        ("profile_create_commands", "command_id", key),
+        ("browser_profiles", "profile_id", ROLLBACK_PROFILE),
+        ("idempotency_records", "idempotency_key", key),
+        ("audit_events", "audit_event_id", audit_id),
+        ("outbox_events", "outbox_event_id", outbox_id),
+    )
+    for table, column, value in checks:
+        assert (
+            connection.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE tenant_id = ? AND {column} = ?",
+                (TENANT, value),
+            ).fetchone()[0]
+            == 0
+        ), (table, column, value)
+
+
 def test_last_owner_and_membership_version(connection: sqlite3.Connection) -> None:
     expect_abort(
         lambda: connection.execute(
@@ -291,6 +359,7 @@ def main() -> int:
     try:
         seed(connection)
         test_owner_transfer_guard(connection)
+        test_complete_envelope_rolls_back_on_late_evidence_failure(connection)
         test_last_owner_and_membership_version(connection)
         test_invitation_and_resource_guards(connection)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
