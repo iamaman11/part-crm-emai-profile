@@ -1,7 +1,7 @@
 # Profile Generation Registry
 
-**Статус:** composed repository-local capability candidate  
-**Tracking:** issue #44, clean draft PR #51  
+**Статус:** composed repository-local capability  
+**Tracking:** issue #44, PR #51  
 **Parent:** issue #43
 
 ## 1. Назначение
@@ -88,6 +88,10 @@ Governed deactivation является отдельной CAS-командой. 
 атомарно очищает pointer, переводит profile в `SUSPENDED`, увеличивает version и
 пишет evidence. Поэтому active generation нельзя «оторвать» прямым SQL UPDATE и
 нельзя quarantined до governed deactivation.
+
+Rollback на ранее verified generation не имеет отдельного обходного endpoint:
+после governed deactivation ранее verified generation может быть снова активирована
+обычным activation path с теми же tenant/owner/CAS/idempotency/integrity guards.
 
 ## 4. Governed Command Journal
 
@@ -180,17 +184,18 @@ Permanent `Profile Generation Gate` проверяет:
 - exact idempotency decision tests;
 - deterministic evidence-ID vectors/collision resistance;
 - Cloudflare adapter tests;
-- complete Worker WASM composition, включая deactivate route;
+- Worker native helpers и complete Worker WASM composition, включая deactivate route;
 - full migration replay;
 - owner, tenant, stale-version and lifecycle negatives;
 - activation/deactivation CAS и monotonic-time rollback;
 - unjournaled SQL bypass attempts;
 - migration contiguity;
 - metadata-only storage policy;
-- additive OpenAPI fragment merge/collision rules.
+- additive OpenAPI fragment merge/collision rules и exact six-operation surface.
 
-Final acceptance требует также всех repository-wide permanent workflows на одном
-exact head, отсутствия unresolved review threads и squash merge в `main`.
+Acceptance дополнительно требует всех repository-wide permanent workflows на том
+же exact head, отсутствия unresolved review threads/reviews и squash merge в
+`main`. CI, а не branch Markdown, является authoritative acceptance evidence.
 
 ## 9. Ограничения
 
@@ -205,5 +210,5 @@ opaque reference. Это не доказывает само по себе:
 - production atomicity или readiness.
 
 Такие свойства требуют external evidence protocol и остаются вне scope issue #44.
-Legacy proxy credential/provider также полностью исключён из этого capability.
+Legacy proxy credential/provider полностью исключён из этого capability.
 `production_ready` остаётся `false`.
