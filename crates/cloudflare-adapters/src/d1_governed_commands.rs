@@ -1,3 +1,4 @@
+use crate::d1_command_identity::command_journal_id;
 use crate::d1_identity_acl::{
     AssignProfileMutation, ClientGrantMutation, CreateInvitationMutation, CreateProfileMutation,
     MembershipStatusMutation, MutationEnvelope, OwnerTransferMutation, ProfileGrantMutation,
@@ -92,6 +93,11 @@ impl D1GovernedCommandRepository {
     ) -> Result<Vec<D1Result>> {
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
         let current_version = sqlite_version(mutation.current_owner_version)?;
@@ -103,7 +109,7 @@ impl D1GovernedCommandRepository {
                 &self.database,
                 OWNER_TRANSFER_COMMAND,
                 tenant_id,
-                mutation.envelope.idempotency_key.as_str(),
+                command_id.as_str(),
                 actor_id,
                 resource_id,
                 current_version,
@@ -154,6 +160,11 @@ impl D1GovernedCommandRepository {
     ) -> Result<Vec<D1Result>> {
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
         let invitation_expires_at = sqlite_integer(mutation.expires_at.value())?;
@@ -165,7 +176,7 @@ impl D1GovernedCommandRepository {
                 &self.database,
                 INVITATION_CREATE_COMMAND,
                 tenant_id,
-                mutation.envelope.idempotency_key.as_str(),
+                command_id.as_str(),
                 actor_id,
                 resource_id,
                 mutation.invited_contact_hmac,
@@ -217,6 +228,11 @@ impl D1GovernedCommandRepository {
     ) -> Result<Vec<D1Result>> {
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
         let expected_version = sqlite_version(mutation.expected_version)?;
@@ -239,7 +255,7 @@ impl D1GovernedCommandRepository {
                 &self.database,
                 MEMBERSHIP_STATUS_COMMAND,
                 tenant_id,
-                mutation.envelope.idempotency_key.as_str(),
+                command_id.as_str(),
                 actor_id,
                 resource_id,
                 expected_version,
@@ -290,6 +306,11 @@ impl D1GovernedCommandRepository {
     ) -> Result<Vec<D1Result>> {
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
         let resource_id = mutation.profile_id.as_str();
@@ -298,7 +319,7 @@ impl D1GovernedCommandRepository {
                 &self.database,
                 PROFILE_CREATE_COMMAND,
                 tenant_id,
-                mutation.envelope.idempotency_key.as_str(),
+                command_id.as_str(),
                 actor_id,
                 resource_id,
                 now
@@ -347,6 +368,11 @@ impl D1GovernedCommandRepository {
     ) -> Result<Vec<D1Result>> {
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
         let expected_version = sqlite_version(mutation.expected_profile_version)?;
@@ -357,7 +383,7 @@ impl D1GovernedCommandRepository {
                 &self.database,
                 PROFILE_ASSIGNMENT_COMMAND,
                 tenant_id,
-                mutation.envelope.idempotency_key.as_str(),
+                command_id.as_str(),
                 actor_id,
                 mutation.assignment_id.as_str(),
                 resource_id,
@@ -427,6 +453,11 @@ impl D1GovernedCommandRepository {
     ) -> Result<Vec<D1Result>> {
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
         let expected_version = sqlite_version(mutation.expected_profile_version)?;
@@ -452,7 +483,7 @@ impl D1GovernedCommandRepository {
                 &self.database,
                 PROFILE_GRANT_COMMAND,
                 tenant_id,
-                mutation.envelope.idempotency_key.as_str(),
+                command_id.as_str(),
                 actor_id,
                 mutation.target_actor_id.as_str(),
                 resource_id,
@@ -523,6 +554,11 @@ impl D1GovernedCommandRepository {
     ) -> Result<Vec<D1Result>> {
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
         let actor_id = actor.actor_id().as_str();
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
         let expected_version = sqlite_version(mutation.expected_client_version)?;
@@ -548,7 +584,7 @@ impl D1GovernedCommandRepository {
                 &self.database,
                 CLIENT_GRANT_COMMAND,
                 tenant_id,
-                mutation.envelope.idempotency_key.as_str(),
+                command_id.as_str(),
                 actor_id,
                 mutation.target_actor_id.as_str(),
                 resource_id,

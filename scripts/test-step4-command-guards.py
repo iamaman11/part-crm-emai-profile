@@ -15,6 +15,8 @@ OWNER_IDENTITY = "identity_owner_commands"
 MEMBER_IDENTITY = "identity_member_commands"
 CLIENT = "client_01_commands"
 PROFILE = "profile_01_commands"
+ROLLBACK_PROFILE = "profile_rollback_commands"
+CONCURRENT_PROFILE = "profile_concurrent_commands"
 
 
 def database() -> sqlite3.Connection:
@@ -160,6 +162,192 @@ def test_owner_transfer_guard(connection: sqlite3.Connection) -> None:
     }
 
 
+def test_complete_envelope_rolls_back_on_late_evidence_failure(
+    connection: sqlite3.Connection,
+) -> None:
+    key = "idem_rollback_commands"
+    audit_id = "audit_rollback_commands"
+    outbox_id = "outbox_rollback_commands"
+    try:
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO profile_create_commands (
+                    tenant_id, command_id, command_actor_id, profile_id, executed_at_ms
+                ) VALUES (?, ?, ?, ?, 125)
+                """,
+                (TENANT, key, MEMBER, ROLLBACK_PROFILE),
+            )
+            connection.execute(
+                """
+                INSERT INTO idempotency_records (
+                    tenant_id, actor_id, idempotency_key, command_name, request_digest,
+                    result_code, result_reference, created_at_ms, expires_at_ms
+                ) VALUES (?, ?, ?, 'profile.create', 'digest_rollback_commands',
+                          'created', ?, 125, 1000)
+                """,
+                (TENANT, MEMBER, key, ROLLBACK_PROFILE),
+            )
+            connection.execute(
+                """
+                INSERT INTO audit_events (
+                    tenant_id, audit_event_id, correlation_id, actor_id, action,
+                    resource_type, resource_id, result_code, occurred_at_ms
+                ) VALUES (?, ?, 'corr_rollback_commands', ?, 'profile.create',
+                          'profile', ?, 'created', 125)
+                """,
+                (TENANT, audit_id, MEMBER, ROLLBACK_PROFILE),
+            )
+            connection.execute(
+                """
+                INSERT INTO outbox_events (
+                    tenant_id, outbox_event_id, aggregate_type, aggregate_id,
+                    aggregate_version, event_type, payload_json, created_at_ms
+                ) VALUES (?, ?, 'profile', ?, 1, 'profile.created.v1', '{', 125)
+                """,
+                (TENANT, outbox_id, ROLLBACK_PROFILE),
+            )
+    except sqlite3.IntegrityError as error:
+        assert "CHECK constraint failed" in str(error), str(error)
+    else:
+        raise AssertionError("invalid late outbox evidence unexpectedly committed")
+
+    checks = (
+        ("profile_create_commands", "command_id", key),
+        ("browser_profiles", "profile_id", ROLLBACK_PROFILE),
+        ("idempotency_records", "idempotency_key", key),
+        ("audit_events", "audit_event_id", audit_id),
+        ("outbox_events", "outbox_event_id", outbox_id),
+    )
+    for table, column, value in checks:
+        assert (
+            connection.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE tenant_id = ? AND {column} = ?",
+                (TENANT, value),
+            ).fetchone()[0]
+            == 0
+        ), (table, column, value)
+
+
+def test_concurrent_winner_allows_only_exact_live_replay(
+    connection: sqlite3.Connection,
+) -> None:
+    key = "idem_concurrent_commands"
+    digest = "digest_concurrent_commands"
+    audit_id = "audit_concurrent_commands"
+    outbox_id = "outbox_concurrent_commands"
+
+    def replay_row() -> sqlite3.Row | None:
+        return connection.execute(
+            """
+            SELECT command_name, request_digest, result_code, result_reference,
+                   expires_at_ms
+            FROM idempotency_records
+            WHERE tenant_id = ? AND actor_id = ? AND idempotency_key = ?
+            """,
+            (TENANT, MEMBER, key),
+        ).fetchone()
+
+    # Both requests can observe the same pre-commit miss. The database uniqueness
+    # boundary decides the winner, and the loser must re-read the committed record.
+    assert replay_row() is None
+    assert replay_row() is None
+
+    with connection:
+        connection.execute(
+            """
+            INSERT INTO profile_create_commands (
+                tenant_id, command_id, command_actor_id, profile_id, executed_at_ms
+            ) VALUES (?, ?, ?, ?, 126)
+            """,
+            (TENANT, key, MEMBER, CONCURRENT_PROFILE),
+        )
+        connection.execute(
+            """
+            INSERT INTO idempotency_records (
+                tenant_id, actor_id, idempotency_key, command_name, request_digest,
+                result_code, result_reference, created_at_ms, expires_at_ms
+            ) VALUES (?, ?, ?, 'profile.create', ?, 'created', ?, 126, 1000)
+            """,
+            (TENANT, MEMBER, key, digest, CONCURRENT_PROFILE),
+        )
+        connection.execute(
+            """
+            INSERT INTO audit_events (
+                tenant_id, audit_event_id, correlation_id, actor_id, action,
+                resource_type, resource_id, result_code, occurred_at_ms
+            ) VALUES (?, ?, 'corr_concurrent_commands', ?, 'profile.create',
+                      'profile', ?, 'created', 126)
+            """,
+            (TENANT, audit_id, MEMBER, CONCURRENT_PROFILE),
+        )
+        connection.execute(
+            """
+            INSERT INTO outbox_events (
+                tenant_id, outbox_event_id, aggregate_type, aggregate_id,
+                aggregate_version, event_type, payload_json, created_at_ms
+            ) VALUES (?, ?, 'profile', ?, 1, 'profile.created.v1', '{}', 126)
+            """,
+            (TENANT, outbox_id, CONCURRENT_PROFILE),
+        )
+
+    expect_abort(
+        lambda: connection.execute(
+            """
+            INSERT INTO profile_create_commands (
+                tenant_id, command_id, command_actor_id, profile_id, executed_at_ms
+            ) VALUES (?, ?, ?, ?, 127)
+            """,
+            (TENANT, key, MEMBER, CONCURRENT_PROFILE),
+        ),
+        "UNIQUE constraint failed",
+    )
+    connection.rollback()
+
+    row = replay_row()
+    assert row is not None
+    assert row["command_name"] == "profile.create"
+    assert row["request_digest"] == digest
+    assert row["result_code"] == "created"
+    assert row["result_reference"] == CONCURRENT_PROFILE
+    assert 999 < row["expires_at_ms"] + 1
+
+    def exact_live(command_name: str, request_digest: str, now_ms: int) -> bool:
+        current = replay_row()
+        assert current is not None
+        return (
+            current["command_name"] == command_name
+            and current["request_digest"] == request_digest
+            and now_ms < current["expires_at_ms"]
+        )
+
+    assert exact_live("profile.create", digest, 999)
+    assert not exact_live("profile.assign_client", digest, 999)
+    assert not exact_live("profile.create", "different_digest_commands", 999)
+    assert not exact_live("profile.create", digest, 1000)
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM browser_profiles WHERE tenant_id = ? AND profile_id = ?",
+            (TENANT, CONCURRENT_PROFILE),
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM audit_events WHERE tenant_id = ? AND audit_event_id = ?",
+            (TENANT, audit_id),
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM outbox_events WHERE tenant_id = ? AND outbox_event_id = ?",
+            (TENANT, outbox_id),
+        ).fetchone()[0]
+        == 1
+    )
+
+
 def test_last_owner_and_membership_version(connection: sqlite3.Connection) -> None:
     expect_abort(
         lambda: connection.execute(
@@ -291,6 +479,8 @@ def main() -> int:
     try:
         seed(connection)
         test_owner_transfer_guard(connection)
+        test_complete_envelope_rolls_back_on_late_evidence_failure(connection)
+        test_concurrent_winner_allows_only_exact_live_replay(connection)
         test_last_owner_and_membership_version(connection)
         test_invitation_and_resource_guards(connection)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []

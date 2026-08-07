@@ -1,6 +1,7 @@
 use crate::access_session::{
     correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
 };
+use crate::mutation_failure::mutation_failure;
 use crate::request_evidence::{audit_event_id, outbox_event_id};
 use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use cloudflare_adapters::d1_identity_acl::{
@@ -419,73 +420,6 @@ async fn replay_response(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MutationFailureClass {
-    NeutralNotFound,
-    VersionConflict,
-    InvalidState,
-    Conflict,
-    IntegrityFailure,
-    DependencyUnavailable,
-}
-
-fn classify_mutation_failure(message: &str) -> MutationFailureClass {
-    if message.contains("owner_required") || message.contains("profile_missing") {
-        return MutationFailureClass::NeutralNotFound;
-    }
-    if message.contains("state_mismatch") {
-        return MutationFailureClass::VersionConflict;
-    }
-    if message.contains("not_verified")
-        || message.contains("active_profile_generation_cannot_be_quarantined")
-        || message.contains("time_regression")
-    {
-        return MutationFailureClass::InvalidState;
-    }
-    if message.contains("UNIQUE constraint failed") {
-        return MutationFailureClass::Conflict;
-    }
-    if message.contains("CHECK constraint failed")
-        || message.contains("FOREIGN KEY constraint failed")
-        || message.contains("not_governed")
-        || message.contains("identity_immutable")
-    {
-        return MutationFailureClass::IntegrityFailure;
-    }
-    MutationFailureClass::DependencyUnavailable
-}
-
-fn mutation_failure(request: &Request, error: Error) -> Result<Response> {
-    match classify_mutation_failure(&error.to_string()) {
-        MutationFailureClass::NeutralNotFound => neutral_not_found(&correlation_hint(request)),
-        MutationFailureClass::VersionConflict => problem(
-            &correlation_hint(request),
-            409,
-            "version_conflict",
-            "Version Conflict",
-        ),
-        MutationFailureClass::InvalidState => problem(
-            &correlation_hint(request),
-            409,
-            "invalid_state",
-            "Invalid State",
-        ),
-        MutationFailureClass::Conflict => conflict(request),
-        MutationFailureClass::IntegrityFailure => problem(
-            &correlation_hint(request),
-            500,
-            "integrity_failure",
-            "Integrity Failure",
-        ),
-        MutationFailureClass::DependencyUnavailable => problem(
-            &correlation_hint(request),
-            503,
-            "dependency_unavailable",
-            "Dependency Unavailable",
-        ),
-    }
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GenerationResponse<'a> {
@@ -675,10 +609,6 @@ fn invalid_request(request: &Request) -> Result<Response> {
     )
 }
 
-fn conflict(request: &Request) -> Result<Response> {
-    problem(&correlation_hint(request), 409, "conflict", "Conflict")
-}
-
 fn internal_failure(request: &Request) -> Result<Response> {
     problem(
         &correlation_hint(request),
@@ -691,8 +621,8 @@ fn internal_failure(request: &Request) -> Result<Response> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActivateGenerationRequest, MutationFailureClass, classify_mutation_failure, next_version,
-        valid_digest, valid_object_key, valid_verification_reference,
+        ActivateGenerationRequest, next_version, valid_digest, valid_object_key,
+        valid_verification_reference,
     };
     use profile_platform_primitives::AggregateVersion;
 
@@ -718,25 +648,5 @@ mod tests {
             r#"{{"expectedProfileVersion":1,"requestDigest":"{digest}","unexpected":true}}"#
         );
         assert!(serde_json::from_str::<ActivateGenerationRequest>(&payload).is_err());
-    }
-
-    #[test]
-    fn d1_failures_are_classified_without_public_provider_details() {
-        assert_eq!(
-            classify_mutation_failure("profile_generation_activate_profile_state_mismatch"),
-            MutationFailureClass::VersionConflict
-        );
-        assert_eq!(
-            classify_mutation_failure("profile_generation_not_verified"),
-            MutationFailureClass::InvalidState
-        );
-        assert_eq!(
-            classify_mutation_failure("profile_generation_activation_not_governed"),
-            MutationFailureClass::IntegrityFailure
-        );
-        assert_eq!(
-            classify_mutation_failure("network request failed"),
-            MutationFailureClass::DependencyUnavailable
-        );
     }
 }

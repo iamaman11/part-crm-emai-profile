@@ -2,6 +2,7 @@
 
 mod access_session;
 mod api;
+mod mutation_failure;
 mod profile_coordinator;
 mod profile_generations;
 mod request_evidence;

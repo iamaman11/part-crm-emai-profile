@@ -3,6 +3,7 @@
 pub mod access_identity;
 pub mod access_webcrypto;
 pub mod d1_catalog;
+mod d1_command_identity;
 pub mod d1_governed_commands;
 pub mod d1_idempotency;
 pub mod d1_identity_acl;
