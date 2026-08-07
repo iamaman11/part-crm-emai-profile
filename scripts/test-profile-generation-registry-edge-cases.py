@@ -29,6 +29,7 @@ def command_count(connection: sqlite3.Connection, table: str, command_id: str) -
         "profile_generation_register_commands",
         "profile_generation_verify_commands",
         "profile_generation_activate_commands",
+        "profile_generation_deactivate_commands",
         "profile_generation_quarantine_commands",
     }
     if table not in allowed:
@@ -169,15 +170,52 @@ def main() -> int:
                     value["GENERATION"],
                 ),
             )
+
+        expect_integrity_error(
+            lambda: connection.execute(
+                """
+                INSERT INTO profile_generation_deactivate_commands (
+                    tenant_id, command_id, command_actor_id, profile_id,
+                    generation_id, expected_profile_version, executed_at_ms
+                ) VALUES (?, 'command_deactivate_time_regression', ?, ?, ?, 2, 209)
+                """,
+                (
+                    value["TENANT"],
+                    value["OWNER"],
+                    value["PROFILE"],
+                    value["GENERATION"],
+                ),
+            ),
+            "profile_generation_time_regression",
+        )
+        connection.rollback()
+        assert command_count(
+            connection,
+            "profile_generation_deactivate_commands",
+            "command_deactivate_time_regression",
+        ) == 0
+        assert tuple(BASE["profile_row"](connection)) == (
+            "READY",
+            value["GENERATION"],
+            2,
+        )
+
+        with connection:
             connection.execute(
                 """
-                UPDATE browser_profiles
-                SET status = 'SUSPENDED', active_generation_id = NULL,
-                    version = 3, updated_by_actor_id = ?, updated_at_ms = 220
-                WHERE tenant_id = ? AND profile_id = ?
+                INSERT INTO profile_generation_deactivate_commands (
+                    tenant_id, command_id, command_actor_id, profile_id,
+                    generation_id, expected_profile_version, executed_at_ms
+                ) VALUES (?, 'command_deactivate_edge', ?, ?, ?, 2, 220)
                 """,
-                (value["OWNER"], value["TENANT"], value["PROFILE"]),
+                (
+                    value["TENANT"],
+                    value["OWNER"],
+                    value["PROFILE"],
+                    value["GENERATION"],
+                ),
             )
+        assert tuple(BASE["profile_row"](connection)) == ("SUSPENDED", None, 3)
 
         expect_integrity_error(
             lambda: connection.execute(
@@ -202,6 +240,7 @@ def main() -> int:
             "profile_generation_quarantine_commands",
             "command_quarantine_time_regression",
         ) == 0
+        assert tuple(BASE["profile_row"](connection)) == ("SUSPENDED", None, 3)
 
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
