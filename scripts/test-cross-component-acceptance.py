@@ -256,13 +256,40 @@ def validate_composition_surfaces() -> None:
         [
             "deny_unknown_fields",
             '"messageBody":"forbidden"',
+            "execute_create_mailbox_job",
+            "get_mailbox_job",
+            "execute_run_mailbox_job",
+            "mailbox_job_application(env)",
+            "validate_create_mailbox_job_request",
+            "validate_mailbox_job_run_version",
+        ],
+        "mailbox job application transport",
+    )
+    mailbox_job_use_cases = read("crates/use-cases/src/mailbox_jobs.rs")
+    require_all(
+        mailbox_job_use_cases,
+        [
+            "pub async fn execute_create_mailbox_job",
+            "pub async fn get_mailbox_job",
+            "pub async fn execute_run_mailbox_job",
+            "pub fn validate_create_mailbox_job_request",
+            "pub fn validate_mailbox_job_run_version",
+            "prepare_run",
+        ],
+        "mailbox job application use cases",
+    )
+    mailbox_job_adapter = read("crates/cloudflare-adapters/src/d1_mailbox_jobs.rs")
+    require_all(
+        mailbox_job_adapter,
+        [
+            "D1MailboxJobApplicationRepository",
             "MetadataMailboxProviderAdapter",
             "decide_mailbox_run",
-            "create_job",
-            "get_job",
-            "run_job",
+            "CreateMailboxJobMutation",
+            "RunMailboxJobMutation",
+            "type RunDecision = MailboxRunDecision",
         ],
-        "retained mailbox job provider transport",
+        "mailbox job D1/provider application adapter",
     )
 
     endpoints = read("frontend/src/shared/api/endpoints.ts")
