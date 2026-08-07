@@ -477,7 +477,11 @@ fn binding_from_row(scope: &TenantScope, row: MailboxBindingRow) -> Result<Mailb
     let status = match row.status.as_str() {
         "ACTIVE" => MailboxBindingStatus::Active,
         "REVOKED" => MailboxBindingStatus::Revoked,
-        _ => return Err(Error::RustError("invalid mailbox binding status".to_owned())),
+        _ => {
+            return Err(Error::RustError(
+                "invalid mailbox binding status".to_owned(),
+            ));
+        }
     };
     Ok(MailboxBinding::restore(
         scope.tenant_id().clone(),
