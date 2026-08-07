@@ -9,10 +9,9 @@ use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, SecretHandle};
 use serde::{Deserialize, Serialize};
 use use_cases::mailboxes::{
-    ExecuteCreateMailboxBindingCommand, ExecuteRevokeMailboxBindingCommand,
-    MailboxBindingDetails, MailboxBindingMutationOutcome, MailboxBindingOperationError,
-    authorize_mailbox_binding, execute_create_mailbox_binding, execute_revoke_mailbox_binding,
-    get_mailbox_binding,
+    ExecuteCreateMailboxBindingCommand, ExecuteRevokeMailboxBindingCommand, MailboxBindingDetails,
+    MailboxBindingMutationOutcome, MailboxBindingOperationError, authorize_mailbox_binding,
+    execute_create_mailbox_binding, execute_revoke_mailbox_binding, get_mailbox_binding,
 };
 use worker::{Env, Request, Response, Result};
 
@@ -160,12 +159,9 @@ fn operation_failure(
 ) -> Result<Response> {
     match error {
         MailboxBindingOperationError::NotFound => neutral_not_found(correlation_id),
-        MailboxBindingOperationError::VersionConflict => problem(
-            correlation_id,
-            409,
-            "version_conflict",
-            "Version Conflict",
-        ),
+        MailboxBindingOperationError::VersionConflict => {
+            problem(correlation_id, 409, "version_conflict", "Version Conflict")
+        }
         MailboxBindingOperationError::InvalidState => {
             problem(correlation_id, 409, "invalid_state", "Invalid State")
         }
@@ -259,11 +255,13 @@ struct RevokeMailboxBindingRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateMailboxBindingRequest, MailboxBindingResponse, MutationReceipt, valid_digest};
+    use super::{
+        CreateMailboxBindingRequest, MailboxBindingResponse, MutationReceipt, valid_digest,
+    };
 
     #[test]
-    fn binding_transport_rejects_sensitive_unknown_fields_and_keeps_legacy_shape(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn binding_transport_rejects_sensitive_unknown_fields_and_keeps_legacy_shape()
+    -> Result<(), Box<dyn std::error::Error>> {
         let digest = "a".repeat(64);
         let valid = format!(
             r#"{{"bindingId":"mailbox_01JTRANSPORT","provider":"IMAP","secretHandle":"secret_01JTRANSPORT","requestDigest":"{digest}"}}"#
