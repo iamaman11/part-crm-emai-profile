@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           persist-credentials: false
 
@@ -27,7 +27,19 @@ jobs:
         run: rustup show active-toolchain
 
       - name: Compile audit policy scripts
-        run: python -m py_compile scripts/test-profile-generation-state-guards.py
+        run: |
+          python -m py_compile scripts/test-profile-generation-state-guards.py
+          python -m py_compile scripts/check-github-actions-runtime.py
+
+      - name: Enforce GitHub Actions Node 24 checkout runtime
+        run: python scripts/check-github-actions-runtime.py
+
+      - name: Prove deprecated Node 20 checkout fixture is rejected
+        run: |
+          if python scripts/check-github-actions-runtime.py --root tests/github-actions-runtime/fixtures/node20-checkout; then
+            echo 'Deprecated Node 20 checkout fixture unexpectedly passed.' >&2
+            exit 1
+          fi
 
       - name: Test hardened pure boundaries
         run: >-
