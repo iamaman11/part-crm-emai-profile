@@ -15,7 +15,7 @@ pub(crate) fn command_journal_id(
     append_field(&mut hasher, actor_id.as_str().as_bytes())?;
     append_field(&mut hasher, idempotency_key.as_str().as_bytes())?;
     let digest = hasher.finalize();
-    Ok(format!("command_{}", lowercase_hex(digest.as_slice())))
+    Ok(format!("command_{}", lowercase_hex(&digest)))
 }
 
 fn append_field(hasher: &mut Sha256, value: &[u8]) -> Result<()> {
