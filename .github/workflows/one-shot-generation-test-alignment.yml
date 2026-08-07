@@ -1,0 +1,135 @@
+name: One Shot Generation Test Alignment
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'profile-generation-registry-clean'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact feature branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: profile-generation-registry-clean
+          persist-credentials: true
+      - name: Apply exact test alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/test-profile-generation-registry.py')
+          text = path.read_text(encoding='utf-8')
+
+          old_foreign = '''    expect_integrity_error(
+              lambda: register(
+                  connection,
+                  command_id="command_foreign_registration",
+                  actor_id=FOREIGN_OWNER,
+                  generation_id=SECOND_GENERATION,
+                  object_key="profiles/v1/foreign_generation_02.enc",
+                  tenant_id=FOREIGN_TENANT,
+              ),
+              "FOREIGN KEY constraint failed",
+          )'''
+          new_foreign = old_foreign.replace(
+              '"FOREIGN KEY constraint failed"',
+              '"profile_generation_register_profile_missing"',
+          )
+          if text.count(old_foreign) != 1:
+              raise SystemExit('foreign-registration expectation drifted')
+          text = text.replace(old_foreign, new_foreign, 1)
+
+          old_tables = '''        "profile_generation_activate_commands",
+                  "profile_generation_quarantine_commands",'''
+          new_tables = '''        "profile_generation_activate_commands",
+                  "profile_generation_deactivate_commands",
+                  "profile_generation_quarantine_commands",'''
+          if text.count(old_tables) != 1:
+              raise SystemExit('command table allowlist drifted')
+          text = text.replace(old_tables, new_tables, 1)
+
+          old_deactivate = '''    with connection:
+              connection.execute(
+                  """
+                  UPDATE browser_profiles
+                  SET status = 'SUSPENDED', active_generation_id = NULL,
+                      version = 3, updated_by_actor_id = ?, updated_at_ms = 310
+                  WHERE tenant_id = ? AND profile_id = ?
+                  """,
+                  (OWNER, TENANT, PROFILE),
+              )
+              connection.execute(
+                  """
+                  INSERT INTO profile_generation_quarantine_commands (
+                      tenant_id, command_id, command_actor_id, profile_id,
+                      generation_id, expected_generation_version, executed_at_ms
+                  ) VALUES (?, 'command_quarantine_generation', ?, ?, ?, 2, 320)
+                  """,
+                  (TENANT, OWNER, PROFILE, GENERATION),
+              )'''
+          new_deactivate = '''    expect_integrity_error(
+              lambda: connection.execute(
+                  """
+                  UPDATE browser_profiles
+                  SET status = 'SUSPENDED', active_generation_id = NULL,
+                      version = 3, updated_by_actor_id = ?, updated_at_ms = 310
+                  WHERE tenant_id = ? AND profile_id = ?
+                  """,
+                  (OWNER, TENANT, PROFILE),
+              ),
+              "profile_generation_deactivation_not_governed",
+          )
+          connection.rollback()
+          assert tuple(profile_row(connection)) == ("READY", GENERATION, 2)
+
+          with connection:
+              connection.execute(
+                  """
+                  INSERT INTO profile_generation_deactivate_commands (
+                      tenant_id, command_id, command_actor_id, profile_id,
+                      generation_id, expected_profile_version, executed_at_ms
+                  ) VALUES (?, 'command_deactivate_generation', ?, ?, ?, 2, 310)
+                  """,
+                  (TENANT, OWNER, PROFILE, GENERATION),
+              )
+              connection.execute(
+                  """
+                  INSERT INTO profile_generation_quarantine_commands (
+                      tenant_id, command_id, command_actor_id, profile_id,
+                      generation_id, expected_generation_version, executed_at_ms
+                  ) VALUES (?, 'command_quarantine_generation', ?, ?, ?, 2, 320)
+                  """,
+                  (TENANT, OWNER, PROFILE, GENERATION),
+              )
+          assert command_count(
+              connection,
+              "profile_generation_deactivate_commands",
+              "command_deactivate_generation",
+          ) == 1'''
+          if text.count(old_deactivate) != 1:
+              raise SystemExit('direct-deactivation fixture drifted')
+          text = text.replace(old_deactivate, new_deactivate, 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+          changed="$(git diff --name-only)"
+          test "$changed" = "scripts/test-profile-generation-registry.py"
+      - name: Commit bounded test alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/test-profile-generation-registry.py
+          git commit -m "Align registry tests with governed deactivation semantics"
+          git push origin HEAD:profile-generation-registry-clean
