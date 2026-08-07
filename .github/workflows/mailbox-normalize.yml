@@ -1,0 +1,87 @@
+name: Mailbox Candidate Normalize
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    if: github.event.pull_request.head.ref == 'mailbox-vertical-slice-clean' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mailbox branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: mailbox-vertical-slice-clean
+          persist-credentials: true
+
+      - name: Normalize source and contract
+        run: |
+          git pull --ff-only origin mailbox-vertical-slice-clean
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('openapi/v1/fragments/mailboxes.json')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('"SecretHandle": {', '"MailboxSecretHandle": {')
+          text = text.replace('#/components/schemas/SecretHandle', '#/components/schemas/MailboxSecretHandle')
+          path.write_text(text, encoding='utf-8')
+          PY
+          cargo fmt --all
+          cargo generate-lockfile
+
+      - name: Verify bounded lockfile refresh
+        run: |
+          python - <<'PY'
+          import subprocess
+
+          diff = subprocess.check_output(
+              ['git', 'diff', '--unified=0', '--', 'Cargo.lock'], text=True
+          )
+          added = [
+              line[1:].strip()
+              for line in diff.splitlines()
+              if line.startswith('+') and not line.startswith('+++')
+          ]
+          removed = [
+              line[1:].strip()
+              for line in diff.splitlines()
+              if line.startswith('-') and not line.startswith('---')
+          ]
+          expected = {'"application-ports",', '"mailbox-domain",'}
+          if (added or removed) and (set(added) != expected or removed):
+              raise SystemExit(f'unexpected Cargo.lock diff: added={added!r} removed={removed!r}')
+          PY
+
+      - name: Commit normalized candidate and remove helpers
+        run: |
+          git rm -f --ignore-unmatch \
+            .github/workflows/mailbox-lock-refresh.yml \
+            .github/workflows/mailbox-lock-cleanup.yml \
+            .github/workflows/mailbox-normalize.yml
+          git add Cargo.lock \
+            apps/control-plane-worker/src \
+            crates/application-ports/src \
+            crates/cloudflare-adapters/src \
+            crates/control-plane-contract/src \
+            crates/mailbox-domain/src \
+            crates/primitives/src \
+            openapi/v1/fragments/mailboxes.json
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Normalize mailbox vertical slice candidate"
+          for attempt in 1 2 3; do
+            git pull --rebase origin mailbox-vertical-slice-clean
+            if git push origin HEAD:mailbox-vertical-slice-clean; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
