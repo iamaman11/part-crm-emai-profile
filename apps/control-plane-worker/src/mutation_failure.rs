@@ -17,6 +17,8 @@ pub(crate) fn classify_mutation_failure(message: &str) -> MutationFailureClass {
         || message.contains("profile_missing")
         || message.contains("target_missing")
         || message.contains("client_missing")
+        || message.contains("mailbox_binding_missing")
+        || message.contains("mailbox_job_missing")
         || message.contains("successor_mismatch")
         || message.contains("target_not_active_member")
         || message.contains("client_not_active")
@@ -41,6 +43,11 @@ pub(crate) fn classify_mutation_failure(message: &str) -> MutationFailureClass {
         || message.contains("invitation_create_expired")
         || message.contains("grant_missing")
         || message.contains("owner_transfer_owner_invariant")
+        || message.contains("mailbox_binding_revoked")
+        || message.contains("mailbox_binding_already_revoked")
+        || message.contains("mailbox_job_not_due")
+        || message.contains("mailbox_job_attempts_exhausted")
+        || message.contains("mailbox_retry_time_invalid")
     {
         return MutationFailureClass::InvalidState;
     }
@@ -53,6 +60,8 @@ pub(crate) fn classify_mutation_failure(message: &str) -> MutationFailureClass {
         || message.contains("FOREIGN KEY constraint failed")
         || message.contains("not_governed")
         || message.contains("identity_immutable")
+        || message.contains("mailbox_cursor_too_long")
+        || message.contains("mailbox_provider_status_invalid")
     {
         return MutationFailureClass::IntegrityFailure;
     }
@@ -60,6 +69,7 @@ pub(crate) fn classify_mutation_failure(message: &str) -> MutationFailureClass {
     if message.contains("aggregate version overflow")
         || message.contains("value exceeds SQLite INTEGER")
         || message.contains("idempotency expiry overflow")
+        || message.contains("mailbox_job_version_overflow")
     {
         return MutationFailureClass::InternalFailure;
     }
@@ -121,6 +131,10 @@ mod tests {
             MutationFailureClass::VersionConflict
         );
         assert_eq!(
+            classify_mutation_failure("mailbox_job_version_mismatch"),
+            MutationFailureClass::VersionConflict
+        );
+        assert_eq!(
             classify_mutation_failure("owner_transfer_successor_version_mismatch"),
             MutationFailureClass::VersionConflict
         );
@@ -130,6 +144,14 @@ mod tests {
         );
         assert_eq!(
             classify_mutation_failure("profile_assignment_profile_missing"),
+            MutationFailureClass::NeutralNotFound
+        );
+        assert_eq!(
+            classify_mutation_failure("mailbox_binding_missing"),
+            MutationFailureClass::NeutralNotFound
+        );
+        assert_eq!(
+            classify_mutation_failure("mailbox_job_missing"),
             MutationFailureClass::NeutralNotFound
         );
         assert_eq!(
@@ -153,6 +175,14 @@ mod tests {
             MutationFailureClass::InvalidState
         );
         assert_eq!(
+            classify_mutation_failure("mailbox_binding_revoked"),
+            MutationFailureClass::InvalidState
+        );
+        assert_eq!(
+            classify_mutation_failure("mailbox_job_not_due"),
+            MutationFailureClass::InvalidState
+        );
+        assert_eq!(
             classify_mutation_failure("last_active_owner"),
             MutationFailureClass::InvalidState
         );
@@ -161,11 +191,19 @@ mod tests {
             MutationFailureClass::Conflict
         );
         assert_eq!(
+            classify_mutation_failure("mailbox_cursor_too_long"),
+            MutationFailureClass::IntegrityFailure
+        );
+        assert_eq!(
             classify_mutation_failure("profile_generation_activation_not_governed"),
             MutationFailureClass::IntegrityFailure
         );
         assert_eq!(
             classify_mutation_failure("aggregate version overflow"),
+            MutationFailureClass::InternalFailure
+        );
+        assert_eq!(
+            classify_mutation_failure("mailbox_job_version_overflow"),
             MutationFailureClass::InternalFailure
         );
         assert_eq!(
