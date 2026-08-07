@@ -16,13 +16,13 @@ impl ApprovedRuntimeBundle {
     pub fn validate(
         manifest: RuntimeManifest,
         inventory: RuntimeInventory,
-        calculated_manifest_digest: &Sha256Digest,
+        calculated_inventory_sha256: &Sha256Digest,
     ) -> Result<Self, RuntimeBundleApprovalError> {
         manifest
-            .validate_calculated_digest(calculated_manifest_digest)
+            .validate_inventory_digest(calculated_inventory_sha256)
             .map_err(RuntimeBundleApprovalError::Manifest)?;
         inventory
-            .require_entrypoint(manifest.entrypoint())
+            .validate_entrypoint(&manifest)
             .map_err(RuntimeBundleApprovalError::Inventory)?;
         Ok(Self {
             manifest,
@@ -215,9 +215,9 @@ mod tests {
     }
 
     #[test]
-    fn approval_rejects_manifest_digest_mismatch() -> Result<(), Box<dyn std::error::Error>> {
+    fn digest_mismatch_is_rejected_before_process_spawn() -> Result<(), Box<dyn std::error::Error>>
+    {
         let expected = digest('a')?;
-        let actual = digest('b')?;
         let entrypoint = BundleRelativePath::parse("camouhost/main.py")?;
         let manifest = RuntimeManifest::new(
             "0.1.0",
@@ -226,25 +226,27 @@ mod tests {
             entrypoint.clone(),
             expected,
         )?;
-        let inventory = RuntimeInventory::new([InventoryEntry::new(entrypoint, 10, digest('c')?)])?;
-        assert!(matches!(
-            ApprovedRuntimeBundle::validate(manifest, inventory, &actual),
+        let inventory = RuntimeInventory::new([InventoryEntry::new(entrypoint, 10, digest('b')?)])?;
+        let result = ApprovedRuntimeBundle::validate(manifest, inventory, &digest('c')?);
+        assert_eq!(
+            result,
             Err(RuntimeBundleApprovalError::Manifest(
-                RuntimeManifestError::ManifestDigestMismatch
+                RuntimeManifestError::InventoryDigestMismatch
             ))
-        ));
+        );
+        let process = FakeProcessControl::default();
+        assert!(process.actions().is_empty());
         Ok(())
     }
 
     #[test]
-    fn approval_rejects_missing_entrypoint() -> Result<(), Box<dyn std::error::Error>> {
+    fn missing_entrypoint_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
         let calculated = digest('a')?;
-        let entrypoint = BundleRelativePath::parse("camouhost/main.py")?;
         let manifest = RuntimeManifest::new(
             "0.1.0",
             "3.12",
             RuntimePlatform::WindowsX86_64,
-            entrypoint,
+            BundleRelativePath::parse("camouhost/main.py")?,
             calculated.clone(),
         )?;
         let inventory = RuntimeInventory::new([InventoryEntry::new(
@@ -252,34 +254,24 @@ mod tests {
             10,
             digest('b')?,
         )])?;
-        assert!(matches!(
+        assert_eq!(
             ApprovedRuntimeBundle::validate(manifest, inventory, &calculated),
             Err(RuntimeBundleApprovalError::Inventory(
                 InventoryError::EntrypointMissing
             ))
-        ));
+        );
         Ok(())
     }
 
     #[test]
-    fn orchestrator_uses_exact_v1_handshake_and_session()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn approved_bundle_launches_and_closes_exact_session() -> Result<(), Box<dyn std::error::Error>>
+    {
         let bundle = approved_bundle()?;
-        let session_id = SessionId::parse("session_01JRUNTIME")?;
+        let session_id = SessionId::parse("session_01JSTEP7RUNTIME")?;
         let mut process = FakeProcessControl::default();
         let mut camouhost = FakeCamouhost::default();
-        RuntimeSessionOrchestrator::launch(
-            &bundle,
-            &session_id,
-            &mut process,
-            &mut camouhost,
-        )?;
-        RuntimeSessionOrchestrator::close(
-            &bundle,
-            &session_id,
-            &mut process,
-            &mut camouhost,
-        )?;
+        RuntimeSessionOrchestrator::launch(&bundle, &session_id, &mut process, &mut camouhost)?;
+        RuntimeSessionOrchestrator::close(&bundle, &session_id, &mut process, &mut camouhost)?;
         assert_eq!(
             process.actions(),
             [
