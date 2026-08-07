@@ -753,6 +753,17 @@ mod tests {
         }
     }
 
+    type TestOperator<H> = ProfileBridgeOperator<
+        FakeDeviceIdentity,
+        FakeDeviceKeyStore,
+        FakeDeviceAuthentication,
+        FakeEnrollment,
+        FakeCoordinator,
+        FakeRuntimeBundles,
+        FakeProcessControl,
+        H,
+    >;
+
     #[derive(Default)]
     struct CloseRejectingCamouhost {
         negotiated: bool,
@@ -899,19 +910,7 @@ mod tests {
     fn operator<H: CamouhostPort>(
         fixture: &Fixture,
         camouhost: H,
-    ) -> Result<
-        ProfileBridgeOperator<
-            FakeDeviceIdentity,
-            FakeDeviceKeyStore,
-            FakeDeviceAuthentication,
-            FakeEnrollment,
-            FakeCoordinator,
-            FakeRuntimeBundles,
-            FakeProcessControl,
-            H,
-        >,
-        Box<dyn std::error::Error>,
-    > {
+    ) -> Result<TestOperator<H>, Box<dyn std::error::Error>> {
         Ok(ProfileBridgeOperator::new(
             FakeDeviceIdentity::new(fixture.device_id.clone()),
             FakeDeviceKeyStore::default(),
