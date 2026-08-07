@@ -32,6 +32,7 @@ jobs:
           python -m py_compile scripts/check-github-actions-runtime.py
           python -m py_compile scripts/check-capability-module-layout.py
           python -m py_compile scripts/check-worker-application-boundary.py
+          python -m py_compile scripts/check-profile-worker-application-boundary.py
 
       - name: Enforce GitHub Actions Node 24 checkout runtime
         run: python scripts/check-github-actions-runtime.py
@@ -54,6 +55,12 @@ jobs:
 
       - name: Prove direct D1 client transport is rejected
         run: python scripts/check-worker-application-boundary.py --self-test
+
+      - name: Enforce thin profile Worker application boundary
+        run: python scripts/check-profile-worker-application-boundary.py
+
+      - name: Prove direct D1 and legacy profile transports are rejected
+        run: python scripts/check-profile-worker-application-boundary.py --self-test
 
       - name: Test hardened pure boundaries
         run: >-
