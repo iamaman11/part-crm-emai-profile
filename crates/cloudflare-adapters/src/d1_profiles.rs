@@ -8,7 +8,9 @@ use application_ports::profiles::{
     ProfileReadModel, ProfileReplayDecision, ProfileReplayReceipt, ProfileStatus,
 };
 use identity_access_domain::MembershipRole;
-use profile_platform_primitives::{ActorContext, ActorId, AggregateVersion, ProfileId, TenantScope};
+use profile_platform_primitives::{
+    ActorContext, ActorId, AggregateVersion, ProfileId, TenantScope,
+};
 use worker::Error;
 use worker::d1::D1Database;
 
