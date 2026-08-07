@@ -1,7 +1,7 @@
 use application_ports::{MailboxObservation, MailboxProviderPort};
 use mailbox_domain::{
-    validate_cursor, validate_provider_status, MailboxBinding, MailboxBindingStatus, MailboxJob,
-    MailboxJobStatus, MailboxProvider,
+    MailboxBinding, MailboxBindingStatus, MailboxJob, MailboxJobStatus, MailboxProvider,
+    validate_cursor, validate_provider_status,
 };
 use profile_platform_primitives::{AggregateVersion, UnixMillis};
 use std::fmt;
@@ -25,6 +25,7 @@ pub enum MailboxProviderAdapterError {
     TerminalFailure,
     SchedulingOverflow,
     InvalidJobState,
+    CounterOverflow,
 }
 
 impl MailboxProviderAdapterError {
@@ -38,7 +39,8 @@ impl MailboxProviderAdapterError {
             | Self::ProviderMismatch
             | Self::InvalidObservation
             | Self::SchedulingOverflow
-            | Self::InvalidJobState => None,
+            | Self::InvalidJobState
+            | Self::CounterOverflow => None,
         }
     }
 }
@@ -54,6 +56,7 @@ impl fmt::Display for MailboxProviderAdapterError {
             Self::TerminalFailure => "mailbox provider terminal failure",
             Self::SchedulingOverflow => "mailbox retry schedule overflow",
             Self::InvalidJobState => "mailbox job state is invalid for provider execution",
+            Self::CounterOverflow => "mailbox provider call counter overflow",
         })
     }
 }
@@ -145,7 +148,10 @@ impl MailboxProviderPort for DeterministicFakeMailboxProvider {
         job: &MailboxJob,
     ) -> Result<MailboxObservation, Self::Error> {
         validate_binding_job(binding, job)?;
-        self.calls = self.calls.saturating_add(1);
+        self.calls = self
+            .calls
+            .checked_add(1)
+            .ok_or(MailboxProviderAdapterError::CounterOverflow)?;
         match &self.outcome {
             DeterministicMailboxOutcome::Success {
                 provider_status,
@@ -334,8 +340,8 @@ fn validate_observation(
 #[cfg(test)]
 mod tests {
     use super::{
-        decide_mailbox_run, DeterministicFakeMailboxProvider, DeterministicMailboxOutcome,
-        MailboxProviderAdapterError, MetadataMailboxProviderAdapter,
+        DeterministicFakeMailboxProvider, DeterministicMailboxOutcome, MailboxProviderAdapterError,
+        MetadataMailboxProviderAdapter, decide_mailbox_run,
     };
     use application_ports::MailboxProviderPort;
     use mailbox_domain::{MailboxBinding, MailboxJob, MailboxJobStatus, MailboxProvider};
@@ -366,8 +372,8 @@ mod tests {
     }
 
     #[test]
-    fn metadata_adapter_returns_only_bounded_observation()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn metadata_adapter_returns_only_bounded_observation() -> Result<(), Box<dyn std::error::Error>>
+    {
         let binding = binding()?;
         let job = job(&binding, 3)?;
         let mut adapter = MetadataMailboxProviderAdapter::new(
@@ -384,13 +390,28 @@ mod tests {
     }
 
     #[test]
+    fn fake_provider_counter_overflow_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+        let binding = binding()?;
+        let job = job(&binding, 3)?;
+        let mut adapter = DeterministicFakeMailboxProvider {
+            outcome: DeterministicMailboxOutcome::TerminalFailure,
+            calls: u32::MAX,
+        };
+        let error = adapter
+            .check_mailbox(&binding, &job)
+            .expect_err("counter overflow must fail closed");
+        assert_eq!(error, MailboxProviderAdapterError::CounterOverflow);
+        assert_eq!(adapter.calls(), u32::MAX);
+        Ok(())
+    }
+
+    #[test]
     fn retryable_failure_schedules_retry_without_payload_data()
     -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
         let job = job(&binding, 3)?;
-        let mut adapter = DeterministicFakeMailboxProvider::new(
-            DeterministicMailboxOutcome::RetryableFailure,
-        );
+        let mut adapter =
+            DeterministicFakeMailboxProvider::new(DeterministicMailboxOutcome::RetryableFailure);
         let decision = decide_mailbox_run(&binding, &job, UnixMillis::new(10), &mut adapter)?;
         assert_eq!(decision.status(), MailboxJobStatus::RetryPending);
         assert_eq!(decision.attempt(), 1);
@@ -406,9 +427,8 @@ mod tests {
     fn terminal_failure_is_terminal() -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
         let job = job(&binding, 3)?;
-        let mut adapter = DeterministicFakeMailboxProvider::new(
-            DeterministicMailboxOutcome::TerminalFailure,
-        );
+        let mut adapter =
+            DeterministicFakeMailboxProvider::new(DeterministicMailboxOutcome::TerminalFailure);
         let decision = decide_mailbox_run(&binding, &job, UnixMillis::new(10), &mut adapter)?;
         assert_eq!(decision.status(), MailboxJobStatus::Failed);
         assert_eq!(decision.attempt(), 1);
@@ -417,13 +437,11 @@ mod tests {
     }
 
     #[test]
-    fn single_attempt_retryable_failure_becomes_failed()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn single_attempt_retryable_failure_becomes_failed() -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
         let job = job(&binding, 1)?;
-        let mut adapter = DeterministicFakeMailboxProvider::new(
-            DeterministicMailboxOutcome::RetryableFailure,
-        );
+        let mut adapter =
+            DeterministicFakeMailboxProvider::new(DeterministicMailboxOutcome::RetryableFailure);
         let decision = decide_mailbox_run(&binding, &job, UnixMillis::new(10), &mut adapter)?;
         assert_eq!(decision.status(), MailboxJobStatus::Failed);
         assert_eq!(decision.provider_status(), "RETRY_EXHAUSTED");
@@ -431,8 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_success_advances_cursor_and_finishes()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn metadata_success_advances_cursor_and_finishes() -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
         let job = job(&binding, 3)?;
         let mut adapter = MetadataMailboxProviderAdapter::new(
