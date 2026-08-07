@@ -1,6 +1,4 @@
-use profile_platform_primitives::{
-    AuditEventId, IdempotencyKey, OutboxEventId, UnixMillis,
-};
+use profile_platform_primitives::{AuditEventId, IdempotencyKey, OutboxEventId, UnixMillis};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandExecutionEvidence {
