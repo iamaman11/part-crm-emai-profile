@@ -4,14 +4,14 @@ use crate::d1_identity_acl::ResolvedMembershipRole;
 use crate::d1_identity_queries::{ClientProjection, D1IdentityQueryRepository};
 use application_ports::CommandExecutionEvidence;
 use application_ports::clients::{
-    ClientApplicationPort, ClientCreateWrite, ClientPortError, ClientPortErrorClass, ClientReadModel,
-    ClientReplayDecision, ClientReplayReceipt,
+    ClientApplicationPort, ClientCreateWrite, ClientPortError, ClientPortErrorClass,
+    ClientReadModel, ClientReplayDecision, ClientReplayReceipt,
 };
 use client_domain::{ClientKind, ClientStatus};
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, ActorId, AggregateVersion, ClientId, TenantScope};
-use worker::d1::D1Database;
 use worker::Error;
+use worker::d1::D1Database;
 
 pub struct D1ClientApplicationRepository {
     catalog: D1CatalogRepository,
@@ -161,10 +161,14 @@ fn classify_write_failure(message: &str) -> ClientPortErrorClass {
     if message.contains("UNIQUE constraint failed") {
         return ClientPortErrorClass::Conflict;
     }
-    if message.contains("CHECK constraint failed") || message.contains("FOREIGN KEY constraint failed") {
+    if message.contains("CHECK constraint failed")
+        || message.contains("FOREIGN KEY constraint failed")
+    {
         return ClientPortErrorClass::IntegrityFailure;
     }
-    if message.contains("value exceeds SQLite INTEGER") || message.contains("idempotency expiry overflow") {
+    if message.contains("value exceeds SQLite INTEGER")
+        || message.contains("idempotency expiry overflow")
+    {
         return ClientPortErrorClass::InternalFailure;
     }
     ClientPortErrorClass::DependencyUnavailable
@@ -178,7 +182,9 @@ mod tests {
     #[test]
     fn client_write_failures_keep_public_classes_stable() {
         assert_eq!(
-            classify_write_failure("UNIQUE constraint failed: clients.tenant_id, clients.client_id"),
+            classify_write_failure(
+                "UNIQUE constraint failed: clients.tenant_id, clients.client_id"
+            ),
             ClientPortErrorClass::Conflict
         );
         assert_eq!(
