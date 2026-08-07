@@ -42,6 +42,7 @@ cargo test --locked --workspace --all-targets \
   --exclude browser-profile-control-plane-worker \
   --exclude cloudflare-adapters
 cargo test --locked -p cloudflare-adapters --lib
+cargo test --locked -p browser-profile-control-plane-worker --lib
 
 cargo check --locked --target wasm32-unknown-unknown \
   -p profile-platform-primitives \
@@ -64,6 +65,31 @@ For D1 migration replay and Worker release packaging, use the pinned commands fr
 `.github/workflows/quality-gate.yml`. Windows, runtime-bundle, local-profile,
 encrypted-generation, certification and external-evidence behavior is accepted by
 its dedicated permanent workflow rather than by an unsupported local approximation.
+
+## Governed Mutation Evidence
+
+Every Worker mutation that writes tenant state through a governed D1 envelope must
+preserve these properties:
+
+- decide idempotency using tenant, actor, key, exact command name, exact request
+  digest and the live expiry boundary; key-only replay is forbidden;
+- derive audit and outbox identifiers with the shared domain-separated request
+  evidence helpers; never truncate or prefix caller-controlled idempotency keys to
+  form tenant-wide evidence identities;
+- keep command journal, aggregate mutation, idempotency, audit and outbox writes in
+  one transaction-fatal D1 batch so a late failure cannot leave partial evidence;
+- precompute fallible aggregate version increments before mutation and never use
+  saturating arithmetic to hide overflow;
+- map mutation failures through the shared Worker taxonomy: disclosure-neutral
+  missing/unauthorized resources, version conflict, invalid state, uniqueness or
+  idempotency conflict, integrity failure, internal preflight failure and unknown
+  dependency failure are distinct classes;
+- never expose raw SQLite, D1 or provider diagnostics in public problem responses.
+
+When changing a governed mutation, update the permanent regression checks rather
+than adding a temporary workflow. Tests must distinguish the semantic/business path
+from direct SQL bypass or integrity-defense paths; do not accept whichever trigger
+message happens to fire first.
 
 ## Architecture Rules
 
