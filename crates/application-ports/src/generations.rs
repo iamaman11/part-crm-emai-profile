@@ -1,21 +1,4 @@
-use profile_domain::ProfileGeneration;
-use profile_platform_primitives::{ActorContext, GenerationId, TenantScope};
-
-pub trait ProfileGenerationRepository {
-    type Error;
-
-    fn get_generation(
-        &self,
-        scope: &TenantScope,
-        generation_id: &GenerationId,
-    ) -> Result<Option<ProfileGeneration>, Self::Error>;
-
-    fn save_generation(
-        &mut self,
-        actor: &ActorContext,
-        generation: &ProfileGeneration,
-    ) -> Result<(), Self::Error>;
-}
+use profile_platform_primitives::{GenerationId, TenantScope};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GenerationObjectReference {
