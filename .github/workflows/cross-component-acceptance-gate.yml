@@ -70,7 +70,7 @@ jobs:
           root="$RUNNER_TEMP/cross-component-profile"
           rm -rf "$root"
           cargo run --locked -p profile-bridge --bin profile-bridge-synthetic -- \
-            'profilebridge://claim/claim_0123456789abcdef' "$root" \
+            'profilebridge://claim/claim_0123456789abcdef0123456789abcdef' "$root" \
             | tee "$RUNNER_TEMP/profile-bridge-synthetic.out"
           grep -Fxq 'synthetic-operator-complete state=DIRTY_LOCAL' "$RUNNER_TEMP/profile-bridge-synthetic.out"
 
