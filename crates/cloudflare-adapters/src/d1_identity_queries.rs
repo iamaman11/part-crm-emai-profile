@@ -1,5 +1,5 @@
 use crate::d1_identity_acl::ResolvedMembershipRole;
-use profile_platform_primitives::{ActorId, ClientId, ProfileId, TenantScope};
+use profile_platform_primitives::{ActorId, ClientId, GenerationId, ProfileId, TenantScope};
 use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::{Error, Result, query};
@@ -44,6 +44,7 @@ impl ClientProjection {
 pub struct ProfileProjection {
     profile_id: ProfileId,
     status: String,
+    active_generation_id: Option<GenerationId>,
     version: u64,
     linked_client_id: Option<ClientId>,
 }
@@ -57,6 +58,11 @@ impl ProfileProjection {
     #[must_use]
     pub fn status(&self) -> &str {
         &self.status
+    }
+
+    #[must_use]
+    pub const fn active_generation_id(&self) -> Option<&GenerationId> {
+        self.active_generation_id.as_ref()
     }
 
     #[must_use]
@@ -130,6 +136,7 @@ impl D1IdentityQueryRepository {
             SELECT
                 profile.profile_id,
                 profile.status,
+                profile.active_generation_id,
                 profile.version,
                 assignment.client_id AS linked_client_id
             FROM browser_profiles AS profile
@@ -174,6 +181,7 @@ struct ClientProjectionRow {
 struct ProfileProjectionRow {
     profile_id: String,
     status: String,
+    active_generation_id: Option<String>,
     version: i64,
     linked_client_id: Option<String>,
 }
@@ -192,6 +200,11 @@ fn profile_projection(row: ProfileProjectionRow) -> Result<ProfileProjection> {
     Ok(ProfileProjection {
         profile_id: ProfileId::parse(row.profile_id).map_err(identifier_error)?,
         status: row.status,
+        active_generation_id: row
+            .active_generation_id
+            .map(GenerationId::parse)
+            .transpose()
+            .map_err(identifier_error)?,
         version: positive_version(row.version)?,
         linked_client_id: row
             .linked_client_id

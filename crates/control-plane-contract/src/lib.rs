@@ -24,6 +24,7 @@ pub enum RouteClass {
     ProfileAssignmentApi,
     ProfileGrantApi,
     ProfileCoordinatorApi,
+    DynamicRouteNotFound,
     BridgeDeniedByDefault,
     StaticAssets,
 }
@@ -36,7 +37,7 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
     if method == "GET" && path == "/api/v1/bindings" {
         return RouteClass::BindingProbeApi;
     }
-    if path.starts_with("/bridge/") {
+    if path == "/bridge" || path.starts_with("/bridge/") {
         return RouteClass::BridgeDeniedByDefault;
     }
     if method == "GET" && path == "/api/v1/session" {
@@ -96,7 +97,18 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
         }
         _ => None,
     };
-    route.unwrap_or(RouteClass::StaticAssets)
+    route.unwrap_or_else(|| {
+        if is_dynamic_path(path) {
+            RouteClass::DynamicRouteNotFound
+        } else {
+            RouteClass::StaticAssets
+        }
+    })
+}
+
+#[must_use]
+fn is_dynamic_path(path: &str) -> bool {
+    path == "/api" || path.starts_with("/api/") || path == "/auth" || path.starts_with("/auth/")
 }
 
 #[must_use]
@@ -105,6 +117,7 @@ pub const fn is_authenticated_api(route: RouteClass) -> bool {
         route,
         RouteClass::HealthApi
             | RouteClass::BindingProbeApi
+            | RouteClass::DynamicRouteNotFound
             | RouteClass::BridgeDeniedByDefault
             | RouteClass::StaticAssets
     )
@@ -146,15 +159,18 @@ mod tests {
     }
 
     #[test]
-    fn only_exact_health_route_is_classified_as_health() {
-        assert_eq!(
-            classify_route("POST", "/api/v1/health"),
-            RouteClass::StaticAssets
-        );
-        assert_eq!(
-            classify_route("GET", "/api/v2/health"),
-            RouteClass::StaticAssets
-        );
+    fn unknown_api_methods_and_versions_fail_closed() {
+        for (method, path) in [
+            ("POST", "/api/v1/health"),
+            ("GET", "/api/v2/health"),
+            ("GET", "/api/v1/unknown"),
+            ("GET", "/api"),
+            ("GET", "/auth/unknown"),
+        ] {
+            let route = classify_route(method, path);
+            assert_eq!(route, RouteClass::DynamicRouteNotFound);
+            assert!(!is_authenticated_api(route));
+        }
     }
 
     #[test]
@@ -210,13 +226,13 @@ mod tests {
     }
 
     #[test]
-    fn coordinator_route_does_not_fall_back_to_static_assets() {
+    fn coordinator_wrong_method_never_falls_back_to_static_assets() {
         assert_eq!(
             classify_route(
                 "DELETE",
                 "/api/v1/tenants/tenant_01/profiles/profile_01/coordinator"
             ),
-            RouteClass::StaticAssets
+            RouteClass::DynamicRouteNotFound
         );
     }
 

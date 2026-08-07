@@ -79,7 +79,7 @@ pub fn decide_open_profile(
         return Err(ApplicationError::new(ProblemCode::NotFound));
     }
 
-    if profile.status() != ProfileStatus::Ready {
+    if profile.status() != ProfileStatus::Ready || profile.active_generation_id().is_none() {
         return Err(ApplicationError::new(ProblemCode::InvalidState));
     }
 
@@ -171,9 +171,12 @@ mod tests {
     use identity_access_domain::{
         Membership, MembershipRole, MembershipStatus, ProfileGrant, ProfileGrantRole,
     };
-    use profile_domain::{BrowserProfile, ProfileStatus};
+    use profile_domain::{
+        BrowserProfile, GenerationVerification, ProfileGeneration, ProfileStatus,
+    };
     use profile_platform_primitives::{
-        ActorContext, ActorId, CorrelationId, DeviceId, ProfileId, TenantId, TenantScope,
+        ActorContext, ActorId, CorrelationId, DeviceId, GenerationId, ProfileId, TenantId,
+        TenantScope,
     };
 
     struct Fixture {
@@ -199,8 +202,14 @@ mod tests {
             MembershipStatus::Active,
         );
         let grant = ProfileGrant::new(tenant_id.clone(), actor_id, profile_id.clone(), role);
-        let mut profile = BrowserProfile::create(tenant_id, profile_id);
-        profile.transition(ProfileStatus::Ready)?;
+        let mut profile = BrowserProfile::create(tenant_id.clone(), profile_id.clone());
+        let generation = ProfileGeneration::new(
+            tenant_id,
+            profile_id,
+            GenerationId::parse("generation_01JUSECASE")?,
+            GenerationVerification::Verified,
+        );
+        profile.activate_generation(&generation)?;
         Ok(Fixture {
             actor,
             membership,
@@ -210,7 +219,8 @@ mod tests {
     }
 
     #[test]
-    fn operator_can_open_ready_profile() -> Result<(), Box<dyn std::error::Error>> {
+    fn operator_can_open_profile_with_verified_active_generation()
+    -> Result<(), Box<dyn std::error::Error>> {
         let fixture = fixture(ProfileGrantRole::Operator)?;
         let decision = decide_open_profile(
             &fixture.actor,
@@ -223,6 +233,7 @@ mod tests {
             ),
         )?;
         assert_eq!(decision.profile_id(), fixture.profile.profile_id());
+        assert!(fixture.profile.active_generation_id().is_some());
         Ok(())
     }
 
@@ -241,6 +252,29 @@ mod tests {
                 ),
             ),
             Err(ApplicationError::new(ProblemCode::NotFound))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn profile_without_active_generation_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = fixture(ProfileGrantRole::Operator)?;
+        let draft = BrowserProfile::create(
+            fixture.profile.tenant_id().clone(),
+            fixture.profile.profile_id().clone(),
+        );
+        assert_eq!(
+            decide_open_profile(
+                &fixture.actor,
+                &fixture.membership,
+                Some(&fixture.grant),
+                &draft,
+                OpenProfileCommand::new(
+                    draft.profile_id().clone(),
+                    DeviceId::parse("device_01JUSECASE")?,
+                ),
+            ),
+            Err(ApplicationError::new(ProblemCode::InvalidState))
         );
         Ok(())
     }

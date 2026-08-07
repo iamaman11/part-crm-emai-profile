@@ -160,24 +160,42 @@ struct Problem<'a> {
     correlation_id: &'a str,
 }
 
+#[must_use]
+fn problem_type_for_code(code: &str) -> &'static str {
+    match code {
+        "not_found" => "urn:part-crm:problem:not-found",
+        "forbidden" => "urn:part-crm:problem:forbidden",
+        "invalid_request" => "urn:part-crm:problem:invalid-request",
+        "invalid_state" => "urn:part-crm:problem:invalid-state",
+        "version_conflict" => "urn:part-crm:problem:version-conflict",
+        "lease_conflict" => "urn:part-crm:problem:lease-conflict",
+        "replay_rejected" => "urn:part-crm:problem:replay-rejected",
+        "dependency_unavailable" => "urn:part-crm:problem:dependency-unavailable",
+        "integrity_failure" => "urn:part-crm:problem:integrity-failure",
+        "internal_failure" => "urn:part-crm:problem:internal-failure",
+        "conflict" => "urn:part-crm:problem:conflict",
+        _ => "urn:part-crm:problem:internal-failure",
+    }
+}
+
 pub fn problem(
     correlation_id: &str,
     status: u16,
     code: &'static str,
     title: &'static str,
 ) -> Result<Response> {
-    Response::from_json(&Problem {
-        problem_type: match code {
-            "conflict" => "urn:part-crm:problem:conflict",
-            "invalid_request" => "urn:part-crm:problem:invalid-request",
-            _ => "urn:part-crm:problem:not-found",
-        },
+    let mut response = Response::from_json(&Problem {
+        problem_type: problem_type_for_code(code),
         title,
         status,
         code,
         correlation_id,
-    })
-    .map(|response| response.with_status(status))
+    })?
+    .with_status(status);
+    response
+        .headers_mut()
+        .set("content-type", "application/problem+json")?;
+    Ok(response)
 }
 
 pub fn neutral_not_found(correlation_id: &str) -> Result<Response> {
@@ -191,4 +209,50 @@ pub fn correlation_hint(request: &Request) -> String {
         .ok()
         .flatten()
         .unwrap_or_else(|| "corr_unknown".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{problem, problem_type_for_code};
+
+    #[test]
+    fn every_stable_problem_code_has_its_own_type() {
+        let cases = [
+            ("not_found", "urn:part-crm:problem:not-found"),
+            ("forbidden", "urn:part-crm:problem:forbidden"),
+            ("invalid_request", "urn:part-crm:problem:invalid-request"),
+            ("invalid_state", "urn:part-crm:problem:invalid-state"),
+            ("version_conflict", "urn:part-crm:problem:version-conflict"),
+            ("lease_conflict", "urn:part-crm:problem:lease-conflict"),
+            ("replay_rejected", "urn:part-crm:problem:replay-rejected"),
+            (
+                "dependency_unavailable",
+                "urn:part-crm:problem:dependency-unavailable",
+            ),
+            (
+                "integrity_failure",
+                "urn:part-crm:problem:integrity-failure",
+            ),
+            ("internal_failure", "urn:part-crm:problem:internal-failure"),
+            ("conflict", "urn:part-crm:problem:conflict"),
+        ];
+        for (code, expected) in cases {
+            assert_eq!(problem_type_for_code(code), expected);
+        }
+        assert_eq!(
+            problem_type_for_code("unknown_code"),
+            "urn:part-crm:problem:internal-failure"
+        );
+    }
+
+    #[test]
+    fn problem_response_uses_problem_json_media_type() -> Result<(), Box<dyn std::error::Error>> {
+        let response = problem("corr_problem_test", 409, "conflict", "Conflict")?;
+        assert_eq!(response.status_code(), 409);
+        assert_eq!(
+            response.headers().get("content-type")?.as_deref(),
+            Some("application/problem+json")
+        );
+        Ok(())
+    }
 }

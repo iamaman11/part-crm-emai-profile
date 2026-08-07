@@ -7,6 +7,11 @@
 - [`PRODUCT.md`](PRODUCT.md): product identity, primary value and non-goals.
 - [`DELIVERY_ROADMAP.md`](DELIVERY_ROADMAP.md): исполнимый порядок Repository Steps
   для автономной разработки через GitHub и CI.
+- [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md): что реально
+  composed, что является library/synthetic evidence, target architecture или
+  external gate.
+- [`QUALITY_AUDIT_2026-08-06.md`](QUALITY_AUDIT_2026-08-06.md): repository-local
+  аудит модульности, инвариантов, fail-closed routing, надёжности и DX.
 
 ## Нормативные Архитектурные Документы
 

@@ -32,17 +32,21 @@ def seed_catalog(database: sqlite3.Connection) -> None:
         "INSERT INTO memberships VALUES (?, ?, ?, 'TENANT_OWNER', 'ACTIVE', 1, 1, 1)",
         ("tenant_step5", "actor_step5_owner", "identity_step5"),
     )
-    for profile_id in ("profile_step5_a", "profile_step5_b"):
+    for profile_id, generation_id in (
+        ("profile_step5_a", "generation_step5_a"),
+        ("profile_step5_b", "generation_step5_b"),
+    ):
         database.execute(
             """
             INSERT INTO browser_profiles (
                 tenant_id, profile_id, status, active_generation_id, version,
                 created_by_actor_id, updated_by_actor_id, created_at_ms, updated_at_ms
-            ) VALUES (?, ?, 'READY', NULL, 1, ?, ?, 1, 1)
+            ) VALUES (?, ?, 'READY', ?, 1, ?, ?, 1, 1)
             """,
             (
                 "tenant_step5",
                 profile_id,
+                generation_id,
                 "actor_step5_owner",
                 "actor_step5_owner",
             ),
