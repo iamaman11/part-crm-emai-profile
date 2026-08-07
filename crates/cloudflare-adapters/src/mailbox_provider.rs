@@ -1,11 +1,13 @@
 use application_ports::{MailboxObservation, MailboxProviderPort};
 use mailbox_domain::{
-    MailboxBinding, MailboxBindingStatus, MailboxJob, MailboxProvider, validate_cursor,
-    validate_provider_status,
+    MailboxBinding, MailboxBindingStatus, MailboxJob, MailboxJobStatus, MailboxProvider,
+    validate_cursor, validate_provider_status,
 };
+use profile_platform_primitives::{AggregateVersion, UnixMillis};
 use std::fmt;
 
 const MAX_BOUNDED_ITEM_COUNT: u32 = 10_000;
+const RETRY_DELAY_MS: u64 = 60_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MailboxProviderFailureKind {
@@ -21,6 +23,8 @@ pub enum MailboxProviderAdapterError {
     InvalidObservation,
     RetryableFailure,
     TerminalFailure,
+    SchedulingOverflow,
+    InvalidJobState,
 }
 
 impl MailboxProviderAdapterError {
@@ -32,7 +36,9 @@ impl MailboxProviderAdapterError {
             Self::BindingRevoked
             | Self::BindingMismatch
             | Self::ProviderMismatch
-            | Self::InvalidObservation => None,
+            | Self::InvalidObservation
+            | Self::SchedulingOverflow
+            | Self::InvalidJobState => None,
         }
     }
 }
@@ -46,6 +52,8 @@ impl fmt::Display for MailboxProviderAdapterError {
             Self::InvalidObservation => "mailbox provider observation is invalid",
             Self::RetryableFailure => "mailbox provider retryable failure",
             Self::TerminalFailure => "mailbox provider terminal failure",
+            Self::SchedulingOverflow => "mailbox retry schedule overflow",
+            Self::InvalidJobState => "mailbox job state is invalid for provider execution",
         })
     }
 }
@@ -162,6 +170,140 @@ impl MailboxProviderPort for DeterministicFakeMailboxProvider {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MailboxRunDecision {
+    status: MailboxJobStatus,
+    attempt: u32,
+    version: AggregateVersion,
+    cursor: Option<String>,
+    provider_status: String,
+    bounded_item_count: u32,
+    retry_at: Option<UnixMillis>,
+}
+
+impl MailboxRunDecision {
+    #[must_use]
+    pub const fn status(&self) -> MailboxJobStatus {
+        self.status
+    }
+
+    #[must_use]
+    pub const fn attempt(&self) -> u32 {
+        self.attempt
+    }
+
+    #[must_use]
+    pub const fn version(&self) -> AggregateVersion {
+        self.version
+    }
+
+    #[must_use]
+    pub fn cursor(&self) -> Option<&str> {
+        self.cursor.as_deref()
+    }
+
+    #[must_use]
+    pub fn provider_status(&self) -> &str {
+        &self.provider_status
+    }
+
+    #[must_use]
+    pub const fn bounded_item_count(&self) -> u32 {
+        self.bounded_item_count
+    }
+
+    #[must_use]
+    pub const fn retry_at(&self) -> Option<UnixMillis> {
+        self.retry_at
+    }
+}
+
+pub fn decide_mailbox_run<P>(
+    binding: &MailboxBinding,
+    job: &MailboxJob,
+    now: UnixMillis,
+    provider: &mut P,
+) -> Result<MailboxRunDecision, MailboxProviderAdapterError>
+where
+    P: MailboxProviderPort<Error = MailboxProviderAdapterError>,
+{
+    validate_binding_job(binding, job)?;
+    let mut next = job.clone();
+    next.start(now)
+        .map_err(|_| MailboxProviderAdapterError::InvalidJobState)?;
+
+    match provider.check_mailbox(binding, &next) {
+        Ok(observation) => {
+            validate_observation(
+                observation.provider_status(),
+                observation.bounded_item_count(),
+                observation.next_cursor(),
+            )?;
+            next.succeed(observation.next_cursor().map(str::to_owned))
+                .map_err(|_| MailboxProviderAdapterError::InvalidJobState)?;
+            Ok(decision_from_job(
+                &next,
+                observation.provider_status().to_owned(),
+                observation.bounded_item_count(),
+                None,
+            ))
+        }
+        Err(MailboxProviderAdapterError::RetryableFailure) => {
+            if next.attempt() >= next.max_attempts() {
+                next.fail()
+                    .map_err(|_| MailboxProviderAdapterError::InvalidJobState)?;
+                return Ok(decision_from_job(
+                    &next,
+                    "RETRY_EXHAUSTED".to_owned(),
+                    0,
+                    None,
+                ));
+            }
+            let retry_at = UnixMillis::new(
+                now.value()
+                    .checked_add(RETRY_DELAY_MS)
+                    .ok_or(MailboxProviderAdapterError::SchedulingOverflow)?,
+            );
+            next.retry(now, retry_at)
+                .map_err(|_| MailboxProviderAdapterError::InvalidJobState)?;
+            Ok(decision_from_job(
+                &next,
+                "RETRYABLE_FAILURE".to_owned(),
+                0,
+                Some(retry_at),
+            ))
+        }
+        Err(MailboxProviderAdapterError::TerminalFailure) => {
+            next.fail()
+                .map_err(|_| MailboxProviderAdapterError::InvalidJobState)?;
+            Ok(decision_from_job(
+                &next,
+                "TERMINAL_FAILURE".to_owned(),
+                0,
+                None,
+            ))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn decision_from_job(
+    job: &MailboxJob,
+    provider_status: String,
+    bounded_item_count: u32,
+    retry_at: Option<UnixMillis>,
+) -> MailboxRunDecision {
+    MailboxRunDecision {
+        status: job.status(),
+        attempt: job.attempt(),
+        version: job.version(),
+        cursor: job.cursor().map(str::to_owned),
+        provider_status,
+        bounded_item_count,
+        retry_at,
+    }
+}
+
 fn validate_binding_job(
     binding: &MailboxBinding,
     job: &MailboxJob,
@@ -193,10 +335,10 @@ fn validate_observation(
 mod tests {
     use super::{
         DeterministicFakeMailboxProvider, DeterministicMailboxOutcome,
-        MailboxProviderAdapterError, MetadataMailboxProviderAdapter,
+        MailboxProviderAdapterError, MetadataMailboxProviderAdapter, decide_mailbox_run,
     };
     use application_ports::MailboxProviderPort;
-    use mailbox_domain::{MailboxBinding, MailboxJob, MailboxProvider};
+    use mailbox_domain::{MailboxBinding, MailboxJob, MailboxJobStatus, MailboxProvider};
     use profile_platform_primitives::{
         MailboxBindingId, MailboxJobId, SecretHandle, TenantId, UnixMillis,
     };
@@ -210,13 +352,13 @@ mod tests {
         ))
     }
 
-    fn job(binding: &MailboxBinding) -> Result<MailboxJob, Box<dyn std::error::Error>> {
+    fn job(binding: &MailboxBinding, max_attempts: u32) -> Result<MailboxJob, Box<dyn std::error::Error>> {
         Ok(MailboxJob::create(
             binding,
             MailboxJobId::parse("mailjob_01JMAILADAPTER")?,
             None,
             UnixMillis::new(1),
-            3,
+            max_attempts,
         )?)
     }
 
@@ -224,7 +366,7 @@ mod tests {
     fn metadata_adapter_returns_only_bounded_observation()
     -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
-        let job = job(&binding)?;
+        let job = job(&binding, 3)?;
         let mut adapter = MetadataMailboxProviderAdapter::new(
             MailboxProvider::Imap,
             "SYNTHETIC_OK",
@@ -239,18 +381,68 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_fake_classifies_retryable_failure()
+    fn retryable_failure_schedules_retry_without_payload_data()
     -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
-        let job = job(&binding)?;
+        let job = job(&binding, 3)?;
         let mut adapter = DeterministicFakeMailboxProvider::new(
             DeterministicMailboxOutcome::RetryableFailure,
         );
-        assert_eq!(
-            adapter.check_mailbox(&binding, &job),
-            Err(MailboxProviderAdapterError::RetryableFailure)
-        );
+        let decision = decide_mailbox_run(&binding, &job, UnixMillis::new(10), &mut adapter)?;
+        assert_eq!(decision.status(), MailboxJobStatus::RetryPending);
+        assert_eq!(decision.attempt(), 1);
+        assert_eq!(decision.version().value(), 3);
+        assert_eq!(decision.retry_at(), Some(UnixMillis::new(60_010)));
+        assert_eq!(decision.provider_status(), "RETRYABLE_FAILURE");
+        assert_eq!(decision.bounded_item_count(), 0);
         assert_eq!(adapter.calls(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_failure_is_terminal() -> Result<(), Box<dyn std::error::Error>> {
+        let binding = binding()?;
+        let job = job(&binding, 3)?;
+        let mut adapter = DeterministicFakeMailboxProvider::new(
+            DeterministicMailboxOutcome::TerminalFailure,
+        );
+        let decision = decide_mailbox_run(&binding, &job, UnixMillis::new(10), &mut adapter)?;
+        assert_eq!(decision.status(), MailboxJobStatus::Failed);
+        assert_eq!(decision.attempt(), 1);
+        assert_eq!(decision.version().value(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn single_attempt_retryable_failure_becomes_failed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let binding = binding()?;
+        let job = job(&binding, 1)?;
+        let mut adapter = DeterministicFakeMailboxProvider::new(
+            DeterministicMailboxOutcome::RetryableFailure,
+        );
+        let decision = decide_mailbox_run(&binding, &job, UnixMillis::new(10), &mut adapter)?;
+        assert_eq!(decision.status(), MailboxJobStatus::Failed);
+        assert_eq!(decision.provider_status(), "RETRY_EXHAUSTED");
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_success_advances_cursor_and_finishes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let binding = binding()?;
+        let job = job(&binding, 3)?;
+        let mut adapter = MetadataMailboxProviderAdapter::new(
+            MailboxProvider::Imap,
+            "SYNTHETIC_OK",
+            2,
+            Some("cursor-2".to_owned()),
+        )?;
+        let decision = decide_mailbox_run(&binding, &job, UnixMillis::new(10), &mut adapter)?;
+        assert_eq!(decision.status(), MailboxJobStatus::Succeeded);
+        assert_eq!(decision.cursor(), Some("cursor-2"));
+        assert_eq!(decision.bounded_item_count(), 2);
+        assert_eq!(decision.version().value(), 3);
         Ok(())
     }
 }
