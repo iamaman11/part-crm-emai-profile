@@ -229,12 +229,8 @@ pub async fn execute_create_client<P: ClientApplicationPort>(
         ClientReplayDecision::Conflict => return Err(ClientOperationError::Conflict),
     }
 
-    let write = ClientCreateWrite::new(
-        client,
-        display_name,
-        evidence,
-        CLIENT_CREATED_EVENT_PAYLOAD,
-    );
+    let write =
+        ClientCreateWrite::new(client, display_name, evidence, CLIENT_CREATED_EVENT_PAYLOAD);
     match port.create_client(actor, &write).await {
         Ok(()) => Ok(ClientMutationOutcome {
             result_code: "created".to_owned(),
@@ -461,8 +457,7 @@ mod tests {
 
     #[test]
     fn owner_create_preserves_requested_display_name_while_domain_normalizes()
-    -> Result<(), Box<dyn std::error::Error>>
-    {
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakeClientPort::new(vec![ClientReplayDecision::Miss]);
         let outcome = block_on(execute_create_client(
             &actor()?,
@@ -486,8 +481,7 @@ mod tests {
 
     #[test]
     fn overlong_requested_display_name_is_rejected_before_replay()
-    -> Result<(), Box<dyn std::error::Error>>
-    {
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakeClientPort::new(vec![ClientReplayDecision::Miss]);
         let display_name = format!("{} ", "x".repeat(200));
         let command = ExecuteCreateClientCommand::new(
