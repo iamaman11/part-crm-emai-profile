@@ -1,0 +1,16 @@
+name: Rejected Node 20 Checkout
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rejected:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
