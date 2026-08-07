@@ -1,0 +1,61 @@
+name: Mailbox Lock Cleanup
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.event.pull_request.head.ref == 'mailbox-vertical-slice-clean' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mailbox branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: mailbox-vertical-slice-clean
+          persist-credentials: true
+
+      - name: Refresh and validate lockfile
+        run: |
+          git pull --ff-only origin mailbox-vertical-slice-clean
+          cargo generate-lockfile
+          python - <<'PY'
+          import subprocess
+
+          diff = subprocess.check_output(
+              ['git', 'diff', '--unified=0', '--', 'Cargo.lock'], text=True
+          )
+          added = [
+              line[1:].strip()
+              for line in diff.splitlines()
+              if line.startswith('+') and not line.startswith('+++')
+          ]
+          removed = [
+              line[1:].strip()
+              for line in diff.splitlines()
+              if line.startswith('-') and not line.startswith('---')
+          ]
+          expected = {'"application-ports",', '"mailbox-domain",'}
+          if (added or removed) and (set(added) != expected or removed):
+              raise SystemExit(f'unexpected Cargo.lock diff: added={added!r} removed={removed!r}')
+          PY
+
+      - name: Commit lockfile and remove temporary helpers
+        run: |
+          git rm -f .github/workflows/mailbox-lock-refresh.yml .github/workflows/mailbox-lock-cleanup.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock
+          git commit -m "Refresh mailbox adapter lockfile"
+          for attempt in 1 2 3; do
+            git pull --rebase origin mailbox-vertical-slice-clean
+            if git push origin HEAD:mailbox-vertical-slice-clean; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
