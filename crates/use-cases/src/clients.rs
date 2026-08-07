@@ -12,6 +12,7 @@ use profile_platform_primitives::{ActorContext, AggregateVersion, ClientId, Tena
 
 const CLIENT_CREATE_COMMAND: &str = "client.create";
 const CLIENT_CREATED_EVENT_PAYLOAD: &str = "{}";
+const MAX_REQUESTED_DISPLAY_NAME_LEN: usize = 200;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CreateClientCommand {
@@ -199,16 +200,25 @@ pub async fn execute_create_client<P: ClientApplicationPort>(
 ) -> Result<ClientMutationOutcome, ClientOperationError> {
     authorize_client_create(role)?;
 
+    let ExecuteCreateClientCommand {
+        client_id,
+        kind,
+        display_name,
+        evidence,
+    } = command;
+    if display_name.trim().is_empty() || display_name.len() > MAX_REQUESTED_DISPLAY_NAME_LEN {
+        return Err(ClientOperationError::InvalidRequest);
+    }
     let client = ClientRecord::create(
         actor.tenant_scope().tenant_id().clone(),
-        command.client_id,
-        command.kind,
-        command.display_name,
+        client_id,
+        kind,
+        display_name.clone(),
     )
     .map_err(map_client_operation_error)?;
 
     match port
-        .decide_replay(actor, CLIENT_CREATE_COMMAND, &command.evidence)
+        .decide_replay(actor, CLIENT_CREATE_COMMAND, &evidence)
         .await
         .map_err(map_client_port_error)?
     {
@@ -219,7 +229,12 @@ pub async fn execute_create_client<P: ClientApplicationPort>(
         ClientReplayDecision::Conflict => return Err(ClientOperationError::Conflict),
     }
 
-    let write = ClientCreateWrite::new(client, command.evidence, CLIENT_CREATED_EVENT_PAYLOAD);
+    let write = ClientCreateWrite::new(
+        client,
+        display_name,
+        evidence,
+        CLIENT_CREATED_EVENT_PAYLOAD,
+    );
     match port.create_client(actor, &write).await {
         Ok(()) => Ok(ClientMutationOutcome {
             result_code: "created".to_owned(),
@@ -338,20 +353,24 @@ mod tests {
 
     struct FakeClientPort {
         replay: RefCell<Vec<ClientReplayDecision>>,
+        replay_calls: Cell<u32>,
         create_error: Cell<Option<ClientPortErrorClass>>,
         create_calls: Cell<u32>,
         visible: RefCell<Option<ClientReadModel>>,
-        seen_display_name: RefCell<Option<String>>,
+        seen_domain_display_name: RefCell<Option<String>>,
+        seen_requested_display_name: RefCell<Option<String>>,
     }
 
     impl FakeClientPort {
         fn new(replay: Vec<ClientReplayDecision>) -> Self {
             Self {
                 replay: RefCell::new(replay),
+                replay_calls: Cell::new(0),
                 create_error: Cell::new(None),
                 create_calls: Cell::new(0),
                 visible: RefCell::new(None),
-                seen_display_name: RefCell::new(None),
+                seen_domain_display_name: RefCell::new(None),
+                seen_requested_display_name: RefCell::new(None),
             }
         }
 
@@ -372,6 +391,7 @@ mod tests {
             _command_name: &str,
             _evidence: &CommandExecutionEvidence,
         ) -> Result<ClientReplayDecision, ClientPortError> {
+            self.replay_calls.set(self.replay_calls.get() + 1);
             Ok(self.next_replay())
         }
 
@@ -381,8 +401,10 @@ mod tests {
             write: &ClientCreateWrite,
         ) -> Result<(), ClientPortError> {
             self.create_calls.set(self.create_calls.get() + 1);
-            self.seen_display_name
+            self.seen_domain_display_name
                 .replace(Some(write.client().display_name().to_owned()));
+            self.seen_requested_display_name
+                .replace(Some(write.requested_display_name().to_owned()));
             match self.create_error.get() {
                 Some(class) => Err(ClientPortError::new(class)),
                 None => Ok(()),
@@ -438,8 +460,8 @@ mod tests {
     }
 
     #[test]
-    fn owner_create_normalizes_domain_input_before_write() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn owner_create_preserves_requested_display_name_while_domain_normalizes()
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakeClientPort::new(vec![ClientReplayDecision::Miss]);
         let outcome = block_on(execute_create_client(
             &actor()?,
@@ -451,9 +473,38 @@ mod tests {
         assert!(!outcome.replayed());
         assert_eq!(port.create_calls.get(), 1);
         assert_eq!(
-            port.seen_display_name.borrow().as_deref(),
+            port.seen_domain_display_name.borrow().as_deref(),
             Some("Synthetic Client")
         );
+        assert_eq!(
+            port.seen_requested_display_name.borrow().as_deref(),
+            Some("  Synthetic Client  ")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn overlong_requested_display_name_is_rejected_before_replay()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let port = FakeClientPort::new(vec![ClientReplayDecision::Miss]);
+        let display_name = format!("{} ", "x".repeat(200));
+        let command = ExecuteCreateClientCommand::new(
+            ClientId::parse("client_01JCLIENTAPP")?,
+            ClientKind::Person,
+            display_name,
+            evidence()?,
+        );
+        assert_eq!(
+            block_on(execute_create_client(
+                &actor()?,
+                MembershipRole::TenantOwner,
+                &port,
+                command,
+            )),
+            Err(ClientOperationError::InvalidRequest)
+        );
+        assert_eq!(port.replay_calls.get(), 0);
+        assert_eq!(port.create_calls.get(), 0);
         Ok(())
     }
 
@@ -470,6 +521,7 @@ mod tests {
             )),
             Err(ClientOperationError::NotFound)
         );
+        assert_eq!(port.replay_calls.get(), 0);
         assert_eq!(port.create_calls.get(), 0);
         Ok(())
     }
@@ -509,6 +561,7 @@ mod tests {
             command()?,
         ))?;
         assert!(outcome.replayed());
+        assert_eq!(port.replay_calls.get(), 2);
         assert_eq!(port.create_calls.get(), 1);
         Ok(())
     }
@@ -528,6 +581,7 @@ mod tests {
             )),
             Err(ClientOperationError::Conflict)
         );
+        assert_eq!(port.replay_calls.get(), 2);
         Ok(())
     }
 
