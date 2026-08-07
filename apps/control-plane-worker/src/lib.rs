@@ -6,6 +6,7 @@ mod clients;
 mod command_evidence;
 mod composition;
 mod mailbox_bindings;
+mod mailbox_jobs;
 mod mailboxes;
 mod mutation_failure;
 mod profile_coordinator;
@@ -66,7 +67,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         }
         RouteClass::MailboxJobCollectionApi
         | RouteClass::MailboxJobResourceApi
-        | RouteClass::MailboxJobRunApi => mailboxes::dispatch(route, &mut request, &env).await,
+        | RouteClass::MailboxJobRunApi => mailbox_jobs::dispatch(route, &mut request, &env).await,
         RouteClass::OwnerBootstrapApi
         | RouteClass::OwnerTransferApi
         | RouteClass::InvitationCollectionApi
