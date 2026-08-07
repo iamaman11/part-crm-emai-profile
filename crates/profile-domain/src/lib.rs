@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod registry;
+
 use core::fmt;
 use profile_platform_primitives::{AggregateVersion, GenerationId, ProfileId, TenantId};
 

@@ -1,0 +1,541 @@
+{
+  "paths": {
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations": {
+      "post": {
+        "operationId": "registerProfileGeneration",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterProfileGenerationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Immutable generation metadata registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}": {
+      "get": {
+        "operationId": "getProfileGeneration",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/GenerationPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Support-safe generation metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileGenerationResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}/verify": {
+      "post": {
+        "operationId": "verifyProfileGeneration",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/GenerationPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyProfileGenerationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/GenerationMutationAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}/activate": {
+      "post": {
+        "operationId": "activateProfileGeneration",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/GenerationPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateProfileGenerationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/GenerationMutationAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}/deactivate": {
+      "post": {
+        "operationId": "deactivateProfileGeneration",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/GenerationPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeactivateProfileGenerationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/GenerationMutationAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}/quarantine": {
+      "post": {
+        "operationId": "quarantineProfileGeneration",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/GenerationPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuarantineProfileGenerationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/GenerationMutationAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "GenerationPath": {
+        "name": "generationId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      }
+    },
+    "responses": {
+      "InvalidRequest": {
+        "description": "Malformed request metadata or version",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "GenerationMutationAccepted": {
+        "description": "Generation lifecycle mutation accepted",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/MutationReceipt"
+            }
+          }
+        }
+      },
+      "DependencyUnavailable": {
+        "description": "Storage or provider dependency is temporarily unavailable",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Sha256Digest": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "GenerationObjectKey": {
+        "type": "string",
+        "minLength": 16,
+        "maxLength": 512,
+        "pattern": "^(?!/)(?!.*\\.\\.)[A-Za-z0-9_./:-]+$"
+      },
+      "VerificationReference": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 256,
+        "pattern": "^[A-Za-z0-9_:-]+$"
+      },
+      "RegisterProfileGenerationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "generationId",
+          "objectKey",
+          "metadataDigest",
+          "containerDigest",
+          "requestDigest"
+        ],
+        "properties": {
+          "generationId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "objectKey": {
+            "$ref": "#/components/schemas/GenerationObjectKey"
+          },
+          "metadataDigest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          },
+          "containerDigest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          },
+          "requestDigest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          }
+        }
+      },
+      "VerifyProfileGenerationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedGenerationVersion",
+          "verificationReference",
+          "requestDigest"
+        ],
+        "properties": {
+          "expectedGenerationVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "verificationReference": {
+            "$ref": "#/components/schemas/VerificationReference"
+          },
+          "requestDigest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          }
+        }
+      },
+      "ActivateProfileGenerationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedProfileVersion",
+          "requestDigest"
+        ],
+        "properties": {
+          "expectedProfileVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "requestDigest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          }
+        }
+      },
+      "DeactivateProfileGenerationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedProfileVersion",
+          "requestDigest"
+        ],
+        "properties": {
+          "expectedProfileVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "requestDigest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          }
+        }
+      },
+      "QuarantineProfileGenerationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedGenerationVersion",
+          "requestDigest"
+        ],
+        "properties": {
+          "expectedGenerationVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "requestDigest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          }
+        }
+      },
+      "ProfileGenerationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "generationId",
+          "metadataDigest",
+          "containerDigest",
+          "status",
+          "version"
+        ],
+        "properties": {
+          "generationId": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "metadataDigest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          },
+          "containerDigest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "REGISTERED",
+              "VERIFIED",
+              "QUARANTINED"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "verificationReference": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VerificationReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

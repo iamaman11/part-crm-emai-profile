@@ -9,6 +9,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "migrations" / "d1"
+TENANT_ID = "tenant_step5"
+OWNER_ID = "actor_step5_owner"
 
 
 def connect() -> sqlite3.Connection:
@@ -19,10 +21,91 @@ def connect() -> sqlite3.Connection:
     return database
 
 
+def seed_ready_profile(
+    database: sqlite3.Connection,
+    *,
+    profile_id: str,
+    generation_id: str,
+    ordinal: int,
+) -> None:
+    database.execute(
+        """
+        INSERT INTO browser_profiles (
+            tenant_id, profile_id, status, active_generation_id, version,
+            created_by_actor_id, updated_by_actor_id, created_at_ms, updated_at_ms
+        ) VALUES (?, ?, 'DRAFT', NULL, 1, ?, ?, 1, 1)
+        """,
+        (TENANT_ID, profile_id, OWNER_ID, OWNER_ID),
+    )
+    database.execute(
+        """
+        INSERT INTO profile_generation_register_commands (
+            tenant_id, command_id, command_actor_id, profile_id,
+            generation_id, object_key, metadata_digest, container_digest,
+            executed_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            TENANT_ID,
+            f"command_step5_register_{ordinal}",
+            OWNER_ID,
+            profile_id,
+            generation_id,
+            f"profiles/v1/{generation_id}.enc",
+            "a" * 64,
+            "b" * 64,
+            10 + ordinal * 10,
+        ),
+    )
+    database.execute(
+        """
+        INSERT INTO profile_generation_verify_commands (
+            tenant_id, command_id, command_actor_id, profile_id,
+            generation_id, expected_generation_version,
+            verification_reference, executed_at_ms
+        ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        """,
+        (
+            TENANT_ID,
+            f"command_step5_verify_{ordinal}",
+            OWNER_ID,
+            profile_id,
+            generation_id,
+            f"review:step5_{ordinal}",
+            11 + ordinal * 10,
+        ),
+    )
+    database.execute(
+        """
+        INSERT INTO profile_generation_activate_commands (
+            tenant_id, command_id, command_actor_id, profile_id,
+            generation_id, expected_profile_version, executed_at_ms
+        ) VALUES (?, ?, ?, ?, ?, 1, ?)
+        """,
+        (
+            TENANT_ID,
+            f"command_step5_activate_{ordinal}",
+            OWNER_ID,
+            profile_id,
+            generation_id,
+            12 + ordinal * 10,
+        ),
+    )
+    row = database.execute(
+        """
+        SELECT status, active_generation_id, version
+        FROM browser_profiles
+        WHERE tenant_id = ? AND profile_id = ?
+        """,
+        (TENANT_ID, profile_id),
+    ).fetchone()
+    assert row == ("READY", generation_id, 2), row
+
+
 def seed_catalog(database: sqlite3.Connection) -> None:
     database.execute(
         "INSERT INTO tenants VALUES (?, ?, 'ACTIVE', 1, 1, 1)",
-        ("tenant_step5", "Step 5 Tenant"),
+        (TENANT_ID, "Step 5 Tenant"),
     )
     database.execute(
         "INSERT INTO identities VALUES (?, ?, ?, ?)",
@@ -30,27 +113,20 @@ def seed_catalog(database: sqlite3.Connection) -> None:
     )
     database.execute(
         "INSERT INTO memberships VALUES (?, ?, ?, 'TENANT_OWNER', 'ACTIVE', 1, 1, 1)",
-        ("tenant_step5", "actor_step5_owner", "identity_step5"),
+        (TENANT_ID, OWNER_ID, "identity_step5"),
     )
-    for profile_id, generation_id in (
-        ("profile_step5_a", "generation_step5_a"),
-        ("profile_step5_b", "generation_step5_b"),
-    ):
-        database.execute(
-            """
-            INSERT INTO browser_profiles (
-                tenant_id, profile_id, status, active_generation_id, version,
-                created_by_actor_id, updated_by_actor_id, created_at_ms, updated_at_ms
-            ) VALUES (?, ?, 'READY', ?, 1, ?, ?, 1, 1)
-            """,
-            (
-                "tenant_step5",
-                profile_id,
-                generation_id,
-                "actor_step5_owner",
-                "actor_step5_owner",
-            ),
-        )
+    seed_ready_profile(
+        database,
+        profile_id="profile_step5_a",
+        generation_id="generation_step5_a",
+        ordinal=1,
+    )
+    seed_ready_profile(
+        database,
+        profile_id="profile_step5_b",
+        generation_id="generation_step5_b",
+        ordinal=2,
+    )
     database.commit()
 
 
@@ -63,7 +139,7 @@ def projection(
 ) -> str:
     active = status in {"active", "draining"}
     payload = {
-        "tenant_id": "tenant_step5",
+        "tenant_id": TENANT_ID,
         "profile_id": profile_id,
         "status": status,
         "version": sequence + 1,
@@ -98,7 +174,7 @@ def insert_command(
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            "tenant_step5",
+            TENANT_ID,
             profile_id,
             sequence,
             sequence + 1,
@@ -139,7 +215,7 @@ def main() -> None:
         FROM profile_coordinator_projections
         WHERE tenant_id = ? AND profile_id = ?
         """,
-        ("tenant_step5", "profile_step5_a"),
+        (TENANT_ID, "profile_step5_a"),
     ).fetchone()
     assert row == (0, 1, "idle"), row
     assert database.execute(
@@ -189,7 +265,7 @@ def main() -> None:
         FROM profile_coordinator_projections
         WHERE tenant_id = ? AND profile_id = ?
         """,
-        ("tenant_step5", "profile_step5_a"),
+        (TENANT_ID, "profile_step5_a"),
     ).fetchone() == (2, 1, "session_step5")
 
     expect_integrity_error(
@@ -220,7 +296,7 @@ def main() -> None:
         FROM profile_coordinator_projections
         WHERE tenant_id = ? AND profile_id = ?
         """,
-        ("tenant_step5", "profile_step5_b"),
+        (TENANT_ID, "profile_step5_b"),
     ).fetchone() == (5,)
 
     expect_integrity_error(
@@ -230,7 +306,7 @@ def main() -> None:
             SET outcome = 'no_change'
             WHERE tenant_id = ? AND profile_id = ? AND coordinator_sequence = 5
             """,
-            ("tenant_step5", "profile_step5_b"),
+            (TENANT_ID, "profile_step5_b"),
         ),
         "coordinator_projection_command_append_only",
     )

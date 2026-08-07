@@ -3,12 +3,16 @@
 mod access_session;
 mod api;
 mod profile_coordinator;
+mod profile_generations;
+mod request_evidence;
 
 pub use profile_coordinator::ProfileCoordinator;
 
 use access_session::session_response;
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
+use cloudflare_adapters::d1_idempotency::D1IdempotencyRepository;
 use cloudflare_adapters::d1_identity_acl::D1IdentityAclRepository;
+use cloudflare_adapters::d1_profile_generations::D1ProfileGenerationRepository;
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
     STATIC_ASSETS_BINDING, VERIFICATION_QUEUE_BINDING, classify_route,
@@ -33,6 +37,14 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         }
         RouteClass::AuthenticatedSessionApi => session_response(&request, &env).await,
         RouteClass::ProfileCoordinatorApi => dispatch_profile_coordinator(&mut request, &env).await,
+        RouteClass::ProfileGenerationCollectionApi
+        | RouteClass::ProfileGenerationResourceApi
+        | RouteClass::ProfileGenerationVerifyApi
+        | RouteClass::ProfileGenerationActivateApi
+        | RouteClass::ProfileGenerationDeactivateApi
+        | RouteClass::ProfileGenerationQuarantineApi => {
+            profile_generations::dispatch(route, &mut request, &env).await
+        }
         RouteClass::OwnerBootstrapApi
         | RouteClass::OwnerTransferApi
         | RouteClass::InvitationCollectionApi
@@ -65,6 +77,10 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _catalog_repository = D1CatalogRepository::new(catalog);
     let identity_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _identity_acl_repository = D1IdentityAclRepository::new(identity_catalog);
+    let generation_catalog = env.d1(D1_CATALOG_BINDING)?;
+    let _generation_repository = D1ProfileGenerationRepository::new(generation_catalog);
+    let idempotency_catalog = env.d1(D1_CATALOG_BINDING)?;
+    let _idempotency_repository = D1IdempotencyRepository::new(idempotency_catalog);
     let _objects = env.bucket(R2_PROFILES_BINDING)?;
     let _verification = env.queue(VERIFICATION_QUEUE_BINDING)?;
     let coordinator = env.durable_object(PROFILE_COORDINATOR_BINDING)?;

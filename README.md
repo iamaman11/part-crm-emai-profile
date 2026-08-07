@@ -57,12 +57,20 @@ Exact-head Quality Gate run: `31074745842`. Certification Gate run:
 Local Profile regression: `31074745880`. Runtime Bundle regression:
 `31074745848`. Squash merge: `3ddde2f48ddf82decf66c933ae5326a4455263e5`.
 
-Нумерованный repository roadmap завершён на Step 10. Следующий этап —
-**external production evidence gates**, без выдуманного Step 11: принятие
-ADR-0001 и ADR-0006, real Camoufox fingerprint certification, второй
-независимый Windows host, production device-key unwrap, remote R2/D1 atomicity,
-clean-environment escrow restore, trusted Windows signing и independent security
-review. Машиночитаемый статус: [`docs/status.json`](docs/status.json).
+Нумерованный repository roadmap завершён на Step 10 и не продолжается
+искусственным Step 11. После него работа разделена на два явно разных трека:
+
+- **repository-local composition epic #43**: authoritative profile-generation
+  registry/API, полный Profile Bridge operator flow, mailbox vertical slice,
+  React UI composition и cross-component synthetic acceptance;
+- **external production evidence gates #3**: принятие ADR-0001 и ADR-0006, real
+  Camoufox fingerprint certification, второй независимый Windows host,
+  production device-key unwrap, remote R2/D1 atomicity, clean-environment escrow
+  restore, trusted Windows signing и independent security review.
+
+Profile Generation Registry/API (#44, PR #51) является первым bounded slice
+post-roadmap composition. Он не меняет machine-readable production readiness:
+[`docs/status.json`](docs/status.json) остаётся authoritative readiness projection.
 
 Единственный разрешенный источник legacy-профилей:
 
@@ -78,7 +86,9 @@ temp/browser_profiles/
 
 Работа выполняется последовательными Repository Steps через GitHub branch, PR,
 постоянный CI и squash merge. Нормативный порядок находится в
-[`docs/DELIVERY_ROADMAP.md`](docs/DELIVERY_ROADMAP.md).
+[`docs/DELIVERY_ROADMAP.md`](docs/DELIVERY_ROADMAP.md). После завершённого Step 10
+новые repository-local capabilities поставляются bounded PR из composition epic
+#43, а не получают искусственные номера Step 11+.
 
 Текущая среда позволяет автономно выполнять repository code, tests, workflows,
 issues, PR review fixes и merge. Внешние операции не симулируются: credential
@@ -95,6 +105,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Целевой жизненный цикл профиля](PROFILE_LIFECYCLE_PLAN.md)
 - [Contract compatibility policy](docs/CONTRACT_POLICY.md)
 - [D1 catalog boundary](docs/D1_CATALOG.md)
+- [Profile Generation Registry boundary](docs/PROFILE_GENERATION_REGISTRY.md)
 - [Profile Coordinator boundary](docs/PROFILE_COORDINATOR.md)
 - [Windows Bridge feasibility boundary](docs/WINDOWS_BRIDGE_FEASIBILITY.md)
 - [Camouhost runtime bundle boundary](docs/CAMOUHOST_RUNTIME_BUNDLE.md)
@@ -182,6 +193,13 @@ preverified release/health identity и fail-closed rollback state machine. Remot
 staging, real Camoufox, kernel advisory locking, third-party redistribution,
 trusted signing, backup/restore, physical multi-device runtime и account recovery
 пока не считаются выполненными.
+
+Post-roadmap composition отдельно добавляет executable catalog/API capabilities
+без изменения external-evidence claims. Текущий profile-generation slice
+связывает immutable generation metadata, governed verification, exact activation/
+deactivation, coordinator eligibility и quarantine через typed D1/Worker/OpenAPI
+boundaries; реальный R2 object lifecycle и device execution по-прежнему требуют
+отдельного external evidence.
 
 ## Ключевые Инварианты
 

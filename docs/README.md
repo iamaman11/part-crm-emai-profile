@@ -23,6 +23,9 @@
   Definition of Done; порядок delivery уточняется `DELIVERY_ROADMAP.md`.
 - [`../PROFILE_LIFECYCLE_PLAN.md`](../PROFILE_LIFECYCLE_PLAN.md): state machine
   создания, запуска, snapshot, restore и cloud sync.
+- [`PROFILE_GENERATION_REGISTRY.md`](PROFILE_GENERATION_REGISTRY.md): authoritative
+  metadata registry, lifecycle, exact idempotency, governed D1 commands and
+  verified-generation activation boundary.
 - [`CONTRACT_POLICY.md`](CONTRACT_POLICY.md): OpenAPI/protobuf v1 roots, stable
   problem taxonomy, compatibility rules and baseline governance.
 - [`D1_CATALOG.md`](D1_CATALOG.md): authoritative catalog boundary, tenant
