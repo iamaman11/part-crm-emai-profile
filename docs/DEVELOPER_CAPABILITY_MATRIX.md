@@ -2,7 +2,7 @@
 
 **Статус:** normative developer orientation  
 **Дата:** 2026-08-07  
-**Tracking:** completed hardening #41; composition epic #43; generation slice #44 / PR #51; Profile Bridge slice #54 / PR #55
+**Tracking:** completed hardening #41; composition epic #43; generation slice #44 / PR #51; Profile Bridge slice #54 / PR #55; mailbox slice #56 / PR #60 + repair #61 / PR #62; React UI candidate #63 / PR #64
 
 ## 1. Зачем Нужен Этот Документ
 
@@ -51,8 +51,8 @@ accepted только после exact-head green и merge. Поэтому во 
 | Local profile lifecycle | Library / Synthetic | Marked workspace, inventory, lock ownership, clone-only recovery, quota/support policies and composed synthetic operator tests. | Full kernel-lock/real-browser integration on physical Windows hosts — External. |
 | Encrypted cloud generations | Synthetic | XChaCha20-Poly1305 container, metadata authentication, nonce domain, immutable in-memory lifecycle, pointer/rollback/quarantine/orphan policies. | Production R2 adapter, device unwrap and remote R2/D1 atomicity — External. |
 | Certification | Synthetic | Typed policy, deterministic matrix, prohibited/incomplete/drift outcomes, privacy-safe summary and update rollback state. | Real Camoufox observations, specialized-site review and independent certification — External. |
-| Mailbox operations | Library | Provider-neutral binding/job domain and mailbox provider port. | Gmail/IMAP/browser adapters, API routes, scheduling, persistence and user workflow are not composed. |
-| React web UI | Target | UI architecture and route contracts are documented. | В репозитории нет `frontend/package.json`; current Worker has no composed React build. |
+| Mailbox operations | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, strict secret-handle-only request DTOs, idempotency/audit/outbox, versioned Worker create/query/revoke/job/run routes and metadata-only synthetic provider decision path. Adapter modules are exported and exercised by Worker native/WASM/release and Cloudflare adapter tests. | Real Gmail API/IMAP/browser provider execution, mailbox message payload processing, production scheduling and external provider evidence remain unproven. |
+| React web UI | Composed candidate / Synthetic | PR #64 adds exact Node 24.19.0/npm 11.17.0 workspace, React 19/Vite 8/TypeScript 7, same-origin typed API/problem layer, tenant-scoped operator shell, session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces, neutral disclosure, high-impact confirmation, strict tests and a read-only permanent Frontend Gate. Worker Static Assets already targets `frontend/dist`. | This branch is not accepted on `main` until exact-head CI + squash merge. No deployed Cloudflare Access UI, real Bridge onboarding/custom-URI acceptance, real provider execution, or catalog list APIs are claimed. |
 | CRM integration | Target | Versioned boundary principles and replaceable adapter direction documented. | CRM Party projection, OIDC/PostgreSQL adapters and event integration отсутствуют. |
 | Production readiness | External | Immutable evidence intake, readiness projection and GitHub attestation interlocks are composed. | Mandatory external evidence matrix currently incomplete; `production_ready` remains `false`. |
 
@@ -84,6 +84,11 @@ apps/profile-bridge
   narrow default claim-only CLI. `profile-bridge-synthetic` is the explicit
   repository-local composed operator path and must never be described as a real
   Camoufox or production-provider implementation.
+
+frontend
+  React operator composition only. Routes/forms display accepted projections and
+  invoke typed same-origin API calls; authorization, lifecycle transitions and
+  provider decisions remain server-side. No secret/token persistence in Web Storage.
 ```
 
 A developer must not move policy downward into an adapter or upward into a UI.
@@ -106,6 +111,24 @@ HTTP request
 
 This path is repository-built and integration-tested, but not a claim of deployed
 production infrastructure.
+
+### React operator path (PR #64 candidate)
+
+```text
+Cloudflare Static Assets / frontend/dist
+  -> React operator route
+  -> explicit tenant + opaque resource ID
+  -> same-origin /api/v1 request
+  -> bounded JSON/problem normalization
+  -> Worker re-authorizes every operation
+  -> authoritative server projection/result
+```
+
+The UI intentionally does not invent list/read APIs that the Worker does not own.
+Client/profile/generation/mailbox resources are resolved by explicit opaque ID.
+High-impact mutations are confirmed and never optimistically treated as success.
+This is repository-local composition evidence only until PR #64 is accepted and
+external deployment evidence exists.
 
 ### Profile generation path
 
@@ -174,16 +197,23 @@ A capability is not considered fully composed until all applicable items exist:
 
 Use the exact commands in [`../CONTRIBUTING.md`](../CONTRIBUTING.md). CI remains
 the acceptance authority because it also executes Windows, Wrangler/D1, WASM,
-Worker release, runtime, local-profile, encrypted-generation, certification and
-external-evidence lanes.
+Worker release, runtime, local-profile, encrypted-generation, certification,
+frontend and external-evidence lanes.
 
 For the Profile Bridge composition slice, `cargo test --locked -p profile-bridge --all-targets`
 covers the library state machine, explicit synthetic executable and integration
 failure-ordering regressions. Repository acceptance still requires every permanent
 workflow on the same final head.
 
+For the React UI candidate, `frontend/.nvmrc`, `package.json` engines/packageManager
+and `.github/workflows/frontend-gate.yml` pin Node `24.19.0` and npm `11.17.0`.
+The permanent lane performs `npm ci`, strict TypeScript, Vitest, Vite production
+build, application-source credential-persistence scanning and Static Assets output
+verification.
+
 ## 8. Audit Exclusion
 
-Repository quality and composition work under issues #41, #43, #44 and #54 does
-not inspect, modify or operate the legacy proxy credential/provider. That external
-item remains separate and has no effect on repository-local architecture findings.
+Repository quality and composition work under issues #41, #43, #44, #54, #56,
+#61 and #63 does not inspect, modify or operate the legacy proxy credential/provider.
+That external item remains separate and has no effect on repository-local
+architecture findings.
