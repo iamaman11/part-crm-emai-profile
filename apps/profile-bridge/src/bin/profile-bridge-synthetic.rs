@@ -1,8 +1,5 @@
 use application_ports::ProfileCoordinatorPort;
-use bridge_domain::{
-    BridgePortError, ClaimUri, DeviceAuthenticationPort as _, DeviceIdentityPort, DeviceKeyPort,
-    EnrollmentClaim,
-};
+use bridge_domain::{BridgePortError, ClaimUri, EnrollmentClaim};
 use profile_bridge::local_profile::{LocalGenerationState, MaterializationRoot};
 use profile_bridge::operator_flow::{
     DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment, ProfileBridgeOperator,
@@ -21,7 +18,7 @@ use runtime_bundle_domain::{
 use session_domain::ProfileLease;
 use std::env;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 const SYNTHETIC_NOW: UnixMillis = UnixMillis::new(10);
@@ -149,11 +146,7 @@ struct SyntheticDeviceAuthentication;
 impl DeviceAuthenticationPort for SyntheticDeviceAuthentication {
     type Error = BridgePortError;
 
-    fn authenticate(
-        &mut self,
-        device_id: &DeviceId,
-        key_handle: &str,
-    ) -> Result<(), Self::Error> {
+    fn authenticate(&mut self, device_id: &DeviceId, key_handle: &str) -> Result<(), Self::Error> {
         let expected = format!("fake_key_handle_{}", device_id.as_str());
         if key_handle == expected {
             Ok(())
@@ -262,19 +255,15 @@ impl SyntheticRuntimeBundles {
         let entrypoint = BundleRelativePath::parse("camouhost/main.py")
             .map_err(|_| SyntheticOperatorError::RuntimeBundleFixture)?;
         let manifest = RuntimeManifest::new(
-            "synthetic-0.1.0",
+            "0.1.0",
             "3.12",
             RuntimePlatform::WindowsX86_64,
             entrypoint.clone(),
             calculated.clone(),
         )
         .map_err(|_| SyntheticOperatorError::RuntimeBundleFixture)?;
-        let inventory = RuntimeInventory::new([InventoryEntry::new(
-            entrypoint,
-            10,
-            digest('b')?,
-        )])
-        .map_err(|_| SyntheticOperatorError::RuntimeBundleFixture)?;
+        let inventory = RuntimeInventory::new([InventoryEntry::new(entrypoint, 10, digest('b')?)])
+            .map_err(|_| SyntheticOperatorError::RuntimeBundleFixture)?;
         let bundle = ApprovedRuntimeBundle::validate(manifest, inventory, &calculated)
             .map_err(|_| SyntheticOperatorError::RuntimeBundleFixture)?;
         Ok(Self { bundle })
