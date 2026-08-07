@@ -10,7 +10,9 @@ from test_step4_error_taxonomy import main as error_taxonomy_main
 
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_identity_acl.rs"
+COMMAND_IDENTITY = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_command_identity.rs"
 GOVERNED_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_governed_commands.rs"
+GENERATION_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_profile_generations.rs"
 INVITATION_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_invitation_acceptance.rs"
 WORKER_API = ROOT / "apps" / "control-plane-worker" / "src" / "api.rs"
 
@@ -75,7 +77,9 @@ REQUIRED_ACCEPTANCE_TOKENS = (
 
 def main() -> int:
     identity = IDENTITY_ADAPTER.read_text(encoding="utf-8")
+    command_identity = COMMAND_IDENTITY.read_text(encoding="utf-8")
     governed = GOVERNED_ADAPTER.read_text(encoding="utf-8")
+    generation = GENERATION_ADAPTER.read_text(encoding="utf-8")
     acceptance = INVITATION_ADAPTER.read_text(encoding="utf-8")
     worker_api = WORKER_API.read_text(encoding="utf-8")
 
@@ -96,6 +100,17 @@ def main() -> int:
         if token not in acceptance:
             errors.append(f"invitation acceptance adapter is missing atomic envelope token: {token}")
 
+    if "part-crm:d1-command-journal:v1" not in command_identity:
+        errors.append("D1 command journal IDs are missing their domain-separated identity tag")
+    if governed.count("let command_id = command_journal_id(") != 7:
+        errors.append("legacy governed command tables must derive exactly seven actor-bound journal IDs")
+    if governed.count("command_id.as_str(),") != 7:
+        errors.append("legacy governed command inserts must use actor-bound journal IDs")
+    if generation.count("let command_id = command_journal_id(") != 5:
+        errors.append("profile generation command tables must derive exactly five actor-bound journal IDs")
+    if generation.count("command_id.as_str(),") != 5:
+        errors.append("profile generation command inserts must use actor-bound journal IDs")
+
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
@@ -106,7 +121,7 @@ def main() -> int:
 
     print(
         "Step 4 writes use governed atomic envelopes, exact replay decisions, "
-        "collision-resistant evidence identifiers, and stable error taxonomy."
+        "actor-bound command/evidence identifiers, and stable error taxonomy."
     )
     return 0
 
