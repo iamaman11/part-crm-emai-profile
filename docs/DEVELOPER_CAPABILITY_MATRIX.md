@@ -2,7 +2,7 @@
 
 **Статус:** normative developer orientation  
 **Дата:** 2026-08-07  
-**Tracking:** completed hardening #41; composition epic #43; generation slice #44 / PR #51
+**Tracking:** completed hardening #41; composition epic #43; generation slice #44 / PR #51; Profile Bridge slice #54 / PR #55
 
 ## 1. Зачем Нужен Этот Документ
 
@@ -44,11 +44,11 @@ accepted только после exact-head green и merge. Поэтому во 
 | Profile catalog | Composed | Create/query/grant/assignment metadata paths, typed profile state и active generation pointer. | Реальные encrypted object operations выполняются не catalog, а будущим R2/provider flow. |
 | Profile generation registry | Composed | Metadata-only register/query/verify/activate/deactivate/quarantine routes, exact command+digest+expiry replay, collision-resistant deterministic evidence IDs, command journals, audit/outbox, monotonic time, immutable digests/object identity и verified-pointer integrity. | Production R2 object verification, device unwrap и cross-device execution — External. |
 | Profile Coordinator | Composed | Durable Object journal, monotonic sequence/version/epoch, fencing, timeout/drain/recovery, D1 projection. | Remote production concurrency evidence — External. |
-| Windows Profile Bridge executable | Library | `profile-bridge.exe` build, strict redacted claim-URI CLI, local-profile/runtime modules and Windows lane. | Текущий executable только принимает claim URI; complete enrollment/network/device-key/runtime composition отсутствует. |
-| Device identity/key ports | Synthetic | Typed ports и deterministic fake implementations. | Production CNG/DPAPI/TPM unwrap/revoke/recovery — External. |
-| Camouhost IPC и process supervision | Synthetic | Versioned messages, fake Camouhost, process state machine, generated subprocess/runtime fixtures. | Real bundled Python/Camoufox lifecycle на physical host — External. |
-| Runtime bundle | Synthetic | Canonical manifest, inventory, path/case safety, digest checks, approval/rollback tests. | Trusted signed distribution/update channel — External. |
-| Local profile lifecycle | Library / Synthetic | Marked workspace, inventory, lock ownership, clone-only recovery, quota/support policies and Bridge library tests. | Full kernel-lock/real-browser integration on physical Windows hosts — External. |
+| Full Profile Bridge operator flow | Composed / Synthetic | Explicit `profile-bridge-synthetic` binary composes strict claim parsing, device/key/auth/enrollment, coordinator lease validation, approved runtime selection, existing generation ownership, Bridge writer lock, local lifecycle, Camouhost v1 negotiation, supervised launch/close, process stop confirmation, recovery state and fail-closed cleanup blocking. The default `profile-bridge` binary remains the accepted narrow claim-only CLI and is preserved as `default-run`. | Real Camoufox execution, production device-key protection, remote enrollment/coordinator providers, production R2 generation lifecycle and physical Windows evidence remain External. |
+| Device identity/key ports | Synthetic | Typed ports и deterministic fake implementations used only by explicit synthetic composition/tests. | Production CNG/DPAPI/TPM unwrap/revoke/recovery — External. |
+| Camouhost IPC и process supervision | Synthetic | Versioned messages, fake Camouhost, process state machine, generated subprocess/runtime fixtures and exact clean-stop confirmation. | Real bundled Python/Camoufox lifecycle на physical host — External. |
+| Runtime bundle | Synthetic | Canonical manifest, inventory, path/case safety, digest checks, approval/rollback tests and composed synthetic selection before lease/local runtime use. | Trusted signed distribution/update channel — External. |
+| Local profile lifecycle | Library / Synthetic | Marked workspace, inventory, lock ownership, clone-only recovery, quota/support policies and composed synthetic operator tests. | Full kernel-lock/real-browser integration on physical Windows hosts — External. |
 | Encrypted cloud generations | Synthetic | XChaCha20-Poly1305 container, metadata authentication, nonce domain, immutable in-memory lifecycle, pointer/rollback/quarantine/orphan policies. | Production R2 adapter, device unwrap and remote R2/D1 atomicity — External. |
 | Certification | Synthetic | Typed policy, deterministic matrix, prohibited/incomplete/drift outcomes, privacy-safe summary and update rollback state. | Real Camoufox observations, specialized-site review and independent certification — External. |
 | Mailbox operations | Library | Provider-neutral binding/job domain and mailbox provider port. | Gmail/IMAP/browser adapters, API routes, scheduling, persistence and user workflow are not composed. |
@@ -80,8 +80,10 @@ apps/control-plane-worker
   Cloudflare Worker composition root and route/DTO/problem mapping.
 
 apps/profile-bridge
-  Windows executable plus Bridge-local libraries; current CLI composition is
-  intentionally much narrower than the available library surface.
+  Windows executable plus Bridge-local libraries. `profile-bridge` remains the
+  narrow default claim-only CLI. `profile-bridge-synthetic` is the explicit
+  repository-local composed operator path and must never be described as a real
+  Camoufox or production-provider implementation.
 ```
 
 A developer must not move policy downward into an adapter or upward into a UI.
@@ -121,17 +123,37 @@ register immutable metadata
 The registry proves catalog/lifecycle consistency. It does not prove that a real
 R2 object exists, decrypts on a device or launches successfully in Camoufox.
 
-### Profile Bridge path
+### Profile Bridge paths
+
+The default accepted CLI stays deliberately narrow:
 
 ```text
-profilebridge://claim/<opaque-code>
-  -> strict URI parsing and redacted CLI result
+profile-bridge profilebridge://claim/<opaque-code>
+  -> strict URI parsing
+  -> redacted claim result
 ```
 
-The richer enrollment, local workspace, runtime bundle and process modules are
-currently exercised through library/synthetic tests rather than one complete
-operator executable flow. New developers must not infer otherwise from the
-presence of those modules.
+The repository-local composed path is explicit and synthetic:
+
+```text
+profile-bridge-synthetic profilebridge://claim/<opaque-code> <absolute-materialization-root>
+  -> strict claim redemption
+  -> deterministic fake device identity + key handle
+  -> explicit synthetic authentication/enrollment
+  -> approved runtime selection
+  -> coordinator lease acquisition + exact tenant/profile/device validation
+  -> existing generation workspace + Bridge writer lock using lease epoch
+  -> LocalGenerationRecord InUse
+  -> supervised process spawn + Camouhost v1 Hello/Launch
+  -> exact clean Close + process stop confirmation
+  -> DirtyLocal + writer lock release + coordinator lease close
+```
+
+Any runtime/protocol failure after local use transitions to `RecoveryRequired`.
+Cleanup failures remain observable; unresolved cleanup blocks another operator
+session in the same composed instance. This proves composition and failure
+ordering only. It does not prove a real Camoufox binary, real remote enrollment,
+production coordinator deployment, production key protection or R2 object use.
 
 ## 6. Definition of a Complete New Capability
 
@@ -155,12 +177,13 @@ the acceptance authority because it also executes Windows, Wrangler/D1, WASM,
 Worker release, runtime, local-profile, encrypted-generation, certification and
 external-evidence lanes.
 
-The permanent Profile Generation Gate covers registry/domain/adapter/Worker/D1/
-OpenAPI-specific invariants. Generation acceptance additionally requires every
-repository-wide permanent workflow on the same final head.
+For the Profile Bridge composition slice, `cargo test --locked -p profile-bridge --all-targets`
+covers the library state machine, explicit synthetic executable and integration
+failure-ordering regressions. Repository acceptance still requires every permanent
+workflow on the same final head.
 
 ## 8. Audit Exclusion
 
-Repository quality and composition work under issues #41, #43 and #44 does not
-inspect, modify or operate the legacy proxy credential/provider. That external
+Repository quality and composition work under issues #41, #43, #44 and #54 does
+not inspect, modify or operate the legacy proxy credential/provider. That external
 item remains separate and has no effect on repository-local architecture findings.

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod local_profile;
+pub mod operator_flow;
 pub mod runtime_bundle;
 
 #[cfg(windows)]
@@ -90,6 +91,7 @@ impl CamouhostPort for FakeCamouhost {
 pub trait ProcessControlPort {
     fn spawn(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
     fn request_graceful_close(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
+    fn confirm_stopped(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
     fn force_terminate(&mut self, session_id: &SessionId) -> Result<(), BridgePortError>;
 }
 
@@ -97,6 +99,7 @@ pub trait ProcessControlPort {
 pub enum ProcessAction {
     Spawn(SessionId),
     GracefulClose(SessionId),
+    ConfirmStopped(SessionId),
     ForceTerminate(SessionId),
 }
 
@@ -129,6 +132,16 @@ impl ProcessControlPort for FakeProcessControl {
         }
         self.actions
             .push(ProcessAction::GracefulClose(session_id.clone()));
+        Ok(())
+    }
+
+    fn confirm_stopped(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
+        if self.active_session.as_ref() != Some(session_id) {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        self.actions
+            .push(ProcessAction::ConfirmStopped(session_id.clone()));
+        self.active_session = None;
         Ok(())
     }
 
@@ -220,17 +233,22 @@ mod tests {
     #[test]
     fn fake_process_control_records_graceful_and_forced_paths()
     -> Result<(), Box<dyn std::error::Error>> {
-        let session_id = SessionId::parse("session_01JBRIDGE")?;
+        let first = SessionId::parse("session_01JBRIDGE")?;
+        let second = SessionId::parse("session_02JBRIDGE")?;
         let mut process = FakeProcessControl::default();
-        process.spawn(&session_id)?;
-        process.request_graceful_close(&session_id)?;
-        process.force_terminate(&session_id)?;
+        process.spawn(&first)?;
+        process.request_graceful_close(&first)?;
+        process.confirm_stopped(&first)?;
+        process.spawn(&second)?;
+        process.force_terminate(&second)?;
         assert_eq!(
             process.actions(),
             [
-                ProcessAction::Spawn(session_id.clone()),
-                ProcessAction::GracefulClose(session_id.clone()),
-                ProcessAction::ForceTerminate(session_id),
+                ProcessAction::Spawn(first.clone()),
+                ProcessAction::GracefulClose(first.clone()),
+                ProcessAction::ConfirmStopped(first),
+                ProcessAction::Spawn(second.clone()),
+                ProcessAction::ForceTerminate(second),
             ]
         );
         Ok(())

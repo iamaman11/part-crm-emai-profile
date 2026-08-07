@@ -139,6 +139,9 @@ impl RuntimeSessionOrchestrator {
                 BridgePortError::InvalidResponse,
             ));
         }
+        process
+            .confirm_stopped(session_id)
+            .map_err(RuntimeLaunchError::Process)?;
         Ok(())
     }
 }
@@ -273,7 +276,8 @@ mod tests {
             process.actions(),
             [
                 ProcessAction::Spawn(session_id.clone()),
-                ProcessAction::GracefulClose(session_id),
+                ProcessAction::GracefulClose(session_id.clone()),
+                ProcessAction::ConfirmStopped(session_id),
             ]
         );
         Ok(())
