@@ -42,6 +42,9 @@ jobs:
       - name: Test typed Cloudflare projections
         run: cargo test --locked -p cloudflare-adapters --lib
 
+      - name: Test Worker native helpers
+        run: cargo test --locked -p browser-profile-control-plane-worker --lib
+
       - name: Check Worker fail-closed composition for WASM
         run: >-
           cargo check --locked -p browser-profile-control-plane-worker
