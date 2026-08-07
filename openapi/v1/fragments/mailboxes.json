@@ -1,0 +1,203 @@
+{
+  "paths": {
+    "/api/v1/tenants/{tenantId}/mailboxes": {
+      "post": {
+        "operationId": "createMailboxBinding",
+        "security": [{"cloudflareAccessJwt": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TenantPath"},
+          {"$ref": "#/components/parameters/CorrelationHeader"},
+          {"$ref": "#/components/parameters/IdempotencyHeader"}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateMailboxBindingRequest"}}}},
+        "responses": {
+          "201": {"$ref": "#/components/responses/MailboxMutationAccepted"},
+          "400": {"$ref": "#/components/responses/InvalidRequest"},
+          "404": {"$ref": "#/components/responses/NeutralNotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "500": {"$ref": "#/components/responses/InternalFailure"},
+          "503": {"$ref": "#/components/responses/DependencyUnavailable"}
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/mailboxes/{bindingId}": {
+      "get": {
+        "operationId": "getMailboxBinding",
+        "security": [{"cloudflareAccessJwt": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TenantPath"},
+          {"$ref": "#/components/parameters/MailboxBindingPath"},
+          {"$ref": "#/components/parameters/CorrelationHeader"}
+        ],
+        "responses": {
+          "200": {"description": "Support-safe mailbox binding metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MailboxBindingResponse"}}}},
+          "404": {"$ref": "#/components/responses/NeutralNotFound"},
+          "500": {"$ref": "#/components/responses/InternalFailure"}
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/mailboxes/{bindingId}/revoke": {
+      "post": {
+        "operationId": "revokeMailboxBinding",
+        "security": [{"cloudflareAccessJwt": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TenantPath"},
+          {"$ref": "#/components/parameters/MailboxBindingPath"},
+          {"$ref": "#/components/parameters/CorrelationHeader"},
+          {"$ref": "#/components/parameters/IdempotencyHeader"}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RevokeMailboxBindingRequest"}}}},
+        "responses": {
+          "200": {"$ref": "#/components/responses/MailboxMutationAccepted"},
+          "400": {"$ref": "#/components/responses/InvalidRequest"},
+          "404": {"$ref": "#/components/responses/NeutralNotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "500": {"$ref": "#/components/responses/InternalFailure"},
+          "503": {"$ref": "#/components/responses/DependencyUnavailable"}
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/mailboxes/{bindingId}/jobs": {
+      "post": {
+        "operationId": "createMailboxJob",
+        "security": [{"cloudflareAccessJwt": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TenantPath"},
+          {"$ref": "#/components/parameters/MailboxBindingPath"},
+          {"$ref": "#/components/parameters/CorrelationHeader"},
+          {"$ref": "#/components/parameters/IdempotencyHeader"}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateMailboxJobRequest"}}}},
+        "responses": {
+          "201": {"$ref": "#/components/responses/MailboxMutationAccepted"},
+          "400": {"$ref": "#/components/responses/InvalidRequest"},
+          "404": {"$ref": "#/components/responses/NeutralNotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "500": {"$ref": "#/components/responses/InternalFailure"},
+          "503": {"$ref": "#/components/responses/DependencyUnavailable"}
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/mailboxes/{bindingId}/jobs/{jobId}": {
+      "get": {
+        "operationId": "getMailboxJob",
+        "security": [{"cloudflareAccessJwt": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TenantPath"},
+          {"$ref": "#/components/parameters/MailboxBindingPath"},
+          {"$ref": "#/components/parameters/MailboxJobPath"},
+          {"$ref": "#/components/parameters/CorrelationHeader"}
+        ],
+        "responses": {
+          "200": {"description": "Support-safe mailbox job metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MailboxJobResponse"}}}},
+          "404": {"$ref": "#/components/responses/NeutralNotFound"},
+          "500": {"$ref": "#/components/responses/InternalFailure"}
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/mailboxes/{bindingId}/jobs/{jobId}/run": {
+      "post": {
+        "operationId": "runMailboxJob",
+        "description": "Runs the currently composed deterministic metadata-only provider path. Live Gmail/IMAP/browser transport is not implied by this contract.",
+        "security": [{"cloudflareAccessJwt": []}],
+        "parameters": [
+          {"$ref": "#/components/parameters/TenantPath"},
+          {"$ref": "#/components/parameters/MailboxBindingPath"},
+          {"$ref": "#/components/parameters/MailboxJobPath"},
+          {"$ref": "#/components/parameters/CorrelationHeader"},
+          {"$ref": "#/components/parameters/IdempotencyHeader"}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunMailboxJobRequest"}}}},
+        "responses": {
+          "200": {"$ref": "#/components/responses/MailboxMutationAccepted"},
+          "400": {"$ref": "#/components/responses/InvalidRequest"},
+          "404": {"$ref": "#/components/responses/NeutralNotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "500": {"$ref": "#/components/responses/InternalFailure"},
+          "503": {"$ref": "#/components/responses/DependencyUnavailable"}
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "MailboxBindingPath": {"name": "bindingId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueId"}},
+      "MailboxJobPath": {"name": "jobId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueId"}}
+    },
+    "responses": {
+      "MailboxMutationAccepted": {"description": "Mailbox metadata mutation accepted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MutationReceipt"}}}}
+    },
+    "schemas": {
+      "MailboxProvider": {"type": "string", "enum": ["GMAIL_API", "IMAP", "BROWSER_FALLBACK"]},
+      "MailboxSecretHandle": {"type": "string", "minLength": 8, "maxLength": 96, "pattern": "^[A-Za-z0-9_-]+$", "description": "Opaque reference to credential material stored outside the mailbox catalog. Raw credentials and authorization tokens are prohibited."},
+      "MailboxCursor": {"type": "string", "maxLength": 512, "description": "Opaque bounded provider cursor. It is accepted for scheduling but omitted from support-safe read responses."},
+      "CreateMailboxBindingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["bindingId", "provider", "secretHandle", "requestDigest"],
+        "properties": {
+          "bindingId": {"$ref": "#/components/schemas/OpaqueId"},
+          "provider": {"$ref": "#/components/schemas/MailboxProvider"},
+          "secretHandle": {"$ref": "#/components/schemas/MailboxSecretHandle"},
+          "requestDigest": {"$ref": "#/components/schemas/Sha256Digest"}
+        }
+      },
+      "RevokeMailboxBindingRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedBindingVersion", "requestDigest"],
+        "properties": {
+          "expectedBindingVersion": {"type": "integer", "minimum": 1},
+          "requestDigest": {"$ref": "#/components/schemas/Sha256Digest"}
+        }
+      },
+      "CreateMailboxJobRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["jobId", "delayMs", "maxAttempts", "requestDigest"],
+        "properties": {
+          "jobId": {"$ref": "#/components/schemas/OpaqueId"},
+          "cursor": {"oneOf": [{"$ref": "#/components/schemas/MailboxCursor"}, {"type": "null"}]},
+          "delayMs": {"type": "integer", "minimum": 0, "maximum": 604800000},
+          "maxAttempts": {"type": "integer", "minimum": 1, "maximum": 10},
+          "requestDigest": {"$ref": "#/components/schemas/Sha256Digest"}
+        }
+      },
+      "RunMailboxJobRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedJobVersion", "requestDigest"],
+        "properties": {
+          "expectedJobVersion": {"type": "integer", "minimum": 1},
+          "requestDigest": {"$ref": "#/components/schemas/Sha256Digest"}
+        }
+      },
+      "MailboxBindingResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["bindingId", "provider", "status", "version"],
+        "properties": {
+          "bindingId": {"$ref": "#/components/schemas/OpaqueId"},
+          "provider": {"$ref": "#/components/schemas/MailboxProvider"},
+          "status": {"type": "string", "enum": ["ACTIVE", "REVOKED"]},
+          "version": {"type": "integer", "minimum": 1}
+        }
+      },
+      "MailboxJobResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["jobId", "status", "attempt", "maxAttempts", "nextRunAtMs", "boundedItemCount", "version"],
+        "properties": {
+          "jobId": {"$ref": "#/components/schemas/OpaqueId"},
+          "status": {"type": "string", "enum": ["PENDING", "RUNNING", "RETRY_PENDING", "SUCCEEDED", "FAILED"]},
+          "attempt": {"type": "integer", "minimum": 0, "maximum": 10},
+          "maxAttempts": {"type": "integer", "minimum": 1, "maximum": 10},
+          "nextRunAtMs": {"type": "integer", "minimum": 0},
+          "providerStatus": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_.-]+$"}, {"type": "null"}]},
+          "boundedItemCount": {"type": "integer", "minimum": 0, "maximum": 10000},
+          "version": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  }
+}

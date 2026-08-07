@@ -30,6 +30,12 @@ pub enum RouteClass {
     ProfileGenerationActivateApi,
     ProfileGenerationDeactivateApi,
     ProfileGenerationQuarantineApi,
+    MailboxBindingCollectionApi,
+    MailboxBindingResourceApi,
+    MailboxBindingRevokeApi,
+    MailboxJobCollectionApi,
+    MailboxJobResourceApi,
+    MailboxJobRunApi,
     DynamicRouteNotFound,
     BridgeDeniedByDefault,
     StaticAssets,
@@ -150,6 +156,24 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
             if matches!(method, "PUT" | "DELETE") =>
         {
             Some(RouteClass::ProfileGrantApi)
+        }
+        ["api", "v1", "tenants", _, "mailboxes"] if method == "POST" => {
+            Some(RouteClass::MailboxBindingCollectionApi)
+        }
+        ["api", "v1", "tenants", _, "mailboxes", _] if method == "GET" => {
+            Some(RouteClass::MailboxBindingResourceApi)
+        }
+        ["api", "v1", "tenants", _, "mailboxes", _, "revoke"] if method == "POST" => {
+            Some(RouteClass::MailboxBindingRevokeApi)
+        }
+        ["api", "v1", "tenants", _, "mailboxes", _, "jobs"] if method == "POST" => {
+            Some(RouteClass::MailboxJobCollectionApi)
+        }
+        ["api", "v1", "tenants", _, "mailboxes", _, "jobs", _] if method == "GET" => {
+            Some(RouteClass::MailboxJobResourceApi)
+        }
+        ["api", "v1", "tenants", _, "mailboxes", _, "jobs", _, "run"] if method == "POST" => {
+            Some(RouteClass::MailboxJobRunApi)
         }
         _ => None,
     };
@@ -323,7 +347,48 @@ mod tests {
     }
 
     #[test]
-    fn generation_wrong_methods_never_fall_back_to_static_assets() {
+    fn mailbox_routes_are_specific_and_authenticated() {
+        let routes = [
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/mailboxes",
+                RouteClass::MailboxBindingCollectionApi,
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01",
+                RouteClass::MailboxBindingResourceApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/revoke",
+                RouteClass::MailboxBindingRevokeApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs",
+                RouteClass::MailboxJobCollectionApi,
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01",
+                RouteClass::MailboxJobResourceApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
+                RouteClass::MailboxJobRunApi,
+            ),
+        ];
+        for (method, path, expected) in routes {
+            let actual = classify_route(method, path);
+            assert_eq!(actual, expected);
+            assert!(is_authenticated_api(actual));
+        }
+    }
+
+    #[test]
+    fn versioned_resource_wrong_methods_never_fall_back_to_static_assets() {
         for (method, path) in [
             (
                 "GET",
@@ -340,6 +405,12 @@ mod tests {
             (
                 "DELETE",
                 "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate",
+            ),
+            ("GET", "/api/v1/tenants/tenant_01/mailboxes"),
+            ("DELETE", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01"),
+            (
+                "PUT",
+                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
             ),
         ] {
             assert_eq!(

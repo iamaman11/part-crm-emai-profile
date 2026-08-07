@@ -88,6 +88,7 @@ define_typed_id!(AssignmentId);
 define_typed_id!(SessionId);
 define_typed_id!(DeviceId);
 define_typed_id!(MailboxBindingId);
+define_typed_id!(MailboxJobId);
 define_typed_id!(LaunchIntentId);
 define_typed_id!(CorrelationId);
 define_typed_id!(IdempotencyKey);

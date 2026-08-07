@@ -157,6 +157,8 @@ dependencies = [
 name = "cloudflare-adapters"
 version = "0.1.0"
 dependencies = [
+ "application-ports",
+ "mailbox-domain",
  "profile-platform-primitives",
  "serde",
  "serde_json",
