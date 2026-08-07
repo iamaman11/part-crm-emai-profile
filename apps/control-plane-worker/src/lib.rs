@@ -33,7 +33,11 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         RouteClass::DynamicRouteNotFound | RouteClass::BridgeDeniedByDefault => {
             Response::error("Not Found", 404)
         }
-        RouteClass::StaticAssets => env.assets(STATIC_ASSETS_BINDING)?.fetch_request(request).await,
+        RouteClass::StaticAssets => {
+            env.assets(STATIC_ASSETS_BINDING)?
+                .fetch_request(request)
+                .await
+        }
         RouteClass::AuthenticatedSessionApi => session_response(&request, &env).await,
         RouteClass::ProfileCoordinatorApi => dispatch_profile_coordinator(&mut request, &env).await,
         RouteClass::ProfileGenerationCollectionApi

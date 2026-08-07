@@ -129,7 +129,7 @@
     },
     "schemas": {
       "MailboxProvider": {"type": "string", "enum": ["GMAIL_API", "IMAP", "BROWSER_FALLBACK"]},
-      "SecretHandle": {"type": "string", "minLength": 8, "maxLength": 96, "pattern": "^[A-Za-z0-9_-]+$", "description": "Opaque reference to credential material stored outside the mailbox catalog. Raw credentials and authorization tokens are prohibited."},
+      "MailboxSecretHandle": {"type": "string", "minLength": 8, "maxLength": 96, "pattern": "^[A-Za-z0-9_-]+$", "description": "Opaque reference to credential material stored outside the mailbox catalog. Raw credentials and authorization tokens are prohibited."},
       "MailboxCursor": {"type": "string", "maxLength": 512, "description": "Opaque bounded provider cursor. It is accepted for scheduling but omitted from support-safe read responses."},
       "CreateMailboxBindingRequest": {
         "type": "object",
@@ -138,7 +138,7 @@
         "properties": {
           "bindingId": {"$ref": "#/components/schemas/OpaqueId"},
           "provider": {"$ref": "#/components/schemas/MailboxProvider"},
-          "secretHandle": {"$ref": "#/components/schemas/SecretHandle"},
+          "secretHandle": {"$ref": "#/components/schemas/MailboxSecretHandle"},
           "requestDigest": {"$ref": "#/components/schemas/Sha256Digest"}
         }
       },

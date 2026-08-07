@@ -3,16 +3,16 @@ use crate::access_session::{
 };
 use crate::mutation_failure::mutation_failure;
 use crate::request_evidence::{audit_event_id, outbox_event_id};
+use cloudflare_adapters::MailboxProvider;
 use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
-use cloudflare_adapters::d1_identity_acl::{MutationEnvelope, ResolvedActor, ResolvedMembershipRole};
+use cloudflare_adapters::d1_identity_acl::{
+    MutationEnvelope, ResolvedActor, ResolvedMembershipRole,
+};
 use cloudflare_adapters::d1_mailboxes::{
     CreateMailboxBindingMutation, CreateMailboxJobMutation, D1MailboxRepository,
     MailboxJobProjection, RevokeMailboxBindingMutation, RunMailboxJobMutation,
 };
-use cloudflare_adapters::mailbox_provider::{
-    decide_mailbox_run, MetadataMailboxProviderAdapter,
-};
-use cloudflare_adapters::MailboxProvider;
+use cloudflare_adapters::mailbox_provider::{MetadataMailboxProviderAdapter, decide_mailbox_run};
 use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
 use profile_platform_primitives::{
     AggregateVersion, AuditEventId, IdempotencyKey, MailboxBindingId, MailboxJobId, OutboxEventId,
@@ -259,7 +259,11 @@ async fn create_job(
     if body.delay_ms > MAX_JOB_DELAY_MS || body.max_attempts == 0 || body.max_attempts > 10 {
         return invalid_request(request);
     }
-    if body.cursor.as_ref().is_some_and(|cursor| cursor.len() > 512) {
+    if body
+        .cursor
+        .as_ref()
+        .is_some_and(|cursor| cursor.len() > 512)
+    {
         return invalid_request(request);
     }
     let job_id = match MailboxJobId::parse(body.job_id) {
@@ -383,27 +387,27 @@ async fn run_job(
         Ok(value) => value,
         Err(_) => return internal_failure(request),
     };
-    let decision =
-        match decide_mailbox_run(&binding, projection.job(), envelope.now, &mut provider) {
-            Ok(value) => value,
-            Err(error) => {
-                return if error.to_string().contains("invalid job state") {
-                    problem(
-                        &correlation_hint(request),
-                        409,
-                        "invalid_state",
-                        "Invalid State",
-                    )
-                } else {
-                    problem(
-                        &correlation_hint(request),
-                        503,
-                        "dependency_unavailable",
-                        "Dependency Unavailable",
-                    )
-                };
-            }
-        };
+    let decision = match decide_mailbox_run(&binding, projection.job(), envelope.now, &mut provider)
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return if error.to_string().contains("invalid job state") {
+                problem(
+                    &correlation_hint(request),
+                    409,
+                    "invalid_state",
+                    "Invalid State",
+                )
+            } else {
+                problem(
+                    &correlation_hint(request),
+                    503,
+                    "dependency_unavailable",
+                    "Dependency Unavailable",
+                )
+            };
+        }
+    };
     let result_code = match decision.status().storage_value() {
         "SUCCEEDED" => "succeeded",
         "RETRY_PENDING" => "retry_pending",

@@ -172,9 +172,7 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
         ["api", "v1", "tenants", _, "mailboxes", _, "jobs", _] if method == "GET" => {
             Some(RouteClass::MailboxJobResourceApi)
         }
-        ["api", "v1", "tenants", _, "mailboxes", _, "jobs", _, "run"]
-            if method == "POST" =>
-        {
+        ["api", "v1", "tenants", _, "mailboxes", _, "jobs", _, "run"] if method == "POST" => {
             Some(RouteClass::MailboxJobRunApi)
         }
         _ => None,
@@ -258,7 +256,11 @@ mod tests {
     #[test]
     fn owner_member_acl_and_coordinator_routes_are_versioned_and_authenticated() {
         let routes = [
-            ("GET", "/api/v1/session", RouteClass::AuthenticatedSessionApi),
+            (
+                "GET",
+                "/api/v1/session",
+                RouteClass::AuthenticatedSessionApi,
+            ),
             (
                 "POST",
                 "/api/v1/tenants/tenant_01/owner/bootstrap",
@@ -405,10 +407,7 @@ mod tests {
                 "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate",
             ),
             ("GET", "/api/v1/tenants/tenant_01/mailboxes"),
-            (
-                "DELETE",
-                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01",
-            ),
+            ("DELETE", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01"),
             (
                 "PUT",
                 "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
