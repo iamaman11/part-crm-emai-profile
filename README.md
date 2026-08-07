@@ -102,6 +102,7 @@ signing и offline key escrow требуют отдельного подтвер
 - [Экспертный implementation plan](IMPLEMENTATION_PLAN.md)
 - [Архитектурная карта](docs/ARCHITECTURE.md)
 - [Архитектура standalone UI](docs/UI_ARCHITECTURE.md)
+- [Cross-component repository-local acceptance](docs/CROSS_COMPONENT_ACCEPTANCE.md)
 - [Целевой жизненный цикл профиля](PROFILE_LIFECYCLE_PLAN.md)
 - [Contract compatibility policy](docs/CONTRACT_POLICY.md)
 - [D1 catalog boundary](docs/D1_CATALOG.md)
