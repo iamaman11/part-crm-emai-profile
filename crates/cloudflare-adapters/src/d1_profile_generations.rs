@@ -1,3 +1,4 @@
+use crate::d1_command_identity::command_journal_id;
 use crate::d1_identity_acl::{MutationEnvelope, ResolvedMembershipRole};
 use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, GenerationId, ProfileId, TenantScope,
@@ -185,11 +186,16 @@ impl D1ProfileGenerationRepository {
         validate_digest(mutation.metadata_digest)?;
         validate_digest(mutation.container_digest)?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let command = query!(
             &self.database,
             REGISTER_COMMAND,
             actor.tenant_scope().tenant_id().as_str(),
-            mutation.envelope.idempotency_key.as_str(),
+            command_id.as_str(),
             actor.actor_id().as_str(),
             mutation.profile_id.as_str(),
             mutation.generation_id.as_str(),
@@ -223,11 +229,16 @@ impl D1ProfileGenerationRepository {
         validate_verification_reference(mutation.verification_reference)?;
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let aggregate_version = next_version_value(mutation.expected_generation_version)?;
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let command = query!(
             &self.database,
             VERIFY_COMMAND,
             actor.tenant_scope().tenant_id().as_str(),
-            mutation.envelope.idempotency_key.as_str(),
+            command_id.as_str(),
             actor.actor_id().as_str(),
             mutation.profile_id.as_str(),
             mutation.generation_id.as_str(),
@@ -259,11 +270,16 @@ impl D1ProfileGenerationRepository {
     ) -> Result<Vec<D1Result>> {
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let aggregate_version = next_version_value(mutation.expected_profile_version)?;
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let command = query!(
             &self.database,
             ACTIVATE_COMMAND,
             actor.tenant_scope().tenant_id().as_str(),
-            mutation.envelope.idempotency_key.as_str(),
+            command_id.as_str(),
             actor.actor_id().as_str(),
             mutation.profile_id.as_str(),
             mutation.generation_id.as_str(),
@@ -294,11 +310,16 @@ impl D1ProfileGenerationRepository {
     ) -> Result<Vec<D1Result>> {
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let aggregate_version = next_version_value(mutation.expected_profile_version)?;
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let command = query!(
             &self.database,
             DEACTIVATE_COMMAND,
             actor.tenant_scope().tenant_id().as_str(),
-            mutation.envelope.idempotency_key.as_str(),
+            command_id.as_str(),
             actor.actor_id().as_str(),
             mutation.profile_id.as_str(),
             mutation.generation_id.as_str(),
@@ -329,11 +350,16 @@ impl D1ProfileGenerationRepository {
     ) -> Result<Vec<D1Result>> {
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let aggregate_version = next_version_value(mutation.expected_generation_version)?;
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            mutation.envelope.idempotency_key,
+        )?;
         let command = query!(
             &self.database,
             QUARANTINE_COMMAND,
             actor.tenant_scope().tenant_id().as_str(),
-            mutation.envelope.idempotency_key.as_str(),
+            command_id.as_str(),
             actor.actor_id().as_str(),
             mutation.profile_id.as_str(),
             mutation.generation_id.as_str(),
