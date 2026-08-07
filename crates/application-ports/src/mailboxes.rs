@@ -1,10 +1,9 @@
 use crate::commands::CommandExecutionEvidence;
 use core::fmt;
-use identity_access_domain::MembershipRole;
 pub use mailbox_domain::{MailboxBinding, MailboxBindingStatus, MailboxProvider};
 use mailbox_domain::MailboxJob;
 use profile_platform_primitives::{
-    ActorContext, ActorId, AggregateVersion, MailboxBindingId, SecretHandle, TenantScope,
+    ActorContext, AggregateVersion, MailboxBindingId, SecretHandle, TenantScope,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -292,18 +291,6 @@ pub trait MailboxBindingApplicationPort {
     async fn find_binding(
         &self,
         scope: &TenantScope,
-        actor_id: &ActorId,
-        role: MembershipRole,
         binding_id: &MailboxBindingId,
     ) -> Result<Option<MailboxBindingReadModel>, MailboxBindingPortError>;
-}
-
-#[must_use]
-pub fn binding_from_parts(
-    tenant_id: profile_platform_primitives::TenantId,
-    binding_id: MailboxBindingId,
-    provider: MailboxProvider,
-    secret_handle: SecretHandle,
-) -> MailboxBinding {
-    MailboxBinding::create(tenant_id, binding_id, provider, secret_handle)
 }
