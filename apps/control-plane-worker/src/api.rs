@@ -4,9 +4,6 @@ use crate::access_session::{
 };
 use crate::mutation_failure::{MutationFailureClass, classify_mutation_failure, mutation_failure};
 use crate::request_evidence::{audit_event_id, outbox_event_id};
-use cloudflare_adapters::d1_catalog::{
-    CatalogClientKind, CreateClientMutation, D1CatalogRepository,
-};
 use cloudflare_adapters::d1_governed_commands::D1GovernedCommandRepository;
 use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use cloudflare_adapters::d1_identity_acl::{
@@ -16,9 +13,7 @@ use cloudflare_adapters::d1_identity_acl::{
     OwnerTransferMutation, ProfileGrantMutation, ProfileGrantValue, ResolvedActor,
     ResolvedMembershipRole, VerifiedBootstrapContext,
 };
-use cloudflare_adapters::d1_identity_queries::{
-    ClientProjection, D1IdentityQueryRepository, ProfileProjection,
-};
+use cloudflare_adapters::d1_identity_queries::{D1IdentityQueryRepository, ProfileProjection};
 use cloudflare_adapters::d1_invitation_acceptance::{
     AcceptInvitationMutation, D1InvitationAcceptanceRepository,
 };
@@ -37,7 +32,6 @@ const OWNER_BOOTSTRAP_COMMAND: &str = "tenant.owner_bootstrap";
 const OWNER_TRANSFER_COMMAND: &str = "membership.owner_transfer";
 const INVITATION_CREATE_COMMAND: &str = "invitation.create";
 const INVITATION_ACCEPT_COMMAND: &str = "invitation.accept";
-const CLIENT_CREATE_COMMAND: &str = "client.create";
 const PROFILE_CREATE_COMMAND: &str = "profile.create";
 const PROFILE_ASSIGN_COMMAND: &str = "profile.assign_client";
 const PROFILE_GRANT_COMMAND: &str = "profile.grant";
@@ -65,11 +59,6 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
         RouteClass::MembershipStatusApi => {
             let actor_id = segments.get(5).copied().unwrap_or_default();
             update_membership_status(request, env, tenant_id, actor_id).await
-        }
-        RouteClass::ClientCollectionApi => create_client(request, env, tenant_id).await,
-        RouteClass::ClientResourceApi => {
-            let client_id = segments.get(5).copied().unwrap_or_default();
-            get_client(request, env, tenant_id, client_id).await
         }
         RouteClass::ClientGrantApi => {
             let client_id = segments.get(5).copied().unwrap_or_default();
@@ -526,105 +515,6 @@ async fn update_membership_status(
             .await
         }
     }
-}
-
-async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Response> {
-    let Some(actor) = active_owner(request, env, tenant_id).await? else {
-        return neutral_not_found(&correlation_hint(request));
-    };
-    let body = match request.json::<ClientCreateRequest>().await {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let client_id = match ClientId::parse(body.client_id) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let kind = match body.kind.as_str() {
-        "PERSON" => CatalogClientKind::Person,
-        "ORGANIZATION" => CatalogClientKind::Organization,
-        _ => return invalid_request(request),
-    };
-    if body.display_name.trim().is_empty() || body.display_name.len() > 200 {
-        return invalid_request(request);
-    }
-    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    if let Some(response) = replay_for_actor(
-        request,
-        env,
-        &actor,
-        CLIENT_CREATE_COMMAND,
-        &envelope,
-        client_id.as_str(),
-        1,
-        200,
-    )
-    .await?
-    {
-        return Ok(response);
-    }
-    let mutation = CreateClientMutation {
-        client_id: &client_id,
-        kind,
-        display_name: &body.display_name,
-        idempotency_key: &envelope.idempotency_key,
-        request_digest: &envelope.request_digest,
-        audit_event_id: &envelope.audit_event_id,
-        outbox_event_id: &envelope.outbox_event_id,
-        event_payload_json: &envelope.payload_json,
-        now: envelope.now,
-        idempotency_expires_at: envelope.expires_at,
-    };
-    let result = D1CatalogRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .create_client(actor.actor(), mutation)
-        .await;
-    match result {
-        Ok(_) => mutation_receipt("created", client_id.as_str(), 1, 201),
-        Err(error) => {
-            mutation_failure_or_replay_for_actor(
-                request,
-                env,
-                &actor,
-                CLIENT_CREATE_COMMAND,
-                &envelope,
-                client_id.as_str(),
-                1,
-                200,
-                error,
-            )
-            .await
-        }
-    }
-}
-
-async fn get_client(
-    request: &Request,
-    env: &Env,
-    tenant_id: &str,
-    client_id: &str,
-) -> Result<Response> {
-    let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
-        return neutral_not_found(&correlation_hint(request));
-    };
-    let client_id = match ClientId::parse(client_id) {
-        Ok(value) => value,
-        Err(_) => return neutral_not_found(actor.actor().correlation_id().as_str()),
-    };
-    let Some(client) = D1IdentityQueryRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .find_visible_client(
-            actor.actor().tenant_scope(),
-            actor.actor().actor_id(),
-            actor.role(),
-            &client_id,
-        )
-        .await?
-    else {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
-    };
-    Response::from_json(&ClientResponse::from(&client))
 }
 
 async fn create_profile(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Response> {
@@ -1178,28 +1068,6 @@ fn mutation_receipt(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ClientResponse<'a> {
-    client_id: &'a str,
-    kind: &'a str,
-    display_name: &'a str,
-    status: &'a str,
-    version: u64,
-}
-
-impl<'a> From<&'a ClientProjection> for ClientResponse<'a> {
-    fn from(client: &'a ClientProjection) -> Self {
-        Self {
-            client_id: client.client_id().as_str(),
-            kind: client.kind(),
-            display_name: client.display_name(),
-            status: client.status(),
-            version: client.version(),
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct ProfileResponse<'a> {
     profile_id: &'a str,
     status: &'a str,
@@ -1330,15 +1198,6 @@ struct InvitationAcceptRequest {
 struct MembershipStatusRequest {
     status: String,
     expected_version: u64,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientCreateRequest {
-    client_id: String,
-    kind: String,
-    display_name: String,
     request_digest: String,
 }
 
