@@ -8,12 +8,11 @@ use cloudflare_adapters::d1_governed_commands::D1GovernedCommandRepository;
 use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use cloudflare_adapters::d1_identity_acl::{
     AssignProfileMutation, BootstrapOwnerMutation, ClientGrantMutation, ClientGrantValue,
-    CreateInvitationMutation, CreateProfileMutation, D1IdentityAclRepository,
-    MembershipStatusMutation, MembershipStatusValue, MutationEnvelope as IdentityEnvelope,
-    OwnerTransferMutation, ProfileGrantMutation, ProfileGrantValue, ResolvedActor,
-    ResolvedMembershipRole, VerifiedBootstrapContext,
+    CreateInvitationMutation, D1IdentityAclRepository, MembershipStatusMutation,
+    MembershipStatusValue, MutationEnvelope as IdentityEnvelope, OwnerTransferMutation,
+    ProfileGrantMutation, ProfileGrantValue, ResolvedActor, ResolvedMembershipRole,
+    VerifiedBootstrapContext,
 };
-use cloudflare_adapters::d1_identity_queries::{D1IdentityQueryRepository, ProfileProjection};
 use cloudflare_adapters::d1_invitation_acceptance::{
     AcceptInvitationMutation, D1InvitationAcceptanceRepository,
 };
@@ -32,7 +31,6 @@ const OWNER_BOOTSTRAP_COMMAND: &str = "tenant.owner_bootstrap";
 const OWNER_TRANSFER_COMMAND: &str = "membership.owner_transfer";
 const INVITATION_CREATE_COMMAND: &str = "invitation.create";
 const INVITATION_ACCEPT_COMMAND: &str = "invitation.accept";
-const PROFILE_CREATE_COMMAND: &str = "profile.create";
 const PROFILE_ASSIGN_COMMAND: &str = "profile.assign_client";
 const PROFILE_GRANT_COMMAND: &str = "profile.grant";
 const PROFILE_GRANT_REVOKE_COMMAND: &str = "profile.grant_revoke";
@@ -64,11 +62,6 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
             let client_id = segments.get(5).copied().unwrap_or_default();
             let actor_id = segments.get(7).copied().unwrap_or_default();
             update_client_grant(request, env, tenant_id, client_id, actor_id).await
-        }
-        RouteClass::ProfileCollectionApi => create_profile(request, env, tenant_id).await,
-        RouteClass::ProfileResourceApi => {
-            let profile_id = segments.get(5).copied().unwrap_or_default();
-            get_profile(request, env, tenant_id, profile_id).await
         }
         RouteClass::ProfileAssignmentApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
@@ -515,89 +508,6 @@ async fn update_membership_status(
             .await
         }
     }
-}
-
-async fn create_profile(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Response> {
-    let Some(actor) = active_owner(request, env, tenant_id).await? else {
-        return neutral_not_found(&correlation_hint(request));
-    };
-    let body = match request.json::<ProfileCreateRequest>().await {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let profile_id = match ProfileId::parse(body.profile_id) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    if let Some(response) = replay_for_actor(
-        request,
-        env,
-        &actor,
-        PROFILE_CREATE_COMMAND,
-        &envelope,
-        profile_id.as_str(),
-        1,
-        200,
-    )
-    .await?
-    {
-        return Ok(response);
-    }
-    let mutation = CreateProfileMutation {
-        profile_id: &profile_id,
-        envelope: envelope.identity(),
-    };
-    let result = D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .create_profile(actor.actor(), mutation)
-        .await;
-    match result {
-        Ok(_) => mutation_receipt("created", profile_id.as_str(), 1, 201),
-        Err(error) => {
-            mutation_failure_or_replay_for_actor(
-                request,
-                env,
-                &actor,
-                PROFILE_CREATE_COMMAND,
-                &envelope,
-                profile_id.as_str(),
-                1,
-                200,
-                error,
-            )
-            .await
-        }
-    }
-}
-
-async fn get_profile(
-    request: &Request,
-    env: &Env,
-    tenant_id: &str,
-    profile_id: &str,
-) -> Result<Response> {
-    let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
-        return neutral_not_found(&correlation_hint(request));
-    };
-    let profile_id = match ProfileId::parse(profile_id) {
-        Ok(value) => value,
-        Err(_) => return neutral_not_found(actor.actor().correlation_id().as_str()),
-    };
-    let Some(profile) = D1IdentityQueryRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .find_visible_profile(
-            actor.actor().tenant_scope(),
-            actor.actor().actor_id(),
-            actor.role(),
-            &profile_id,
-        )
-        .await?
-    else {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
-    };
-    Response::from_json(&ProfileResponse::from(&profile))
 }
 
 async fn assign_profile(
@@ -1066,26 +976,6 @@ fn mutation_receipt(
     .map(|response| response.with_status(status))
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileResponse<'a> {
-    profile_id: &'a str,
-    status: &'a str,
-    version: u64,
-    linked_client_id: Option<&'a str>,
-}
-
-impl<'a> From<&'a ProfileProjection> for ProfileResponse<'a> {
-    fn from(profile: &'a ProfileProjection) -> Self {
-        Self {
-            profile_id: profile.profile_id().as_str(),
-            status: profile.status(),
-            version: profile.version(),
-            linked_client_id: profile.linked_client_id().map(ClientId::as_str),
-        }
-    }
-}
-
 struct EnvelopeOwned {
     idempotency_key: IdempotencyKey,
     request_digest: String,
@@ -1198,13 +1088,6 @@ struct InvitationAcceptRequest {
 struct MembershipStatusRequest {
     status: String,
     expected_version: u64,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileCreateRequest {
-    profile_id: String,
     request_digest: String,
 }
 

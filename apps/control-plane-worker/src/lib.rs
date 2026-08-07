@@ -9,6 +9,7 @@ mod mailboxes;
 mod mutation_failure;
 mod profile_coordinator;
 mod profile_generations;
+mod profiles;
 mod request_evidence;
 
 pub use profile_coordinator::ProfileCoordinator;
@@ -45,6 +46,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         RouteClass::ClientCollectionApi | RouteClass::ClientResourceApi => {
             clients::dispatch(route, &mut request, &env).await
         }
+        RouteClass::ProfileCollectionApi | RouteClass::ProfileResourceApi => {
+            profiles::dispatch(route, &mut request, &env).await
+        }
         RouteClass::ProfileCoordinatorApi => dispatch_profile_coordinator(&mut request, &env).await,
         RouteClass::ProfileGenerationCollectionApi
         | RouteClass::ProfileGenerationResourceApi
@@ -66,8 +70,6 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::InvitationAcceptApi
         | RouteClass::MembershipStatusApi
         | RouteClass::ClientGrantApi
-        | RouteClass::ProfileCollectionApi
-        | RouteClass::ProfileResourceApi
         | RouteClass::ProfileAssignmentApi
         | RouteClass::ProfileGrantApi => api::dispatch(route, &mut request, &env).await,
     }

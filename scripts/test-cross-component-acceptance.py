@@ -153,12 +153,10 @@ def validate_composition_surfaces() -> None:
         api,
         [
             "OwnerBootstrapApi",
-            "ProfileCollectionApi",
             "ProfileAssignmentApi",
             "ProfileGrantApi",
-            "find_visible_profile",
         ],
-        "identity/profile Worker composition",
+        "remaining identity/profile governance Worker composition",
     )
 
     worker_lib = read("apps/control-plane-worker/src/lib.rs")
@@ -167,8 +165,10 @@ def validate_composition_surfaces() -> None:
         [
             "RouteClass::ClientCollectionApi | RouteClass::ClientResourceApi",
             "clients::dispatch(route, &mut request, &env).await",
+            "RouteClass::ProfileCollectionApi | RouteClass::ProfileResourceApi",
+            "profiles::dispatch(route, &mut request, &env).await",
         ],
-        "client Worker routing composition",
+        "application-boundary Worker routing composition",
     )
     client_transport = read("apps/control-plane-worker/src/clients.rs")
     require_all(
@@ -181,6 +181,18 @@ def validate_composition_surfaces() -> None:
         client_use_cases,
         ["pub async fn execute_create_client", "pub async fn get_visible_client"],
         "client application use cases",
+    )
+    profile_transport = read("apps/control-plane-worker/src/profiles.rs")
+    require_all(
+        profile_transport,
+        ["execute_create_profile", "get_visible_profile", "profile_application(env)"],
+        "profile Worker application transport",
+    )
+    profile_use_cases = read("crates/use-cases/src/profiles.rs")
+    require_all(
+        profile_use_cases,
+        ["pub async fn execute_create_profile", "pub async fn get_visible_profile"],
+        "profile application use cases",
     )
 
     generation = read("crates/cloudflare-adapters/src/d1_profile_generations.rs")

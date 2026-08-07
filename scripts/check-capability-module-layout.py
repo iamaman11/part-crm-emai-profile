@@ -33,7 +33,11 @@ PORT_OWNERS = {
     "generations.rs": ("pub struct GenerationObjectReference", "pub trait GenerationObjectStorePort"),
     "identity.rs": ("pub trait MembershipRepository",),
     "mailboxes.rs": ("pub struct MailboxObservation", "pub trait MailboxProviderPort"),
-    "profiles.rs": ("pub trait ProfileRepository",),
+    "profiles.rs": (
+        "pub trait ProfileRepository",
+        "pub trait ProfileApplicationPort",
+        "pub struct ProfileCreateWrite",
+    ),
     "sessions.rs": ("pub trait ProfileCoordinatorPort",),
 }
 
@@ -46,7 +50,13 @@ USE_CASE_OWNERS = {
         "pub async fn get_visible_client",
     ),
     "error.rs": ("pub struct ApplicationError",),
-    "profiles.rs": ("pub struct OpenProfileCommand", "pub fn decide_open_profile"),
+    "profiles.rs": (
+        "pub struct OpenProfileCommand",
+        "pub fn decide_open_profile",
+        "pub struct ExecuteCreateProfileCommand",
+        "pub async fn execute_create_profile",
+        "pub async fn get_visible_profile",
+    ),
 }
 
 
