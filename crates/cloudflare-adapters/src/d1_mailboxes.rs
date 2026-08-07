@@ -2,8 +2,8 @@ use crate::d1_command_identity::command_journal_id;
 use crate::d1_identity_acl::MutationEnvelope;
 use crate::mailbox_provider::MailboxRunDecision;
 use mailbox_domain::{
-    validate_cursor, validate_provider_status, MailboxBinding, MailboxBindingStatus, MailboxJob,
-    MailboxJobStatus, MailboxProvider,
+    MailboxBinding, MailboxBindingStatus, MailboxJob, MailboxJobStatus, MailboxProvider,
+    validate_cursor, validate_provider_status,
 };
 use profile_platform_primitives::{
     ActorContext, AggregateVersion, MailboxBindingId, MailboxJobId, SecretHandle, TenantScope,
@@ -11,7 +11,7 @@ use profile_platform_primitives::{
 };
 use serde::Deserialize;
 use worker::d1::{D1Database, D1PreparedStatement, D1Result};
-use worker::{query, Error, Result};
+use worker::{Error, Result, query};
 
 const BINDING_CREATE_COMMAND: &str = r#"
 INSERT INTO mailbox_binding_create_commands (
@@ -285,9 +285,7 @@ impl D1MailboxRepository {
         }
         let (result_code, event_type) = match mutation.decision.status() {
             MailboxJobStatus::Succeeded => ("succeeded", "mailbox.job_succeeded.v1"),
-            MailboxJobStatus::RetryPending => {
-                ("retry_pending", "mailbox.job_retry_scheduled.v1")
-            }
+            MailboxJobStatus::RetryPending => ("retry_pending", "mailbox.job_retry_scheduled.v1"),
             MailboxJobStatus::Failed => ("failed", "mailbox.job_failed.v1"),
             MailboxJobStatus::Pending | MailboxJobStatus::Running => {
                 return Err(Error::RustError("invalid mailbox run outcome".to_owned()));
