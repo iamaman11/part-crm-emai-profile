@@ -9,7 +9,7 @@ use profile_platform_primitives::ClientId;
 use serde::{Deserialize, Serialize};
 use use_cases::clients::{
     ClientDetails, ClientMutationOutcome, ClientOperationError, ExecuteCreateClientCommand,
-    execute_create_client, get_visible_client,
+    authorize_client_create, execute_create_client, get_visible_client,
 };
 use worker::{Env, Request, Response, Result};
 
@@ -36,6 +36,10 @@ async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Res
     let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
         return neutral_not_found(&correlation_hint(request));
     };
+    let role = membership_role(&actor);
+    if let Err(error) = authorize_client_create(role) {
+        return operation_failure(actor.actor().correlation_id().as_str(), error);
+    }
     let body = match request.json::<ClientCreateRequest>().await {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
@@ -56,7 +60,7 @@ async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Res
     let application = client_application(env)?;
     match execute_create_client(
         actor.actor(),
-        membership_role(&actor),
+        role,
         &application,
         ExecuteCreateClientCommand::new(client_id, kind, body.display_name, evidence),
     )
@@ -189,13 +193,13 @@ mod tests {
     use super::{ClientResponse, MutationReceipt};
 
     #[test]
-    fn transport_models_keep_camel_case_contract_field_names() {
+    fn transport_models_keep_camel_case_contract_field_names()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mutation = serde_json::to_value(MutationReceipt {
             result_code: "created",
             resource_id: "client_01JTRANSPORT",
             aggregate_version: 1,
-        })
-        .expect("serializable mutation receipt");
+        })?;
         assert!(mutation.get("resultCode").is_some());
         assert!(mutation.get("resourceId").is_some());
         assert!(mutation.get("aggregateVersion").is_some());
@@ -206,9 +210,9 @@ mod tests {
             display_name: "Client",
             status: "ACTIVE",
             version: 1,
-        })
-        .expect("serializable client response");
+        })?;
         assert!(response.get("clientId").is_some());
         assert!(response.get("displayName").is_some());
+        Ok(())
     }
 }
