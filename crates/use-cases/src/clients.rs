@@ -183,15 +183,21 @@ impl fmt::Display for ClientOperationError {
 
 impl std::error::Error for ClientOperationError {}
 
+pub fn authorize_client_create(role: MembershipRole) -> Result<(), ClientOperationError> {
+    if role == MembershipRole::TenantOwner {
+        Ok(())
+    } else {
+        Err(ClientOperationError::NotFound)
+    }
+}
+
 pub async fn execute_create_client<P: ClientApplicationPort>(
     actor: &ActorContext,
     role: MembershipRole,
     port: &P,
     command: ExecuteCreateClientCommand,
 ) -> Result<ClientMutationOutcome, ClientOperationError> {
-    if role != MembershipRole::TenantOwner {
-        return Err(ClientOperationError::NotFound);
-    }
+    authorize_client_create(role)?;
 
     let client = ClientRecord::create(
         actor.tenant_scope().tenant_id().clone(),
@@ -302,8 +308,8 @@ fn map_client_error(error: ClientError) -> ApplicationError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientOperationError, ExecuteCreateClientCommand, execute_create_client,
-        get_visible_client,
+        ClientOperationError, ExecuteCreateClientCommand, authorize_client_create,
+        execute_create_client, get_visible_client,
     };
     use application_ports::CommandExecutionEvidence;
     use application_ports::clients::{
@@ -429,6 +435,15 @@ mod tests {
             "  Synthetic Client  ",
             evidence()?,
         ))
+    }
+
+    #[test]
+    fn create_authorization_is_disclosure_neutral() {
+        assert_eq!(authorize_client_create(MembershipRole::TenantOwner), Ok(()));
+        assert_eq!(
+            authorize_client_create(MembershipRole::Member),
+            Err(ClientOperationError::NotFound)
+        );
     }
 
     #[test]
