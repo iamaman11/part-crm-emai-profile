@@ -2,9 +2,7 @@ use crate::access_session::{
     correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
     verify_request_identity,
 };
-use crate::mutation_failure::{
-    MutationFailureClass, classify_mutation_failure, mutation_failure,
-};
+use crate::mutation_failure::{MutationFailureClass, classify_mutation_failure, mutation_failure};
 use crate::request_evidence::{audit_event_id, outbox_event_id};
 use cloudflare_adapters::d1_catalog::{
     CatalogClientKind, CreateClientMutation, D1CatalogRepository,
@@ -1023,7 +1021,7 @@ async fn replay_response(
     };
     match decision {
         IdempotencyDecision::Miss => Ok(None),
-        IdempotencyDecision::Replay(receipt) if status == 204 => no_content().map(Some),
+        IdempotencyDecision::Replay(_) if status == 204 => no_content().map(Some),
         IdempotencyDecision::Replay(receipt) => mutation_receipt(
             receipt.result_code(),
             receipt.result_reference().unwrap_or(resource_id),
