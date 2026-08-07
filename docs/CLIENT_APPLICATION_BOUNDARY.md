@@ -21,7 +21,7 @@ HTTP / Workers SDK
   -> existing atomic D1 catalog command/query implementations
 ```
 
-Concrete D1 construction is isolated in `apps/control-plane-worker/src/composition.rs`. The migrated `clients.rs` transport must not import `cloudflare_adapters::d1_*`, construct `CreateClientMutation`, or instantiate D1 repositories directly.
+Concrete D1 construction is isolated in `apps/control-plane-worker/src/composition.rs`. The migrated `clients.rs` transport must not import `cloudflare_adapters::d1_*`, construct `CreateClientMutation`, or instantiate D1 repositories directly. The superseded client create/get handlers are removed from the legacy `api.rs` surface and permanent policy rejects their return.
 
 ## Command Evidence
 
@@ -42,11 +42,12 @@ The application use case owns these decisions and ordering rules:
 
 1. only a tenant owner may execute client create; non-owner disclosure remains neutral `not_found`;
 2. owner authorization is evaluated before request-body/idempotency parsing, preserving the previous disclosure boundary;
-3. `ClientRecord::create` owns display-name normalization and domain validation;
-4. exact idempotency replay returns the prior logical result without issuing a write;
-5. a concurrent unique conflict is rechecked for exact replay and is otherwise a conflict;
-6. the adapter maps the validated record and command evidence into the existing atomic `CreateClientMutation` so client state, idempotency, audit and outbox retain the same D1 transaction boundary;
-7. storage/provider failures are mapped to stable application failure classes and are not relabeled as business `not_found`.
+3. the legacy raw display-name checks remain exact: `trim().is_empty()` or a requested string longer than 200 bytes is rejected before replay/write sequencing;
+4. `ClientRecord::create` still provides domain validation and a normalized domain view, while `ClientCreateWrite` separately carries the originally requested display-name string so the D1 adapter preserves the pre-migration persisted representation rather than silently normalizing stored data;
+5. exact idempotency replay returns the prior logical result without issuing a write;
+6. a concurrent unique conflict is rechecked for exact replay and is otherwise a conflict;
+7. the adapter maps the validated record, compatibility-preserved requested display name and command evidence into the existing atomic `CreateClientMutation` so client state, idempotency, audit and outbox retain the same D1 transaction boundary;
+8. storage/provider failures are mapped to stable application failure classes and are not relabeled as business `not_found`.
 
 The HTTP response contract remains transport-owned: a fresh create is `201`, an exact replay is `200`, and the existing camelCase receipt shape is preserved.
 
@@ -59,7 +60,7 @@ The Worker parses the client ID and calls the application query. The D1 adapter 
 Permanent Repository Quality Audit checks enforce two layers:
 
 - `check-capability-module-layout.py` requires the command/client application symbols to remain capability-owned instead of collapsing into root facade files;
-- `check-worker-application-boundary.py` rejects direct D1/client-mutation dependencies in the migrated Worker transport and includes a deliberately failing direct-D1 fixture to prove the policy is active.
+- `check-worker-application-boundary.py` rejects direct D1/client-mutation dependencies in the migrated Worker transport, rejects reintroduction of the superseded client handlers/types in `api.rs`, and includes a deliberately failing fixture that proves both regressions are caught.
 
 Pure use-case tests use a deterministic fake `ClientApplicationPort`; Cloudflare adapter tests, Worker native tests and Worker WASM checks then prove the outward composition separately.
 
