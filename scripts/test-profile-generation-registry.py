@@ -109,6 +109,7 @@ def command_count(connection: sqlite3.Connection, table: str, command_id: str) -
         "profile_generation_register_commands",
         "profile_generation_verify_commands",
         "profile_generation_activate_commands",
+        "profile_generation_deactivate_commands",
         "profile_generation_quarantine_commands",
     }:
         raise AssertionError(f"unexpected command table: {table}")
@@ -269,7 +270,7 @@ def test_registration_guards(connection: sqlite3.Connection) -> None:
             object_key="profiles/v1/foreign_generation_02.enc",
             tenant_id=FOREIGN_TENANT,
         ),
-        "FOREIGN KEY constraint failed",
+        "profile_generation_register_profile_missing",
     )
     connection.rollback()
     assert generation_row(connection, SECOND_GENERATION) is None
@@ -383,8 +384,8 @@ def test_quarantine(connection: sqlite3.Connection) -> None:
     assert generation_row(connection)["status"] == "VERIFIED"
     assert tuple(profile_row(connection)) == ("READY", GENERATION, 2)
 
-    with connection:
-        connection.execute(
+    expect_integrity_error(
+        lambda: connection.execute(
             """
             UPDATE browser_profiles
             SET status = 'SUSPENDED', active_generation_id = NULL,
@@ -392,6 +393,21 @@ def test_quarantine(connection: sqlite3.Connection) -> None:
             WHERE tenant_id = ? AND profile_id = ?
             """,
             (OWNER, TENANT, PROFILE),
+        ),
+        "profile_generation_deactivation_not_governed",
+    )
+    connection.rollback()
+    assert tuple(profile_row(connection)) == ("READY", GENERATION, 2)
+
+    with connection:
+        connection.execute(
+            """
+            INSERT INTO profile_generation_deactivate_commands (
+                tenant_id, command_id, command_actor_id, profile_id,
+                generation_id, expected_profile_version, executed_at_ms
+            ) VALUES (?, 'command_deactivate_generation', ?, ?, ?, 2, 310)
+            """,
+            (TENANT, OWNER, PROFILE, GENERATION),
         )
         connection.execute(
             """
@@ -402,6 +418,11 @@ def test_quarantine(connection: sqlite3.Connection) -> None:
             """,
             (TENANT, OWNER, PROFILE, GENERATION),
         )
+    assert command_count(
+        connection,
+        "profile_generation_deactivate_commands",
+        "command_deactivate_generation",
+    ) == 1
     row = generation_row(connection)
     assert (row["status"], row["version"]) == ("QUARANTINED", 3)
     assert tuple(profile_row(connection)) == ("SUSPENDED", None, 3)
