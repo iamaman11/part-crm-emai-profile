@@ -2,9 +2,7 @@ use crate::commands::CommandExecutionEvidence;
 use client_domain::{ClientKind, ClientRecord, ClientStatus};
 use core::fmt;
 use identity_access_domain::MembershipRole;
-use profile_platform_primitives::{
-    ActorContext, ActorId, AggregateVersion, ClientId, TenantScope,
-};
+use profile_platform_primitives::{ActorContext, ActorId, AggregateVersion, ClientId, TenantScope};
 
 pub trait ClientRepository {
     type Error;
