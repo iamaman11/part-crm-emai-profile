@@ -15,6 +15,8 @@ pub(crate) enum MutationFailureClass {
 pub(crate) fn classify_mutation_failure(message: &str) -> MutationFailureClass {
     if message.contains("owner_required")
         || message.contains("profile_missing")
+        || message.contains("target_missing")
+        || message.contains("client_missing")
         || message.contains("successor_mismatch")
         || message.contains("target_not_active_member")
         || message.contains("client_not_active")
@@ -117,6 +119,26 @@ mod tests {
         assert_eq!(
             classify_mutation_failure("membership_status_version_mismatch"),
             MutationFailureClass::VersionConflict
+        );
+        assert_eq!(
+            classify_mutation_failure("owner_transfer_successor_version_mismatch"),
+            MutationFailureClass::VersionConflict
+        );
+        assert_eq!(
+            classify_mutation_failure("membership_status_target_missing"),
+            MutationFailureClass::NeutralNotFound
+        );
+        assert_eq!(
+            classify_mutation_failure("profile_assignment_profile_missing"),
+            MutationFailureClass::NeutralNotFound
+        );
+        assert_eq!(
+            classify_mutation_failure("client_grant_client_missing"),
+            MutationFailureClass::NeutralNotFound
+        );
+        assert_eq!(
+            classify_mutation_failure("owner_transfer_successor_mismatch"),
+            MutationFailureClass::NeutralNotFound
         );
         assert_eq!(
             classify_mutation_failure("profile_assignment_client_not_active"),
