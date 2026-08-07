@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import {
   assignProfile,
@@ -161,7 +161,7 @@ export function ProfilesWorkspace() {
         }}>
           <label>Assignment ID<input name="assignmentId" required disabled={!profileLoaded} /></label>
           <label>Client ID<input name="clientId" required disabled={!profileLoaded} /></label>
-          <label>Expected profile version<input name="expectedVersion" type="number" min="1" defaultValue={profile?.version ?? 1} required disabled={!profileLoaded} /></label>
+          <label>Expected profile version<input key={profile?.version ?? 1} name="expectedVersion" type="number" min="1" defaultValue={profile?.version ?? 1} required disabled={!profileLoaded} /></label>
           <label>Reason<input name="reason" required disabled={!profileLoaded} /></label>
           <button type="submit" disabled={!profileLoaded || assign.isPending}>Assign</button>
         </form>
@@ -260,6 +260,11 @@ function ProfileGrantPanel({ disabled, defaultVersion, busy, onGrant, onRevoke }
   const [role, setRole] = useState<'PROFILE_VIEWER' | 'PROFILE_OPERATOR'>('PROFILE_VIEWER');
   const [reason, setReason] = useState('');
   const [expectedProfileVersion, setExpectedVersion] = useState(defaultVersion);
+
+  useEffect(() => {
+    setExpectedVersion(defaultVersion);
+  }, [defaultVersion]);
+
   const draft = { actorId, role, reason, expectedProfileVersion };
   const unavailable = disabled || busy || !actorId || !reason;
   return (
