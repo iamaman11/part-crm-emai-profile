@@ -13,6 +13,7 @@ pub mod d1_invitation_acceptance;
 pub mod d1_mailboxes;
 pub mod d1_profile_coordinator;
 pub mod d1_profile_generations;
+pub mod d1_profiles;
 pub mod mailbox_provider;
 pub mod profile_coordinator;
 
