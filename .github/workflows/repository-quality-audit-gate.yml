@@ -30,6 +30,7 @@ jobs:
         run: |
           python -m py_compile scripts/test-profile-generation-state-guards.py
           python -m py_compile scripts/check-github-actions-runtime.py
+          python -m py_compile scripts/check-capability-module-layout.py
 
       - name: Enforce GitHub Actions Node 24 checkout runtime
         run: python scripts/check-github-actions-runtime.py
@@ -40,6 +41,12 @@ jobs:
             echo 'Deprecated Node 20 checkout fixture unexpectedly passed.' >&2
             exit 1
           fi
+
+      - name: Enforce capability-owned application boundaries
+        run: python scripts/check-capability-module-layout.py
+
+      - name: Prove collapsed capability facades are rejected
+        run: python scripts/check-capability-module-layout.py --self-test
 
       - name: Test hardened pure boundaries
         run: >-
