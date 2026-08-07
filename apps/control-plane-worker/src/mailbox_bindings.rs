@@ -6,9 +6,7 @@ use crate::composition::mailbox_binding_application;
 use application_ports::mailboxes::{MailboxBindingStatus, MailboxProvider};
 use control_plane_contract::RouteClass;
 use identity_access_domain::MembershipRole;
-use profile_platform_primitives::{
-    ActorContext, AggregateVersion, MailboxBindingId, SecretHandle,
-};
+use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, SecretHandle};
 use serde::{Deserialize, Serialize};
 use use_cases::mailboxes::{
     ExecuteCreateMailboxBindingCommand, ExecuteRevokeMailboxBindingCommand,
@@ -83,6 +81,9 @@ async fn create_binding(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
+    if !valid_digest(&body.request_digest) {
+        return invalid_request(actor.correlation_id().as_str());
+    }
     let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
@@ -132,6 +133,9 @@ async fn revoke_binding(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
+    if !valid_digest(&body.request_digest) {
+        return invalid_request(actor.correlation_id().as_str());
+    }
     let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
@@ -190,6 +194,13 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
     problem(correlation_id, 400, "invalid_request", "Invalid Request")
 }
 
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MutationReceipt<'a> {
@@ -210,7 +221,7 @@ fn mutation_receipt(outcome: &MailboxBindingMutationOutcome, status: u16) -> Res
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MailboxBindingResponse<'a> {
-    mailbox_binding_id: &'a str,
+    binding_id: &'a str,
     provider: &'static str,
     status: &'static str,
     version: u64,
@@ -219,7 +230,7 @@ struct MailboxBindingResponse<'a> {
 impl<'a> From<&'a MailboxBindingDetails> for MailboxBindingResponse<'a> {
     fn from(binding: &'a MailboxBindingDetails) -> Self {
         Self {
-            mailbox_binding_id: binding.binding_id().as_str(),
+            binding_id: binding.binding_id().as_str(),
             provider: binding.provider().storage_value(),
             status: match binding.status() {
                 MailboxBindingStatus::Active => "ACTIVE",
@@ -233,7 +244,7 @@ impl<'a> From<&'a MailboxBindingDetails> for MailboxBindingResponse<'a> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateMailboxBindingRequest {
-    mailbox_binding_id: String,
+    binding_id: String,
     provider: String,
     secret_handle: String,
     request_digest: String,
@@ -248,23 +259,36 @@ struct RevokeMailboxBindingRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateMailboxBindingRequest, MailboxBindingResponse, MutationReceipt};
+    use super::{CreateMailboxBindingRequest, MailboxBindingResponse, MutationReceipt, valid_digest};
 
     #[test]
-    fn binding_transport_rejects_sensitive_unknown_fields_and_keeps_camel_case()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn binding_transport_rejects_sensitive_unknown_fields_and_keeps_legacy_shape(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let digest = "a".repeat(64);
+        let valid = format!(
+            r#"{{"bindingId":"mailbox_01JTRANSPORT","provider":"IMAP","secretHandle":"secret_01JTRANSPORT","requestDigest":"{digest}"}}"#
+        );
+        assert!(serde_json::from_str::<CreateMailboxBindingRequest>(&valid).is_ok());
         assert!(
             serde_json::from_str::<CreateMailboxBindingRequest>(
-                r#"{"mailboxBindingId":"mailbox_01JTRANSPORT","provider":"IMAP","secretHandle":"secret_01JTRANSPORT","requestDigest":"digest_01JTRANSPORT","password":"forbidden"}"#
+                &format!(
+                    r#"{{"bindingId":"mailbox_01JTRANSPORT","provider":"IMAP","secretHandle":"secret_01JTRANSPORT","requestDigest":"{digest}","password":"forbidden"}}"#
+                )
             )
             .is_err()
         );
         assert!(
             serde_json::from_str::<CreateMailboxBindingRequest>(
-                r#"{"mailboxBindingId":"mailbox_01JTRANSPORT","provider":"IMAP","secretHandle":"secret_01JTRANSPORT","requestDigest":"digest_01JTRANSPORT","messageBody":"forbidden"}"#
+                &format!(
+                    r#"{{"bindingId":"mailbox_01JTRANSPORT","provider":"IMAP","secretHandle":"secret_01JTRANSPORT","requestDigest":"{digest}","messageBody":"forbidden"}}"#
+                )
             )
             .is_err()
         );
+
+        assert!(valid_digest(&digest));
+        assert!(!valid_digest(&"A".repeat(64)));
+        assert!(!valid_digest(&"a".repeat(63)));
 
         let mutation = serde_json::to_value(MutationReceipt {
             result_code: "created",
@@ -276,12 +300,13 @@ mod tests {
         assert!(mutation.get("aggregateVersion").is_some());
 
         let response = serde_json::to_value(MailboxBindingResponse {
-            mailbox_binding_id: "mailbox_01JTRANSPORT",
+            binding_id: "mailbox_01JTRANSPORT",
             provider: "IMAP",
             status: "ACTIVE",
             version: 1,
         })?;
-        assert!(response.get("mailboxBindingId").is_some());
+        assert!(response.get("bindingId").is_some());
+        assert!(response.get("mailboxBindingId").is_none());
         assert!(response.get("provider").is_some());
         assert!(response.get("status").is_some());
         assert!(response.get("version").is_some());
