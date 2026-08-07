@@ -16,6 +16,11 @@ preparation boundary. It reads the accepted gate/check catalog directly from
 from `scripts/check-external-evidence-scope.py`. It does not maintain a third copy
 of the security contract.
 
+For the real provider/host/policy operation itself, use
+[`EXTERNAL_GATE_EXECUTION_RUNBOOK.md`](EXTERNAL_GATE_EXECUTION_RUNBOOK.md). Its
+coverage is checked against the same validator-derived gate catalog; the runbook
+never replaces `describe` as the source of exact checks or allowed environments.
+
 ## Inspect the accepted gate contract
 
 List all external gates, allowed environments and required terminal check codes:
@@ -65,9 +70,10 @@ repository-approved `passed` or `failed` external claim.
 ## Perform the real external operation
 
 After a pending draft exists, the actual gate work happens outside Git according
-to the provider/host/policy-specific runbook. Raw credentials, host paths, logs,
-screenshots, browser/mailbox payloads, certificates and key material remain in
-approved external storage and are never copied into the repository record.
+to the gate-specific procedure in `EXTERNAL_GATE_EXECUTION_RUNBOOK.md`. Raw
+credentials, host paths, logs, screenshots, browser/mailbox payloads, certificates
+and key material remain in approved external storage and are never copied into the
+repository record.
 
 For a real terminal observation:
 
@@ -87,13 +93,17 @@ From repository root:
 
 ```bash
 python tests/external-evidence-tooling/test-draft-tool.py
+python tests/external-evidence-tooling/test-runbook-coverage.py
 python scripts/check-external-evidence.py
 python scripts/check-external-evidence-scope.py
+python scripts/check-external-runbook.py
 python scripts/check-external-readiness-summary.py
 ```
 
-The permanent `External Evidence Gate` recompiles the validators/tool and proves
-pending-draft behavior for every accepted gate plus negative fail-closed cases.
+The permanent `External Evidence Gate` recompiles the validators/tooling, proves
+pending-draft behavior for every accepted gate, verifies that the execution runbook
+covers exactly the validator-derived gate catalog, and exercises negative fail-closed
+cases.
 
 ## Safety properties
 
@@ -105,8 +115,11 @@ The tooling rejects:
 - unsafe or unsupported references;
 - invalid opaque subject IDs or bounded limitation tokens;
 - noncanonical output filenames;
-- overwrite of any existing evidence record.
+- overwrite of any existing evidence record;
+- missing, duplicate or unknown external-gate runbook sections;
+- a runbook gate section that omits its exact validator-derived `describe` command.
 
-A generated pending draft does not satisfy a mandatory readiness requirement and
-does not change `docs/status.json`. Production readiness remains false until the
-separate external-evidence and residual-risk process is actually completed.
+A generated pending draft and a passing runbook coverage check do not satisfy a
+mandatory readiness requirement and do not change `docs/status.json`. Production
+readiness remains false until the separate external-evidence and residual-risk
+process is actually completed.

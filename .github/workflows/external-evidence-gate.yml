@@ -27,16 +27,22 @@ jobs:
         run: |
           python -m py_compile scripts/check-external-evidence.py
           python -m py_compile scripts/check-external-evidence-scope.py
+          python -m py_compile scripts/check-external-runbook.py
           python -m py_compile scripts/prepare-external-evidence.py
           python -m py_compile tests/external-evidence-tooling/test-draft-tool.py
+          python -m py_compile tests/external-evidence-tooling/test-runbook-coverage.py
 
       - name: Validate repository external evidence
         run: |
           python scripts/check-external-evidence.py
           python scripts/check-external-evidence-scope.py
+          python scripts/check-external-runbook.py
 
       - name: Exercise fail-safe pending draft tooling
         run: python tests/external-evidence-tooling/test-draft-tool.py
+
+      - name: Exercise external gate runbook coverage
+        run: python tests/external-evidence-tooling/test-runbook-coverage.py
 
       - name: Validate canonical fixtures
         run: |
