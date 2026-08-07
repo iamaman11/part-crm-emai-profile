@@ -117,14 +117,14 @@ def activate_through_registry(connection: sqlite3.Connection) -> None:
     expect_integrity_error(
         lambda: connection.execute(
             """
-            UPDATE browser_profiles
-            SET status = 'READY', active_generation_id = ?,
-                version = 2, updated_at_ms = 21
-            WHERE tenant_id = ? AND profile_id = ?
+            INSERT INTO profile_generation_activate_commands (
+                tenant_id, command_id, command_actor_id, profile_id,
+                generation_id, expected_profile_version, executed_at_ms
+            ) VALUES (?, 'command_quality_activate_missing', ?, ?, ?, 1, 21)
             """,
-            (GENERATION_ID, TENANT_ID, PROFILE_ID),
+            (TENANT_ID, OWNER_ID, PROFILE_ID, GENERATION_ID),
         ),
-        "active_profile_generation_not_verified",
+        "profile_generation_not_verified",
     )
     connection.rollback()
     assert profile_row(connection) == ("DRAFT", None, 1)
@@ -173,6 +173,7 @@ def activate_through_registry(connection: sqlite3.Connection) -> None:
         "profile_generation_activation_not_governed",
     )
     connection.rollback()
+    assert profile_row(connection) == ("DRAFT", None, 1)
 
     with connection:
         connection.execute(
@@ -216,6 +217,7 @@ def main() -> None:
     connection = open_database()
     try:
         seed_profile(connection)
+        has_registry = registry_present(connection)
 
         expect_integrity_error(
             lambda: connection.execute(
@@ -227,7 +229,11 @@ def main() -> None:
                 """,
                 (TENANT_ID, PROFILE_ID),
             ),
-            "invalid_active_generation_id",
+            (
+                "profile_generation_activation_not_governed"
+                if has_registry
+                else "invalid_active_generation_id"
+            ),
         )
         connection.rollback()
         assert profile_row(connection) == ("DRAFT", None, 1)
@@ -246,7 +252,7 @@ def main() -> None:
         connection.rollback()
         assert profile_row(connection) == ("DRAFT", None, 1)
 
-        if registry_present(connection):
+        if has_registry:
             activate_through_registry(connection)
         else:
             with connection:
@@ -271,14 +277,15 @@ def main() -> None:
                 (TENANT_ID, PROFILE_ID),
             ),
             (
-                "live_profile_requires_active_generation",
-                "profile_generation_deactivation_not_governed",
+                "profile_generation_deactivation_not_governed"
+                if has_registry
+                else "live_profile_requires_active_generation"
             ),
         )
         connection.rollback()
         assert profile_row(connection) == ("READY", GENERATION_ID, 2)
 
-        if registry_present(connection):
+        if has_registry:
             deactivate_through_registry(connection)
         else:
             with connection:
@@ -317,7 +324,11 @@ def main() -> None:
                 """,
                 (TENANT_ID, OWNER_ID, OWNER_ID),
             ),
-            "invalid_active_generation_id",
+            (
+                "active_profile_generation_not_verified"
+                if has_registry
+                else "invalid_active_generation_id"
+            ),
         )
         connection.rollback()
 
