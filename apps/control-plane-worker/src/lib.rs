@@ -2,6 +2,9 @@
 
 mod access_session;
 mod api;
+mod clients;
+mod command_evidence;
+mod composition;
 mod mailboxes;
 mod mutation_failure;
 mod profile_coordinator;
@@ -39,6 +42,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
                 .await
         }
         RouteClass::AuthenticatedSessionApi => session_response(&request, &env).await,
+        RouteClass::ClientCollectionApi | RouteClass::ClientResourceApi => {
+            clients::dispatch(route, &mut request, &env).await
+        }
         RouteClass::ProfileCoordinatorApi => dispatch_profile_coordinator(&mut request, &env).await,
         RouteClass::ProfileGenerationCollectionApi
         | RouteClass::ProfileGenerationResourceApi
@@ -59,8 +65,6 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::InvitationCollectionApi
         | RouteClass::InvitationAcceptApi
         | RouteClass::MembershipStatusApi
-        | RouteClass::ClientCollectionApi
-        | RouteClass::ClientResourceApi
         | RouteClass::ClientGrantApi
         | RouteClass::ProfileCollectionApi
         | RouteClass::ProfileResourceApi
