@@ -65,6 +65,19 @@ def draft_arguments(
     ]
 
 
+def validate_root(root: Path) -> None:
+    for validator in (BASE_VALIDATOR, SCOPE_VALIDATOR):
+        result = subprocess.run(
+            [sys.executable, str(validator), "--root", str(root)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise AssertionError(f"generated drafts failed {validator.name}: {result.stderr}")
+
+
 def verify_describe_contract() -> dict[str, dict[str, list[str]]]:
     payload = json.loads(run("describe").stdout)
     assert payload["draft_status"] == "pending_only"
@@ -84,57 +97,86 @@ def verify_describe_contract() -> dict[str, dict[str, list[str]]]:
     return gates
 
 
-def verify_all_gate_drafts(gates: dict[str, dict[str, list[str]]]) -> None:
+def assert_pending_draft(path: Path, gate: str, environment: str) -> None:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["status"] == "pending"
+    assert data["checks"] == []
+    assert data["artifact_digests_sha256"] == []
+    assert "review" not in data
+    assert "supersedes" not in data
+    assert data["gate"] == gate
+    assert data["scope"]["environment"] == environment
+
+
+def verify_all_gate_environment_drafts(gates: dict[str, dict[str, list[str]]]) -> None:
+    combination_count = 0
     with tempfile.TemporaryDirectory(prefix="external-evidence-tooling-") as temporary:
-        root = Path(temporary)
-        records = root / "evidence/external/records"
-        records.mkdir(parents=True)
+        parent = Path(temporary)
 
+        # Every accepted gate x allowed-environment pair must be independently
+        # draftable and validator-approved. Separate roots avoid creating multiple
+        # active lineages for one gate merely to test environment coverage.
+        for gate_index, (gate, gate_contract) in enumerate(sorted(gates.items()), start=1):
+            for environment_index, environment in enumerate(
+                gate_contract["allowed_environments"], start=1
+            ):
+                combination_count += 1
+                root = parent / f"combo-{gate_index:02d}-{environment_index:02d}"
+                records = root / "evidence/external/records"
+                records.mkdir(parents=True)
+                evidence_id = f"ev-20260807-combo-{gate_index:02d}-{environment_index:02d}"
+                output = records / f"{evidence_id}.json"
+                run(
+                    *draft_arguments(
+                        gate=gate,
+                        environment=environment,
+                        evidence_id=evidence_id,
+                        output=output,
+                    )
+                )
+                assert_pending_draft(output, gate, environment)
+                validate_root(root)
+
+        # Also prove one pending leaf for every gate can coexist as a valid
+        # repository record set without satisfying any terminal readiness claim.
+        combined_root = parent / "combined"
+        combined_records = combined_root / "evidence/external/records"
+        combined_records.mkdir(parents=True)
         for index, (gate, gate_contract) in enumerate(sorted(gates.items()), start=1):
-            evidence_id = f"ev-20260807-draft-{index:02d}"
-            output = records / f"{evidence_id}.json"
             environment = gate_contract["allowed_environments"][0]
-            run(*draft_arguments(
-                gate=gate,
-                environment=environment,
-                evidence_id=evidence_id,
-                output=output,
-            ))
-            data = json.loads(output.read_text(encoding="utf-8"))
-            assert data["status"] == "pending"
-            assert data["checks"] == []
-            assert data["artifact_digests_sha256"] == []
-            assert "review" not in data
-            assert data["gate"] == gate
-            assert data["scope"]["environment"] == environment
-
-        for validator in (BASE_VALIDATOR, SCOPE_VALIDATOR):
-            result = subprocess.run(
-                [sys.executable, str(validator), "--root", str(root)],
-                cwd=ROOT,
-                text=True,
-                capture_output=True,
-                check=False,
+            evidence_id = f"ev-20260807-draft-{index:02d}"
+            output = combined_records / f"{evidence_id}.json"
+            run(
+                *draft_arguments(
+                    gate=gate,
+                    environment=environment,
+                    evidence_id=evidence_id,
+                    output=output,
+                )
             )
-            if result.returncode != 0:
-                raise AssertionError(f"generated drafts failed {validator.name}: {result.stderr}")
+            assert_pending_draft(output, gate, environment)
+        validate_root(combined_root)
+
+    expected_combinations = sum(len(item["allowed_environments"]) for item in gates.values())
+    assert combination_count == expected_combinations
 
 
 def verify_fail_closed(gates: dict[str, dict[str, list[str]]]) -> None:
     with tempfile.TemporaryDirectory(prefix="external-evidence-tooling-negative-") as temporary:
         records = Path(temporary)
-        terminal = records / "ev-20260807-terminal.json"
-        run(
-            *draft_arguments(
-                gate="product_license",
-                environment="none",
-                evidence_id="ev-20260807-terminal",
-                output=terminal,
-                status="passed",
-            ),
-            expect_success=False,
-        )
-        assert not terminal.exists()
+        for status in ("passed", "failed"):
+            terminal = records / f"ev-20260807-terminal-{status}.json"
+            run(
+                *draft_arguments(
+                    gate="product_license",
+                    environment="none",
+                    evidence_id=f"ev-20260807-terminal-{status}",
+                    output=terminal,
+                    status=status,
+                ),
+                expect_success=False,
+            )
+            assert not terminal.exists()
 
         wrong_environment = records / "ev-20260807-wrong-environment.json"
         run(
@@ -204,7 +246,7 @@ def verify_fail_closed(gates: dict[str, dict[str, list[str]]]) -> None:
 
 def main() -> int:
     gates = verify_describe_contract()
-    verify_all_gate_drafts(gates)
+    verify_all_gate_environment_drafts(gates)
     verify_fail_closed(gates)
     print("external evidence draft tooling tests passed")
     return 0
