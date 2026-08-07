@@ -6,6 +6,7 @@ use application_ports::clients::{
 };
 use client_domain::{ClientError, ClientKind, ClientRecord, ClientStatus};
 use contracts::ProblemCode;
+use core::fmt;
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, AggregateVersion, ClientId, TenantId};
 
@@ -167,6 +168,21 @@ pub enum ClientOperationError {
     DependencyUnavailable,
 }
 
+impl fmt::Display for ClientOperationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NotFound => "client not found",
+            Self::InvalidRequest => "client request is invalid",
+            Self::Conflict => "client command conflict",
+            Self::IntegrityFailure => "client data integrity failure",
+            Self::InternalFailure => "client application internal failure",
+            Self::DependencyUnavailable => "client dependency unavailable",
+        })
+    }
+}
+
+impl std::error::Error for ClientOperationError {}
+
 pub async fn execute_create_client<P: ClientApplicationPort>(
     actor: &ActorContext,
     role: MembershipRole,
@@ -260,8 +276,9 @@ fn replay_outcome(client: &ClientRecord, receipt: &ClientReplayReceipt) -> Clien
 fn map_client_operation_error(error: ClientError) -> ClientOperationError {
     match error {
         ClientError::InvalidDisplayName => ClientOperationError::InvalidRequest,
-        ClientError::InvalidStatusTransition => ClientOperationError::InternalFailure,
-        ClientError::VersionOverflow => ClientOperationError::InternalFailure,
+        ClientError::InvalidStatusTransition | ClientError::VersionOverflow => {
+            ClientOperationError::InternalFailure
+        }
     }
 }
 
