@@ -76,7 +76,8 @@ impl MailboxJobCreateWrite {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MailboxJobRunDecision {
+pub struct MailboxJobPreparedRun<D> {
+    decision: D,
     status: MailboxJobStatus,
     attempt: u32,
     version: AggregateVersion,
@@ -86,9 +87,11 @@ pub struct MailboxJobRunDecision {
     retry_at: Option<UnixMillis>,
 }
 
-impl MailboxJobRunDecision {
+impl<D> MailboxJobPreparedRun<D> {
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
+        decision: D,
         status: MailboxJobStatus,
         attempt: u32,
         version: AggregateVersion,
@@ -98,6 +101,7 @@ impl MailboxJobRunDecision {
         retry_at: Option<UnixMillis>,
     ) -> Self {
         Self {
+            decision,
             status,
             attempt,
             version,
@@ -106,6 +110,11 @@ impl MailboxJobRunDecision {
             bounded_item_count,
             retry_at,
         }
+    }
+
+    #[must_use]
+    pub const fn decision(&self) -> &D {
+        &self.decision
     }
 
     #[must_use]
@@ -145,22 +154,22 @@ impl MailboxJobRunDecision {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MailboxJobRunWrite {
+pub struct MailboxJobRunWrite<D> {
     binding_id: MailboxBindingId,
     job_id: MailboxJobId,
     expected_version: AggregateVersion,
-    decision: MailboxJobRunDecision,
+    prepared: MailboxJobPreparedRun<D>,
     evidence: CommandExecutionEvidence,
     event_payload_json: String,
 }
 
-impl MailboxJobRunWrite {
+impl<D> MailboxJobRunWrite<D> {
     #[must_use]
     pub fn new(
         binding_id: MailboxBindingId,
         job_id: MailboxJobId,
         expected_version: AggregateVersion,
-        decision: MailboxJobRunDecision,
+        prepared: MailboxJobPreparedRun<D>,
         evidence: CommandExecutionEvidence,
         event_payload_json: impl Into<String>,
     ) -> Self {
@@ -168,7 +177,7 @@ impl MailboxJobRunWrite {
             binding_id,
             job_id,
             expected_version,
-            decision,
+            prepared,
             evidence,
             event_payload_json: event_payload_json.into(),
         }
@@ -190,8 +199,8 @@ impl MailboxJobRunWrite {
     }
 
     #[must_use]
-    pub const fn decision(&self) -> &MailboxJobRunDecision {
-        &self.decision
+    pub const fn prepared(&self) -> &MailboxJobPreparedRun<D> {
+        &self.prepared
     }
 
     #[must_use]
@@ -286,46 +295,10 @@ impl fmt::Display for MailboxJobPortError {
 
 impl std::error::Error for MailboxJobPortError {}
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MailboxJobRunnerErrorClass {
-    InvalidState,
-    InternalFailure,
-    DependencyUnavailable,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MailboxJobRunnerError {
-    class: MailboxJobRunnerErrorClass,
-}
-
-impl MailboxJobRunnerError {
-    #[must_use]
-    pub const fn new(class: MailboxJobRunnerErrorClass) -> Self {
-        Self { class }
-    }
-
-    #[must_use]
-    pub const fn class(self) -> MailboxJobRunnerErrorClass {
-        self.class
-    }
-}
-
-impl fmt::Display for MailboxJobRunnerError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self.class {
-            MailboxJobRunnerErrorClass::InvalidState => "mailbox job runner invalid state",
-            MailboxJobRunnerErrorClass::InternalFailure => "mailbox job runner internal failure",
-            MailboxJobRunnerErrorClass::DependencyUnavailable => {
-                "mailbox job runner dependency unavailable"
-            }
-        })
-    }
-}
-
-impl std::error::Error for MailboxJobRunnerError {}
-
 #[allow(async_fn_in_trait)]
 pub trait MailboxJobApplicationPort {
+    type RunDecision;
+
     async fn decide_replay(
         &self,
         actor: &ActorContext,
@@ -342,7 +315,7 @@ pub trait MailboxJobApplicationPort {
     async fn run_job(
         &self,
         actor: &ActorContext,
-        write: &MailboxJobRunWrite,
+        write: &MailboxJobRunWrite<Self::RunDecision>,
     ) -> Result<(), MailboxJobPortError>;
 
     async fn find_binding(
@@ -357,15 +330,13 @@ pub trait MailboxJobApplicationPort {
         binding_id: &MailboxBindingId,
         job_id: &MailboxJobId,
     ) -> Result<Option<MailboxJobReadModel>, MailboxJobPortError>;
-}
 
-pub trait MailboxJobRunnerPort {
-    fn decide_run(
+    fn prepare_run(
         &mut self,
         binding: &MailboxBinding,
         job: &MailboxJob,
         now: UnixMillis,
-    ) -> Result<MailboxJobRunDecision, MailboxJobRunnerError>;
+    ) -> Result<MailboxJobPreparedRun<Self::RunDecision>, MailboxJobPortError>;
 }
 
 #[must_use]
