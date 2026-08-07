@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod local_profile;
+pub mod operator_flow;
 pub mod runtime_bundle;
 
 #[cfg(windows)]
