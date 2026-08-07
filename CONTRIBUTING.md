@@ -76,6 +76,9 @@ preserve these properties:
 - derive audit and outbox identifiers with the shared domain-separated request
   evidence helpers; never truncate or prefix caller-controlled idempotency keys to
   form tenant-wide evidence identities;
+- derive command-journal identity from tenant, actor and the complete idempotency
+  key before writing tenant-wide command tables; never use the raw caller key alone
+  as a tenant-wide `command_id`;
 - keep command journal, aggregate mutation, idempotency, audit and outbox writes in
   one transaction-fatal D1 batch so a late failure cannot leave partial evidence;
 - precompute fallible aggregate version increments before mutation and never use
