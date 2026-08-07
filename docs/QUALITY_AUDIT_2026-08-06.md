@@ -1,7 +1,7 @@
 # Repository Quality Audit — 2026-08-06
 
 **Статус:** repository-local engineering audit  
-**Tracking:** issue #41, PR #42  
+**Tracking:** issue #41, active PR #47 (supersedes #42)  
 **Baseline:** `48efed23c2adc37ad0736c13d612bc22b15d7aab`
 
 ## 1. Область Аудита
@@ -114,7 +114,7 @@ composition paths.
 
 ## 4. Надёжность После Hardening
 
-После принятия PR #42 repository-local boundaries должны гарантировать:
+После принятия PR #47 repository-local boundaries должны гарантировать:
 
 - нулевая aggregate version не создаётся публичным primitive API;
 - version overflow не меняет aggregate;
@@ -126,6 +126,10 @@ composition paths.
 - capability documentation не выдаёт synthetic/library code за composed product;
 - regression защищён отдельным `Repository Quality Audit Gate` плюс всеми
   существующими permanent workflows.
+
+Pinned `cargo fmt` уже применён к active hardening branch, временные formatter
+workflows/jobs удалены, permanent workflow permissions возвращены к `contents: read`.
+Оставшийся acceptance gate — permanent exact-head CI на финальном commit перед merge.
 
 ## 5. Что Не Является Полностью Готовым Приложением
 
@@ -149,8 +153,9 @@ composition paths.
 
 Архитектура репозитория модульная и в основном последовательно соблюдает
 hexagonal/clean boundaries. Аудит выявил реальные invariant, atomicity, routing и
-clarity defects, которые существующий green CI не ловил. PR #42 исправляет их и
-добавляет отдельный permanent regression gate.
+clarity defects, которые существующий green CI не ловил. Active PR #47 исправляет
+их и добавляет отдельный permanent regression gate; PR #42 сохранён как
+superseded review history.
 
 После exact-head green и merge можно утверждать высокий уровень надёжности
 **реализованного repository-local scope**. Нельзя утверждать 10/10 для всего
