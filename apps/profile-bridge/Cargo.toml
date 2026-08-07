@@ -6,9 +6,11 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+application-ports.workspace = true
 bridge-domain.workspace = true
 profile-platform-primitives.workspace = true
 runtime-bundle-domain.workspace = true
+session-domain.workspace = true
 
 [lints]
 workspace = true
