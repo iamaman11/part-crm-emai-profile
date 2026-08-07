@@ -1,8 +1,8 @@
 use application_ports::CommandExecutionEvidence;
 use application_ports::mailbox_jobs::{
     MailboxJobApplicationPort, MailboxJobCreateWrite, MailboxJobPortError,
-    MailboxJobPortErrorClass, MailboxJobReadModel, MailboxJobRunDecision, MailboxJobRunnerError,
-    MailboxJobRunnerErrorClass, MailboxJobRunnerPort, MailboxJobRunWrite, MailboxJobStatus,
+    MailboxJobPortErrorClass, MailboxJobPreparedRun, MailboxJobReadModel, MailboxJobRunWrite,
+    MailboxJobStatus,
 };
 use application_ports::mailboxes::{MailboxReplayDecision, MailboxReplayReceipt};
 use core::fmt;
@@ -210,6 +210,30 @@ pub fn authorize_mailbox_job(role: MembershipRole) -> Result<(), MailboxJobOpera
     }
 }
 
+pub fn validate_create_mailbox_job_request(
+    delay_ms: u64,
+    max_attempts: u32,
+    cursor: Option<&str>,
+) -> Result<(), MailboxJobOperationError> {
+    if delay_ms > MAX_JOB_DELAY_MS
+        || max_attempts == 0
+        || max_attempts > MAX_JOB_ATTEMPTS
+        || cursor.is_some_and(|value| value.len() > MAX_CURSOR_LENGTH)
+    {
+        return Err(MailboxJobOperationError::InvalidRequest);
+    }
+    Ok(())
+}
+
+pub fn validate_mailbox_job_run_version(
+    expected_version: AggregateVersion,
+) -> Result<AggregateVersion, MailboxJobOperationError> {
+    expected_version
+        .next()
+        .and_then(AggregateVersion::next)
+        .map_err(|_| MailboxJobOperationError::InternalFailure)
+}
+
 pub async fn execute_create_mailbox_job<P: MailboxJobApplicationPort>(
     actor: &ActorContext,
     role: MembershipRole,
@@ -217,7 +241,11 @@ pub async fn execute_create_mailbox_job<P: MailboxJobApplicationPort>(
     command: ExecuteCreateMailboxJobCommand,
 ) -> Result<MailboxJobMutationOutcome, MailboxJobOperationError> {
     authorize_mailbox_job(role)?;
-    validate_create_request(&command)?;
+    validate_create_mailbox_job_request(
+        command.delay_ms,
+        command.max_attempts,
+        command.cursor.as_deref(),
+    )?;
     let scheduled_at = UnixMillis::new(
         command
             .evidence
@@ -288,23 +316,14 @@ pub async fn get_mailbox_job<P: MailboxJobApplicationPort>(
         .ok_or(MailboxJobOperationError::NotFound)
 }
 
-pub async fn execute_run_mailbox_job<P, R>(
+pub async fn execute_run_mailbox_job<P: MailboxJobApplicationPort>(
     actor: &ActorContext,
     role: MembershipRole,
-    port: &P,
-    runner: &mut R,
+    port: &mut P,
     command: ExecuteRunMailboxJobCommand,
-) -> Result<MailboxJobMutationOutcome, MailboxJobOperationError>
-where
-    P: MailboxJobApplicationPort,
-    R: MailboxJobRunnerPort,
-{
+) -> Result<MailboxJobMutationOutcome, MailboxJobOperationError> {
     authorize_mailbox_job(role)?;
-    let response_version = command
-        .expected_version
-        .next()
-        .and_then(AggregateVersion::next)
-        .map_err(|_| MailboxJobOperationError::InternalFailure)?;
+    let response_version = validate_mailbox_job_run_version(command.expected_version)?;
 
     match port
         .decide_replay(actor, MAILBOX_JOB_RUN_COMMAND, &command.evidence)
@@ -340,18 +359,18 @@ where
         return Err(MailboxJobOperationError::VersionConflict);
     }
 
-    let decision = runner
-        .decide_run(&binding, job.job(), command.evidence.now())
-        .map_err(map_runner_error)?;
-    if decision.version() != response_version {
+    let prepared = port
+        .prepare_run(&binding, job.job(), command.evidence.now())
+        .map_err(map_port_error)?;
+    if prepared.version() != response_version {
         return Err(MailboxJobOperationError::IntegrityFailure);
     }
-    let result_code = result_code(&decision)?;
+    let result_code = result_code(&prepared)?;
     let write = MailboxJobRunWrite::new(
         command.binding_id,
         command.job_id,
         command.expected_version,
-        decision,
+        prepared,
         command.evidence,
         MAILBOX_JOB_EVENT_PAYLOAD,
     );
@@ -382,24 +401,10 @@ where
     }
 }
 
-fn validate_create_request(
-    command: &ExecuteCreateMailboxJobCommand,
-) -> Result<(), MailboxJobOperationError> {
-    if command.delay_ms > MAX_JOB_DELAY_MS
-        || command.max_attempts == 0
-        || command.max_attempts > MAX_JOB_ATTEMPTS
-        || command
-            .cursor
-            .as_ref()
-            .is_some_and(|cursor| cursor.len() > MAX_CURSOR_LENGTH)
-    {
-        return Err(MailboxJobOperationError::InvalidRequest);
-    }
-    Ok(())
-}
-
-fn result_code(decision: &MailboxJobRunDecision) -> Result<&'static str, MailboxJobOperationError> {
-    match decision.status() {
+fn result_code<D>(
+    prepared: &MailboxJobPreparedRun<D>,
+) -> Result<&'static str, MailboxJobOperationError> {
+    match prepared.status() {
         MailboxJobStatus::Succeeded => Ok("succeeded"),
         MailboxJobStatus::RetryPending => Ok("retry_pending"),
         MailboxJobStatus::Failed => Ok("failed"),
@@ -454,28 +459,17 @@ fn map_port_error(error: MailboxJobPortError) -> MailboxJobOperationError {
     }
 }
 
-fn map_runner_error(error: MailboxJobRunnerError) -> MailboxJobOperationError {
-    match error.class() {
-        MailboxJobRunnerErrorClass::InvalidState => MailboxJobOperationError::InvalidState,
-        MailboxJobRunnerErrorClass::InternalFailure => MailboxJobOperationError::InternalFailure,
-        MailboxJobRunnerErrorClass::DependencyUnavailable => {
-            MailboxJobOperationError::DependencyUnavailable
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         ExecuteCreateMailboxJobCommand, ExecuteRunMailboxJobCommand, MailboxJobOperationError,
         authorize_mailbox_job, execute_create_mailbox_job, execute_run_mailbox_job,
-        get_mailbox_job,
+        get_mailbox_job, validate_create_mailbox_job_request, validate_mailbox_job_run_version,
     };
     use application_ports::CommandExecutionEvidence;
     use application_ports::mailbox_jobs::{
         MailboxBinding, MailboxJob, MailboxJobApplicationPort, MailboxJobCreateWrite,
-        MailboxJobPortError, MailboxJobPortErrorClass, MailboxJobReadModel, MailboxJobRunDecision,
-        MailboxJobRunnerError, MailboxJobRunnerErrorClass, MailboxJobRunnerPort,
+        MailboxJobPortError, MailboxJobPortErrorClass, MailboxJobPreparedRun, MailboxJobReadModel,
         MailboxJobRunWrite, MailboxJobStatus,
     };
     use application_ports::mailboxes::{
@@ -503,6 +497,9 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct FakeRunToken;
+
     struct FakeJobPort {
         replay: RefCell<Vec<MailboxReplayDecision>>,
         replay_calls: Cell<u32>,
@@ -510,10 +507,13 @@ mod tests {
         run_calls: Cell<u32>,
         binding_reads: Cell<u32>,
         job_reads: Cell<u32>,
+        prepare_calls: Cell<u32>,
         create_error: Cell<Option<MailboxJobPortErrorClass>>,
         run_error: Cell<Option<MailboxJobPortErrorClass>>,
+        prepare_error: Cell<Option<MailboxJobPortErrorClass>>,
         binding: RefCell<Option<MailboxBinding>>,
         job: RefCell<Option<MailboxJobReadModel>>,
+        prepared: RefCell<Option<MailboxJobPreparedRun<FakeRunToken>>>,
     }
 
     impl FakeJobPort {
@@ -525,10 +525,13 @@ mod tests {
                 run_calls: Cell::new(0),
                 binding_reads: Cell::new(0),
                 job_reads: Cell::new(0),
+                prepare_calls: Cell::new(0),
                 create_error: Cell::new(None),
                 run_error: Cell::new(None),
+                prepare_error: Cell::new(None),
                 binding: RefCell::new(None),
                 job: RefCell::new(None),
+                prepared: RefCell::new(None),
             }
         }
 
@@ -543,6 +546,8 @@ mod tests {
     }
 
     impl MailboxJobApplicationPort for FakeJobPort {
+        type RunDecision = FakeRunToken;
+
         async fn decide_replay(
             &self,
             _actor: &ActorContext,
@@ -568,7 +573,7 @@ mod tests {
         async fn run_job(
             &self,
             _actor: &ActorContext,
-            _write: &MailboxJobRunWrite,
+            _write: &MailboxJobRunWrite<Self::RunDecision>,
         ) -> Result<(), MailboxJobPortError> {
             self.run_calls.set(self.run_calls.get() + 1);
             match self.run_error.get() {
@@ -595,39 +600,21 @@ mod tests {
             self.job_reads.set(self.job_reads.get() + 1);
             Ok(self.job.borrow().clone())
         }
-    }
 
-    struct FakeRunner {
-        calls: Cell<u32>,
-        error: Cell<Option<MailboxJobRunnerErrorClass>>,
-        decision: RefCell<Option<MailboxJobRunDecision>>,
-    }
-
-    impl FakeRunner {
-        fn new(decision: MailboxJobRunDecision) -> Self {
-            Self {
-                calls: Cell::new(0),
-                error: Cell::new(None),
-                decision: RefCell::new(Some(decision)),
-            }
-        }
-    }
-
-    impl MailboxJobRunnerPort for FakeRunner {
-        fn decide_run(
+        fn prepare_run(
             &mut self,
             _binding: &MailboxBinding,
             _job: &MailboxJob,
             _now: UnixMillis,
-        ) -> Result<MailboxJobRunDecision, MailboxJobRunnerError> {
-            self.calls.set(self.calls.get() + 1);
-            if let Some(class) = self.error.get() {
-                return Err(MailboxJobRunnerError::new(class));
+        ) -> Result<MailboxJobPreparedRun<Self::RunDecision>, MailboxJobPortError> {
+            self.prepare_calls.set(self.prepare_calls.get() + 1);
+            if let Some(class) = self.prepare_error.get() {
+                return Err(MailboxJobPortError::new(class));
             }
-            self.decision
+            self.prepared
                 .borrow()
                 .clone()
-                .ok_or_else(|| MailboxJobRunnerError::new(MailboxJobRunnerErrorClass::InternalFailure))
+                .ok_or_else(|| MailboxJobPortError::new(MailboxJobPortErrorClass::InternalFailure))
         }
     }
 
@@ -669,6 +656,19 @@ mod tests {
         )?)
     }
 
+    fn prepared_success() -> Result<MailboxJobPreparedRun<FakeRunToken>, Box<dyn std::error::Error>> {
+        Ok(MailboxJobPreparedRun::new(
+            FakeRunToken,
+            MailboxJobStatus::Succeeded,
+            1,
+            AggregateVersion::new(3)?,
+            Some("meta_mailjob_01JMAILJOBAPP_1".to_owned()),
+            "SYNTHETIC_OK",
+            0,
+            None,
+        ))
+    }
+
     fn create_command() -> Result<ExecuteCreateMailboxJobCommand, Box<dyn std::error::Error>> {
         Ok(ExecuteCreateMailboxJobCommand::new(
             MailboxBindingId::parse("mailbox_01JMAILJOBAPP")?,
@@ -687,6 +687,25 @@ mod tests {
             authorize_mailbox_job(MembershipRole::Member),
             Err(MailboxJobOperationError::NotFound)
         );
+    }
+
+    #[test]
+    fn transport_intent_validation_is_pure_and_fail_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(validate_create_mailbox_job_request(0, 3, None), Ok(()));
+        assert_eq!(
+            validate_create_mailbox_job_request(0, 3, Some(&"x".repeat(513))),
+            Err(MailboxJobOperationError::InvalidRequest)
+        );
+        assert_eq!(
+            validate_mailbox_job_run_version(AggregateVersion::INITIAL)?.value(),
+            3
+        );
+        assert_eq!(
+            validate_mailbox_job_run_version(AggregateVersion::new(u64::MAX)?),
+            Err(MailboxJobOperationError::InternalFailure)
+        );
+        Ok(())
     }
 
     #[test]
@@ -781,21 +800,12 @@ mod tests {
     }
 
     #[test]
-    fn run_exact_replay_skips_reads_provider_and_write()
+    fn run_exact_replay_skips_reads_prepare_and_write()
     -> Result<(), Box<dyn std::error::Error>> {
-        let port = FakeJobPort::new(vec![MailboxReplayDecision::Replay(
+        let mut port = FakeJobPort::new(vec![MailboxReplayDecision::Replay(
             MailboxReplayReceipt::new("succeeded", Some("mailjob_existing".to_owned())),
         )]);
-        let decision = MailboxJobRunDecision::new(
-            MailboxJobStatus::Succeeded,
-            1,
-            AggregateVersion::new(3)?,
-            None,
-            "SYNTHETIC_OK",
-            0,
-            None,
-        );
-        let mut runner = FakeRunner::new(decision);
+        port.prepared.replace(Some(prepared_success()?));
         let command = ExecuteRunMailboxJobCommand::new(
             MailboxBindingId::parse("mailbox_01JMAILJOBAPP")?,
             MailboxJobId::parse("mailjob_01JMAILJOBAPP")?,
@@ -805,37 +815,27 @@ mod tests {
         let outcome = block_on(execute_run_mailbox_job(
             &actor()?,
             MembershipRole::TenantOwner,
-            &port,
-            &mut runner,
+            &mut port,
             command,
         ))?;
         assert!(outcome.replayed());
         assert_eq!(outcome.aggregate_version().value(), 3);
         assert_eq!(port.binding_reads.get(), 0);
         assert_eq!(port.job_reads.get(), 0);
-        assert_eq!(runner.calls.get(), 0);
+        assert_eq!(port.prepare_calls.get(), 0);
         assert_eq!(port.run_calls.get(), 0);
         Ok(())
     }
 
     #[test]
-    fn run_version_mismatch_stops_before_provider_and_write()
+    fn run_version_mismatch_stops_before_prepare_and_write()
     -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
         let job = job(&binding)?;
-        let port = FakeJobPort::new(vec![MailboxReplayDecision::Miss]);
+        let mut port = FakeJobPort::new(vec![MailboxReplayDecision::Miss]);
         port.binding.replace(Some(binding.clone()));
         port.job.replace(Some(MailboxJobReadModel::new(job, None, 0)));
-        let decision = MailboxJobRunDecision::new(
-            MailboxJobStatus::Succeeded,
-            1,
-            AggregateVersion::new(4)?,
-            None,
-            "SYNTHETIC_OK",
-            0,
-            None,
-        );
-        let mut runner = FakeRunner::new(decision);
+        port.prepared.replace(Some(prepared_success()?));
         let command = ExecuteRunMailboxJobCommand::new(
             binding.binding_id().clone(),
             MailboxJobId::parse("mailjob_01JMAILJOBAPP")?,
@@ -846,36 +846,26 @@ mod tests {
             block_on(execute_run_mailbox_job(
                 &actor()?,
                 MembershipRole::TenantOwner,
-                &port,
-                &mut runner,
+                &mut port,
                 command,
             )),
             Err(MailboxJobOperationError::VersionConflict)
         );
-        assert_eq!(runner.calls.get(), 0);
+        assert_eq!(port.prepare_calls.get(), 0);
         assert_eq!(port.run_calls.get(), 0);
         Ok(())
     }
 
     #[test]
-    fn successful_run_calls_provider_once_and_persists_version_plus_two()
+    fn successful_run_prepares_once_and_persists_version_plus_two()
     -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
         let job = job(&binding)?;
-        let port = FakeJobPort::new(vec![MailboxReplayDecision::Miss]);
+        let mut port = FakeJobPort::new(vec![MailboxReplayDecision::Miss]);
         port.binding.replace(Some(binding.clone()));
         port.job
             .replace(Some(MailboxJobReadModel::new(job, None, 0)));
-        let decision = MailboxJobRunDecision::new(
-            MailboxJobStatus::Succeeded,
-            1,
-            AggregateVersion::new(3)?,
-            Some("meta_mailjob_01JMAILJOBAPP_1".to_owned()),
-            "SYNTHETIC_OK",
-            0,
-            None,
-        );
-        let mut runner = FakeRunner::new(decision);
+        port.prepared.replace(Some(prepared_success()?));
         let command = ExecuteRunMailboxJobCommand::new(
             binding.binding_id().clone(),
             MailboxJobId::parse("mailjob_01JMAILJOBAPP")?,
@@ -885,38 +875,29 @@ mod tests {
         let outcome = block_on(execute_run_mailbox_job(
             &actor()?,
             MembershipRole::TenantOwner,
-            &port,
-            &mut runner,
+            &mut port,
             command,
         ))?;
         assert_eq!(outcome.result_code(), "succeeded");
         assert_eq!(outcome.aggregate_version().value(), 3);
         assert!(!outcome.replayed());
-        assert_eq!(runner.calls.get(), 1);
+        assert_eq!(port.prepare_calls.get(), 1);
         assert_eq!(port.run_calls.get(), 1);
         Ok(())
     }
 
     #[test]
-    fn runner_invalid_state_keeps_public_invalid_state_class()
+    fn prepare_invalid_state_keeps_public_invalid_state_class()
     -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
         let job = job(&binding)?;
-        let port = FakeJobPort::new(vec![MailboxReplayDecision::Miss]);
+        let mut port = FakeJobPort::new(vec![MailboxReplayDecision::Miss]);
         port.binding.replace(Some(binding.clone()));
         port.job
             .replace(Some(MailboxJobReadModel::new(job, None, 0)));
-        let decision = MailboxJobRunDecision::new(
-            MailboxJobStatus::Succeeded,
-            1,
-            AggregateVersion::new(3)?,
-            None,
-            "SYNTHETIC_OK",
-            0,
-            None,
-        );
-        let mut runner = FakeRunner::new(decision);
-        runner.error.set(Some(MailboxJobRunnerErrorClass::InvalidState));
+        port.prepared.replace(Some(prepared_success()?));
+        port.prepare_error
+            .set(Some(MailboxJobPortErrorClass::InvalidState));
         let command = ExecuteRunMailboxJobCommand::new(
             binding.binding_id().clone(),
             MailboxJobId::parse("mailjob_01JMAILJOBAPP")?,
@@ -927,8 +908,7 @@ mod tests {
             block_on(execute_run_mailbox_job(
                 &actor()?,
                 MembershipRole::TenantOwner,
-                &port,
-                &mut runner,
+                &mut port,
                 command,
             )),
             Err(MailboxJobOperationError::InvalidState)
