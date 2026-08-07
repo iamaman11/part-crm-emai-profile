@@ -5,7 +5,10 @@ use crate::command_evidence;
 use crate::composition::mailbox_binding_application;
 use application_ports::mailboxes::{MailboxBindingStatus, MailboxProvider};
 use control_plane_contract::RouteClass;
-use profile_platform_primitives::{AggregateVersion, MailboxBindingId, SecretHandle};
+use identity_access_domain::MembershipRole;
+use profile_platform_primitives::{
+    ActorContext, AggregateVersion, MailboxBindingId, SecretHandle,
+};
 use serde::{Deserialize, Serialize};
 use use_cases::mailboxes::{
     ExecuteCreateMailboxBindingCommand, ExecuteRevokeMailboxBindingCommand,
@@ -33,18 +36,20 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
     }
 
     match route {
-        RouteClass::MailboxBindingCollectionApi => create_binding(request, env, &actor).await,
+        RouteClass::MailboxBindingCollectionApi => {
+            create_binding(request, env, actor.actor(), role).await
+        }
         RouteClass::MailboxBindingResourceApi => {
             let Some(binding_id) = parse_binding_id(&segments) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            get_binding(env, &actor, role, &binding_id).await
+            get_binding(env, actor.actor(), role, &binding_id).await
         }
         RouteClass::MailboxBindingRevokeApi => {
             let Some(binding_id) = parse_binding_id(&segments) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            revoke_binding(request, env, &actor, role, binding_id).await
+            revoke_binding(request, env, actor.actor(), role, binding_id).await
         }
         _ => neutral_not_found(actor.actor().correlation_id().as_str()),
     }
@@ -59,82 +64,81 @@ fn parse_binding_id(segments: &[&str]) -> Option<MailboxBindingId> {
 async fn create_binding(
     request: &mut Request,
     env: &Env,
-    actor: &cloudflare_adapters::d1_identity_acl::ResolvedActor,
+    actor: &ActorContext,
+    role: MembershipRole,
 ) -> Result<Response> {
     let body = match request.json::<CreateMailboxBindingRequest>().await {
         Ok(value) => value,
-        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let binding_id = match MailboxBindingId::parse(body.binding_id) {
         Ok(value) => value,
-        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let secret_handle = match SecretHandle::parse(body.secret_handle) {
         Ok(value) => value,
-        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let provider = match MailboxProvider::parse_storage(&body.provider) {
         Ok(value) => value,
-        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
         Ok(value) => value,
-        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let application = mailbox_binding_application(env)?;
     match execute_create_mailbox_binding(
-        actor.actor(),
-        membership_role(actor),
+        actor,
+        role,
         &application,
         ExecuteCreateMailboxBindingCommand::new(binding_id, provider, secret_handle, evidence),
     )
     .await
     {
         Ok(outcome) => mutation_receipt(&outcome, 201),
-        Err(error) => operation_failure(actor.actor().correlation_id().as_str(), error),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
 
 async fn get_binding(
     env: &Env,
-    actor: &cloudflare_adapters::d1_identity_acl::ResolvedActor,
-    role: identity_access_domain::MembershipRole,
+    actor: &ActorContext,
+    role: MembershipRole,
     binding_id: &MailboxBindingId,
 ) -> Result<Response> {
     let application = mailbox_binding_application(env)?;
-    match get_mailbox_binding(actor.actor(), role, &application, binding_id).await {
+    match get_mailbox_binding(actor, role, &application, binding_id).await {
         Ok(binding) => Response::from_json(&MailboxBindingResponse::from(&binding)),
         Err(MailboxBindingOperationError::NotFound) => {
-            neutral_not_found(actor.actor().correlation_id().as_str())
+            neutral_not_found(actor.correlation_id().as_str())
         }
-        Err(error) => operation_failure(actor.actor().correlation_id().as_str(), error),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
 
 async fn revoke_binding(
     request: &mut Request,
     env: &Env,
-    actor: &cloudflare_adapters::d1_identity_acl::ResolvedActor,
-    role: identity_access_domain::MembershipRole,
+    actor: &ActorContext,
+    role: MembershipRole,
     binding_id: MailboxBindingId,
 ) -> Result<Response> {
     let body = match request.json::<RevokeMailboxBindingRequest>().await {
         Ok(value) => value,
-        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let expected_version = match AggregateVersion::new(body.expected_binding_version) {
         Ok(value) => value,
-        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
-    {
+    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
         Ok(value) => value,
-        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let application = mailbox_binding_application(env)?;
     match execute_revoke_mailbox_binding(
-        actor.actor(),
+        actor,
         role,
         &application,
         ExecuteRevokeMailboxBindingCommand::new(binding_id, expected_version, evidence),
@@ -142,7 +146,7 @@ async fn revoke_binding(
     .await
     {
         Ok(outcome) => mutation_receipt(&outcome, 200),
-        Err(error) => operation_failure(actor.actor().correlation_id().as_str(), error),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
 
