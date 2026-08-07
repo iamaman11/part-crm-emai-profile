@@ -1,19 +1,19 @@
 use profile_platform_primitives::{ActorId, IdempotencyKey, TenantId};
+use worker::Result;
 
 const COMMAND_DOMAIN: &str = "part-crm:d1-command-journal:v1";
 
-#[must_use]
 pub(crate) fn command_journal_id(
     tenant_id: &TenantId,
     actor_id: &ActorId,
     idempotency_key: &IdempotencyKey,
-) -> String {
-    canonical_component(
+) -> Result<String> {
+    Ok(canonical_component(
         COMMAND_DOMAIN,
         tenant_id.as_str(),
         actor_id.as_str(),
         idempotency_key.as_str(),
-    )
+    ))
 }
 
 fn canonical_component(domain: &str, tenant_id: &str, actor_id: &str, key: &str) -> String {
@@ -41,22 +41,22 @@ mod tests {
         let key_a = IdempotencyKey::parse(format!("{shared_prefix}AAAAAA"))?;
         let key_b = IdempotencyKey::parse(format!("{shared_prefix}BBBBBB"))?;
 
-        let actor_a_key_a = command_journal_id(&tenant, &actor_a, &key_a);
+        let actor_a_key_a = command_journal_id(&tenant, &actor_a, &key_a)?;
         assert_eq!(
             actor_a_key_a,
-            command_journal_id(&tenant, &actor_a, &key_a)
+            command_journal_id(&tenant, &actor_a, &key_a)?
         );
         assert_ne!(
             actor_a_key_a,
-            command_journal_id(&tenant, &actor_b, &key_a)
+            command_journal_id(&tenant, &actor_b, &key_a)?
         );
         assert_ne!(
             actor_a_key_a,
-            command_journal_id(&tenant, &actor_a, &key_b)
+            command_journal_id(&tenant, &actor_a, &key_b)?
         );
         assert_ne!(
             actor_a_key_a,
-            command_journal_id(&other_tenant, &actor_a, &key_a)
+            command_journal_id(&other_tenant, &actor_a, &key_a)?
         );
         assert!(actor_a_key_a.ends_with(key_a.as_str()));
         Ok(())
