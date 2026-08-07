@@ -26,7 +26,7 @@ smoke test does not promote unrelated production gates.
 | Repository Step 10 / PR #33 | accepted bounded synthetic evidence | required/optional/prohibited certification policy, deterministic matrix/vector, privacy-safe support output, typed device grant journal, exact preverified update/health identity, rollback/fail-closed state and Linux/Windows/WASM gates | real fingerprint certification, physical second device, production unwrap, cryptographic signature verification, trusted signing or production readiness |
 | Mailbox composition / PR #60 + repair PR #62 | accepted repository-local composed/synthetic evidence | D1 mailbox binding/job persistence, secret-handle-only request DTOs, idempotency/audit/outbox, Worker API routes, metadata-only synthetic provider path, adapter/native/WASM/release compilation | real Gmail/IMAP/browser execution, mailbox contents, production scheduler/provider evidence or production readiness |
 | React operator UI / PR #64 | accepted repository-local composed/synthetic evidence | exact head `f2fcfe19335508a6062b9ed8a7c984fe2f97a417`; Node 24.19.0/npm 11.17.0 locked React/Vite/TypeScript workspace; same-origin API/problem boundary; neutral disclosure; high-impact confirmation; 11/11 permanent workflows and Frontend Gate `31207429792`; squash merge `c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b` | deployed Cloudflare Access UI, real Bridge/custom-URI onboarding, real providers, missing backend list APIs or production readiness |
-| Cross-component standalone acceptance / PR #66 | candidate repository-local composed/synthetic evidence; final exact-head acceptance pending | deterministic metadata-only six-phase manifest, D1/ACL/mailbox/generation invariants, adapter + Worker native/WASM, actual synthetic Bridge CLI to `DIRTY_LOCAL`, Node24 frontend install/typecheck/tests/build; candidate gate `31208530252` succeeded | real Cloudflare/Camoufox/mailbox providers, production keys/signing, physical multi-device or production readiness |
+| Cross-component standalone acceptance / PR #66 | accepted repository-local composed/synthetic evidence | exact head `31f358c92c2e09c752155af208b7d2aaf73d472a`; all 12 permanent workflows green; Cross-Component Gate `31208960718`; deterministic six-phase metadata-only manifest, D1/ACL/mailbox/generation invariants, adapter + Worker native/WASM, actual synthetic Bridge CLI to `DIRTY_LOCAL`, Node24 frontend install/typecheck/tests/build; squash merge `eb02f3e81022193fb459b7c46d14afcb19c8900f` | real Cloudflare/Camoufox/mailbox providers, production keys/signing, physical multi-device or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -338,7 +338,7 @@ review item; it is not a Worker runtime dependency claim.
 - Profile Bridge library/bin/integration suites: 35 passed in aggregate, followed by successful execution of `profile-bridge-synthetic` ending exactly `DIRTY_LOCAL`;
 - Node `24.19.0` / npm `11.17.0` clean frontend install, strict TypeScript, Vitest and Vite build passed in the same lane;
 - metadata-only evidence scan passed; no user data or real external provider/runtime was involved;
-- this remains candidate evidence until PR #66 passes final exact-head acceptance and squash merge.
+- final accepted source head: `31f358c92c2e09c752155af208b7d2aaf73d472a`; all 12 permanent workflows passed on that exact unchanged head; Cross-Component Acceptance Gate `31208960718` succeeded; squash merge `eb02f3e81022193fb459b7c46d14afcb19c8900f`.
 
 ## 2. Required Permanent CI Evidence
 

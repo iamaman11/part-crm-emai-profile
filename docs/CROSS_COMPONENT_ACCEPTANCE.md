@@ -1,6 +1,6 @@
 # Cross-Component Repository-Local Acceptance
 
-**Status:** final candidate repository-local composed/synthetic evidence; exact-head acceptance pending  
+**Status:** accepted repository-local composed/synthetic evidence  
 **Tracking:** issue #65 / PR #66, parent epic #43  
 **Baseline:** `c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b` (accepted React UI composition)
 
@@ -20,7 +20,7 @@ The permanent `Cross-Component Acceptance Gate` validates and executes, in order
 
 The machine-readable contract is `tests/cross-component/standalone-acceptance.json`; `scripts/test-cross-component-acceptance.py` binds it to the accepted composition surfaces and fails closed when those surfaces drift.
 
-## Candidate evidence
+## Evidence
 
 Cross-Component Acceptance Gate run `31208530252` completed successfully after the canonical strict synthetic claim fixture was used. The successful run demonstrated:
 
@@ -35,7 +35,7 @@ Cross-Component Acceptance Gate run `31208530252` completed successfully after t
 - frontend clean install/typecheck/tests/build: passed;
 - metadata-only evidence scan: passed.
 
-The evidence registry and status projection have been synchronized from this successful candidate run. This document update establishes the user-authored final candidate head; acceptance still requires all permanent workflows green on that same unchanged head before squash merge. A prior diagnostic run exposed two harness defects — an over-broad evidence-key scanner and an invalid shortened claim fixture. Both were repaired without weakening application parsers or security boundaries.
+Final acceptance used exact head `31f358c92c2e09c752155af208b7d2aaf73d472a`. All 12 permanent workflows passed on that unchanged head, including Cross-Component Acceptance Gate `31208960718`; squash merge `eb02f3e81022193fb459b7c46d14afcb19c8900f` established the accepted repository-local composition on `main`. Post-merge evidence normalization is tracked by issue #67 / PR #68 and changes no executable or external-evidence claim. A prior diagnostic run exposed two harness defects — an over-broad evidence-key scanner and an invalid shortened claim fixture. Both were repaired without weakening application parsers or security boundaries.
 
 ## Negative evidence carried through the composed lane
 
@@ -85,4 +85,4 @@ npm test
 npm run build
 ```
 
-Repository acceptance still requires every permanent workflow green on the same exact final PR head and squash merge with `expected_head_sha`.
+Any future change to this accepted repository-local composition must pass every applicable permanent workflow on one unchanged exact head before merge.
