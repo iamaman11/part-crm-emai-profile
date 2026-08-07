@@ -1,10 +1,8 @@
 use crate::commands::CommandExecutionEvidence;
 use core::fmt;
-pub use mailbox_domain::{MailboxBinding, MailboxBindingStatus, MailboxProvider};
 use mailbox_domain::MailboxJob;
-use profile_platform_primitives::{
-    ActorContext, AggregateVersion, MailboxBindingId, SecretHandle, TenantScope,
-};
+pub use mailbox_domain::{MailboxBinding, MailboxBindingStatus, MailboxProvider};
+use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, TenantScope};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MailboxObservation {
