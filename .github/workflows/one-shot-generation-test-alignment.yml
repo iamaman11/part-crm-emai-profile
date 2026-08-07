@@ -19,7 +19,7 @@ jobs:
         with:
           ref: profile-generation-registry-clean
           persist-credentials: true
-      - name: Apply exact test alignment
+      - name: Apply bounded test alignment
         shell: bash
         run: |
           set -euo pipefail
@@ -29,54 +29,45 @@ jobs:
           path = Path('scripts/test-profile-generation-registry.py')
           text = path.read_text(encoding='utf-8')
 
-          old_foreign = '''    expect_integrity_error(
-              lambda: register(
-                  connection,
-                  command_id="command_foreign_registration",
-                  actor_id=FOREIGN_OWNER,
-                  generation_id=SECOND_GENERATION,
-                  object_key="profiles/v1/foreign_generation_02.enc",
-                  tenant_id=FOREIGN_TENANT,
-              ),
-              "FOREIGN KEY constraint failed",
-          )'''
-          new_foreign = old_foreign.replace(
-              '"FOREIGN KEY constraint failed"',
+          old_error = '"FOREIGN KEY constraint failed"'
+          if text.count(old_error) != 1:
+              raise SystemExit(f'expected exactly one foreign-key assertion, got {text.count(old_error)}')
+          text = text.replace(
+              old_error,
               '"profile_generation_register_profile_missing"',
+              1,
           )
-          if text.count(old_foreign) != 1:
-              raise SystemExit('foreign-registration expectation drifted')
-          text = text.replace(old_foreign, new_foreign, 1)
 
-          old_tables = '''        "profile_generation_activate_commands",
-                  "profile_generation_quarantine_commands",'''
-          new_tables = '''        "profile_generation_activate_commands",
-                  "profile_generation_deactivate_commands",
-                  "profile_generation_quarantine_commands",'''
-          if text.count(old_tables) != 1:
-              raise SystemExit('command table allowlist drifted')
-          text = text.replace(old_tables, new_tables, 1)
+          allowlist_anchor = (
+              '        "profile_generation_activate_commands",\n'
+              '        "profile_generation_quarantine_commands",'
+          )
+          if text.count(allowlist_anchor) != 1:
+              raise SystemExit('command table allowlist anchor drifted')
+          text = text.replace(
+              allowlist_anchor,
+              '        "profile_generation_activate_commands",\n'
+              '        "profile_generation_deactivate_commands",\n'
+              '        "profile_generation_quarantine_commands",',
+              1,
+          )
 
-          old_deactivate = '''    with connection:
-              connection.execute(
-                  """
-                  UPDATE browser_profiles
-                  SET status = 'SUSPENDED', active_generation_id = NULL,
-                      version = 3, updated_by_actor_id = ?, updated_at_ms = 310
-                  WHERE tenant_id = ? AND profile_id = ?
-                  """,
-                  (OWNER, TENANT, PROFILE),
-              )
-              connection.execute(
-                  """
-                  INSERT INTO profile_generation_quarantine_commands (
-                      tenant_id, command_id, command_actor_id, profile_id,
-                      generation_id, expected_generation_version, executed_at_ms
-                  ) VALUES (?, 'command_quarantine_generation', ?, ?, ?, 2, 320)
-                  """,
-                  (TENANT, OWNER, PROFILE, GENERATION),
-              )'''
-          new_deactivate = '''    expect_integrity_error(
+          start_marker = (
+              '    with connection:\n'
+              '        connection.execute(\n'
+              '            """\n'
+              '            UPDATE browser_profiles\n'
+              "            SET status = 'SUSPENDED', active_generation_id = NULL,\n"
+          )
+          start = text.find(start_marker)
+          if start < 0 or text.find(start_marker, start + 1) >= 0:
+              raise SystemExit('direct-deactivation start marker missing or ambiguous')
+          end_marker = '    row = generation_row(connection)\n'
+          end = text.find(end_marker, start)
+          if end < 0:
+              raise SystemExit('quarantine result marker missing')
+
+          governed = '''    expect_integrity_error(
               lambda: connection.execute(
                   """
                   UPDATE browser_profiles
@@ -114,11 +105,9 @@ jobs:
               connection,
               "profile_generation_deactivate_commands",
               "command_deactivate_generation",
-          ) == 1'''
-          if text.count(old_deactivate) != 1:
-              raise SystemExit('direct-deactivation fixture drifted')
-          text = text.replace(old_deactivate, new_deactivate, 1)
-
+          ) == 1
+'''
+          text = text[:start] + governed + text[end:]
           path.write_text(text, encoding='utf-8')
           PY
           git diff --check
