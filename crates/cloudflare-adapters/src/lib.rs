@@ -14,3 +14,5 @@ pub mod d1_profile_coordinator;
 pub mod d1_profile_generations;
 pub mod mailbox_provider;
 pub mod profile_coordinator;
+
+pub use mailbox_domain::MailboxProvider;
