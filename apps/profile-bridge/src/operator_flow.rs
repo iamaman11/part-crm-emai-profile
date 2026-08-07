@@ -1,9 +1,11 @@
+use crate::ProcessControlPort;
 use crate::local_profile::{
     BridgeWorkspaceLock, LocalGenerationRecord, LocalGenerationState, LocalProfileError,
     MaterializationRoot,
 };
-use crate::runtime_bundle::{ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator};
-use crate::ProcessControlPort;
+use crate::runtime_bundle::{
+    ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
+};
 use application_ports::ProfileCoordinatorPort;
 use bridge_domain::{CamouhostPort, ClaimUri, DeviceIdentityPort, DeviceKeyPort};
 use profile_platform_primitives::{
@@ -15,11 +17,7 @@ use std::fmt;
 pub trait DeviceAuthenticationPort {
     type Error;
 
-    fn authenticate(
-        &mut self,
-        device_id: &DeviceId,
-        key_handle: &str,
-    ) -> Result<(), Self::Error>;
+    fn authenticate(&mut self, device_id: &DeviceId, key_handle: &str) -> Result<(), Self::Error>;
 }
 
 pub trait EnrollmentPort {
@@ -186,9 +184,7 @@ impl fmt::Display for OperatorFlowError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Busy => formatter.write_str("an operator session is already active"),
-            Self::CleanupRequired => {
-                formatter.write_str("previous operator cleanup is unresolved")
-            }
+            Self::CleanupRequired => formatter.write_str("previous operator cleanup is unresolved"),
             Self::Stage(stage) => write!(formatter, "operator flow failed at {stage:?}"),
             Self::Runtime {
                 stage,
@@ -214,7 +210,6 @@ impl std::error::Error for OperatorFlowError {}
 
 struct ActiveOperatorSession {
     lease: ProfileLease,
-    generation_id: GenerationId,
     workspace_lock: Option<BridgeWorkspaceLock>,
     local_record: LocalGenerationRecord,
     runtime_bundle: ApprovedRuntimeBundle,
@@ -318,10 +313,7 @@ where
             || lease.profile_id() != enrollment.profile_id()
             || lease.device_id() != &device_id
         {
-            return Err(self.fail_before_local_use(
-                OperatorFailureStage::LeaseValidation,
-                lease,
-            ));
+            return Err(self.fail_before_local_use(OperatorFailureStage::LeaseValidation, lease));
         }
 
         let workspace = match root.open_generation(
@@ -331,22 +323,18 @@ where
         ) {
             Ok(value) => value,
             Err(_) => {
-                return Err(self.fail_before_local_use(
-                    OperatorFailureStage::LocalWorkspace,
-                    lease,
-                ));
+                return Err(self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease));
             }
         };
-        let workspace_lock = match BridgeWorkspaceLock::acquire(&workspace, &device_id, lease.epoch())
-        {
-            Ok(value) => value,
-            Err(_) => {
-                return Err(self.fail_before_local_use(
-                    OperatorFailureStage::LocalWorkspace,
-                    lease,
-                ));
-            }
-        };
+        let workspace_lock =
+            match BridgeWorkspaceLock::acquire(&workspace, &device_id, lease.epoch()) {
+                Ok(value) => value,
+                Err(_) => {
+                    return Err(
+                        self.fail_before_local_use(OperatorFailureStage::LocalWorkspace, lease)
+                    );
+                }
+            };
         let inventory = match workspace.inventory() {
             Ok(value) => value,
             Err(_) => {
@@ -378,11 +366,7 @@ where
         ) {
             let _ = local_record.observe_crash(now);
             let process_failed = matches!(source, RuntimeLaunchError::Rollback { .. });
-            let cleanup = self.cleanup_after_local_use(
-                &lease,
-                workspace_lock,
-                process_failed,
-            );
+            let cleanup = self.cleanup_after_local_use(&lease, workspace_lock, process_failed);
             self.record_terminal(&lease, &local_record, cleanup);
             if cleanup.any() {
                 self.cleanup_blocked = true;
@@ -396,7 +380,6 @@ where
 
         self.active = Some(ActiveOperatorSession {
             lease,
-            generation_id: enrollment.generation_id().clone(),
             workspace_lock: Some(workspace_lock),
             local_record,
             runtime_bundle,
@@ -467,7 +450,9 @@ where
 
     #[must_use]
     pub fn active_session_id(&self) -> Option<&SessionId> {
-        self.active.as_ref().map(|session| session.lease.session_id())
+        self.active
+            .as_ref()
+            .map(|session| session.lease.session_id())
     }
 
     #[must_use]
@@ -591,9 +576,9 @@ where
                 cleanup,
             });
         }
-        self.last_terminal
-            .clone()
-            .ok_or(OperatorFlowError::Stage(OperatorFailureStage::LocalLifecycle))
+        self.last_terminal.clone().ok_or(OperatorFlowError::Stage(
+            OperatorFailureStage::LocalLifecycle,
+        ))
     }
 
     fn finish_failed_session(
@@ -643,7 +628,9 @@ mod tests {
     };
     use crate::local_profile::{BridgeWorkspaceLock, LocalGenerationState, MaterializationRoot};
     use crate::runtime_bundle::ApprovedRuntimeBundle;
-    use crate::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl, ProcessAction};
+    use crate::{
+        FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl, ProcessAction,
+    };
     use application_ports::ProfileCoordinatorPort;
     use bridge_domain::{
         BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort, ClaimCode,
@@ -946,8 +933,14 @@ mod tests {
         let fixture = Fixture::new()?;
         let mut operator = operator(&fixture, FakeCamouhost::default())?;
         operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
-        assert_eq!(operator.active_session_id(), Some(fixture.lease.session_id()));
-        assert_eq!(operator.active_local_state(), Some(LocalGenerationState::InUse));
+        assert_eq!(
+            operator.active_session_id(),
+            Some(fixture.lease.session_id())
+        );
+        assert_eq!(
+            operator.active_local_state(),
+            Some(LocalGenerationState::InUse)
+        );
         assert_eq!(operator.coordinator().acquired, 1);
         assert_eq!(operator.coordinator().closed, 0);
         assert_eq!(
@@ -964,6 +957,7 @@ mod tests {
             [
                 ProcessAction::Spawn(fixture.lease.session_id().clone()),
                 ProcessAction::GracefulClose(fixture.lease.session_id().clone()),
+                ProcessAction::ConfirmStopped(fixture.lease.session_id().clone()),
             ]
         );
         let workspace = fixture.root.open_generation(
@@ -971,7 +965,8 @@ mod tests {
             &fixture.profile_id,
             &fixture.generation_id,
         )?;
-        let lock = BridgeWorkspaceLock::acquire(&workspace, &fixture.device_id, fixture.lease.epoch())?;
+        let lock =
+            BridgeWorkspaceLock::acquire(&workspace, &fixture.device_id, fixture.lease.epoch())?;
         lock.release()?;
         Ok(())
     }
@@ -1066,15 +1061,14 @@ mod tests {
             &fixture.profile_id,
             &fixture.generation_id,
         )?;
-        let busy_lock = BridgeWorkspaceLock::acquire(
-            &workspace,
-            &fixture.device_id,
-            fixture.lease.epoch(),
-        )?;
+        let busy_lock =
+            BridgeWorkspaceLock::acquire(&workspace, &fixture.device_id, fixture.lease.epoch())?;
         let mut operator = operator(&fixture, FakeCamouhost::default())?;
         assert_eq!(
             operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
-            Err(OperatorFlowError::Stage(OperatorFailureStage::LocalWorkspace))
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::LocalWorkspace
+            ))
         );
         assert_eq!(operator.coordinator().closed, 1);
         assert!(operator.process().actions().is_empty());
@@ -1119,7 +1113,10 @@ mod tests {
         let mut operator = operator(&fixture, FakeCamouhost::default())?;
         operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10))?;
         let terminal = operator.abort(UnixMillis::new(11))?;
-        assert_eq!(terminal.local_state(), LocalGenerationState::RecoveryRequired);
+        assert_eq!(
+            terminal.local_state(),
+            LocalGenerationState::RecoveryRequired
+        );
         assert_eq!(operator.coordinator().closed, 1);
         assert_eq!(
             operator.process().actions(),
