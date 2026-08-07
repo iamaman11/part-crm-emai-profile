@@ -5,10 +5,9 @@ use crate::d1_identity_queries::{D1IdentityQueryRepository, ProfileProjection};
 use application_ports::CommandExecutionEvidence;
 use application_ports::profiles::{
     ProfileApplicationPort, ProfileCreateWrite, ProfilePortError, ProfilePortErrorClass,
-    ProfileReadModel, ProfileReplayDecision, ProfileReplayReceipt,
+    ProfileReadModel, ProfileReplayDecision, ProfileReplayReceipt, ProfileStatus,
 };
 use identity_access_domain::MembershipRole;
-use profile_domain::ProfileStatus;
 use profile_platform_primitives::{ActorContext, ActorId, AggregateVersion, ProfileId, TenantScope};
 use worker::Error;
 use worker::d1::D1Database;
