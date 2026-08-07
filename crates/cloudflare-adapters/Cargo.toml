@@ -6,6 +6,8 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+application-ports.workspace = true
+mailbox-domain.workspace = true
 profile-platform-primitives.workspace = true
 serde = "=1.0.229"
 serde_json = "=1.0.151"
