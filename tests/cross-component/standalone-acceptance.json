@@ -56,7 +56,8 @@
       "name": "mailbox_metadata_job",
       "expectedOutcome": "metadata_only_synthetic_provider_job",
       "evidence": [
-        "apps/control-plane-worker/src/mailboxes.rs",
+        "apps/control-plane-worker/src/mailbox_bindings.rs",
+        "apps/control-plane-worker/src/mailbox_jobs.rs",
         "scripts/test-mailbox-vertical-slice.py"
       ]
     },

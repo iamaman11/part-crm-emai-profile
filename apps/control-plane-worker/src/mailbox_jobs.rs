@@ -3,20 +3,18 @@ use crate::access_session::{
 };
 use crate::mutation_failure::mutation_failure;
 use crate::request_evidence::{audit_event_id, outbox_event_id};
-use cloudflare_adapters::MailboxProvider;
 use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use cloudflare_adapters::d1_identity_acl::{
     MutationEnvelope, ResolvedActor, ResolvedMembershipRole,
 };
 use cloudflare_adapters::d1_mailboxes::{
-    CreateMailboxBindingMutation, CreateMailboxJobMutation, D1MailboxRepository,
-    MailboxJobProjection, RevokeMailboxBindingMutation, RunMailboxJobMutation,
+    CreateMailboxJobMutation, D1MailboxRepository, MailboxJobProjection, RunMailboxJobMutation,
 };
 use cloudflare_adapters::mailbox_provider::{MetadataMailboxProviderAdapter, decide_mailbox_run};
 use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
 use profile_platform_primitives::{
     AggregateVersion, AuditEventId, IdempotencyKey, MailboxBindingId, MailboxJobId, OutboxEventId,
-    SecretHandle, UnixMillis,
+    UnixMillis,
 };
 use serde::{Deserialize, Serialize};
 use worker::{Date, Env, Error, Request, Response, Result};
@@ -47,19 +45,6 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
     }
 
     match route {
-        RouteClass::MailboxBindingCollectionApi => create_binding(request, env, &actor).await,
-        RouteClass::MailboxBindingResourceApi => {
-            let Some(binding_id) = binding_id else {
-                return neutral_not_found(actor.actor().correlation_id().as_str());
-            };
-            get_binding(env, &actor, &binding_id).await
-        }
-        RouteClass::MailboxBindingRevokeApi => {
-            let Some(binding_id) = binding_id else {
-                return neutral_not_found(actor.actor().correlation_id().as_str());
-            };
-            revoke_binding(request, env, &actor, &binding_id).await
-        }
         RouteClass::MailboxJobCollectionApi => {
             let Some(binding_id) = binding_id else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
@@ -82,26 +67,6 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
     }
 }
 
-async fn get_binding(
-    env: &Env,
-    actor: &ResolvedActor,
-    binding_id: &MailboxBindingId,
-) -> Result<Response> {
-    let repository = D1MailboxRepository::new(env.d1(D1_CATALOG_BINDING)?);
-    let Some(binding) = repository
-        .find_binding(actor.actor().tenant_scope(), binding_id)
-        .await?
-    else {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
-    };
-    Response::from_json(&MailboxBindingResponse {
-        binding_id: binding.binding_id().as_str(),
-        provider: binding.provider().storage_value(),
-        status: binding.status().storage_value(),
-        version: binding.version().value(),
-    })
-}
-
 async fn get_job(
     env: &Env,
     actor: &ResolvedActor,
@@ -116,134 +81,6 @@ async fn get_job(
         return neutral_not_found(actor.actor().correlation_id().as_str());
     };
     Response::from_json(&MailboxJobResponse::from(&job))
-}
-
-async fn create_binding(
-    request: &mut Request,
-    env: &Env,
-    actor: &ResolvedActor,
-) -> Result<Response> {
-    let body = match request.json::<CreateMailboxBindingRequest>().await {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let binding_id = match MailboxBindingId::parse(body.binding_id) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let secret_handle = match SecretHandle::parse(body.secret_handle) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let provider = match parse_provider(&body.provider) {
-        Some(value) => value,
-        None => return invalid_request(request),
-    };
-    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    if let Some(response) = replay_response(
-        env,
-        actor,
-        "mailbox.binding_create",
-        &envelope,
-        binding_id.as_str(),
-        1,
-        201,
-    )
-    .await?
-    {
-        return Ok(response);
-    }
-    let mutation = CreateMailboxBindingMutation {
-        binding_id: &binding_id,
-        provider,
-        secret_handle: &secret_handle,
-        envelope: envelope.identity(),
-    };
-    match D1MailboxRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .create_binding(actor.actor(), mutation)
-        .await
-    {
-        Ok(_) => mutation_receipt("created", binding_id.as_str(), 1, 201),
-        Err(error) => {
-            mutation_failure_or_replay(
-                request,
-                env,
-                actor,
-                error,
-                "mailbox.binding_create",
-                &envelope,
-                binding_id.as_str(),
-                1,
-                201,
-            )
-            .await
-        }
-    }
-}
-
-async fn revoke_binding(
-    request: &mut Request,
-    env: &Env,
-    actor: &ResolvedActor,
-    binding_id: &MailboxBindingId,
-) -> Result<Response> {
-    let body = match request.json::<RevokeMailboxBindingRequest>().await {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let expected_version = match AggregateVersion::new(body.expected_binding_version) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let response_version = match expected_version.next() {
-        Ok(value) => value.value(),
-        Err(_) => return internal_failure(request),
-    };
-    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    if let Some(response) = replay_response(
-        env,
-        actor,
-        "mailbox.binding_revoke",
-        &envelope,
-        binding_id.as_str(),
-        response_version,
-        200,
-    )
-    .await?
-    {
-        return Ok(response);
-    }
-    let mutation = RevokeMailboxBindingMutation {
-        binding_id,
-        expected_binding_version: expected_version,
-        envelope: envelope.identity(),
-    };
-    match D1MailboxRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .revoke_binding(actor.actor(), mutation)
-        .await
-    {
-        Ok(_) => mutation_receipt("revoked", binding_id.as_str(), response_version, 200),
-        Err(error) => {
-            mutation_failure_or_replay(
-                request,
-                env,
-                actor,
-                error,
-                "mailbox.binding_revoke",
-                &envelope,
-                binding_id.as_str(),
-                response_version,
-                200,
-            )
-            .await
-        }
-    }
 }
 
 async fn create_job(
@@ -511,15 +348,6 @@ async fn replay_response(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MailboxBindingResponse<'a> {
-    binding_id: &'a str,
-    provider: &'static str,
-    status: &'static str,
-    version: u64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct MailboxJobResponse<'a> {
     job_id: &'a str,
     status: &'static str,
@@ -633,22 +461,6 @@ impl EnvelopeOwned {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateMailboxBindingRequest {
-    binding_id: String,
-    provider: String,
-    secret_handle: String,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RevokeMailboxBindingRequest {
-    expected_binding_version: u64,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateMailboxJobRequest {
     job_id: String,
     cursor: Option<String>,
@@ -662,15 +474,6 @@ struct CreateMailboxJobRequest {
 struct RunMailboxJobRequest {
     expected_job_version: u64,
     request_digest: String,
-}
-
-fn parse_provider(value: &str) -> Option<MailboxProvider> {
-    match value {
-        "GMAIL_API" => Some(MailboxProvider::GmailApi),
-        "IMAP" => Some(MailboxProvider::Imap),
-        "BROWSER_FALLBACK" => Some(MailboxProvider::BrowserFallback),
-        _ => None,
-    }
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -709,28 +512,20 @@ fn internal_failure(request: &Request) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CreateMailboxBindingRequest, CreateMailboxJobRequest, parse_provider, valid_digest,
-    };
+    use super::{CreateMailboxJobRequest, valid_digest};
 
     #[test]
-    fn provider_and_digest_validation_is_strict() {
-        assert!(parse_provider("IMAP").is_some());
-        assert!(parse_provider("imap").is_none());
-        assert!(valid_digest(&"a".repeat(64)));
-        assert!(!valid_digest(&"A".repeat(64)));
-    }
-
-    #[test]
-    fn mailbox_request_dtos_reject_unknown_fields_and_raw_credential_shape() {
+    fn mailbox_job_request_shape_and_digest_validation_remain_strict() {
         let digest = "a".repeat(64);
-        let unknown = format!(
-            r#"{{"bindingId":"mailbox_01JTEST","provider":"IMAP","secretHandle":"secret_01JTEST","requestDigest":"{digest}","password":"forbidden"}}"#
+        let valid = format!(
+            r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"{digest}"}}"#
         );
-        assert!(serde_json::from_str::<CreateMailboxBindingRequest>(&unknown).is_err());
-        let job_unknown = format!(
+        assert!(serde_json::from_str::<CreateMailboxJobRequest>(&valid).is_ok());
+        let unknown = format!(
             r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"{digest}","messageBody":"forbidden"}}"#
         );
-        assert!(serde_json::from_str::<CreateMailboxJobRequest>(&job_unknown).is_err());
+        assert!(serde_json::from_str::<CreateMailboxJobRequest>(&unknown).is_err());
+        assert!(valid_digest(&digest));
+        assert!(!valid_digest(&"A".repeat(64)));
     }
 }
