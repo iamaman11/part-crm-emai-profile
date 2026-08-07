@@ -1,27 +1,19 @@
 use crate::access_session::{
-    correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
+    correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
-use crate::mutation_failure::mutation_failure;
-use crate::request_evidence::{audit_event_id, outbox_event_id};
-use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
-use cloudflare_adapters::d1_identity_acl::{
-    MutationEnvelope, ResolvedActor, ResolvedMembershipRole,
-};
-use cloudflare_adapters::d1_mailboxes::{
-    CreateMailboxJobMutation, D1MailboxRepository, MailboxJobProjection, RunMailboxJobMutation,
-};
-use cloudflare_adapters::mailbox_provider::{MetadataMailboxProviderAdapter, decide_mailbox_run};
-use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
-use profile_platform_primitives::{
-    AggregateVersion, AuditEventId, IdempotencyKey, MailboxBindingId, MailboxJobId, OutboxEventId,
-    UnixMillis,
-};
+use crate::command_evidence;
+use crate::composition::mailbox_job_application;
+use control_plane_contract::RouteClass;
+use identity_access_domain::MembershipRole;
+use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, MailboxJobId};
 use serde::{Deserialize, Serialize};
-use worker::{Date, Env, Error, Request, Response, Result};
-
-const IDEMPOTENCY_HEADER: &str = "Idempotency-Key";
-const IDEMPOTENCY_TTL_MS: u64 = 86_400_000;
-const MAX_JOB_DELAY_MS: u64 = 604_800_000;
+use use_cases::mailbox_jobs::{
+    ExecuteCreateMailboxJobCommand, ExecuteRunMailboxJobCommand, MailboxJobDetails,
+    MailboxJobMutationOutcome, MailboxJobOperationError, authorize_mailbox_job,
+    execute_create_mailbox_job, execute_run_mailbox_job, get_mailbox_job,
+    validate_create_mailbox_job_request, validate_mailbox_job_run_version,
+};
+use worker::{Env, Request, Response, Result};
 
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
@@ -37,11 +29,13 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
     let job_id = segments
         .get(7)
         .and_then(|value| MailboxJobId::parse((*value).to_owned()).ok());
+
     let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
         return neutral_not_found(&correlation_hint(request));
     };
-    if actor.role() != ResolvedMembershipRole::TenantOwner {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
+    let role = membership_role(&actor);
+    if let Err(error) = authorize_mailbox_job(role) {
+        return operation_failure(actor.actor().correlation_id().as_str(), error);
     }
 
     match route {
@@ -49,301 +43,176 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
             let Some(binding_id) = binding_id else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            create_job(request, env, &actor, &binding_id).await
+            create_job(request, env, actor.actor(), role, binding_id).await
         }
         RouteClass::MailboxJobResourceApi => {
             let (Some(binding_id), Some(job_id)) = (binding_id, job_id) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            get_job(env, &actor, &binding_id, &job_id).await
+            get_job(env, actor.actor(), role, &binding_id, &job_id).await
         }
         RouteClass::MailboxJobRunApi => {
             let (Some(binding_id), Some(job_id)) = (binding_id, job_id) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            run_job(request, env, &actor, &binding_id, &job_id).await
+            run_job(request, env, actor.actor(), role, binding_id, job_id).await
         }
         _ => neutral_not_found(actor.actor().correlation_id().as_str()),
     }
 }
 
-async fn get_job(
-    env: &Env,
-    actor: &ResolvedActor,
-    binding_id: &MailboxBindingId,
-    job_id: &MailboxJobId,
-) -> Result<Response> {
-    let repository = D1MailboxRepository::new(env.d1(D1_CATALOG_BINDING)?);
-    let Some(job) = repository
-        .find_job(actor.actor().tenant_scope(), binding_id, job_id)
-        .await?
-    else {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
-    };
-    Response::from_json(&MailboxJobResponse::from(&job))
-}
-
 async fn create_job(
     request: &mut Request,
     env: &Env,
-    actor: &ResolvedActor,
-    binding_id: &MailboxBindingId,
+    actor: &ActorContext,
+    role: MembershipRole,
+    binding_id: MailboxBindingId,
 ) -> Result<Response> {
     let body = match request.json::<CreateMailboxJobRequest>().await {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if body.delay_ms > MAX_JOB_DELAY_MS || body.max_attempts == 0 || body.max_attempts > 10 {
-        return invalid_request(request);
-    }
-    if body
-        .cursor
-        .as_ref()
-        .is_some_and(|cursor| cursor.len() > 512)
-    {
-        return invalid_request(request);
+    if let Err(error) = validate_create_mailbox_job_request(
+        body.delay_ms,
+        body.max_attempts,
+        body.cursor.as_deref(),
+    ) {
+        return operation_failure(actor.correlation_id().as_str(), error);
     }
     let job_id = match MailboxJobId::parse(body.job_id) {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let scheduled_at = match envelope.now.value().checked_add(body.delay_ms) {
-        Some(value) => UnixMillis::new(value),
-        None => return internal_failure(request),
-    };
-    if let Some(response) = replay_response(
-        env,
-        actor,
-        "mailbox.job_create",
-        &envelope,
-        job_id.as_str(),
-        1,
-        201,
-    )
-    .await?
-    {
-        return Ok(response);
+    if !valid_digest(&body.request_digest) {
+        return invalid_request(actor.correlation_id().as_str());
     }
-    let mutation = CreateMailboxJobMutation {
-        binding_id,
-        job_id: &job_id,
-        cursor: body.cursor.as_deref(),
-        scheduled_at,
-        max_attempts: body.max_attempts,
-        envelope: envelope.identity(),
+    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    match D1MailboxRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .create_job(actor.actor(), mutation)
-        .await
+    let application = mailbox_job_application(env)?;
+    match execute_create_mailbox_job(
+        actor,
+        role,
+        &application,
+        ExecuteCreateMailboxJobCommand::new(
+            binding_id,
+            job_id,
+            body.cursor,
+            body.delay_ms,
+            body.max_attempts,
+            evidence,
+        ),
+    )
+    .await
     {
-        Ok(_) => mutation_receipt("created", job_id.as_str(), 1, 201),
-        Err(error) => {
-            mutation_failure_or_replay(
-                request,
-                env,
-                actor,
-                error,
-                "mailbox.job_create",
-                &envelope,
-                job_id.as_str(),
-                1,
-                201,
-            )
-            .await
+        Ok(outcome) => mutation_receipt(&outcome, 201),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
+    }
+}
+
+async fn get_job(
+    env: &Env,
+    actor: &ActorContext,
+    role: MembershipRole,
+    binding_id: &MailboxBindingId,
+    job_id: &MailboxJobId,
+) -> Result<Response> {
+    let application = mailbox_job_application(env)?;
+    match get_mailbox_job(actor, role, &application, binding_id, job_id).await {
+        Ok(job) => Response::from_json(&MailboxJobResponse::from(&job)),
+        Err(MailboxJobOperationError::NotFound) => {
+            neutral_not_found(actor.correlation_id().as_str())
         }
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
 
 async fn run_job(
     request: &mut Request,
     env: &Env,
-    actor: &ResolvedActor,
-    binding_id: &MailboxBindingId,
-    job_id: &MailboxJobId,
+    actor: &ActorContext,
+    role: MembershipRole,
+    binding_id: MailboxBindingId,
+    job_id: MailboxJobId,
 ) -> Result<Response> {
     let body = match request.json::<RunMailboxJobRequest>().await {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let expected_version = match AggregateVersion::new(body.expected_job_version) {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let response_version = match expected_version.next().and_then(AggregateVersion::next) {
-        Ok(value) => value.value(),
-        Err(_) => return internal_failure(request),
-    };
-    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
+    if let Err(error) = validate_mailbox_job_run_version(expected_version) {
+        return operation_failure(actor.correlation_id().as_str(), error);
+    }
+    if !valid_digest(&body.request_digest) {
+        return invalid_request(actor.correlation_id().as_str());
+    }
+    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if let Some(response) = replay_response(
-        env,
+    let mut application = mailbox_job_application(env)?;
+    match execute_run_mailbox_job(
         actor,
-        "mailbox.job_run",
-        &envelope,
-        job_id.as_str(),
-        response_version,
-        200,
+        role,
+        &mut application,
+        ExecuteRunMailboxJobCommand::new(binding_id, job_id, expected_version, evidence),
     )
-    .await?
+    .await
     {
-        return Ok(response);
-    }
-    let repository = D1MailboxRepository::new(env.d1(D1_CATALOG_BINDING)?);
-    let Some(binding) = repository
-        .find_binding(actor.actor().tenant_scope(), binding_id)
-        .await?
-    else {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
-    };
-    let Some(projection) = repository
-        .find_job(actor.actor().tenant_scope(), binding_id, job_id)
-        .await?
-    else {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
-    };
-    if projection.job().version() != expected_version {
-        return version_conflict(request);
-    }
-    let next_attempt = match projection.job().attempt().checked_add(1) {
-        Some(value) => value,
-        None => return internal_failure(request),
-    };
-    let next_cursor = format!("meta_{}_{}", job_id.as_str(), next_attempt);
-    let mut provider = match MetadataMailboxProviderAdapter::new(
-        binding.provider(),
-        "SYNTHETIC_OK",
-        0,
-        Some(next_cursor),
-    ) {
-        Ok(value) => value,
-        Err(_) => return internal_failure(request),
-    };
-    let decision = match decide_mailbox_run(&binding, projection.job(), envelope.now, &mut provider)
-    {
-        Ok(value) => value,
-        Err(error) => {
-            return if error.to_string().contains("invalid job state") {
-                problem(
-                    &correlation_hint(request),
-                    409,
-                    "invalid_state",
-                    "Invalid State",
-                )
-            } else {
-                problem(
-                    &correlation_hint(request),
-                    503,
-                    "dependency_unavailable",
-                    "Dependency Unavailable",
-                )
-            };
-        }
-    };
-    let result_code = match decision.status().storage_value() {
-        "SUCCEEDED" => "succeeded",
-        "RETRY_PENDING" => "retry_pending",
-        "FAILED" => "failed",
-        _ => return internal_failure(request),
-    };
-    let mutation = RunMailboxJobMutation {
-        binding_id,
-        job_id,
-        expected_job_version: expected_version,
-        decision: &decision,
-        envelope: envelope.identity(),
-    };
-    match repository.run_job(actor.actor(), mutation).await {
-        Ok(_) => mutation_receipt(result_code, job_id.as_str(), response_version, 200),
-        Err(error) => {
-            mutation_failure_or_replay(
-                request,
-                env,
-                actor,
-                error,
-                "mailbox.job_run",
-                &envelope,
-                job_id.as_str(),
-                response_version,
-                200,
-            )
-            .await
-        }
+        Ok(outcome) => mutation_receipt(&outcome, 200),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn mutation_failure_or_replay(
-    request: &Request,
-    env: &Env,
-    actor: &ResolvedActor,
-    error: Error,
-    command_name: &str,
-    envelope: &EnvelopeOwned,
-    resource_id: &str,
-    aggregate_version: u64,
-    success_status: u16,
-) -> Result<Response> {
-    if error.to_string().contains("UNIQUE constraint failed") {
-        if let Some(response) = replay_response(
-            env,
-            actor,
-            command_name,
-            envelope,
-            resource_id,
-            aggregate_version,
-            success_status,
-        )
-        .await?
-        {
-            return Ok(response);
+fn operation_failure(correlation_id: &str, error: MailboxJobOperationError) -> Result<Response> {
+    match error {
+        MailboxJobOperationError::InvalidRequest => {
+            problem(correlation_id, 400, "invalid_request", "Invalid Request")
         }
-    }
-    mutation_failure(request, error)
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn replay_response(
-    env: &Env,
-    actor: &ResolvedActor,
-    command_name: &str,
-    envelope: &EnvelopeOwned,
-    resource_id: &str,
-    aggregate_version: u64,
-    success_status: u16,
-) -> Result<Option<Response>> {
-    let decision = D1IdempotencyRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .decide(
-            actor.actor().tenant_scope(),
-            actor.actor().actor_id(),
-            &envelope.idempotency_key,
-            command_name,
-            &envelope.request_digest,
-            envelope.now,
-        )
-        .await?;
-    match decision {
-        IdempotencyDecision::Miss => Ok(None),
-        IdempotencyDecision::Replay(receipt) => mutation_receipt(
-            receipt.result_code(),
-            receipt.result_reference().unwrap_or(resource_id),
-            aggregate_version,
-            success_status,
-        )
-        .map(Some),
-        IdempotencyDecision::Conflict => problem(
-            actor.actor().correlation_id().as_str(),
+        MailboxJobOperationError::NotFound => neutral_not_found(correlation_id),
+        MailboxJobOperationError::VersionConflict => problem(
+            correlation_id,
             409,
-            "conflict",
-            "Conflict",
-        )
-        .map(Some),
+            "version_conflict",
+            "Version Conflict",
+        ),
+        MailboxJobOperationError::InvalidState => {
+            problem(correlation_id, 409, "invalid_state", "Invalid State")
+        }
+        MailboxJobOperationError::Conflict => {
+            problem(correlation_id, 409, "conflict", "Conflict")
+        }
+        MailboxJobOperationError::IntegrityFailure => problem(
+            correlation_id,
+            500,
+            "integrity_failure",
+            "Integrity Failure",
+        ),
+        MailboxJobOperationError::InternalFailure => {
+            problem(correlation_id, 500, "internal_failure", "Internal Failure")
+        }
+        MailboxJobOperationError::DependencyUnavailable => problem(
+            correlation_id,
+            503,
+            "dependency_unavailable",
+            "Dependency Unavailable",
+        ),
     }
+}
+
+fn invalid_request(correlation_id: &str) -> Result<Response> {
+    problem(correlation_id, 400, "invalid_request", "Invalid Request")
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 #[derive(Serialize)]
@@ -359,17 +228,17 @@ struct MailboxJobResponse<'a> {
     version: u64,
 }
 
-impl<'a> From<&'a MailboxJobProjection> for MailboxJobResponse<'a> {
-    fn from(projection: &'a MailboxJobProjection) -> Self {
+impl<'a> From<&'a MailboxJobDetails> for MailboxJobResponse<'a> {
+    fn from(job: &'a MailboxJobDetails) -> Self {
         Self {
-            job_id: projection.job().job_id().as_str(),
-            status: projection.job().status().storage_value(),
-            attempt: projection.job().attempt(),
-            max_attempts: projection.job().max_attempts(),
-            next_run_at_ms: projection.job().next_run_at().value(),
-            provider_status: projection.provider_status(),
-            bounded_item_count: projection.bounded_item_count(),
-            version: projection.job().version().value(),
+            job_id: job.job_id().as_str(),
+            status: job.status().storage_value(),
+            attempt: job.attempt(),
+            max_attempts: job.max_attempts(),
+            next_run_at_ms: job.next_run_at().value(),
+            provider_status: job.provider_status(),
+            bounded_item_count: job.bounded_item_count(),
+            version: job.version().value(),
         }
     }
 }
@@ -382,81 +251,13 @@ struct MutationReceipt<'a> {
     aggregate_version: u64,
 }
 
-fn mutation_receipt(
-    result_code: &str,
-    resource_id: &str,
-    aggregate_version: u64,
-    status: u16,
-) -> Result<Response> {
+fn mutation_receipt(outcome: &MailboxJobMutationOutcome, status: u16) -> Result<Response> {
     Response::from_json(&MutationReceipt {
-        result_code,
-        resource_id,
-        aggregate_version,
+        result_code: outcome.result_code(),
+        resource_id: outcome.resource_id(),
+        aggregate_version: outcome.aggregate_version().value(),
     })
     .map(|response| response.with_status(status))
-}
-
-struct EnvelopeOwned {
-    idempotency_key: IdempotencyKey,
-    request_digest: String,
-    audit_event_id: AuditEventId,
-    outbox_event_id: OutboxEventId,
-    now: UnixMillis,
-    expires_at: UnixMillis,
-    payload_json: String,
-}
-
-impl EnvelopeOwned {
-    fn from_request(
-        request: &Request,
-        actor: &ResolvedActor,
-        request_digest: String,
-    ) -> Result<Self> {
-        if !valid_digest(&request_digest) {
-            return Err(Error::RustError("request digest is invalid".to_owned()));
-        }
-        let key = request
-            .headers()
-            .get(IDEMPOTENCY_HEADER)?
-            .ok_or_else(|| Error::RustError("idempotency key missing".to_owned()))?;
-        let idempotency_key =
-            IdempotencyKey::parse(key).map_err(|error| Error::RustError(error.to_string()))?;
-        let audit_event_id = audit_event_id(
-            actor.actor().tenant_scope().tenant_id(),
-            actor.actor().actor_id(),
-            &idempotency_key,
-        )?;
-        let outbox_event_id = outbox_event_id(
-            actor.actor().tenant_scope().tenant_id(),
-            actor.actor().actor_id(),
-            &idempotency_key,
-        )?;
-        let now = Date::now().as_millis();
-        let expires_at = now
-            .checked_add(IDEMPOTENCY_TTL_MS)
-            .ok_or_else(|| Error::RustError("idempotency expiry overflow".to_owned()))?;
-        Ok(Self {
-            idempotency_key,
-            request_digest,
-            audit_event_id,
-            outbox_event_id,
-            now: UnixMillis::new(now),
-            expires_at: UnixMillis::new(expires_at),
-            payload_json: "{}".to_owned(),
-        })
-    }
-
-    fn identity(&self) -> MutationEnvelope<'_> {
-        MutationEnvelope {
-            idempotency_key: &self.idempotency_key,
-            request_digest: &self.request_digest,
-            audit_event_id: &self.audit_event_id,
-            outbox_event_id: &self.outbox_event_id,
-            payload_json: &self.payload_json,
-            now: self.now,
-            idempotency_expires_at: self.expires_at,
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -476,46 +277,13 @@ struct RunMailboxJobRequest {
     request_digest: String,
 }
 
-fn valid_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-}
-
-fn invalid_request(request: &Request) -> Result<Response> {
-    problem(
-        &correlation_hint(request),
-        400,
-        "invalid_request",
-        "Invalid Request",
-    )
-}
-
-fn version_conflict(request: &Request) -> Result<Response> {
-    problem(
-        &correlation_hint(request),
-        409,
-        "version_conflict",
-        "Version Conflict",
-    )
-}
-
-fn internal_failure(request: &Request) -> Result<Response> {
-    problem(
-        &correlation_hint(request),
-        500,
-        "internal_failure",
-        "Internal Failure",
-    )
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{CreateMailboxJobRequest, valid_digest};
+    use super::{CreateMailboxJobRequest, MailboxJobResponse, MutationReceipt, valid_digest};
 
     #[test]
-    fn mailbox_job_request_shape_and_digest_validation_remain_strict() {
+    fn mailbox_job_transport_preserves_legacy_shape_and_privacy()
+    -> Result<(), Box<dyn std::error::Error>> {
         let digest = "a".repeat(64);
         let valid = format!(
             r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"{digest}"}}"#
@@ -527,5 +295,41 @@ mod tests {
         assert!(serde_json::from_str::<CreateMailboxJobRequest>(&unknown).is_err());
         assert!(valid_digest(&digest));
         assert!(!valid_digest(&"A".repeat(64)));
+        assert!(!valid_digest(&"a".repeat(63)));
+
+        let receipt = serde_json::to_value(MutationReceipt {
+            result_code: "created",
+            resource_id: "mailjob_01JTEST",
+            aggregate_version: 1,
+        })?;
+        assert!(receipt.get("resultCode").is_some());
+        assert!(receipt.get("resourceId").is_some());
+        assert!(receipt.get("aggregateVersion").is_some());
+
+        let response = serde_json::to_value(MailboxJobResponse {
+            job_id: "mailjob_01JTEST",
+            status: "PENDING",
+            attempt: 0,
+            max_attempts: 3,
+            next_run_at_ms: 0,
+            provider_status: None,
+            bounded_item_count: 0,
+            version: 1,
+        })?;
+        for key in [
+            "jobId",
+            "status",
+            "attempt",
+            "maxAttempts",
+            "nextRunAtMs",
+            "providerStatus",
+            "boundedItemCount",
+            "version",
+        ] {
+            assert!(response.get(key).is_some(), "missing {key}");
+        }
+        assert!(response.get("messageBody").is_none());
+        assert!(response.get("secretHandle").is_none());
+        Ok(())
     }
 }
