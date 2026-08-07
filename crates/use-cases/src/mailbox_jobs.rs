@@ -347,11 +347,7 @@ pub async fn execute_run_mailbox_job<P: MailboxJobApplicationPort>(
         .map_err(map_port_error)?
         .ok_or(MailboxJobOperationError::NotFound)?;
     let job = port
-        .find_job(
-            actor.tenant_scope(),
-            &command.binding_id,
-            &command.job_id,
-        )
+        .find_job(actor.tenant_scope(), &command.binding_id, &command.job_id)
         .await
         .map_err(map_port_error)?
         .ok_or(MailboxJobOperationError::NotFound)?;
@@ -656,7 +652,8 @@ mod tests {
         )?)
     }
 
-    fn prepared_success() -> Result<MailboxJobPreparedRun<FakeRunToken>, Box<dyn std::error::Error>> {
+    fn prepared_success() -> Result<MailboxJobPreparedRun<FakeRunToken>, Box<dyn std::error::Error>>
+    {
         Ok(MailboxJobPreparedRun::new(
             FakeRunToken,
             MailboxJobStatus::Succeeded,
@@ -752,8 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn create_unique_conflict_rechecks_exact_replay()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn create_unique_conflict_rechecks_exact_replay() -> Result<(), Box<dyn std::error::Error>> {
         let port = FakeJobPort::new(vec![
             MailboxReplayDecision::Miss,
             MailboxReplayDecision::Replay(MailboxReplayReceipt::new(
@@ -776,8 +772,8 @@ mod tests {
     }
 
     #[test]
-    fn query_projects_existing_job_without_payload_data()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn query_projects_existing_job_without_payload_data() -> Result<(), Box<dyn std::error::Error>>
+    {
         let binding = binding()?;
         let job = job(&binding)?;
         let port = FakeJobPort::new(Vec::new());
@@ -800,8 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn run_exact_replay_skips_reads_prepare_and_write()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn run_exact_replay_skips_reads_prepare_and_write() -> Result<(), Box<dyn std::error::Error>> {
         let mut port = FakeJobPort::new(vec![MailboxReplayDecision::Replay(
             MailboxReplayReceipt::new("succeeded", Some("mailjob_existing".to_owned())),
         )]);
@@ -834,7 +829,8 @@ mod tests {
         let job = job(&binding)?;
         let mut port = FakeJobPort::new(vec![MailboxReplayDecision::Miss]);
         port.binding.replace(Some(binding.clone()));
-        port.job.replace(Some(MailboxJobReadModel::new(job, None, 0)));
+        port.job
+            .replace(Some(MailboxJobReadModel::new(job, None, 0)));
         port.prepared.replace(Some(prepared_success()?));
         let command = ExecuteRunMailboxJobCommand::new(
             binding.binding_id().clone(),
