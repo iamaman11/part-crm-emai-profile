@@ -28,10 +28,11 @@ boundaries. Слово `accepted` означает, что конкретный 
 | **Target** | Нормативно спроектировано, но executable implementation отсутствует или неполна. |
 | **External** | Требует provider, physical host, policy, signing или независимого evidence вне GitHub CI. |
 
-Ни один уровень сам по себе не означает production readiness. Branch/PR capability
-становится accepted только после exact-head green и merge. Поэтому строки,
-изменяемые текущим PR, описывают composition candidate и становятся состоянием
-`main` только после acceptance.
+Ни один уровень сам по себе не означает production readiness. `Composed` описывает
+исполняемую wiring/composition форму capability; repository claim становится
+accepted только после exact-head green и merge. Поэтому во время review capability
+может быть `Composed` в feature branch, но состоянием `main` становится только
+после acceptance.
 
 ## 3. Текущая Capability Matrix
 
@@ -41,7 +42,7 @@ boundaries. Слово `accepted` означает, что конкретный 
 | Identity, memberships и ACL | Composed | Access identity adapter, memberships, owner lifecycle, invitations, profile/client grants, neutral disclosure, governed D1 commands. | Реальный production Access/IdP deployment остаётся External. |
 | Client Registry | Composed | Create/query/assignment/grant bounded Worker paths и D1 schema. | Полный CRM Customer Master, merge UI и advanced contact workflows — Target. |
 | Profile catalog | Composed | Create/query/grant/assignment metadata paths, typed profile state и active generation pointer. | Реальные encrypted object operations выполняются не catalog, а будущим R2/provider flow. |
-| Profile generation registry | Composed candidate (#51) | Metadata-only register/query/verify/activate/deactivate/quarantine routes, exact command+digest+expiry replay, collision-resistant deterministic evidence IDs, command journals, audit/outbox, monotonic time, immutable digests/object identity и verified-pointer integrity. | Production R2 object verification, device unwrap и cross-device execution — External. |
+| Profile generation registry | Composed | Metadata-only register/query/verify/activate/deactivate/quarantine routes, exact command+digest+expiry replay, collision-resistant deterministic evidence IDs, command journals, audit/outbox, monotonic time, immutable digests/object identity и verified-pointer integrity. | Production R2 object verification, device unwrap и cross-device execution — External. |
 | Profile Coordinator | Composed | Durable Object journal, monotonic sequence/version/epoch, fencing, timeout/drain/recovery, D1 projection. | Remote production concurrency evidence — External. |
 | Windows Profile Bridge executable | Library | `profile-bridge.exe` build, strict redacted claim-URI CLI, local-profile/runtime modules and Windows lane. | Текущий executable только принимает claim URI; complete enrollment/network/device-key/runtime composition отсутствует. |
 | Device identity/key ports | Synthetic | Typed ports и deterministic fake implementations. | Production CNG/DPAPI/TPM unwrap/revoke/recovery — External. |
@@ -154,8 +155,9 @@ the acceptance authority because it also executes Windows, Wrangler/D1, WASM,
 Worker release, runtime, local-profile, encrypted-generation, certification and
 external-evidence lanes.
 
-PR #51 adds a dedicated Profile Generation Gate; it is acceptance evidence only
-after the same final head also passes every permanent repository workflow.
+The permanent Profile Generation Gate covers registry/domain/adapter/Worker/D1/
+OpenAPI-specific invariants. Generation acceptance additionally requires every
+repository-wide permanent workflow on the same final head.
 
 ## 8. Audit Exclusion
 
