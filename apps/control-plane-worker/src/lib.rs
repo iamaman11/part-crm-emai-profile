@@ -2,6 +2,7 @@
 
 mod access_session;
 mod api;
+mod mailboxes;
 mod mutation_failure;
 mod profile_coordinator;
 mod profile_generations;
@@ -13,6 +14,7 @@ use access_session::session_response;
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use cloudflare_adapters::d1_idempotency::D1IdempotencyRepository;
 use cloudflare_adapters::d1_identity_acl::D1IdentityAclRepository;
+use cloudflare_adapters::d1_mailboxes::D1MailboxRepository;
 use cloudflare_adapters::d1_profile_generations::D1ProfileGenerationRepository;
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
@@ -46,6 +48,12 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::ProfileGenerationQuarantineApi => {
             profile_generations::dispatch(route, &mut request, &env).await
         }
+        RouteClass::MailboxBindingCollectionApi
+        | RouteClass::MailboxBindingResourceApi
+        | RouteClass::MailboxBindingRevokeApi
+        | RouteClass::MailboxJobCollectionApi
+        | RouteClass::MailboxJobResourceApi
+        | RouteClass::MailboxJobRunApi => mailboxes::dispatch(route, &mut request, &env).await,
         RouteClass::OwnerBootstrapApi
         | RouteClass::OwnerTransferApi
         | RouteClass::InvitationCollectionApi
@@ -80,6 +88,8 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _identity_acl_repository = D1IdentityAclRepository::new(identity_catalog);
     let generation_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _generation_repository = D1ProfileGenerationRepository::new(generation_catalog);
+    let mailbox_catalog = env.d1(D1_CATALOG_BINDING)?;
+    let _mailbox_repository = D1MailboxRepository::new(mailbox_catalog);
     let idempotency_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _idempotency_repository = D1IdempotencyRepository::new(idempotency_catalog);
     let _objects = env.bucket(R2_PROFILES_BINDING)?;
