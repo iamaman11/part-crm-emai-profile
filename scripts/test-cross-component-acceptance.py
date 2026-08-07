@@ -167,6 +167,10 @@ def validate_composition_surfaces() -> None:
             "clients::dispatch(route, &mut request, &env).await",
             "RouteClass::ProfileCollectionApi | RouteClass::ProfileResourceApi",
             "profiles::dispatch(route, &mut request, &env).await",
+            "RouteClass::MailboxBindingCollectionApi",
+            "mailbox_bindings::dispatch(route, &mut request, &env).await",
+            "RouteClass::MailboxJobCollectionApi",
+            "mailbox_jobs::dispatch(route, &mut request, &env).await",
         ],
         "application-boundary Worker routing composition",
     )
@@ -231,17 +235,34 @@ def validate_composition_surfaces() -> None:
         "synthetic Profile Bridge executable",
     )
 
-    mailbox = read("apps/control-plane-worker/src/mailboxes.rs")
+    mailbox_binding = read("apps/control-plane-worker/src/mailbox_bindings.rs")
     require_all(
-        mailbox,
+        mailbox_binding,
         [
             "deny_unknown_fields",
             '"password":"forbidden"',
             '"messageBody":"forbidden"',
             "SecretHandle::parse",
-            "MetadataMailboxProviderAdapter",
+            "execute_create_mailbox_binding",
+            "execute_revoke_mailbox_binding",
+            "get_mailbox_binding",
+            "mailbox_binding_application(env)",
         ],
-        "mailbox metadata-only boundary",
+        "mailbox binding metadata-only application boundary",
+    )
+    mailbox_jobs = read("apps/control-plane-worker/src/mailbox_jobs.rs")
+    require_all(
+        mailbox_jobs,
+        [
+            "deny_unknown_fields",
+            '"messageBody":"forbidden"',
+            "MetadataMailboxProviderAdapter",
+            "decide_mailbox_run",
+            "create_job",
+            "get_job",
+            "run_job",
+        ],
+        "retained mailbox job provider transport",
     )
 
     endpoints = read("frontend/src/shared/api/endpoints.ts")
