@@ -56,10 +56,14 @@ def validate(root: Path) -> list[str]:
     ):
         if not path.is_file():
             errors.append(f"missing mailbox application-boundary file: {path.relative_to(root)}")
-    if legacy_path.exists():
-        errors.append("legacy mixed mailbox Worker transport must be removed: apps/control-plane-worker/src/mailboxes.rs")
     if errors:
         return errors
+
+    if legacy_path.exists():
+        errors.append(
+            "legacy mixed mailbox Worker transport must be removed: "
+            "apps/control-plane-worker/src/mailboxes.rs"
+        )
 
     binding = read(binding_path)
     jobs = read(jobs_path)
@@ -82,7 +86,10 @@ def validate(root: Path) -> list[str]:
         "        | RouteClass::MailboxBindingResourceApi\n"
         "        | RouteClass::MailboxBindingRevokeApi"
     )
-    if binding_route_fragment not in worker_lib or "mailbox_bindings::dispatch(route, &mut request, &env).await" not in worker_lib:
+    if (
+        binding_route_fragment not in worker_lib
+        or "mailbox_bindings::dispatch(route, &mut request, &env).await" not in worker_lib
+    ):
         errors.append("Worker root must route mailbox binding APIs to mailbox_bindings::dispatch")
 
     job_route_fragment = (
@@ -90,13 +97,19 @@ def validate(root: Path) -> list[str]:
         "        | RouteClass::MailboxJobResourceApi\n"
         "        | RouteClass::MailboxJobRunApi"
     )
-    if job_route_fragment not in worker_lib or "mailbox_jobs::dispatch(route, &mut request, &env).await" not in worker_lib:
+    if (
+        job_route_fragment not in worker_lib
+        or "mailbox_jobs::dispatch(route, &mut request, &env).await" not in worker_lib
+    ):
         errors.append("Worker root must route mailbox job APIs to mailbox_jobs::dispatch")
 
     if "mod mailboxes;" in worker_lib:
         errors.append("Worker root must not retain legacy mixed `mailboxes` module")
 
-    if "D1MailboxBindingApplicationRepository" not in composition or "env.d1(D1_CATALOG_BINDING)?" not in composition:
+    if (
+        "D1MailboxBindingApplicationRepository" not in composition
+        or "env.d1(D1_CATALOG_BINDING)?" not in composition
+    ):
         errors.append("Worker composition root must construct the D1 mailbox binding application adapter")
 
     if "pub trait MailboxBindingApplicationPort" not in ports:
