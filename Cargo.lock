@@ -597,9 +597,11 @@ dependencies = [
 name = "profile-bridge"
 version = "0.1.0"
 dependencies = [
+ "application-ports",
  "bridge-domain",
  "profile-platform-primitives",
  "runtime-bundle-domain",
+ "session-domain",
 ]
 
 [[package]]
