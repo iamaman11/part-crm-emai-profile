@@ -41,6 +41,7 @@ jobs:
           scripts/test-step4-command-guards.py
           scripts/test-step5-coordinator-projection.py
           scripts/test-step6-bridge-local.py
+          scripts/test-mailbox-vertical-slice.py
 
       - name: Reject temporary Step 4, Step 5 and Step 6 artifacts
         run: python scripts/check-no-temporary-step4.py
@@ -109,6 +110,9 @@ jobs:
 
       - name: Test governed command trigger atomicity
         run: python scripts/test-step4-command-guards.py
+
+      - name: Test mailbox metadata, lifecycle, replay and atomicity invariants
+        run: python scripts/test-mailbox-vertical-slice.py
 
       - name: Test coordinator projection and reconciliation invariants
         run: python scripts/test-step5-coordinator-projection.py
@@ -208,7 +212,7 @@ jobs:
           --local
           --config deploy/cloudflare/wrangler.d1-test.jsonc
           --persist-to .wrangler/d1-test-state
-          --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT COUNT(*) AS invitation_acceptances FROM invitation_acceptances; SELECT COUNT(*) AS governed_owner_transfers FROM owner_transfer_commands; SELECT COUNT(*) AS governed_profile_grants FROM profile_grant_commands; SELECT COUNT(*) AS coordinator_projection_commands FROM profile_coordinator_projection_commands; SELECT COUNT(*) AS coordinator_projections FROM profile_coordinator_projections; SELECT name FROM d1_migrations ORDER BY id;"
+          --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT COUNT(*) AS invitation_acceptances FROM invitation_acceptances; SELECT COUNT(*) AS governed_owner_transfers FROM owner_transfer_commands; SELECT COUNT(*) AS governed_profile_grants FROM profile_grant_commands; SELECT COUNT(*) AS coordinator_projection_commands FROM profile_coordinator_projection_commands; SELECT COUNT(*) AS coordinator_projections FROM profile_coordinator_projections; SELECT COUNT(*) AS mailbox_bindings FROM mailbox_bindings; SELECT COUNT(*) AS mailbox_jobs FROM mailbox_jobs; SELECT name FROM d1_migrations ORDER BY id;"
 
   cloudflare-worker:
     name: Cloudflare Worker Release Build
