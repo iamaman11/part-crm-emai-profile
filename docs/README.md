@@ -100,7 +100,8 @@
 - committed workspace `Cargo.lock`;
 - `worker 0.8.5`, direct `wasm-bindgen 0.2.126`, `worker-build 0.8.5`;
 - typed primitives and pure identity/client/profile/session/mailbox domains;
-- provider-independent application ports and initial use-case decisions;
+- provider-independent capability-owned application ports and use-case modules with
+  thin compatibility facades enforced by the Repository Quality Audit Gate;
 - OpenAPI/protobuf v1 contract roots and immutable accepted baseline;
 - strict forward-only D1 catalog migration and typed Cloudflare adapter;
 - Wrangler `4.94.0` migration apply/replay plus deterministic SQLite invariants;
