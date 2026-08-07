@@ -24,7 +24,7 @@ EXPECTED_NEGATIVE_EVIDENCE = {
     "foreignResourceDisclosureIsNeutral",
     "unverifiedGenerationActivationRejected",
     "coordinatorLeaseMismatchFailsClosed",
-    "rawMailboxCredentialAndMessageBodyRejected",
+    "mailboxSensitivePayloadRejected",
     "unknownDynamicRoutesFailClosed",
     "browserCredentialPersistenceRejected",
 }
