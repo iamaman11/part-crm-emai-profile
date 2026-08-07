@@ -54,6 +54,9 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
           }
         }
       }
@@ -150,6 +153,9 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
           }
         }
       }
@@ -204,6 +210,66 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}/deactivate": {
+      "post": {
+        "operationId": "deactivateProfileGeneration",
+        "security": [
+          {
+            "cloudflareAccessJwt": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TenantPath"
+          },
+          {
+            "$ref": "#/components/parameters/ProfilePath"
+          },
+          {
+            "$ref": "#/components/parameters/GenerationPath"
+          },
+          {
+            "$ref": "#/components/parameters/CorrelationHeader"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeactivateProfileGenerationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/GenerationMutationAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NeutralNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
           }
         }
       }
@@ -258,6 +324,9 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalFailure"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
           }
         }
       }
@@ -291,6 +360,16 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/MutationReceipt"
+            }
+          }
+        }
+      },
+      "DependencyUnavailable": {
+        "description": "Storage or provider dependency is temporarily unavailable",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
             }
           }
         }
@@ -363,6 +442,23 @@
         }
       },
       "ActivateProfileGenerationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expectedProfileVersion",
+          "requestDigest"
+        ],
+        "properties": {
+          "expectedProfileVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "requestDigest": {
+            "$ref": "#/components/schemas/Sha256Digest"
+          }
+        }
+      },
+      "DeactivateProfileGenerationRequest": {
         "type": "object",
         "additionalProperties": false,
         "required": [
