@@ -1,8 +1,8 @@
 use crate::commands::CommandExecutionEvidence;
 use core::fmt;
 use identity_access_domain::MembershipRole;
-use profile_domain::{BrowserProfile, ProfileGeneration};
 pub use profile_domain::ProfileStatus;
+use profile_domain::{BrowserProfile, ProfileGeneration};
 use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, ClientId, GenerationId, ProfileId, TenantScope,
 };
