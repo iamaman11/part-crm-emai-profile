@@ -13,6 +13,7 @@ from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER_PATH = ROOT / "scripts" / "check-contract-compatibility.py"
+GENERATION_FRAGMENT = ROOT / "openapi" / "v1" / "fragments" / "profile-generations.json"
 
 
 def load_checker() -> ModuleType:
@@ -56,6 +57,44 @@ def expect_value_error(operation: Callable[[], object], fragment: str) -> None:
             ) from error
     else:
         raise AssertionError(f"operation unexpectedly passed; expected {fragment!r}")
+
+
+def assert_generation_fragment_surface() -> None:
+    fragment = json.loads(GENERATION_FRAGMENT.read_text(encoding="utf-8"))
+    paths = fragment["paths"]
+    base = "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations"
+    expected = {
+        base: ("post", "registerProfileGeneration"),
+        f"{base}/{{generationId}}": ("get", "getProfileGeneration"),
+        f"{base}/{{generationId}}/verify": ("post", "verifyProfileGeneration"),
+        f"{base}/{{generationId}}/activate": ("post", "activateProfileGeneration"),
+        f"{base}/{{generationId}}/deactivate": (
+            "post",
+            "deactivateProfileGeneration",
+        ),
+        f"{base}/{{generationId}}/quarantine": (
+            "post",
+            "quarantineProfileGeneration",
+        ),
+    }
+    assert set(paths) == set(expected), set(paths)
+    for path, (method, operation_id) in expected.items():
+        operation = paths[path][method]
+        assert operation["operationId"] == operation_id
+        if method == "post":
+            assert operation["responses"]["503"] == {
+                "$ref": "#/components/responses/DependencyUnavailable"
+            }
+
+    schemas = fragment["components"]["schemas"]
+    deactivate = schemas["DeactivateProfileGenerationRequest"]
+    assert deactivate["type"] == "object"
+    assert deactivate["additionalProperties"] is False
+    assert set(deactivate["required"]) == {"expectedProfileVersion", "requestDigest"}
+    assert set(deactivate["properties"]) == {"expectedProfileVersion", "requestDigest"}
+
+    dependency = fragment["components"]["responses"]["DependencyUnavailable"]
+    assert "application/problem+json" in dependency["content"]
 
 
 def main() -> int:
@@ -116,6 +155,7 @@ def main() -> int:
             "unsupported component sections",
         )
 
+    assert_generation_fragment_surface()
     print("Additive OpenAPI fragment governance passed.")
     return 0
 
