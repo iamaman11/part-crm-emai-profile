@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiProblem, requestJson } from './client';
+import { requestJson } from './client';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -51,7 +51,7 @@ describe('requestJson', () => {
       tenantId: 'tenant_01JTEST',
     });
 
-    await expect(promise).rejects.toMatchObject<ApiProblem>({
+    await expect(promise).rejects.toMatchObject({
       name: 'ApiProblem',
       status: 404,
       code: 'not_found',
