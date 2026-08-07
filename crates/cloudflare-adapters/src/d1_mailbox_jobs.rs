@@ -1,8 +1,6 @@
 use crate::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use crate::d1_identity_acl::MutationEnvelope;
-use crate::d1_mailboxes::{
-    CreateMailboxJobMutation, D1MailboxRepository, RunMailboxJobMutation,
-};
+use crate::d1_mailboxes::{CreateMailboxJobMutation, D1MailboxRepository, RunMailboxJobMutation};
 use crate::mailbox_provider::{
     MailboxProviderAdapterError, MailboxRunDecision, MetadataMailboxProviderAdapter,
     decide_mailbox_run,
@@ -165,8 +163,8 @@ impl MailboxJobApplicationPort for D1MailboxJobApplicationRepository {
             Some(next_cursor),
         )
         .map_err(|_| MailboxJobPortError::new(MailboxJobPortErrorClass::InternalFailure))?;
-        let decision = decide_mailbox_run(binding, job, now, &mut provider)
-            .map_err(map_provider_error)?;
+        let decision =
+            decide_mailbox_run(binding, job, now, &mut provider).map_err(map_provider_error)?;
         let status = decision.status();
         let attempt = decision.attempt();
         let version = decision.version();
