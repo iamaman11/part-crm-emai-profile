@@ -14,6 +14,7 @@ pub mod d1_mailbox_bindings;
 pub mod d1_mailbox_jobs;
 pub mod d1_mailboxes;
 pub mod d1_profile_coordinator;
+pub mod d1_profile_generation_application;
 pub mod d1_profile_generations;
 pub mod d1_profiles;
 pub mod mailbox_provider;
