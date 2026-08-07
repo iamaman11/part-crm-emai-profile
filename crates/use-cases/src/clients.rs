@@ -461,7 +461,8 @@ mod tests {
 
     #[test]
     fn owner_create_preserves_requested_display_name_while_domain_normalizes()
-    -> Result<(), Box<dyn std::error::Error>> {
+    -> Result<(), Box<dyn std::error::Error>>
+    {
         let port = FakeClientPort::new(vec![ClientReplayDecision::Miss]);
         let outcome = block_on(execute_create_client(
             &actor()?,
@@ -485,7 +486,8 @@ mod tests {
 
     #[test]
     fn overlong_requested_display_name_is_rejected_before_replay()
-    -> Result<(), Box<dyn std::error::Error>> {
+    -> Result<(), Box<dyn std::error::Error>>
+    {
         let port = FakeClientPort::new(vec![ClientReplayDecision::Miss]);
         let display_name = format!("{} ", "x".repeat(200));
         let command = ExecuteCreateClientCommand::new(
