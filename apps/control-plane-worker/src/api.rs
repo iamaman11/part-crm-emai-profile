@@ -251,12 +251,7 @@ async fn create_invitation(request: &mut Request, env: &Env, tenant_id: &str) ->
     {
         return neutral_not_found(actor.actor().correlation_id().as_str());
     }
-    mutation_receipt(
-        "created",
-        invitation_id.as_str(),
-        response_version,
-        201,
-    )
+    mutation_receipt("created", invitation_id.as_str(), response_version, 201)
 }
 
 async fn accept_invitation(
@@ -390,12 +385,7 @@ async fn update_membership_status(
     {
         return neutral_not_found(actor.actor().correlation_id().as_str());
     }
-    mutation_receipt(
-        "updated",
-        target_actor_id.as_str(),
-        response_version,
-        200,
-    )
+    mutation_receipt("updated", target_actor_id.as_str(), response_version, 200)
 }
 
 async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Response> {
@@ -589,12 +579,7 @@ async fn assign_profile(
     {
         return neutral_not_found(actor.actor().correlation_id().as_str());
     }
-    mutation_receipt(
-        "assigned",
-        assignment_id.as_str(),
-        response_version,
-        200,
-    )
+    mutation_receipt("assigned", assignment_id.as_str(), response_version, 200)
 }
 
 async fn update_profile_grant(
@@ -1024,10 +1009,7 @@ mod tests {
 
     #[test]
     fn aggregate_response_versions_never_saturate() -> Result<(), Box<dyn std::error::Error>> {
-        assert_eq!(
-            next_aggregate_version(AggregateVersion::INITIAL),
-            Some(2)
-        );
+        assert_eq!(next_aggregate_version(AggregateVersion::INITIAL), Some(2));
         assert_eq!(
             next_aggregate_version(AggregateVersion::new(u64::MAX)?),
             None

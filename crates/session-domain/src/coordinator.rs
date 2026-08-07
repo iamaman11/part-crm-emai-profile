@@ -906,8 +906,8 @@ mod tests {
     }
 
     #[test]
-    fn version_overflow_does_not_partially_apply_command()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn version_overflow_does_not_partially_apply_command() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut state = coordinator()?;
         state.version = AggregateVersion::new(u64::MAX)?;
         let result = state.apply(envelope(

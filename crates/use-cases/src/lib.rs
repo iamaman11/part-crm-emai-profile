@@ -201,12 +201,7 @@ mod tests {
             MembershipRole::Member,
             MembershipStatus::Active,
         );
-        let grant = ProfileGrant::new(
-            tenant_id.clone(),
-            actor_id,
-            profile_id.clone(),
-            role,
-        );
+        let grant = ProfileGrant::new(tenant_id.clone(), actor_id, profile_id.clone(), role);
         let mut profile = BrowserProfile::create(tenant_id.clone(), profile_id.clone());
         let generation = ProfileGeneration::new(
             tenant_id,
@@ -262,8 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_without_active_generation_is_rejected()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn profile_without_active_generation_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
         let fixture = fixture(ProfileGrantRole::Operator)?;
         let draft = BrowserProfile::create(
             fixture.profile.tenant_id().clone(),
