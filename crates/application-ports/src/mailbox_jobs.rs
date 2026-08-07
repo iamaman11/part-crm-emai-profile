@@ -223,11 +223,7 @@ pub struct MailboxJobReadModel {
 
 impl MailboxJobReadModel {
     #[must_use]
-    pub fn new(
-        job: MailboxJob,
-        provider_status: Option<String>,
-        bounded_item_count: u32,
-    ) -> Self {
+    pub fn new(job: MailboxJob, provider_status: Option<String>, bounded_item_count: u32) -> Self {
         Self {
             job,
             provider_status,
