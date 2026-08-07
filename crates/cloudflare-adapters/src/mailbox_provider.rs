@@ -334,8 +334,8 @@ fn validate_observation(
 #[cfg(test)]
 mod tests {
     use super::{
-        DeterministicFakeMailboxProvider, DeterministicMailboxOutcome,
-        MailboxProviderAdapterError, MetadataMailboxProviderAdapter, decide_mailbox_run,
+        decide_mailbox_run, DeterministicFakeMailboxProvider, DeterministicMailboxOutcome,
+        MailboxProviderAdapterError, MetadataMailboxProviderAdapter,
     };
     use application_ports::MailboxProviderPort;
     use mailbox_domain::{MailboxBinding, MailboxJob, MailboxJobStatus, MailboxProvider};
@@ -352,7 +352,10 @@ mod tests {
         ))
     }
 
-    fn job(binding: &MailboxBinding, max_attempts: u32) -> Result<MailboxJob, Box<dyn std::error::Error>> {
+    fn job(
+        binding: &MailboxBinding,
+        max_attempts: u32,
+    ) -> Result<MailboxJob, Box<dyn std::error::Error>> {
         Ok(MailboxJob::create(
             binding,
             MailboxJobId::parse("mailjob_01JMAILADAPTER")?,
