@@ -24,6 +24,12 @@ pub enum RouteClass {
     ProfileAssignmentApi,
     ProfileGrantApi,
     ProfileCoordinatorApi,
+    ProfileGenerationCollectionApi,
+    ProfileGenerationResourceApi,
+    ProfileGenerationVerifyApi,
+    ProfileGenerationActivateApi,
+    ProfileGenerationDeactivateApi,
+    ProfileGenerationQuarantineApi,
     DynamicRouteNotFound,
     BridgeDeniedByDefault,
     StaticAssets,
@@ -78,6 +84,56 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
         }
         ["api", "v1", "tenants", _, "profiles"] if method == "POST" => {
             Some(RouteClass::ProfileCollectionApi)
+        }
+        ["api", "v1", "tenants", _, "profiles", _, "generations"] if method == "POST" => {
+            Some(RouteClass::ProfileGenerationCollectionApi)
+        }
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generations",
+            _,
+            "verify",
+        ] if method == "POST" => Some(RouteClass::ProfileGenerationVerifyApi),
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generations",
+            _,
+            "activate",
+        ] if method == "POST" => Some(RouteClass::ProfileGenerationActivateApi),
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generations",
+            _,
+            "deactivate",
+        ] if method == "POST" => Some(RouteClass::ProfileGenerationDeactivateApi),
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "profiles",
+            _,
+            "generations",
+            _,
+            "quarantine",
+        ] if method == "POST" => Some(RouteClass::ProfileGenerationQuarantineApi),
+        ["api", "v1", "tenants", _, "profiles", _, "generations", _] if method == "GET" => {
+            Some(RouteClass::ProfileGenerationResourceApi)
         }
         ["api", "v1", "tenants", _, "profiles", _, "coordinator"]
             if matches!(method, "GET" | "POST") =>
@@ -222,6 +278,74 @@ mod tests {
             let actual = classify_route(method, path);
             assert_eq!(actual, expected);
             assert!(is_authenticated_api(actual));
+        }
+    }
+
+    #[test]
+    fn generation_routes_are_specific_and_authenticated() {
+        let routes = [
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations",
+                RouteClass::ProfileGenerationCollectionApi,
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01",
+                RouteClass::ProfileGenerationResourceApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/verify",
+                RouteClass::ProfileGenerationVerifyApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/activate",
+                RouteClass::ProfileGenerationActivateApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate",
+                RouteClass::ProfileGenerationDeactivateApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/quarantine",
+                RouteClass::ProfileGenerationQuarantineApi,
+            ),
+        ];
+        for (method, path, expected) in routes {
+            let actual = classify_route(method, path);
+            assert_eq!(actual, expected);
+            assert!(is_authenticated_api(actual));
+        }
+    }
+
+    #[test]
+    fn generation_wrong_methods_never_fall_back_to_static_assets() {
+        for (method, path) in [
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations",
+            ),
+            (
+                "DELETE",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01",
+            ),
+            (
+                "PUT",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/verify",
+            ),
+            (
+                "DELETE",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate",
+            ),
+        ] {
+            assert_eq!(
+                classify_route(method, path),
+                RouteClass::DynamicRouteNotFound
+            );
         }
     }
 

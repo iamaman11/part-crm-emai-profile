@@ -1,17 +1,35 @@
 # Contract Compatibility Policy
 
 **Статус:** normative v1 policy  
-**Дата:** 2026-08-05
+**Дата:** 2026-08-06
 
 ## 1. Version Roots
 
-- Web API: `openapi/v1/openapi.json`;
+- Web API root: `openapi/v1/openapi.json`;
+- additive Web API fragments: `openapi/v1/fragments/*.json`;
 - profile/CRM protobuf: `proto/profile/v1/`;
 - Bridge protobuf: `proto/bridge/v1/`;
 - Rust contract constants: `crates/contracts`.
 
 The directory/package major version is authoritative. A new incompatible surface
 uses a new major root; it is not hidden behind an in-place v1 mutation.
+
+The canonical current Web API document is the deterministic merge of the v1 root
+and lexically sorted additive fragments. The root owns `openapi`, `info`, shared
+security schemes and common components. A fragment may add only:
+
+- new paths;
+- new schemas;
+- new parameters;
+- new responses;
+- new request bodies;
+- new headers;
+- new security schemes.
+
+A fragment cannot replace any path or component already defined by the root or an
+earlier fragment. Unknown top-level/component sections and collisions fail closed.
+Use `python scripts/render-openapi.py` when a single materialized document is
+required for client generation or inspection.
 
 ## 2. Stable Problem Taxonomy
 
@@ -28,9 +46,15 @@ Public errors use stable machine codes from `contracts::ProblemCode`:
 - `integrity_failure`;
 - `internal_failure`.
 
+The legacy generic `conflict` code remains supported only where it is already part
+of the current v1 surface. New endpoints should prefer the most specific stable
+code that does not disclose a foreign or unauthorized resource.
+
 Foreign and absent resources may intentionally map to the same `not_found`
 response. Internal adapter/SDK errors never become public SDK-specific codes.
 Human-readable detail is non-authoritative and must not contain secrets or PII.
+An unknown internal code maps to the internal-failure problem type rather than a
+misleading not-found type.
 
 ## 3. Compatible v1 Changes
 
@@ -38,6 +62,7 @@ Generally compatible:
 
 - add an optional response field;
 - add a new endpoint with a unique operation ID;
+- add a uniquely named additive fragment path/component;
 - add a protobuf message;
 - add a protobuf field with a new number;
 - add a new problem code when old clients can treat it generically;
@@ -50,6 +75,7 @@ Compatibility still requires implementation and negative authorization tests.
 Forbidden without a new major root or governed migration:
 
 - remove or rename an existing API path/operation ID;
+- replace an existing root/fragment path or component through a collision;
 - remove an existing schema property required by the baseline;
 - remove/rename a protobuf message;
 - remove, rename or reuse a protobuf field number;
@@ -63,16 +89,20 @@ Forbidden without a new major root or governed migration:
 `contracts/baseline/` contains the accepted v1 compatibility floor. The permanent
 quality gate:
 
-1. lints current OpenAPI/protobuf roots;
-2. proves current contracts retain every baseline path/operation/message/field;
-3. runs a deliberately breaking fixture and requires the checker to reject it.
+1. deterministically merges the current root and additive fragments;
+2. rejects malformed fragments, unknown sections and path/component collisions;
+3. lints the merged OpenAPI/protobuf roots;
+4. proves current contracts retain every baseline path/operation/message/field;
+5. runs deliberately breaking fixtures and requires the checker to reject them.
 
-Changing the baseline is a governed compatibility decision, not an automatic
-side effect of editing current contracts. The PR must state why old clients are
-safe or introduce a new major version/cutover plan.
+The baseline is not automatically copied from current fragments. Changing the
+baseline is a governed compatibility decision, not an automatic side effect of
+editing current contracts. The PR must state why old clients are safe or introduce
+a new major version/cutover plan.
 
 ## 6. Generated Code
 
-Generated web/protobuf clients are build artifacts and do not own domain policy.
-Frontend, Bridge and future CRM adapters consume versioned contracts; domain
-crates remain independent of HTTP, protobuf runtime and provider SDK types.
+Generated web/protobuf clients and rendered OpenAPI JSON are build artifacts and do
+not own domain policy. Frontend, Bridge and future CRM adapters consume versioned
+contracts; domain crates remain independent of HTTP, protobuf runtime and provider
+SDK types.

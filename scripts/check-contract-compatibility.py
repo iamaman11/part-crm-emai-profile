@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lint v1 contract roots and reject backwards-incompatible removals."""
+"""Lint v1 contract roots/fragments and reject backwards-incompatible removals."""
 
 from __future__ import annotations
 
@@ -11,6 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 HTTP_METHODS = {"get", "put", "post", "delete", "patch", "options", "head", "trace"}
+OPENAPI_FRAGMENT_COMPONENTS = {
+    "schemas",
+    "parameters",
+    "responses",
+    "requestBodies",
+    "headers",
+    "securitySchemes",
+}
 PACKAGE_RE = re.compile(r"\bpackage\s+([A-Za-z0-9_.]+)\s*;")
 MESSAGE_RE = re.compile(r"\bmessage\s+([A-Za-z0-9_]+)\s*\{(.*?)\}", re.DOTALL)
 FIELD_RE = re.compile(
@@ -31,6 +39,81 @@ def load_json(path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{path}: root must be an object")
     return value
+
+
+def merge_unique_map(
+    target: dict[str, object],
+    source: dict[str, object],
+    *,
+    fragment_path: Path,
+    namespace: str,
+) -> None:
+    for name, value in source.items():
+        if name in target:
+            raise ValueError(
+                f"{fragment_path}: duplicate {namespace} entry {name!r}"
+            )
+        target[name] = value
+
+
+def merge_openapi_fragment(
+    document: dict[str, object], fragment: dict[str, object], fragment_path: Path
+) -> None:
+    unknown_keys = set(fragment) - {"paths", "components"}
+    if unknown_keys:
+        raise ValueError(
+            f"{fragment_path}: unsupported top-level keys {sorted(unknown_keys)}"
+        )
+
+    fragment_paths = fragment.get("paths", {})
+    if not isinstance(fragment_paths, dict):
+        raise ValueError(f"{fragment_path}: paths must be an object")
+    document_paths = document.setdefault("paths", {})
+    if not isinstance(document_paths, dict):
+        raise ValueError("OpenAPI root paths must be an object")
+    merge_unique_map(
+        document_paths,
+        fragment_paths,
+        fragment_path=fragment_path,
+        namespace="path",
+    )
+
+    fragment_components = fragment.get("components", {})
+    if not isinstance(fragment_components, dict):
+        raise ValueError(f"{fragment_path}: components must be an object")
+    unknown_components = set(fragment_components) - OPENAPI_FRAGMENT_COMPONENTS
+    if unknown_components:
+        raise ValueError(
+            f"{fragment_path}: unsupported component sections "
+            f"{sorted(unknown_components)}"
+        )
+    document_components = document.setdefault("components", {})
+    if not isinstance(document_components, dict):
+        raise ValueError("OpenAPI root components must be an object")
+    for section, entries in fragment_components.items():
+        if not isinstance(entries, dict):
+            raise ValueError(f"{fragment_path}: components.{section} must be an object")
+        target_entries = document_components.setdefault(section, {})
+        if not isinstance(target_entries, dict):
+            raise ValueError(f"OpenAPI root components.{section} must be an object")
+        merge_unique_map(
+            target_entries,
+            entries,
+            fragment_path=fragment_path,
+            namespace=f"components.{section}",
+        )
+
+
+def load_openapi_tree(root: Path) -> tuple[dict[str, object], Path]:
+    root_path = root / "openapi/v1/openapi.json"
+    document = load_json(root_path)
+    fragment_root = root / "openapi/v1/fragments"
+    if fragment_root.exists():
+        if not fragment_root.is_dir():
+            raise ValueError(f"{fragment_root}: fragment root must be a directory")
+        for fragment_path in sorted(fragment_root.glob("*.json")):
+            merge_openapi_fragment(document, load_json(fragment_path), fragment_path)
+    return document, root_path
 
 
 def lint_openapi(document: dict[str, object], path: Path) -> list[str]:
@@ -191,11 +274,9 @@ def compare_proto(
 
 def check(current_root: Path, baseline_root: Path) -> list[str]:
     errors: list[str] = []
-    current_openapi_path = current_root / "openapi/v1/openapi.json"
-    baseline_openapi_path = baseline_root / "openapi/v1/openapi.json"
     try:
-        current_openapi = load_json(current_openapi_path)
-        baseline_openapi = load_json(baseline_openapi_path)
+        current_openapi, current_openapi_path = load_openapi_tree(current_root)
+        baseline_openapi, _baseline_openapi_path = load_openapi_tree(baseline_root)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         return [str(error)]
 
@@ -224,7 +305,7 @@ def main() -> int:
             print(error, file=sys.stderr)
         return 1
 
-    print("OpenAPI and protobuf v1 contracts are backwards compatible.")
+    print("OpenAPI v1 root/fragments and protobuf contracts are compatible.")
     return 0
 
 
