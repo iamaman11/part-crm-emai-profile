@@ -24,7 +24,11 @@ fn synthetic_operator_cli_completes_dirty_local() -> Result<(), Box<dyn std::err
         .output()?;
 
     let _ = fs::remove_dir_all(&root);
-    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(
         String::from_utf8(output.stdout)?,
         "synthetic-operator-complete state=DIRTY_LOCAL\n"
@@ -62,8 +66,6 @@ fn synthetic_operator_cli_rejects_relative_materialization_root()
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8(output.stderr)?.contains("materialization root must be absolute")
-    );
+    assert!(String::from_utf8(output.stderr)?.contains("materialization root must be absolute"));
     Ok(())
 }
