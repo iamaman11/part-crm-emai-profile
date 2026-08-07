@@ -325,7 +325,9 @@ fn runtime_bundle_rejection_prevents_lease_and_runtime_mutation()
 
     assert_eq!(
         operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
-        Err(OperatorFlowError::Stage(OperatorFailureStage::RuntimeBundle))
+        Err(OperatorFlowError::Stage(
+            OperatorFailureStage::RuntimeBundle
+        ))
     );
     assert_eq!(operator.coordinator().acquired, 0);
     assert!(operator.process().actions().is_empty());
