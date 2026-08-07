@@ -296,6 +296,86 @@ Search, lists, detail projections, realtime subscription/catch-up and CRM-facing
 
 Client contact values are encrypted at rest. Exact lookup uses tenant-keyed HMAC tokens. Prefix/fuzzy PII search requires an explicit privacy/security ADR because blind n-gram indexes reveal searchable structure.
 
+### 6.6 Profile storage, materialization and freshness contract
+
+Browser profile state uses explicit cloud authority plus local materialization. It is **not** a bidirectional folder-sync model and Profile Bridge must never infer authority by listing R2 objects.
+
+Authoritative ownership:
+
+```text
+D1
+  -> profile/generation metadata
+  -> authoritative active_generation_id + aggregate version
+
+R2
+  -> encrypted immutable ProfileGeneration objects
+  -> manifests/inventory required by the accepted generation format
+
+per-profile Durable Object
+  -> materialization/open lease
+  -> fencing epoch/token
+  -> concurrent-session coordination
+
+Windows Profile Bridge
+  -> local encrypted staging/materialization/cache/workspace
+  -> local generation metadata and recovery state
+  -> Camoufox/Camouhost lifecycle
+```
+
+The local filesystem is operational state and cache, not the cross-device source of truth. React never receives R2 credentials and never reads/writes the local profile directory directly; browser lifecycle remains behind the authenticated Bridge protocol.
+
+Before any Camoufox launch, Bridge resolves the authoritative profile projection through the Worker/application API and compares the local materialized generation with `active_generation_id`.
+
+```text
+resolve authoritative active_generation_id
+  -> local generation matches
+       -> validate local integrity/runtime compatibility
+       -> obtain/confirm the required open lease and launch
+  -> local generation missing or stale
+       -> obtain a fenced materialization lease
+       -> fetch the authorized active generation object
+       -> verify manifest/schema/runtime bundle/digest
+       -> decrypt into staging
+       -> verify inventory + SQLite/profile integrity
+       -> atomic local activation
+       -> continue the ordinary fenced open flow
+```
+
+A stale local generation may be retained for rollback/recovery policy, but it may not start a writer session as though it were current. Bridge does not choose “the newest object” from R2; only the control-plane projection determines which generation is active.
+
+A state-changing browser session never overwrites the current R2 object. Graceful close produces a new immutable generation:
+
+```text
+active Gn
+  -> local writer session under lease/fencing
+  -> graceful close + quiescence evidence
+  -> DIRTY_LOCAL snapshot candidate Gn+1
+  -> package + encrypt
+  -> conditional immutable R2 create
+  -> verify remote digest + restore readability
+  -> D1 compare-and-set Gn -> Gn+1 using expected profile version/fencing token
+  -> audit + outbox / generation-activated event
+  -> synced local state becomes eviction-eligible according to policy
+```
+
+If R2 upload or verification fails, the dirty local workspace remains recoverable as `DIRTY_LOCAL`/`SYNC_RETRY_PENDING`; it must not be deleted or reported as synced. If immutable upload succeeds but the D1 compare-and-set fails, that object is not authoritative and must be handled as an unactivated/orphan candidate by bounded recovery/retention logic rather than silently promoted. A stale fencing token can never activate a generation.
+
+Multi-device behavior follows the same contract: once device A activates `G5`, device B holding `G4` must materialize `G5` before its next writer launch. Device B cannot later publish a generation derived from stale `G4` over `G5`; lease/fencing plus D1 compare-and-set reject that transition.
+
+Local eviction is allowed only after the relevant generation is durably present/verified in R2 and the authoritative D1 state confirms the safe lifecycle outcome. Unsynced dirty state survives network loss, Worker/R2 failure and Bridge restart.
+
+Required acceptance scenarios:
+
+- local `G3`, active `G3` -> no cloud download; local integrity/open path proceeds;
+- local `G3`, active `G4` -> `G4` is verified and atomically materialized before browser launch;
+- device A activates `G5` -> device B holding `G4` observes and materializes `G5` on its next open;
+- stale device/session result cannot replace an already activated newer generation;
+- R2 upload/verification failure preserves local dirty state and never advances D1 active generation;
+- crash between immutable R2 upload and D1 CAS is recoverable without treating the uploaded object as authoritative;
+- duplicate/retried generation-finalization command is idempotent and cannot create multiple logical activations;
+- unauthorized/revoked device or actor cannot resolve/download a generation through the application API;
+- Bridge behavior does not depend on R2 object listing order, timestamps or “latest object” heuristics.
+
 ## 7. Ordered Development Phases
 
 ## Phase 0 — Architecture Convergence And Developer DX
@@ -657,6 +737,10 @@ Required repository-local/synthetic acceptance:
 - duplicate Queue delivery is idempotent;
 - membership revoke blocks commands and realtime;
 - offline Bridge preserves `PENDING_DEVICE` job;
+- local/current generation equality avoids unnecessary materialization download;
+- stale local generation is materialized from the authoritative active generation before writer launch;
+- stale fencing/CAS cannot overwrite a newer active generation;
+- simulated R2 failure preserves dirty local state and leaves the active generation unchanged;
 - all new permanent gates run on one exact head SHA.
 
 Real provider/physical-host claims remain External.
@@ -743,6 +827,7 @@ Every new capability PR must satisfy applicable gates:
 9. **Failure-order gate:** external side effects occur only after the durable state transition that authorizes them.
 10. **Exact-head gate:** every permanent workflow green on the same final head before merge.
 11. **Evidence scope gate:** synthetic/local tests never promote external production claims.
+12. **Generation freshness gate:** Bridge writer launch and generation activation are bound to the authoritative active generation plus valid lease/fencing; stale local state cannot overwrite a newer cloud generation.
 
 ## 10. Developer Workflow And Documentation Rules
 
@@ -807,6 +892,10 @@ The expanded standalone + CRM-ready architecture is complete only when all of th
 - Bridge offline state preserves mailbox work as `PENDING_DEVICE`;
 - WebSocket is never used as the local Camoufox command channel;
 - UI never shows `Saved` before authoritative commit;
+- D1 is authoritative for `active_generation_id`; R2 generations are encrypted and immutable; Bridge local profiles are materializations/cache/workspaces rather than cross-device authority;
+- Bridge verifies generation freshness through the control plane before writer launch and materializes the authoritative generation when local state is stale;
+- a changed browser session creates a new generation and only verified R2 upload plus fenced D1 compare-and-set can activate it;
+- R2/network failure never discards unsynced dirty local state, and stale devices/sessions cannot overwrite a newer active generation;
 - standalone `client_id` can link to CRM Party without changing profile IDs;
 - CRM integration does not require R2-generation migration or browser-lifecycle rewrite;
 - all external production gates are separately satisfied with real reviewable evidence.
