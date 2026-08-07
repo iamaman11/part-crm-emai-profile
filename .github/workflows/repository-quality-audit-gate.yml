@@ -31,6 +31,7 @@ jobs:
           python -m py_compile scripts/test-profile-generation-state-guards.py
           python -m py_compile scripts/check-github-actions-runtime.py
           python -m py_compile scripts/check-capability-module-layout.py
+          python -m py_compile scripts/check-worker-application-boundary.py
 
       - name: Enforce GitHub Actions Node 24 checkout runtime
         run: python scripts/check-github-actions-runtime.py
@@ -47,6 +48,12 @@ jobs:
 
       - name: Prove collapsed capability facades are rejected
         run: python scripts/check-capability-module-layout.py --self-test
+
+      - name: Enforce thin client Worker application boundary
+        run: python scripts/check-worker-application-boundary.py
+
+      - name: Prove direct D1 client transport is rejected
+        run: python scripts/check-worker-application-boundary.py --self-test
 
       - name: Test hardened pure boundaries
         run: >-
