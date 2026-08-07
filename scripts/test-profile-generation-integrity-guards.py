@@ -188,8 +188,8 @@ def main() -> int:
         assert generation_snapshot(connection) == verified
         assert profile_snapshot(connection) == ("READY", generation, 2)
 
-        with connection:
-            connection.execute(
+        expect_integrity_error(
+            lambda: connection.execute(
                 """
                 UPDATE browser_profiles
                 SET status = 'SUSPENDED', active_generation_id = NULL,
@@ -197,6 +197,21 @@ def main() -> int:
                 WHERE tenant_id = ? AND profile_id = ?
                 """,
                 (owner, tenant, profile),
+            ),
+            "profile_generation_deactivation_not_governed",
+        )
+        connection.rollback()
+        assert profile_snapshot(connection) == ("READY", generation, 2)
+
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO profile_generation_deactivate_commands (
+                    tenant_id, command_id, command_actor_id, profile_id,
+                    generation_id, expected_profile_version, executed_at_ms
+                ) VALUES (?, 'command_deactivate_integrity', ?, ?, ?, 2, 220)
+                """,
+                (tenant, owner, profile, generation),
             )
             connection.execute(
                 """
