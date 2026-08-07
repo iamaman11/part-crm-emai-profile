@@ -11,9 +11,7 @@ use identity_access_domain::{
     authorize_profile,
 };
 use profile_domain::{BrowserProfile, ProfileStatus};
-use profile_platform_primitives::{
-    ActorContext, AggregateVersion, ClientId, DeviceId, ProfileId,
-};
+use profile_platform_primitives::{ActorContext, AggregateVersion, ClientId, DeviceId, ProfileId};
 
 const PROFILE_CREATE_COMMAND: &str = "profile.create";
 const PROFILE_CREATED_EVENT_PAYLOAD: &str = "{}";
@@ -144,10 +142,8 @@ pub async fn execute_create_profile<P: ProfileApplicationPort>(
 ) -> Result<ProfileMutationOutcome, ProfileOperationError> {
     authorize_profile_create(role)?;
 
-    let profile = BrowserProfile::create(
-        actor.tenant_scope().tenant_id().clone(),
-        command.profile_id,
-    );
+    let profile =
+        BrowserProfile::create(actor.tenant_scope().tenant_id().clone(), command.profile_id);
 
     match port
         .decide_replay(actor, PROFILE_CREATE_COMMAND, &command.evidence)
@@ -200,7 +196,10 @@ pub async fn get_visible_profile<P: ProfileApplicationPort>(
         .ok_or(ProfileOperationError::NotFound)
 }
 
-fn replay_outcome(profile: &BrowserProfile, receipt: &ProfileReplayReceipt) -> ProfileMutationOutcome {
+fn replay_outcome(
+    profile: &BrowserProfile,
+    receipt: &ProfileReplayReceipt,
+) -> ProfileMutationOutcome {
     ProfileMutationOutcome {
         result_code: receipt.result_code().to_owned(),
         resource_id: receipt
@@ -217,7 +216,9 @@ fn map_profile_port_error(error: ProfilePortError) -> ProfileOperationError {
         ProfilePortErrorClass::Conflict => ProfileOperationError::Conflict,
         ProfilePortErrorClass::IntegrityFailure => ProfileOperationError::IntegrityFailure,
         ProfilePortErrorClass::InternalFailure => ProfileOperationError::InternalFailure,
-        ProfilePortErrorClass::DependencyUnavailable => ProfileOperationError::DependencyUnavailable,
+        ProfilePortErrorClass::DependencyUnavailable => {
+            ProfileOperationError::DependencyUnavailable
+        }
     }
 }
 
