@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import { createClient, getClient, setClientGrant } from '../../shared/api/endpoints';
 import type { ClientProjection } from '../../shared/api/types';
@@ -9,6 +9,14 @@ import { StatusMessage } from '../../shared/ui/StatusMessage';
 function field(form: FormData, name: string): string {
   return String(form.get(name) ?? '').trim();
 }
+
+type ClientGrantInput = {
+  actorId: string;
+  role: 'CLIENT_VIEWER' | 'CLIENT_EDITOR';
+  reason: string;
+  expectedClientVersion: number;
+  revoke: boolean;
+};
 
 export function ClientsWorkspace() {
   const { tenantId } = useTenant();
@@ -22,7 +30,7 @@ export function ClientsWorkspace() {
     mutationFn: (input: { clientId: string; kind: 'PERSON' | 'ORGANIZATION'; displayName: string }) => createClient(tenantId, input),
   });
   const grant = useMutation({
-    mutationFn: (input: { actorId: string; role: 'CLIENT_VIEWER' | 'CLIENT_EDITOR'; reason: string; expectedClientVersion: number; revoke: boolean }) =>
+    mutationFn: (input: ClientGrantInput) =>
       setClientGrant(tenantId, lookupId, input.actorId, {
         role: input.role,
         reason: input.reason,
@@ -118,14 +126,25 @@ function GrantForm({
   disabled: boolean;
   defaultVersion: number;
   busy: boolean;
-  onApply: (input: { actorId: string; role: 'CLIENT_VIEWER' | 'CLIENT_EDITOR'; reason: string; expectedClientVersion: number; revoke: boolean }) => void;
-  onRevoke: (input: { actorId: string; role: 'CLIENT_VIEWER' | 'CLIENT_EDITOR'; reason: string; expectedClientVersion: number; revoke: boolean }) => Promise<void>;
+  onApply: (input: ClientGrantInput) => void;
+  onRevoke: (input: ClientGrantInput) => Promise<void>;
 }) {
-  const [input, setInput] = useState({ actorId: '', role: 'CLIENT_VIEWER' as const, reason: '', expectedClientVersion: defaultVersion, revoke: false });
+  const [input, setInput] = useState<ClientGrantInput>({
+    actorId: '',
+    role: 'CLIENT_VIEWER',
+    reason: '',
+    expectedClientVersion: defaultVersion,
+    revoke: false,
+  });
+
+  useEffect(() => {
+    setInput((current) => ({ ...current, expectedClientVersion: defaultVersion }));
+  }, [defaultVersion]);
+
   return (
     <div className="action-grid">
       <label>Actor ID<input value={input.actorId} onChange={(e) => setInput({ ...input, actorId: e.currentTarget.value })} disabled={disabled} /></label>
-      <label>Role<select value={input.role} onChange={(e) => setInput({ ...input, role: e.currentTarget.value as 'CLIENT_VIEWER' | 'CLIENT_EDITOR' })} disabled={disabled}><option value="CLIENT_VIEWER">Viewer</option><option value="CLIENT_EDITOR">Editor</option></select></label>
+      <label>Role<select value={input.role} onChange={(e) => setInput({ ...input, role: e.currentTarget.value as ClientGrantInput['role'] })} disabled={disabled}><option value="CLIENT_VIEWER">Viewer</option><option value="CLIENT_EDITOR">Editor</option></select></label>
       <label>Expected version<input type="number" min="1" value={input.expectedClientVersion} onChange={(e) => setInput({ ...input, expectedClientVersion: Number(e.currentTarget.value) })} disabled={disabled} /></label>
       <label className="wide">Reason<input value={input.reason} onChange={(e) => setInput({ ...input, reason: e.currentTarget.value })} disabled={disabled} /></label>
       <button type="button" disabled={disabled || busy || !input.actorId || !input.reason} onClick={() => onApply({ ...input, revoke: false })}>Apply grant</button>
