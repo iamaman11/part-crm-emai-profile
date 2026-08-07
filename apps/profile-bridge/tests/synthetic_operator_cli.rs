@@ -51,3 +51,19 @@ fn synthetic_operator_cli_rejects_invalid_claim_without_echoing_it()
     assert!(!stderr.contains(secret_like_claim));
     Ok(())
 }
+
+#[test]
+fn synthetic_operator_cli_rejects_relative_materialization_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new(env!("CARGO_BIN_EXE_profile-bridge-synthetic"))
+        .arg("profilebridge://claim/claim_0123456789abcdef0123456789abcdea")
+        .arg("relative-root")
+        .output()?;
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)?.contains("materialization root must be absolute")
+    );
+    Ok(())
+}
