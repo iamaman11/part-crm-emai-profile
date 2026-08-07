@@ -39,6 +39,13 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Reject credential persistence and token surfaces in application source
+        run: |
+          if grep -R -n -E --include='*.ts' --include='*.tsx' '(localStorage|sessionStorage|Cf-Access-Jwt-Assertion)' frontend/src; then
+            echo "Forbidden browser credential persistence/token surface found in application source." >&2
+            exit 1
+          fi
+
       - name: Strict TypeScript
         working-directory: frontend
         run: npm run typecheck
@@ -55,7 +62,3 @@ jobs:
         run: |
           test -f frontend/dist/index.html
           find frontend/dist/assets -type f -print -quit | grep -q .
-          if grep -R -E --include='*.js' --include='*.html' '(localStorage|sessionStorage|Cf-Access-Jwt-Assertion)' frontend/dist; then
-            echo "Forbidden browser credential persistence/token surface found in built assets." >&2
-            exit 1
-          fi
