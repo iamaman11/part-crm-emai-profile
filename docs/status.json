@@ -134,7 +134,8 @@
     "frontend": "accepted_pr_64_repository_local_react_operator_ui",
     "certification_multi_device": "accepted_step_10_synthetic_policy_and_state_machine_candidate",
     "mailbox_operations": "accepted_pr_60_repaired_pr_62_composed_synthetic",
-    "cross_component_acceptance": "candidate_pr_66_repository_local_synthetic"
+    "cross_component_acceptance": "accepted_pr_66_repository_local_synthetic",
+    "composition_epic": "accepted_epic_43_repository_local_complete"
   },
   "evidence": {
     "foundation_linux_windows_wasm": "passed",
@@ -235,7 +236,7 @@
     "independent_certification_security_review": "not_proven",
     "mailbox_composition": "accepted_pr_62_head_80d5da1239595c2562752307d2e48a7b14a0ba3e_quality_run_31204097542",
     "frontend_composition": "accepted_pr_64_head_f2fcfe19335508a6062b9ed8a7c984fe2f97a417_frontend_gate_run_31207429792_merge_c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b",
-    "cross_component_candidate": "pr_66_candidate_run_31208530252_repository_local_standalone_flow"
+    "cross_component_acceptance": "accepted_pr_66_head_31f358c92c2e09c752155af208b7d2aaf73d472a_gate_run_31208960718_merge_eb02f3e81022193fb459b7c46d14afcb19c8900f"
   },
   "decisions": {
     "adr_0001": "proposed_blocks_production_certification",

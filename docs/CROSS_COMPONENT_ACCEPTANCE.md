@@ -1,6 +1,6 @@
 # Cross-Component Repository-Local Acceptance
 
-**Status:** final candidate repository-local composed/synthetic evidence; exact-head acceptance pending  
+**Status:** accepted repository-local composed/synthetic evidence  
 **Tracking:** issue #65 / PR #66, parent epic #43  
 **Baseline:** `c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b` (accepted React UI composition)
 
@@ -35,7 +35,7 @@ Cross-Component Acceptance Gate run `31208530252` completed successfully after t
 - frontend clean install/typecheck/tests/build: passed;
 - metadata-only evidence scan: passed.
 
-The evidence registry and status projection have been synchronized from this successful candidate run. This document update establishes the user-authored final candidate head; acceptance still requires all permanent workflows green on that same unchanged head before squash merge. A prior diagnostic run exposed two harness defects — an over-broad evidence-key scanner and an invalid shortened claim fixture. Both were repaired without weakening application parsers or security boundaries.
+Final acceptance used exact head `31f358c92c2e09c752155af208b7d2aaf73d472a`. All 12 permanent workflows passed on that unchanged head, including Cross-Component Acceptance Gate `31208960718`; squash merge `eb02f3e81022193fb459b7c46d14afcb19c8900f` established the accepted repository-local composition on `main`. A prior diagnostic run exposed two harness defects — an over-broad evidence-key scanner and an invalid shortened claim fixture. Both were repaired without weakening application parsers or security boundaries.
 
 ## Negative evidence carried through the composed lane
 

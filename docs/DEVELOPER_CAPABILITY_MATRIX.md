@@ -2,7 +2,7 @@
 
 **Статус:** normative developer orientation  
 **Дата:** 2026-08-07  
-**Tracking:** completed hardening #41; composition epic #43; generation slice #44 / PR #51; Profile Bridge slice #54 / PR #55; mailbox slice #56 / PR #60 + repair #61 / PR #62; accepted React UI #63 / PR #64; cross-component candidate #65 / PR #66
+**Tracking:** completed hardening #41; completed composition epic #43; generation slice #44 / PR #51; Profile Bridge slice #54 / PR #55; mailbox slice #56 / PR #60 + repair #61 / PR #62; React UI #63 / PR #64; cross-component acceptance #65 / PR #66
 
 ## 1. Зачем Нужен Этот Документ
 
@@ -53,7 +53,7 @@ accepted только после exact-head green и merge. Поэтому во 
 | Certification | Synthetic | Typed policy, deterministic matrix, prohibited/incomplete/drift outcomes, privacy-safe summary and update rollback state. | Real Camoufox observations, specialized-site review and independent certification — External. |
 | Mailbox operations | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, strict secret-handle-only request DTOs, idempotency/audit/outbox, versioned Worker create/query/revoke/job/run routes and metadata-only synthetic provider decision path. Adapter modules are exported and exercised by Worker native/WASM/release and Cloudflare adapter tests. | Real Gmail API/IMAP/browser provider execution, mailbox message payload processing, production scheduling and external provider evidence remain unproven. |
 | React web UI | Composed / Synthetic | Accepted PR #64 provides exact Node 24.19.0/npm 11.17.0 workspace, React 19/Vite 8/TypeScript 7, same-origin typed API/problem layer, tenant-scoped operator shell, session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces, neutral disclosure, high-impact confirmation, strict tests and permanent Frontend Gate. Worker Static Assets targets `frontend/dist`. | No deployed Cloudflare Access UI, real Bridge onboarding/custom-URI acceptance, real provider execution, or missing backend list APIs are claimed. |
-| Cross-component standalone acceptance | Composed candidate / Synthetic | PR #66 adds a deterministic metadata-only manifest/validator and one permanent read-only lane that executes governed D1 invariants, generation integrity, Worker/adapters native+WASM, actual synthetic Bridge CLI, and Node24 frontend tests/build in one repository-local flow. | Candidate is not accepted on `main` until exact-head CI + squash merge; no external deployment/provider/device evidence is implied. |
+| Cross-component standalone acceptance | Composed / Synthetic | Accepted PR #66 provides a deterministic metadata-only manifest/validator and permanent read-only lane that executes governed D1 invariants, generation integrity, Worker/adapters native+WASM, actual synthetic Bridge CLI, and Node24 frontend tests/build in one repository-local flow. Exact accepted head and 12/12 CI are recorded in the evidence index. | No external deployment/provider/device evidence is implied; all production gates remain External. |
 | CRM integration | Target | Versioned boundary principles and replaceable adapter direction documented. | CRM Party projection, OIDC/PostgreSQL adapters and event integration отсутствуют. |
 | Production readiness | External | Immutable evidence intake, readiness projection and GitHub attestation interlocks are composed. | Mandatory external evidence matrix currently incomplete; `production_ready` remains `false`. |
 

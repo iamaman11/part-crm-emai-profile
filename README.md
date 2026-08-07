@@ -60,9 +60,9 @@ Local Profile regression: `31074745880`. Runtime Bundle regression:
 Нумерованный repository roadmap завершён на Step 10 и не продолжается
 искусственным Step 11. После него работа разделена на два явно разных трека:
 
-- **repository-local composition epic #43**: authoritative profile-generation
+- **completed repository-local composition epic #43**: authoritative profile-generation
   registry/API, полный Profile Bridge operator flow, mailbox vertical slice,
-  React UI composition и cross-component synthetic acceptance;
+  React UI composition и cross-component synthetic acceptance приняты;
 - **external production evidence gates #3**: принятие ADR-0001 и ADR-0006, real
   Camoufox fingerprint certification, второй независимый Windows host,
   production device-key unwrap, remote R2/D1 atomicity, clean-environment escrow
