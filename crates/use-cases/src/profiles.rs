@@ -305,11 +305,13 @@ mod tests {
         ExecuteCreateProfileCommand, OpenProfileCommand, ProfileOperationError,
         authorize_profile_create, decide_open_profile, execute_create_profile, get_visible_profile,
     };
+    use crate::error::ApplicationError;
     use application_ports::CommandExecutionEvidence;
     use application_ports::profiles::{
         ProfileApplicationPort, ProfileCreateWrite, ProfilePortError, ProfilePortErrorClass,
         ProfileReadModel, ProfileReplayDecision, ProfileReplayReceipt,
     };
+    use contracts::ProblemCode;
     use identity_access_domain::{
         Membership, MembershipRole, MembershipStatus, ProfileGrant, ProfileGrantRole,
     };
