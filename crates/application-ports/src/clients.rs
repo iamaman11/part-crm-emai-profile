@@ -23,6 +23,7 @@ pub trait ClientRepository {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClientCreateWrite {
     client: ClientRecord,
+    requested_display_name: String,
     evidence: CommandExecutionEvidence,
     event_payload_json: String,
 }
@@ -31,11 +32,13 @@ impl ClientCreateWrite {
     #[must_use]
     pub fn new(
         client: ClientRecord,
+        requested_display_name: impl Into<String>,
         evidence: CommandExecutionEvidence,
         event_payload_json: impl Into<String>,
     ) -> Self {
         Self {
             client,
+            requested_display_name: requested_display_name.into(),
             evidence,
             event_payload_json: event_payload_json.into(),
         }
@@ -44,6 +47,11 @@ impl ClientCreateWrite {
     #[must_use]
     pub const fn client(&self) -> &ClientRecord {
         &self.client
+    }
+
+    #[must_use]
+    pub fn requested_display_name(&self) -> &str {
+        &self.requested_display_name
     }
 
     #[must_use]
