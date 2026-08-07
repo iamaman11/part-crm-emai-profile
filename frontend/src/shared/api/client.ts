@@ -37,7 +37,7 @@ export interface ApiRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   idempotencyKey?: string;
-  signal?: AbortSignal;
+  signal?: AbortSignal | undefined;
 }
 
 function opaqueRequestId(prefix: 'corr' | 'idem'): string {
