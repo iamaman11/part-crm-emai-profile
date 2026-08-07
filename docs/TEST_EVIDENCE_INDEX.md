@@ -25,7 +25,8 @@ smoke test does not promote unrelated production gates.
 | Repository Step 9 / PR #30 | accepted bounded synthetic evidence | exact-pinned XChaCha20-Poly1305/SHA-256 container, authenticated chunk/final records, immutable lifecycle, strict pointer CAS/rollback/quarantine/orphan planning, DEK-bound nonce reuse, zeroizing plaintext boundaries and Linux/Windows/WASM gates | production entropy/key wrapping, remote R2/D1 atomicity, escrow/account-loss restore, independent cryptographic review, physical multi-device or production readiness |
 | Repository Step 10 / PR #33 | accepted bounded synthetic evidence | required/optional/prohibited certification policy, deterministic matrix/vector, privacy-safe support output, typed device grant journal, exact preverified update/health identity, rollback/fail-closed state and Linux/Windows/WASM gates | real fingerprint certification, physical second device, production unwrap, cryptographic signature verification, trusted signing or production readiness |
 | Mailbox composition / PR #60 + repair PR #62 | accepted repository-local composed/synthetic evidence | D1 mailbox binding/job persistence, secret-handle-only request DTOs, idempotency/audit/outbox, Worker API routes, metadata-only synthetic provider path, adapter/native/WASM/release compilation | real Gmail/IMAP/browser execution, mailbox contents, production scheduler/provider evidence or production readiness |
-| React operator UI / PR #64 | candidate repository-local composed evidence; acceptance pending final exact-head merge | Node 24.19.0/npm 11.17.0 exact runtime, locked React/Vite/TypeScript workspace, same-origin API/problem boundary, neutral disclosure, high-impact confirmation, strict TS/tests/build and Static Assets gate | deployed Cloudflare Access UI, real Bridge/custom-URI onboarding, real providers, missing backend list APIs or production readiness |
+| React operator UI / PR #64 | accepted repository-local composed/synthetic evidence | exact head `f2fcfe19335508a6062b9ed8a7c984fe2f97a417`; Node 24.19.0/npm 11.17.0 locked React/Vite/TypeScript workspace; same-origin API/problem boundary; neutral disclosure; high-impact confirmation; 11/11 permanent workflows and Frontend Gate `31207429792`; squash merge `c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b` | deployed Cloudflare Access UI, real Bridge/custom-URI onboarding, real providers, missing backend list APIs or production readiness |
+| Cross-component standalone acceptance / PR #66 | candidate repository-local composed/synthetic evidence; final exact-head acceptance pending | deterministic metadata-only six-phase manifest, D1/ACL/mailbox/generation invariants, adapter + Worker native/WASM, actual synthetic Bridge CLI to `DIRTY_LOCAL`, Node24 frontend install/typecheck/tests/build; candidate gate `31208530252` succeeded | real Cloudflare/Camoufox/mailbox providers, production keys/signing, physical multi-device or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -315,15 +316,29 @@ review item; it is not a Worker runtime dependency claim.
 - adapter mailbox suite was compiled/executed and Worker native/WASM/release composition passed;
 - real mailbox providers, mailbox payload processing and production scheduling were not involved.
 
-### React Operator UI Candidate Evidence
+### React Operator UI Accepted Evidence
 
-- tracking: issue #63 / draft PR #64; acceptance on `main` is still pending final exact-head CI and squash merge;
+- tracking: issue #63 / PR #64, closed completed;
+- accepted source head: `f2fcfe19335508a6062b9ed8a7c984fe2f97a417`;
+- squash merge: `c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b`;
+- exact-head Frontend Gate run `31207429792`, conclusion `success`;
+- all 11 then-permanent workflows were green on the same accepted head;
 - runtime pins: Node `24.19.0`, npm `11.17.0`; lockfile is authoritative and clean install uses `npm ci`;
-- candidate Frontend Gate run `31207221527`, conclusion `success`;
-- the lane passed exact runtime checks, clean install, application-source credential-persistence scan, strict TypeScript, 7 unit tests, Vite production build and Static Assets output verification;
-- component/API tests cover same-origin transport, problem normalization, neutral resource disclosure, session success/error and destructive-action confirmation;
-- no Cloudflare production deployment, real device onboarding, real provider execution or user data was involved;
-- this entry records candidate evidence only and does not promote `production_ready`.
+- frontend lane passed source credential-persistence scan, strict TypeScript, 7 unit tests, Vite production build and Static Assets output verification;
+- no Cloudflare production deployment, real device onboarding, real provider execution or user data was involved.
+
+### Cross-Component Standalone Candidate Evidence
+
+- tracking: issue #65 / draft PR #66, parent epic #43;
+- baseline: accepted React UI merge `c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b`;
+- candidate Cross-Component Acceptance Gate run `31208530252`, conclusion `success`;
+- deterministic validator reported six repository-local synthetic phases and `productionReady=false`;
+- governed D1 identity/client/profile/mailbox negative invariants and generation integrity suites passed;
+- Cloudflare adapter suite: 19 passed; Worker helper suite: 14 passed; Worker WASM check passed;
+- Profile Bridge library/bin/integration suites: 35 passed in aggregate, followed by successful execution of `profile-bridge-synthetic` ending exactly `DIRTY_LOCAL`;
+- Node `24.19.0` / npm `11.17.0` clean frontend install, strict TypeScript, Vitest and Vite build passed in the same lane;
+- metadata-only evidence scan passed; no user data or real external provider/runtime was involved;
+- this remains candidate evidence until PR #66 passes final exact-head acceptance and squash merge.
 
 ## 2. Required Permanent CI Evidence
 
