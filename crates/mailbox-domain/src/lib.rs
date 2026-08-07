@@ -432,7 +432,9 @@ mod tests {
         MailboxBinding, MailboxBindingStatus, MailboxError, MailboxJob, MailboxJobStatus,
         MailboxProvider,
     };
-    use profile_platform_primitives::{MailboxBindingId, MailboxJobId, SecretHandle, TenantId, UnixMillis};
+    use profile_platform_primitives::{
+        MailboxBindingId, MailboxJobId, SecretHandle, TenantId, UnixMillis,
+    };
 
     fn binding() -> Result<MailboxBinding, Box<dyn std::error::Error>> {
         Ok(MailboxBinding::create(
