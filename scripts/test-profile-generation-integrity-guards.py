@@ -131,15 +131,15 @@ def main() -> int:
         expect_integrity_error(
             lambda: connection.execute(
                 """
-                UPDATE browser_profiles
-                SET active_generation_id = 'generation_missing_integrity',
-                    status = 'READY', version = 2,
-                    updated_by_actor_id = ?, updated_at_ms = 210
-                WHERE tenant_id = ? AND profile_id = ?
+                INSERT INTO profile_generation_activate_commands (
+                    tenant_id, command_id, command_actor_id, profile_id,
+                    generation_id, expected_profile_version, executed_at_ms
+                ) VALUES (?, 'command_activate_missing_integrity', ?, ?,
+                          'generation_missing_integrity', 1, 205)
                 """,
-                (owner, tenant, profile),
+                (tenant, owner, profile),
             ),
-            "active_profile_generation_not_verified",
+            "profile_generation_not_verified",
         )
         connection.rollback()
         assert profile_snapshot(connection) == ("DRAFT", None, 1)
