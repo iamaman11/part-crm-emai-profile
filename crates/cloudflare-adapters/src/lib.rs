@@ -10,6 +10,7 @@ pub mod d1_idempotency;
 pub mod d1_identity_acl;
 pub mod d1_identity_queries;
 pub mod d1_invitation_acceptance;
+pub mod d1_mailbox_bindings;
 pub mod d1_mailboxes;
 pub mod d1_profile_coordinator;
 pub mod d1_profile_generations;
