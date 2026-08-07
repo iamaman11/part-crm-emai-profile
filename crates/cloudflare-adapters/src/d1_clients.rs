@@ -64,7 +64,7 @@ impl ClientApplicationPort for D1ClientApplicationRepository {
         let mutation = CreateClientMutation {
             client_id: write.client().client_id(),
             kind: catalog_kind(write.client().kind()),
-            display_name: write.client().display_name(),
+            display_name: write.requested_display_name(),
             idempotency_key: evidence.idempotency_key(),
             request_digest: evidence.request_digest(),
             audit_event_id: evidence.audit_event_id(),
