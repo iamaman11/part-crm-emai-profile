@@ -7,7 +7,6 @@ mod command_evidence;
 mod composition;
 mod mailbox_bindings;
 mod mailbox_jobs;
-mod mailboxes;
 mod mutation_failure;
 mod profile_coordinator;
 mod profile_generations;
