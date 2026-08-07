@@ -15,11 +15,12 @@ PORT_MODULES = (
     "commands",
     "generations",
     "identity",
+    "mailbox_jobs",
     "mailboxes",
     "profiles",
     "sessions",
 )
-USE_CASE_MODULES = ("clients", "error", "identity_acl", "profiles")
+USE_CASE_MODULES = ("clients", "error", "identity_acl", "mailbox_jobs", "mailboxes", "profiles")
 
 PORT_OWNERS = {
     "audit.rs": ("pub trait AuditPort", "pub struct AuditRecord", "pub enum AuditResult"),
@@ -32,6 +33,11 @@ PORT_OWNERS = {
     "commands.rs": ("pub struct CommandExecutionEvidence",),
     "generations.rs": ("pub struct GenerationObjectReference", "pub trait GenerationObjectStorePort"),
     "identity.rs": ("pub trait MembershipRepository",),
+    "mailbox_jobs.rs": (
+        "pub trait MailboxJobApplicationPort",
+        "pub struct MailboxJobCreateWrite",
+        "pub struct MailboxJobPreparedRun",
+    ),
     "mailboxes.rs": ("pub struct MailboxObservation", "pub trait MailboxProviderPort"),
     "profiles.rs": (
         "pub trait ProfileRepository",
@@ -50,6 +56,13 @@ USE_CASE_OWNERS = {
         "pub async fn get_visible_client",
     ),
     "error.rs": ("pub struct ApplicationError",),
+    "mailbox_jobs.rs": (
+        "pub async fn execute_create_mailbox_job",
+        "pub async fn get_mailbox_job",
+        "pub async fn execute_run_mailbox_job",
+        "pub fn validate_create_mailbox_job_request",
+        "pub fn validate_mailbox_job_run_version",
+    ),
     "profiles.rs": (
         "pub struct OpenProfileCommand",
         "pub fn decide_open_profile",
