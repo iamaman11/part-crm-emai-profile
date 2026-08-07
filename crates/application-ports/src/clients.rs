@@ -1,5 +1,6 @@
 use crate::commands::CommandExecutionEvidence;
 use client_domain::{ClientKind, ClientRecord, ClientStatus};
+use core::fmt;
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, ClientId, TenantScope,
@@ -115,6 +116,19 @@ impl ClientPortError {
         self.class
     }
 }
+
+impl fmt::Display for ClientPortError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self.class {
+            ClientPortErrorClass::Conflict => "client port conflict",
+            ClientPortErrorClass::IntegrityFailure => "client port integrity failure",
+            ClientPortErrorClass::InternalFailure => "client port internal failure",
+            ClientPortErrorClass::DependencyUnavailable => "client port dependency unavailable",
+        })
+    }
+}
+
+impl std::error::Error for ClientPortError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClientReadModel {
