@@ -53,7 +53,8 @@ async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Res
         "ORGANIZATION" => ClientKind::Organization,
         _ => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest) {
+    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
+    {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -108,9 +109,12 @@ fn operation_failure(correlation_id: &str, error: ClientOperationError) -> Resul
             problem(correlation_id, 400, "invalid_request", "Invalid Request")
         }
         ClientOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
-        ClientOperationError::IntegrityFailure => {
-            problem(correlation_id, 500, "integrity_failure", "Integrity Failure")
-        }
+        ClientOperationError::IntegrityFailure => problem(
+            correlation_id,
+            500,
+            "integrity_failure",
+            "Integrity Failure",
+        ),
         ClientOperationError::InternalFailure => {
             problem(correlation_id, 500, "internal_failure", "Internal Failure")
         }
@@ -124,12 +128,7 @@ fn operation_failure(correlation_id: &str, error: ClientOperationError) -> Resul
 }
 
 fn invalid_request(correlation_id: &str) -> Result<Response> {
-    problem(
-        correlation_id,
-        400,
-        "invalid_request",
-        "Invalid Request",
-    )
+    problem(correlation_id, 400, "invalid_request", "Invalid Request")
 }
 
 #[derive(Serialize)]
