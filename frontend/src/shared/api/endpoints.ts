@@ -39,6 +39,43 @@ export function getSession(tenantId: string, signal?: AbortSignal): Promise<Acto
   return requestJson<ActorSession>('/api/v1/session', { tenantId, signal });
 }
 
+export function bootstrapOwner(
+  tenantId: string,
+  input: { actorId: string; identityId: string; tenantDisplayName: string },
+): Promise<MutationReceipt | undefined> {
+  return mutate(`/api/v1/tenants/${segment(tenantId)}/owner/bootstrap`, tenantId, 'POST', input);
+}
+
+export function transferOwner(
+  tenantId: string,
+  input: { nextOwnerActorId: string; currentOwnerVersion: number; nextOwnerVersion: number },
+): Promise<MutationReceipt | undefined> {
+  return mutate(`/api/v1/tenants/${segment(tenantId)}/owner/transfer`, tenantId, 'POST', input);
+}
+
+export function createInvitation(
+  tenantId: string,
+  input: { invitationId: string; invitedContactHmac: string; expiresAtMs: number; expectedTenantVersion: number },
+): Promise<MutationReceipt | undefined> {
+  return mutate(`/api/v1/tenants/${segment(tenantId)}/invitations`, tenantId, 'POST', input);
+}
+
+export function acceptInvitation(
+  tenantId: string,
+  invitationId: string,
+  input: { identityId: string; actorId: string },
+): Promise<MutationReceipt | undefined> {
+  return mutate(`/api/v1/tenants/${segment(tenantId)}/invitations/${segment(invitationId)}/accept`, tenantId, 'POST', input);
+}
+
+export function updateMembershipStatus(
+  tenantId: string,
+  actorId: string,
+  input: { status: 'ACTIVE' | 'SUSPENDED' | 'REVOKED'; expectedVersion: number },
+): Promise<MutationReceipt | undefined> {
+  return mutate(`/api/v1/tenants/${segment(tenantId)}/members/${segment(actorId)}/status`, tenantId, 'PUT', input);
+}
+
 export function getClient(tenantId: string, clientId: string): Promise<ClientProjection | undefined> {
   return requestJson<ClientProjection>(`/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}`, { tenantId });
 }
