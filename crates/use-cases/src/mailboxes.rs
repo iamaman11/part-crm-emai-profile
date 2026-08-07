@@ -7,9 +7,7 @@ use application_ports::mailboxes::{
 };
 use core::fmt;
 use identity_access_domain::MembershipRole;
-use profile_platform_primitives::{
-    ActorContext, AggregateVersion, MailboxBindingId, SecretHandle,
-};
+use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, SecretHandle};
 
 const MAILBOX_BINDING_CREATE_COMMAND: &str = "mailbox.binding_create";
 const MAILBOX_BINDING_REVOKE_COMMAND: &str = "mailbox.binding_revoke";
@@ -160,9 +158,7 @@ impl fmt::Display for MailboxBindingOperationError {
 
 impl std::error::Error for MailboxBindingOperationError {}
 
-pub fn authorize_mailbox_binding(
-    role: MembershipRole,
-) -> Result<(), MailboxBindingOperationError> {
+pub fn authorize_mailbox_binding(role: MembershipRole) -> Result<(), MailboxBindingOperationError> {
     if role == MembershipRole::TenantOwner {
         Ok(())
     } else {
@@ -487,14 +483,17 @@ mod tests {
         Ok(ExecuteCreateMailboxBindingCommand::new(
             MailboxBindingId::parse("mailbox_01JMAILBOXAPP")?,
             MailboxProvider::Imap,
-            SecretHandle::parse("secret://mailbox/01JMAILBOXAPP")?,
+            SecretHandle::parse("secret_01JMAILBOXAPP")?,
             evidence()?,
         ))
     }
 
     #[test]
     fn owner_only_authorization_is_disclosure_neutral() {
-        assert_eq!(authorize_mailbox_binding(MembershipRole::TenantOwner), Ok(()));
+        assert_eq!(
+            authorize_mailbox_binding(MembershipRole::TenantOwner),
+            Ok(())
+        );
         assert_eq!(
             authorize_mailbox_binding(MembershipRole::Member),
             Err(MailboxBindingOperationError::NotFound)
@@ -536,8 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn create_unique_conflict_rechecks_exact_replay()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn create_unique_conflict_rechecks_exact_replay() -> Result<(), Box<dyn std::error::Error>> {
         let port = FakeMailboxBindingPort::new(vec![
             MailboxReplayDecision::Miss,
             MailboxReplayDecision::Replay(MailboxReplayReceipt::new(
