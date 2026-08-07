@@ -174,18 +174,13 @@ fn operation_failure(correlation_id: &str, error: MailboxJobOperationError) -> R
             problem(correlation_id, 400, "invalid_request", "Invalid Request")
         }
         MailboxJobOperationError::NotFound => neutral_not_found(correlation_id),
-        MailboxJobOperationError::VersionConflict => problem(
-            correlation_id,
-            409,
-            "version_conflict",
-            "Version Conflict",
-        ),
+        MailboxJobOperationError::VersionConflict => {
+            problem(correlation_id, 409, "version_conflict", "Version Conflict")
+        }
         MailboxJobOperationError::InvalidState => {
             problem(correlation_id, 409, "invalid_state", "Invalid State")
         }
-        MailboxJobOperationError::Conflict => {
-            problem(correlation_id, 409, "conflict", "Conflict")
-        }
+        MailboxJobOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
         MailboxJobOperationError::IntegrityFailure => problem(
             correlation_id,
             500,
