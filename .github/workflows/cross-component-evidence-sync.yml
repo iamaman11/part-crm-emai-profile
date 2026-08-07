@@ -1,0 +1,89 @@
+name: Cross-Component Evidence Sync
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.head_ref == 'cross-component-acceptance' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: true
+
+      - name: Sync evidence-scoped documentation
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          status_path = Path('docs/status.json')
+          status = json.loads(status_path.read_text(encoding='utf-8'))
+          assert status['implementation']['production_code'] is False
+          status['as_of'] = '2026-08-07'
+          status['implementation']['frontend'] = 'accepted_pr_64_repository_local_react_operator_ui'
+          status['implementation']['cross_component_acceptance'] = 'candidate_pr_66_repository_local_synthetic'
+          status['evidence'].pop('frontend_candidate', None)
+          status['evidence']['frontend_composition'] = 'accepted_pr_64_head_f2fcfe19335508a6062b9ed8a7c984fe2f97a417_frontend_gate_run_31207429792_merge_c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b'
+          status['evidence']['cross_component_candidate'] = 'pr_66_candidate_run_31208530252_repository_local_standalone_flow'
+          assert status['implementation']['production_code'] is False
+          status_path.write_text(json.dumps(status, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+
+          matrix_path = Path('docs/DEVELOPER_CAPABILITY_MATRIX.md')
+          matrix = matrix_path.read_text(encoding='utf-8')
+          matrix = matrix.replace(
+              'mailbox slice #56 / PR #60 + repair #61 / PR #62; React UI candidate #63 / PR #64',
+              'mailbox slice #56 / PR #60 + repair #61 / PR #62; accepted React UI #63 / PR #64; cross-component candidate #65 / PR #66',
+          )
+          old_react = '| React web UI | Composed candidate / Synthetic | PR #64 adds exact Node 24.19.0/npm 11.17.0 workspace, React 19/Vite 8/TypeScript 7, same-origin typed API/problem layer, tenant-scoped operator shell, session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces, neutral disclosure, high-impact confirmation, strict tests and a read-only permanent Frontend Gate. Worker Static Assets already targets `frontend/dist`. | This branch is not accepted on `main` until exact-head CI + squash merge. No deployed Cloudflare Access UI, real Bridge onboarding/custom-URI acceptance, real provider execution, or catalog list APIs are claimed. |'
+          new_react = '| React web UI | Composed / Synthetic | Accepted PR #64 provides exact Node 24.19.0/npm 11.17.0 workspace, React 19/Vite 8/TypeScript 7, same-origin typed API/problem layer, tenant-scoped operator shell, session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces, neutral disclosure, high-impact confirmation, strict tests and permanent Frontend Gate. Worker Static Assets targets `frontend/dist`. | No deployed Cloudflare Access UI, real Bridge onboarding/custom-URI acceptance, real provider execution, or missing backend list APIs are claimed. |'
+          if old_react not in matrix:
+              raise SystemExit('expected React capability row not found')
+          matrix = matrix.replace(old_react, new_react, 1)
+          cross_row = '| Cross-component standalone acceptance | Composed candidate / Synthetic | PR #66 adds a deterministic metadata-only manifest/validator and one permanent read-only lane that executes governed D1 invariants, generation integrity, Worker/adapters native+WASM, actual synthetic Bridge CLI, and Node24 frontend tests/build in one repository-local flow. | Candidate is not accepted on `main` until exact-head CI + squash merge; no external deployment/provider/device evidence is implied. |'
+          if cross_row not in matrix:
+              matrix = matrix.replace(new_react, new_react + '\n' + cross_row, 1)
+          matrix = matrix.replace('For the React UI candidate,', 'For the accepted React UI,')
+          matrix_path.write_text(matrix, encoding='utf-8')
+
+          index_path = Path('docs/TEST_EVIDENCE_INDEX.md')
+          index = index_path.read_text(encoding='utf-8')
+          old_row = '| React operator UI / PR #64 | candidate repository-local composed evidence; acceptance pending final exact-head merge | Node 24.19.0/npm 11.17.0 exact runtime, locked React/Vite/TypeScript workspace, same-origin API/problem boundary, neutral disclosure, high-impact confirmation, strict TS/tests/build and Static Assets gate | deployed Cloudflare Access UI, real Bridge/custom-URI onboarding, real providers, missing backend list APIs or production readiness |'
+          new_row = '| React operator UI / PR #64 | accepted repository-local composed/synthetic evidence | exact head `f2fcfe19335508a6062b9ed8a7c984fe2f97a417`; Node 24.19.0/npm 11.17.0 locked React/Vite/TypeScript workspace; same-origin API/problem boundary; neutral disclosure; high-impact confirmation; 11/11 permanent workflows and Frontend Gate `31207429792`; squash merge `c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b` | deployed Cloudflare Access UI, real Bridge/custom-URI onboarding, real providers, missing backend list APIs or production readiness |'
+          if old_row not in index:
+              raise SystemExit('expected React evidence row not found')
+          index = index.replace(old_row, new_row, 1)
+          cross_row = '| Cross-component standalone acceptance / PR #66 | candidate repository-local composed/synthetic evidence; final exact-head acceptance pending | deterministic metadata-only six-phase manifest, D1/ACL/mailbox/generation invariants, adapter + Worker native/WASM, actual synthetic Bridge CLI to `DIRTY_LOCAL`, Node24 frontend install/typecheck/tests/build; candidate gate `31208530252` succeeded | real Cloudflare/Camoufox/mailbox providers, production keys/signing, physical multi-device or production readiness |'
+          if cross_row not in index:
+              index = index.replace(new_row, new_row + '\n' + cross_row, 1)
+
+          old_section = '''### React Operator UI Candidate Evidence\n\n- tracking: issue #63 / draft PR #64; acceptance on `main` is still pending final exact-head CI and squash merge;\n- runtime pins: Node `24.19.0`, npm `11.17.0`; lockfile is authoritative and clean install uses `npm ci`;\n- candidate Frontend Gate run `31207221527`, conclusion `success`;\n- the lane passed exact runtime checks, clean install, application-source credential-persistence scan, strict TypeScript, 7 unit tests, Vite production build and Static Assets output verification;\n- component/API tests cover same-origin transport, problem normalization, neutral resource disclosure, session success/error and destructive-action confirmation;\n- no Cloudflare production deployment, real device onboarding, real provider execution or user data was involved;\n- this entry records candidate evidence only and does not promote `production_ready`.\n'''
+          new_section = '''### React Operator UI Accepted Evidence\n\n- tracking: issue #63 / PR #64, closed completed;\n- accepted source head: `f2fcfe19335508a6062b9ed8a7c984fe2f97a417`;\n- squash merge: `c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b`;\n- exact-head Frontend Gate run `31207429792`, conclusion `success`;\n- all 11 then-permanent workflows were green on the same accepted head;\n- runtime pins: Node `24.19.0`, npm `11.17.0`; lockfile is authoritative and clean install uses `npm ci`;\n- frontend lane passed source credential-persistence scan, strict TypeScript, 7 unit tests, Vite production build and Static Assets output verification;\n- no Cloudflare production deployment, real device onboarding, real provider execution or user data was involved.\n\n### Cross-Component Standalone Candidate Evidence\n\n- tracking: issue #65 / draft PR #66, parent epic #43;\n- baseline: accepted React UI merge `c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b`;\n- candidate Cross-Component Acceptance Gate run `31208530252`, conclusion `success`;\n- deterministic validator reported six repository-local synthetic phases and `productionReady=false`;\n- governed D1 identity/client/profile/mailbox negative invariants and generation integrity suites passed;\n- Cloudflare adapter suite: 19 passed; Worker helper suite: 14 passed; Worker WASM check passed;\n- Profile Bridge library/bin/integration suites: 35 passed in aggregate, followed by successful execution of `profile-bridge-synthetic` ending exactly `DIRTY_LOCAL`;\n- Node `24.19.0` / npm `11.17.0` clean frontend install, strict TypeScript, Vitest and Vite build passed in the same lane;\n- metadata-only evidence scan passed; no user data or real external provider/runtime was involved;\n- this remains candidate evidence until PR #66 passes final exact-head acceptance and squash merge.\n'''
+          if old_section not in index:
+              raise SystemExit('expected React candidate evidence section not found')
+          index = index.replace(old_section, new_section, 1)
+          index_path.write_text(index, encoding='utf-8')
+
+          readme_path = Path('README.md')
+          readme = readme_path.read_text(encoding='utf-8')
+          anchor = '- [Архитектура standalone UI](docs/UI_ARCHITECTURE.md)'
+          cross = '- [Cross-component repository-local acceptance](docs/CROSS_COMPONENT_ACCEPTANCE.md)'
+          if cross not in readme:
+              readme = readme.replace(anchor, anchor + '\n' + cross, 1)
+          readme_path.write_text(readme, encoding='utf-8')
+          PY
+
+      - name: Remove one-shot workflow and commit synchronized evidence
+        run: |
+          rm .github/workflows/cross-component-evidence-sync.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/status.json docs/DEVELOPER_CAPABILITY_MATRIX.md docs/TEST_EVIDENCE_INDEX.md README.md .github/workflows/cross-component-evidence-sync.yml
+          git commit -m "Sync composition acceptance evidence"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
