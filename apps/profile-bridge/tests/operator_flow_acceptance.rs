@@ -1,7 +1,5 @@
 use application_ports::ProfileCoordinatorPort;
-use bridge_domain::{
-    BridgePortError, CamouhostMessage, CamouhostPort, ClaimUri, EnrollmentClaim,
-};
+use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort, ClaimUri, EnrollmentClaim};
 use profile_bridge::local_profile::{LocalGenerationState, MaterializationRoot};
 use profile_bridge::operator_flow::{
     DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment, OperatorFailureStage,
@@ -32,7 +30,11 @@ struct AllowAuthentication;
 impl DeviceAuthenticationPort for AllowAuthentication {
     type Error = BridgePortError;
 
-    fn authenticate(&mut self, _device_id: &DeviceId, _key_handle: &str) -> Result<(), Self::Error> {
+    fn authenticate(
+        &mut self,
+        _device_id: &DeviceId,
+        _key_handle: &str,
+    ) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -98,6 +100,7 @@ impl ProfileCoordinatorPort for TestCoordinator {
 #[derive(Clone, Debug)]
 struct TestRuntimeBundles {
     bundle: ApprovedRuntimeBundle,
+    allow: bool,
 }
 
 impl RuntimeBundleSelectionPort for TestRuntimeBundles {
@@ -109,7 +112,11 @@ impl RuntimeBundleSelectionPort for TestRuntimeBundles {
         _profile_id: &ProfileId,
         _generation_id: &GenerationId,
     ) -> Result<ApprovedRuntimeBundle, Self::Error> {
-        Ok(self.bundle.clone())
+        if self.allow {
+            Ok(self.bundle.clone())
+        } else {
+            Err(BridgePortError::Unavailable)
+        }
     }
 }
 
@@ -264,6 +271,7 @@ fn operator<H: CamouhostPort>(
         coordinator,
         TestRuntimeBundles {
             bundle: approved_bundle()?,
+            allow: true,
         },
         FakeProcessControl::default(),
         camouhost,
@@ -294,6 +302,33 @@ fn busy_invalid_and_replayed_claims_fail_before_second_ownership()
         Err(OperatorFlowError::Stage(OperatorFailureStage::Enrollment))
     );
     assert_eq!(operator.coordinator().acquired, 1);
+    Ok(())
+}
+
+#[test]
+fn runtime_bundle_rejection_prevents_lease_and_runtime_mutation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new()?;
+    let mut operator = ProfileBridgeOperator::new(
+        FakeDeviceIdentity::new(fixture.device_id.clone()),
+        FakeDeviceKeyStore::default(),
+        AllowAuthentication,
+        fixture.enrollment()?,
+        fixture.coordinator(),
+        TestRuntimeBundles {
+            bundle: approved_bundle()?,
+            allow: false,
+        },
+        FakeProcessControl::default(),
+        FakeCamouhost::default(),
+    );
+
+    assert_eq!(
+        operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
+        Err(OperatorFlowError::Stage(OperatorFailureStage::RuntimeBundle))
+    );
+    assert_eq!(operator.coordinator().acquired, 0);
+    assert!(operator.process().actions().is_empty());
     Ok(())
 }
 
