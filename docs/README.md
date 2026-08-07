@@ -45,6 +45,9 @@
 - [`EXTERNAL_EVIDENCE_OPERATOR.md`](EXTERNAL_EVIDENCE_OPERATOR.md): fail-safe
   operator workflow for deriving gate requirements and creating validator-approved
   `pending` drafts without manufacturing terminal evidence.
+- [`EXTERNAL_GATE_EXECUTION_RUNBOOK.md`](EXTERNAL_GATE_EXECUTION_RUNBOOK.md):
+  validator-covered provider/host/policy execution guidance for every accepted
+  external gate, with metadata-safe capture and explicit stop conditions.
 - [`EXTERNAL_EVIDENCE_READINESS.md`](EXTERNAL_EVIDENCE_READINESS.md): deterministic
   active-record projection, mandatory production matrix and readiness interlock.
 - [`EXTERNAL_REVIEW_ATTESTATIONS.md`](EXTERNAL_REVIEW_ATTESTATIONS.md): canonical
