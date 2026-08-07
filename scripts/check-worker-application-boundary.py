@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed if the migrated client Worker transport regains D1 orchestration."""
+"""Fail closed if the migrated client Worker surface regains D1 orchestration."""
 
 from __future__ import annotations
 
@@ -15,6 +15,15 @@ FORBIDDEN_CLIENT_TRANSPORT_TOKENS = (
     "D1IdempotencyRepository",
     "CreateClientMutation",
     "D1Database",
+)
+
+FORBIDDEN_LEGACY_API_TOKENS = (
+    "CreateClientMutation",
+    "CLIENT_CREATE_COMMAND",
+    "async fn create_client(",
+    "async fn get_client(",
+    "struct ClientCreateRequest",
+    "struct ClientResponse",
 )
 
 REQUIRED_CLIENT_TRANSPORT_TOKENS = (
@@ -37,6 +46,7 @@ def validate(root: Path) -> list[str]:
     client_path = worker / "clients.rs"
     composition_path = worker / "composition.rs"
     lib_path = worker / "lib.rs"
+    legacy_api_path = worker / "api.rs"
     ports_path = root / "crates/application-ports/src/clients.rs"
     use_cases_path = root / "crates/use-cases/src/clients.rs"
     adapter_path = root / "crates/cloudflare-adapters/src/d1_clients.rs"
@@ -45,6 +55,7 @@ def validate(root: Path) -> list[str]:
         client_path,
         composition_path,
         lib_path,
+        legacy_api_path,
         ports_path,
         use_cases_path,
         adapter_path,
@@ -58,6 +69,7 @@ def validate(root: Path) -> list[str]:
     client = read(client_path)
     composition = read(composition_path)
     worker_lib = read(lib_path)
+    legacy_api = read(legacy_api_path)
     ports = read(ports_path)
     use_cases = read(use_cases_path)
     adapter = read(adapter_path)
@@ -65,6 +77,10 @@ def validate(root: Path) -> list[str]:
     for token in FORBIDDEN_CLIENT_TRANSPORT_TOKENS:
         if token in client:
             errors.append(f"client Worker transport must not contain provider token `{token}`")
+
+    for token in FORBIDDEN_LEGACY_API_TOKENS:
+        if token in legacy_api:
+            errors.append(f"legacy api.rs must not contain migrated client token `{token}`")
 
     for token in REQUIRED_CLIENT_TRANSPORT_TOKENS:
         if token not in client:
@@ -109,6 +125,10 @@ def write_self_test_fixture(root: Path) -> None:
         "clients::dispatch(route, &mut request, &env).await\n",
         encoding="utf-8",
     )
+    (worker / "api.rs").write_text(
+        "async fn create_client() {}\n",
+        encoding="utf-8",
+    )
     (ports / "clients.rs").write_text("pub trait ClientApplicationPort {}\n", encoding="utf-8")
     (use_cases / "clients.rs").write_text(
         "pub async fn execute_create_client() {}\npub async fn get_visible_client() {}\n",
@@ -131,12 +151,14 @@ def main() -> int:
             fixture = Path(temp_dir)
             write_self_test_fixture(fixture)
             errors = validate(fixture)
-            if not any("provider token" in error for error in errors):
-                print("negative direct-D1 Worker fixture unexpectedly passed")
+            provider_rejected = any("provider token" in error for error in errors)
+            legacy_rejected = any("legacy api.rs" in error for error in errors)
+            if not provider_rejected or not legacy_rejected:
+                print("negative Worker application-boundary fixture unexpectedly passed")
                 for error in errors:
                     print(error)
                 return 1
-            print("negative direct-D1 Worker fixture rejected as expected")
+            print("negative direct-D1 and legacy Worker fixtures rejected as expected")
             return 0
 
     errors = validate(args.root.resolve())
