@@ -153,14 +153,34 @@ def validate_composition_surfaces() -> None:
         api,
         [
             "OwnerBootstrapApi",
-            "ClientCollectionApi",
             "ProfileCollectionApi",
             "ProfileAssignmentApi",
             "ProfileGrantApi",
-            "find_visible_client",
             "find_visible_profile",
         ],
-        "identity/client/profile Worker composition",
+        "identity/profile Worker composition",
+    )
+
+    worker_lib = read("apps/control-plane-worker/src/lib.rs")
+    require_all(
+        worker_lib,
+        [
+            "RouteClass::ClientCollectionApi | RouteClass::ClientResourceApi",
+            "clients::dispatch(route, &mut request, &env).await",
+        ],
+        "client Worker routing composition",
+    )
+    client_transport = read("apps/control-plane-worker/src/clients.rs")
+    require_all(
+        client_transport,
+        ["execute_create_client", "get_visible_client", "client_application(env)"],
+        "client Worker application transport",
+    )
+    client_use_cases = read("crates/use-cases/src/clients.rs")
+    require_all(
+        client_use_cases,
+        ["pub async fn execute_create_client", "pub async fn get_visible_client"],
+        "client application use cases",
     )
 
     generation = read("crates/cloudflare-adapters/src/d1_profile_generations.rs")

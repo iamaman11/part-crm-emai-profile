@@ -4,6 +4,7 @@ use cloudflare_adapters::d1_identity_acl::{
     D1IdentityAclRepository, ResolvedActor, ResolvedMembershipRole,
 };
 use control_plane_contract::D1_CATALOG_BINDING;
+use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{CorrelationId, TenantId, TenantScope};
 use serde::Serialize;
 use worker::{Date, Env, Error, Fetch, Request, Response, Result, Url};
@@ -60,6 +61,14 @@ pub async fn resolve_active_request_actor(
             verified.correlation_id().clone(),
         )
         .await
+}
+
+#[must_use]
+pub const fn membership_role(resolved: &ResolvedActor) -> MembershipRole {
+    match resolved.role() {
+        ResolvedMembershipRole::TenantOwner => MembershipRole::TenantOwner,
+        ResolvedMembershipRole::Member => MembershipRole::Member,
+    }
 }
 
 pub async fn verify_request_identity(

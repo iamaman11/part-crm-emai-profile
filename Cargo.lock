@@ -62,13 +62,16 @@ dependencies = [
 name = "browser-profile-control-plane-worker"
 version = "0.1.0"
 dependencies = [
+ "application-ports",
  "client-domain",
  "cloudflare-adapters",
  "control-plane-contract",
+ "identity-access-domain",
  "profile-platform-primitives",
  "serde",
  "serde_json",
  "session-domain",
+ "use-cases",
  "wasm-bindgen",
  "worker",
 ]
@@ -158,6 +161,8 @@ name = "cloudflare-adapters"
 version = "0.1.0"
 dependencies = [
  "application-ports",
+ "client-domain",
+ "identity-access-domain",
  "mailbox-domain",
  "profile-platform-primitives",
  "serde",

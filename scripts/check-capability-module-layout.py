@@ -12,6 +12,7 @@ PORT_MODULES = (
     "audit",
     "clients",
     "clock",
+    "commands",
     "generations",
     "identity",
     "mailboxes",
@@ -22,8 +23,13 @@ USE_CASE_MODULES = ("clients", "error", "identity_acl", "profiles")
 
 PORT_OWNERS = {
     "audit.rs": ("pub trait AuditPort", "pub struct AuditRecord", "pub enum AuditResult"),
-    "clients.rs": ("pub trait ClientRepository",),
+    "clients.rs": (
+        "pub trait ClientRepository",
+        "pub trait ClientApplicationPort",
+        "pub struct ClientCreateWrite",
+    ),
     "clock.rs": ("pub trait ClockPort",),
+    "commands.rs": ("pub struct CommandExecutionEvidence",),
     "generations.rs": ("pub struct GenerationObjectReference", "pub trait GenerationObjectStorePort"),
     "identity.rs": ("pub trait MembershipRepository",),
     "mailboxes.rs": ("pub struct MailboxObservation", "pub trait MailboxProviderPort"),
@@ -32,7 +38,13 @@ PORT_OWNERS = {
 }
 
 USE_CASE_OWNERS = {
-    "clients.rs": ("pub struct CreateClientCommand", "pub fn decide_create_client"),
+    "clients.rs": (
+        "pub struct CreateClientCommand",
+        "pub fn decide_create_client",
+        "pub struct ExecuteCreateClientCommand",
+        "pub async fn execute_create_client",
+        "pub async fn get_visible_client",
+    ),
     "error.rs": ("pub struct ApplicationError",),
     "profiles.rs": ("pub struct OpenProfileCommand", "pub fn decide_open_profile"),
 }
@@ -99,6 +111,7 @@ def validate(root: Path) -> list[str]:
         "pub use audit::{AuditPort, AuditRecord, AuditResult};",
         "pub use clients::ClientRepository;",
         "pub use clock::ClockPort;",
+        "pub use commands::CommandExecutionEvidence;",
         "pub use generations::{GenerationObjectReference, GenerationObjectStorePort};",
         "pub use identity::MembershipRepository;",
         "pub use mailboxes::{MailboxObservation, MailboxProviderPort};",
