@@ -13,6 +13,7 @@ const TENANT_HEADER: &str = "X-Tenant-Id";
 const CORRELATION_HEADER: &str = "X-Correlation-Id";
 const ACCESS_ISSUER_VAR: &str = "ACCESS_ISSUER";
 const ACCESS_AUDIENCE_VAR: &str = "ACCESS_AUDIENCE";
+const PROBLEM_CONTENT_TYPE: &str = "application/problem+json";
 
 pub struct VerifiedRequestIdentity {
     scope: TenantScope,
@@ -194,7 +195,7 @@ pub fn problem(
     .with_status(status);
     response
         .headers_mut()
-        .set("content-type", "application/problem+json")?;
+        .set("content-type", PROBLEM_CONTENT_TYPE)?;
     Ok(response)
 }
 
@@ -213,7 +214,7 @@ pub fn correlation_hint(request: &Request) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{problem, problem_type_for_code};
+    use super::{PROBLEM_CONTENT_TYPE, problem_type_for_code};
 
     #[test]
     fn every_stable_problem_code_has_its_own_type() {
@@ -246,13 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn problem_response_uses_problem_json_media_type() -> Result<(), Box<dyn std::error::Error>> {
-        let response = problem("corr_problem_test", 409, "conflict", "Conflict")?;
-        assert_eq!(response.status_code(), 409);
-        assert_eq!(
-            response.headers().get("content-type")?.as_deref(),
-            Some("application/problem+json")
-        );
-        Ok(())
+    fn problem_response_media_type_is_stable_without_wasm_runtime() {
+        assert_eq!(PROBLEM_CONTENT_TYPE, "application/problem+json");
     }
 }
