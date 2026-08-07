@@ -120,6 +120,17 @@ impl RuntimeBundleSelectionPort for TestRuntimeBundles {
     }
 }
 
+type TestOperator<H> = ProfileBridgeOperator<
+    FakeDeviceIdentity,
+    FakeDeviceKeyStore,
+    AllowAuthentication,
+    TestEnrollment,
+    TestCoordinator,
+    TestRuntimeBundles,
+    FakeProcessControl,
+    H,
+>;
+
 #[derive(Default)]
 struct RejectHelloCamouhost;
 
@@ -250,19 +261,7 @@ fn operator<H: CamouhostPort>(
     fixture: &Fixture,
     coordinator: TestCoordinator,
     camouhost: H,
-) -> Result<
-    ProfileBridgeOperator<
-        FakeDeviceIdentity,
-        FakeDeviceKeyStore,
-        AllowAuthentication,
-        TestEnrollment,
-        TestCoordinator,
-        TestRuntimeBundles,
-        FakeProcessControl,
-        H,
-    >,
-    Box<dyn std::error::Error>,
-> {
+) -> Result<TestOperator<H>, Box<dyn std::error::Error>> {
     Ok(ProfileBridgeOperator::new(
         FakeDeviceIdentity::new(fixture.device_id.clone()),
         FakeDeviceKeyStore::default(),
