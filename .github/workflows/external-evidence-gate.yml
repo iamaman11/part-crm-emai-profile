@@ -19,19 +19,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           persist-credentials: false
 
-      - name: Compile external evidence policies
+      - name: Compile external evidence policies and operator tooling
         run: |
           python -m py_compile scripts/check-external-evidence.py
           python -m py_compile scripts/check-external-evidence-scope.py
+          python -m py_compile scripts/prepare-external-evidence.py
+          python -m py_compile tests/external-evidence-tooling/test-draft-tool.py
 
       - name: Validate repository external evidence
         run: |
           python scripts/check-external-evidence.py
           python scripts/check-external-evidence-scope.py
+
+      - name: Exercise fail-safe pending draft tooling
+        run: python tests/external-evidence-tooling/test-draft-tool.py
 
       - name: Validate canonical fixtures
         run: |
