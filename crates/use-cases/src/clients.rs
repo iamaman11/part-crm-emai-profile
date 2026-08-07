@@ -1,8 +1,8 @@
 use crate::error::ApplicationError;
 use application_ports::CommandExecutionEvidence;
 use application_ports::clients::{
-    ClientApplicationPort, ClientCreateWrite, ClientPortError, ClientPortErrorClass, ClientReadModel,
-    ClientReplayDecision, ClientReplayReceipt,
+    ClientApplicationPort, ClientCreateWrite, ClientPortError, ClientPortErrorClass,
+    ClientReadModel, ClientReplayDecision, ClientReplayReceipt,
 };
 use client_domain::{ClientError, ClientKind, ClientRecord, ClientStatus};
 use contracts::ProblemCode;
@@ -219,11 +219,7 @@ pub async fn execute_create_client<P: ClientApplicationPort>(
         ClientReplayDecision::Conflict => return Err(ClientOperationError::Conflict),
     }
 
-    let write = ClientCreateWrite::new(
-        client,
-        command.evidence,
-        CLIENT_CREATED_EVENT_PAYLOAD,
-    );
+    let write = ClientCreateWrite::new(client, command.evidence, CLIENT_CREATED_EVENT_PAYLOAD);
     match port.create_client(actor, &write).await {
         Ok(()) => Ok(ClientMutationOutcome {
             result_code: "created".to_owned(),
@@ -255,16 +251,11 @@ pub async fn get_visible_client<P: ClientApplicationPort>(
     port: &P,
     client_id: &ClientId,
 ) -> Result<ClientDetails, ClientOperationError> {
-    port.find_visible_client(
-        actor.tenant_scope(),
-        actor.actor_id(),
-        role,
-        client_id,
-    )
-    .await
-    .map_err(map_client_port_error)?
-    .map(ClientDetails::from)
-    .ok_or(ClientOperationError::NotFound)
+    port.find_visible_client(actor.tenant_scope(), actor.actor_id(), role, client_id)
+        .await
+        .map_err(map_client_port_error)?
+        .map(ClientDetails::from)
+        .ok_or(ClientOperationError::NotFound)
 }
 
 fn replay_outcome(client: &ClientRecord, receipt: &ClientReplayReceipt) -> ClientMutationOutcome {
@@ -447,8 +438,8 @@ mod tests {
     }
 
     #[test]
-    fn owner_create_normalizes_domain_input_before_write()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn owner_create_normalizes_domain_input_before_write() -> Result<(), Box<dyn std::error::Error>>
+    {
         let port = FakeClientPort::new(vec![ClientReplayDecision::Miss]);
         let outcome = block_on(execute_create_client(
             &actor()?,
@@ -484,8 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_replay_skips_write_and_preserves_receipt()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn exact_replay_skips_write_and_preserves_receipt() -> Result<(), Box<dyn std::error::Error>> {
         let port = FakeClientPort::new(vec![ClientReplayDecision::Replay(
             ClientReplayReceipt::new("created", Some("client_existing".to_owned())),
         )]);
@@ -526,10 +516,8 @@ mod tests {
     #[test]
     fn unique_conflict_without_exact_replay_remains_conflict()
     -> Result<(), Box<dyn std::error::Error>> {
-        let port = FakeClientPort::new(vec![
-            ClientReplayDecision::Miss,
-            ClientReplayDecision::Miss,
-        ]);
+        let port =
+            FakeClientPort::new(vec![ClientReplayDecision::Miss, ClientReplayDecision::Miss]);
         port.create_error.set(Some(ClientPortErrorClass::Conflict));
         assert_eq!(
             block_on(execute_create_client(
@@ -544,8 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn visible_query_returns_typed_application_view()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn visible_query_returns_typed_application_view() -> Result<(), Box<dyn std::error::Error>> {
         let port = FakeClientPort::new(Vec::new());
         port.visible.replace(Some(ClientReadModel::new(
             ClientId::parse("client_01JCLIENTAPP")?,
