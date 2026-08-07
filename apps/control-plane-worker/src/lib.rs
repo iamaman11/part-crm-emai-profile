@@ -2,6 +2,7 @@
 
 mod access_session;
 mod api;
+mod mutation_errors;
 mod profile_coordinator;
 mod profile_generations;
 mod request_evidence;
@@ -41,6 +42,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::ProfileGenerationResourceApi
         | RouteClass::ProfileGenerationVerifyApi
         | RouteClass::ProfileGenerationActivateApi
+        | RouteClass::ProfileGenerationDeactivateApi
         | RouteClass::ProfileGenerationQuarantineApi => {
             profile_generations::dispatch(route, &mut request, &env).await
         }
