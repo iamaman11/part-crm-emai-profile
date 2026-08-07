@@ -5,8 +5,10 @@
 - [`../README.md`](../README.md): фактический статус, границы и быстрый вход.
 - [`status.json`](status.json): machine-readable readiness projection.
 - [`PRODUCT.md`](PRODUCT.md): product identity, primary value and non-goals.
-- [`DELIVERY_ROADMAP.md`](DELIVERY_ROADMAP.md): исполнимый порядок Repository Steps
-  для автономной разработки через GitHub и CI.
+- [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md): текущий архитектурный аудит и
+  нормативный порядок post-composition развития standalone/realtime/mailbox/CRM.
+- [`DELIVERY_ROADMAP.md`](DELIVERY_ROADMAP.md): исторический исполнимый порядок
+  Repository Steps 0–10 и исходная delivery discipline.
 - [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md): что реально
   composed, что является library/synthetic evidence, target architecture или
   external gate.
@@ -20,7 +22,8 @@
 - [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md): standalone routes, screens,
   frontend layers, state ownership и UI acceptance gates.
 - [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md): полный целевой план и
-  Definition of Done; порядок delivery уточняется `DELIVERY_ROADMAP.md`.
+  Definition of Done; post-composition очередность delivery задаёт
+  `DEVELOPMENT_PLAN.md`.
 - [`../PROFILE_LIFECYCLE_PLAN.md`](../PROFILE_LIFECYCLE_PLAN.md): state machine
   создания, запуска, snapshot, restore и cloud sync.
 - [`PROFILE_GENERATION_REGISTRY.md`](PROFILE_GENERATION_REGISTRY.md): authoritative
@@ -120,3 +123,5 @@
    message content или другие secrets/PII.
 8. Устаревший документ помечается superseded и перестает быть источником истины.
 9. External action не отмечается выполненной без reviewable evidence reference.
+10. Post-composition execution order меняется только через `DEVELOPMENT_PLAN.md`;
+    capability matrix и status при этом отражают только фактически принятый код/evidence.
