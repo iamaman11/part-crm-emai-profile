@@ -6,6 +6,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from test_step4_error_taxonomy import main as error_taxonomy_main
+
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_identity_acl.rs"
 GOVERNED_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_governed_commands.rs"
@@ -99,9 +101,12 @@ def main() -> int:
             print(error, file=sys.stderr)
         return 1
 
+    if error_taxonomy_main() != 0:
+        return 1
+
     print(
         "Step 4 writes use governed atomic envelopes, exact replay decisions, "
-        "and collision-resistant evidence identifiers."
+        "collision-resistant evidence identifiers, and stable error taxonomy."
     )
     return 0
 
