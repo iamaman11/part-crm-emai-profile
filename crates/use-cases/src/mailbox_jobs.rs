@@ -478,9 +478,10 @@ mod tests {
         MailboxJobRunnerError, MailboxJobRunnerErrorClass, MailboxJobRunnerPort,
         MailboxJobRunWrite, MailboxJobStatus,
     };
-    use application_ports::mailboxes::{MailboxReplayDecision, MailboxReplayReceipt};
+    use application_ports::mailboxes::{
+        MailboxProvider, MailboxReplayDecision, MailboxReplayReceipt,
+    };
     use identity_access_domain::MembershipRole;
-    use mailbox_domain::MailboxProvider;
     use profile_platform_primitives::{
         ActorContext, ActorId, AggregateVersion, AuditEventId, CorrelationId, IdempotencyKey,
         MailboxBindingId, MailboxJobId, OutboxEventId, SecretHandle, TenantId, TenantScope,
