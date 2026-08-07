@@ -2,10 +2,15 @@ use crate::access_session::{
     correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
     verify_request_identity,
 };
+use crate::mutation_failure::{
+    MutationFailureClass, classify_mutation_failure, mutation_failure,
+};
+use crate::request_evidence::{audit_event_id, outbox_event_id};
 use cloudflare_adapters::d1_catalog::{
     CatalogClientKind, CreateClientMutation, D1CatalogRepository,
 };
 use cloudflare_adapters::d1_governed_commands::D1GovernedCommandRepository;
+use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use cloudflare_adapters::d1_identity_acl::{
     AssignProfileMutation, BootstrapOwnerMutation, ClientGrantMutation, ClientGrantValue,
     CreateInvitationMutation, CreateProfileMutation, D1IdentityAclRepository,
@@ -22,13 +27,25 @@ use cloudflare_adapters::d1_invitation_acceptance::{
 use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
 use profile_platform_primitives::{
     ActorId, AggregateVersion, AssignmentId, AuditEventId, ClientId, IdempotencyKey, IdentityId,
-    InvitationId, OutboxEventId, ProfileId, UnixMillis,
+    InvitationId, OutboxEventId, ProfileId, TenantScope, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
 use worker::{Date, Env, Error, Request, Response, Result};
 
 const IDEMPOTENCY_HEADER: &str = "Idempotency-Key";
 const IDEMPOTENCY_TTL_MS: u64 = 86_400_000;
+
+const OWNER_BOOTSTRAP_COMMAND: &str = "tenant.owner_bootstrap";
+const OWNER_TRANSFER_COMMAND: &str = "membership.owner_transfer";
+const INVITATION_CREATE_COMMAND: &str = "invitation.create";
+const INVITATION_ACCEPT_COMMAND: &str = "invitation.accept";
+const CLIENT_CREATE_COMMAND: &str = "client.create";
+const PROFILE_CREATE_COMMAND: &str = "profile.create";
+const PROFILE_ASSIGN_COMMAND: &str = "profile.assign_client";
+const PROFILE_GRANT_COMMAND: &str = "profile.grant";
+const PROFILE_GRANT_REVOKE_COMMAND: &str = "profile.grant_revoke";
+const CLIENT_GRANT_COMMAND: &str = "client.grant";
+const CLIENT_GRANT_REVOKE_COMMAND: &str = "client.grant_revoke";
 
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
@@ -95,40 +112,57 @@ async fn bootstrap_owner(request: &mut Request, env: &Env, tenant_id: &str) -> R
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_request(
+        request,
+        verified.scope(),
+        &actor_id,
+        body.request_digest,
+    ) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
     let repository = D1IdentityAclRepository::new(env.d1(D1_CATALOG_BINDING)?);
 
-    if let Some(existing) = repository
+    let existing = match repository
         .resolve_active_actor(
             verified.scope().clone(),
             verified.identity(),
             verified.correlation_id().clone(),
         )
-        .await?
+        .await
     {
+        Ok(value) => value,
+        Err(error) => return mutation_failure(request, error),
+    };
+    if let Some(existing) = existing {
         if existing.role() != ResolvedMembershipRole::TenantOwner
             || existing.actor().actor_id() != &actor_id
         {
             return neutral_not_found(verified.correlation_id().as_str());
         }
-        if let Some(replay) = repository
-            .idempotency_replay(verified.scope(), &actor_id, &envelope.idempotency_key)
-            .await?
+        if let Some(response) = replay_response(
+            request,
+            env,
+            verified.scope(),
+            &actor_id,
+            verified.correlation_id().as_str(),
+            OWNER_BOOTSTRAP_COMMAND,
+            &envelope,
+            verified.scope().tenant_id().as_str(),
+            1,
+            200,
+        )
+        .await?
         {
-            return mutation_receipt(
-                replay.result_code(),
-                replay.result_reference().unwrap_or(actor_id.as_str()),
-                1,
-                200,
-            );
+            return Ok(response);
         }
         return conflict(request);
     }
 
-    let boundary = repository.tenant_boundary(verified.scope()).await?;
+    let boundary = match repository.tenant_boundary(verified.scope()).await {
+        Ok(value) => value,
+        Err(error) => return mutation_failure(request, error),
+    };
     if boundary.membership_count != 0 || boundary.active_owner_count != 0 {
         return conflict(request);
     }
@@ -143,19 +177,30 @@ async fn bootstrap_owner(request: &mut Request, env: &Env, tenant_id: &str) -> R
         identity_id: &identity_id,
         envelope: envelope.identity(),
     };
-    if repository
-        .bootstrap_owner(&context, mutation)
-        .await
-        .is_err()
-    {
-        return conflict(request);
+    match repository.bootstrap_owner(&context, mutation).await {
+        Ok(_) => mutation_receipt(
+            "bootstrapped",
+            verified.scope().tenant_id().as_str(),
+            1,
+            201,
+        ),
+        Err(error) => {
+            mutation_failure_or_replay(
+                request,
+                env,
+                verified.scope(),
+                &actor_id,
+                verified.correlation_id().as_str(),
+                OWNER_BOOTSTRAP_COMMAND,
+                &envelope,
+                verified.scope().tenant_id().as_str(),
+                1,
+                200,
+                error,
+            )
+            .await
+        }
     }
-    mutation_receipt(
-        "bootstrapped",
-        verified.scope().tenant_id().as_str(),
-        1,
-        201,
-    )
 }
 
 async fn transfer_owner(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Response> {
@@ -182,11 +227,22 @@ async fn transfer_owner(request: &mut Request, env: &Env, tenant_id: &str) -> Re
         Some(value) => value,
         None => return internal_failure(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
+    if let Some(response) = replay_for_actor(
+        request,
+        env,
+        &actor,
+        OWNER_TRANSFER_COMMAND,
+        &envelope,
+        next_owner_actor_id.as_str(),
+        response_version,
+        200,
+    )
+    .await?
+    {
         return Ok(response);
     }
     let mutation = OwnerTransferMutation {
@@ -195,19 +251,31 @@ async fn transfer_owner(request: &mut Request, env: &Env, tenant_id: &str) -> Re
         next_owner_version,
         envelope: envelope.identity(),
     };
-    if D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    let result = D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .transfer_owner(actor.actor(), mutation)
-        .await
-        .is_err()
-    {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
+        .await;
+    match result {
+        Ok(_) => mutation_receipt(
+            "transferred",
+            next_owner_actor_id.as_str(),
+            response_version,
+            200,
+        ),
+        Err(error) => {
+            mutation_failure_or_replay_for_actor(
+                request,
+                env,
+                &actor,
+                OWNER_TRANSFER_COMMAND,
+                &envelope,
+                next_owner_actor_id.as_str(),
+                response_version,
+                200,
+                error,
+            )
+            .await
+        }
     }
-    mutation_receipt(
-        "transferred",
-        next_owner_actor_id.as_str(),
-        response_version,
-        200,
-    )
 }
 
 async fn create_invitation(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Response> {
@@ -230,11 +298,22 @@ async fn create_invitation(request: &mut Request, env: &Env, tenant_id: &str) ->
         Some(value) => value,
         None => return internal_failure(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
+    if let Some(response) = replay_for_actor(
+        request,
+        env,
+        &actor,
+        INVITATION_CREATE_COMMAND,
+        &envelope,
+        invitation_id.as_str(),
+        response_version,
+        200,
+    )
+    .await?
+    {
         return Ok(response);
     }
     let mutation = CreateInvitationMutation {
@@ -244,14 +323,26 @@ async fn create_invitation(request: &mut Request, env: &Env, tenant_id: &str) ->
         tenant_expected_version: expected_tenant_version,
         envelope: envelope.identity(),
     };
-    if D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    let result = D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .create_invitation(actor.actor(), mutation)
-        .await
-        .is_err()
-    {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
+        .await;
+    match result {
+        Ok(_) => mutation_receipt("created", invitation_id.as_str(), response_version, 201),
+        Err(error) => {
+            mutation_failure_or_replay_for_actor(
+                request,
+                env,
+                &actor,
+                INVITATION_CREATE_COMMAND,
+                &envelope,
+                invitation_id.as_str(),
+                response_version,
+                200,
+                error,
+            )
+            .await
+        }
     }
-    mutation_receipt("created", invitation_id.as_str(), response_version, 201)
 }
 
 async fn accept_invitation(
@@ -279,32 +370,46 @@ async fn accept_invitation(
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_request(
+        request,
+        verified.scope(),
+        &actor_id,
+        body.request_digest,
+    ) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
     let identity_repository = D1IdentityAclRepository::new(env.d1(D1_CATALOG_BINDING)?);
-    if let Some(existing) = identity_repository
+    let existing = match identity_repository
         .resolve_active_actor(
             verified.scope().clone(),
             verified.identity(),
             verified.correlation_id().clone(),
         )
-        .await?
+        .await
     {
+        Ok(value) => value,
+        Err(error) => return mutation_failure(request, error),
+    };
+    if let Some(existing) = existing {
         if existing.actor().actor_id() != &actor_id {
             return neutral_not_found(verified.correlation_id().as_str());
         }
-        if let Some(replay) = identity_repository
-            .idempotency_replay(verified.scope(), &actor_id, &envelope.idempotency_key)
-            .await?
+        if let Some(response) = replay_response(
+            request,
+            env,
+            verified.scope(),
+            &actor_id,
+            verified.correlation_id().as_str(),
+            INVITATION_ACCEPT_COMMAND,
+            &envelope,
+            actor_id.as_str(),
+            1,
+            200,
+        )
+        .await?
         {
-            return mutation_receipt(
-                replay.result_code(),
-                replay.result_reference().unwrap_or(actor_id.as_str()),
-                1,
-                200,
-            );
+            return Ok(response);
         }
         return conflict(request);
     }
@@ -319,19 +424,33 @@ async fn accept_invitation(
         identity_id: &identity_id,
         envelope: envelope.identity(),
     };
-    if D1InvitationAcceptanceRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    let result = D1InvitationAcceptanceRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .accept(
             &context,
             verified.identity(),
             verified.correlation_id(),
             mutation,
         )
-        .await
-        .is_err()
-    {
-        return neutral_not_found(verified.correlation_id().as_str());
+        .await;
+    match result {
+        Ok(_) => mutation_receipt("accepted", actor_id.as_str(), 1, 200),
+        Err(error) => {
+            mutation_failure_or_replay(
+                request,
+                env,
+                verified.scope(),
+                &actor_id,
+                verified.correlation_id().as_str(),
+                INVITATION_ACCEPT_COMMAND,
+                &envelope,
+                actor_id.as_str(),
+                1,
+                200,
+                error,
+            )
+            .await
+        }
     }
-    mutation_receipt("accepted", actor_id.as_str(), 1, 200)
 }
 
 async fn update_membership_status(
@@ -359,17 +478,28 @@ async fn update_membership_status(
         Some(value) => value,
         None => return internal_failure(request),
     };
-    let next_status = match body.status.as_str() {
-        "ACTIVE" => MembershipStatusValue::Active,
-        "SUSPENDED" => MembershipStatusValue::Suspended,
-        "REVOKED" => MembershipStatusValue::Revoked,
+    let (next_status, command_name) = match body.status.as_str() {
+        "ACTIVE" => (MembershipStatusValue::Active, "membership.activate"),
+        "SUSPENDED" => (MembershipStatusValue::Suspended, "membership.suspend"),
+        "REVOKED" => (MembershipStatusValue::Revoked, "membership.revoke"),
         _ => return invalid_request(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
+    if let Some(response) = replay_for_actor(
+        request,
+        env,
+        &actor,
+        command_name,
+        &envelope,
+        target_actor_id.as_str(),
+        response_version,
+        200,
+    )
+    .await?
+    {
         return Ok(response);
     }
     let mutation = MembershipStatusMutation {
@@ -378,14 +508,26 @@ async fn update_membership_status(
         next_status,
         envelope: envelope.identity(),
     };
-    if D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    let result = D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .update_membership_status(actor.actor(), mutation)
-        .await
-        .is_err()
-    {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
+        .await;
+    match result {
+        Ok(_) => mutation_receipt("updated", target_actor_id.as_str(), response_version, 200),
+        Err(error) => {
+            mutation_failure_or_replay_for_actor(
+                request,
+                env,
+                &actor,
+                command_name,
+                &envelope,
+                target_actor_id.as_str(),
+                response_version,
+                200,
+                error,
+            )
+            .await
+        }
     }
-    mutation_receipt("updated", target_actor_id.as_str(), response_version, 200)
 }
 
 async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Response> {
@@ -408,11 +550,22 @@ async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Res
     if body.display_name.trim().is_empty() || body.display_name.len() > 200 {
         return invalid_request(request);
     }
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(env, &actor, &envelope, 1).await? {
+    if let Some(response) = replay_for_actor(
+        request,
+        env,
+        &actor,
+        CLIENT_CREATE_COMMAND,
+        &envelope,
+        client_id.as_str(),
+        1,
+        200,
+    )
+    .await?
+    {
         return Ok(response);
     }
     let mutation = CreateClientMutation {
@@ -427,14 +580,26 @@ async fn create_client(request: &mut Request, env: &Env, tenant_id: &str) -> Res
         now: envelope.now,
         idempotency_expires_at: envelope.expires_at,
     };
-    if D1CatalogRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    let result = D1CatalogRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .create_client(actor.actor(), mutation)
-        .await
-        .is_err()
-    {
-        return conflict(request);
+        .await;
+    match result {
+        Ok(_) => mutation_receipt("created", client_id.as_str(), 1, 201),
+        Err(error) => {
+            mutation_failure_or_replay_for_actor(
+                request,
+                env,
+                &actor,
+                CLIENT_CREATE_COMMAND,
+                &envelope,
+                client_id.as_str(),
+                1,
+                200,
+                error,
+            )
+            .await
+        }
     }
-    mutation_receipt("created", client_id.as_str(), 1, 201)
 }
 
 async fn get_client(
@@ -476,25 +641,48 @@ async fn create_profile(request: &mut Request, env: &Env, tenant_id: &str) -> Re
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(env, &actor, &envelope, 1).await? {
+    if let Some(response) = replay_for_actor(
+        request,
+        env,
+        &actor,
+        PROFILE_CREATE_COMMAND,
+        &envelope,
+        profile_id.as_str(),
+        1,
+        200,
+    )
+    .await?
+    {
         return Ok(response);
     }
     let mutation = CreateProfileMutation {
         profile_id: &profile_id,
         envelope: envelope.identity(),
     };
-    if D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    let result = D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .create_profile(actor.actor(), mutation)
-        .await
-        .is_err()
-    {
-        return conflict(request);
+        .await;
+    match result {
+        Ok(_) => mutation_receipt("created", profile_id.as_str(), 1, 201),
+        Err(error) => {
+            mutation_failure_or_replay_for_actor(
+                request,
+                env,
+                &actor,
+                PROFILE_CREATE_COMMAND,
+                &envelope,
+                profile_id.as_str(),
+                1,
+                200,
+                error,
+            )
+            .await
+        }
     }
-    mutation_receipt("created", profile_id.as_str(), 1, 201)
 }
 
 async fn get_profile(
@@ -557,11 +745,22 @@ async fn assign_profile(
         Some(value) => value,
         None => return internal_failure(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
+    if let Some(response) = replay_for_actor(
+        request,
+        env,
+        &actor,
+        PROFILE_ASSIGN_COMMAND,
+        &envelope,
+        assignment_id.as_str(),
+        response_version,
+        200,
+    )
+    .await?
+    {
         return Ok(response);
     }
     let mutation = AssignProfileMutation {
@@ -572,14 +771,26 @@ async fn assign_profile(
         reason: &body.reason,
         envelope: envelope.identity(),
     };
-    if D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
+    let result = D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
         .assign_profile(actor.actor(), mutation)
-        .await
-        .is_err()
-    {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
+        .await;
+    match result {
+        Ok(_) => mutation_receipt("assigned", assignment_id.as_str(), response_version, 200),
+        Err(error) => {
+            mutation_failure_or_replay_for_actor(
+                request,
+                env,
+                &actor,
+                PROFILE_ASSIGN_COMMAND,
+                &envelope,
+                assignment_id.as_str(),
+                response_version,
+                200,
+                error,
+            )
+            .await
+        }
     }
-    mutation_receipt("assigned", assignment_id.as_str(), response_version, 200)
 }
 
 async fn update_profile_grant(
@@ -617,11 +828,29 @@ async fn update_profile_grant(
         "PROFILE_OPERATOR" => ProfileGrantValue::Operator,
         _ => return invalid_request(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let revoke = request.method().as_ref() == "DELETE";
+    let command_name = if revoke {
+        PROFILE_GRANT_REVOKE_COMMAND
+    } else {
+        PROFILE_GRANT_COMMAND
+    };
+    let replay_status = if revoke { 204 } else { 200 };
+    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
+    if let Some(response) = replay_for_actor(
+        request,
+        env,
+        &actor,
+        command_name,
+        &envelope,
+        profile_id.as_str(),
+        response_version,
+        replay_status,
+    )
+    .await?
+    {
         return Ok(response);
     }
     let mutation = ProfileGrantMutation {
@@ -633,7 +862,6 @@ async fn update_profile_grant(
         envelope: envelope.identity(),
     };
     let repository = D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?);
-    let revoke = request.method().as_ref() == "DELETE";
     let result = if revoke {
         repository
             .revoke_profile_grant(actor.actor(), mutation)
@@ -641,13 +869,23 @@ async fn update_profile_grant(
     } else {
         repository.grant_profile(actor.actor(), mutation).await
     };
-    if result.is_err() {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
-    }
-    if revoke {
-        Response::empty().map(|response| response.with_status(204))
-    } else {
-        mutation_receipt("granted", profile_id.as_str(), response_version, 200)
+    match result {
+        Ok(_) if revoke => no_content(),
+        Ok(_) => mutation_receipt("granted", profile_id.as_str(), response_version, 200),
+        Err(error) => {
+            mutation_failure_or_replay_for_actor(
+                request,
+                env,
+                &actor,
+                command_name,
+                &envelope,
+                profile_id.as_str(),
+                response_version,
+                replay_status,
+                error,
+            )
+            .await
+        }
     }
 }
 
@@ -686,11 +924,29 @@ async fn update_client_grant(
         "CLIENT_EDITOR" => ClientGrantValue::Editor,
         _ => return invalid_request(request),
     };
-    let envelope = match EnvelopeOwned::from_request(request, body.request_digest) {
+    let revoke = request.method().as_ref() == "DELETE";
+    let command_name = if revoke {
+        CLIENT_GRANT_REVOKE_COMMAND
+    } else {
+        CLIENT_GRANT_COMMAND
+    };
+    let replay_status = if revoke { 204 } else { 200 };
+    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
         Ok(value) => value,
         Err(_) => return invalid_request(request),
     };
-    if let Some(response) = replay_response(env, &actor, &envelope, response_version).await? {
+    if let Some(response) = replay_for_actor(
+        request,
+        env,
+        &actor,
+        command_name,
+        &envelope,
+        client_id.as_str(),
+        response_version,
+        replay_status,
+    )
+    .await?
+    {
         return Ok(response);
     }
     let mutation = ClientGrantMutation {
@@ -702,7 +958,6 @@ async fn update_client_grant(
         envelope: envelope.identity(),
     };
     let repository = D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?);
-    let revoke = request.method().as_ref() == "DELETE";
     let result = if revoke {
         repository
             .revoke_client_grant(actor.actor(), mutation)
@@ -710,13 +965,23 @@ async fn update_client_grant(
     } else {
         repository.grant_client(actor.actor(), mutation).await
     };
-    if result.is_err() {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
-    }
-    if revoke {
-        Response::empty().map(|response| response.with_status(204))
-    } else {
-        mutation_receipt("granted", client_id.as_str(), response_version, 200)
+    match result {
+        Ok(_) if revoke => no_content(),
+        Ok(_) => mutation_receipt("granted", client_id.as_str(), response_version, 200),
+        Err(error) => {
+            mutation_failure_or_replay_for_actor(
+                request,
+                env,
+                &actor,
+                command_name,
+                &envelope,
+                client_id.as_str(),
+                response_version,
+                replay_status,
+                error,
+            )
+            .await
+        }
     }
 }
 
@@ -729,31 +994,136 @@ async fn active_owner(
     Ok(actor.filter(|resolved| resolved.role() == ResolvedMembershipRole::TenantOwner))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn replay_response(
+    request: &Request,
+    env: &Env,
+    scope: &TenantScope,
+    actor_id: &ActorId,
+    correlation_id: &str,
+    command_name: &str,
+    envelope: &EnvelopeOwned,
+    resource_id: &str,
+    aggregate_version: u64,
+    status: u16,
+) -> Result<Option<Response>> {
+    let decision = match D1IdempotencyRepository::new(env.d1(D1_CATALOG_BINDING)?)
+        .decide(
+            scope,
+            actor_id,
+            &envelope.idempotency_key,
+            command_name,
+            &envelope.request_digest,
+            envelope.now,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => return mutation_failure(request, error).map(Some),
+    };
+    match decision {
+        IdempotencyDecision::Miss => Ok(None),
+        IdempotencyDecision::Replay(receipt) if status == 204 => no_content().map(Some),
+        IdempotencyDecision::Replay(receipt) => mutation_receipt(
+            receipt.result_code(),
+            receipt.result_reference().unwrap_or(resource_id),
+            aggregate_version,
+            status,
+        )
+        .map(Some),
+        IdempotencyDecision::Conflict => {
+            problem(correlation_id, 409, "conflict", "Conflict").map(Some)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn replay_for_actor(
+    request: &Request,
     env: &Env,
     actor: &ResolvedActor,
+    command_name: &str,
     envelope: &EnvelopeOwned,
+    resource_id: &str,
     aggregate_version: u64,
+    status: u16,
 ) -> Result<Option<Response>> {
-    let replay = D1IdentityAclRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .idempotency_replay(
-            actor.actor().tenant_scope(),
-            actor.actor().actor_id(),
-            &envelope.idempotency_key,
+    replay_response(
+        request,
+        env,
+        actor.actor().tenant_scope(),
+        actor.actor().actor_id(),
+        actor.actor().correlation_id().as_str(),
+        command_name,
+        envelope,
+        resource_id,
+        aggregate_version,
+        status,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn mutation_failure_or_replay(
+    request: &Request,
+    env: &Env,
+    scope: &TenantScope,
+    actor_id: &ActorId,
+    correlation_id: &str,
+    command_name: &str,
+    envelope: &EnvelopeOwned,
+    resource_id: &str,
+    aggregate_version: u64,
+    replay_status: u16,
+    error: Error,
+) -> Result<Response> {
+    if classify_mutation_failure(&error.to_string()) == MutationFailureClass::Conflict {
+        if let Some(response) = replay_response(
+            request,
+            env,
+            scope,
+            actor_id,
+            correlation_id,
+            command_name,
+            envelope,
+            resource_id,
+            aggregate_version,
+            replay_status,
         )
-        .await?;
-    replay
-        .map(|value| {
-            mutation_receipt(
-                value.result_code(),
-                value
-                    .result_reference()
-                    .unwrap_or_else(|| actor.actor().actor_id().as_str()),
-                aggregate_version,
-                200,
-            )
-        })
-        .transpose()
+        .await?
+        {
+            return Ok(response);
+        }
+    }
+    mutation_failure(request, error)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn mutation_failure_or_replay_for_actor(
+    request: &Request,
+    env: &Env,
+    actor: &ResolvedActor,
+    command_name: &str,
+    envelope: &EnvelopeOwned,
+    resource_id: &str,
+    aggregate_version: u64,
+    replay_status: u16,
+    error: Error,
+) -> Result<Response> {
+    mutation_failure_or_replay(
+        request,
+        env,
+        actor.actor().tenant_scope(),
+        actor.actor().actor_id(),
+        actor.actor().correlation_id().as_str(),
+        command_name,
+        envelope,
+        resource_id,
+        aggregate_version,
+        replay_status,
+        error,
+    )
+    .await
 }
 
 fn next_aggregate_version(version: AggregateVersion) -> Option<u64> {
@@ -780,6 +1150,10 @@ fn internal_failure(request: &Request) -> Result<Response> {
         "internal_failure",
         "Internal Failure",
     )
+}
+
+fn no_content() -> Result<Response> {
+    Response::empty().map(|response| response.with_status(204))
 }
 
 #[derive(Serialize)]
@@ -857,7 +1231,25 @@ struct EnvelopeOwned {
 }
 
 impl EnvelopeOwned {
-    fn from_request(request: &Request, request_digest: String) -> Result<Self> {
+    fn from_actor(
+        request: &Request,
+        actor: &ResolvedActor,
+        request_digest: String,
+    ) -> Result<Self> {
+        Self::from_request(
+            request,
+            actor.actor().tenant_scope(),
+            actor.actor().actor_id(),
+            request_digest,
+        )
+    }
+
+    fn from_request(
+        request: &Request,
+        scope: &TenantScope,
+        actor_id: &ActorId,
+        request_digest: String,
+    ) -> Result<Self> {
         if !(16..=256).contains(&request_digest.len()) {
             return Err(Error::RustError(
                 "request digest length is invalid".to_owned(),
@@ -869,10 +1261,8 @@ impl EnvelopeOwned {
             .ok_or_else(|| Error::RustError("idempotency key missing".to_owned()))?;
         let idempotency_key =
             IdempotencyKey::parse(key).map_err(|error| Error::RustError(error.to_string()))?;
-        let audit_event_id = AuditEventId::parse(prefixed_id("audit", idempotency_key.as_str()))
-            .map_err(|error| Error::RustError(error.to_string()))?;
-        let outbox_event_id = OutboxEventId::parse(prefixed_id("outbox", idempotency_key.as_str()))
-            .map_err(|error| Error::RustError(error.to_string()))?;
+        let audit_event_id = audit_event_id(scope.tenant_id(), actor_id, &idempotency_key)?;
+        let outbox_event_id = outbox_event_id(scope.tenant_id(), actor_id, &idempotency_key)?;
         let now = Date::now().as_millis();
         let expires_at = now
             .checked_add(IDEMPOTENCY_TTL_MS)
@@ -899,12 +1289,6 @@ impl EnvelopeOwned {
             idempotency_expires_at: self.expires_at,
         }
     }
-}
-
-fn prefixed_id(prefix: &str, value: &str) -> String {
-    let remaining = 96_usize.saturating_sub(prefix.len() + 1);
-    let suffix: String = value.chars().take(remaining).collect();
-    format!("{prefix}_{suffix}")
 }
 
 #[derive(Deserialize)]
@@ -997,15 +1381,11 @@ struct ClientGrantRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_aggregate_version, prefixed_id};
+    use super::{
+        CLIENT_GRANT_COMMAND, CLIENT_GRANT_REVOKE_COMMAND, PROFILE_GRANT_COMMAND,
+        PROFILE_GRANT_REVOKE_COMMAND, next_aggregate_version,
+    };
     use profile_platform_primitives::AggregateVersion;
-
-    #[test]
-    fn generated_envelope_ids_stay_within_opaque_id_limit() {
-        let source = "x".repeat(96);
-        assert!(prefixed_id("audit", &source).len() <= 96);
-        assert!(prefixed_id("outbox", &source).len() <= 96);
-    }
 
     #[test]
     fn aggregate_response_versions_never_saturate() -> Result<(), Box<dyn std::error::Error>> {
@@ -1015,5 +1395,11 @@ mod tests {
             None
         );
         Ok(())
+    }
+
+    #[test]
+    fn grant_and_revoke_commands_are_distinct_idempotency_domains() {
+        assert_ne!(PROFILE_GRANT_COMMAND, PROFILE_GRANT_REVOKE_COMMAND);
+        assert_ne!(CLIENT_GRANT_COMMAND, CLIENT_GRANT_REVOKE_COMMAND);
     }
 }
