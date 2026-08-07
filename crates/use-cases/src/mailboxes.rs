@@ -193,11 +193,8 @@ pub async fn execute_create_mailbox_binding<P: MailboxBindingApplicationPort>(
         MailboxReplayDecision::Conflict => return Err(MailboxBindingOperationError::Conflict),
     }
 
-    let write = MailboxBindingCreateWrite::new(
-        binding,
-        command.evidence,
-        MAILBOX_BINDING_EVENT_PAYLOAD,
-    );
+    let write =
+        MailboxBindingCreateWrite::new(binding, command.evidence, MAILBOX_BINDING_EVENT_PAYLOAD);
     match port.create_binding(actor, &write).await {
         Ok(()) => Ok(MailboxBindingMutationOutcome {
             result_code: "created".to_owned(),
