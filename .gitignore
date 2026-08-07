@@ -19,6 +19,11 @@ lock
 # Rust build outputs
 /target/
 
+# Frontend dependency and build outputs
+/frontend/node_modules/
+/frontend/dist/
+/frontend/coverage/
+
 # Secrets & Environment Variables
 .env
 *.pem

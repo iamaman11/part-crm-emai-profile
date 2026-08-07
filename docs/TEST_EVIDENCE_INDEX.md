@@ -1,7 +1,7 @@
 # Test And Evidence Index
 
 **Статус:** normative evidence registry  
-**Дата:** 2026-08-06
+**Дата:** 2026-08-07
 
 A claim is accepted only within the scope of its referenced evidence. Passing one
 smoke test does not promote unrelated production gates.
@@ -24,6 +24,8 @@ smoke test does not promote unrelated production gates.
 | Repository Step 8 / PR #27 | accepted | marked opaque local materialization, atomic Bridge lock-file protocol, deterministic inventory, clone-only recovery, explicit dirty/recovery states, safe quota and metadata-only support evidence | kernel advisory locks, real browser/database recovery, real legacy profiles, encrypted cloud generations, trusted signing, multi-device or production readiness |
 | Repository Step 9 / PR #30 | accepted bounded synthetic evidence | exact-pinned XChaCha20-Poly1305/SHA-256 container, authenticated chunk/final records, immutable lifecycle, strict pointer CAS/rollback/quarantine/orphan planning, DEK-bound nonce reuse, zeroizing plaintext boundaries and Linux/Windows/WASM gates | production entropy/key wrapping, remote R2/D1 atomicity, escrow/account-loss restore, independent cryptographic review, physical multi-device or production readiness |
 | Repository Step 10 / PR #33 | accepted bounded synthetic evidence | required/optional/prohibited certification policy, deterministic matrix/vector, privacy-safe support output, typed device grant journal, exact preverified update/health identity, rollback/fail-closed state and Linux/Windows/WASM gates | real fingerprint certification, physical second device, production unwrap, cryptographic signature verification, trusted signing or production readiness |
+| Mailbox composition / PR #60 + repair PR #62 | accepted repository-local composed/synthetic evidence | D1 mailbox binding/job persistence, secret-handle-only request DTOs, idempotency/audit/outbox, Worker API routes, metadata-only synthetic provider path, adapter/native/WASM/release compilation | real Gmail/IMAP/browser execution, mailbox contents, production scheduler/provider evidence or production readiness |
+| React operator UI / PR #64 | candidate repository-local composed evidence; acceptance pending final exact-head merge | Node 24.19.0/npm 11.17.0 exact runtime, locked React/Vite/TypeScript workspace, same-origin API/problem boundary, neutral disclosure, high-impact confirmation, strict TS/tests/build and Static Assets gate | deployed Cloudflare Access UI, real Bridge/custom-URI onboarding, real providers, missing backend list APIs or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -301,6 +303,27 @@ review item; it is not a Worker runtime dependency claim.
 - real browser signals, production keys, physical devices, trusted signatures or
   user data involved: no;
 - ADR-0001/ADR-0006 and production readiness remain unaccepted.
+
+### Post-roadmap Mailbox Composition Evidence
+
+- accepted composition: issue #56 / PR #60, followed by forward-only repair issue #61 / PR #62;
+- repair accepted source head: `80d5da1239595c2562752307d2e48a7b14a0ba3e`;
+- squash merge establishing repaired composed state: `497953bf67af1c40fd35da465106f93b0a68685d`;
+- exact-head Quality Gate run: `31204097542`, conclusion `success`;
+- Repository Quality Audit Gate run: `31204098505`, conclusion `success`;
+- Profile Generation regression run: `31204096927`, conclusion `success`;
+- adapter mailbox suite was compiled/executed and Worker native/WASM/release composition passed;
+- real mailbox providers, mailbox payload processing and production scheduling were not involved.
+
+### React Operator UI Candidate Evidence
+
+- tracking: issue #63 / draft PR #64; acceptance on `main` is still pending final exact-head CI and squash merge;
+- runtime pins: Node `24.19.0`, npm `11.17.0`; lockfile is authoritative and clean install uses `npm ci`;
+- candidate Frontend Gate run `31207221527`, conclusion `success`;
+- the lane passed exact runtime checks, clean install, application-source credential-persistence scan, strict TypeScript, 7 unit tests, Vite production build and Static Assets output verification;
+- component/API tests cover same-origin transport, problem normalization, neutral resource disclosure, session success/error and destructive-action confirmation;
+- no Cloudflare production deployment, real device onboarding, real provider execution or user data was involved;
+- this entry records candidate evidence only and does not promote `production_ready`.
 
 ## 2. Required Permanent CI Evidence
 
