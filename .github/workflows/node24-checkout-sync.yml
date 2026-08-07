@@ -1,0 +1,55 @@
+name: Node 24 Checkout Sync
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.head_ref == 'actions-node24-checkout' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: true
+
+      - name: Replace deprecated checkout runtime pins
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          old = '11bd71901bbe5b1630ceea73d27597364c9af683'
+          new = 'f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a'
+          changed = []
+          occurrences = 0
+          for path in sorted(Path('.github/workflows').glob('*.yml')):
+              if path.name == 'node24-checkout-sync.yml':
+                  continue
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count:
+                  path.write_text(text.replace(old, new), encoding='utf-8')
+                  changed.append((str(path), count))
+                  occurrences += count
+          if occurrences == 0:
+              raise SystemExit('no deprecated checkout runtime pins found')
+          print(f'replaced {occurrences} checkout pins across {len(changed)} workflows')
+          for path, count in changed:
+              print(f'{path}: {count}')
+          PY
+
+      - name: Verify repository action runtime policy
+        run: python scripts/check-github-actions-runtime.py
+
+      - name: Remove one-shot workflow and commit migration
+        run: |
+          rm .github/workflows/node24-checkout-sync.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows
+          git commit -m "Move permanent checkout actions to Node 24"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
