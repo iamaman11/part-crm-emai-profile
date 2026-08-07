@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+// Temporary CI synchronization marker.
 pub mod access_identity;
 pub mod access_webcrypto;
 pub mod d1_catalog;
