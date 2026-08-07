@@ -6,6 +6,7 @@ pub mod clock;
 pub mod commands;
 pub mod generations;
 pub mod identity;
+pub mod mailbox_jobs;
 pub mod mailboxes;
 pub mod profiles;
 pub mod sessions;

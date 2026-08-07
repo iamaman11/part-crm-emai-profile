@@ -2,7 +2,7 @@
 
 **Status:** Phase 0 reference pattern for mailbox binding create / visible-by-ID / revoke.
 
-**Scope:** repository architecture only. Mailbox job create/get/run and provider execution remain a separate Phase 0 A0 vertical. This document does not claim production readiness or real provider readiness.
+**Scope:** repository architecture only. Mailbox job create/get/run is now an independent application-boundary vertical documented in `MAILBOX_JOB_APPLICATION_BOUNDARY.md`. This document does not claim production readiness or real provider readiness.
 
 ## Purpose
 
@@ -23,7 +23,7 @@ HTTP / Workers SDK
 
 Concrete D1 construction belongs to `apps/control-plane-worker/src/composition.rs`. The migrated `mailbox_bindings.rs` transport must not instantiate `D1MailboxRepository`, `D1IdempotencyRepository`, `CreateMailboxBindingMutation`, `RevokeMailboxBindingMutation`, or a D1 mutation envelope.
 
-Mailbox job routes are intentionally separated into `apps/control-plane-worker/src/mailbox_jobs.rs`. They still own their current provider-execution orchestration until the dedicated mailbox-job Phase 0 slice.
+Mailbox job routes remain physically separated in `apps/control-plane-worker/src/mailbox_jobs.rs` and now use their own application boundary. Binding and job policies are intentionally independent so either capability can fail closed without reopening the other.
 
 ## Security And Disclosure Invariants
 
@@ -92,7 +92,7 @@ The adapter maps this inward evidence to the existing D1 `MutationEnvelope`; the
 
 ## CI Enforcement
 
-`check-mailbox-binding-worker-application-boundary.py` is the permanent fail-closed architecture policy for this slice. Once the legacy mixed mailbox transport is removed and the policy is enabled in the permanent Repository Quality Audit Gate, it proves that:
+`check-mailbox-binding-worker-application-boundary.py` is the permanent fail-closed architecture policy for this slice. It proves that:
 
 - mailbox binding routes enter `mailbox_bindings::dispatch`;
 - mailbox job routes remain present and enter `mailbox_jobs::dispatch`;
@@ -101,12 +101,12 @@ The adapter maps this inward evidence to the existing D1 `MutationEnvelope`; the
 - the old mixed `apps/control-plane-worker/src/mailboxes.rs` cannot return;
 - a negative fixture that restores both direct D1 transport and the legacy mixed file is rejected.
 
-Pure fake-port tests, D1 adapter tests, Worker native/WASM checks, mailbox D1 atomicity tests and cross-component acceptance remain separate evidence layers.
+Mailbox-job D1/provider ownership is enforced separately by `check-mailbox-job-worker-application-boundary.py`. Pure fake-port tests, D1 adapter tests, Worker native/WASM checks, mailbox D1 atomicity tests and cross-component acceptance remain separate evidence layers.
 
 ## Remaining A0 Work
 
-This slice does **not** migrate mailbox job create/get/run or `MetadataMailboxProviderAdapter` execution. The retained job transport is separated so the next bounded Phase 0 vertical can move provider-decision sequencing behind its own application port without reopening binding lifecycle ownership.
+Mailbox job create/get/run has its own application boundary and no longer belongs to the remaining work for this binding slice.
 
-Generation and remaining governance orchestration also remain separate Phase 0 work.
+Generation and remaining governance orchestration remain separate Phase 0 work.
 
 `production_ready=false` remains unchanged.

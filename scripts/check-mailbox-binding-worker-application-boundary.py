@@ -124,11 +124,16 @@ def validate(root: Path) -> list[str]:
     if "impl MailboxBindingApplicationPort for D1MailboxBindingApplicationRepository" not in adapter:
         errors.append("Cloudflare adapter must implement the inward mailbox binding application port")
 
-    # The retained jobs transport is intentionally still provider-owned in this Phase 0D slice.
-    # Prove it still exists rather than accidentally deleting job execution while cleaning bindings.
-    for token in ("create_job", "get_job", "run_job", "MetadataMailboxProviderAdapter"):
+    # Binding enforcement only proves that the split job transport remains routed and callable.
+    # Dedicated Phase 0E policy owns the stronger no-D1/no-provider job assertions.
+    for token in (
+        "execute_create_mailbox_job",
+        "get_mailbox_job",
+        "execute_run_mailbox_job",
+        "mailbox_job_application(env)",
+    ):
         if token not in jobs:
-            errors.append(f"retained mailbox job transport missing `{token}`")
+            errors.append(f"mailbox job application transport missing `{token}`")
 
     return errors
 
@@ -148,7 +153,8 @@ def write_self_test_fixture(root: Path) -> None:
         encoding="utf-8",
     )
     (worker / "mailbox_jobs.rs").write_text(
-        "fn create_job() {} fn get_job() {} fn run_job() {} MetadataMailboxProviderAdapter\n",
+        "fn route() { execute_create_mailbox_job(); get_mailbox_job(); "
+        "execute_run_mailbox_job(); mailbox_job_application(env); }\n",
         encoding="utf-8",
     )
     (worker / "mailboxes.rs").write_text("async fn create_binding() {}\n", encoding="utf-8")
