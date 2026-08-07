@@ -76,7 +76,7 @@
     "foreignResourceDisclosureIsNeutral": true,
     "unverifiedGenerationActivationRejected": true,
     "coordinatorLeaseMismatchFailsClosed": true,
-    "rawMailboxCredentialAndMessageBodyRejected": true,
+    "mailboxSensitivePayloadRejected": true,
     "unknownDynamicRoutesFailClosed": true,
     "browserCredentialPersistenceRejected": true
   },
