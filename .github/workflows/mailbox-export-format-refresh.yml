@@ -4,12 +4,16 @@ on:
   push:
     branches:
       - mailbox-adapter-export-repair
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   format-and-self-remove:
+    if: github.head_ref == 'mailbox-adapter-export-repair' || github.ref_name == 'mailbox-adapter-export-repair'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout repair branch
