@@ -25,6 +25,7 @@ pub enum MailboxProviderAdapterError {
     TerminalFailure,
     SchedulingOverflow,
     InvalidJobState,
+    CounterOverflow,
 }
 
 impl MailboxProviderAdapterError {
@@ -38,7 +39,8 @@ impl MailboxProviderAdapterError {
             | Self::ProviderMismatch
             | Self::InvalidObservation
             | Self::SchedulingOverflow
-            | Self::InvalidJobState => None,
+            | Self::InvalidJobState
+            | Self::CounterOverflow => None,
         }
     }
 }
@@ -54,6 +56,7 @@ impl fmt::Display for MailboxProviderAdapterError {
             Self::TerminalFailure => "mailbox provider terminal failure",
             Self::SchedulingOverflow => "mailbox retry schedule overflow",
             Self::InvalidJobState => "mailbox job state is invalid for provider execution",
+            Self::CounterOverflow => "mailbox provider call counter overflow",
         })
     }
 }
@@ -145,7 +148,10 @@ impl MailboxProviderPort for DeterministicFakeMailboxProvider {
         job: &MailboxJob,
     ) -> Result<MailboxObservation, Self::Error> {
         validate_binding_job(binding, job)?;
-        self.calls = self.calls.saturating_add(1);
+        self.calls = self
+            .calls
+            .checked_add(1)
+            .ok_or(MailboxProviderAdapterError::CounterOverflow)?;
         match &self.outcome {
             DeterministicMailboxOutcome::Success {
                 provider_status,
@@ -380,6 +386,22 @@ mod tests {
         assert_eq!(observation.provider_status(), "SYNTHETIC_OK");
         assert_eq!(observation.bounded_item_count(), 4);
         assert_eq!(observation.next_cursor(), Some("cursor-next"));
+        Ok(())
+    }
+
+    #[test]
+    fn fake_provider_counter_overflow_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+        let binding = binding()?;
+        let job = job(&binding, 3)?;
+        let mut adapter = DeterministicFakeMailboxProvider {
+            outcome: DeterministicMailboxOutcome::TerminalFailure,
+            calls: u32::MAX,
+        };
+        let error = adapter
+            .check_mailbox(&binding, &job)
+            .expect_err("counter overflow must fail closed");
+        assert_eq!(error, MailboxProviderAdapterError::CounterOverflow);
+        assert_eq!(adapter.calls(), u32::MAX);
         Ok(())
     }
 
