@@ -59,15 +59,15 @@ No level by itself means production readiness.
 Accepted capability behavior and clean application ownership are separate claims. Phase 0 moves
 provider-independent orchestration behind application use cases without changing public behavior.
 
-Accepted Phase 0 slices through 0I establish the pattern for client create/query/grant,
-profile create/query/assignment/grant, mailbox binding/job and generation paths. The Phase 0J
-identity-governance slice becomes an accepted `main` claim only after guarded merge.
+Accepted Phase 0 slices through **0J** establish application ownership for client create/query/grant,
+profile create/query/assignment/grant, mailbox binding/job, generation and identity governance/
+ceremony paths. The active Phase 0K coordinator-ingress branch is not an accepted `main` claim
+until its guarded merge.
 
 As of this matrix date:
 
-- Phase 0J identity-governance application-boundary ownership is tracked by #100 / PR #101 and is not accepted until guarded merge;
-- the branch removes the legacy mixed Worker `api.rs` orchestration surface and permanent gates reject its return;
-- coordinator-ingress convergence remains the next Phase 0 Target after 0J acceptance;
+- accepted `main` includes Phase 0J identity-governance application-boundary ownership and permanent rejection of the legacy mixed Worker `api.rs` surface;
+- Phase 0K coordinator-ingress convergence is tracked by #102 / PR #103 and remains unaccepted until exact-head permanent CI plus guarded merge;
 - the current execution plan, not this matrix, determines subsequent order.
 
 Do not interpret a feature branch's `Composed` wiring or PR description as accepted `main`.
@@ -92,7 +92,7 @@ crates/cloudflare-adapters
   D1/Access/DO/R2/Queue/provider implementations that depend inward
 
 apps/control-plane-worker
-  thin Worker/DO composition and transport; coordinator ingress remains the Phase 0 convergence target
+  thin Worker/DO composition and transport; coordinator ingress remains the active Phase 0 convergence target until 0K merge
 
 apps/profile-bridge
   Windows-native local/device/runtime composition

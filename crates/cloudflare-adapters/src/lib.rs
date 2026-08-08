@@ -2,6 +2,7 @@
 
 pub mod access_identity;
 pub mod access_webcrypto;
+pub mod coordinator_ingress;
 pub mod d1_catalog;
 pub mod d1_clients;
 mod d1_command_identity;
