@@ -33,7 +33,6 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Formatting is first because it is the cheapest high-fanout CI failure.
     run("Rust formatting", ["cargo", "fmt", "--all", "--", "--check"])
 
     scripts = [
@@ -44,10 +43,15 @@ def main() -> int:
         "check-step5-profile-coordinator.py",
         "check-step6-windows-bridge.py",
         "check-frontend-feature-boundaries.py",
+        "check-phase1a-event-boundaries.py",
     ]
     for script in scripts:
         run(script, [sys.executable, str(ROOT / "scripts" / script)])
 
+    run(
+        "Phase 1A durable outbox and consumer idempotency",
+        [sys.executable, str(ROOT / "scripts" / "test-integration-event-foundation.py")],
+    )
     run(
         "generated frontend contract drift",
         [sys.executable, str(ROOT / "scripts" / "generate-frontend-contracts.py"), "--check"],
