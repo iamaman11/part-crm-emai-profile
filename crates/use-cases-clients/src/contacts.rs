@@ -1,8 +1,7 @@
 use application_ports::CommandExecutionEvidence;
 use application_ports::clients::{
-    ContactEncryptionKeyDomain, ContactEncryptionRequest, ContactExactLookupRequest,
-    ContactLookupKeyDomain, ContactProtectionPort, ContactProtectionPortError,
-    ContactProtectionPortErrorClass, ProtectedContactWrite,
+    ContactEncryptionRequest, ContactExactLookupRequest, ContactProtectionPort,
+    ContactProtectionPortError, ContactProtectionPortErrorClass, ProtectedContactWrite,
 };
 use client_domain::{
     ContactKind, ContactNormalizationVersion, ContactProtectionVersion, ContactStatus,
@@ -354,7 +353,10 @@ mod tests {
             Some("person@example.com")
         );
         assert_eq!(write.contact().kind(), ContactKind::Email);
-        assert_eq!(write.contact().display_value().ciphertext(), &[1, 2, 3, 4]);
+        assert_eq!(
+            write.contact().display_value().ciphertext(),
+            &[1, 2, 3, 4]
+        );
         assert_eq!(write.contact().exact_lookup().bytes(), &[7_u8; 32]);
         assert!(!format!("{write:?}").contains("Person@Example.COM"));
         Ok(())
@@ -373,7 +375,10 @@ mod tests {
         let seen = protector.lookup_input_seen.borrow();
         let seen = seen.as_deref().ok_or("missing lookup input")?;
         assert!(seen.starts_with(b"client-contact-exact-lookup\0v1\0"));
-        assert!(seen.windows(b"tenant_01JCONTACT".len()).any(|window| window == b"tenant_01JCONTACT"));
+        assert!(
+            seen.windows(b"tenant_01JCONTACT".len())
+                .any(|window| window == b"tenant_01JCONTACT")
+        );
         Ok(())
     }
 }
