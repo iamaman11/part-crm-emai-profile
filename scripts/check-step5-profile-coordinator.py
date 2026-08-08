@@ -50,6 +50,12 @@ REPOSITORY_REQUIRED = {
         "profile_coordinator_projection_commands",
         "pub async fn projected_sequence",
     ),
+    "apps/control-plane-worker/src/profile_coordinator_ingress.rs": (
+        "CloudflareCoordinatorIngressApplication",
+        "prepare_coordinator_ingress",
+        "request.json::<CoordinatorCommandRequest>()",
+        "execute_prepared_coordinator_ingress",
+    ),
     "apps/control-plane-worker/src/profile_coordinator.rs": (
         "#[durable_object]",
         "pub struct ProfileCoordinator",
@@ -72,6 +78,16 @@ REPOSITORY_REQUIRED = {
 FORBIDDEN_COORDINATOR_AUTH_MARKERS = (
     "profile_client_assignments",
     "linked_client_id",
+)
+
+FORBIDDEN_LEGACY_WORKER_ORCHESTRATION = (
+    "resolve_active_request_actor",
+    "D1IdentityQueryRepository",
+    "D1ProfileCoordinatorRepository",
+    "generate_fencing_token",
+    "generate_outbox_event_id",
+    "profile_is_coordinatable",
+    "project_and_respond",
 )
 
 ALLOWED_DURABLE_OBJECT_FILES = {
@@ -140,6 +156,28 @@ def main() -> int:
                 errors.append(
                     "application use case must authorize visible/coordinatable profile before coordinator runtime access"
                 )
+
+        transport_path = root / "apps/control-plane-worker/src/profile_coordinator_ingress.rs"
+        if transport_path.exists():
+            transport = transport_path.read_text(encoding="utf-8")
+            prepare_index = transport.find("prepare_coordinator_ingress")
+            body_index = transport.find("request.json::<CoordinatorCommandRequest>()")
+            execute_index = transport.find("execute_prepared_coordinator_ingress")
+            if min(prepare_index, body_index, execute_index) < 0 or not (
+                prepare_index < body_index < execute_index
+            ):
+                errors.append(
+                    "coordinator transport must complete visibility preparation before POST body parsing and execution"
+                )
+
+        do_path = root / "apps/control-plane-worker/src/profile_coordinator.rs"
+        if do_path.exists():
+            do_source = do_path.read_text(encoding="utf-8")
+            for marker in FORBIDDEN_LEGACY_WORKER_ORCHESTRATION:
+                if marker in do_source:
+                    errors.append(
+                        f"legacy coordinator HTTP orchestration returned to Durable Object module: {marker}"
+                    )
 
     if errors:
         for error in errors:
