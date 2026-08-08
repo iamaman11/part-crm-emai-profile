@@ -153,6 +153,11 @@ def validate_composition_surfaces() -> None:
             "MailboxJobRunApi",
             "ProfileGenerationActivateApi",
             "ProfileCoordinatorApi",
+            "OwnerBootstrapApi",
+            "OwnerTransferApi",
+            "InvitationCollectionApi",
+            "InvitationAcceptApi",
+            "MembershipStatusApi",
             "ClientGrantApi",
             "ProfileAssignmentApi",
             "ProfileGrantApi",
@@ -160,34 +165,19 @@ def validate_composition_surfaces() -> None:
         "Worker route contract",
     )
 
-    api = read("apps/control-plane-worker/src/api.rs")
-    require_all(api, ["OwnerBootstrapApi"], "remaining identity Worker composition")
-    for forbidden in (
-        "ClientGrantApi",
-        "ClientGrantMutation",
-        "ClientGrantValue",
-        "async fn update_client_grant(",
-        "struct ClientGrantRequest",
-        "CLIENT_GRANT_COMMAND",
-        "CLIENT_GRANT_REVOKE_COMMAND",
-        "ProfileAssignmentApi",
-        "AssignProfileMutation",
-        "async fn assign_profile(",
-        "ProfileGrantApi",
-        "ProfileGrantMutation",
-        "ProfileGrantValue",
-        "async fn update_profile_grant(",
-        "struct ProfileGrantRequest",
-        "PROFILE_GRANT_COMMAND",
-        "PROFILE_GRANT_REVOKE_COMMAND",
-    ):
-        if forbidden in api:
-            fail(f"migrated client/profile orchestration must not remain in legacy api.rs: {forbidden}")
+    if (ROOT / "apps/control-plane-worker/src/api.rs").exists():
+        fail("legacy api.rs must remain removed after identity application-boundary migration")
 
     worker_lib = read("apps/control-plane-worker/src/lib.rs")
     require_all(
         worker_lib,
         [
+            "RouteClass::OwnerBootstrapApi",
+            "RouteClass::OwnerTransferApi",
+            "RouteClass::InvitationCollectionApi",
+            "RouteClass::InvitationAcceptApi",
+            "RouteClass::MembershipStatusApi",
+            "identity::dispatch(route, &mut request, &env).await",
             "RouteClass::ClientCollectionApi",
             "RouteClass::ClientResourceApi",
             "RouteClass::ClientGrantApi",
@@ -206,6 +196,107 @@ def validate_composition_surfaces() -> None:
         ],
         "application-boundary Worker routing composition",
     )
+
+    identity_transport = read("apps/control-plane-worker/src/identity.rs")
+    require_all(
+        identity_transport,
+        [
+            "RouteClass::OwnerBootstrapApi",
+            "RouteClass::OwnerTransferApi",
+            "RouteClass::InvitationCollectionApi",
+            "RouteClass::InvitationAcceptApi",
+            "RouteClass::MembershipStatusApi",
+            "execute_owner_bootstrap",
+            "execute_owner_transfer",
+            "execute_invitation_create",
+            "execute_invitation_accept",
+            "execute_membership_status",
+            "authorize_identity_governance",
+            "identity_governance_application(env)",
+            "identity_ceremony_application(env, verified.identity().clone())",
+        ],
+        "identity Worker application transport",
+    )
+    for forbidden in (
+        "cloudflare_adapters::d1_",
+        "D1GovernedCommandRepository",
+        "D1IdempotencyRepository",
+        "D1IdentityAclRepository",
+        "D1InvitationAcceptanceRepository",
+        "OwnerTransferMutation",
+        "CreateInvitationMutation",
+        "MembershipStatusMutation",
+        "BootstrapOwnerMutation",
+        "AcceptInvitationMutation",
+    ):
+        if forbidden in identity_transport:
+            fail(f"identity Worker transport regained provider orchestration: {forbidden}")
+
+    identity_governance_use_cases = read("crates/use-cases/src/identity_governance.rs")
+    require_all(
+        identity_governance_use_cases,
+        [
+            "pub async fn execute_owner_transfer",
+            "pub async fn execute_invitation_create",
+            "pub async fn execute_membership_status",
+            "pub fn authorize_identity_governance",
+            "decide_identity_replay",
+            '"membership.activate"',
+            '"membership.suspend"',
+            '"membership.revoke"',
+            "IdentityGovernancePortErrorClass::Conflict",
+        ],
+        "identity governance application use cases",
+    )
+    identity_ceremony_use_cases = read("crates/use-cases/src/identity_ceremonies.rs")
+    require_all(
+        identity_ceremony_use_cases,
+        [
+            "pub async fn execute_owner_bootstrap",
+            "pub async fn execute_invitation_accept",
+            "find_active_identity_binding",
+            "tenant_identity_boundary",
+            "decide_ceremony_replay",
+            '"tenant.owner_bootstrap"',
+            '"invitation.accept"',
+            "IdentityGovernancePortErrorClass::Conflict",
+        ],
+        "identity ceremony application use cases",
+    )
+    identity_governance_adapter = read(
+        "crates/cloudflare-adapters/src/d1_identity_governance.rs"
+    )
+    require_all(
+        identity_governance_adapter,
+        [
+            "impl ActiveOwnerGovernanceApplicationPort for D1IdentityGovernanceApplicationRepository",
+            "OwnerTransferMutation",
+            "CreateInvitationMutation",
+            "MembershipStatusMutation",
+            ".transfer_owner(",
+            ".create_invitation(",
+            ".update_membership_status(",
+            "D1IdempotencyRepository",
+        ],
+        "identity governance D1 application adapter",
+    )
+    identity_ceremony_adapter = read(
+        "crates/cloudflare-adapters/src/d1_identity_ceremonies.rs"
+    )
+    require_all(
+        identity_ceremony_adapter,
+        [
+            "impl IdentityCeremonyApplicationPort for D1IdentityCeremonyApplicationRepository",
+            "VerifiedBootstrapContext::from_verified_identity",
+            "BootstrapOwnerMutation",
+            "AcceptInvitationMutation",
+            ".bootstrap_owner(",
+            ".accept(",
+            "D1IdempotencyRepository",
+        ],
+        "identity ceremony D1 application adapter",
+    )
+
     client_transport = read("apps/control-plane-worker/src/clients.rs")
     require_all(
         client_transport,
@@ -317,6 +408,9 @@ def validate_composition_surfaces() -> None:
     require_all(
         governed_commands,
         [
+            "owner_transfer_commands",
+            "membership_status_commands",
+            "invitation_create_commands",
             "client_grant_commands",
             "pub async fn grant_client",
             "pub async fn revoke_client_grant",
@@ -329,7 +423,7 @@ def validate_composition_surfaces() -> None:
             "expected_profile_version",
             '"profile.assign_client"',
         ],
-        "client/profile grant and assignment atomic D1 commands",
+        "identity/client/profile governed atomic D1 commands",
     )
 
     generation_transport = read("apps/control-plane-worker/src/profile_generations.rs")
