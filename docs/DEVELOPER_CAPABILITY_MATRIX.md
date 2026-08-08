@@ -59,15 +59,15 @@ No level by itself means production readiness.
 Accepted capability behavior and clean application ownership are separate claims. Phase 0 moves
 provider-independent orchestration behind application use cases without changing public behavior.
 
-Accepted Phase 0 slices through 0J establish the pattern for identity governance/ceremonies,
-client create/query/grant, profile create/query/assignment/grant, mailbox binding/job and
-generation paths.
+Accepted Phase 0 slices through 0I establish the pattern for client create/query/grant,
+profile create/query/assignment/grant, mailbox binding/job and generation paths. The Phase 0J
+identity-governance slice becomes an accepted `main` claim only after guarded merge.
 
 As of this matrix date:
 
-- Phase 0J identity-governance application-boundary ownership is accepted through #100 / PR #101;
-- the legacy mixed Worker `api.rs` orchestration surface is removed and permanently rejected;
-- coordinator-ingress convergence remains the next Phase 0 Target;
+- Phase 0J identity-governance application-boundary ownership is tracked by #100 / PR #101 and is not accepted until guarded merge;
+- the branch removes the legacy mixed Worker `api.rs` orchestration surface and permanent gates reject its return;
+- coordinator-ingress convergence remains the next Phase 0 Target after 0J acceptance;
 - the current execution plan, not this matrix, determines subsequent order.
 
 Do not interpret a feature branch's `Composed` wiring or PR description as accepted `main`.
