@@ -76,9 +76,8 @@ pub trait IntegrationEventPublisherPort {
 pub trait ConsumerIdempotencyPort {
     async fn claim(
         &self,
-        tenant_id: &TenantId,
         consumer_id: &OpaqueId,
-        event_id: &OutboxEventId,
+        event: &IntegrationEventEnvelope,
         consumed_at: UnixMillis,
     ) -> Result<ConsumerClaim, IntegrationEventPortError>;
 }
