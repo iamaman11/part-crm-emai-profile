@@ -1,0 +1,140 @@
+name: Phase 1B Closeout Materialize
+
+on:
+  push:
+    branches:
+      - phase1b-closeout
+
+permissions:
+  contents: write
+
+jobs:
+  closeout:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+      - name: Materialize accepted Phase 1B documentation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing closeout source in {path}: {old[:100]!r}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+
+          plan = Path('docs/DEVELOPMENT_PLAN.md')
+          replace(plan, '**Date:** 2026-08-08', '**Date:** 2026-08-09')
+          replace(
+              plan,
+              '**Tracking:** Phase 1A accepted via #114/#115; Phase 0 complete; Phase 1B #120 is the unique NEXT; expert-plan refinement #133; external CRM is future development only',
+              '**Tracking:** Phase 1B accepted via #120/#135; Phase 1 complete; Phase 2A #118 is the unique NEXT; expert-plan refinement #133; external CRM is future development only',
+          )
+          replace(
+              plan,
+              '- Phase 1A versioned integration-event envelope, durable outbox dispatch, metadata-only notification\n  persistence and durable consumer idempotency.',
+              '- Phase 1A versioned integration-event envelope, durable outbox dispatch and consumer idempotency;\n- Phase 1B extracted notification domain/application ownership, durable retry/DLQ, authorized audited\n  replay, grant-aware catch-up, bounded retention and sanitizer-safe operational visibility.',
+          )
+          replace(
+              plan,
+              '`0186b780f7fed4b7c5e7f212c2fe437cbc46a5e5`.\n\nThe critical path is deliberately linear:',
+              '`0186b780f7fed4b7c5e7f212c2fe437cbc46a5e5`.\n\nPhase 1B was accepted through issue #120 / PR #135 from exact proven source head\n`22b2ef36a943d07d22755bf467ec6e7c27ef081d` and guarded squash merge\n`f081e0709481d6bbaa150f5518ec8552124c78de`.\n\nThe critical path is deliberately linear:',
+          )
+          replace(plan, 'Phase 1B\n  -> Phase 2A', 'Phase 2A')
+          replace(
+              plan,
+              'Exactly one implementation slice is active at a time. The already-created Phase 2A issue #118 is\nqueued and blocked while Phase 1B is open.',
+              'Exactly one implementation slice is active at a time. Phase 2A issue #118 is the unique NEXT\nafter the accepted Phase 1B closeout.',
+          )
+          replace(
+              plan,
+              '| 6.2 | Durable-before-notify | **Accepted foundation + permanent invariant.** | 1B adds durable delivery state; 2E–2G and 2I prove full failure ordering. |',
+              '| 6.2 | Durable-before-notify | **Accepted through durable delivery in Phase 1B.** Durable mutation/outbox precedes Queue delivery state and notification surfaces. | Preserve; 2E–2G and 2I extend the same failure ordering to new consumers/realtime. |',
+          )
+          replace(
+              plan,
+              '| 6.3 | At-least-once consumer idempotency | **Accepted for current Phase 1A consumer only.** | 1B retry/replay hardening; 2E/2F every new Queue/device consumer must be duplicate-neutral. |',
+              '| 6.3 | At-least-once consumer idempotency | **Accepted for the current notification consumer through Phase 1B retry/DLQ/replay.** | 2E/2F every new Queue/device consumer must preserve duplicate neutrality. |',
+          )
+          replace(
+              plan,
+              '| 6.4 | Authorization-before-projection | **Partially composed invariant.** Existing paths enforce it; full catch-up/search/provider coverage does not yet exist. | 1B event catch-up; 2D read/search/provider query; 2G realtime subscriptions. |',
+              '| 6.4 | Authorization-before-projection | **Composed for Phase 1B event catch-up.** Live membership/grants are applied before event projection; broader query/provider coverage remains open. | 2D read/search/provider query; 2G realtime subscriptions. |',
+          )
+          replace(
+              plan,
+              '**Goal:** complete the asynchronous reliability substrate before product expansion depends on it.\nPhase 2 cannot start until all Phase 1B acceptance criteria are merged and closed out.',
+              '**Goal:** complete the asynchronous reliability substrate before product expansion depends on it.\n**Status:** ACCEPTED. Phase 1 is complete; Phase 2A is the unique next implementation slice.',
+          )
+          replace(
+              plan,
+              '### Phase 1B — Delivery hardening, catch-up and operations — NEXT',
+              '### Phase 1B — Delivery hardening, catch-up and operations — ACCEPTED',
+          )
+          replace(
+              plan,
+              '**Goal:** turn Phase 1A into an operationally safe, replayable, observable at-least-once delivery\nplatform before clients/mailboxes/devices/realtime build on it.\n\n#### 1B execution order',
+              '**Goal:** turn Phase 1A into an operationally safe, replayable, observable at-least-once delivery\nplatform before clients/mailboxes/devices/realtime build on it.\n\n**Accepted evidence:** issue #120 / PR #135; exact proven source head\n`22b2ef36a943d07d22755bf467ec6e7c27ef081d`; squash merge\n`f081e0709481d6bbaa150f5518ec8552124c78de`; 12/12 permanent workflows green on the unchanged\nsource head; `behind_by=0`; reviews=0; unresolved threads=0. `production_ready=false` remains unchanged.\n\n#### 1B execution order',
+          )
+          replace(
+              plan,
+              '**Phase 1 completion gate:** after 1B implementation merge, a bounded docs closeout marks 1B accepted\nand advances Phase 2A. No Phase 2 implementation PR may merge before that closeout.',
+              '**Phase 1 completion gate:** ACCEPTED by the implementation merge and this bounded documentation\ncloseout. Phase 2A #118 is the unique NEXT; later Phase 2 slices remain blocked by the same linear rule.',
+          )
+          replace(
+              plan,
+              '### Phase 2A — Client domain decomposition, aggregate and contact-protection foundation',
+              '### Phase 2A — Client domain decomposition, aggregate and contact-protection foundation — NEXT',
+          )
+
+          matrix = Path('docs/DEVELOPER_CAPABILITY_MATRIX.md')
+          replace(matrix, '**Date:** 2026-08-08', '**Date:** 2026-08-09')
+          replace(
+              matrix,
+              '| Integration event envelope/outbox | Composed / Synthetic | Phase 1A versioned envelope, event registry, evolved D1 outbox, metadata-only notification events, Queue dispatch, source guards and durable consumer idempotency. | Phase 1B retry/backoff/DLQ/cursors/catch-up/retention/operations remains Target. |',
+              '| Integration event envelope/outbox | Composed / Synthetic | Phase 1A versioned envelope, event registry, evolved D1 outbox, metadata-only notification events, Queue dispatch, source guards and durable consumer idempotency; Phase 1B preserves the canonical event source for replay. | Future capability event types/consumers must extend the same registry and durable-source rules. |',
+          )
+          replace(
+              matrix,
+              '| Notification delivery/catch-up operations | Target | Phase 1A provides the durable event source and current idempotent consumer foundation. | `notification-domain`, `use-cases-notifications`, delivery attempts, DLQ, cursors, replay, catch-up and retention are Phase 1B. |',
+              '| Notification delivery/catch-up operations | Composed / Synthetic | Phase 1B `notification-domain` + `use-cases-notifications`, deterministic bounded retry/DLQ, authorized immutable-audit replay, grant-aware durable catch-up/cursors, bounded compaction, sanitizer-safe owner operations, generated notification HTTP contracts and thin Worker Queue/Scheduled/API composition. | New mailbox/device consumers remain Phase 2E/2F; realtime UserNotificationHub remains Phase 2G. |',
+          )
+          replace(
+              matrix,
+              '| 6.2 | Durable-before-notify | **Accepted foundation / ongoing invariant**. | 1B durable delivery; 2E–2G/2I full failure-order proof. |',
+              '| 6.2 | Durable-before-notify | **Accepted through Phase 1B durable delivery**; notification state/replay intent is durable before publication/signal. | Preserve; 2E–2G/2I extend the same ordering. |',
+          )
+          replace(
+              matrix,
+              '| 6.3 | At-least-once consumer idempotency | **Accepted for current event consumer, not every future consumer**. | 1B hardening; 2E/2F new consumers. |',
+              '| 6.3 | At-least-once consumer idempotency | **Accepted for current notification delivery/replay consumer** with bounded retry/DLQ and duplicate-neutral canonical replay. | 2E/2F new consumers must preserve it. |',
+          )
+          replace(
+              matrix,
+              '| 6.4 | Authorization-before-projection | **Partially composed** on current paths. | 1B catch-up; 2D query/provider fetch; 2G realtime. |',
+              '| 6.4 | Authorization-before-projection | **Composed for Phase 1B catch-up** with live membership/grants before metadata projection. | 2D query/provider fetch; 2G realtime. |',
+          )
+          replace(
+              matrix,
+              'crates/use-cases-identity\n  independent identity governance + verified-identity application context\n\ncrates/use-cases\n  remaining shared application contexts plus accepted Phase 1A event orchestration pending the fixed extractions in DEVELOPMENT_PLAN',
+              'crates/use-cases-identity\n  independent identity governance + verified-identity application context\n\ncrates/notification-domain\n  provider-neutral delivery attempt/terminal/cursor invariants\n\ncrates/use-cases-notifications\n  independent notification dispatch, retry, replay, catch-up, retention and operations application context\n\ncrates/use-cases\n  remaining shared application contexts; notification ownership is fully extracted',
+          )
+          replace(
+              matrix,
+              'The fixed future extraction points are normative in `DEVELOPMENT_PLAN.md`: notifications in 1B,\nclients in 2A, query in 2D, mailboxes in 2E and devices in 2F.',
+              'The notification extraction point was accepted in Phase 1B. Remaining fixed extraction points are\nnormative in `DEVELOPMENT_PLAN.md`: clients in 2A, query in 2D, mailboxes in 2E and devices in 2F.',
+          )
+          PY
+      - name: Self-clean and commit
+        run: |
+          rm .github/workflows/phase1b-closeout-materialize.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/DEVELOPMENT_PLAN.md docs/DEVELOPER_CAPABILITY_MATRIX.md
+          git add -u .github/workflows/phase1b-closeout-materialize.yml
+          git commit -m 'Docs: close Phase 1B and advance Phase 2A'
+          git push origin HEAD:phase1b-closeout
