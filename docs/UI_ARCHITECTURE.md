@@ -12,9 +12,9 @@ Windows-компьютере, где будет запускаться Camoufox:
 React SPA и browser-facing Rust API публикуются одним Cloudflare Workers Static
 Assets deployment на одном origin и защищаются Cloudflare Access. Device-bound
 Bridge routes используют отдельную Worker policy. UI не хранит пароль, Access
-token или R2 credentials в Web Storage.
+token, R2 credentials или mailbox message bodies в Web Storage.
 
-Мобильный web UI поддерживает каталог, clients, access, history, mailbox и audit.
+Мобильный web UI поддерживает каталог, clients, users/access, history, mailbox и audit.
 Кнопка запуска Camoufox доступна только при совместимом enrolled desktop device.
 
 ## 2. Information Architecture
@@ -25,17 +25,20 @@ token или R2 credentials в Web Storage.
 | `/profiles` | поиск/фильтры/статусы профилей | granted profiles |
 | `/profiles/:profileId` | overview, session, generations, client, access, certification, mailbox, audit | profile grant/owner |
 | `/clients` | клиентский каталог | client grants/owner |
-| `/clients/:clientId` | card, contact points, profiles, activity, access | client grant/owner |
-| `/mailboxes` | bindings, jobs, provider state | permitted bindings/owner |
+| `/clients/:clientId` | card, contact points, mail search/body, profiles, activity, access | client grant/owner + mailbox policy |
+| `/users` | поиск сотрудников, invitations, memberships and grants | owner only |
+| `/mailboxes` | bindings, jobs, provider state and technical administration | permitted bindings/owner |
 | `/sessions` | active/stuck/dirty sessions | own sessions/owner all |
 | `/certification` | runtime lanes, drift and evidence summaries | viewer/owner |
-| `/users` | invitations, memberships and grants | owner only |
-| `/devices` | enrolled devices, versions and revocation | own devices/owner all |
+| `/devices` | infrastructure: enrolled devices, versions and revocation | own devices/owner all |
 | `/audit` | security/business audit explorer | owner only |
 | `/settings` | tenant policy, retention and release channel | owner only |
 
 Маршрут не является authorization boundary. Worker всегда повторно проверяет
 membership/grant; недоступный и чужой resource возвращаются одинаково.
+
+Primary business navigation prioritizes Clients / Profiles / Users. Devices remains an
+infrastructure/admin area rather than a primary business object.
 
 ## 3. Основные Экраны
 
@@ -59,18 +62,35 @@ membership/grant; недоступный и чужой resource возвраща
 ### Client Detail
 
 - structured card and governed contact points;
+- first-class `Mail` tab for searching messages associated with the client;
+- search by subject, sender, recipient, body text and date/time filters;
+- bounded results with mailbox, subject, sender/recipient, time and snippet;
+- selecting a result opens the full authorized message body;
+- HTML mail is rendered through a sanitized/sandboxed viewer with remote images/external active content disabled by default;
+- message bodies are never persisted in browser storage or copied into telemetry/error reporting;
 - assigned profiles without leaking ungranted profile details;
 - client grants separately from profile grants;
 - assignment history and future CRM `party_ref` sync state;
 - archive/merge flow вместо unsafe hard delete.
 
+Mailbox search is client-scoped in the initial product. `/mailboxes` remains the technical
+surface for binding/provider/job administration rather than the primary place where users
+read correspondence.
+
 ### Users & Access
 
+- user/member search and filters are first-class for tenant administration;
 - invitation lifecycle and expiry;
 - единственный active owner и explicit owner-transfer ceremony;
 - grants grouped by user и resource;
 - revoke preview показывает affected active sessions;
 - confirmation требует reason, а результат отображает audit reference.
+
+### Devices
+
+- technical list/filter by device ID/name/status/version;
+- revoke/disable and infrastructure diagnostics;
+- device search is available inside this admin surface but is secondary to Users & Access in product navigation.
 
 ## 4. Критические UX-Потоки
 
@@ -99,6 +119,16 @@ membership/grant; недоступный и чужой resource возвраща
 4. Отмена до browser start освобождает materialization lease безопасно.
 5. После открытия UI показывает actor/device и close policy.
 
+### Search Client Mail
+
+1. Пользователь открывает client card и вкладку `Mail`.
+2. UI отправляет client-scoped query; server сначала проверяет tenant/membership/grants.
+3. Результаты показывают только сообщения из mailbox bindings, разрешённых для этого клиента/пользователя.
+4. Пользователь выбирает письмо.
+5. UI отдельно загружает full message detail/body по opaque message reference.
+6. Body отображается только в viewer и не сохраняется в Web Storage/telemetry.
+7. `AUTH_REQUIRED`, offline/browser-lane pending и provider failure отображаются явно, а не как ложный пустой результат.
+
 ### Forgotten Window И Offline
 
 - Bridge показывает native idle warning независимо от web page;
@@ -122,6 +152,7 @@ frontend/src/
     certification/
     mailboxes/
     audit/
+    search/
   entities/            # generated DTO projections and pure display helpers
   shared/
     api/                # generated client, problem-code mapping
@@ -134,13 +165,18 @@ Feature не импортирует sibling feature internals. Общая биз
 дублируется вручную: DTO/enums генерируются из OpenAPI. Domain decisions всегда
 выполняет Rust Worker/domain core.
 
+Этот запрет является CI-инвариантом, а не только соглашением: feature boundary
+checker/ESLint rule должен падать при прямом импорте internals соседней feature.
+Общая композиция проходит только через `entities`, `shared`, app/routes или явно
+опубликованный feature API.
+
 ## 6. State Management
 
 - TanStack Query владеет remote state, invalidation and bounded retry;
 - TanStack Router владеет URL, filters and navigation state;
 - component/form state остается локальным;
-- активная session progress приходит через Worker polling, позже SSE при
-  доказанной необходимости;
+- mailbox message body существует в query/detail cache только в объёме, необходимом для текущего authorized view, и не переносится в persistent browser storage;
+- активная session progress приходит через Worker polling, позже SSE/WebSocket according to accepted realtime plan;
 - глобальный mutable business store запрещен;
 - optimistic UI допускается только для обратимых display mutations, но не для
   grants, generation activation, session close или deletion.
@@ -153,7 +189,8 @@ Feature не импортирует sibling feature internals. Общая биз
 - keyboard navigation, focus restoration, labels and live regions обязательны;
 - destructive/high-impact actions имеют consequence preview и typed reason;
 - responsive tables переходят в cards без потери critical status/action;
-- PII скрывается в notifications, screenshots, telemetry and support bundles;
+- PII скрывается в notifications, screenshots, telemetry and support bundles, но authorized product views (client contact/message body) показывают данные, необходимые пользователю;
+- mailbox HTML viewer не исполняет uncontrolled scripts/active content и не загружает remote tracking images по умолчанию;
 - loading skeleton не маскирует authorization or sync failure.
 
 ## 8. UI Test Gates
@@ -161,6 +198,11 @@ Feature не импортирует sibling feature internals. Общая биз
 - component tests для state/error/permission projections;
 - MSW/contract fixtures генерируются из API schema;
 - Playwright E2E для owner/member and revoked access;
+- client-mail search E2E: subject/sender/body query -> result -> full body;
+- negative E2E: ungranted/foreign client/message reference cannot disclose result/body;
+- mailbox body is absent from telemetry/error snapshots and persistent Web Storage;
+- sanitized/sandboxed HTML-message rendering tests;
+- frontend feature-boundary CI test + deliberately forbidden sibling-import fixture;
 - accessibility scan плюс keyboard-only critical flows;
 - responsive desktop/mobile smoke;
 - custom URI flow с fake Bridge adapter в CI и Windows-native acceptance lane;
@@ -170,8 +212,9 @@ Feature не импортирует sibling feature internals. Общая биз
 
 ## 9. Standalone UI Definition Of Done
 
-UI готов, когда без CLI можно выполнить login, invitation, client CRUD,
-profile creation/assignment/grant, Bridge onboarding, open/close/sync, generation
-history, certification review, mailbox check, device revoke, audit lookup and
-recoverable failure handling. Пустые, loading, offline, forbidden, conflict,
-quarantine и partial-success states проектируются одновременно с happy path.
+UI готов, когда без CLI можно выполнить login, invitation, user/member search, client CRUD,
+client-scoped mailbox message search, full authorized message-body viewing, profile
+creation/assignment/grant, Bridge onboarding, open/close/sync, generation history,
+certification review, mailbox check, device revoke, audit lookup and recoverable failure
+handling. Пустые, loading, offline, auth-required, forbidden, conflict, quarantine и
+partial-success states проектируются одновременно с happy path.

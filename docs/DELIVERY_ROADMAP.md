@@ -1,198 +1,136 @@
-# Delivery Roadmap
+# Delivery Roadmap — Historical Repository Steps
 
-**Статус:** normative execution order  
-**Дата:** 2026-08-05  
-**Исполнитель:** автономная разработка через GitHub repository, pull requests и
-GitHub Actions в текущей среде
+**Status:** historical accepted delivery record; not current execution order  
+**Date:** 2026-08-08  
+**Current execution plan:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
 
-Этот документ уточняет порядок реализации из `IMPLEMENTATION_PLAN.md`. При
-конфликте по очередности repository steps этот документ является источником
-истины; архитектурные инварианты исходного плана сохраняются.
+This document preserves the original Repository Step model and its acceptance discipline.
+It is useful for understanding how the standalone foundation was delivered, but it no
+longer defines what to implement next.
 
-## 1. Модель Выполнения
+For all post-composition work, `DEVELOPMENT_PLAN.md` is the only normative execution order.
+If this historical roadmap conflicts with that plan on sequencing or future scope, the
+current development plan wins.
 
-Каждый Repository Step выполняется отдельной веткой и pull request:
+`IMPLEMENTATION_PLAN.md` and the original lifecycle plans remain design/history inputs;
+they do not override the current post-composition plan.
 
-1. baseline `main` фиксируется commit SHA;
-2. изменение включает код, tests и обновление evidence/status;
-3. постоянные workflows должны быть зелёными;
-4. PR проверяется по diff, comments и unresolved threads;
-5. принимается squash merge;
-6. `docs/status.json` обновляется только по доказанным результатам.
+## 1. Historical Acceptance Discipline
 
-Работы, доступные в текущей среде, выполняются без ожидания ручных действий:
-repository files, architecture, Rust/TypeScript/Python code, GitHub Actions,
-issues, PR, review fixes и merge после зелёного CI.
+Each accepted Repository Step used the same fail-safe delivery model:
 
-Внешние действия не симулируются и не объявляются выполненными без evidence:
-отзыв чужого credential, Cloudflare account provisioning, физический Windows
-host, trusted code-signing certificate, offline key escrow и юридическое
-одобрение certification targets.
+1. baseline `main` commit fixed;
+2. bounded branch/PR;
+3. code/tests/evidence updated together;
+4. permanent workflows green on one exact final head;
+5. diff/reviews/unresolved threads checked;
+6. guarded squash merge;
+7. status/evidence updated only for claims actually proven.
 
-## 2. Repository Steps
+External work was never simulated: Cloudflare production resources, physical Windows hosts,
+trusted signing, key escrow, legal/provider approval and similar claims require real evidence.
+
+That acceptance discipline remains applicable to the current phased plan.
+
+## 2. Accepted Historical Repository Steps 0–10
 
 ### Step 0 — Executable Foundation
 
-- exact Rust toolchain и locked workspace;
-- pure primitives crate и tenant scope;
-- Linux, Windows и WASM quality gate;
-- machine-readable status;
-- product, security, delivery и evidence governance;
-- tracking issues для внешних gates.
-
-**Gate:** workspace форматируется, компилируется и тестируется на Linux/Windows;
-domain primitive компилируется в `wasm32-unknown-unknown`; tracked-file secret
-scan и status validation зелёные.
+Exact Rust toolchain, locked workspace, primitives/tenant scope, Linux/Windows/WASM quality
+gates, machine-readable status, security/delivery/evidence governance and external-gate
+tracking.
 
 ### Step 1 — Cloudflare Cold-Build Spike
 
-- minimal `workers-rs` Worker crate;
-- exact dependency pins после cold build;
-- Static Assets routing contract;
-- D1, R2, Queue и Durable Object bindings behind adapters;
-- local fake bindings и production Worker build;
-- no-cloud-credential integration tests.
-
-**Gate:** production WASM build и local binding tests зелёные. Remote staging
-остаётся внешним evidence gate, если Cloudflare credentials недоступны.
+Minimal workers-rs Worker, pinned dependencies, Static Assets routing, D1/R2/Queue/DO
+binding boundaries, fake bindings and production Worker build path.
 
 ### Step 2 — Domain And Contract Skeleton
 
-- opaque IDs, actor/tenant context and safe paths;
-- identity, client, profile, session и mailbox domain crates;
-- application ports and use-case boundaries;
-- OpenAPI/protobuf version roots;
-- forbidden dependency architecture test.
-
-**Gate:** domain state and architecture tests зелёные на native и WASM.
+Opaque IDs, actor/tenant context, identity/client/profile/session/mailbox domains,
+application ports/use-case boundaries, versioned contract roots and forbidden-dependency
+tests.
 
 ### Step 3 — D1 Catalog Foundation
 
-- migrations for tenant, membership, client, profile, assignment and grants;
-- typed tenant-scoped repositories;
-- optimistic aggregate versions;
-- idempotency, audit и outbox;
-- migration replay and negative isolation tests.
-
-**Gate:** unscoped repository API невозможно использовать из application code;
-IDOR/cross-tenant tests fail closed.
+Tenant/membership/client/profile/assignment/grant migrations, typed tenant-scoped
+repositories, optimistic versions, idempotency, audit/outbox and migration/isolation tests.
 
 ### Step 4 — Identity, Clients And ACL Slice
 
-- Access JWT adapter plus fake test identity;
-- owner bootstrap/transfer invariant;
-- invitations, memberships and revoke;
-- client/profile metadata, assignments and grants;
-- owner/member web API and initial React UI.
-
-**Gate:** owner/member use cases работают end-to-end через generated contracts;
-direct endpoint abuse не раскрывает resources.
+Access identity adapter, owner lifecycle, invitations/memberships, client/profile metadata,
+assignments/grants and initial owner/member API/UI behavior.
 
 ### Step 5 — Profile Coordinator
 
-- one Durable Object per profile;
-- monotonic lease epoch and fencing token;
-- launch intent, heartbeat, idle/hard TTL and drain;
-- duplicate, reorder, eviction and stale-writer tests;
-- D1 projection and reconciliation protocol.
-
-**Gate:** delayed writer после lease turnover не может commit logical result.
+Per-profile Durable Object, monotonic lease epoch/fencing, launch/heartbeat/drain/recovery,
+D1 projection and stale-writer rejection.
 
 ### Step 6 — Windows Bridge Feasibility
 
-- Windows-native Rust executable in CI;
-- custom URI parsing with single-use opaque code;
-- device key abstraction and DPAPI/CNG adapter boundary;
-- process handle/job supervision test fixture;
-- encrypted local workspace and SQLite outbox skeleton;
-- fake Camouhost typed IPC.
-
-**Gate:** Windows runner proves enrollment protocol, process ownership, bounded
-shutdown and dirty-state preservation without requiring physical Camoufox.
+Windows-native Rust executable, custom URI, device-key abstraction, process supervision,
+local workspace/SQLite outbox skeleton and fake Camouhost IPC.
 
 ### Step 7 — Camouhost Runtime Bundle
 
-- embedded Python/Camoufox packaging boundary;
-- protobuf IPC and exact runtime manifest;
-- signed/content-addressed development bundle format;
-- create/open/graceful-close on disposable synthetic profile;
-- original legacy corpus remains untouched.
-
-**Gate:** disposable profile lifecycle works on an approved Windows evidence host;
-GitHub CI covers contract and packaging independently.
+Runtime packaging boundary, typed IPC, exact runtime manifest, signed/content-addressed
+bundle direction and synthetic create/open/close evidence.
 
 ### Step 8 — Local Profile Lifecycle
 
-- safe materialization paths and OS locks;
-- deterministic inventory and clone-only integrity checks;
-- crash recovery, forgotten-window and quota policies;
-- no secret/PII support bundle;
-- generation state machine.
-
-**Gate:** dirty local generation cannot be evicted; lock files are never deleted
-blindly; recovery runs only on clone.
+Safe materialization paths, OS locks, inventory/integrity checks, crash recovery,
+forgotten-window/quota policy and generation lifecycle.
 
 ### Step 9 — Encrypted Cloud Generations
 
-- accepted ADR-0006 implementation;
-- reviewed streaming AEAD container and test vectors;
-- immutable R2 adapter, verification and pointer CAS;
-- restore, rollback, orphan reconciliation and retention;
-- clean-environment key/data restore evidence.
-
-**Gate:** create -> close -> encrypt -> upload -> remove local clone -> restore ->
-replay succeeds; corruption and stale fencing fail closed.
+AEAD generation container, immutable object policy, verification/pointer CAS, restore,
+rollback, orphan reconciliation and key/data recovery direction.
 
 ### Step 10 — Certification And Multi-Device
 
-- accepted ADR-0001 signal policy;
-- drift and repeatability matrix;
-- second independent Windows device;
-- device-scoped unwrap and revoke;
-- signed Bridge/runtime update with rollback.
+Certification policy/matrix, device-scoped unwrap/revoke, multi-device direction and signed
+Bridge/runtime update/rollback model.
 
-**Gate:** authorized second device restores exact generation; revoked device
-cannot obtain new key material; failed update rolls back.
+Exact implementation/evidence level for any capability is read from
+`DEVELOPER_CAPABILITY_MATRIX.md`, not inferred from this historical summary.
 
-### Step 11 — Mailbox Operations
+## 3. Superseded Future Step Sketches
 
-- Gmail OAuth/API and IMAP adapters through secret handles;
-- bounded jobs, cursors, retries and provider rate limits;
-- browser-assisted fallback as separate capability;
-- safe metadata UI and audit;
-- Communications ownership contract for CRM.
+The old roadmap also contained **Step 11 — Mailbox Operations** and **Step 12 — Production
+Operations And CRM Adapter**. Those steps were planning sketches and are **superseded as an
+execution sequence**.
 
-**Gate:** tokens/message content never enter logs or ordinary audit; provider
-contract tests and revoke behavior are deterministic.
+Their useful requirements were not discarded; they were decomposed and reordered in the
+current `DEVELOPMENT_PLAN.md`:
 
-### Step 12 — Production Operations And CRM Adapter
+- mailbox/read-model/provider/device work -> current Phases 3–5;
+- event/outbox/DLQ foundations -> Phase 1;
+- realtime -> Phase 6;
+- complete UI/E2E -> Phases 7–8;
+- CRM boundary/cutover -> Phase 9;
+- production/external evidence -> Phase 10.
 
-- environment promotion, rollback, backup and disaster game day;
-- SLO, alerts, DLQ and cost controls;
-- stable Windows signing/update channel;
-- v1 contracts/events;
-- D1-to-PostgreSQL schema map, shadow parity, cutover and rollback protocol;
-- CRM Party projection.
+Do not open a new implementation slice from the old Step 11/12 wording.
 
-**Gate:** operations recover catalog, keys and generation on clean environment;
-CRM cutover preserves IDs and domain decisions without direct filesystem/R2
-access.
+## 4. External Evidence Gates
 
-## 3. External Evidence Gates
+External gates may progress in parallel but cannot be marked complete by repository code
+alone. They include, as applicable:
 
-The following issues may run in parallel but cannot be marked complete by code
-alone:
+- legacy credential/provider remediation;
+- isolated Cloudflare dev/staging/prod resources and budgets;
+- trusted Windows code-signing certificate;
+- independent physical Windows evidence hosts;
+- root-key escrow/recovery process;
+- legal/acceptable-use/provider approval;
+- repository/product license decisions;
+- real provider/runtime/certification evidence.
 
-- rotate/revoke the legacy proxy credential and review provider access logs;
-- provision isolated Cloudflare dev/staging/prod resources and budgets;
-- obtain trusted Windows code-signing certificate;
-- provide second independent Windows-native evidence host;
-- approve offline root-key escrow and dual-control process;
-- approve legal/acceptable-use policy for certification and mailbox automation;
-- choose repository license.
+The authoritative current requirements for production promotion are in Phase 10 of
+`DEVELOPMENT_PLAN.md` and the repository's external-evidence governance.
 
-## 4. Status Discipline
+## 5. Historical Status Rule
 
-A step is complete only after merge and green permanent workflows. A smoke test
-may prove a bounded property but cannot advance unrelated gates. Proposed ADRs
-remain proposed until their acceptance criteria have evidence references.
+A historical step was accepted only after merge and green permanent workflows. A local or
+synthetic smoke test never promoted unrelated external claims. The same evidence discipline
+continues under the current phased plan.
