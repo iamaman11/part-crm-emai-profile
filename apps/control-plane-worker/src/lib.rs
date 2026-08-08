@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 mod access_session;
-mod api;
 mod clients;
 mod command_evidence;
 mod composition;
