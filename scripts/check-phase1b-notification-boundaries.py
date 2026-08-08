@@ -26,6 +26,8 @@ REQUIRED_FILES = (
     "crates/use-cases-notifications/src/lib.rs",
     "crates/use-cases-notifications/src/integration_events.rs",
     "crates/use-cases-notifications/src/foundation_event_consumer.rs",
+    "crates/use-cases-notifications/src/retry.rs",
+    "crates/cloudflare-adapters/src/d1_notifications.rs",
     "crates/use-cases/src/integration_events.rs",
     "crates/use-cases/src/foundation_event_consumer.rs",
 )
@@ -35,6 +37,11 @@ APPLICATION_PORT_SYMBOLS = (
     "pub trait NotificationCursorRepositoryPort",
     "pub trait NotificationCatchUpRepositoryPort",
     "pub trait NotificationReplayRepositoryPort",
+)
+
+ADAPTER_SYMBOLS = (
+    "impl NotificationDeliveryRepositoryPort for D1NotificationRepository",
+    "impl NotificationCursorRepositoryPort for D1NotificationRepository",
 )
 
 COMPATIBILITY_FACADES = {
@@ -57,6 +64,10 @@ PROHIBITED_SOURCE_MARKERS = (
     "web_sys",
     "sqlx",
     "rusqlite",
+    "rand::",
+    "thread_rng",
+    "getrandom",
+    "Math::random",
 )
 
 
@@ -123,6 +134,13 @@ def validate(root: Path) -> list[str]:
                     f"outer/runtime marker {marker!r}"
                 )
 
+    d1_adapter = root / "crates/cloudflare-adapters/src/d1_notifications.rs"
+    if d1_adapter.is_file():
+        adapter = read(d1_adapter)
+        for symbol in ADAPTER_SYMBOLS:
+            if symbol not in adapter:
+                errors.append(f"D1 notification adapter missing `{symbol}`")
+
     ports_lib = root / "crates/application-ports/src/lib.rs"
     if ports_lib.is_file() and "pub mod notifications;" not in read(ports_lib):
         errors.append("application-ports facade missing `pub mod notifications;`")
@@ -133,6 +151,17 @@ def validate(root: Path) -> list[str]:
             ports_document = tomllib.load(handle)
         if "notification-domain" not in dependency_names(ports_document):
             errors.append("application-ports must depend inward on notification-domain")
+
+    adapter_manifest = root / "crates/cloudflare-adapters/Cargo.toml"
+    if adapter_manifest.is_file():
+        with adapter_manifest.open("rb") as handle:
+            adapter_document = tomllib.load(handle)
+        adapter_dependencies = dependency_names(adapter_document)
+        for dependency in ("application-ports", "notification-domain"):
+            if dependency not in adapter_dependencies:
+                errors.append(
+                    f"cloudflare-adapters must depend inward on {dependency} for Phase 1B"
+                )
 
     for relative, expected in COMPATIBILITY_FACADES.items():
         path = root / relative
@@ -147,6 +176,7 @@ def validate(root: Path) -> list[str]:
         for declaration in (
             "pub mod foundation_event_consumer;",
             "pub mod integration_events;",
+            "pub mod retry;",
         ):
             if declaration not in lib:
                 errors.append(
@@ -195,13 +225,22 @@ def write_valid_fixture(root: Path) -> None:
         "notification-domain = {}\nprofile-platform-primitives = {}\n",
         encoding="utf-8",
     )
+    (root / "crates/cloudflare-adapters/Cargo.toml").write_text(
+        "[package]\nname='cloudflare-adapters'\nversion='0.1.0'\n"
+        "[dependencies]\napplication-ports = {}\nnotification-domain = {}\nworker = {}\n",
+        encoding="utf-8",
+    )
+    (root / "crates/cloudflare-adapters/src/d1_notifications.rs").write_text(
+        "\n".join(ADAPTER_SYMBOLS) + "\n",
+        encoding="utf-8",
+    )
     (root / "crates/use-cases/Cargo.toml").write_text(
         "[package]\nname='use-cases'\nversion='0.1.0'\n"
         "[dependencies]\nuse-cases-notifications = {}\n",
         encoding="utf-8",
     )
     (root / "crates/use-cases-notifications/src/lib.rs").write_text(
-        "pub mod foundation_event_consumer;\npub mod integration_events;\n",
+        "pub mod foundation_event_consumer;\npub mod integration_events;\npub mod retry;\n",
         encoding="utf-8",
     )
     for relative, content in COMPATIBILITY_FACADES.items():
@@ -225,6 +264,14 @@ def self_test() -> int:
             return 1
 
         write_valid_fixture(root)
+        retry = root / "crates/use-cases-notifications/src/retry.rs"
+        retry.write_text("let _ = rand::thread_rng();\n", encoding="utf-8")
+        errors = validate(root)
+        if not any("outer/runtime marker" in error for error in errors):
+            print("runtime randomness in deterministic retry fixture unexpectedly passed")
+            return 1
+
+        write_valid_fixture(root)
         facade = root / "crates/use-cases/src/integration_events.rs"
         facade.write_text("pub fn dispatch_pending_events() {}\n", encoding="utf-8")
         errors = validate(root)
@@ -238,6 +285,14 @@ def self_test() -> int:
         errors = validate(root)
         if not any("application-ports/src/notifications.rs" in error for error in errors):
             print("provider leakage into notification ports fixture unexpectedly passed")
+            return 1
+
+        write_valid_fixture(root)
+        adapter = root / "crates/cloudflare-adapters/src/d1_notifications.rs"
+        adapter.write_text("// missing port implementations\n", encoding="utf-8")
+        errors = validate(root)
+        if not any("D1 notification adapter missing" in error for error in errors):
+            print("missing D1 notification port implementation fixture unexpectedly passed")
             return 1
 
     print("Phase 1B notification negative fixtures rejected as expected.")
