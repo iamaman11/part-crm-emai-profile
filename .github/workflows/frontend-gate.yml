@@ -7,122 +7,64 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: frontend-gate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  phase1a-source-guard-materialize:
-    name: Materialize Phase 1A source guard
-    if: github.event_name == 'pull_request' && github.head_ref == 'phase1a-event-outbox-foundation' && github.actor != 'github-actions[bot]'
+  frontend:
+    name: React Operator UI
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout implementation branch
+      - name: Checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: phase1a-event-outbox-foundation
+          persist-credentials: false
 
-      - name: Materialize source guard and formatting
+      - name: Enforce frontend sibling-feature boundaries
+        run: python scripts/check-frontend-feature-boundaries.py
+
+      - name: Prove sibling feature internals are rejected
+        run: python scripts/check-frontend-feature-boundaries.py --self-test
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node and npm versions
         run: |
-          python scripts/phase1a-source-guard-materialize.py
-          cargo fmt --all
-          python scripts/check-phase1a-event-boundaries.py
-          python scripts/test-integration-event-foundation.py
-          git diff --check
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
 
-      - name: Restore permanent Frontend Gate and remove materializer
-        shell: bash
+      - name: Clean install from lockfile
+        working-directory: frontend
+        run: npm ci
+
+      - name: Reject credential persistence and token surfaces in application source
         run: |
-          cat > .github/workflows/frontend-gate.yml <<'YAML'
-          name: Frontend Gate
+          if grep -R -n -E --include='*.ts' --include='*.tsx' '(localStorage|sessionStorage|Cf-Access-Jwt-Assertion)' frontend/src; then
+            echo "Forbidden browser credential persistence/token surface found in application source." >&2
+            exit 1
+          fi
 
-          on:
-            pull_request:
-            push:
-              branches:
-                - main
+      - name: Strict TypeScript
+        working-directory: frontend
+        run: npm run typecheck
 
-          permissions:
-            contents: read
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test
 
-          concurrency:
-            group: frontend-gate-${{ github.workflow }}-${{ github.ref }}
-            cancel-in-progress: true
+      - name: Production build
+        working-directory: frontend
+        run: npm run build
 
-          jobs:
-            frontend:
-              name: React Operator UI
-              runs-on: ubuntu-latest
-              steps:
-                - name: Checkout
-                  uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-                  with:
-                    persist-credentials: false
-
-                - name: Enforce frontend sibling-feature boundaries
-                  run: python scripts/check-frontend-feature-boundaries.py
-
-                - name: Prove sibling feature internals are rejected
-                  run: python scripts/check-frontend-feature-boundaries.py --self-test
-
-                - name: Set up Node 24 LTS
-                  uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-                  with:
-                    node-version: '24.19.0'
-                    package-manager-cache: false
-
-                - name: Enforce Node and npm versions
-                  run: |
-                    test "$(node --version)" = "v24.19.0"
-                    npm install --global npm@11.17.0
-                    test "$(npm --version)" = "11.17.0"
-
-                - name: Clean install from lockfile
-                  working-directory: frontend
-                  run: npm ci
-
-                - name: Reject credential persistence and token surfaces in application source
-                  run: |
-                    if grep -R -n -E --include='*.ts' --include='*.tsx' '(localStorage|sessionStorage|Cf-Access-Jwt-Assertion)' frontend/src; then
-                      echo "Forbidden browser credential persistence/token surface found in application source." >&2
-                      exit 1
-                    fi
-
-                - name: Strict TypeScript
-                  working-directory: frontend
-                  run: npm run typecheck
-
-                - name: Unit tests
-                  working-directory: frontend
-                  run: npm test
-
-                - name: Production build
-                  working-directory: frontend
-                  run: npm run build
-
-                - name: Verify Static Assets output
-                  run: |
-                    test -f frontend/dist/index.html
-                    find frontend/dist/assets -type f -print -quit | grep -q .
-          YAML
-          rm scripts/phase1a-source-guard-materialize.py
-
-      - name: Commit materialized Phase 1A state
-        shell: bash
+      - name: Verify Static Assets output
         run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/workflows/frontend-gate.yml \
-            crates/application-ports/src \
-            crates/cloudflare-adapters/src/d1_integration_events.rs \
-            crates/contracts/src \
-            crates/use-cases/src \
-            migrations/d1/0012_integration_event_foundation.sql \
-            scripts/check-phase1a-event-boundaries.py \
-            scripts/test-integration-event-foundation.py \
-            scripts/phase1a-source-guard-materialize.py
-          git commit -m 'Phase 1A: enforce canonical notification source metadata'
-          git push origin HEAD:phase1a-event-outbox-foundation
+          test -f frontend/dist/index.html
+          find frontend/dist/assets -type f -print -quit | grep -q .
