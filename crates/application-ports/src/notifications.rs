@@ -94,6 +94,7 @@ pub trait NotificationCursorRepositoryPort {
         actor_id: &ActorId,
         expected: Option<&NotificationCursor>,
         next: &NotificationCursor,
+        advanced_at: UnixMillis,
     ) -> Result<CursorAdvanceWriteOutcome, NotificationPortError>;
 }
 
