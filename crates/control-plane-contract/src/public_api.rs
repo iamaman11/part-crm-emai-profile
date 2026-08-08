@@ -397,11 +397,15 @@ mod tests {
     #[test]
     fn every_problem_code_has_a_stable_problem_type() {
         for code in PROBLEM_CODES {
-            assert_ne!(
-                problem_type_for_code(code),
-                "urn:part-crm:problem:internal-failure",
-                "known problem code {code} fell through"
-            );
+            let problem_type = problem_type_for_code(code);
+            assert!(problem_type.starts_with("urn:part-crm:problem:"));
+            if code != "internal_failure" {
+                assert_ne!(
+                    problem_type,
+                    "urn:part-crm:problem:internal-failure",
+                    "known problem code {code} fell through"
+                );
+            }
         }
         assert_eq!(
             problem_type_for_code("internal_failure"),
