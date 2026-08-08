@@ -27,6 +27,11 @@ PRODUCER_FILES = [
 ]
 
 EVENT_PATTERN = re.compile(r"[a-z][a-z0-9_.-]+\.v[0-9]+")
+COORDINATOR_OUTCOME_BLOCK = re.compile(
+    r"outcome\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\(\s*outcome\s+IN\s*\((.*?)\)\s*\)",
+    re.IGNORECASE | re.DOTALL,
+)
+COORDINATOR_DYNAMIC_EVENT = "'profile_coordinator.' || NEW.outcome || '.v1'"
 
 
 def require_files(paths: list[Path]) -> None:
@@ -139,11 +144,25 @@ def registered_events() -> set[str]:
     return set(EVENT_PATTERN.findall(registry))
 
 
+def dynamic_coordinator_events(text: str) -> set[str]:
+    if COORDINATOR_DYNAMIC_EVENT not in text:
+        return set()
+    match = COORDINATOR_OUTCOME_BLOCK.search(text)
+    if match is None:
+        raise SystemExit("coordinator event generator exists without a bounded outcome CHECK")
+    outcomes = re.findall(r"'([a-z][a-z0-9_]*)'", match.group(1))
+    if not outcomes:
+        raise SystemExit("coordinator outcome CHECK contains no observable outcomes")
+    return {f"profile_coordinator.{outcome}.v1" for outcome in outcomes}
+
+
 def producer_events() -> set[str]:
     observed: set[str] = set()
     for path in PRODUCER_FILES:
         text = path.read_text(encoding="utf-8")
         observed.update(EVENT_PATTERN.findall(text))
+        if path.name == "0004_profile_coordinator_projection.sql":
+            observed.update(dynamic_coordinator_events(text))
     return observed
 
 
