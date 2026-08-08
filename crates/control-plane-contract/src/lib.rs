@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod public_api;
+mod routes;
 
 pub const D1_CATALOG_BINDING: &str = "CATALOG_DB";
 pub const R2_PROFILES_BINDING: &str = "PROFILE_OBJECTS";
@@ -45,151 +46,11 @@ pub enum RouteClass {
 
 #[must_use]
 pub fn classify_route(method: &str, path: &str) -> RouteClass {
-    if method == "GET" && path == "/api/v1/health" {
-        return RouteClass::HealthApi;
-    }
-    if method == "GET" && path == "/api/v1/bindings" {
-        return RouteClass::BindingProbeApi;
-    }
-    if path == "/bridge" || path.starts_with("/bridge/") {
-        return RouteClass::BridgeDeniedByDefault;
-    }
-    if method == "GET" && path == "/api/v1/session" {
-        return RouteClass::AuthenticatedSessionApi;
-    }
-
-    let segments: Vec<&str> = path
-        .trim_matches('/')
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    let route = match segments.as_slice() {
-        ["api", "v1", "tenants", _, "owner", "bootstrap"] if method == "POST" => {
-            Some(RouteClass::OwnerBootstrapApi)
-        }
-        ["api", "v1", "tenants", _, "owner", "transfer"] if method == "POST" => {
-            Some(RouteClass::OwnerTransferApi)
-        }
-        ["api", "v1", "tenants", _, "invitations"] if method == "POST" => {
-            Some(RouteClass::InvitationCollectionApi)
-        }
-        ["api", "v1", "tenants", _, "invitations", _, "accept"] if method == "POST" => {
-            Some(RouteClass::InvitationAcceptApi)
-        }
-        ["api", "v1", "tenants", _, "members", _, "status"] if method == "PUT" => {
-            Some(RouteClass::MembershipStatusApi)
-        }
-        ["api", "v1", "tenants", _, "clients"] if method == "POST" => {
-            Some(RouteClass::ClientCollectionApi)
-        }
-        ["api", "v1", "tenants", _, "clients", _] if method == "GET" => {
-            Some(RouteClass::ClientResourceApi)
-        }
-        ["api", "v1", "tenants", _, "clients", _, "grants", _]
-            if matches!(method, "PUT" | "DELETE") =>
-        {
-            Some(RouteClass::ClientGrantApi)
-        }
-        ["api", "v1", "tenants", _, "profiles"] if method == "POST" => {
-            Some(RouteClass::ProfileCollectionApi)
-        }
-        ["api", "v1", "tenants", _, "profiles", _, "generations"] if method == "POST" => {
-            Some(RouteClass::ProfileGenerationCollectionApi)
-        }
-        [
-            "api",
-            "v1",
-            "tenants",
-            _,
-            "profiles",
-            _,
-            "generations",
-            _,
-            "verify",
-        ] if method == "POST" => Some(RouteClass::ProfileGenerationVerifyApi),
-        [
-            "api",
-            "v1",
-            "tenants",
-            _,
-            "profiles",
-            _,
-            "generations",
-            _,
-            "activate",
-        ] if method == "POST" => Some(RouteClass::ProfileGenerationActivateApi),
-        [
-            "api",
-            "v1",
-            "tenants",
-            _,
-            "profiles",
-            _,
-            "generations",
-            _,
-            "deactivate",
-        ] if method == "POST" => Some(RouteClass::ProfileGenerationDeactivateApi),
-        [
-            "api",
-            "v1",
-            "tenants",
-            _,
-            "profiles",
-            _,
-            "generations",
-            _,
-            "quarantine",
-        ] if method == "POST" => Some(RouteClass::ProfileGenerationQuarantineApi),
-        ["api", "v1", "tenants", _, "profiles", _, "generations", _] if method == "GET" => {
-            Some(RouteClass::ProfileGenerationResourceApi)
-        }
-        ["api", "v1", "tenants", _, "profiles", _, "coordinator"]
-            if matches!(method, "GET" | "POST") =>
-        {
-            Some(RouteClass::ProfileCoordinatorApi)
-        }
-        ["api", "v1", "tenants", _, "profiles", _] if method == "GET" => {
-            Some(RouteClass::ProfileResourceApi)
-        }
-        ["api", "v1", "tenants", _, "profiles", _, "assignment"] if method == "PUT" => {
-            Some(RouteClass::ProfileAssignmentApi)
-        }
-        ["api", "v1", "tenants", _, "profiles", _, "grants", _]
-            if matches!(method, "PUT" | "DELETE") =>
-        {
-            Some(RouteClass::ProfileGrantApi)
-        }
-        ["api", "v1", "tenants", _, "mailboxes"] if method == "POST" => {
-            Some(RouteClass::MailboxBindingCollectionApi)
-        }
-        ["api", "v1", "tenants", _, "mailboxes", _] if method == "GET" => {
-            Some(RouteClass::MailboxBindingResourceApi)
-        }
-        ["api", "v1", "tenants", _, "mailboxes", _, "revoke"] if method == "POST" => {
-            Some(RouteClass::MailboxBindingRevokeApi)
-        }
-        ["api", "v1", "tenants", _, "mailboxes", _, "jobs"] if method == "POST" => {
-            Some(RouteClass::MailboxJobCollectionApi)
-        }
-        ["api", "v1", "tenants", _, "mailboxes", _, "jobs", _] if method == "GET" => {
-            Some(RouteClass::MailboxJobResourceApi)
-        }
-        ["api", "v1", "tenants", _, "mailboxes", _, "jobs", _, "run"] if method == "POST" => {
-            Some(RouteClass::MailboxJobRunApi)
-        }
-        _ => None,
-    };
-    route.unwrap_or_else(|| {
-        if is_dynamic_path(path) {
-            RouteClass::DynamicRouteNotFound
-        } else {
-            RouteClass::StaticAssets
-        }
-    })
+    routes::classify(method, path)
 }
 
 #[must_use]
-fn is_dynamic_path(path: &str) -> bool {
+pub(crate) fn is_dynamic_path(path: &str) -> bool {
     path == "/api" || path.starts_with("/api/") || path == "/auth" || path.starts_with("/auth/")
 }
 
@@ -241,22 +102,39 @@ mod tests {
     }
 
     #[test]
-    fn unknown_api_methods_and_versions_fail_closed() {
-        for (method, path) in [
-            ("POST", "/api/v1/health"),
-            ("GET", "/api/v2/health"),
-            ("GET", "/api/v1/unknown"),
-            ("GET", "/api"),
-            ("GET", "/auth/unknown"),
+    fn dynamic_namespaces_fail_closed_for_unknown_versions_routes_and_methods() {
+        for (method, path, expected) in [
+            ("POST", "/api/v1/health", RouteClass::DynamicRouteNotFound),
+            ("GET", "/api/v2/health", RouteClass::DynamicRouteNotFound),
+            ("GET", "/api/v1/unknown", RouteClass::DynamicRouteNotFound),
+            ("GET", "/api", RouteClass::DynamicRouteNotFound),
+            (
+                "POST",
+                "/auth/v2/callback",
+                RouteClass::DynamicRouteNotFound,
+            ),
+            ("GET", "/auth/unknown", RouteClass::DynamicRouteNotFound),
+            ("GET", "/bridge", RouteClass::BridgeDeniedByDefault),
+            (
+                "POST",
+                "/bridge/v2/claim",
+                RouteClass::BridgeDeniedByDefault,
+            ),
+            (
+                "DELETE",
+                "/bridge/unknown",
+                RouteClass::BridgeDeniedByDefault,
+            ),
         ] {
             let route = classify_route(method, path);
-            assert_eq!(route, RouteClass::DynamicRouteNotFound);
+            assert_eq!(route, expected, "unexpected route for {method} {path}");
             assert!(!is_authenticated_api(route));
+            assert_ne!(route, RouteClass::StaticAssets);
         }
     }
 
     #[test]
-    fn owner_member_acl_and_coordinator_routes_are_versioned_and_authenticated() {
+    fn identity_client_profile_and_coordinator_routes_are_versioned_and_authenticated() {
         let routes = [
             (
                 "GET",
@@ -274,14 +152,49 @@ mod tests {
                 RouteClass::OwnerTransferApi,
             ),
             (
+                "POST",
+                "/api/v1/tenants/tenant_01/invitations",
+                RouteClass::InvitationCollectionApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/invitations/invitation_01/accept",
+                RouteClass::InvitationAcceptApi,
+            ),
+            (
                 "PUT",
                 "/api/v1/tenants/tenant_01/members/actor_01/status",
                 RouteClass::MembershipStatusApi,
             ),
             (
+                "POST",
+                "/api/v1/tenants/tenant_01/clients",
+                RouteClass::ClientCollectionApi,
+            ),
+            (
                 "GET",
                 "/api/v1/tenants/tenant_01/clients/client_01",
                 RouteClass::ClientResourceApi,
+            ),
+            (
+                "DELETE",
+                "/api/v1/tenants/tenant_01/clients/client_01/grants/actor_01",
+                RouteClass::ClientGrantApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/profiles",
+                RouteClass::ProfileCollectionApi,
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/profiles/profile_01",
+                RouteClass::ProfileResourceApi,
+            ),
+            (
+                "PUT",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/assignment",
+                RouteClass::ProfileAssignmentApi,
             ),
             (
                 "PUT",

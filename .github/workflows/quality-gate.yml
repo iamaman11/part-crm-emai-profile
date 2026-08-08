@@ -38,6 +38,7 @@ jobs:
           scripts/check-no-temporary-step4.py
           scripts/check-frontend-feature-boundaries.py
           scripts/generate-frontend-contracts.py
+          scripts/generate-architecture-inventory.py
           scripts/test-d1-schema.py
           scripts/test-step4-identity-acl.py
           scripts/test-step4-command-guards.py
@@ -112,6 +113,12 @@ jobs:
 
       - name: Verify generated frontend contracts are current
         run: python scripts/generate-frontend-contracts.py --check
+
+      - name: Verify architecture inventory and documentation consistency
+        run: python scripts/generate-architecture-inventory.py --check
+
+      - name: Prove architecture inventory drift is detected
+        run: python scripts/generate-architecture-inventory.py --self-test
 
       - name: Test D1 schema and transaction invariants
         run: python scripts/test-d1-schema.py
