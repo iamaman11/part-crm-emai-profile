@@ -54,17 +54,19 @@ def main() -> int:
     route_drift["routing"]["public_routes"][0]["route_class"] = "UnknownApi"
     expect_rejected(module, expected, route_drift)
 
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        original_path = module.INVENTORY_PATH
-        module.INVENTORY_PATH = Path(temporary_directory) / "missing.json"
-        try:
-            module.check_current(expected)
-        except SystemExit:
-            pass
-        else:
-            raise AssertionError("missing architecture inventory unexpectedly passed --check")
-        finally:
-            module.INVENTORY_PATH = original_path
+    original_path = module.INVENTORY_PATH
+    missing_path = ROOT / ".architecture-inventory-negative-missing.json"
+    if missing_path.exists():
+        raise AssertionError(f"negative fixture path unexpectedly exists: {missing_path}")
+    module.INVENTORY_PATH = missing_path
+    try:
+        module.check_current(expected)
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("missing architecture inventory unexpectedly passed --check")
+    finally:
+        module.INVENTORY_PATH = original_path
 
     print("Architecture inventory checker rejects stale, tampered and missing inventory.")
     return 0
