@@ -98,7 +98,9 @@ where
     }
 }
 
-fn map_port_error(error: IntegrationEventPortError) -> IntegrationEventOperationError {
+pub(crate) fn map_port_error(
+    error: IntegrationEventPortError,
+) -> IntegrationEventOperationError {
     match error.class() {
         IntegrationEventPortErrorClass::Conflict => IntegrationEventOperationError::Conflict,
         IntegrationEventPortErrorClass::IntegrityFailure => {
