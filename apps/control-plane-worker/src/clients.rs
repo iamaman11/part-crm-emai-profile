@@ -200,7 +200,10 @@ fn operation_failure(correlation_id: &str, error: ClientOperationError) -> Resul
     }
 }
 
-fn client_grant_failure(correlation_id: &str, error: ClientGrantOperationError) -> Result<Response> {
+fn client_grant_failure(
+    correlation_id: &str,
+    error: ClientGrantOperationError,
+) -> Result<Response> {
     match error {
         ClientGrantOperationError::InvalidRequest => invalid_request(correlation_id),
         ClientGrantOperationError::NotFound => neutral_not_found(correlation_id),
@@ -210,9 +213,7 @@ fn client_grant_failure(correlation_id: &str, error: ClientGrantOperationError) 
         ClientGrantOperationError::InvalidState => {
             problem(correlation_id, 409, "invalid_state", "Invalid State")
         }
-        ClientGrantOperationError::Conflict => {
-            problem(correlation_id, 409, "conflict", "Conflict")
-        }
+        ClientGrantOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
         ClientGrantOperationError::IntegrityFailure => problem(
             correlation_id,
             500,
