@@ -167,6 +167,8 @@ def validate_composition_surfaces() -> None:
             "clients::dispatch(route, &mut request, &env).await",
             "RouteClass::ProfileCollectionApi | RouteClass::ProfileResourceApi",
             "profiles::dispatch(route, &mut request, &env).await",
+            "RouteClass::ProfileGenerationCollectionApi",
+            "profile_generations::dispatch(route, &mut request, &env).await",
             "RouteClass::MailboxBindingCollectionApi",
             "mailbox_bindings::dispatch(route, &mut request, &env).await",
             "RouteClass::MailboxJobCollectionApi",
@@ -199,6 +201,53 @@ def validate_composition_surfaces() -> None:
         "profile application use cases",
     )
 
+    generation_transport = read("apps/control-plane-worker/src/profile_generations.rs")
+    require_all(
+        generation_transport,
+        [
+            "execute_register_generation",
+            "get_visible_generation",
+            "execute_verify_generation",
+            "execute_activate_generation",
+            "execute_deactivate_generation",
+            "execute_quarantine_generation",
+            "profile_generation_application(env)",
+            "authorize_generation_mutation(role)",
+        ],
+        "generation Worker application transport",
+    )
+    generation_use_cases = read("crates/use-cases/src/generations.rs")
+    require_all(
+        generation_use_cases,
+        [
+            "pub async fn execute_register_generation",
+            "pub async fn get_visible_generation",
+            "pub async fn execute_verify_generation",
+            "pub async fn execute_activate_generation",
+            "pub async fn execute_deactivate_generation",
+            "pub async fn execute_quarantine_generation",
+            "GenerationReplayDecision::Replay",
+            "next_generation_version",
+        ],
+        "generation application use cases",
+    )
+    generation_application_adapter = read(
+        "crates/cloudflare-adapters/src/d1_profile_generation_application.rs"
+    )
+    require_all(
+        generation_application_adapter,
+        [
+            "impl GenerationApplicationPort for D1ProfileGenerationApplicationRepository",
+            ".register(",
+            ".verify(",
+            ".activate(",
+            ".deactivate(",
+            ".quarantine(",
+            ".find_visible(",
+            "D1IdempotencyRepository",
+        ],
+        "generation D1 application adapter",
+    )
     generation = read("crates/cloudflare-adapters/src/d1_profile_generations.rs")
     require_all(
         generation,
@@ -207,8 +256,9 @@ def validate_composition_surfaces() -> None:
             "profile_generation_activate_commands",
             "expected_profile_version",
             "profile_generation.verify",
+            "active_profile_generation_cannot_be_quarantined",
         ],
-        "immutable generation adapter",
+        "immutable generation atomic D1 adapter",
     )
 
     operator = read("apps/profile-bridge/src/operator_flow.rs")
