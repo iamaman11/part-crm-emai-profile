@@ -1,15 +1,15 @@
 # Profile Generation Application Boundary
 
-**Status:** Phase 0 reference pattern under implementation for generation register / visible-by-ID / verify / activate / deactivate / quarantine.
+**Status:** Phase 0F accepted architecture for generation register / visible-by-ID / verify / activate / deactivate / quarantine.
 
 **Scope:** architecture convergence only. This slice preserves the accepted generation state machine and observable HTTP contract. It does not add lifecycle states, redesign object storage, expand coordinator/Bridge protocols, or promote production readiness.
 
-## Target Ownership
+## Accepted Ownership
 
 ```text
 HTTP / Workers SDK
-  -> thin generation Worker transport
-     actor/path/body/evidence parsing + HTTP mapping
+  -> apps/control-plane-worker/src/profile_generations.rs
+     thin transport: actor/path/body/evidence parsing + HTTP mapping
   -> crates/use-cases/src/generations.rs
      authorization + validation + replay + version/state sequencing
   -> crates/application-ports/src/generations.rs
@@ -20,7 +20,7 @@ HTTP / Workers SDK
      accepted atomic D1 state machine
 ```
 
-Concrete D1 construction belongs only in the Worker composition root.
+Concrete D1 generation construction belongs only in the Worker composition root. The Worker transport does not own D1 generation/idempotency repositories, governed mutation DTOs, SQL, or provider mechanics.
 
 ## State And Version Invariants
 
@@ -41,15 +41,15 @@ All version arithmetic is checked. Saturation and wrapping are forbidden.
 
 ## Replay Compatibility
 
-The legacy generation transport performs exact idempotency replay **before** each mutation but does not perform a second replay lookup after a write failure.
+The accepted generation protocol performs exact idempotency replay **before** each mutation but does not perform a second replay lookup after a write failure.
 
-Phase 0F intentionally preserves that behavior. A concurrent/unique write conflict remains a conflict rather than being silently converted into a replay by new application orchestration.
+Phase 0F preserves that behavior. A concurrent/unique write conflict remains a conflict rather than being silently converted into a replay by application orchestration.
 
-This differs intentionally from later mailbox/client boundaries that already owned a post-conflict replay recheck.
+This differs intentionally from mailbox/client boundaries that already owned a post-conflict replay recheck.
 
 ## Mutation Authorization And Query Visibility
 
-All five mutation families are tenant-owner-only and must fail disclosure-neutrally before body/evidence processing for non-owners:
+All five mutation families are tenant-owner-only and fail disclosure-neutrally before body/evidence processing for non-owners:
 
 - register;
 - verify;
@@ -61,7 +61,7 @@ Visible generation GET remains available through the established owner-or-explic
 
 ## Protocol Validation
 
-The migrated transport must preserve legacy validation order and shape:
+The thin transport and application boundary preserve the accepted validation order and shape:
 
 - malformed profile/generation path IDs -> neutral not found;
 - register object key: 16–512 characters, no leading `/`, no `..`, no backslash, only ASCII alphanumeric plus `_-. / :` accepted by the existing rule;
@@ -89,20 +89,22 @@ The visible response remains:
 - deactivate fresh/exact replay -> `200`, result `deactivated`, expected profile version + 1;
 - quarantine fresh/exact replay -> `200`, result `quarantined`, expected generation version + 1.
 
-Stable problem taxonomy remains neutral not-found, version conflict, invalid state, conflict, integrity failure, internal failure and dependency unavailable.
+Stable problem taxonomy remains neutral not-found, version conflict, invalid state, conflict, integrity failure, internal failure and dependency unavailable. Adapter/storage failures are not collapsed into business not-found.
 
-## CI Enforcement Target
+## Permanent CI Enforcement
 
-`check-generation-worker-application-boundary.py` is the Phase 0F fail-closed policy. Once live routing is switched and native/WASM composition is proven, the permanent Repository Quality Audit will require:
+`check-generation-worker-application-boundary.py` is enforced by the permanent Repository Quality Audit Gate. It requires:
 
 - application-owned generation ports/use cases;
 - composition-root construction of `D1ProfileGenerationApplicationRepository`;
 - no direct D1/idempotency/mutation types in the Worker generation transport;
 - all six generation application calls in the transport;
-- the existing D1 repository/mutation state machine retained in the Cloudflare adapter;
+- the existing D1 repository/mutation state machine retained behind the Cloudflare application adapter;
 - a negative fixture proving direct D1/idempotency transport is rejected.
 
-Pure fake-port tests independently prove mutation authorization, metadata validation, exact replay, checked overflow, legacy no-post-write-replay behavior and member-capable visible query.
+The capability-layout policy also requires generation application symbols to be owned by `generations.rs` in both application-ports and use-cases rather than by facade `lib.rs` files.
+
+Pure fake-port tests independently prove mutation authorization, metadata validation, exact replay, checked overflow, the no-post-write-replay invariant and member-capable visible query. Cloudflare adapter tests preserve stable public storage-error classes; native Worker and WASM checks prove the accepted composition; D1 registry/state-guard tests remain the source of state-machine and atomicity evidence.
 
 ## Non-Goals
 
