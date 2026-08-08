@@ -5,17 +5,15 @@ use crate::command_evidence;
 use crate::composition::profile_application;
 use application_ports::profiles::ProfileStatus;
 use control_plane_contract::RouteClass;
-use profile_platform_primitives::{
-    ActorId, AggregateVersion, AssignmentId, ClientId, ProfileId,
-};
+use profile_platform_primitives::{ActorId, AggregateVersion, AssignmentId, ClientId, ProfileId};
 use serde::{Deserialize, Serialize};
 use use_cases::profile_assignments::{
     ExecuteAssignProfileCommand, ProfileAssignmentOperationError, ProfileAssignmentOutcome,
     authorize_profile_assignment, execute_assign_profile, next_profile_assignment_version,
 };
 use use_cases::profile_grants::{
-    ExecuteProfileGrantCommand, ProfileGrantAction, ProfileGrantOperationError, ProfileGrantOutcome,
-    authorize_profile_grant, execute_profile_grant,
+    ExecuteProfileGrantCommand, ProfileGrantAction, ProfileGrantOperationError,
+    ProfileGrantOutcome, authorize_profile_grant, execute_profile_grant,
 };
 use use_cases::profiles::{
     ExecuteCreateProfileCommand, ProfileDetails, ProfileMutationOutcome, ProfileOperationError,
