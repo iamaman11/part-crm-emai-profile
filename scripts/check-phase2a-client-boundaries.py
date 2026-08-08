@@ -64,8 +64,8 @@ def deps(path: Path) -> set[str]:
     with path.open("rb") as handle:
         doc = tomllib.load(handle)
     result: set[str] = set()
-    for section in ("dependencies", "dev-dependencies", "build-dependencies"):
-        values = doc.get(section, {})
+    for section_name in ("dependencies", "dev-dependencies", "build-dependencies"):
+        values = doc.get(section_name, {})
         if isinstance(values, dict):
             result.update(str(name) for name in values)
     return result
@@ -181,7 +181,13 @@ def validate(root: Path) -> list[str]:
     ):
         if marker not in contacts:
             errors.append(f"contact application boundary missing `{marker}`")
-    if contacts.find("authorize_contact_mutation(role)?") > contacts.find("normalize_contact_value"):
+    authorization_index = contacts.find("authorize_contact_mutation(role)?")
+    normalization_index = contacts.find("let normalized = normalize_contact_value")
+    if (
+        authorization_index < 0
+        or normalization_index < 0
+        or authorization_index > normalization_index
+    ):
         errors.append("contact authorization must precede plaintext normalization/protection")
 
     lifecycle = read(root / "crates/use-cases-clients/src/lifecycle.rs")
@@ -284,8 +290,9 @@ def write_fixture(root: Path) -> None:
     )
     (root / "crates/use-cases-clients/src/contacts.rs").write_text(
         "pub struct TransientContactValue {} impl Drop for TransientContactValue {} "
-        "fn x(){ authorize_contact_mutation(role)?; normalize_contact_value(); exact_lookup_hmac_input(); "
-        "encrypt_contact_display(); derive_exact_lookup_token(); ProtectedContactWrite::new(); }\n",
+        "fn x(){ authorize_contact_mutation(role)?; let normalized = normalize_contact_value(); "
+        "exact_lookup_hmac_input(); encrypt_contact_display(); derive_exact_lookup_token(); "
+        "ProtectedContactWrite::new(); }\n",
         encoding="utf-8",
     )
     (root / "crates/use-cases-clients/src/lifecycle.rs").write_text(
