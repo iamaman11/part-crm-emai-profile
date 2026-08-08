@@ -30,7 +30,7 @@ No level by itself means production readiness.
 | Capability | Level on accepted `main` | Accepted scope | Still Target / External |
 |---|---|---|---|
 | Rust workspace / primitives | Composed | Exact toolchain, typed opaque IDs, tenant/actor context, positive versions, strict lint/policy gates. | External runtime is not required for this claim. |
-| Identity / memberships / ACL | Composed | Access identity adapter, memberships, owner bootstrap/transfer, invitation create/accept, membership status lifecycle, profile/client grants, neutral disclosure and governed D1 commands. Identity governance/ceremonies plus profile/client grant/revoke are application-owned behind thin capability transports; the legacy mixed Worker `api.rs` orchestration surface is removed and permanently rejected. | Production Access/IdP deployment is External; first real application Cargo isolation remains active Phase 0 work until 0L merges. |
+| Identity / memberships / ACL | Composed | Access identity adapter, memberships, owner bootstrap/transfer, invitation create/accept, membership status lifecycle, profile/client grants, neutral disclosure and governed D1 commands. Identity governance plus verified-identity ceremonies are independently Cargo-isolated in `use-cases-identity`; profile/client grant/revoke remain application-owned behind thin capability transports. | Production Access/IdP deployment is External; later client/profile/mailbox application crate extraction remains just-in-time Target work only where growth pressure justifies it. |
 | Client Registry | Composed | Current create/query/assignment/grant metadata paths and D1 schema. Client create/query and client grant/revoke are application-owned; profile assignment remains non-authorizing. | Registry 2.0 contacts/merge/richer lifecycle and CRM Party authority are Target. |
 | Profile catalog | Composed | Current create/query/grant/assignment metadata paths, typed profile state and active generation pointer. Create/query, assignment and profile grant/revoke are application-owned; assignment remains non-authorizing. | Remaining Phase 0 convergence is outside these accepted profile catalog paths. |
 | Profile generation registry | Composed | Governed metadata register/query/verify/activate/deactivate/quarantine, replay/evidence, audit/outbox and pointer integrity. | Production R2 verification/device unwrap/cross-device evidence is External. |
@@ -59,16 +59,16 @@ No level by itself means production readiness.
 Accepted capability behavior and clean application ownership are separate claims. Phase 0 moves
 provider-independent orchestration behind application use cases without changing public behavior.
 
-Accepted Phase 0 slices through **0K** establish application ownership for client create/query/grant,
+Accepted Phase 0 slices through **0L** establish application ownership for client create/query/grant,
 profile create/query/assignment/grant, mailbox binding/job, generation, identity governance/
-ceremonies and coordinator ingress. The active Phase 0L Cargo-boundary branch is not an accepted
-`main` claim until its guarded merge.
+ceremonies and coordinator ingress, plus the first real compile-time application Cargo boundary.
 
 As of this matrix date:
 
 - accepted `main` includes Phase 0K application-thin coordinator ingress with permanent Step-5 ownership enforcement;
-- Phase 0L first real application Cargo extraction is tracked by issue / draft PR #104 and remains unaccepted until exact-head permanent CI plus guarded merge;
-- the current execution plan, not this matrix, determines subsequent order.
+- accepted Phase 0L places identity governance plus verified-identity ceremonies in independent `use-cases-identity`, proven by native tests, explicit Workers-WASM compile and composed regressions;
+- `identity_acl` intentionally remains in shared `use-cases` because its current helpers cross client/profile contexts;
+- the current execution plan, not this matrix, determines subsequent order; Phase 0M is next planned.
 
 Do not interpret a feature branch's `Composed` wiring or PR description as accepted `main`.
 
@@ -84,9 +84,11 @@ crates/*-domain
 crates/application-ports
   capability-owned interfaces required by application workflows
 
+crates/use-cases-identity
+  accepted independent identity governance + verified-identity ceremony application context
+
 crates/use-cases
-  accepted shared application crate with capability modules
-  (active Phase 0L branch extracts the first justified independent identity context)
+  accepted shared application crate for remaining contexts; identity modules are compatibility re-exports only
 
 crates/cloudflare-adapters
   D1/Access/DO/R2/Queue/provider implementations that depend inward
