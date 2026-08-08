@@ -9,9 +9,9 @@ use crate::profile_coordinator::{
 };
 use application_ports::ClockPort;
 use application_ports::coordinator_ingress::{
-    CoordinatorIngressApplicationPort, CoordinatorIngressPortError, CoordinatorIngressPortErrorClass,
-    CoordinatorProfileAccess, CoordinatorProjectionSnapshot, CoordinatorRuntimeOutcome,
-    CoordinatorRuntimeResult,
+    CoordinatorIngressApplicationPort, CoordinatorIngressPortError,
+    CoordinatorIngressPortErrorClass, CoordinatorProfileAccess, CoordinatorProjectionSnapshot,
+    CoordinatorRuntimeOutcome, CoordinatorRuntimeResult,
 };
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{
@@ -42,11 +42,7 @@ pub struct CloudflareCoordinatorIngressApplication<'a> {
 
 impl<'a> CloudflareCoordinatorIngressApplication<'a> {
     #[must_use]
-    pub const fn new(
-        env: &'a Env,
-        d1_binding: &'a str,
-        coordinator_binding: &'a str,
-    ) -> Self {
+    pub const fn new(env: &'a Env, d1_binding: &'a str, coordinator_binding: &'a str) -> Self {
         Self {
             env,
             d1_binding,
@@ -128,12 +124,7 @@ impl CoordinatorIngressApplicationPort for CloudflareCoordinatorIngressApplicati
                 .d1(self.d1_binding)
                 .map_err(map_worker_dependency)?,
         )
-        .find_visible_profile(
-            actor.tenant_scope(),
-            actor.actor_id(),
-            role,
-            profile_id,
-        )
+        .find_visible_profile(actor.tenant_scope(), actor.actor_id(), role, profile_id)
         .await
         .map(|row| {
             row.map(|visible| {
@@ -172,7 +163,8 @@ impl CoordinatorIngressApplicationPort for CloudflareCoordinatorIngressApplicati
         profile_id: &ProfileId,
         envelope: &CoordinatorCommandEnvelope,
     ) -> Result<CoordinatorRuntimeResult, CoordinatorIngressPortError> {
-        self.runtime_request(scope, profile_id, Some(envelope)).await
+        self.runtime_request(scope, profile_id, Some(envelope))
+            .await
     }
 
     async fn project(
