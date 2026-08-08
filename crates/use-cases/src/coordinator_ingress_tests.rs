@@ -183,17 +183,27 @@ fn envelope_input(
     ))
 }
 
+fn prepared_access(
+    port: &FakePort,
+    role: MembershipRole,
+) -> Result<CoordinatorIngressAccess, Box<dyn std::error::Error>> {
+    Ok(block_on(prepare_coordinator_ingress(
+        &actor()?,
+        role,
+        &profile_id()?,
+        port,
+    ))?)
+}
+
 #[test]
 fn missing_or_non_live_profile_stops_before_runtime() -> Result<(), Box<dyn std::error::Error>> {
     let missing = FakePort::new(None);
     assert_eq!(
-        block_on(execute_coordinator_ingress(
+        block_on(prepare_coordinator_ingress(
             &actor()?,
             MembershipRole::Member,
             &profile_id()?,
             &missing,
-            &clock(),
-            CoordinatorIngressRequest::Snapshot,
         )),
         Err(CoordinatorIngressOperationError::NotFound)
     );
@@ -201,13 +211,11 @@ fn missing_or_non_live_profile_stops_before_runtime() -> Result<(), Box<dyn std:
 
     let draft = FakePort::new(Some(CoordinatorProfileAccess::new("DRAFT", true)));
     assert_eq!(
-        block_on(execute_coordinator_ingress(
+        block_on(prepare_coordinator_ingress(
             &actor()?,
             MembershipRole::Member,
             &profile_id()?,
             &draft,
-            &clock(),
-            CoordinatorIngressRequest::Snapshot,
         )),
         Err(CoordinatorIngressOperationError::Conflict)
     );
@@ -218,10 +226,11 @@ fn missing_or_non_live_profile_stops_before_runtime() -> Result<(), Box<dyn std:
 #[test]
 fn snapshot_runtime_result_is_projected_after_success() -> Result<(), Box<dyn std::error::Error>> {
     let port = FakePort::new(Some(CoordinatorProfileAccess::new("READY", true)));
-    block_on(execute_coordinator_ingress(
+    let access = prepared_access(&port, MembershipRole::Member)?;
+    block_on(execute_prepared_coordinator_ingress(
         &actor()?,
         MembershipRole::Member,
-        &profile_id()?,
+        &access,
         &port,
         &clock(),
         CoordinatorIngressRequest::Snapshot,
@@ -235,11 +244,12 @@ fn snapshot_runtime_result_is_projected_after_success() -> Result<(), Box<dyn st
 #[test]
 fn owner_only_recovery_stops_non_owner_before_execute() -> Result<(), Box<dyn std::error::Error>> {
     let port = FakePort::new(Some(CoordinatorProfileAccess::new("DIRTY_LOCAL", true)));
+    let access = prepared_access(&port, MembershipRole::Member)?;
     assert_eq!(
-        block_on(execute_coordinator_ingress(
+        block_on(execute_prepared_coordinator_ingress(
             &actor()?,
             MembershipRole::Member,
-            &profile_id()?,
+            &access,
             &port,
             &clock(),
             CoordinatorIngressRequest::Command(envelope_input(
@@ -258,6 +268,7 @@ fn owner_only_recovery_stops_non_owner_before_execute() -> Result<(), Box<dyn st
 fn invalid_launch_ttl_stops_before_execute_and_projection() -> Result<(), Box<dyn std::error::Error>>
 {
     let port = FakePort::new(Some(CoordinatorProfileAccess::new("READY", true)));
+    let access = prepared_access(&port, MembershipRole::TenantOwner)?;
     let request = CoordinatorIngressRequest::Command(envelope_input(
         CoordinatorCommandInput::IssueLaunchIntent {
             launch_intent_id: LaunchIntentId::parse("launch_01JCOORDINGRESS")?,
@@ -266,10 +277,10 @@ fn invalid_launch_ttl_stops_before_execute_and_projection() -> Result<(), Box<dy
         },
     )?);
     assert_eq!(
-        block_on(execute_coordinator_ingress(
+        block_on(execute_prepared_coordinator_ingress(
             &actor()?,
             MembershipRole::TenantOwner,
-            &profile_id()?,
+            &access,
             &port,
             &clock(),
             request,
@@ -284,16 +295,17 @@ fn invalid_launch_ttl_stops_before_execute_and_projection() -> Result<(), Box<dy
 #[test]
 fn claim_generates_fencing_token_once_and_projects() -> Result<(), Box<dyn std::error::Error>> {
     let port = FakePort::new(Some(CoordinatorProfileAccess::new("READY", true)));
+    let access = prepared_access(&port, MembershipRole::Member)?;
     let request =
         CoordinatorIngressRequest::Command(envelope_input(CoordinatorCommandInput::Claim {
             launch_intent_id: LaunchIntentId::parse("launch_01JCOORDINGRESS")?,
             device_id: DeviceId::parse("device_01JCOORDINGRESS")?,
             session_id: SessionId::parse("session_01JCOORDINGRESS")?,
         })?);
-    block_on(execute_coordinator_ingress(
+    block_on(execute_prepared_coordinator_ingress(
         &actor()?,
         MembershipRole::Member,
-        &profile_id()?,
+        &access,
         &port,
         &clock(),
         request,
@@ -307,13 +319,14 @@ fn claim_generates_fencing_token_once_and_projects() -> Result<(), Box<dyn std::
 #[test]
 fn runtime_failure_never_projects() -> Result<(), Box<dyn std::error::Error>> {
     let port = FakePort::new(Some(CoordinatorProfileAccess::new("READY", true)));
+    let access = prepared_access(&port, MembershipRole::Member)?;
     port.runtime_error
         .set(Some(CoordinatorIngressPortErrorClass::Conflict));
     assert_eq!(
-        block_on(execute_coordinator_ingress(
+        block_on(execute_prepared_coordinator_ingress(
             &actor()?,
             MembershipRole::Member,
-            &profile_id()?,
+            &access,
             &port,
             &clock(),
             CoordinatorIngressRequest::Snapshot,
