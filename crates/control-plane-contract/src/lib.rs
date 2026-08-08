@@ -103,11 +103,23 @@ mod tests {
             ("GET", "/api/v2/health", RouteClass::DynamicRouteNotFound),
             ("GET", "/api/v1/unknown", RouteClass::DynamicRouteNotFound),
             ("GET", "/api", RouteClass::DynamicRouteNotFound),
-            ("POST", "/auth/v2/callback", RouteClass::DynamicRouteNotFound),
+            (
+                "POST",
+                "/auth/v2/callback",
+                RouteClass::DynamicRouteNotFound,
+            ),
             ("GET", "/auth/unknown", RouteClass::DynamicRouteNotFound),
             ("GET", "/bridge", RouteClass::BridgeDeniedByDefault),
-            ("POST", "/bridge/v2/claim", RouteClass::BridgeDeniedByDefault),
-            ("DELETE", "/bridge/unknown", RouteClass::BridgeDeniedByDefault),
+            (
+                "POST",
+                "/bridge/v2/claim",
+                RouteClass::BridgeDeniedByDefault,
+            ),
+            (
+                "DELETE",
+                "/bridge/unknown",
+                RouteClass::BridgeDeniedByDefault,
+            ),
         ] {
             let route = classify_route(method, path);
             assert_eq!(route, expected, "unexpected route for {method} {path}");
@@ -117,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn owner_member_acl_and_coordinator_routes_are_versioned_and_authenticated() {
+    fn identity_client_profile_and_coordinator_routes_are_versioned_and_authenticated() {
         let routes = [
             (
                 "GET",
@@ -135,14 +147,49 @@ mod tests {
                 RouteClass::OwnerTransferApi,
             ),
             (
+                "POST",
+                "/api/v1/tenants/tenant_01/invitations",
+                RouteClass::InvitationCollectionApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/invitations/invitation_01/accept",
+                RouteClass::InvitationAcceptApi,
+            ),
+            (
                 "PUT",
                 "/api/v1/tenants/tenant_01/members/actor_01/status",
                 RouteClass::MembershipStatusApi,
             ),
             (
+                "POST",
+                "/api/v1/tenants/tenant_01/clients",
+                RouteClass::ClientCollectionApi,
+            ),
+            (
                 "GET",
                 "/api/v1/tenants/tenant_01/clients/client_01",
                 RouteClass::ClientResourceApi,
+            ),
+            (
+                "DELETE",
+                "/api/v1/tenants/tenant_01/clients/client_01/grants/actor_01",
+                RouteClass::ClientGrantApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/profiles",
+                RouteClass::ProfileCollectionApi,
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/profiles/profile_01",
+                RouteClass::ProfileResourceApi,
+            ),
+            (
+                "PUT",
+                "/api/v1/tenants/tenant_01/profiles/profile_01/assignment",
+                RouteClass::ProfileAssignmentApi,
             ),
             (
                 "PUT",
