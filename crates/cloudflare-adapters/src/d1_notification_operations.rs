@@ -7,9 +7,7 @@ use application_ports::{
     ReplayReasonClass,
 };
 use notification_domain::{DeliveryFailureClass, DeliveryState, NotificationCursor};
-use profile_platform_primitives::{
-    ActorContext, OpaqueId, OutboxEventId, TenantId, UnixMillis,
-};
+use profile_platform_primitives::{ActorContext, OpaqueId, OutboxEventId, TenantId, UnixMillis};
 use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::query;
@@ -328,7 +326,9 @@ impl D1NotificationOperationsRepository {
         if exact {
             Ok(Some(ReplayPreparationOutcome::Duplicate))
         } else {
-            Err(NotificationPortError::new(NotificationPortErrorClass::Conflict))
+            Err(NotificationPortError::new(
+                NotificationPortErrorClass::Conflict,
+            ))
         }
     }
 
@@ -354,7 +354,9 @@ impl D1NotificationOperationsRepository {
         let failure_class = required_failure_class(row.failure_class.as_deref())?;
         let state = DeliveryState::restore_dead_letter(attempts, terminal_at, failure_class)
             .map_err(|_| integrity_failure())?;
-        state.record_remediation().map_err(|_| integrity_failure())?;
+        state
+            .record_remediation()
+            .map_err(|_| integrity_failure())?;
         Ok(i64::from(attempts))
     }
 }
@@ -381,9 +383,10 @@ impl NotificationAuthorizationPort for D1NotificationOperationsRepository {
         match (role.role.as_str(), capability) {
             ("TENANT_OWNER", _) => Ok(true),
             ("MEMBER", NotificationCapability::CatchUp) => Ok(true),
-            ("MEMBER", NotificationCapability::Remediate | NotificationCapability::ObserveOperations) => {
-                Ok(false)
-            }
+            (
+                "MEMBER",
+                NotificationCapability::Remediate | NotificationCapability::ObserveOperations,
+            ) => Ok(false),
             _ => Err(integrity_failure()),
         }
     }
@@ -397,7 +400,10 @@ impl NotificationCatchUpRepositoryPort for D1NotificationOperationsRepository {
         limit: u32,
     ) -> Result<NotificationEventPage, NotificationPortError> {
         let (after_time, after_id) = if let Some(cursor) = after {
-            (sqlite_integer(cursor.occurred_at())?, cursor.event_id().as_str())
+            (
+                sqlite_integer(cursor.occurred_at())?,
+                cursor.event_id().as_str(),
+            )
         } else {
             (-1, "")
         };
@@ -504,10 +510,11 @@ impl NotificationReplayRepositoryPort for D1NotificationOperationsRepository {
         replay_id: &OpaqueId,
         published_at: UnixMillis,
     ) -> Result<(), NotificationPortError> {
+        let published_at = sqlite_integer(published_at)?;
         let returned = query!(
             &self.database,
             MARK_REPLAY_PUBLISHED,
-            sqlite_integer(published_at)?,
+            published_at,
             tenant_id.as_str(),
             replay_id.as_str()
         )
@@ -531,9 +538,10 @@ impl NotificationReplayRepositoryPort for D1NotificationOperationsRepository {
         .map_err(map_worker_error)?;
         match state.as_ref().map(|row| row.dispatch_state.as_str()) {
             Some("PUBLISHED") => Ok(()),
-            Some("PENDING") => Err(NotificationPortError::new(NotificationPortErrorClass::Conflict)),
-            Some(_) => Err(integrity_failure()),
-            None => Err(integrity_failure()),
+            Some("PENDING") => Err(NotificationPortError::new(
+                NotificationPortErrorClass::Conflict,
+            )),
+            Some(_) | None => Err(integrity_failure()),
         }
     }
 }
@@ -546,7 +554,8 @@ impl NotificationRetentionRepositoryPort for D1NotificationOperationsRepository 
     ) -> Result<NotificationRetentionOutcome, NotificationPortError> {
         let before = sqlite_integer(before)?;
         let limit = i64::from(limit);
-        let deliveries_removed = delete_count(&self.database, DELETE_DELIVERED, before, limit).await?;
+        let deliveries_removed =
+            delete_count(&self.database, DELETE_DELIVERED, before, limit).await?;
         let cursors_removed =
             delete_count(&self.database, DELETE_INACTIVE_CURSORS, before, limit).await?;
         let replay_dispatches_removed = delete_count(
