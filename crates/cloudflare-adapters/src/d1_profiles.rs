@@ -9,8 +9,8 @@ use application_ports::CommandExecutionEvidence;
 use application_ports::profiles::{
     ProfileApplicationPort, ProfileAssignmentApplicationPort, ProfileAssignmentPortError,
     ProfileAssignmentPortErrorClass, ProfileAssignmentWrite, ProfileCreateWrite,
-    ProfileGrantApplicationPort, ProfileGrantPortError, ProfileGrantPortErrorClass, ProfileGrantRole,
-    ProfileGrantWrite, ProfilePortError, ProfilePortErrorClass, ProfileReadModel,
+    ProfileGrantApplicationPort, ProfileGrantPortError, ProfileGrantPortErrorClass,
+    ProfileGrantRole, ProfileGrantWrite, ProfilePortError, ProfilePortErrorClass, ProfileReadModel,
     ProfileReplayDecision, ProfileReplayReceipt, ProfileStatus,
 };
 use identity_access_domain::MembershipRole;
