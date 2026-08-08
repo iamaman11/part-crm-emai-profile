@@ -136,7 +136,7 @@ impl DeliveryState {
     pub fn record_failure(
         self,
         failed_at: UnixMillis,
-        next_attempt_at: UnixMillis,
+        next_attempt_at: Option<UnixMillis>,
         attempt_limit: AttemptLimit,
         failure_class: DeliveryFailureClass,
     ) -> Result<Self, DeliveryTransitionError> {
@@ -146,12 +146,19 @@ impl DeliveryState {
 
         let attempts = self.attempts().increment()?;
         if attempts.value() >= attempt_limit.value() {
+            if next_attempt_at.is_some() {
+                return Err(DeliveryTransitionError::UnexpectedTerminalRetrySchedule);
+            }
             return Ok(Self::DeadLetter {
                 attempts,
                 terminal_at: failed_at,
                 failure_class,
             });
         }
+
+        let Some(next_attempt_at) = next_attempt_at else {
+            return Err(DeliveryTransitionError::MissingRetrySchedule);
+        };
         if next_attempt_at.value() <= failed_at.value() {
             return Err(DeliveryTransitionError::InvalidRetrySchedule);
         }
@@ -174,7 +181,9 @@ impl Default for DeliveryState {
 pub enum DeliveryTransitionError {
     AttemptOverflow,
     InvalidRetrySchedule,
+    MissingRetrySchedule,
     TerminalState,
+    UnexpectedTerminalRetrySchedule,
 }
 
 impl fmt::Display for DeliveryTransitionError {
@@ -184,7 +193,11 @@ impl fmt::Display for DeliveryTransitionError {
             Self::InvalidRetrySchedule => {
                 "notification retry schedule must be strictly after the failed attempt"
             }
+            Self::MissingRetrySchedule => "non-terminal notification failure requires retry time",
             Self::TerminalState => "notification delivery is already terminal",
+            Self::UnexpectedTerminalRetrySchedule => {
+                "terminal notification failure must not carry retry time"
+            }
         })
     }
 }
@@ -208,33 +221,53 @@ mod tests {
     }
 
     #[test]
-    fn retry_must_move_time_forward() -> Result<(), Box<dyn std::error::Error>> {
+    fn retry_must_be_present_and_move_time_forward() -> Result<(), Box<dyn std::error::Error>> {
         let limit = AttemptLimit::new(3)?;
-        let result = DeliveryState::new().record_failure(
-            UnixMillis::new(10),
-            UnixMillis::new(10),
-            limit,
-            DeliveryFailureClass::DependencyUnavailable,
+        assert_eq!(
+            DeliveryState::new().record_failure(
+                UnixMillis::new(10),
+                None,
+                limit,
+                DeliveryFailureClass::DependencyUnavailable,
+            ),
+            Err(DeliveryTransitionError::MissingRetrySchedule)
         );
-        assert_eq!(result, Err(DeliveryTransitionError::InvalidRetrySchedule));
+        assert_eq!(
+            DeliveryState::new().record_failure(
+                UnixMillis::new(10),
+                Some(UnixMillis::new(10)),
+                limit,
+                DeliveryFailureClass::DependencyUnavailable,
+            ),
+            Err(DeliveryTransitionError::InvalidRetrySchedule)
+        );
         Ok(())
     }
 
     #[test]
-    fn max_attempt_reaches_dead_letter_deterministically() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn max_attempt_requires_terminal_shape_and_reaches_dead_letter()
+    -> Result<(), Box<dyn std::error::Error>> {
         let limit = AttemptLimit::new(2)?;
         let first = DeliveryState::new().record_failure(
             UnixMillis::new(10),
-            UnixMillis::new(20),
+            Some(UnixMillis::new(20)),
             limit,
             DeliveryFailureClass::DependencyUnavailable,
         )?;
         assert!(matches!(first, DeliveryState::RetryScheduled { .. }));
+        assert_eq!(
+            first.record_failure(
+                UnixMillis::new(20),
+                Some(UnixMillis::new(30)),
+                limit,
+                DeliveryFailureClass::DependencyUnavailable,
+            ),
+            Err(DeliveryTransitionError::UnexpectedTerminalRetrySchedule)
+        );
 
         let terminal = first.record_failure(
             UnixMillis::new(20),
-            UnixMillis::new(30),
+            None,
             limit,
             DeliveryFailureClass::DependencyUnavailable,
         )?;
