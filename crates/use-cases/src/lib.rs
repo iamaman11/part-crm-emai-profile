@@ -6,6 +6,7 @@ pub mod coordinator_ingress;
 pub mod error;
 pub mod generations;
 pub mod identity_acl;
+pub mod integration_events;
 pub mod mailbox_jobs;
 pub mod mailboxes;
 pub mod profile_assignments;
