@@ -1,0 +1,38 @@
+name: Phase 1B Materialize
+
+on:
+  push:
+    branches:
+      - phase1b-delivery-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase1b-delivery-hardening
+          fetch-depth: 0
+
+      - name: Format and materialize deterministic repository files
+        run: |
+          rustup show active-toolchain
+          cargo fmt --all
+          cargo metadata --format-version 1 > /dev/null
+          python scripts/generate-architecture-inventory.py --write
+          git diff --check
+          git diff -- Cargo.lock architecture/inventory.json
+
+      - name: Commit formatting and remove this workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git rm --ignore-unmatch .github/workflows/phase1b-materialize.yml
+          git commit -m 'Phase 1B: format notification composition and self-clean'
+          git push origin HEAD:phase1b-delivery-hardening
