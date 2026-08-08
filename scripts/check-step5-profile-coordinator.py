@@ -18,6 +18,27 @@ REPOSITORY_REQUIRED = {
         "fn idle_timeout_preserves_uncertain_state_until_recovery",
         "fn late_clean_release_becomes_uncertain",
     ),
+    "crates/application-ports/src/coordinator_ingress.rs": (
+        "pub trait CoordinatorIngressApplicationPort",
+        "pub struct CoordinatorProfileAccess",
+        "pub struct CoordinatorRuntimeResult",
+        "async fn find_visible_profile",
+        "async fn project",
+    ),
+    "crates/use-cases/src/coordinator_ingress.rs": (
+        "pub async fn prepare_coordinator_ingress",
+        "pub async fn execute_prepared_coordinator_ingress",
+        "CoordinatorCommandInput::MarkRecovered",
+        "MIN_INTENT_TTL_MS",
+        "MAX_INTENT_TTL_MS",
+    ),
+    "crates/cloudflare-adapters/src/coordinator_ingress.rs": (
+        "pub struct CloudflareCoordinatorIngressApplication",
+        "durable_object(self.coordinator_binding)",
+        "find_visible_profile",
+        "D1ProfileCoordinatorRepository",
+        "new_fencing_token",
+    ),
     "crates/cloudflare-adapters/src/profile_coordinator.rs": (
         "pub struct StoredCoordinatorDocument",
         "pub fn replay",
@@ -30,12 +51,10 @@ REPOSITORY_REQUIRED = {
         "pub async fn projected_sequence",
     ),
     "apps/control-plane-worker/src/profile_coordinator.rs": (
-        "resolve_active_request_actor",
-        "find_visible_profile",
-        "coordinator_object_name(&profile_id)",
-        "generate_fencing_token",
-        "D1ProfileCoordinatorRepository",
-        "profile_is_coordinatable",
+        "#[durable_object]",
+        "pub struct ProfileCoordinator",
+        "StoredCoordinatorDocument",
+        "schedule_alarm",
     ),
     "migrations/d1/0004_profile_coordinator_projection.sql": (
         "CREATE TABLE profile_coordinator_projection_commands",
@@ -58,6 +77,7 @@ FORBIDDEN_COORDINATOR_AUTH_MARKERS = (
 ALLOWED_DURABLE_OBJECT_FILES = {
     "apps/control-plane-worker/src/lib.rs",
     "apps/control-plane-worker/src/profile_coordinator.rs",
+    "crates/cloudflare-adapters/src/coordinator_ingress.rs",
 }
 FIXTURE_PREFIX = "tests/profile-coordinator/fixtures/"
 
@@ -89,7 +109,7 @@ def main() -> int:
                         f"assignment-derived coordinator authorization is forbidden: {rel}: {marker}"
                     )
         if "durable_object(" in text and rel not in ALLOWED_DURABLE_OBJECT_FILES:
-            errors.append(f"raw Durable Object API escaped Worker composition: {rel}")
+            errors.append(f"raw Durable Object API escaped outer coordinator adapters: {rel}")
 
     if repository_root:
         for rel, markers in REPOSITORY_REQUIRED.items():
@@ -102,17 +122,23 @@ def main() -> int:
                 if marker not in text:
                     errors.append(f"missing Step 5 invariant in {rel}: {marker}")
 
-        worker_path = root / "apps/control-plane-worker/src/profile_coordinator.rs"
-        if worker_path.exists():
-            worker = worker_path.read_text(encoding="utf-8")
-            actor_index = worker.find("resolve_active_request_actor")
-            acl_index = worker.find("find_visible_profile")
-            object_index = worker.find("env.durable_object")
-            if min(actor_index, acl_index, object_index) < 0 or not (
-                actor_index < acl_index < object_index
+        use_case_path = root / "crates/use-cases/src/coordinator_ingress.rs"
+        if use_case_path.exists():
+            use_case = use_case_path.read_text(encoding="utf-8")
+            prepare_index = use_case.find("pub async fn prepare_coordinator_ingress")
+            acl_index = use_case.find("find_visible_profile", prepare_index)
+            execute_index = use_case.find("pub async fn execute_prepared_coordinator_ingress")
+            runtime_candidates = (
+                use_case.find(".snapshot(", execute_index),
+                use_case.find(".execute(", execute_index),
+            ) if execute_index >= 0 else (-1, -1)
+            runtime_indexes = [index for index in runtime_candidates if index >= 0]
+            runtime_index = min(runtime_indexes) if runtime_indexes else -1
+            if min(prepare_index, acl_index, execute_index, runtime_index) < 0 or not (
+                prepare_index <= acl_index < execute_index <= runtime_index
             ):
                 errors.append(
-                    "Worker must resolve active actor and explicit profile ACL before Durable Object access"
+                    "application use case must authorize visible/coordinatable profile before coordinator runtime access"
                 )
 
     if errors:

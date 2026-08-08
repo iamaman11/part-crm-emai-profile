@@ -1,19 +1,19 @@
+use crate::d1_identity_acl::ResolvedMembershipRole;
+use crate::d1_identity_queries::D1IdentityQueryRepository;
+use crate::d1_profile_coordinator::{
+    CoordinatorProjectionMutation, CoordinatorProjectionOutcome, D1ProfileCoordinatorRepository,
+};
+use crate::profile_coordinator::{
+    CoordinatorProjection, StoredCoordinatorCommand, StoredCoordinatorEnvelope,
+    StoredReleaseDisposition,
+};
 use application_ports::ClockPort;
 use application_ports::coordinator_ingress::{
     CoordinatorIngressApplicationPort, CoordinatorIngressPortError, CoordinatorIngressPortErrorClass,
     CoordinatorProfileAccess, CoordinatorProjectionSnapshot, CoordinatorRuntimeOutcome,
     CoordinatorRuntimeResult,
 };
-use cloudflare_adapters::d1_identity_queries::D1IdentityQueryRepository;
-use cloudflare_adapters::d1_profile_coordinator::{
-    CoordinatorProjectionMutation, CoordinatorProjectionOutcome, D1ProfileCoordinatorRepository,
-};
-use cloudflare_adapters::profile_coordinator::{
-    StoredCoordinatorCommand, StoredCoordinatorEnvelope,
-};
-use control_plane_contract::{D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING};
 use identity_access_domain::MembershipRole;
-use js_sys::Reflect;
 use profile_platform_primitives::{
     ActorContext, AggregateVersion, DeviceId, FencingToken, LaunchIntentId, OutboxEventId,
     ProfileId, SessionId, TenantScope, UnixMillis,
@@ -22,26 +22,36 @@ use serde::{Deserialize, Serialize};
 use session_domain::coordinator::{
     CoordinatorCommand, CoordinatorCommandEnvelope, ReleaseDisposition, coordinator_object_name,
 };
-use wasm_bindgen::{JsCast, JsValue};
-use web_sys::WorkerGlobalScope;
-use worker::{Date, Env, Fetch, Headers, Method, Request, RequestInit, Result as WorkerResult};
+use worker::wasm_bindgen::{JsCast, JsValue};
+use worker::web_sys::WorkerGlobalScope;
+use worker::{Date, Env, Fetch, Headers, Method, Request, RequestInit};
 
-pub struct WorkerCoordinatorClock;
+pub struct CloudflareCoordinatorClock;
 
-impl ClockPort for WorkerCoordinatorClock {
+impl ClockPort for CloudflareCoordinatorClock {
     fn now(&self) -> UnixMillis {
         UnixMillis::new(Date::now().as_millis())
     }
 }
 
-pub struct WorkerCoordinatorIngressApplication {
-    env: Env,
+pub struct CloudflareCoordinatorIngressApplication<'a> {
+    env: &'a Env,
+    d1_binding: &'a str,
+    coordinator_binding: &'a str,
 }
 
-impl WorkerCoordinatorIngressApplication {
+impl<'a> CloudflareCoordinatorIngressApplication<'a> {
     #[must_use]
-    pub fn new(env: &Env) -> Self {
-        Self { env: env.clone() }
+    pub const fn new(
+        env: &'a Env,
+        d1_binding: &'a str,
+        coordinator_binding: &'a str,
+    ) -> Self {
+        Self {
+            env,
+            d1_binding,
+            coordinator_binding,
+        }
     }
 
     async fn runtime_request(
@@ -52,7 +62,7 @@ impl WorkerCoordinatorIngressApplication {
     ) -> Result<CoordinatorRuntimeResult, CoordinatorIngressPortError> {
         let namespace = self
             .env
-            .durable_object(PROFILE_COORDINATOR_BINDING)
+            .durable_object(self.coordinator_binding)
             .map_err(map_worker_dependency)?;
         let object_id = namespace
             .id_from_name(&coordinator_object_name(profile_id))
@@ -61,14 +71,14 @@ impl WorkerCoordinatorIngressApplication {
 
         let request = match envelope {
             None => internal_request(
-                "https://coordinator.internal/snapshot",
+                "/snapshot",
                 &CoordinatorSnapshotRequest {
                     tenant_id: scope.tenant_id().as_str(),
                     profile_id: profile_id.as_str(),
                 },
             )?,
             Some(envelope) => internal_request(
-                "https://coordinator.internal/command",
+                "/command",
                 &CoordinatorInternalCommandRequest {
                     tenant_id: scope.tenant_id().as_str(),
                     profile_id: profile_id.as_str(),
@@ -81,17 +91,18 @@ impl WorkerCoordinatorIngressApplication {
                 },
             )?,
         };
-        let mut response = stub.fetch_with_request(request).await.map_err(map_worker_dependency)?;
+        let mut response = stub
+            .fetch_with_request(request)
+            .await
+            .map_err(map_worker_dependency)?;
         if response.status_code() != 200 {
-            return Err(CoordinatorIngressPortError::new(
-                if response.status_code() == 404 {
-                    CoordinatorIngressPortErrorClass::NotFound
-                } else if response.status_code() == 409 {
-                    CoordinatorIngressPortErrorClass::Conflict
-                } else {
-                    CoordinatorIngressPortErrorClass::DependencyUnavailable
-                },
-            ));
+            let class = match response.status_code() {
+                400 => CoordinatorIngressPortErrorClass::InvalidRequest,
+                404 => CoordinatorIngressPortErrorClass::NotFound,
+                409 => CoordinatorIngressPortErrorClass::Conflict,
+                _ => CoordinatorIngressPortErrorClass::DependencyUnavailable,
+            };
+            return Err(CoordinatorIngressPortError::new(class));
         }
         let response = response
             .json::<CoordinatorObjectResponse>()
@@ -101,25 +112,34 @@ impl WorkerCoordinatorIngressApplication {
     }
 }
 
-impl CoordinatorIngressApplicationPort for WorkerCoordinatorIngressApplication {
+impl CoordinatorIngressApplicationPort for CloudflareCoordinatorIngressApplication<'_> {
     async fn find_visible_profile(
         &self,
         actor: &ActorContext,
         role: MembershipRole,
         profile_id: &ProfileId,
     ) -> Result<Option<CoordinatorProfileAccess>, CoordinatorIngressPortError> {
+        let role = match role {
+            MembershipRole::TenantOwner => ResolvedMembershipRole::TenantOwner,
+            MembershipRole::Member => ResolvedMembershipRole::Member,
+        };
         D1IdentityQueryRepository::new(
             self.env
-                .d1(D1_CATALOG_BINDING)
+                .d1(self.d1_binding)
                 .map_err(map_worker_dependency)?,
         )
-        .find_visible_profile(actor, role, profile_id)
+        .find_visible_profile(
+            actor.tenant_scope(),
+            actor.actor_id(),
+            role,
+            profile_id,
+        )
         .await
         .map(|row| {
             row.map(|visible| {
                 CoordinatorProfileAccess::new(
-                    visible.status,
-                    visible.active_generation_id.is_some(),
+                    visible.status(),
+                    visible.active_generation_id().is_some(),
                 )
             })
         })
@@ -127,13 +147,15 @@ impl CoordinatorIngressApplicationPort for WorkerCoordinatorIngressApplication {
     }
 
     fn new_fencing_token(&self) -> Result<FencingToken, CoordinatorIngressPortError> {
-        FencingToken::parse(format!("fence_{}", random_uuid()?))
-            .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))
+        FencingToken::parse(format!("fence_{}", random_uuid()?)).map_err(|_| {
+            CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure)
+        })
     }
 
     fn new_outbox_event_id(&self) -> Result<OutboxEventId, CoordinatorIngressPortError> {
-        OutboxEventId::parse(format!("outbox_{}", random_uuid()?))
-            .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))
+        OutboxEventId::parse(format!("outbox_{}", random_uuid()?)).map_err(|_| {
+            CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure)
+        })
     }
 
     async fn snapshot(
@@ -161,41 +183,18 @@ impl CoordinatorIngressApplicationPort for WorkerCoordinatorIngressApplication {
         outbox_event_id: &OutboxEventId,
         projected_at: UnixMillis,
     ) -> Result<(), CoordinatorIngressPortError> {
-        let projection = result.projection();
-        if projection.tenant_id() != scope.tenant_id() || projection.profile_id() != profile_id {
-            return Err(CoordinatorIngressPortError::new(
-                CoordinatorIngressPortErrorClass::IntegrityFailure,
-            ));
-        }
-        let actor = ActorContext::new(
-            scope.clone(),
-            profile_platform_primitives::ActorId::parse("actor_coordinator_projection")
-                .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))?,
-            profile_platform_primitives::CorrelationId::parse("corr_coordinator_projection")
-                .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))?,
-        );
+        let projection = coordinator_projection(result.projection());
         D1ProfileCoordinatorRepository::new(
             self.env
-                .d1(D1_CATALOG_BINDING)
+                .d1(self.d1_binding)
                 .map_err(map_worker_dependency)?,
         )
-        .persist_projection(
-            &actor,
+        .project(
+            scope,
             CoordinatorProjectionMutation {
                 profile_id,
+                projection: &projection,
                 outcome: projection_outcome(result.outcome()),
-                coordinator_version: result.version(),
-                coordinator_sequence: result.sequence(),
-                status: projection.status(),
-                next_epoch: projection.next_epoch(),
-                active_session_id: projection.active_session_id(),
-                active_device_id: projection.active_device_id(),
-                active_epoch: projection.active_epoch(),
-                idle_expires_at: projection.idle_expires_at(),
-                hard_expires_at: projection.hard_expires_at(),
-                drain_deadline: projection.drain_deadline(),
-                pending_launch_intent_id: projection.pending_launch_intent_id(),
-                pending_intent_expires_at: projection.pending_intent_expires_at(),
                 outbox_event_id,
                 projected_at,
             },
@@ -203,6 +202,31 @@ impl CoordinatorIngressApplicationPort for WorkerCoordinatorIngressApplication {
         .await
         .map(|_| ())
         .map_err(map_worker_dependency)
+    }
+}
+
+fn coordinator_projection(value: &CoordinatorProjectionSnapshot) -> CoordinatorProjection {
+    CoordinatorProjection {
+        tenant_id: value.tenant_id().as_str().to_owned(),
+        profile_id: value.profile_id().as_str().to_owned(),
+        status: value.status().to_owned(),
+        version: value.version().value(),
+        sequence: value.sequence(),
+        next_epoch: value.next_epoch(),
+        active_session_id: value
+            .active_session_id()
+            .map(|item| item.as_str().to_owned()),
+        active_device_id: value
+            .active_device_id()
+            .map(|item| item.as_str().to_owned()),
+        active_epoch: value.active_epoch(),
+        idle_expires_at_ms: value.idle_expires_at().map(UnixMillis::value),
+        hard_expires_at_ms: value.hard_expires_at().map(UnixMillis::value),
+        drain_deadline_ms: value.drain_deadline().map(UnixMillis::value),
+        pending_launch_intent_id: value
+            .pending_launch_intent_id()
+            .map(|item| item.as_str().to_owned()),
+        pending_intent_expires_at_ms: value.pending_intent_expires_at().map(UnixMillis::value),
     }
 }
 
@@ -258,8 +282,9 @@ fn stored_command(command: &CoordinatorCommand) -> StoredCoordinatorCommand {
             epoch: *epoch,
             fencing_token: fencing_token.as_str().to_owned(),
             disposition: match disposition {
-                ReleaseDisposition::Clean => "clean".to_owned(),
-                ReleaseDisposition::DirtyLocal => "dirty_local".to_owned(),
+                ReleaseDisposition::Clean => StoredReleaseDisposition::Clean,
+                ReleaseDisposition::Dirty => StoredReleaseDisposition::Dirty,
+                ReleaseDisposition::Uncertain => StoredReleaseDisposition::Uncertain,
             },
             now_ms: now.value(),
         },
@@ -281,36 +306,42 @@ fn runtime_result(
     let projection = response.projection;
     Ok(CoordinatorRuntimeResult::new(
         runtime_outcome(&response.outcome)?,
-        AggregateVersion::new(response.version)
-            .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::IntegrityFailure))?,
+        AggregateVersion::new(response.version).map_err(|_| integrity_failure())?,
         response.sequence,
         response.replayed,
         response
             .fencing_token
             .map(FencingToken::parse)
             .transpose()
-            .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::IntegrityFailure))?,
+            .map_err(|_| integrity_failure())?,
         response.epoch,
         CoordinatorProjectionSnapshot::new(
             profile_platform_primitives::TenantId::parse(projection.tenant_id)
-                .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::IntegrityFailure))?,
-            ProfileId::parse(projection.profile_id)
-                .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::IntegrityFailure))?,
+                .map_err(|_| integrity_failure())?,
+            ProfileId::parse(projection.profile_id).map_err(|_| integrity_failure())?,
             projection.status,
-            AggregateVersion::new(projection.version)
-                .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::IntegrityFailure))?,
+            AggregateVersion::new(projection.version).map_err(|_| integrity_failure())?,
             projection.sequence,
             projection.next_epoch,
-            projection.active_session_id.map(SessionId::parse).transpose()
-                .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::IntegrityFailure))?,
-            projection.active_device_id.map(DeviceId::parse).transpose()
-                .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::IntegrityFailure))?,
+            projection
+                .active_session_id
+                .map(SessionId::parse)
+                .transpose()
+                .map_err(|_| integrity_failure())?,
+            projection
+                .active_device_id
+                .map(DeviceId::parse)
+                .transpose()
+                .map_err(|_| integrity_failure())?,
             projection.active_epoch,
             projection.idle_expires_at_ms.map(UnixMillis::new),
             projection.hard_expires_at_ms.map(UnixMillis::new),
             projection.drain_deadline_ms.map(UnixMillis::new),
-            projection.pending_launch_intent_id.map(LaunchIntentId::parse).transpose()
-                .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::IntegrityFailure))?,
+            projection
+                .pending_launch_intent_id
+                .map(LaunchIntentId::parse)
+                .transpose()
+                .map_err(|_| integrity_failure())?,
             projection.pending_intent_expires_at_ms.map(UnixMillis::new),
         ),
     ))
@@ -328,55 +359,42 @@ fn runtime_outcome(value: &str) -> Result<CoordinatorRuntimeOutcome, Coordinator
         "launch_intent_expired" => Ok(CoordinatorRuntimeOutcome::LaunchIntentExpired),
         "recovered" => Ok(CoordinatorRuntimeOutcome::Recovered),
         "no_change" => Ok(CoordinatorRuntimeOutcome::NoChange),
-        _ => Err(CoordinatorIngressPortError::new(
-            CoordinatorIngressPortErrorClass::IntegrityFailure,
-        )),
+        _ => Err(integrity_failure()),
     }
 }
 
 const fn projection_outcome(value: CoordinatorRuntimeOutcome) -> CoordinatorProjectionOutcome {
     match value {
         CoordinatorRuntimeOutcome::Snapshot => CoordinatorProjectionOutcome::Snapshot,
-        CoordinatorRuntimeOutcome::LaunchIntentIssued => CoordinatorProjectionOutcome::LaunchIntentIssued,
+        CoordinatorRuntimeOutcome::LaunchIntentIssued => {
+            CoordinatorProjectionOutcome::LaunchIntentIssued
+        }
         CoordinatorRuntimeOutcome::LeaseClaimed => CoordinatorProjectionOutcome::LeaseClaimed,
-        CoordinatorRuntimeOutcome::HeartbeatAccepted => CoordinatorProjectionOutcome::HeartbeatAccepted,
+        CoordinatorRuntimeOutcome::HeartbeatAccepted => {
+            CoordinatorProjectionOutcome::HeartbeatAccepted
+        }
         CoordinatorRuntimeOutcome::Released => CoordinatorProjectionOutcome::Released,
         CoordinatorRuntimeOutcome::DrainStarted => CoordinatorProjectionOutcome::DrainStarted,
         CoordinatorRuntimeOutcome::TimedOut => CoordinatorProjectionOutcome::TimedOut,
-        CoordinatorRuntimeOutcome::LaunchIntentExpired => CoordinatorProjectionOutcome::LaunchIntentExpired,
+        CoordinatorRuntimeOutcome::LaunchIntentExpired => {
+            CoordinatorProjectionOutcome::LaunchIntentExpired
+        }
         CoordinatorRuntimeOutcome::Recovered => CoordinatorProjectionOutcome::Recovered,
         CoordinatorRuntimeOutcome::NoChange => CoordinatorProjectionOutcome::NoChange,
     }
 }
 
-fn map_worker_dependency(_error: worker::Error) -> CoordinatorIngressPortError {
-    CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::DependencyUnavailable)
-}
-
 fn random_uuid() -> Result<String, CoordinatorIngressPortError> {
-    let global = js_sys::global();
-    let scope: WorkerGlobalScope = global
-        .dyn_into()
-        .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))?;
-    Reflect::apply(
-        &Reflect::get(scope.crypto().as_ref(), &JsValue::from_str("randomUUID"))
-            .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))?
-            .dyn_into::<js_sys::Function>()
-            .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))?,
-        scope.crypto().as_ref(),
-        &js_sys::Array::new(),
-    )
-    .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))?
-    .as_string()
-    .ok_or_else(|| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))
+    let global: WorkerGlobalScope = worker::js_sys::global().unchecked_into();
+    let crypto = global.crypto().map_err(|_| internal_failure())?;
+    Ok(crypto.random_uuid())
 }
 
 fn internal_request<T: Serialize>(
-    url: &str,
+    path: &str,
     body: &T,
 ) -> Result<Request, CoordinatorIngressPortError> {
-    let body = serde_json::to_string(body)
-        .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))?;
+    let payload = serde_json::to_string(body).map_err(|_| internal_failure())?;
     let headers = Headers::new();
     headers
         .set("content-type", "application/json")
@@ -384,19 +402,21 @@ fn internal_request<T: Serialize>(
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
         .with_headers(headers)
-        .with_body(Some(body.into()));
-    Request::new_with_init(url, &init).map_err(map_worker_dependency)
+        .with_body(Some(JsValue::from_str(&payload)));
+    Request::new_with_init(
+        &format!("https://profile-coordinator.internal{path}"),
+        &init,
+    )
+    .map_err(map_worker_dependency)
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct CoordinatorSnapshotRequest<'a> {
     tenant_id: &'a str,
     profile_id: &'a str,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct CoordinatorInternalCommandRequest<'a> {
     tenant_id: &'a str,
     profile_id: &'a str,
@@ -404,7 +424,6 @@ struct CoordinatorInternalCommandRequest<'a> {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct CoordinatorObjectResponse {
     outcome: String,
     version: u64,
@@ -412,24 +431,17 @@ struct CoordinatorObjectResponse {
     replayed: bool,
     fencing_token: Option<String>,
     epoch: Option<u64>,
-    projection: CoordinatorProjectionResponse,
+    projection: CoordinatorProjection,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CoordinatorProjectionResponse {
-    tenant_id: String,
-    profile_id: String,
-    status: String,
-    version: u64,
-    sequence: u64,
-    next_epoch: u64,
-    active_session_id: Option<String>,
-    active_device_id: Option<String>,
-    active_epoch: Option<u64>,
-    idle_expires_at_ms: Option<u64>,
-    hard_expires_at_ms: Option<u64>,
-    drain_deadline_ms: Option<u64>,
-    pending_launch_intent_id: Option<String>,
-    pending_intent_expires_at_ms: Option<u64>,
+fn map_worker_dependency(_error: worker::Error) -> CoordinatorIngressPortError {
+    CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::DependencyUnavailable)
+}
+
+const fn integrity_failure() -> CoordinatorIngressPortError {
+    CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::IntegrityFailure)
+}
+
+const fn internal_failure() -> CoordinatorIngressPortError {
+    CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure)
 }
