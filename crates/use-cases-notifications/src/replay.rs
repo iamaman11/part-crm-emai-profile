@@ -1,7 +1,8 @@
 use crate::error::NotificationOperationError;
 use application_ports::{
-    IntegrationEventPublisherPort, NotificationAuthorizationPort, NotificationCapability,
-    NotificationReplayIntent, NotificationReplayRepositoryPort, ReplayPreparationOutcome,
+    IntegrationEventPublisherPort, IntegrationEventSourcePort, NotificationAuthorizationPort,
+    NotificationCapability, NotificationReplayIntent, NotificationReplayRepositoryPort,
+    ReplayPreparationOutcome,
 };
 use profile_platform_primitives::{ActorContext, UnixMillis};
 
@@ -32,14 +33,16 @@ where
         .map_err(Into::into)
 }
 
-pub async fn dispatch_pending_replays<R, P>(
+pub async fn dispatch_pending_replays<R, S, P>(
     replays: &R,
+    source: &S,
     publisher: &P,
     published_at: UnixMillis,
     limit: u32,
 ) -> Result<u32, NotificationOperationError>
 where
     R: NotificationReplayRepositoryPort,
+    S: IntegrationEventSourcePort,
     P: IntegrationEventPublisherPort,
 {
     validate_dispatch_limit(limit)?;
@@ -52,15 +55,19 @@ where
 
     let mut published = 0_u32;
     for replay in pending {
+        let event = source
+            .load_event(replay.tenant_id(), replay.event_id())
+            .await?
+            .ok_or(NotificationOperationError::IntegrityFailure)?;
+        if event.tenant_id() != replay.tenant_id() || event.event_id() != replay.event_id() {
+            return Err(NotificationOperationError::IntegrityFailure);
+        }
+
         // Re-publish the canonical envelope unchanged. A crash after publish but before the durable
         // mark intentionally causes at-least-once duplicate publication of the same event identity.
-        publisher.publish(replay.event()).await?;
+        publisher.publish(&event).await?;
         replays
-            .mark_replay_published(
-                replay.event().tenant_id(),
-                replay.replay_id(),
-                published_at,
-            )
+            .mark_replay_published(replay.tenant_id(), replay.replay_id(), published_at)
             .await?;
         published = published
             .checked_add(1)
