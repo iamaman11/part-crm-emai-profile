@@ -1,19 +1,26 @@
 use cloudflare_adapters::d1_integration_events::D1IntegrationEventRepository;
+use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
 use cloudflare_adapters::d1_notifications::D1NotificationRepository;
 use cloudflare_adapters::integration_event_queue::{
     IntegrationEventQueueMessage, QueueIntegrationEventPublisher,
 };
 use profile_platform_primitives::{OpaqueId, UnixMillis};
 use use_cases_notifications::delivery::{DeliveryProcessingOutcome, process_foundation_delivery};
+use use_cases_notifications::error::NotificationOperationError;
 use use_cases_notifications::integration_events::{
     IntegrationEventOperationError, dispatch_pending_events,
 };
+use use_cases_notifications::replay::dispatch_pending_replays;
+use use_cases_notifications::retention::{NotificationRetentionPolicy, compact_notification_state};
 use use_cases_notifications::retry::RetryPolicy;
 use worker::{Date, Env, Error, MessageBatch, MessageExt, QueueRetryOptionsBuilder, Result};
 
 pub const INTEGRATION_EVENTS_QUEUE_BINDING: &str = "INTEGRATION_EVENTS";
 const FOUNDATION_CONSUMER_ID: &str = "consumer_foundation_v1";
 const DISPATCH_BATCH_LIMIT: u32 = 50;
+const REPLAY_DISPATCH_BATCH_LIMIT: u32 = 50;
+const RETENTION_TTL_MS: u64 = 30 * 86_400_000;
+const RETENTION_BATCH_LIMIT: u32 = 100;
 const RETRY_BASE_DELAY_MS: u64 = 1_000;
 const RETRY_MAX_DELAY_MS: u64 = 60_000;
 const RETRY_JITTER_BASIS_POINTS: u16 = 1_000;
@@ -22,18 +29,39 @@ const TRANSPORT_FAILURE_RETRY_SECONDS: u32 = 30;
 const MAX_QUEUE_DELAY_SECONDS: u64 = 86_400;
 
 pub async fn dispatch_pending(env: &Env) -> Result<()> {
+    let now = UnixMillis::new(Date::now().as_millis());
+
     let database = env.d1(control_plane_contract::D1_CATALOG_BINDING)?;
     let queue = env.queue(INTEGRATION_EVENTS_QUEUE_BINDING)?;
     let outbox = D1IntegrationEventRepository::new(database);
     let publisher = QueueIntegrationEventPublisher::new(queue);
-    dispatch_pending_events(
-        &outbox,
-        &publisher,
-        UnixMillis::new(Date::now().as_millis()),
-        DISPATCH_BATCH_LIMIT,
+    dispatch_pending_events(&outbox, &publisher, now, DISPATCH_BATCH_LIMIT)
+        .await
+        .map_err(operation_error)?;
+
+    let replay_database = env.d1(control_plane_contract::D1_CATALOG_BINDING)?;
+    let source_database = env.d1(control_plane_contract::D1_CATALOG_BINDING)?;
+    let replay_queue = env.queue(INTEGRATION_EVENTS_QUEUE_BINDING)?;
+    let replays = D1NotificationOperationsRepository::new(replay_database);
+    let source = D1IntegrationEventRepository::new(source_database);
+    let replay_publisher = QueueIntegrationEventPublisher::new(replay_queue);
+    dispatch_pending_replays(
+        &replays,
+        &source,
+        &replay_publisher,
+        now,
+        REPLAY_DISPATCH_BATCH_LIMIT,
     )
     .await
-    .map_err(operation_error)?;
+    .map_err(notification_operation_error)?;
+
+    let retention_database = env.d1(control_plane_contract::D1_CATALOG_BINDING)?;
+    let retention = D1NotificationOperationsRepository::new(retention_database);
+    let retention_policy = NotificationRetentionPolicy::new(RETENTION_TTL_MS, RETENTION_BATCH_LIMIT)
+        .map_err(notification_operation_error)?;
+    compact_notification_state(&retention, now, retention_policy)
+        .await
+        .map_err(notification_operation_error)?;
     Ok(())
 }
 
@@ -117,14 +145,22 @@ fn operation_error(error: IntegrationEventOperationError) -> Error {
     Error::RustError(error.to_string())
 }
 
+fn notification_operation_error(error: NotificationOperationError) -> Error {
+    Error::RustError(error.to_string())
+}
+
 fn identifier_error(error: profile_platform_primitives::ParseOpaqueIdError) -> Error {
     Error::RustError(error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_QUEUE_DELAY_SECONDS, TRANSPORT_FAILURE_RETRY_SECONDS, queue_delay_seconds};
+    use super::{
+        MAX_QUEUE_DELAY_SECONDS, RETENTION_BATCH_LIMIT, RETENTION_TTL_MS,
+        TRANSPORT_FAILURE_RETRY_SECONDS, queue_delay_seconds,
+    };
     use profile_platform_primitives::UnixMillis;
+    use use_cases_notifications::retention::NotificationRetentionPolicy;
 
     #[test]
     fn queue_retry_delay_never_becomes_zero() -> Result<(), Box<dyn std::error::Error>> {
@@ -156,5 +192,10 @@ mod tests {
     fn transport_failure_retry_is_delayed_and_platform_bounded() {
         assert!(TRANSPORT_FAILURE_RETRY_SECONDS > 0);
         assert!(u64::from(TRANSPORT_FAILURE_RETRY_SECONDS) <= MAX_QUEUE_DELAY_SECONDS);
+    }
+
+    #[test]
+    fn scheduled_retention_configuration_is_within_application_bounds() {
+        assert!(NotificationRetentionPolicy::new(RETENTION_TTL_MS, RETENTION_BATCH_LIMIT).is_ok());
     }
 }
