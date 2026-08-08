@@ -115,7 +115,11 @@ fn normalize_v1(kind: ContactKind, raw: &str) -> Result<String, ContactValueErro
 }
 
 fn normalize_email_v1(value: &str) -> Result<String, ContactValueError> {
-    if value.len() > 320 || value.bytes().any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace()) {
+    if value.len() > 320
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
         return Err(ContactValueError::InvalidValue);
     }
     let mut parts = value.split('@');
@@ -148,7 +152,10 @@ fn normalize_phone_v1(value: &str) -> Result<String, ContactValueError> {
 }
 
 fn normalize_url_v1(value: &str) -> Result<String, ContactValueError> {
-    if value.bytes().any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace()) {
+    if value
+        .bytes()
+        .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
         return Err(ContactValueError::InvalidValue);
     }
     let bytes = value.as_bytes();
@@ -202,9 +209,8 @@ pub fn exact_lookup_hmac_input(
     let kind = kind.stable_code().as_bytes();
     let version = normalization_version.value().to_be_bytes();
     let value = normalized.expose().as_bytes();
-    let mut input = Vec::with_capacity(
-        LOOKUP_DOMAIN_TAG.len() + tenant.len() + kind.len() + value.len() + 12,
-    );
+    let mut input =
+        Vec::with_capacity(LOOKUP_DOMAIN_TAG.len() + tenant.len() + kind.len() + value.len() + 12);
     input.extend_from_slice(LOOKUP_DOMAIN_TAG);
     input.extend_from_slice(&version);
     input.push(0);
@@ -453,7 +459,8 @@ mod tests {
     }
 
     #[test]
-    fn exact_lookup_input_is_domain_and_tenant_separated() -> Result<(), Box<dyn std::error::Error>> {
+    fn exact_lookup_input_is_domain_and_tenant_separated() -> Result<(), Box<dyn std::error::Error>>
+    {
         let normalized = normalize_contact_value(
             ContactKind::Email,
             ContactNormalizationVersion::V1,
@@ -474,7 +481,11 @@ mod tests {
             &normalized,
         );
         assert_ne!(input_a.expose_bytes(), input_b.expose_bytes());
-        assert!(input_a.expose_bytes().starts_with(b"client-contact-exact-lookup\0v1\0"));
+        assert!(
+            input_a
+                .expose_bytes()
+                .starts_with(b"client-contact-exact-lookup\0v1\0")
+        );
         Ok(())
     }
 

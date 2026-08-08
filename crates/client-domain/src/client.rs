@@ -213,7 +213,8 @@ mod tests {
     }
 
     #[test]
-    fn archive_overflow_does_not_partially_mutate_client() -> Result<(), Box<dyn std::error::Error>> {
+    fn archive_overflow_does_not_partially_mutate_client() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut client = ClientRecord::restore(
             TenantId::parse("tenant_01JCLIENT")?,
             ClientId::parse("client_01JCLIENT")?,

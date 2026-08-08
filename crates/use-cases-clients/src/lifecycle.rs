@@ -154,14 +154,11 @@ pub async fn execute_update_client<P: ClientLifecycleApplicationPort>(
         return Ok(outcome);
     }
 
-    let mut client = load_exact_version(
-        actor,
-        port,
-        &command.client_id,
-        command.expected_version,
-    )
-    .await?;
-    client.rename(command.display_name).map_err(map_client_error)?;
+    let mut client =
+        load_exact_version(actor, port, &command.client_id, command.expected_version).await?;
+    client
+        .rename(command.display_name)
+        .map_err(map_client_error)?;
     persist_lifecycle(
         actor,
         port,
@@ -197,13 +194,8 @@ pub async fn execute_archive_client<P: ClientLifecycleApplicationPort>(
         return Ok(outcome);
     }
 
-    let mut client = load_exact_version(
-        actor,
-        port,
-        &command.client_id,
-        command.expected_version,
-    )
-    .await?;
+    let mut client =
+        load_exact_version(actor, port, &command.client_id, command.expected_version).await?;
     client.archive().map_err(map_client_error)?;
     persist_lifecycle(
         actor,
@@ -343,8 +335,8 @@ mod tests {
     };
     use application_ports::CommandExecutionEvidence;
     use application_ports::clients::{
-        ClientLifecycleApplicationPort, ClientLifecycleWrite, ClientPortError, ClientReplayDecision,
-        ClientReplayReceipt,
+        ClientLifecycleApplicationPort, ClientLifecycleWrite, ClientPortError,
+        ClientReplayDecision, ClientReplayReceipt,
     };
     use client_domain::{ClientKind, ClientRecord, ClientStatus};
     use identity_access_domain::MembershipRole;
@@ -484,8 +476,7 @@ mod tests {
         let port = FakePort::new(
             Some(client(AggregateVersion::new(2)?)?),
             vec![ClientReplayDecision::Replay(ClientReplayReceipt::new(
-                "updated",
-                None,
+                "updated", None,
             ))],
         );
         let command = UpdateClientCommand::new(

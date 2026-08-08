@@ -508,7 +508,9 @@ impl fmt::Display for ContactProtectionPortError {
             ContactProtectionPortErrorClass::InvalidProtectedValue => {
                 "contact protector returned invalid protected value"
             }
-            ContactProtectionPortErrorClass::InternalFailure => "contact protection internal failure",
+            ContactProtectionPortErrorClass::InternalFailure => {
+                "contact protection internal failure"
+            }
         })
     }
 }

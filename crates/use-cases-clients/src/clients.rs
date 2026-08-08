@@ -1,8 +1,8 @@
 use crate::error::ApplicationError;
 use application_ports::CommandExecutionEvidence;
 use application_ports::clients::{
-    ClientApplicationPort, ClientCreateWrite, ClientPortError, ClientPortErrorClass, ClientReadModel,
-    ClientReplayDecision, ClientReplayReceipt,
+    ClientApplicationPort, ClientCreateWrite, ClientPortError, ClientPortErrorClass,
+    ClientReadModel, ClientReplayDecision, ClientReplayReceipt,
 };
 use client_domain::{ClientError, ClientKind, ClientRecord, ClientStatus};
 use contracts::ProblemCode;
@@ -229,7 +229,8 @@ pub async fn execute_create_client<P: ClientApplicationPort>(
         ClientReplayDecision::Conflict => return Err(ClientOperationError::Conflict),
     }
 
-    let write = ClientCreateWrite::new(client, display_name, evidence, CLIENT_CREATED_EVENT_PAYLOAD);
+    let write =
+        ClientCreateWrite::new(client, display_name, evidence, CLIENT_CREATED_EVENT_PAYLOAD);
     match port.create_client(actor, &write).await {
         Ok(()) => Ok(ClientMutationOutcome {
             result_code: "created".to_owned(),

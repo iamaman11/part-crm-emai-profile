@@ -238,7 +238,8 @@ mod tests {
     }
 
     #[test]
-    fn contact_point_ids_are_opaque_and_reject_contact_values() -> Result<(), Box<dyn std::error::Error>> {
+    fn contact_point_ids_are_opaque_and_reject_contact_values()
+    -> Result<(), Box<dyn std::error::Error>> {
         let id = ContactPointId::parse("contact_01JABCDEF")?;
         assert_eq!(id.as_str(), "contact_01JABCDEF");
         assert!(ContactPointId::parse("person@example.com").is_err());

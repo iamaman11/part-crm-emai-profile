@@ -190,7 +190,9 @@ fn map_protection_error(error: ContactProtectionPortError) -> ContactApplication
         ContactProtectionPortErrorClass::InvalidProtectedValue => {
             ContactApplicationError::IntegrityFailure
         }
-        ContactProtectionPortErrorClass::InternalFailure => ContactApplicationError::InternalFailure,
+        ContactProtectionPortErrorClass::InternalFailure => {
+            ContactApplicationError::InternalFailure
+        }
     }
 }
 
@@ -206,7 +208,8 @@ mod tests {
         ContactLookupKeyDomain, ContactProtectionPort, ContactProtectionPortError,
     };
     use client_domain::{
-        ContactKind, EncryptedContactValue, EncryptionKeyVersion, ExactLookupToken, LookupKeyVersion,
+        ContactKind, EncryptedContactValue, EncryptionKeyVersion, ExactLookupToken,
+        LookupKeyVersion,
     };
     use identity_access_domain::MembershipRole;
     use profile_platform_primitives::{
@@ -280,7 +283,10 @@ mod tests {
             request: ContactExactLookupRequest<'_>,
         ) -> Result<ExactLookupToken, ContactProtectionPortError> {
             self.lookup_calls.set(self.lookup_calls.get() + 1);
-            assert_eq!(request.key_domain(), ContactLookupKeyDomain::TenantExactLookup);
+            assert_eq!(
+                request.key_domain(),
+                ContactLookupKeyDomain::TenantExactLookup
+            );
             self.lookup_input_seen
                 .replace(Some(request.hmac_input().expose_bytes().to_vec()));
             let key_version = LookupKeyVersion::new(1).map_err(|_| {
@@ -353,10 +359,7 @@ mod tests {
             Some("person@example.com")
         );
         assert_eq!(write.contact().kind(), ContactKind::Email);
-        assert_eq!(
-            write.contact().display_value().ciphertext(),
-            &[1, 2, 3, 4]
-        );
+        assert_eq!(write.contact().display_value().ciphertext(), &[1, 2, 3, 4]);
         assert_eq!(write.contact().exact_lookup().bytes(), &[7_u8; 32]);
         assert!(!format!("{write:?}").contains("Person@Example.COM"));
         Ok(())
