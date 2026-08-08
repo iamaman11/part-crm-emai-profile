@@ -22,11 +22,19 @@ REQUIRED_FILES = (
     "crates/notification-domain/src/lib.rs",
     "crates/notification-domain/src/delivery.rs",
     "crates/notification-domain/src/cursor.rs",
+    "crates/application-ports/src/notifications.rs",
     "crates/use-cases-notifications/src/lib.rs",
     "crates/use-cases-notifications/src/integration_events.rs",
     "crates/use-cases-notifications/src/foundation_event_consumer.rs",
     "crates/use-cases/src/integration_events.rs",
     "crates/use-cases/src/foundation_event_consumer.rs",
+)
+
+APPLICATION_PORT_SYMBOLS = (
+    "pub trait NotificationDeliveryRepositoryPort",
+    "pub trait NotificationCursorRepositoryPort",
+    "pub trait NotificationCatchUpRepositoryPort",
+    "pub trait NotificationReplayRepositoryPort",
 )
 
 COMPATIBILITY_FACADES = {
@@ -102,6 +110,30 @@ def validate(root: Path) -> list[str]:
                         f"{path.relative_to(root)} contains outer/runtime marker {marker!r}"
                     )
 
+    notification_ports = root / "crates/application-ports/src/notifications.rs"
+    if notification_ports.is_file():
+        ports = read(notification_ports)
+        for symbol in APPLICATION_PORT_SYMBOLS:
+            if symbol not in ports:
+                errors.append(f"application-ports/notifications.rs must own `{symbol}`")
+        for marker in PROHIBITED_SOURCE_MARKERS:
+            if marker in ports:
+                errors.append(
+                    "crates/application-ports/src/notifications.rs contains "
+                    f"outer/runtime marker {marker!r}"
+                )
+
+    ports_lib = root / "crates/application-ports/src/lib.rs"
+    if ports_lib.is_file() and "pub mod notifications;" not in read(ports_lib):
+        errors.append("application-ports facade missing `pub mod notifications;`")
+
+    ports_manifest = root / "crates/application-ports/Cargo.toml"
+    if ports_manifest.is_file():
+        with ports_manifest.open("rb") as handle:
+            ports_document = tomllib.load(handle)
+        if "notification-domain" not in dependency_names(ports_document):
+            errors.append("application-ports must depend inward on notification-domain")
+
     for relative, expected in COMPATIBILITY_FACADES.items():
         path = root / relative
         if path.is_file() and read(path).strip() != expected:
@@ -142,6 +174,19 @@ def write_valid_fixture(root: Path) -> None:
     (root / "crates/notification-domain/Cargo.toml").write_text(
         "[package]\nname='notification-domain'\nversion='0.1.0'\n"
         "[dependencies]\nprofile-platform-primitives = {}\n",
+        encoding="utf-8",
+    )
+    (root / "crates/application-ports/Cargo.toml").write_text(
+        "[package]\nname='application-ports'\nversion='0.1.0'\n"
+        "[dependencies]\nnotification-domain = {}\n",
+        encoding="utf-8",
+    )
+    (root / "crates/application-ports/src/lib.rs").write_text(
+        "pub mod notifications;\n",
+        encoding="utf-8",
+    )
+    (root / "crates/application-ports/src/notifications.rs").write_text(
+        "\n".join(APPLICATION_PORT_SYMBOLS) + "\n",
         encoding="utf-8",
     )
     (root / "crates/use-cases-notifications/Cargo.toml").write_text(
@@ -185,6 +230,14 @@ def self_test() -> int:
         errors = validate(root)
         if not any("thin temporary compatibility" in error for error in errors):
             print("duplicate monolithic owner fixture unexpectedly passed")
+            return 1
+
+        write_valid_fixture(root)
+        ports = root / "crates/application-ports/src/notifications.rs"
+        ports.write_text("use worker::Env;\n", encoding="utf-8")
+        errors = validate(root)
+        if not any("application-ports/src/notifications.rs" in error for error in errors):
+            print("provider leakage into notification ports fixture unexpectedly passed")
             return 1
 
     print("Phase 1B notification negative fixtures rejected as expected.")
