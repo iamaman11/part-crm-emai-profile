@@ -27,7 +27,9 @@ REQUIRED_FILES = (
     "crates/use-cases-notifications/src/integration_events.rs",
     "crates/use-cases-notifications/src/foundation_event_consumer.rs",
     "crates/use-cases-notifications/src/retry.rs",
+    "crates/use-cases-notifications/src/delivery.rs",
     "crates/cloudflare-adapters/src/d1_notifications.rs",
+    "apps/control-plane-worker/src/integration_events.rs",
     "crates/use-cases/src/integration_events.rs",
     "crates/use-cases/src/foundation_event_consumer.rs",
 )
@@ -42,6 +44,13 @@ APPLICATION_PORT_SYMBOLS = (
 ADAPTER_SYMBOLS = (
     "impl NotificationDeliveryRepositoryPort for D1NotificationRepository",
     "impl NotificationCursorRepositoryPort for D1NotificationRepository",
+)
+
+WORKER_COMPOSITION_SYMBOLS = (
+    "D1NotificationRepository",
+    "use_cases_notifications::delivery",
+    "process_foundation_delivery",
+    "retry_with_options",
 )
 
 COMPATIBILITY_FACADES = {
@@ -141,6 +150,21 @@ def validate(root: Path) -> list[str]:
             if symbol not in adapter:
                 errors.append(f"D1 notification adapter missing `{symbol}`")
 
+    worker_composition = root / "apps/control-plane-worker/src/integration_events.rs"
+    if worker_composition.is_file():
+        worker_source = read(worker_composition)
+        for symbol in WORKER_COMPOSITION_SYMBOLS:
+            if symbol not in worker_source:
+                errors.append(f"Worker notification composition missing `{symbol}`")
+        for marker in (
+            "use_cases::foundation_event_consumer",
+            "message.attempts",
+            ".attempts()",
+            ".retry();",
+        ):
+            if marker in worker_source:
+                errors.append(f"Worker notification composition contains forbidden `{marker}`")
+
     ports_lib = root / "crates/application-ports/src/lib.rs"
     if ports_lib.is_file() and "pub mod notifications;" not in read(ports_lib):
         errors.append("application-ports facade missing `pub mod notifications;`")
@@ -163,6 +187,16 @@ def validate(root: Path) -> list[str]:
                     f"cloudflare-adapters must depend inward on {dependency} for Phase 1B"
                 )
 
+    worker_manifest = root / "apps/control-plane-worker/Cargo.toml"
+    if worker_manifest.is_file():
+        with worker_manifest.open("rb") as handle:
+            worker_document = tomllib.load(handle)
+        worker_dependencies = dependency_names(worker_document)
+        if "use-cases-notifications" not in worker_dependencies:
+            errors.append("Worker must compose use-cases-notifications directly")
+        if "notification-domain" in worker_dependencies:
+            errors.append("Worker must not depend directly on notification-domain")
+
     for relative, expected in COMPATIBILITY_FACADES.items():
         path = root / relative
         if path.is_file() and read(path).strip() != expected:
@@ -174,14 +208,13 @@ def validate(root: Path) -> list[str]:
     if notification_lib.is_file():
         lib = read(notification_lib)
         for declaration in (
+            "pub mod delivery;",
             "pub mod foundation_event_consumer;",
             "pub mod integration_events;",
             "pub mod retry;",
         ):
             if declaration not in lib:
-                errors.append(
-                    f"use-cases-notifications facade missing `{declaration}`"
-                )
+                errors.append(f"use-cases-notifications facade missing `{declaration}`")
 
     monolith_manifest = root / "crates/use-cases/Cargo.toml"
     if monolith_manifest.is_file():
@@ -234,13 +267,23 @@ def write_valid_fixture(root: Path) -> None:
         "\n".join(ADAPTER_SYMBOLS) + "\n",
         encoding="utf-8",
     )
+    (root / "apps/control-plane-worker/Cargo.toml").write_text(
+        "[package]\nname='worker-fixture'\nversion='0.1.0'\n"
+        "[dependencies]\nuse-cases-notifications = {}\nworker = {}\n",
+        encoding="utf-8",
+    )
+    (root / "apps/control-plane-worker/src/integration_events.rs").write_text(
+        "\n".join(WORKER_COMPOSITION_SYMBOLS) + "\n",
+        encoding="utf-8",
+    )
     (root / "crates/use-cases/Cargo.toml").write_text(
         "[package]\nname='use-cases'\nversion='0.1.0'\n"
         "[dependencies]\nuse-cases-notifications = {}\n",
         encoding="utf-8",
     )
     (root / "crates/use-cases-notifications/src/lib.rs").write_text(
-        "pub mod foundation_event_consumer;\npub mod integration_events;\npub mod retry;\n",
+        "pub mod delivery;\npub mod foundation_event_consumer;\n"
+        "pub mod integration_events;\npub mod retry;\n",
         encoding="utf-8",
     )
     for relative, content in COMPATIBILITY_FACADES.items():
@@ -256,7 +299,7 @@ def self_test() -> int:
             print(f"invalid self-test baseline: {baseline}")
             return 1
 
-        application = root / "crates/use-cases-notifications/src/integration_events.rs"
+        application = root / "crates/use-cases-notifications/src/delivery.rs"
         application.write_text("use worker::Env;\n", encoding="utf-8")
         errors = validate(root)
         if not any("outer/runtime marker" in error for error in errors):
@@ -293,6 +336,26 @@ def self_test() -> int:
         errors = validate(root)
         if not any("D1 notification adapter missing" in error for error in errors):
             print("missing D1 notification port implementation fixture unexpectedly passed")
+            return 1
+
+        write_valid_fixture(root)
+        worker_manifest = root / "apps/control-plane-worker/Cargo.toml"
+        worker_manifest.write_text(
+            "[package]\nname='worker-fixture'\nversion='0.1.0'\n"
+            "[dependencies]\nuse-cases-notifications = {}\nnotification-domain = {}\n",
+            encoding="utf-8",
+        )
+        errors = validate(root)
+        if not any("must not depend directly on notification-domain" in error for error in errors):
+            print("Worker direct domain dependency fixture unexpectedly passed")
+            return 1
+
+        write_valid_fixture(root)
+        worker = root / "apps/control-plane-worker/src/integration_events.rs"
+        worker.write_text("message.retry();\nmessage.attempts();\n", encoding="utf-8")
+        errors = validate(root)
+        if not any("Worker notification composition" in error for error in errors):
+            print("implicit/platform-attempt Worker fixture unexpectedly passed")
             return 1
 
     print("Phase 1B notification negative fixtures rejected as expected.")
