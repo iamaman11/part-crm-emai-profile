@@ -14,11 +14,13 @@ client-domain.workspace = true
 cloudflare-adapters.workspace = true
 control-plane-contract = { path = "../../crates/control-plane-contract" }
 identity-access-domain.workspace = true
+notification-domain.workspace = true
 profile-platform-primitives.workspace = true
 serde = "=1.0.229"
 serde_json = "=1.0.151"
 session-domain.workspace = true
 use-cases.workspace = true
+use-cases-notifications.workspace = true
 wasm-bindgen.workspace = true
 worker.workspace = true
 
