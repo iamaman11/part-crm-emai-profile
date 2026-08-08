@@ -221,8 +221,8 @@ mod tests {
     }
 
     #[test]
-    fn max_attempt_reaches_dead_letter_deterministically()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn max_attempt_reaches_dead_letter_deterministically() -> Result<(), Box<dyn std::error::Error>>
+    {
         let limit = AttemptLimit::new(2)?;
         let first = DeliveryState::new().record_failure(
             UnixMillis::new(10),
