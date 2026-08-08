@@ -415,4 +415,5 @@ fn map_port_error(error: IdentityGovernancePortError) -> IdentityGovernanceOpera
 }
 
 #[cfg(test)]
+#[path = "identity_governance_tests.rs"]
 mod identity_governance_tests;
