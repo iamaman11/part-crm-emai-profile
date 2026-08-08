@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require Step 4 lifecycle and ACL writes to use governed command adapters."""
+"""Require Step 4 lifecycle and ACL writes to use governed application/adapters."""
 
 from __future__ import annotations
 
@@ -10,6 +10,10 @@ from test_step4_error_taxonomy import main as error_taxonomy_main
 
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_identity_acl.rs"
+IDENTITY_GOVERNANCE_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_identity_governance.rs"
+IDENTITY_CEREMONY_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_identity_ceremonies.rs"
+IDENTITY_GOVERNANCE_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "identity_governance.rs"
+IDENTITY_CEREMONY_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "identity_ceremonies.rs"
 COMMAND_IDENTITY = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_command_identity.rs"
 GOVERNED_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_governed_commands.rs"
 GENERATION_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_profile_generations.rs"
@@ -21,7 +25,6 @@ PROFILE_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_profiles
 PROFILE_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "profiles.rs"
 PROFILE_ASSIGNMENT_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "profile_assignments.rs"
 PROFILE_GRANT_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "profile_grants.rs"
-WORKER_API = ROOT / "apps" / "control-plane-worker" / "src" / "api.rs"
 
 LEGACY_WRITE_TOKENS = (
     "OWNER_TRANSFER_DEMOTE",
@@ -37,36 +40,51 @@ LEGACY_WRITE_TOKENS = (
     "pub async fn grant_client(",
 )
 
-LEGACY_WORKER_MUTATION_TOKENS = (
-    "prefixed_id(",
-    ".idempotency_replay(",
-    'const PROFILE_ASSIGN_COMMAND: &str = "profile.assign_client";',
-    "AssignProfileMutation",
-    "async fn assign_profile(",
-    'const PROFILE_GRANT_COMMAND: &str = "profile.grant";',
-    'const PROFILE_GRANT_REVOKE_COMMAND: &str = "profile.grant_revoke";',
-    "ProfileGrantMutation",
-    "ProfileGrantValue",
-    "async fn update_profile_grant(",
-    "struct ProfileGrantRequest",
-    'const CLIENT_GRANT_COMMAND: &str = "client.grant";',
-    'const CLIENT_GRANT_REVOKE_COMMAND: &str = "client.grant_revoke";',
-    "ClientGrantMutation",
-    "ClientGrantValue",
-    "async fn update_client_grant(",
-    "struct ClientGrantRequest",
-)
-
-REQUIRED_WORKER_MUTATION_TOKENS = (
-    "D1IdempotencyRepository",
-    "IdempotencyDecision",
-    "audit_event_id(scope.tenant_id(), actor_id, &idempotency_key)",
-    "outbox_event_id(scope.tenant_id(), actor_id, &idempotency_key)",
-    "mutation_failure_or_replay",
-    'const OWNER_BOOTSTRAP_COMMAND: &str = "tenant.owner_bootstrap";',
+REQUIRED_IDENTITY_GOVERNANCE_APPLICATION_TOKENS = (
     'const OWNER_TRANSFER_COMMAND: &str = "membership.owner_transfer";',
     'const INVITATION_CREATE_COMMAND: &str = "invitation.create";',
+    '"membership.activate"',
+    '"membership.suspend"',
+    '"membership.revoke"',
+    "authorize_identity_governance",
+    "decide_identity_replay",
+    "port.transfer_owner(actor, &write)",
+    "port.create_invitation(actor, &write)",
+    "port.update_membership_status(actor, &write)",
+    "IdentityGovernancePortErrorClass::Conflict",
+)
+
+REQUIRED_IDENTITY_CEREMONY_APPLICATION_TOKENS = (
+    'const OWNER_BOOTSTRAP_COMMAND: &str = "tenant.owner_bootstrap";',
     'const INVITATION_ACCEPT_COMMAND: &str = "invitation.accept";',
+    "find_active_identity_binding",
+    "tenant_identity_boundary",
+    "decide_ceremony_replay",
+    "port.bootstrap_owner(&context, &write)",
+    "port.accept_invitation(&context, &write)",
+    "IdentityGovernancePortErrorClass::Conflict",
+)
+
+REQUIRED_IDENTITY_GOVERNANCE_ADAPTER_TOKENS = (
+    "D1IdempotencyRepository",
+    "OwnerTransferMutation",
+    "CreateInvitationMutation",
+    "MembershipStatusMutation",
+    ".transfer_owner(",
+    ".create_invitation(",
+    ".update_membership_status(",
+    "mutation_envelope(write.evidence(), write.event_payload_json())",
+)
+
+REQUIRED_IDENTITY_CEREMONY_ADAPTER_TOKENS = (
+    "D1IdentityAclRepository",
+    "D1IdempotencyRepository",
+    "D1InvitationAcceptanceRepository",
+    "BootstrapOwnerMutation",
+    "AcceptInvitationMutation",
+    "VerifiedBootstrapContext::from_verified_identity",
+    ".bootstrap_owner(",
+    ".accept(",
 )
 
 REQUIRED_CLIENT_APPLICATION_TOKENS = (
@@ -150,8 +168,18 @@ REQUIRED_ACCEPTANCE_TOKENS = (
 )
 
 
+def require_tokens(text: str, tokens: tuple[str, ...], label: str, errors: list[str]) -> None:
+    for token in tokens:
+        if token not in text:
+            errors.append(f"{label} is missing required token: {token}")
+
+
 def main() -> int:
     identity = IDENTITY_ADAPTER.read_text(encoding="utf-8")
+    identity_governance_adapter = IDENTITY_GOVERNANCE_ADAPTER.read_text(encoding="utf-8")
+    identity_ceremony_adapter = IDENTITY_CEREMONY_ADAPTER.read_text(encoding="utf-8")
+    identity_governance_use_cases = IDENTITY_GOVERNANCE_USE_CASES.read_text(encoding="utf-8")
+    identity_ceremony_use_cases = IDENTITY_CEREMONY_USE_CASES.read_text(encoding="utf-8")
     command_identity = COMMAND_IDENTITY.read_text(encoding="utf-8")
     governed = GOVERNED_ADAPTER.read_text(encoding="utf-8")
     generation = GENERATION_ADAPTER.read_text(encoding="utf-8")
@@ -163,45 +191,70 @@ def main() -> int:
     profile_use_cases = PROFILE_USE_CASES.read_text(encoding="utf-8")
     profile_assignment_use_cases = PROFILE_ASSIGNMENT_USE_CASES.read_text(encoding="utf-8")
     profile_grant_use_cases = PROFILE_GRANT_USE_CASES.read_text(encoding="utf-8")
-    worker_api = WORKER_API.read_text(encoding="utf-8")
 
     errors: list[str] = []
     for token in LEGACY_WRITE_TOKENS:
         if token in identity:
             errors.append(f"legacy direct mutation token remains in d1_identity_acl.rs: {token}")
-    for token in LEGACY_WORKER_MUTATION_TOKENS:
-        if token in worker_api:
-            errors.append(f"legacy governed Worker mutation token remains in api.rs: {token}")
-    for token in REQUIRED_WORKER_MUTATION_TOKENS:
-        if token not in worker_api:
-            errors.append(f"governed Worker mutation envelope is missing required token: {token}")
-    for token in REQUIRED_CLIENT_APPLICATION_TOKENS:
-        if token not in client_use_cases:
-            errors.append(f"client application orchestration is missing governed token: {token}")
-    for token in REQUIRED_CLIENT_GRANT_APPLICATION_TOKENS:
-        if token not in client_grant_use_cases:
-            errors.append(f"client grant orchestration is missing governed token: {token}")
-    for token in REQUIRED_CLIENT_ADAPTER_TOKENS:
-        if token not in client_adapter:
-            errors.append(f"client D1 adapter is missing atomic mutation token: {token}")
-    for token in REQUIRED_PROFILE_APPLICATION_TOKENS:
-        if token not in profile_use_cases:
-            errors.append(f"profile application orchestration is missing governed token: {token}")
-    for token in REQUIRED_PROFILE_ASSIGNMENT_APPLICATION_TOKENS:
-        if token not in profile_assignment_use_cases:
-            errors.append(f"profile assignment orchestration is missing governed token: {token}")
-    for token in REQUIRED_PROFILE_GRANT_APPLICATION_TOKENS:
-        if token not in profile_grant_use_cases:
-            errors.append(f"profile grant orchestration is missing governed token: {token}")
-    for token in REQUIRED_PROFILE_ADAPTER_TOKENS:
-        if token not in profile_adapter:
-            errors.append(f"profile D1 adapter is missing atomic mutation token: {token}")
-    for token in REQUIRED_GOVERNED_TOKENS:
-        if token not in governed:
-            errors.append(f"governed command adapter is missing required token: {token}")
-    for token in REQUIRED_ACCEPTANCE_TOKENS:
-        if token not in acceptance:
-            errors.append(f"invitation acceptance adapter is missing atomic envelope token: {token}")
+
+    require_tokens(
+        identity_governance_use_cases,
+        REQUIRED_IDENTITY_GOVERNANCE_APPLICATION_TOKENS,
+        "identity governance application orchestration",
+        errors,
+    )
+    require_tokens(
+        identity_ceremony_use_cases,
+        REQUIRED_IDENTITY_CEREMONY_APPLICATION_TOKENS,
+        "identity ceremony application orchestration",
+        errors,
+    )
+    require_tokens(
+        identity_governance_adapter,
+        REQUIRED_IDENTITY_GOVERNANCE_ADAPTER_TOKENS,
+        "identity governance D1 adapter",
+        errors,
+    )
+    require_tokens(
+        identity_ceremony_adapter,
+        REQUIRED_IDENTITY_CEREMONY_ADAPTER_TOKENS,
+        "identity ceremony D1 adapter",
+        errors,
+    )
+    require_tokens(
+        client_use_cases,
+        REQUIRED_CLIENT_APPLICATION_TOKENS,
+        "client application orchestration",
+        errors,
+    )
+    require_tokens(
+        client_grant_use_cases,
+        REQUIRED_CLIENT_GRANT_APPLICATION_TOKENS,
+        "client grant orchestration",
+        errors,
+    )
+    require_tokens(client_adapter, REQUIRED_CLIENT_ADAPTER_TOKENS, "client D1 adapter", errors)
+    require_tokens(
+        profile_use_cases,
+        REQUIRED_PROFILE_APPLICATION_TOKENS,
+        "profile application orchestration",
+        errors,
+    )
+    require_tokens(
+        profile_assignment_use_cases,
+        REQUIRED_PROFILE_ASSIGNMENT_APPLICATION_TOKENS,
+        "profile assignment orchestration",
+        errors,
+    )
+    require_tokens(
+        profile_grant_use_cases,
+        REQUIRED_PROFILE_GRANT_APPLICATION_TOKENS,
+        "profile grant orchestration",
+        errors,
+    )
+    require_tokens(profile_adapter, REQUIRED_PROFILE_ADAPTER_TOKENS, "profile D1 adapter", errors)
+    require_tokens(governed, REQUIRED_GOVERNED_TOKENS, "governed command adapter", errors)
+    require_tokens(acceptance, REQUIRED_ACCEPTANCE_TOKENS, "invitation acceptance adapter", errors)
 
     if "part-crm:d1-command-journal:v1" not in command_identity:
         errors.append("D1 command journal IDs are missing their domain-separated identity tag")
@@ -223,8 +276,8 @@ def main() -> int:
         return 1
 
     print(
-        "Step 4 writes use governed atomic envelopes, exact replay decisions, "
-        "actor-bound command/evidence identifiers, and stable error taxonomy."
+        "Step 4 writes use application-owned authorization/replay sequencing, governed atomic "
+        "adapters, actor-bound command/evidence identifiers, and stable error taxonomy."
     )
     return 0
 
