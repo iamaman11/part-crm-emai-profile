@@ -4,14 +4,14 @@ use crate::d1_identity_acl::{
     CreateInvitationMutation, MembershipStatusMutation, MembershipStatusValue, MutationEnvelope,
     OwnerTransferMutation,
 };
+use crate::d1_identity_failure::{map_identity_dependency_error, map_identity_write_error};
 use application_ports::CommandExecutionEvidence;
 use application_ports::identity_governance::{
-    ActiveOwnerGovernanceApplicationPort, IdentityGovernancePortError,
-    IdentityGovernancePortErrorClass, IdentityReplayDecision, IdentityReplayReceipt,
-    InvitationCreateWrite, MembershipStatusTarget, MembershipStatusWrite, OwnerTransferWrite,
+    ActiveOwnerGovernanceApplicationPort, IdentityGovernancePortError, IdentityReplayDecision,
+    IdentityReplayReceipt, InvitationCreateWrite, MembershipStatusTarget, MembershipStatusWrite,
+    OwnerTransferWrite,
 };
 use profile_platform_primitives::ActorContext;
-use worker::Error;
 use worker::d1::D1Database;
 
 pub struct D1IdentityGovernanceApplicationRepository {
@@ -47,7 +47,7 @@ impl ActiveOwnerGovernanceApplicationPort for D1IdentityGovernanceApplicationRep
             )
             .await
             .map(map_replay_decision)
-            .map_err(map_dependency_error)
+            .map_err(map_identity_dependency_error)
     }
 
     async fn transfer_owner(
@@ -67,7 +67,7 @@ impl ActiveOwnerGovernanceApplicationPort for D1IdentityGovernanceApplicationRep
             )
             .await
             .map(|_| ())
-            .map_err(map_write_error)
+            .map_err(map_identity_write_error)
     }
 
     async fn create_invitation(
@@ -88,7 +88,7 @@ impl ActiveOwnerGovernanceApplicationPort for D1IdentityGovernanceApplicationRep
             )
             .await
             .map(|_| ())
-            .map_err(map_write_error)
+            .map_err(map_identity_write_error)
     }
 
     async fn update_membership_status(
@@ -108,11 +108,11 @@ impl ActiveOwnerGovernanceApplicationPort for D1IdentityGovernanceApplicationRep
             )
             .await
             .map(|_| ())
-            .map_err(map_write_error)
+            .map_err(map_identity_write_error)
     }
 }
 
-fn mutation_envelope<'a>(
+pub(crate) fn mutation_envelope<'a>(
     evidence: &'a CommandExecutionEvidence,
     payload_json: &'a str,
 ) -> MutationEnvelope<'a> {
@@ -127,7 +127,7 @@ fn mutation_envelope<'a>(
     }
 }
 
-fn map_replay_decision(decision: IdempotencyDecision) -> IdentityReplayDecision {
+pub(crate) fn map_replay_decision(decision: IdempotencyDecision) -> IdentityReplayDecision {
     match decision {
         IdempotencyDecision::Miss => IdentityReplayDecision::Miss,
         IdempotencyDecision::Replay(receipt) => {
@@ -145,100 +145,5 @@ const fn membership_status(status: MembershipStatusTarget) -> MembershipStatusVa
         MembershipStatusTarget::Active => MembershipStatusValue::Active,
         MembershipStatusTarget::Suspended => MembershipStatusValue::Suspended,
         MembershipStatusTarget::Revoked => MembershipStatusValue::Revoked,
-    }
-}
-
-fn map_dependency_error(_error: Error) -> IdentityGovernancePortError {
-    IdentityGovernancePortError::new(IdentityGovernancePortErrorClass::DependencyUnavailable)
-}
-
-fn map_write_error(error: Error) -> IdentityGovernancePortError {
-    IdentityGovernancePortError::new(classify_write_failure(&error.to_string()))
-}
-
-fn classify_write_failure(message: &str) -> IdentityGovernancePortErrorClass {
-    if message.contains("owner_required")
-        || message.contains("target_missing")
-        || message.contains("successor_mismatch")
-    {
-        return IdentityGovernancePortErrorClass::NotFound;
-    }
-    if message.contains("version_mismatch")
-        || message.contains("current_owner_mismatch")
-        || message.contains("tenant_version_mismatch")
-    {
-        return IdentityGovernancePortErrorClass::VersionConflict;
-    }
-    if message.contains("last_active_owner")
-        || message.contains("invalid_transition")
-        || message.contains("time_regression")
-    {
-        return IdentityGovernancePortErrorClass::InvalidState;
-    }
-    if message.contains("UNIQUE constraint failed") {
-        return IdentityGovernancePortErrorClass::Conflict;
-    }
-    if message.contains("CHECK constraint failed")
-        || message.contains("FOREIGN KEY constraint failed")
-        || message.contains("not_governed")
-    {
-        return IdentityGovernancePortErrorClass::IntegrityFailure;
-    }
-    if message.contains("aggregate version overflow")
-        || message.contains("value exceeds SQLite INTEGER")
-        || message.contains("idempotency expiry overflow")
-    {
-        return IdentityGovernancePortErrorClass::InternalFailure;
-    }
-    IdentityGovernancePortErrorClass::DependencyUnavailable
-}
-
-#[cfg(test)]
-mod tests {
-    use super::classify_write_failure;
-    use application_ports::identity_governance::IdentityGovernancePortErrorClass;
-
-    #[test]
-    fn identity_governance_write_failures_keep_public_classes_stable() {
-        assert_eq!(
-            classify_write_failure("owner_transfer_successor_mismatch"),
-            IdentityGovernancePortErrorClass::NotFound
-        );
-        assert_eq!(
-            classify_write_failure("membership_status_target_missing"),
-            IdentityGovernancePortErrorClass::NotFound
-        );
-        assert_eq!(
-            classify_write_failure("owner_transfer_current_owner_mismatch"),
-            IdentityGovernancePortErrorClass::VersionConflict
-        );
-        assert_eq!(
-            classify_write_failure("owner_transfer_successor_version_mismatch"),
-            IdentityGovernancePortErrorClass::VersionConflict
-        );
-        assert_eq!(
-            classify_write_failure("invitation_create_tenant_version_mismatch"),
-            IdentityGovernancePortErrorClass::VersionConflict
-        );
-        assert_eq!(
-            classify_write_failure("last_active_owner"),
-            IdentityGovernancePortErrorClass::InvalidState
-        );
-        assert_eq!(
-            classify_write_failure("UNIQUE constraint failed: membership_status_commands"),
-            IdentityGovernancePortErrorClass::Conflict
-        );
-        assert_eq!(
-            classify_write_failure("CHECK constraint failed: memberships"),
-            IdentityGovernancePortErrorClass::IntegrityFailure
-        );
-        assert_eq!(
-            classify_write_failure("aggregate version overflow"),
-            IdentityGovernancePortErrorClass::InternalFailure
-        );
-        assert_eq!(
-            classify_write_failure("network request failed"),
-            IdentityGovernancePortErrorClass::DependencyUnavailable
-        );
     }
 }
