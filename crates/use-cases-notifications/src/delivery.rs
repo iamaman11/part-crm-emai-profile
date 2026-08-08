@@ -109,7 +109,7 @@ where
                     })
                 }
                 DeliveryTransitionWriteOutcome::Stale => {
-                    reconcile_after_stale(deliveries, consumer_id, event, now).await
+                    reconcile_after_stale(deliveries, consumer_id, event).await
                 }
             }
         }
@@ -135,7 +135,7 @@ where
             {
                 DeliveryTransitionWriteOutcome::Applied => outcome_from_state(next),
                 DeliveryTransitionWriteOutcome::Stale => {
-                    reconcile_after_stale(deliveries, consumer_id, event, now).await
+                    reconcile_after_stale(deliveries, consumer_id, event).await
                 }
             }
         }
@@ -146,7 +146,6 @@ async fn reconcile_after_stale<D>(
     deliveries: &D,
     consumer_id: &OpaqueId,
     event: &IntegrationEventEnvelope,
-    now: UnixMillis,
 ) -> Result<DeliveryProcessingOutcome, DeliveryProcessingError>
 where
     D: NotificationDeliveryRepositoryPort,
@@ -170,9 +169,6 @@ where
         } => Ok(DeliveryProcessingOutcome::RetryScheduled {
             retry_at: next_attempt_at,
         }),
-        DeliveryState::Ready { .. } if current.is_due(now) => {
-            Err(DeliveryProcessingError::StateConflict)
-        }
         DeliveryState::Ready { .. } => Err(DeliveryProcessingError::StateConflict),
     }
 }
@@ -213,10 +209,12 @@ fn map_persistence_error(error: NotificationPortError) -> DeliveryProcessingErro
 #[cfg(test)]
 mod tests {
     use super::{DeliveryProcessingOutcome, process_foundation_delivery};
+    use crate::retry::RetryPolicy;
     use application_ports::{
         ConsumerClaim, ConsumerIdempotencyPort, DeliveryTransitionWriteOutcome,
         IntegrationEventPortError, IntegrationEventPortErrorClass,
         NotificationDeliveryRepositoryPort, NotificationEventPort, NotificationPortError,
+        NotificationPortErrorClass,
     };
     use contracts::{IntegrationEventEnvelope, IntegrationEventPayload};
     use notification_domain::{AttemptLimit, DeliveryState};
@@ -285,10 +283,8 @@ mod tests {
             if state.is_none() {
                 *state = Some(DeliveryState::new());
             }
-            state.ok_or_else(|| {
-                NotificationPortError::new(
-                    application_ports::NotificationPortErrorClass::InternalFailure,
-                )
+            (*state).ok_or_else(|| {
+                NotificationPortError::new(NotificationPortErrorClass::InternalFailure)
             })
         }
 
@@ -360,7 +356,7 @@ mod tests {
             _persisted_at: UnixMillis,
         ) -> Result<(), IntegrationEventPortError> {
             self.notification_calls
-                .set(self.notification_calls.get().saturating_add(1));
+                .set(self.notification_calls.get() + 1);
             let remaining = self.persist_failures_remaining.get();
             if self.always_fail || remaining > 0 {
                 if remaining > 0 {
@@ -381,7 +377,7 @@ mod tests {
             _event: &IntegrationEventEnvelope,
             _consumed_at: UnixMillis,
         ) -> Result<ConsumerClaim, IntegrationEventPortError> {
-            self.claim_calls.set(self.claim_calls.get().saturating_add(1));
+            self.claim_calls.set(self.claim_calls.get() + 1);
             if self.claimed.replace(true) {
                 Ok(ConsumerClaim::Duplicate)
             } else {
@@ -479,7 +475,13 @@ mod tests {
             DeliveryProcessingOutcome::Delivered { duplicate: false }
         );
         assert_eq!(consumer.notification_calls.get(), 2);
-        assert_eq!(repository.state().map(DeliveryState::attempts).map(|v| v.value()), Some(2));
+        assert_eq!(
+            repository
+                .state()
+                .map(DeliveryState::attempts)
+                .map(|value| value.value()),
+            Some(2)
+        );
         Ok(())
     }
 
