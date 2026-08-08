@@ -1,91 +1,59 @@
 # Browser Profile Platform — Development Plan
 
-**Status:** normative post-composition development plan  
-**Date:** 2026-08-07  
-**Tracking:** issue #75  
-**Audit baseline:** `08ffa240996954ca6a25e0784ab38c78841107c3`  
-**Production readiness:** unchanged; external evidence gates remain authoritative
+**Status:** normative post-composition execution plan  
+**Date:** 2026-08-08  
+**Tracking:** issue #96  
+**Production readiness:** unchanged; `production_ready=false` until external evidence gates are satisfied
 
-## 1. Purpose And Source Of Truth
+## 1. Authority And Scope
 
-This document records two things together:
+This document is the **single normative source for post-composition execution order**.
+It defines what comes next, which work must precede other work, and the acceptance
+conditions for each phase.
 
-1. a current-state architecture quality audit of the accepted repository-local composition;
-2. the ordered development plan for the next functional expansion of the standalone Browser Profile Platform and its later CRM integration.
+Authority is intentionally separated:
 
-For post-composition execution order, this document is authoritative. Existing `DELIVERY_ROADMAP.md` remains the historical source for Repository Steps 0–10 and their acceptance discipline. `ARCHITECTURE.md`, accepted ADRs, security/privacy documents and versioned contracts remain authoritative for their own invariants. `DEVELOPER_CAPABILITY_MATRIX.md` remains authoritative for what is actually Composed, Library, Synthetic, Target or External at a given accepted `main`.
+- `DEVELOPMENT_PLAN.md` — execution order and phase acceptance;
+- `ARCHITECTURE.md` + accepted ADRs — stable boundaries and architecture invariants;
+- `DATA_CLASSIFICATION.md` — data sensitivity, storage and disclosure rules;
+- `UI_ARCHITECTURE.md` — normative standalone product/UI target;
+- `DEVELOPER_CAPABILITY_MATRIX.md` — what is actually Composed, Library, Synthetic, Target or External on accepted `main`;
+- `DELIVERY_ROADMAP.md` — historical Repository Steps 0–10 and their acceptance record;
+- `IMPLEMENTATION_PLAN.md` / lifecycle plans — design baseline and historical planning input, not current execution order.
 
-A planned item in this document is **not** an implementation claim. No external/provider/physical-host property becomes accepted without the existing external-evidence process.
+If another roadmap or historical plan conflicts with this document on **what to do next**,
+this document wins. If this document conflicts with an accepted architecture/security ADR
+on an invariant, the invariant document wins and this plan must be corrected.
 
-## 2. Executive Architecture Assessment
+A planned item is never an implementation claim. External/provider/physical-host claims
+remain External until the existing evidence process accepts real evidence.
 
-The repository is a strong clean/hexagonal foundation, but the actual composition has grown beyond parts of the original target documentation. The current repository-local architecture is assessed at approximately **8.6/10** for engineering architecture quality. This score does not measure production readiness.
+## 2. Current Accepted Baseline And Active Slice
 
-| Area | Assessment | Current state |
-|---|---:|---|
-| Domain isolation and invariants | 9.3/10 | Pure domain crates, typed IDs, strict state transitions and negative tests are strong. |
-| Dependency direction | 8.8/10 | Compile-time allowlists protect inner layers; the documented adapter dependency diagram is now stricter than the actual and valid inward dependency shape. |
-| Application-layer separation | 7.2/10 | `apps/control-plane-worker` performs substantial authorization/orchestration/idempotency/D1 mutation assembly that should move behind application use cases. |
-| Adapter boundaries | 8.6/10 | D1/Access/DO/mailbox adapters are typed and fail closed, but app handlers know too many concrete adapter mutation types. |
-| Data ownership and transaction semantics | 9.2/10 | D1 envelopes, optimistic versions, outbox/audit and DO/R2 separation are disciplined. |
-| Frontend layering | 7.9/10 | React/TanStack composition is clean and server-authoritative, but route coverage is incomplete and public API types are handwritten rather than generated as the architecture claims. |
-| Developer discoverability | 8.1/10 | Documentation is unusually strong, but several normative files lag the accepted composition and there are multiple overlapping roadmap/status documents. |
-| CI architecture enforcement | 9.6/10 | Permanent exact-head gates, negative fixtures and forbidden dependency checks are a major strength. |
-| Production/external claim discipline | 10/10 | Repository-local and external evidence are consistently separated; `production_ready=false` is preserved until real evidence exists. |
+Repository Steps 0–10 and the accepted post-composition slices through **Phase 0G** provide
+the current code baseline: typed domain/application boundaries, governed D1 writes,
+profile generations, coordinator/session foundations, synthetic Bridge/runtime lanes,
+mailbox metadata/jobs, React composition and exact-head cross-component acceptance.
 
-The correct next move is **not** to attach realtime, richer clients, search and device mailbox scheduling directly to the current Worker handlers. First converge the executable layering with the architecture contract, then build the new capabilities on those cleaned boundaries.
+The current unfinished architecture-convergence slice is:
 
-## 3. What Is Already Architecturally Strong
+- **Phase 0H — Profile grant application boundary**;
+- tracking issue **#92**;
+- draft PR **#93**.
 
-### 3.1 Inner layers are genuinely protected
+Phase 0H is **not accepted or merged** until its actual final diff, exact-head CI and merge
+evidence satisfy its issue acceptance. PR descriptions are not implementation evidence.
+Before merge the branch must be synchronized to the latest `main` and end at
+`behind_by=0`.
 
-`crates/*-domain`, primitives, contracts, ports and use cases are guarded by an executable dependency allowlist. Provider/runtime dependencies such as Workers SDK, Windows, SQLx, Tokio, Axum and Python bindings cannot silently enter pure boundaries.
+After 0H, continue the Phase 0 sequence below. Do not begin Phase 1 product expansion
+while Phase 0 acceptance remains incomplete.
 
-### 3.2 Critical identities are typed and opaque
+## 3. Non-Negotiable Architecture Rules
 
-Tenant, actor, client, profile, generation, device, mailbox, idempotency and audit identifiers are value objects rather than email/name/path-derived identifiers. This is the correct basis for client registry expansion, CRM linking and realtime events.
+### 3.1 Dependency direction
 
-### 3.3 Authorization is not a frontend concern
-
-The Worker resolves live identity/membership/grants and uses neutral disclosure for foreign or unauthorized resources. Existing assignment logic is already explicitly separated from access grants, which matches the expanded requirements.
-
-### 3.4 D1 mutation semantics are disciplined
-
-The repository already uses optimistic aggregate versions, idempotency, audit and outbox concepts and tests transaction rollback behavior. This is the right foundation for at-least-once Queue consumers and notification delivery deduplication.
-
-### 3.5 Durable Object and R2 ownership are conceptually clean
-
-Profile coordination belongs to a per-profile Durable Object; D1 remains the business/catalog projection; immutable encrypted generations belong in R2. There is no false distributed transaction claim between D1/DO/R2.
-
-### 3.6 Frontend is server-authoritative
-
-TanStack Query owns remote state and high-impact mutations are not presented as successful before the server confirms them. This supports the required rule that WebSocket is a change signal, never the source of truth.
-
-## 4. Architecture Gaps To Resolve Before Expansion
-
-### A0 — Application orchestration leaks into the Worker app — **High priority**
-
-Current `apps/control-plane-worker/src/api.rs` and `mailboxes.rs` perform significant workflow logic directly: request-specific authorization flow, idempotency checks, concrete D1 mutation construction, version calculations, replay handling and command sequencing. Meanwhile `crates/use-cases` is mostly decision functions rather than the orchestration layer described by `ARCHITECTURE.md`.
-
-**Target:** Worker modules become transport/composition adapters only:
-
-```text
-HTTP / Queue / Scheduled / DO ingress
-  -> parse + authenticate transport
-  -> construct verified request context
-  -> call one application command/query
-  -> map typed result/problem to protocol
-```
-
-Application commands/queries own authorization intent, repository port calls, idempotency semantics, durable mutation ordering and outbox intent. Concrete D1 statements remain in Cloudflare adapters.
-
-**Permanent guard:** add a repository policy preventing ordinary Worker route modules from importing `d1_*` mutation/repository implementation modules directly. Only the Worker composition root/provider factory may construct concrete adapters.
-
-### A1 — The documented adapter dependency graph is ambiguous — **Medium priority**
-
-The current architecture diagram says adapters depend on ports/contracts/primitives, while `cloudflare-adapters` correctly depends inward on mailbox/session domain types as well. In Clean Architecture an outer adapter may depend inward on domain types; the dangerous direction is the reverse.
-
-**Target dependency rule:** make the documentation and checker agree on one rule:
+The allowed direction is inward:
 
 ```text
 primitives
@@ -95,436 +63,384 @@ application-ports -> domains + contracts + primitives
 use-cases -> application-ports + domains + contracts + primitives
 adapters -> application-ports + domains + contracts + primitives + provider SDKs
 apps -> use-cases + adapters + contracts + primitives
-frontend -> generated public contracts + frontend feature/shared packages only
+frontend -> generated public contracts + frontend shared/entities/feature public APIs
 ```
 
-Domain/use-case code must never depend outward on adapters/apps/provider SDKs.
+Outer adapters may depend on inner domain types. Inner layers may never depend on
+Cloudflare, Windows, React, D1/R2/DO implementations or other outer runtime SDKs.
 
-### A2 — `application-ports/src/lib.rs` is becoming a grab-bag — **Medium priority**
+### 3.2 Worker/ingress thinness
 
-The single file already mixes membership, client, profile, coordinator, generation storage, mailbox provider and audit ports. Realtime/search/device/CRM growth would make this difficult to navigate and review.
-
-**Target:** capability modules with an intentionally small public facade:
+Ordinary HTTP/Queue/Scheduled/DO ingress owns only protocol work:
 
 ```text
-application-ports/src/
-  identity.rs
-  clients.rs
-  profiles.rs
-  generations.rs
-  sessions.rs
-  mailboxes.rs
-  notifications.rs
-  search.rs
-  devices.rs
-  audit.rs
-  crm.rs
+parse/authenticate transport
+  -> construct verified request context
+  -> call one application command/query
+  -> map typed result/problem to protocol
 ```
 
-### A3 — Large domain `lib.rs` files will not scale — **Medium priority**
+Application use cases own authorization intent, idempotency/replay semantics, aggregate
+version sequencing, repository ordering and outbox intent. Concrete D1 mutation/repository
+types stay in adapters/composition.
 
-`client-domain` and `mailbox-domain` are currently understandable, but the requested contact points, merge/link state, mailbox runtime lanes and richer job lifecycle would turn single-file modules into maintenance hotspots.
+### 3.3 Domain ownership
 
-**Target:** split by aggregate/value/state machine before adding fields, keeping `lib.rs` as a deliberate public API.
+- `identity-access-domain` owns tenant owner, membership/grant decisions;
+- `client-domain` owns client/contact/assignment invariants;
+- `profile-domain` owns profile/generation lifecycle policy;
+- `session-domain` owns launch intent, lease epoch, fencing, session/recovery state;
+- `mailbox-domain` owns provider-neutral mailbox binding/job/runtime-lane state;
+- notification/search/CRM domains or pure value modules are introduced only where real
+  provider-independent state exists.
 
-### A4 — Frontend contract generation claim is not true yet — **High priority**
+**Do not move lease/fencing/session semantics into `profile-domain`.** A per-profile Durable
+Object is an outer runtime coordinator for the `session-domain` state machine, not a second
+profile catalog.
 
-`frontend/src/shared/api/types.ts` manually declares public DTOs/enums, while `UI_ARCHITECTURE.md` says DTO/enums are generated from OpenAPI. This creates contract-drift risk, especially for realtime envelopes and expanded mailbox states.
-
-**Target:** generated public TypeScript contracts/client from the accepted versioned API schema. Handwritten code may wrap generated types but may not redefine server enums or DTO shapes.
-
-**Permanent guard:** CI regenerates and fails on diff; feature modules cannot define duplicate public API enums.
-
-### A5 — Route composition is behind the target information architecture — **Medium priority**
-
-The accepted router currently exposes dashboard, clients, profiles, mailboxes and users/access. The planned standalone product requires explicit detail routes plus sessions/devices/audit/settings and complete tab structures.
-
-**Target:** file/feature-owned route definitions assembled by the app shell; the central router must not become one growing import list.
-
-### A6 — Documentation drift exists — **Medium priority**
-
-Examples: the D1 catalog foundation document still describes the initial migration baseline while accepted capabilities now extend beyond it; architecture target structure omits several later accepted pure crates; UI documentation describes generated contracts not yet implemented.
-
-**Target:** every accepted capability PR updates the capability matrix and only the normative document it actually changes. Add a documentation consistency gate for known machine-checkable claims (workspace crates, routes, migration inventory, generated frontend contracts).
-
-### A7 — Route classification will become a monolith — **Medium priority**
-
-`control-plane-contract` centrally enumerates every HTTP route. It is currently safe and well tested, but realtime, search, device jobs and CRM projections will make it a merge-conflict hotspot.
-
-**Target:** keep fail-closed route classification but group routes by versioned capability modules with a single composed classifier. Unknown `/api/*`, `/auth/*` and `/bridge/*` methods/versions must continue to fail closed rather than reach SPA assets.
-
-### A8 — Query-side capabilities need an explicit read-model boundary — **High priority before search**
-
-Unified search and UI catalog/list views are not aggregate commands and should not be forced through mutation-oriented repositories.
-
-**Target:** application query services + typed read-model ports + D1 projections. Authorization/grant filtering happens in the query before result construction. R2, browser filesystem and frontend filtering never participate in authorization/search.
-
-## 5. Target Module Map For Expansion
-
-The next architecture should preserve existing crate boundaries and add capability modules rather than one large “service” crate.
+### 3.4 D1 / Durable Object / R2 ownership
 
 ```text
-apps/
-  control-plane-worker/
-    ingress/http/
-    ingress/queue/
-    ingress/scheduled/
-    composition/
-    durable_objects/
-      profile_coordinator/
-      user_notification_hub/
-  profile-bridge/
-    ingress/
-    device_jobs/
-    runtime/
+D1
+  -> authoritative business/catalog metadata
+  -> active_generation_id + aggregate versions
+  -> audit/outbox/read projections
 
-crates/
-  primitives/
-  contracts/
-    api/
-    events/
-    bridge/
-  identity-access-domain/
-  client-domain/
-    client.rs
-    contact_point.rs
-    assignment.rs
-    merge.rs
-  profile-domain/
-  session-domain/
-  mailbox-domain/
-    binding.rs
-    job.rs
-    runtime_lane.rs
-    observation.rs
-  notification-domain/
-    event.rs
-    delivery.rs
-    cursor.rs
-  application-ports/
-    ... capability modules ...
-  use-cases/
-    identity/
-    clients/
-    profiles/
-    mailboxes/
-    notifications/
-    search/
-    devices/
-    crm_projection/
-  cloudflare-adapters/
-    d1/
-    r2/
-    access/
-    queues/
-    durable_objects/
-    mailbox_providers/
+per-profile Durable Object
+  -> lease/session serialization
+  -> monotonic fencing epoch/token
+  -> minimal recoverable coordination state
 
-frontend/src/
-  app/
-  routes/
-  features/
-    clients/
-    profiles/
-    mailboxes/
-    sessions/
-    devices/
-    users/
-    audit/
-    settings/
-    realtime/
-    search/
-  entities/
-  shared/
-    api/generated/
-    realtime/
-    ui/
-    forms/
-    observability/
+R2
+  -> encrypted immutable generation objects/evidence objects
+
+Windows Profile Bridge
+  -> local encrypted staging/materialization/cache/workspace
+  -> native process/browser lifecycle
 ```
 
-`notification-domain` owns safe event/delivery/cursor rules only. It does not know WebSocket or Durable Objects. `UserNotificationHub` is an outer Cloudflare runtime adapter/composition component.
+D1, DO and R2 do not form a distributed transaction. Generation publication uses immutable
+object creation, verification, fenced D1 compare-and-set, idempotency and reconciliation.
+Stale writers/devices cannot overwrite a newer active generation. Failed upload/verification
+cannot discard `DIRTY_LOCAL` state.
 
-## 6. Cross-Cutting Contracts For All New Work
+### 3.5 Authorization-before-projection/fetch
 
-### 6.1 Versioned integration event envelope
+Tenant scope and live membership/grants are applied **before** constructing list/search/detail
+results and before provider message-body retrieval. “Fetch everything, then hide in React” is
+forbidden. Missing and unauthorized resources remain disclosure-neutral where the public
+contract is neutral.
 
-All integration/realtime events use a single safe envelope with opaque identifiers, resource version, occurrence time, actor reference and correlation ID. PII, profile payloads, cookies, OAuth tokens, proxy credentials and browser secrets are prohibited.
-
-Initial event taxonomy:
-
-- `client.created`
-- `client.updated`
-- `client.merged`
-- `client.linked_to_crm`
-- `profile.created`
-- `profile.assigned`
-- `profile.reassigned`
-- `profile.access_changed`
-- `profile.session_changed`
-- `profile.generation_activated`
-- `mailbox.changed`
-- `mailbox.auth_required`
-- `device.status_changed`
-- `certification.changed`
-
-Event schemas are versioned contracts, not ad-hoc Queue/WebSocket JSON.
-
-### 6.2 Durable-before-notify rule
-
-For every business mutation:
+### 3.6 Durable-before-notify
 
 ```text
 validated command
-  -> durable canonical state mutation
+  -> durable canonical mutation
   -> audit + outbox in the same durable boundary where possible
   -> dispatcher / Queue
   -> notification delivery
 ```
 
-No UI signal may precede the canonical D1/R2/DO commit that it represents.
+Realtime events are change signals, not authority. UI refetches canonical projections.
 
-### 6.3 At-least-once consumer rule
+### 3.7 PII, secrets and mailbox content
 
-Cloudflare Queues delivers at least once. Every Queue consumer therefore requires an event/message idempotency key and must make duplicate delivery harmless. A duplicate message must not increment unread counters twice, create a second business event or repeat a destructive side effect.
+- contact display values are encrypted at rest;
+- exact contact lookup uses tenant-keyed HMAC tokens;
+- fuzzy/prefix PII indexes require an explicit privacy/security ADR;
+- mailbox message metadata/body is authorized `CONFIDENTIAL` product content;
+- full body may be displayed to an authorized user but never enters ordinary logs, audit,
+  metrics, realtime/integration events or support bundles;
+- message body is not persisted in browser Web Storage;
+- HTML mail is sanitized/sandboxed; remote images/active content are disabled by default;
+- attachments are a separate capability requiring explicit access/content-handling policy.
 
-### 6.4 Authorization-before-projection rule
+## 4. Phase 0 — Architecture Convergence And Developer DX
 
-Search, lists, detail projections, realtime subscription/catch-up and CRM-facing projections must apply tenant scope and live grants before forming the returned result. “Find then hide in frontend” is prohibited.
+**Goal:** finish executable clean boundaries before feature expansion.
 
-### 6.5 PII boundary
+Phase 0 is intentionally split into bounded slices. Each slice preserves public behavior
+unless its own issue explicitly changes a contract.
 
-Client contact values are encrypted at rest. Exact lookup uses tenant-keyed HMAC tokens. Prefix/fuzzy PII search requires an explicit privacy/security ADR because blind n-gram indexes reveal searchable structure.
+### Phase 0H — Profile grant application boundary — ACTIVE
 
-### 6.6 Profile storage, materialization and freshness contract
+Move only profile grant/revoke orchestration from legacy Worker governance into the profile
+application boundary.
 
-Browser profile state uses explicit cloud authority plus local materialization. It is **not** a bidirectional folder-sync model and Profile Bridge must never infer authority by listing R2 objects.
+Required outcome:
 
-Authoritative ownership:
+- pure profile grant ports/use cases;
+- D1 implementation behind the profile application adapter;
+- live `ProfileGrantApi` routed through thin `profiles.rs` only after inward native/WASM proof;
+- legacy fallback removed only after the switched Worker path is proven;
+- permanent positive/negative boundary, capability-layout, governed-write and
+  cross-component evidence updated;
+- assignment remains non-authorizing;
+- no unrelated client-grant/identity-lifecycle changes.
 
-```text
-D1
-  -> profile/generation metadata
-  -> authoritative active_generation_id + aggregate version
+Acceptance is exactly the bounded issue #92 discipline, including one unchanged final head,
+12 permanent workflows green, `behind_by=0`, bounded diff, no unexplained `Cargo.lock`
+change and zero blocking/unresolved reviews.
 
-R2
-  -> encrypted immutable ProfileGeneration objects
-  -> manifests/inventory required by the accepted generation format
+### Phase 0I — Client grant application boundary
 
-per-profile Durable Object
-  -> materialization/open lease
-  -> fencing epoch/token
-  -> concurrent-session coordination
+Move `ClientGrantApi` grant/revoke orchestration out of legacy Worker governance using the
+accepted application-boundary pattern.
 
-Windows Profile Bridge
-  -> local encrypted staging/materialization/cache/workspace
-  -> local generation metadata and recovery state
-  -> Camoufox/Camouhost lifecycle
-```
+Keep this slice separate from identity lifecycle. Preserve owner authorization, neutral
+disclosure, idempotency domains, checked versions, D1 atomicity and stable public problems.
 
-The local filesystem is operational state and cache, not the cross-device source of truth. React never receives R2 credentials and never reads/writes the local profile directory directly; browser lifecycle remains behind the authenticated Bridge protocol.
+### Phase 0J — Identity governance lifecycle application boundary
 
-Before any Camoufox launch, Bridge resolves the authoritative profile projection through the Worker/application API and compares the local materialized generation with `active_generation_id`.
+Move remaining owner/bootstrap/transfer, invitation create/accept and membership
+status/revoke orchestration behind identity application services.
 
-```text
-resolve authoritative active_generation_id
-  -> local generation matches
-       -> validate local integrity/runtime compatibility
-       -> obtain/confirm the required open lease and launch
-  -> local generation missing or stale
-       -> obtain a fenced materialization lease
-       -> fetch the authorized active generation object
-       -> verify manifest/schema/runtime bundle/digest
-       -> decrypt into staging
-       -> verify inventory + SQLite/profile integrity
-       -> atomic local activation
-       -> continue the ordinary fenced open flow
-```
+Requirements:
 
-A stale local generation may be retained for rollback/recovery policy, but it may not start a writer session as though it were current. Bridge does not choose “the newest object” from R2; only the control-plane projection determines which generation is active.
+- identity domain remains authoritative for owner/membership/grant rules;
+- transport cannot assemble D1 identity mutations directly;
+- owner-transfer ceremony and single-active-owner invariant are unchanged;
+- invitation/membership state transitions remain idempotent/fail-closed;
+- no UI-only authorization decisions.
 
-A state-changing browser session never overwrites the current R2 object. Graceful close produces a new immutable generation:
+### Phase 0K — Profile coordinator ingress thinness
 
-```text
-active Gn
-  -> local writer session under lease/fencing
-  -> graceful close + quiescence evidence
-  -> DIRTY_LOCAL snapshot candidate Gn+1
-  -> package + encrypt
-  -> conditional immutable R2 create
-  -> verify remote digest + restore readability
-  -> D1 compare-and-set Gn -> Gn+1 using expected profile version/fencing token
-  -> audit + outbox / generation-activated event
-  -> synced local state becomes eviction-eligible according to policy
-```
+Clean the remaining thick coordinator ingress/DO composition boundary.
 
-If R2 upload or verification fails, the dirty local workspace remains recoverable as `DIRTY_LOCAL`/`SYNC_RETRY_PENDING`; it must not be deleted or reported as synced. If immutable upload succeeds but the D1 compare-and-set fails, that object is not authoritative and must be handled as an unactivated/orphan candidate by bounded recovery/retention logic rather than silently promoted. A stale fencing token can never activate a generation.
+Target:
 
-Multi-device behavior follows the same contract: once device A activates `G5`, device B holding `G4` must materialize `G5` before its next writer launch. Device B cannot later publish a generation derived from stale `G4` over `G5`; lease/fencing plus D1 compare-and-set reject that transition.
+- HTTP/DO ingress maps protocol and constructs adapters only;
+- application/session use case owns orchestration across coordinator projection/storage ports;
+- `session-domain` continues to own lease/fencing/session transitions;
+- D1 remains authoritative catalog/projection storage;
+- DO does not accumulate client/profile catalog business rules.
 
-Local eviction is allowed only after the relevant generation is durably present/verified in R2 and the authoritative D1 state confirms the safe lifecycle outcome. Unsynced dirty state survives network loss, Worker/R2 failure and Bridge restart.
+This slice must not redesign the proven coordinator state machine merely to move code.
 
-Required acceptance scenarios:
+### Phase 0L — Real application Cargo boundaries
 
-- local `G3`, active `G3` -> no cloud download; local integrity/open path proceeds;
-- local `G3`, active `G4` -> `G4` is verified and atomically materialized before browser launch;
-- device A activates `G5` -> device B holding `G4` observes and materializes `G5` on its next open;
-- stale device/session result cannot replace an already activated newer generation;
-- R2 upload/verification failure preserves local dirty state and never advances D1 active generation;
-- crash between immutable R2 upload and D1 CAS is recoverable without treating the uploaded object as authoritative;
-- duplicate/retried generation-finalization command is idempotent and cannot create multiple logical activations;
-- unauthorized/revoked device or actor cannot resolve/download a generation through the application API;
-- Bridge behavior does not depend on R2 object listing order, timestamps or “latest object” heuristics.
+The current capability modules inside one `crates/use-cases` crate are not the final growth
+boundary. Before Phase 1/3 growth, split independent high-growth application contexts into
+workspace crates where the dependency graph benefits from compile-time isolation.
 
-## 7. Ordered Development Phases
-
-## Phase 0 — Architecture Convergence And Developer DX
-
-**Goal:** make the executable architecture match the intended clean layers before adding major capabilities.
-
-Work:
-
-- split `application-ports` and `use-cases` into capability modules;
-- move Worker application orchestration behind use-case command/query services;
-- keep Worker route modules limited to transport mapping and dependency injection;
-- document and enforce the corrected dependency direction;
-- modularize route classification by capability without weakening fail-closed behavior;
-- introduce generated TypeScript API contracts and remove handwritten duplicate DTO enums;
-- add machine-readable architecture inventory for workspace crates, migrations, public routes and generated contracts;
-- update stale architecture/D1/UI developer docs to the accepted composition.
-
-Acceptance:
-
-- no ordinary Worker handler directly constructs a D1 mutation type;
-- application services are testable with fake ports without Workers SDK;
-- adapters remain provider-specific and depend only inward;
-- frontend contract regeneration is deterministic and CI-enforced;
-- architecture checker has positive + deliberately forbidden fixtures;
-- all permanent workflows green on exact head.
-
-## Phase 1 — Event, Outbox And Notification Persistence Foundation
-
-**Goal:** establish one durable event model used by realtime, mailbox, client/profile activity and CRM integration.
-
-Add D1 structures:
-
-- `notification_events`;
-- `notification_deliveries`;
-- `outbox_events` evolution/versioning where required;
-- `consumer_idempotency`;
-- `user_event_cursors`.
-
-Build:
-
-- `notification-domain` safe envelope and cursor/delivery state;
-- versioned integration event contracts;
-- outbox dispatcher use case and Queue adapter;
-- idempotent consumer registry;
-- catch-up query by user/grants and event cursor;
-- bounded retention/compaction policy that never deletes canonical business state.
-
-Acceptance:
-
-- duplicate Queue delivery is side-effect neutral;
-- event payload sanitizer rejects PII/secret-bearing fixtures;
-- event is persisted only after canonical business mutation;
-- cursor replay works after simulated disconnect;
-- unauthorized users cannot query event history for ungranted resources.
-
-## Phase 2 — Client Registry 2.0 And Assignment Model
-
-**Goal:** turn the current minimal client record into the complete standalone registry while preserving opaque IDs and future CRM linking.
-
-Client card:
-
-- `client_id`, `PERSON|ORGANIZATION`;
-- display name + optional legal name;
-- `ACTIVE|ARCHIVED|MERGED`;
-- country, locale, timezone, tags;
-- structured notes;
-- encrypted contact points: email, phone, URL;
-- optional `external_party_ref`;
-- aggregate version and timestamps;
-- projections for profiles, mailbox bindings, grants, assignment/activity/audit history.
-
-Assignment entity:
+Initial direction:
 
 ```text
-ProfileClientAssignment
-  assignment_id
-  tenant_id
-  profile_id
-  client_id
-  status
-  valid_from
-  valid_to
-  assigned_by
-  reason
+use-cases-identity
+use-cases-clients
+use-cases-profiles
+use-cases-mailboxes
 ```
 
-Reassignment closes the previous active assignment, creates a new one, writes audit/outbox and emits the safe event. Assignment remains explicitly non-authoritative for access.
-
-Security:
-
-- contact ciphertext and key version metadata in D1;
-- tenant-keyed HMAC exact lookup tokens;
-- no contact/name in resource IDs, URL keys, filesystem paths or R2 keys;
-- fuzzy/prefix PII search blocked until a separate approved ADR.
-
-Acceptance:
-
-- owner can create/update/archive/merge clients through use cases;
-- one profile has at most one active primary client assignment;
-- one client may own multiple profiles;
-- assignment never grants client/profile access;
-- member sees only grant-permitted card/profile projections;
-- exact contact lookup does not require plaintext scan.
-
-## Phase 3 — Unified Search And Read Projections
-
-**Goal:** provide safe server-side discovery without weakening tenant/grant isolation.
-
-Endpoint:
-
-```text
-GET /api/v1/search?q=<query>&types=client,profile,mailbox
-```
-
-Search projections cover:
-
-- client display name;
-- exact contact HMAC lookup;
-- profile label;
-- mailbox provider;
-- tags;
-- client assignment;
-- profile lifecycle status;
-- cloud status;
-- certification status;
-- mailbox status;
-- assigned user;
-- runtime lane.
+Later phases add independent crates such as notification/search/device/CRM projection only
+when those capabilities exist.
 
 Rules:
 
-- typed tenant scope is mandatory;
-- live membership/grants are joined/applied before result construction;
-- stable cursor pagination and bounded query cost;
-- R2 is never queried;
-- resource labels/contact projections follow field-level disclosure policy.
+- do not create one crate per function;
+- shared neutral evidence/value/contracts remain in primitives/contracts/application-ports;
+- a temporary compatibility facade may re-export during migration;
+- no circular capability dependencies;
+- provider SDKs remain outside all use-case crates;
+- capability crates compile/test independently.
+
+`application-ports` may remain one Cargo crate with capability modules while that keeps a
+clear dependency graph; split it into multiple crates only if actual dependency pressure
+justifies the added surface.
+
+### Phase 0M — Generated frontend contracts and feature-boundary enforcement
+
+Implement deterministic OpenAPI -> TypeScript generation and remove handwritten duplicate
+server DTO/enums.
+
+Add permanent CI:
+
+- regeneration must produce no diff;
+- feature X cannot import sibling feature Y internals;
+- cross-feature composition uses `shared`, `entities`, app/routes or an explicitly public
+  feature API;
+- positive repository check + deliberately forbidden fixture.
+
+### Phase 0N — Route classifier, architecture inventory and documentation consistency
+
+Finish the remaining DX/convergence items:
+
+- split fail-closed route classification by capability while retaining one composed
+  classifier;
+- unknown `/api/*`, `/auth/*`, `/bridge/*` versions/methods never fall through to SPA;
+- machine-readable inventory for workspace crates, migrations, public routes and generated
+  contracts;
+- documentation consistency checks for machine-verifiable claims;
+- keep `docs/INDEX.md` current and avoid parallel roadmaps.
+
+### Phase 0 completion gate
+
+Phase 0 is complete only when all are true:
+
+- ordinary Worker/DO transports do not own provider/D1 business orchestration;
+- remaining legacy governance routes have bounded application owners;
+- coordinator ingress is thin without moving session semantics to the wrong domain;
+- use-case growth has real Cargo isolation where justified;
+- generated public TS contracts are CI-enforced;
+- frontend sibling-feature boundaries are CI-enforced;
+- route classification remains fail-closed and modular;
+- architecture/docs inventory is consistent;
+- all permanent workflows are green on the exact accepted head.
+
+## 5. Phase 1 — Integration Events, Outbox And Notification Persistence
+
+**Goal:** establish one durable event/outbox substrate before richer registry, mailbox and
+realtime behavior depend on it.
+
+Build:
+
+- versioned integration event envelope;
+- `notification_events`, `notification_deliveries`, evolved `outbox_events`,
+  `consumer_idempotency`, `user_event_cursors` as required;
+- outbox dispatcher and Queue adapter;
+- idempotent consumer registry;
+- authorized catch-up by user/grants and event cursor;
+- bounded retention/compaction that never removes canonical business state.
+
+Delivery policy is mandatory:
+
+- deterministic attempt accounting;
+- exponential backoff with bounded jitter;
+- maximum automatic attempts;
+- DLQ or equivalent terminal failure lane;
+- sanitized alerting/operational visibility;
+- operator-safe replay procedure;
+- replay idempotency and auditability.
 
 Acceptance:
 
-- IDOR/cross-tenant negative suite demonstrates no result-count or item leakage;
-- revoked grant disappears from search immediately according to the accepted consistency contract;
-- query plans are index-backed for supported predicates;
-- fuzzy PII search remains unavailable without an accepted ADR.
+- duplicate delivery is side-effect neutral;
+- poison messages reach DLQ/terminal state after the configured bound;
+- retries do not hot-loop;
+- DLQ/event payload sanitizer rejects prohibited PII/secrets;
+- replay after remediation cannot duplicate the logical effect;
+- unauthorized users cannot query event history.
 
-## Phase 4 — Mailbox Operations 2.0: One Job Contract, Two Runtime Lanes
+## 6. Phase 2 — Client Registry 2.0 And Assignment Model
 
-**Goal:** support Cloud provider APIs and Windows/Camoufox execution with one application job model.
+**Goal:** complete the standalone business client model before search and CRM integration.
 
-Mailbox job states become:
+Client card target:
+
+- opaque `client_id`, `PERSON|ORGANIZATION`;
+- display name + optional legal name;
+- `ACTIVE|ARCHIVED|MERGED`;
+- country, locale, timezone, tags, structured notes;
+- encrypted email/phone/URL contact points;
+- optional opaque `external_party_ref`;
+- aggregate version/timestamps;
+- profile, mailbox, grant, assignment/activity/audit projections.
+
+`ProfileClientAssignment` is historical/business association only. Reassignment closes the
+previous active assignment, creates the new assignment and emits audit/outbox. Assignment
+never grants profile/client access.
+
+Acceptance:
+
+- owner create/update/archive/merge through application services;
+- one profile has at most one active primary client assignment;
+- one client may have multiple profiles;
+- member projections are grant-filtered;
+- exact contact lookup does not require plaintext scan;
+- no name/contact-derived technical IDs/paths/keys.
+
+## 7. Phase 3 — Read Models, Global Search And Client Mail Query Contract
+
+**Goal:** add explicit CQRS-lite read boundaries and safe discovery.
+
+### 7.1 Read-model boundary
+
+Lists/search/detail projections use application query services + typed read-model ports.
+Mutation aggregates are not hydrated merely to render large tables/search results.
+Authorization/grant filtering happens before projection construction.
+
+### 7.2 Global search
+
+Conceptual endpoint:
+
+```text
+GET /api/v1/search?q=<query>&types=client,profile,member,mailbox
+```
+
+Primary global result types:
+
+- clients;
+- profiles;
+- members/users subject to owner/admin disclosure policy;
+- mailbox binding/provider/status metadata.
+
+Devices remain searchable/filterable inside the Devices administration screen but are not a
+primary business global-search type.
+
+Rules:
+
+- typed tenant scope mandatory;
+- stable cursor pagination and bounded cost;
+- supported predicates are index-backed;
+- R2/browser filesystem are never queried for catalog search;
+- fuzzy/prefix PII search remains blocked without an accepted ADR.
+
+### 7.3 Client-scoped mailbox message search
+
+Provide provider-neutral application queries conceptually equivalent to:
+
+- `SearchClientMailboxMessages`;
+- `GetClientMailboxMessage`.
+
+Primary UX:
+
+```text
+Client -> Mail -> search -> results -> open message -> full body
+```
+
+Authorized users can search a selected client's eligible mailbox bindings by at least:
+
+- subject;
+- sender;
+- recipient;
+- message body text;
+- date/time filters.
+
+Search results are bounded metadata/snippet projections. Opening a result fetches the full
+authorized message body by opaque provider-scoped reference.
+
+Mandatory order:
+
+```text
+authenticate actor
+  -> tenant + live membership/grants
+  -> authorize client/mailbox context
+  -> resolve only eligible mailbox bindings
+  -> provider/Bridge query adapter
+  -> bounded result/body projection
+```
+
+The initial product does **not** require central D1 full-text storage, blind index or n-gram
+index. Provider-native search/fetch is preferred where practical; an adapter may perform a
+bounded internal search behind the same port. A future central/local index requires its own
+storage/security/retention decision.
+
+Phase 3 proves API/read-model/authorization semantics with deterministic fakes. Real provider
+execution belongs to Phases 4–5.
+
+Acceptance:
+
+- no cross-tenant/result-count leakage;
+- revoked grants disappear according to the accepted consistency contract;
+- provider search/body fetch is not called before authorization succeeds;
+- a foreign message reference cannot bypass client/mailbox authorization;
+- full body can be returned by the fake without entering logs/audit/events/telemetry.
+
+## 8. Phase 4 — Mailbox Operations 2.0 And Cloud Provider Lane
+
+**Goal:** implement real cloud-capable mailbox operations behind one provider-neutral model.
+
+Mailbox job states:
 
 ```text
 SCHEDULED
@@ -539,73 +455,74 @@ FAILED
 SUSPENDED
 ```
 
-Runtime lanes:
+Cloud lane includes Gmail API, IMAP and future standard provider APIs.
 
-1. **Cloud Worker** — Gmail API, IMAP and future standard provider APIs;
-2. **Windows Profile Bridge + Camoufox** — providers requiring an authorized browser profile.
-
-Canonical flow:
+Canonical scheduled flow:
 
 ```text
 Scheduled trigger
   -> Queue mailbox.check.requested
-  -> mailbox policy + authorization/runtime selection
-  -> provider execution or durable device job
-  -> D1 transaction: mailbox state + unread + observation + audit + outbox
+  -> mailbox policy/runtime selection
+  -> provider execution
+  -> D1: mailbox state + observation + audit + outbox
   -> notification pipeline
 ```
 
-Provider-specific implementation stays in adapters. The domain owns job transitions and runtime-lane eligibility, not Gmail/IMAP/Mail.ru protocol details.
+The cloud provider adapters also implement the Phase 3 message-query contract:
+
+- subject/sender/recipient/body search where provider capabilities allow;
+- bounded provider-neutral result mapping;
+- selected full message-body fetch;
+- no canonical D1/R2 body copy required;
+- message content never enters ordinary audit/outbox/realtime payloads.
+
+Mailbox scheduled checks and interactive message search are separate application use cases
+even when they share a provider adapter.
 
 Acceptance:
 
-- Gmail/IMAP and browser lane pass the same application contract suite;
-- duplicate Queue deliveries do not duplicate business results/unread changes;
+- duplicate Queue deliveries do not duplicate business results/counters/events;
 - revoked/suspended binding cannot execute;
-- provider payload/message content never enters ordinary audit/events;
-- retry/backoff and auth-required transitions are deterministic.
+- retry/auth-required transitions are deterministic;
+- provider fake/real integration contract proves search + body retrieval;
+- unauthorized search/body fetch stops before provider access;
+- real provider claims remain External until real evidence exists.
 
-## Phase 5 — Device Job Channel And Camoufox Mailbox Mode
+## 9. Phase 5 — Durable Device Jobs And Browser/Camoufox Mailbox Lane
 
-**Goal:** make browser-assisted mailbox checks durable when the assigned Windows device is offline.
+**Goal:** support providers requiring an authorized browser profile without using the web
+WebSocket as a device command channel.
 
 Target flow:
 
 ```text
-Cloud Queue
-  -> durable mailbox job in D1
-  -> DeviceCommandHub or /bridge/v1/jobs/claim
-  -> device-bound authenticated Profile Bridge
-  -> profile lease + current generation
+Cloud Queue / interactive request
+  -> durable job/request state
+  -> device claim channel
+  -> authenticated device-bound Profile Bridge
+  -> current profile generation + lease/fencing
   -> certified Camoufox mailbox mode
-  -> graceful close
-  -> generation update if session state changed
-  -> mailbox result command
-  -> D1 commit + outbox
+  -> result/body projection
+  -> D1 commit/outbox where mutation exists
 ```
 
-The web-app WebSocket is never a device command channel.
+Requirements:
 
-Rules:
-
-- offline device -> `PENDING_DEVICE`, not false failure/success;
-- claim is lease/idempotency/fencing aware;
-- only assigned/authorized device can claim;
-- job survives Bridge restart/network loss;
-- profile busy maps to `PROFILE_BUSY` without unsafe concurrent launch;
-- headless mode requires separate Mail.ru certification; challenge/fingerprint drift forces approved headful background mode.
-
-Acceptance:
-
-- power-off/restart simulation preserves claimable job;
+- offline device -> explicit `PENDING_DEVICE`, never false empty/success;
+- profile contention -> `PROFILE_BUSY`;
+- claim/result are idempotent, leased and fencing-aware;
 - stale device result is rejected after claim turnover;
-- duplicate result submission is idempotent;
-- Bridge cannot fetch arbitrary tenant jobs;
-- real Camoufox behavior remains External until physical-host certification evidence exists.
+- Bridge cannot claim arbitrary tenant jobs;
+- browser lane implements the same `SearchClientMailboxMessages` /
+  `GetClientMailboxMessage` contract as the cloud lane;
+- challenge/fingerprint drift follows certification policy rather than silently changing
+  browser mode.
 
-## Phase 6 — Realtime UserNotificationHub
+Real Camoufox/physical-host behavior remains External until accepted evidence exists.
 
-**Goal:** deliver low-latency safe change signals while keeping D1/API projections authoritative.
+## 10. Phase 6 — Realtime UserNotificationHub
+
+**Goal:** deliver low-latency safe change signals after durable event persistence exists.
 
 Topology:
 
@@ -614,302 +531,280 @@ canonical state + outbox
   -> Queue dispatcher
   -> per-user UserNotificationHub Durable Object
   -> Hibernatable WebSocket
-  -> React
-  -> TanStack Query invalidation
-  -> HTTPS GET canonical projection
+  -> React invalidation
+  -> HTTPS refetch of canonical projection
 ```
-
-Endpoint:
-
-```text
-wss://app.example.com/api/v1/realtime
-```
-
-Before upgrade the Worker verifies Access JWT, active tenant membership and user state, then routes to the logical per-user Durable Object.
 
 Capabilities:
 
-- multiple tabs/devices per user;
-- reconnect with exponential backoff + jitter;
-- client sends last accepted `event_id`;
-- catch-up from durable event history or current projection;
-- session progress, mailbox changes, revocation, device status, cloud sync and certification changes;
-- membership revoke closes existing sockets and blocks reconnect/commands;
-- bounded connection lifetime and periodic reauthorization policy;
-- versioned event envelope;
-- no unnecessary heartbeat that continuously wakes a hibernating DO.
+- multiple tabs/devices;
+- reconnect with exponential backoff+jitter;
+- cursor/catch-up after disconnect;
+- session/mailbox/grant/device/cloud/certification change signals;
+- membership revoke closes sockets and blocks reconnect;
+- bounded reauthorization policy;
+- no prohibited PII/secrets/message bodies in event envelopes.
 
-Connection UI states:
+Acceptance includes duplicate safety, catch-up, revocation and DO hibernation reconstruction
+without in-memory-only security/cursor state.
 
-```text
-CONNECTED
-RECONNECTING
-OFFLINE
-CATCHING_UP
-```
+## 11. Phase 7 — Complete Standalone UI
 
-Acceptance:
+**Goal:** finish the operator product on top of accepted application/query contracts.
 
-- online accepted event normally reaches UI within the product latency SLO;
-- WebSocket event never contains prohibited PII/secret payload;
-- UI always refetches canonical projection after invalidation;
-- disconnect/reconnect recovers missed changes;
-- duplicate delivery is harmless;
-- membership revoke terminates all user connections;
-- DO hibernation lifecycle tests prove no in-memory-only cursor/security dependency.
+Primary information-architecture priority:
 
-Cloudflare currently recommends the Durable Objects Hibernation WebSocket API for server-side WebSocket workloads because clients remain connected while the object can hibernate. Connection attachments/storage must therefore contain only bounded non-sensitive reconstruction metadata.
+1. Clients / Profiles;
+2. Users & Access;
+3. Mail on the Client detail;
+4. Mailboxes for provider/binding/job administration;
+5. Devices for infrastructure administration.
 
-## Phase 7 — Standalone UI Information Architecture And Reusable Features
-
-**Goal:** complete the operator product without moving business rules into React.
-
-Required routes:
+Required routes include:
 
 ```text
 /
-/profiles
-/profiles/:profileId
 /clients
 /clients/:clientId
+/profiles
+/profiles/:profileId
+/users
 /mailboxes
 /sessions
 /devices
-/users
 /audit
 /settings
 ```
 
-Client Detail tabs:
+Client detail includes first-class `Mail`:
 
-- Overview
-- Contact Points
-- Profiles
-- Mailboxes
-- Access
-- Assignment History
-- Activity
-- Audit
+- message search and filters;
+- bounded result list with subject/sender/time/snippet;
+- full authorized message body viewer;
+- explicit offline/auth-required/browser-lane-pending states;
+- sanitized/sandboxed HTML, remote images/active content disabled by default;
+- no body persistence in Web Storage/telemetry.
 
-Profile Detail tabs:
-
-- Overview
-- Client Assignment
-- Session
-- Generations
-- Mailbox
-- Certification
-- Access
-- Audit
+Users & Access provides member search/filter, invitation/membership/grant administration and
+owner-transfer workflows. Devices remains a technical/admin screen.
 
 Frontend rules:
 
 - generated public API/event types only;
-- TanStack Query is canonical remote cache;
-- realtime module only invalidates/refetches or updates explicitly safe ephemeral progress;
-- feature package cannot import sibling feature internals;
-- route modules compose feature public APIs only;
-- no optimistic “Saved” for grant, assignment, generation, session-close, mailbox result or profile sync commits;
-- standalone features expose reusable entry points so future CRM shell can mount them without moving domain logic into frontend.
+- TanStack Query owns remote state;
+- realtime invalidates/refetches authoritative state;
+- sibling feature internals cannot be imported;
+- no optimistic success for grants, assignment, generation activation, session close,
+  mailbox result or profile sync commits.
 
-Acceptance:
+## 12. Phase 8 — Standalone End-To-End Acceptance
 
-- owner/member/revoked E2E suites;
-- keyboard/accessibility critical flows;
-- offline/reconnect states;
-- no-secret/no-PII snapshot/telemetry checks;
-- direct endpoint abuse remains denied server-side.
+**Goal:** prove the expanded standalone composition without inflating External claims.
 
-## Phase 8 — Standalone End-To-End Product Acceptance
+Repository-local/synthetic acceptance includes:
 
-**Goal:** prove the expanded standalone product as one composition without inflating external claims.
-
-Required repository-local/synthetic acceptance:
-
-- owner creates and finds a client through UI;
-- client links to multiple profiles;
-- profile has at most one active primary client;
-- member cannot see foreign profiles/client cards;
-- search does not disclose forbidden objects;
-- Gmail/IMAP adapter fake and Camoufox mailbox fake use the same job contract;
-- mailbox result commits before notification;
-- reconnect catches up missed events;
+- owner creates/finds a client;
+- one client relates to multiple profiles and one profile has at most one active primary
+  client assignment;
+- member cannot see ungranted clients/profiles/messages;
+- owner/admin can find a member and inspect allowed grant projection;
+- authorized user searches client mail by subject/sender/body and opens full body;
+- foreign client/message reference cannot disclose result/body;
+- body absent from log/audit/outbox/realtime/telemetry evidence;
+- cloud and browser mailbox fakes satisfy the same application contracts;
 - duplicate Queue delivery is idempotent;
-- membership revoke blocks commands and realtime;
-- offline Bridge preserves `PENDING_DEVICE` job;
-- local/current generation equality avoids unnecessary materialization download;
-- stale local generation is materialized from the authoritative active generation before writer launch;
-- stale fencing/CAS cannot overwrite a newer active generation;
-- simulated R2 failure preserves dirty local state and leaves the active generation unchanged;
-- all new permanent gates run on one exact head SHA.
+- realtime reconnect catches up missed events;
+- membership revoke blocks commands/realtime;
+- offline device jobs remain durable;
+- generation freshness/fencing/R2 failure invariants remain green;
+- all permanent workflows run on one exact final head.
 
 Real provider/physical-host claims remain External.
 
-## Phase 9 — CRM Boundary And Party Integration
+## 13. Phase 9 — CRM Boundary And Party Integration
 
-**Goal:** switch client data authority to CRM without migrating browser runtime ownership.
+**Goal:** allow CRM to become authoritative for Party/client master data without coupling
+browser runtime internals to CRM.
 
-Ownership after integration:
+After cutover:
 
 ```text
 CRM Party/Customer Master
   -> canonical name/contact/status + party_ref
+
 Browser Profile Platform
   -> profiles, assignments, generations, sessions, certification, mailbox runtime
 ```
 
-Migration/cutover sequence:
+Migration sequence:
 
 1. preserve standalone `client_id`;
-2. add/verify `external_party_ref`;
+2. add/verify opaque `external_party_ref`;
 3. consume versioned CRM Party projection/events through a CRM adapter;
 4. reconcile/link standalone client and CRM Party;
 5. switch authority for name/contact/status only after parity acceptance;
-6. keep profile assignments in Profile Platform;
-7. block standalone edits for CRM-owned fields or translate them into CRM commands;
-8. optionally replace D1 catalog adapter with PostgreSQL/SQLx + RLS without changing domain/use-case contracts;
-9. replace Cloudflare Access identity adapter with CRM OIDC adapter if required;
-10. leave R2, Profile Bridge and browser lifecycle unchanged.
+6. keep profile assignments/runtime ownership in Profile Platform;
+7. block local edits to CRM-owned fields or translate explicit commands through the CRM
+   adapter;
+8. optionally replace D1 catalog adapter with PostgreSQL/SQLx + RLS without changing
+   domain/application contracts;
+9. optionally replace Access identity adapter with CRM OIDC;
+10. leave R2 generations and Profile Bridge lifecycle independent.
 
-No direct CRM-table, R2, D1 or browser-filesystem coupling is allowed.
+Integration is **event/contract isolated and async-first**, not dogmatically “100% async”.
+Durable events/projections are the default synchronization mechanism, while a user-triggered
+HTTP command may still return a synchronous acknowledgement/result. Core domain/application
+code never imports CRM tables/entities/SDK implementation details.
 
-CRM UI route:
+## 14. Phase 10 — Production Evidence And Rollout
 
-```text
-CRM /clients/:partyId/browser-profiles
-```
+Code may prepare adapters, validators and runbooks, but production promotion still requires
+real accepted evidence for the existing external gates, including as applicable:
 
-It consumes a versioned Profile Platform API projection: profiles, cloud status, active session, mailbox status, certification, permitted actions and recent audit projection.
+- isolated Cloudflare resources/budgets;
+- trusted Windows signing/update channel;
+- primary/secondary physical Windows evidence;
+- key escrow/restore procedure;
+- privacy/retention approval;
+- product/license decisions;
+- real provider/fingerprint certification;
+- production device-key protection/unwrap;
+- remote R2/D1/DO recovery behavior;
+- independent security/cryptographic review.
 
-Acceptance:
+`production_ready` remains `false` until those gates are satisfied with real reviewable
+evidence.
 
-- linking a standalone client to CRM Party does not change profile IDs;
-- CRM authority cutover is versioned, replayable and reversible until final promotion;
-- profile/generation/session runtime remains independently operable;
-- no R2 generation migration is required for CRM integration.
+## 15. Architecture Gates For Every Future PR
 
-## Phase 10 — Production Evidence And Rollout
+Every applicable capability PR must satisfy:
 
-Repository code may prepare adapters, validators and runbooks, but actual production promotion still requires the external gates already tracked by issues #1 and #3 and the immutable external-evidence protocol.
+1. **Layer gate** — no outward dependency from domain/application code.
+2. **Transport-thinness gate** — ordinary ingress does not own provider/D1 orchestration.
+3. **Contract gate** — public API/event/bridge changes are versioned/compatibility checked.
+4. **Frontend generation gate** — generated contracts are deterministic and clean.
+5. **Frontend feature gate** — sibling-feature internals cannot be imported.
+6. **Tenant/IDOR gate** — authorization occurs before projection/provider fetch.
+7. **Idempotency gate** — duplicate HTTP/Queue/device result has no duplicate logical effect.
+8. **Transaction gate** — canonical D1 mutation + audit/outbox are atomic within one D1
+   boundary.
+9. **Secret/PII/content gate** — prohibited payloads never enter logs/events/audit/support.
+10. **Failure-order gate** — external side effects follow the durable transition that
+    authorizes them.
+11. **Generation freshness gate** — active generation + lease/fencing controls writer launch
+    and activation.
+12. **Exact-head gate** — all permanent workflows green on one unchanged final head.
+13. **Review gate** — zero blocking reviews/unresolved threads before merge.
+14. **Evidence-scope gate** — synthetic/local evidence never promotes External claims.
 
-This includes real Cloudflare resources, primary/secondary physical Windows evidence, trusted signing, key escrow restore, privacy/retention approval, product license, real fingerprint certification, production device-key unwrap, remote R2/D1 atomicity and independent security/cryptographic review.
+For architecture-boundary migrations use the proven fail-safe switch discipline:
 
-## 8. Standalone Ownership Before CRM
+1. add inward port/use case and adapter;
+2. prove native/WASM inward behavior;
+3. switch live transport while retaining fallback;
+4. prove post-switch native/WASM behavior;
+5. remove only superseded fallback;
+6. make permanent policy/docs reflect the proven final ownership;
+7. run exact-head full acceptance;
+8. guarded squash merge with expected head SHA.
 
-Until CRM cutover, authoritative ownership remains:
+## 16. Documentation And Developer Workflow
 
-| Data | Authoritative owner |
-|---|---|
-| Users / memberships / grants | Standalone Identity & Access |
-| Client cards | Standalone Client Registry in D1 |
-| Profiles / generation metadata | Profile Catalog in D1 |
-| Encrypted generation objects | R2 |
-| Sessions / leases / fencing | per-profile Durable Objects |
-| Mailbox bindings / jobs / results | Mailbox Operations in D1 |
-| Audit / outbox / notification history | D1 |
-| Realtime connections | per-user `UserNotificationHub` Durable Objects |
-| Device-local runtime state | Profile Bridge local encrypted workspace + SQLite |
-
-The first production deployment remains one organization with multiple users. Owner sees organization resources according to owner policy; members see only live grants.
-
-## 9. Required Architecture Gates For Future PRs
-
-Every new capability PR must satisfy applicable gates:
-
-1. **Layer gate:** no outward dependency from domain/use-cases.
-2. **Worker-thinness gate:** protocol handlers do not own D1 mutation workflow logic.
-3. **Contract gate:** OpenAPI/event/bridge contract changes are versioned and compatibility checked.
-4. **Frontend generation gate:** generated types/client are clean after regeneration.
-5. **Tenant/IDOR gate:** foreign and absent resources remain neutral; query/search results are pre-filtered.
-6. **Idempotency gate:** duplicate Queue/HTTP/device result does not duplicate logical side effects.
-7. **Transaction gate:** canonical state + audit/outbox remain atomic within one D1 boundary.
-8. **Secret/PII gate:** events/logs/audit/realtime/support artifacts reject prohibited payloads.
-9. **Failure-order gate:** external side effects occur only after the durable state transition that authorizes them.
-10. **Exact-head gate:** every permanent workflow green on the same final head before merge.
-11. **Evidence scope gate:** synthetic/local tests never promote external production claims.
-12. **Generation freshness gate:** Bridge writer launch and generation activation are bound to the authoritative active generation plus valid lease/fencing; stale local state cannot overwrite a newer cloud generation.
-
-## 10. Developer Workflow And Documentation Rules
-
-A developer should be able to answer “where does this change belong?” without searching the whole repository.
-
-Decision table:
+A developer should be able to determine ownership without repository-wide guessing:
 
 | Change | Owner |
 |---|---|
-| provider-independent state invariant | `*-domain` |
-| workflow across repositories/providers | `use-cases/<capability>` |
-| interface required by a workflow | `application-ports/<capability>` |
-| D1/R2/Queue/DO/Access implementation | `cloudflare-adapters` |
-| HTTP/Queue/Scheduled/WebSocket ingress mapping | `apps/control-plane-worker` |
-| Windows process/filesystem/device implementation | Bridge/windows adapter boundary |
+| provider-independent invariant | appropriate `*-domain` |
+| application workflow | capability use-case crate/module |
+| port required by workflow | capability-owned `application-ports` module |
+| D1/R2/Queue/DO/Access implementation | adapter layer |
+| HTTP/Queue/Scheduled/DO/WebSocket mapping | app ingress/composition |
+| Windows filesystem/process/device behavior | Bridge/windows adapter boundary |
 | display/navigation/query invalidation | frontend feature/shared layer |
 | public wire shape | versioned contract |
-| cross-system CRM mapping | CRM adapter + versioned projection contract |
+| CRM mapping | CRM adapter + versioned integration contract |
 
 Documentation discipline:
 
-- `DEVELOPMENT_PLAN.md` = what is next and in what order;
-- `DEVELOPER_CAPABILITY_MATRIX.md` = what is actually implemented/accepted;
-- `ARCHITECTURE.md` = stable boundaries and dependency rules;
-- ADR = changed invariant/architecture decision;
-- evidence/status = only what was actually proven;
-- no duplicate roadmap is allowed to silently redefine execution order.
+- no parallel normative execution roadmap;
+- every accepted capability PR updates `DEVELOPER_CAPABILITY_MATRIX.md` only for claims it
+  actually changes;
+- invariant changes require ADR/architecture update before implementation acceptance;
+- `docs/INDEX.md` must classify new normative/historical/evidence documents;
+- machine-checkable claims should be enforced by CI rather than prose alone.
 
-## 11. Recommended PR Slicing
+## 17. Recommended PR Slicing
 
-Do not implement a phase as one giant PR. Prefer bounded acceptance slices:
+Do not implement a whole phase in one PR. Preferred order:
 
-- Phase 0: ports/use-case modules -> Worker orchestration extraction -> generated frontend contracts -> documentation/architecture policy consolidation;
-- Phase 1: event contract/domain -> D1 migration -> outbox dispatcher/idempotent consumer -> catch-up query;
-- Phase 2: client aggregate/contact crypto -> D1 adapter -> assignment/reassignment -> API/UI;
-- Phase 3: search projection schema -> query service -> API -> UI;
-- Phase 4: mailbox domain state expansion -> cloud runtime adapter contract -> scheduler/Queue consumer;
-- Phase 5: durable device jobs -> Bridge claim/result -> synthetic Camoufox mailbox mode;
-- Phase 6: notification hub DO -> WebSocket auth/reauth -> catch-up/reconnect -> frontend realtime state;
-- Phase 7: routes/features/details incrementally by bounded context;
-- Phase 8: cross-component acceptance only after component gates are stable;
-- Phase 9: CRM contracts first, adapter/cutover second.
+```text
+Phase 0H profile grant
+  -> 0I client grant
+  -> 0J identity governance lifecycle
+  -> 0K coordinator ingress
+  -> 0L use-case Cargo boundaries
+  -> 0M generated TS + frontend feature boundary
+  -> 0N route classifier + architecture/docs inventory
 
-Each slice gets its own issue, branch, exact-head CI acceptance and squash merge.
+Phase 1 event contract/domain
+  -> persistence migration
+  -> dispatcher/idempotent consumer
+  -> retry/DLQ/replay
+  -> authorized catch-up
 
-## 12. Final Product Definition Of Done
+Phase 2 client aggregate/contact crypto
+  -> D1 adapter
+  -> merge/assignment lifecycle
+  -> API/UI projections
 
-The expanded standalone + CRM-ready architecture is complete only when all of the following are accepted at their correct evidence level:
+Phase 3 read-model schema
+  -> global query service
+  -> client-mail query contracts/fakes
+  -> API/UI integration
 
-- owner creates and finds a client through UI;
-- client relates to multiple profiles;
-- a profile has no more than one active primary client assignment;
-- member cannot see ungranted profiles or client cards;
-- search never reveals forbidden resources;
-- contact PII is encrypted and exact lookup uses tenant-keyed HMAC;
-- Gmail/IMAP Worker and Camoufox mailbox worker implement one job contract;
-- mailbox result is durable before realtime notification;
-- online UI receives safe change notification within the accepted latency SLO;
-- offline UI catches up after reconnect;
-- duplicate Queue delivery creates no duplicate result/counter/event;
-- membership revoke closes realtime sessions and denies new commands;
-- Bridge offline state preserves mailbox work as `PENDING_DEVICE`;
-- WebSocket is never used as the local Camoufox command channel;
-- UI never shows `Saved` before authoritative commit;
-- D1 is authoritative for `active_generation_id`; R2 generations are encrypted and immutable; Bridge local profiles are materializations/cache/workspaces rather than cross-device authority;
-- Bridge verifies generation freshness through the control plane before writer launch and materializes the authoritative generation when local state is stale;
-- a changed browser session creates a new generation and only verified R2 upload plus fenced D1 compare-and-set can activate it;
-- R2/network failure never discards unsynced dirty local state, and stale devices/sessions cannot overwrite a newer active generation;
-- standalone `client_id` can link to CRM Party without changing profile IDs;
-- CRM integration does not require R2-generation migration or browser-lifecycle rewrite;
-- all external production gates are separately satisfied with real reviewable evidence.
+Phase 4 cloud mailbox provider contract
+  -> scheduler/Queue
+  -> provider message search/body
 
-## 13. First Execution Slice
+Phase 5 durable device jobs
+  -> Bridge claim/result
+  -> browser-lane message search/body
 
-The next implementation issue should be **Phase 0 / Application Boundary Convergence**. It should not add product features. Its bounded goal is to move one representative capability (recommended: client/profile ACL query+mutation path) from Worker-owned orchestration into application use-case services using ports, then add a permanent rule that prevents the old direct-adapter pattern from spreading.
+Phase 6 notification hub
+  -> auth/reauth
+  -> catch-up/reconnect
+  -> frontend realtime
 
-After that pattern is accepted, migrate mailbox and generation handlers using the same architecture. Only then start Phase 1 event/notification persistence.
+Phase 7 UI capabilities incrementally
+Phase 8 cross-component acceptance
+Phase 9 CRM contracts/projection before cutover adapters
+Phase 10 external evidence/promotion
+```
 
-## 14. External Technical References
+Each slice gets its own issue, branch, bounded diff, exact-head CI and guarded squash merge.
 
-- Cloudflare Durable Objects WebSockets / Hibernation: https://developers.cloudflare.com/durable-objects/best-practices/websockets/
-- Cloudflare Queues delivery guarantees: https://developers.cloudflare.com/queues/reference/delivery-guarantees/
-- Cloudflare D1 index guidance: https://developers.cloudflare.com/d1/best-practices/use-indexes/
+## 18. Final Product Definition Of Done
 
-These references validate platform capabilities only. They do not constitute deployment or production evidence for this repository.
+The standalone + CRM-ready target is complete only when, at the correct evidence level:
+
+- clean application/adapter boundaries are enforced in code and CI;
+- client/profile/user/mailbox search is grant-safe;
+- authorized users can search a client's messages and read the full body;
+- mailbox content remains outside ordinary telemetry/audit/event payloads;
+- Client Registry 2.0 and profile-client assignment semantics are complete;
+- cloud and browser mailbox lanes share provider-neutral application contracts;
+- durable jobs/retries/DLQ/replay are operationally safe;
+- realtime is durable-event-backed and never authoritative itself;
+- complete UI works without CLI for ordinary product/admin workflows;
+- D1 is authoritative for catalog pointers, DO for session coordination, R2 for immutable
+  encrypted objects and Bridge for local runtime/materialization;
+- stale devices/sessions cannot overwrite newer generations;
+- standalone `client_id` links to CRM Party without changing profile IDs;
+- CRM integration requires no R2 generation migration or browser lifecycle rewrite;
+- all External production gates are separately satisfied with real evidence.
+
+## 19. Immediate Next Action
+
+Finish **Phase 0H (#92 / PR #93)** against the latest `main` using the fail-safe application
+boundary sequence above. Only after its guarded merge start a fresh Phase 0I branch from the
+new accepted `main`.
