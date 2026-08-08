@@ -71,6 +71,15 @@ pub trait IntegrationEventOutboxPort {
     ) -> Result<(), IntegrationEventPortError>;
 }
 
+pub trait IntegrationEventSourcePort {
+    /// Loads one canonical, already-sanitized integration event by durable identity.
+    async fn load_event(
+        &self,
+        tenant_id: &TenantId,
+        event_id: &OutboxEventId,
+    ) -> Result<Option<IntegrationEventEnvelope>, IntegrationEventPortError>;
+}
+
 pub trait IntegrationEventPublisherPort {
     async fn publish(
         &self,
