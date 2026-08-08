@@ -121,7 +121,7 @@ def test_delivery_state_shape_and_sanitization() -> None:
             """,
             """
             UPDATE notification_deliveries
-            SET delivery_state='DEAD_LETTER', attempt_count=3,
+            SET delivery_state='DEAD_LETTER', attempt_count=1,
                 last_attempt_at_ms=30, terminal_at_ms=NULL,
                 failure_class='DEPENDENCY_UNAVAILABLE', updated_at_ms=30
             WHERE tenant_id=? AND consumer_id=? AND outbox_event_id=?
@@ -135,6 +135,61 @@ def test_delivery_state_shape_and_sanitization() -> None:
                 "CHECK constraint failed",
             )
             connection.rollback()
+    finally:
+        connection.close()
+
+
+def test_delivery_transition_sequence_and_terminal_are_fail_closed() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        apply_migrations(connection)
+        seed_actor(connection)
+        seed_event(connection, EVENT_A, 10)
+        ready_delivery(connection)
+        connection.commit()
+
+        expect_integrity_error(
+            lambda: connection.execute(
+                """
+                UPDATE notification_deliveries
+                SET delivery_state='DEAD_LETTER', attempt_count=3,
+                    last_attempt_at_ms=30, terminal_at_ms=30,
+                    failure_class='INTERNAL_FAILURE', updated_at_ms=30
+                WHERE tenant_id=? AND consumer_id=? AND outbox_event_id=?
+                """,
+                (TENANT_ID, CONSUMER_ID, EVENT_A),
+            ),
+            "notification_delivery_attempt_sequence_invalid",
+        )
+        connection.rollback()
+
+        connection.execute(
+            """
+            UPDATE notification_deliveries
+            SET delivery_state='DEAD_LETTER', attempt_count=1,
+                last_attempt_at_ms=30, terminal_at_ms=30,
+                failure_class='INTERNAL_FAILURE', updated_at_ms=30
+            WHERE tenant_id=? AND consumer_id=? AND outbox_event_id=?
+            """,
+            (TENANT_ID, CONSUMER_ID, EVENT_A),
+        )
+        connection.commit()
+
+        expect_integrity_error(
+            lambda: connection.execute(
+                """
+                UPDATE notification_deliveries
+                SET delivery_state='RETRY_SCHEDULED', attempt_count=2,
+                    last_attempt_at_ms=40, next_attempt_at_ms=50,
+                    terminal_at_ms=NULL,
+                    failure_class='DEPENDENCY_UNAVAILABLE', updated_at_ms=40
+                WHERE tenant_id=? AND consumer_id=? AND outbox_event_id=?
+                """,
+                (TENANT_ID, CONSUMER_ID, EVENT_A),
+            ),
+            "notification_delivery_terminal_immutable",
+        )
     finally:
         connection.close()
 
@@ -283,6 +338,7 @@ def test_delivery_source_is_fail_closed() -> None:
 def main() -> int:
     tests = (
         test_delivery_state_shape_and_sanitization,
+        test_delivery_transition_sequence_and_terminal_are_fail_closed,
         test_delivery_retention_cannot_delete_canonical_event,
         test_cursor_is_source_bound_monotonic_and_live_member_only,
         test_delivery_source_is_fail_closed,
