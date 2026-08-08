@@ -117,12 +117,14 @@ jobs:
         run: >-
           cargo test --locked
           -p notification-domain
+          -p application-ports
           -p use-cases-notifications
 
       - name: Check Phase 1B notification inner boundaries for Workers target
         run: >-
           cargo check --locked
           -p notification-domain
+          -p application-ports
           -p use-cases-notifications
           --target wasm32-unknown-unknown
 
