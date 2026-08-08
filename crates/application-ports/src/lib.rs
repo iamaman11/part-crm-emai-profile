@@ -4,6 +4,7 @@ pub mod audit;
 pub mod clients;
 pub mod clock;
 pub mod commands;
+pub mod coordinator_ingress;
 pub mod generations;
 pub mod identity;
 pub mod identity_ceremonies;
