@@ -1,0 +1,39 @@
+name: Phase 0N Inventory Materialize
+
+on:
+  push:
+    branches:
+      - phase0n-routing-inventory
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phase0n-inventory-materialize
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase0n-routing-inventory
+      - name: Generate inventory
+        run: python scripts/generate-architecture-inventory.py --write
+      - name: Commit inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add architecture/inventory.json
+          if git diff --cached --quiet; then
+            echo 'Inventory already current.'
+            exit 0
+          fi
+          git commit -m 'Phase 0N: materialize architecture inventory'
+          git push origin HEAD:phase0n-routing-inventory
