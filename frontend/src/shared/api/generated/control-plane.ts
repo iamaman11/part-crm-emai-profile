@@ -49,6 +49,49 @@ export interface MutationReceipt {
   resultCode: string;
 }
 
+export interface NotificationCatchUpAckRequest {
+  eventId: string;
+}
+
+export interface NotificationCatchUpProjection {
+  events: ReadonlyArray<NotificationEventProjection>;
+}
+
+export interface NotificationEventProjection {
+  aggregateId: string;
+  aggregateType: string;
+  eventId: string;
+  eventType: string;
+  occurredAtMs: number;
+}
+
+export interface NotificationOperationsProjection {
+  catchUpLagCount: number;
+  deadLetterCount: number;
+  deliveredCount: number;
+  maxAttemptCount: number;
+  oldestOpenAgeMs: number;
+  pendingReplayCount: number;
+  readyCount: number;
+  retryScheduledCount: number;
+}
+
+export const NotificationReplayReasonValues = ["DEPENDENCY_RECOVERED", "OPERATOR_REMEDIATION", "INTEGRITY_REVALIDATED"] as const;
+export type NotificationReplayReason = (typeof NotificationReplayReasonValues)[number];
+
+export interface NotificationReplayReceipt {
+  replayId: string;
+  resultCode: string;
+}
+
+export interface NotificationReplayRequest {
+  auditEventId: string;
+  consumerId: string;
+  eventId: string;
+  reasonClass: NotificationReplayReason;
+  replayId: string;
+}
+
 export const ProblemCodeValues = ["not_found", "forbidden", "invalid_request", "invalid_state", "version_conflict", "lease_conflict", "replay_rejected", "dependency_unavailable", "integrity_failure", "internal_failure", "conflict"] as const;
 export type ProblemCode = (typeof ProblemCodeValues)[number];
 

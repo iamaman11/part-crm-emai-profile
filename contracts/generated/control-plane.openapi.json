@@ -152,6 +152,178 @@
         ],
         "type": "object"
       },
+      "NotificationCatchUpAckRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "eventId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId"
+        ],
+        "type": "object"
+      },
+      "NotificationCatchUpProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationEventProjection"
+            },
+            "maxItems": 200,
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "type": "object"
+      },
+      "NotificationEventProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "aggregateId": {
+            "type": "string"
+          },
+          "aggregateType": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "occurredAtMs": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "eventId",
+          "aggregateType",
+          "aggregateId",
+          "eventType",
+          "occurredAtMs"
+        ],
+        "type": "object"
+      },
+      "NotificationOperationsProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "catchUpLagCount": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deadLetterCount": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deliveredCount": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxAttemptCount": {
+            "format": "uint16",
+            "maximum": 64,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "oldestOpenAgeMs": {
+            "format": "uint64",
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "pendingReplayCount": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "readyCount": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retryScheduledCount": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "readyCount",
+          "retryScheduledCount",
+          "deliveredCount",
+          "deadLetterCount",
+          "pendingReplayCount",
+          "maxAttemptCount",
+          "oldestOpenAgeMs",
+          "catchUpLagCount"
+        ],
+        "type": "object"
+      },
+      "NotificationReplayReason": {
+        "enum": [
+          "DEPENDENCY_RECOVERED",
+          "OPERATOR_REMEDIATION",
+          "INTEGRITY_REVALIDATED"
+        ],
+        "type": "string"
+      },
+      "NotificationReplayReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "replayId": {
+            "type": "string"
+          },
+          "resultCode": {
+            "enum": [
+              "prepared",
+              "duplicate"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "replayId",
+          "resultCode"
+        ],
+        "type": "object"
+      },
+      "NotificationReplayRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "auditEventId": {
+            "type": "string"
+          },
+          "consumerId": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "reasonClass": {
+            "$ref": "#/components/schemas/NotificationReplayReason"
+          },
+          "replayId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "replayId",
+          "consumerId",
+          "eventId",
+          "auditEventId",
+          "reasonClass"
+        ],
+        "type": "object"
+      },
       "ProblemCode": {
         "enum": [
           "not_found",
@@ -541,6 +713,327 @@
             "description": "Successful response"
           },
           "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/notifications/events": {
+      "get": {
+        "operationId": "getNotificationCatchUp",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationCatchUpProjection"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/notifications/events/ack": {
+      "post": {
+        "operationId": "acknowledgeNotificationCatchUp",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationCatchUpAckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Catch-up cursor advanced or already current"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/notifications/operations": {
+      "get": {
+        "operationId": "getNotificationOperations",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationOperationsProjection"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          }
+        }
+      }
+    },
+    "/api/v1/tenants/{tenantId}/notifications/replays": {
+      "post": {
+        "operationId": "prepareNotificationReplay",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenantId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationReplayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationReplayReceipt"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemPayload"
+                }
+              }
+            },
+            "description": "Problem response"
+          },
+          "403": {
             "content": {
               "application/problem+json": {
                 "schema": {

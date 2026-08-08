@@ -72,6 +72,10 @@
       {
         "capability": "mailboxes",
         "module": "crates/control-plane-contract/src/routes/mailboxes.rs"
+      },
+      {
+        "capability": "notifications",
+        "module": "crates/control-plane-contract/src/routes/notifications.rs"
       }
     ],
     "public_routes": [
@@ -356,6 +360,46 @@
         ],
         "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}/run",
         "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
+        "authenticated": true
+      },
+      {
+        "route_class": "NotificationEventCollectionApi",
+        "capability": "notifications",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/notifications/events",
+        "example_path": "/api/v1/tenants/tenant_01/notifications/events",
+        "authenticated": true
+      },
+      {
+        "route_class": "NotificationEventAckApi",
+        "capability": "notifications",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/notifications/events/ack",
+        "example_path": "/api/v1/tenants/tenant_01/notifications/events/ack",
+        "authenticated": true
+      },
+      {
+        "route_class": "NotificationReplayCollectionApi",
+        "capability": "notifications",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/notifications/replays",
+        "example_path": "/api/v1/tenants/tenant_01/notifications/replays",
+        "authenticated": true
+      },
+      {
+        "route_class": "NotificationOperationsApi",
+        "capability": "notifications",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/notifications/operations",
+        "example_path": "/api/v1/tenants/tenant_01/notifications/operations",
         "authenticated": true
       }
     ]
