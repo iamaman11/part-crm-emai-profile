@@ -11,7 +11,7 @@ use use_cases_notifications::integration_events::{
     IntegrationEventOperationError, dispatch_pending_events,
 };
 use use_cases_notifications::retry::RetryPolicy;
-use worker::{Date, Env, Error, MessageBatch, QueueRetryOptionsBuilder, Result};
+use worker::{Date, Env, Error, MessageBatch, MessageExt, QueueRetryOptionsBuilder, Result};
 
 pub const INTEGRATION_EVENTS_QUEUE_BINDING: &str = "INTEGRATION_EVENTS";
 const FOUNDATION_CONSUMER_ID: &str = "consumer_foundation_v1";
