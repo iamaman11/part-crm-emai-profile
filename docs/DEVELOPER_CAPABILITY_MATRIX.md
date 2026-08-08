@@ -1,7 +1,7 @@
 # Developer Capability and Module Matrix
 
 **Status:** normative accepted implementation/evidence orientation  
-**Date:** 2026-08-08  
+**Date:** 2026-08-09  
 **Execution order:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
 
 ## 1. Purpose
@@ -40,8 +40,8 @@ No level by itself means production readiness.
 | Mailbox operations baseline | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, secret-handle-only DTOs, idempotency/audit/outbox, Worker metadata/job paths and synthetic provider decisions. | Mailbox-domain decomposition, real cloud/browser execution and message search/body retrieval are Phase 2D–2F Target/External. |
 | React web UI baseline | Composed / Synthetic | React/Vite/TS shell and current session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces. Migrated session/client/problem/mutation contracts are generated. Sibling-feature internal/alias imports are fail-closed. | Feature-owned route composition (A5), complete routes, full generated public DTO coverage, Client Mail and complete admin UX remain Phase 2C/2H Target. |
 | Cross-component standalone acceptance | Composed / Synthetic | Deterministic metadata-only manifest covering governed D1, generation integrity, Worker/adapters native+WASM, synthetic Bridge and frontend build/tests. | Real deployment/provider/device evidence is External. |
-| Integration event envelope/outbox | Composed / Synthetic | Phase 1A versioned envelope, event registry, evolved D1 outbox, metadata-only notification events, Queue dispatch, source guards and durable consumer idempotency. | Phase 1B retry/backoff/DLQ/cursors/catch-up/retention/operations remains Target. |
-| Notification delivery/catch-up operations | Target | Phase 1A provides the durable event source and current idempotent consumer foundation. | `notification-domain`, `use-cases-notifications`, delivery attempts, DLQ, cursors, replay, catch-up and retention are Phase 1B. |
+| Integration event envelope/outbox | Composed / Synthetic | Phase 1A versioned envelope, event registry, evolved D1 outbox, metadata-only notification events, Queue dispatch, source guards and durable consumer idempotency; Phase 1B preserves the canonical event source for replay. | Future capability event types/consumers must extend the same registry and durable-source rules. |
+| Notification delivery/catch-up operations | Composed / Synthetic | Phase 1B `notification-domain` + `use-cases-notifications`, deterministic bounded retry/DLQ, authorized immutable-audit replay, grant-aware durable catch-up/cursors, bounded compaction, sanitizer-safe owner operations, generated notification HTTP contracts and thin Worker Queue/Scheduled/API composition. | New mailbox/device consumers remain Phase 2E/2F; realtime UserNotificationHub remains Phase 2G. |
 | Client contact protection | Target | Data-classification and architecture contracts require encrypted display values and tenant-keyed exact lookup. | Actual client contact encryption/HMAC/key-version persistence is **not** implemented; Phase 2A–2B owns it. |
 | Client Registry 2.0 | Target | Expert standalone registry target and strict 2A–2C sequence are normative. | `client-domain` split, `use-cases-clients`, contacts, lifecycle/merge, projections and UI remain Target. |
 | Read models/global search | Target | CQRS/query/security target is normative. | `use-cases-query`, read-model ports/projections and global search are Phase 2D. |
@@ -68,9 +68,9 @@ because phase numbering changed.
 | A7 | Route classifier modularization | **Accepted** — capability-owned fail-closed classifiers. | Preserve for new route families. |
 | A8 | CQRS/read-model boundary | **Open**. | Phase 2D via independent `use-cases-query`. |
 | 6.1 | Integration event envelope | **Accepted foundation** in Phase 1A. | Extend registry/versioned events only. |
-| 6.2 | Durable-before-notify | **Accepted foundation / ongoing invariant**. | 1B durable delivery; 2E–2G/2I full failure-order proof. |
-| 6.3 | At-least-once consumer idempotency | **Accepted for current event consumer, not every future consumer**. | 1B hardening; 2E/2F new consumers. |
-| 6.4 | Authorization-before-projection | **Partially composed** on current paths. | 1B catch-up; 2D query/provider fetch; 2G realtime. |
+| 6.2 | Durable-before-notify | **Accepted through Phase 1B durable delivery**; notification state/replay intent is durable before publication/signal. | Preserve; 2E–2G/2I extend the same ordering. |
+| 6.3 | At-least-once consumer idempotency | **Accepted for current notification delivery/replay consumer** with bounded retry/DLQ and duplicate-neutral canonical replay. | 2E/2F new consumers must preserve it. |
+| 6.4 | Authorization-before-projection | **Composed for Phase 1B catch-up** with live membership/grants before metadata projection. | 2D query/provider fetch; 2G realtime. |
 | 6.5 | PII contact protection | **Open for client contacts**. Phase 1A sanitizer does not satisfy this requirement. | 2A protected-value/crypto boundary; 2B D1 encryption/HMAC/key rotation. |
 | 6.6 | Profile materialization | **Library/Synthetic foundation**. | 2F browser/device integration; 2I recovery; 2J real physical evidence. |
 
@@ -92,8 +92,14 @@ crates/control-plane-contract
 crates/use-cases-identity
   independent identity governance + verified-identity application context
 
+crates/notification-domain
+  provider-neutral delivery attempt/terminal/cursor invariants
+
+crates/use-cases-notifications
+  independent notification dispatch, retry, replay, catch-up, retention and operations application context
+
 crates/use-cases
-  remaining shared application contexts plus accepted Phase 1A event orchestration pending the fixed extractions in DEVELOPMENT_PLAN
+  remaining shared application contexts; notification ownership is fully extracted
 
 crates/cloudflare-adapters
   D1/Access/DO/R2/Queue/provider implementations depending inward
@@ -108,8 +114,8 @@ frontend
   React presentation/navigation/query cache; migrated public API types consume generated TypeScript
 ```
 
-The fixed future extraction points are normative in `DEVELOPMENT_PLAN.md`: notifications in 1B,
-clients in 2A, query in 2D, mailboxes in 2E and devices in 2F.
+The notification extraction point was accepted in Phase 1B. Remaining fixed extraction points are
+normative in `DEVELOPMENT_PLAN.md`: clients in 2A, query in 2D, mailboxes in 2E and devices in 2F.
 
 ## 6. Current End-To-End Boundaries
 
