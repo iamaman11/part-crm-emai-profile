@@ -13,6 +13,7 @@ PORT_MODULES = (
     "clients",
     "clock",
     "commands",
+    "coordinator_ingress",
     "generations",
     "identity",
     "identity_ceremonies",
@@ -25,6 +26,7 @@ PORT_MODULES = (
 USE_CASE_MODULES = (
     "client_grants",
     "clients",
+    "coordinator_ingress",
     "error",
     "generations",
     "identity_acl",
@@ -48,6 +50,11 @@ PORT_OWNERS = {
     ),
     "clock.rs": ("pub trait ClockPort",),
     "commands.rs": ("pub struct CommandExecutionEvidence",),
+    "coordinator_ingress.rs": (
+        "pub trait CoordinatorIngressApplicationPort",
+        "pub struct CoordinatorProfileAccess",
+        "pub struct CoordinatorRuntimeResult",
+    ),
     "generations.rs": (
         "pub struct GenerationObjectReference",
         "pub trait GenerationObjectStorePort",
@@ -100,6 +107,11 @@ USE_CASE_OWNERS = {
         "pub struct ExecuteCreateClientCommand",
         "pub async fn execute_create_client",
         "pub async fn get_visible_client",
+    ),
+    "coordinator_ingress.rs": (
+        "pub struct CoordinatorIngressAccess",
+        "pub async fn prepare_coordinator_ingress",
+        "pub async fn execute_prepared_coordinator_ingress",
     ),
     "error.rs": ("pub struct ApplicationError",),
     "generations.rs": (
