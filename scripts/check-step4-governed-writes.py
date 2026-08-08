@@ -16,6 +16,7 @@ GENERATION_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_profi
 INVITATION_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_invitation_acceptance.rs"
 CLIENT_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_clients.rs"
 CLIENT_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "clients.rs"
+CLIENT_GRANT_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "client_grants.rs"
 PROFILE_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_profiles.rs"
 PROFILE_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "profiles.rs"
 PROFILE_ASSIGNMENT_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "profile_assignments.rs"
@@ -48,6 +49,12 @@ LEGACY_WORKER_MUTATION_TOKENS = (
     "ProfileGrantValue",
     "async fn update_profile_grant(",
     "struct ProfileGrantRequest",
+    'const CLIENT_GRANT_COMMAND: &str = "client.grant";',
+    'const CLIENT_GRANT_REVOKE_COMMAND: &str = "client.grant_revoke";',
+    "ClientGrantMutation",
+    "ClientGrantValue",
+    "async fn update_client_grant(",
+    "struct ClientGrantRequest",
 )
 
 REQUIRED_WORKER_MUTATION_TOKENS = (
@@ -60,8 +67,6 @@ REQUIRED_WORKER_MUTATION_TOKENS = (
     'const OWNER_TRANSFER_COMMAND: &str = "membership.owner_transfer";',
     'const INVITATION_CREATE_COMMAND: &str = "invitation.create";',
     'const INVITATION_ACCEPT_COMMAND: &str = "invitation.accept";',
-    'const CLIENT_GRANT_COMMAND: &str = "client.grant";',
-    'const CLIENT_GRANT_REVOKE_COMMAND: &str = "client.grant_revoke";',
 )
 
 REQUIRED_CLIENT_APPLICATION_TOKENS = (
@@ -71,10 +76,23 @@ REQUIRED_CLIENT_APPLICATION_TOKENS = (
     "ClientReplayDecision::Conflict",
 )
 
+REQUIRED_CLIENT_GRANT_APPLICATION_TOKENS = (
+    'const CLIENT_GRANT_COMMAND: &str = "client.grant";',
+    'const CLIENT_GRANT_REVOKE_COMMAND: &str = "client.grant_revoke";',
+    "decide_client_grant_replay",
+    "port.grant_client(actor, &write)",
+    "port.revoke_client_grant(actor, &write)",
+    "ClientGrantPortErrorClass::Conflict",
+)
+
 REQUIRED_CLIENT_ADAPTER_TOKENS = (
     "CreateClientMutation",
     "requested_display_name",
     "create_client(actor, mutation)",
+    "ClientGrantMutation",
+    "MutationEnvelope",
+    ".grant_client(actor, mutation)",
+    ".revoke_client_grant(actor, mutation)",
 )
 
 REQUIRED_PROFILE_APPLICATION_TOKENS = (
@@ -140,6 +158,7 @@ def main() -> int:
     acceptance = INVITATION_ADAPTER.read_text(encoding="utf-8")
     client_adapter = CLIENT_ADAPTER.read_text(encoding="utf-8")
     client_use_cases = CLIENT_USE_CASES.read_text(encoding="utf-8")
+    client_grant_use_cases = CLIENT_GRANT_USE_CASES.read_text(encoding="utf-8")
     profile_adapter = PROFILE_ADAPTER.read_text(encoding="utf-8")
     profile_use_cases = PROFILE_USE_CASES.read_text(encoding="utf-8")
     profile_assignment_use_cases = PROFILE_ASSIGNMENT_USE_CASES.read_text(encoding="utf-8")
@@ -159,6 +178,9 @@ def main() -> int:
     for token in REQUIRED_CLIENT_APPLICATION_TOKENS:
         if token not in client_use_cases:
             errors.append(f"client application orchestration is missing governed token: {token}")
+    for token in REQUIRED_CLIENT_GRANT_APPLICATION_TOKENS:
+        if token not in client_grant_use_cases:
+            errors.append(f"client grant orchestration is missing governed token: {token}")
     for token in REQUIRED_CLIENT_ADAPTER_TOKENS:
         if token not in client_adapter:
             errors.append(f"client D1 adapter is missing atomic mutation token: {token}")
