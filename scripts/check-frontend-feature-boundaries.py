@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Enforce frontend sibling-feature boundaries without relying on TypeScript path aliases.
+"""Enforce frontend sibling-feature boundaries without resolver-alias escape hatches.
 
 Feature modules may import shared/entities/app composition through normal relative imports and may
 import declared npm packages. A feature may import a sibling feature only through that sibling's
 explicit root public API (`index.ts` / `index.tsx` or the feature directory itself).
 
-Unknown non-relative imports from feature source are rejected. This intentionally makes opaque
-TypeScript/Vite aliases fail closed instead of providing an alternate path around the boundary.
+Unknown non-relative imports from feature source are rejected. TypeScript `paths` and custom Vite
+`resolve` configuration are also rejected until this checker explicitly understands their resolved
+targets, so a future alias cannot silently create a second route into sibling internals.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ STATIC_IMPORT_RE = re.compile(
     re.MULTILINE | re.DOTALL,
 )
 DYNAMIC_IMPORT_RE = re.compile(r"\bimport\s*\(\s*[\"']([^\"']+)[\"']\s*\)")
+VITE_RESOLVE_RE = re.compile(r"\bresolve\s*:")
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,54 @@ def declared_packages(frontend_root: Path) -> set[str]:
         if isinstance(values, dict):
             packages.update(str(name) for name in values)
     return packages
+
+
+def resolver_configuration_violations(frontend_root: Path) -> list[Violation]:
+    violations: list[Violation] = []
+
+    for tsconfig in sorted(frontend_root.glob("tsconfig*.json")):
+        try:
+            payload = json.loads(tsconfig.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            violations.append(
+                Violation(
+                    tsconfig,
+                    "",
+                    f"cannot audit TypeScript resolver configuration: {error}",
+                )
+            )
+            continue
+        compiler_options = payload.get("compilerOptions", {})
+        if not isinstance(compiler_options, dict):
+            continue
+        paths = compiler_options.get("paths")
+        if isinstance(paths, dict) and paths:
+            violations.append(
+                Violation(
+                    tsconfig,
+                    "paths",
+                    "TypeScript path aliases are forbidden until the feature-boundary checker resolves and validates their targets",
+                )
+            )
+
+    for vite_config in sorted(frontend_root.glob("vite.config.*")):
+        try:
+            source = vite_config.read_text(encoding="utf-8")
+        except OSError as error:
+            violations.append(
+                Violation(vite_config, "", f"cannot audit Vite resolver configuration: {error}")
+            )
+            continue
+        if VITE_RESOLVE_RE.search(source):
+            violations.append(
+                Violation(
+                    vite_config,
+                    "resolve",
+                    "custom Vite resolve configuration is forbidden until the feature-boundary checker resolves and validates aliases",
+                )
+            )
+
+    return violations
 
 
 def import_specifiers(source: str) -> set[str]:
@@ -97,7 +147,6 @@ def lexical_feature_target(specifier: str, feature_names: set[str]) -> tuple[str
 
 def inspect_feature_source(
     source_path: Path,
-    frontend_root: Path,
     features_root: Path,
     packages: set[str],
     feature_names: set[str],
@@ -158,7 +207,7 @@ def scan(root: Path) -> list[Violation]:
 
     feature_names = {entry.name for entry in features_root.iterdir() if entry.is_dir()}
     packages = declared_packages(frontend_root)
-    violations: list[Violation] = []
+    violations = resolver_configuration_violations(frontend_root)
 
     for source_path in sorted(features_root.rglob("*")):
         if not source_path.is_file() or source_path.suffix not in SOURCE_SUFFIXES:
@@ -166,7 +215,6 @@ def scan(root: Path) -> list[Violation]:
         violations.extend(
             inspect_feature_source(
                 source_path=source_path,
-                frontend_root=frontend_root,
                 features_root=features_root,
                 packages=packages,
                 feature_names=feature_names,
@@ -185,6 +233,20 @@ def print_violations(root: Path, violations: list[Violation]) -> None:
         print(f"{display}:{detail}: {violation.reason}", file=sys.stderr)
 
 
+def require_fixture_rejection(
+    fixture_root: Path,
+    expected_reason_fragment: str,
+    label: str,
+) -> bool:
+    violations = scan(fixture_root)
+    if any(expected_reason_fragment in violation.reason for violation in violations):
+        print(f"{label} negative fixture rejected as expected")
+        return True
+    print(f"{label} negative fixture was not rejected", file=sys.stderr)
+    print_violations(fixture_root, violations)
+    return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=REPO_ROOT)
@@ -192,14 +254,25 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.self_test:
-        fixture_root = REPO_ROOT / "tests" / "frontend-feature-boundary" / "fixtures" / "sibling-internal"
-        violations = scan(fixture_root)
-        if not any("imports sibling 'profiles' internals" in violation.reason for violation in violations):
-            print("negative sibling-feature fixture was not rejected", file=sys.stderr)
-            print_violations(fixture_root, violations)
-            return 1
-        print("frontend sibling-feature negative fixture rejected as expected")
-        return 0
+        fixture_base = REPO_ROOT / "tests" / "frontend-feature-boundary" / "fixtures"
+        results = [
+            require_fixture_rejection(
+                fixture_base / "sibling-internal",
+                "imports sibling 'profiles' internals",
+                "sibling-feature",
+            ),
+            require_fixture_rejection(
+                fixture_base / "alias-bypass",
+                "TypeScript path aliases are forbidden",
+                "TypeScript alias bypass",
+            ),
+            require_fixture_rejection(
+                fixture_base / "alias-bypass",
+                "custom Vite resolve configuration is forbidden",
+                "Vite alias bypass",
+            ),
+        ]
+        return 0 if all(results) else 1
 
     root = args.root.resolve()
     violations = scan(root)
