@@ -11,6 +11,7 @@ pub fn client_application(env: &Env) -> Result<D1ClientApplicationRepository> {
         env.d1(D1_CATALOG_BINDING)?,
         env.d1(D1_CATALOG_BINDING)?,
         env.d1(D1_CATALOG_BINDING)?,
+        env.d1(D1_CATALOG_BINDING)?,
     ))
 }
 
