@@ -68,11 +68,11 @@ async fn bootstrap_owner(request: &mut Request, env: &Env, tenant_id: &str) -> R
         actor_id.clone(),
         verified.correlation_id().clone(),
     );
-    let evidence = match command_evidence::from_request(request, &evidence_actor, body.request_digest)
-    {
-        Ok(value) => value,
-        Err(_) => return invalid_request(correlation_id),
-    };
+    let evidence =
+        match command_evidence::from_request(request, &evidence_actor, body.request_digest) {
+            Ok(value) => value,
+            Err(_) => return invalid_request(correlation_id),
+        };
     let snapshot = VerifiedIdentitySnapshot::new(
         verified.identity().subject(),
         verified.identity().contact_hint().map(str::to_owned),
@@ -221,11 +221,11 @@ async fn accept_invitation(
         actor_id.clone(),
         verified.correlation_id().clone(),
     );
-    let evidence = match command_evidence::from_request(request, &evidence_actor, body.request_digest)
-    {
-        Ok(value) => value,
-        Err(_) => return invalid_request(correlation_id),
-    };
+    let evidence =
+        match command_evidence::from_request(request, &evidence_actor, body.request_digest) {
+            Ok(value) => value,
+            Err(_) => return invalid_request(correlation_id),
+        };
     let snapshot = VerifiedIdentitySnapshot::new(
         verified.identity().subject(),
         verified.identity().contact_hint().map(str::to_owned),
