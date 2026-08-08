@@ -9,6 +9,7 @@ mod mailbox_bindings;
 mod mailbox_jobs;
 mod mutation_failure;
 mod profile_coordinator;
+mod profile_coordinator_ingress;
 mod profile_generations;
 mod profiles;
 mod request_evidence;
@@ -84,7 +85,7 @@ async fn dispatch_profile_coordinator(request: &mut Request, env: &Env) -> Resul
         .collect();
     let tenant_id = segments.get(3).copied().unwrap_or_default();
     let profile_id = segments.get(5).copied().unwrap_or_default();
-    profile_coordinator::dispatch(request, env, tenant_id, profile_id).await
+    profile_coordinator_ingress::dispatch(request, env, tenant_id, profile_id).await
 }
 
 fn binding_probe(env: &Env) -> Result<Response> {
