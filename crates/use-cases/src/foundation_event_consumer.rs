@@ -48,7 +48,8 @@ mod tests {
             _event: &IntegrationEventEnvelope,
             _persisted_at: UnixMillis,
         ) -> Result<(), IntegrationEventPortError> {
-            self.notification_calls.set(self.notification_calls.get() + 1);
+            self.notification_calls
+                .set(self.notification_calls.get() + 1);
             Ok(())
         }
     }
