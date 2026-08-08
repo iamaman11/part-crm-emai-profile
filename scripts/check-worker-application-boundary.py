@@ -7,7 +7,6 @@ import argparse
 import tempfile
 from pathlib import Path
 
-
 FORBIDDEN_CLIENT_TRANSPORT_TOKENS = (
     "cloudflare_adapters::d1_",
     "D1CatalogRepository",
@@ -87,8 +86,8 @@ def validate(root: Path) -> list[str]:
     client_adapter_path = root / "crates/cloudflare-adapters/src/d1_clients.rs"
     identity_governance_ports_path = root / "crates/application-ports/src/identity_governance.rs"
     identity_ceremony_ports_path = root / "crates/application-ports/src/identity_ceremonies.rs"
-    identity_governance_use_cases_path = root / "crates/use-cases/src/identity_governance.rs"
-    identity_ceremony_use_cases_path = root / "crates/use-cases/src/identity_ceremonies.rs"
+    identity_governance_use_cases_path = root / "crates/use-cases-identity/src/identity_governance.rs"
+    identity_ceremony_use_cases_path = root / "crates/use-cases-identity/src/identity_ceremonies.rs"
     identity_governance_adapter_path = root / "crates/cloudflare-adapters/src/d1_identity_governance.rs"
     identity_ceremony_adapter_path = root / "crates/cloudflare-adapters/src/d1_identity_ceremonies.rs"
 
@@ -287,8 +286,9 @@ def write_self_test_fixture(root: Path) -> None:
     worker = root / "apps/control-plane-worker/src"
     ports = root / "crates/application-ports/src"
     use_cases = root / "crates/use-cases/src"
+    identity_use_cases = root / "crates/use-cases-identity/src"
     adapters = root / "crates/cloudflare-adapters/src"
-    for path in (worker, ports, use_cases, adapters):
+    for path in (worker, ports, use_cases, identity_use_cases, adapters):
         path.mkdir(parents=True, exist_ok=True)
 
     (worker / "clients.rs").write_text(
@@ -353,12 +353,12 @@ def write_self_test_fixture(root: Path) -> None:
         "pub struct BootstrapOwnerWrite;\npub struct InvitationAcceptWrite;\n",
         encoding="utf-8",
     )
-    (use_cases / "identity_governance.rs").write_text(
+    (identity_use_cases / "identity_governance.rs").write_text(
         "pub async fn execute_owner_transfer() {}\npub async fn execute_invitation_create() {}\n"
         "pub async fn execute_membership_status() {}\npub fn authorize_identity_governance() {}\n",
         encoding="utf-8",
     )
-    (use_cases / "identity_ceremonies.rs").write_text(
+    (identity_use_cases / "identity_ceremonies.rs").write_text(
         'const OWNER_BOOTSTRAP_COMMAND: &str = "tenant.owner_bootstrap";\n'
         'const INVITATION_ACCEPT_COMMAND: &str = "invitation.accept";\n'
         "pub async fn execute_owner_bootstrap() {}\npub async fn execute_invitation_accept() {}\n",
