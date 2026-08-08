@@ -3,7 +3,8 @@ use cloudflare_adapters::integration_event_queue::{
     IntegrationEventQueueMessage, QueueIntegrationEventPublisher,
 };
 use profile_platform_primitives::{OpaqueId, UnixMillis};
-use use_cases::integration_events::{accept_delivery_once, dispatch_pending_events};
+use use_cases::foundation_event_consumer::accept_foundation_delivery_once;
+use use_cases::integration_events::dispatch_pending_events;
 use worker::{Date, Env, Error, MessageBatch, Result};
 
 pub const INTEGRATION_EVENTS_QUEUE_BINDING: &str = "INTEGRATION_EVENTS";
@@ -37,7 +38,7 @@ pub async fn consume(
 
     for message in message_batch.messages()? {
         let event = message.body().clone().into_event().map_err(port_error)?;
-        accept_delivery_once(&consumer, &consumer_id, &event, consumed_at)
+        accept_foundation_delivery_once(&consumer, &consumer_id, &event, consumed_at)
             .await
             .map_err(operation_error)?;
         message.ack();
