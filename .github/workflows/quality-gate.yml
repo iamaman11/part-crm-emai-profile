@@ -36,6 +36,8 @@ jobs:
           scripts/check-step5-profile-coordinator.py
           scripts/check-step6-windows-bridge.py
           scripts/check-no-temporary-step4.py
+          scripts/check-frontend-feature-boundaries.py
+          scripts/generate-frontend-contracts.py
           scripts/test-d1-schema.py
           scripts/test-step4-identity-acl.py
           scripts/test-step4-command-guards.py
@@ -101,6 +103,15 @@ jobs:
 
       - name: Protect accepted v1 contract baseline
         run: bash scripts/check-contract-baseline-immutable.sh
+
+      - name: Enforce frontend sibling-feature boundaries
+        run: python scripts/check-frontend-feature-boundaries.py
+
+      - name: Prove sibling feature internals are rejected
+        run: python scripts/check-frontend-feature-boundaries.py --self-test
+
+      - name: Verify generated frontend contracts are current
+        run: python scripts/generate-frontend-contracts.py --check
 
       - name: Test D1 schema and transaction invariants
         run: python scripts/test-d1-schema.py
