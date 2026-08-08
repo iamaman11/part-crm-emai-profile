@@ -18,6 +18,22 @@ pub struct RetryPolicy {
 }
 
 impl RetryPolicy {
+    pub fn configured(
+        base_delay_ms: u64,
+        max_delay_ms: u64,
+        jitter_basis_points: u16,
+        max_attempts: u16,
+    ) -> Result<Self, RetryPolicyConfigError> {
+        let attempt_limit = AttemptLimit::new(max_attempts)
+            .map_err(|_| RetryPolicyConfigError::AttemptLimitOutOfBounds)?;
+        Self::new(
+            base_delay_ms,
+            max_delay_ms,
+            jitter_basis_points,
+            attempt_limit,
+        )
+    }
+
     pub fn new(
         base_delay_ms: u64,
         max_delay_ms: u64,
@@ -145,6 +161,7 @@ fn deterministic_jitter_sample(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RetryPolicyConfigError {
+    AttemptLimitOutOfBounds,
     JitterExceedsBound,
     MaxDelayBeforeBase,
     MaxDelayExceedsBound,
@@ -154,6 +171,9 @@ pub enum RetryPolicyConfigError {
 impl fmt::Display for RetryPolicyConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::AttemptLimitOutOfBounds => {
+                "notification retry attempt limit is outside accepted bounds"
+            }
             Self::JitterExceedsBound => "notification retry jitter exceeds accepted bound",
             Self::MaxDelayBeforeBase => {
                 "notification retry max delay must be at least the base delay"
@@ -202,7 +222,7 @@ mod tests {
     use profile_platform_primitives::{OutboxEventId, UnixMillis};
 
     fn policy() -> Result<RetryPolicy, Box<dyn std::error::Error>> {
-        Ok(RetryPolicy::new(1_000, 60_000, 1_000, AttemptLimit::new(6)?)?)
+        Ok(RetryPolicy::configured(1_000, 60_000, 1_000, 6)?)
     }
 
     #[test]
@@ -211,6 +231,10 @@ mod tests {
         assert_eq!(
             RetryPolicy::new(0, 1_000, 0, attempts),
             Err(RetryPolicyConfigError::ZeroBaseDelay)
+        );
+        assert_eq!(
+            RetryPolicy::configured(1_000, 2_000, 0, 0),
+            Err(RetryPolicyConfigError::AttemptLimitOutOfBounds)
         );
         assert_eq!(
             RetryPolicy::new(2_000, 1_000, 0, attempts),
@@ -254,7 +278,7 @@ mod tests {
     #[test]
     fn automatic_attempt_limit_becomes_terminal_without_retry_time()
     -> Result<(), Box<dyn std::error::Error>> {
-        let policy = RetryPolicy::new(100, 1_000, 0, AttemptLimit::new(2)?)?;
+        let policy = RetryPolicy::configured(100, 1_000, 0, 2)?;
         let event_id = OutboxEventId::parse("outbox_retry_terminal")?;
         let first = policy.transition_after_failure(
             DeliveryState::new(),
@@ -278,7 +302,7 @@ mod tests {
 
     #[test]
     fn timestamp_overflow_is_fail_closed() -> Result<(), Box<dyn std::error::Error>> {
-        let policy = RetryPolicy::new(10, 10, 0, AttemptLimit::new(2)?)?;
+        let policy = RetryPolicy::configured(10, 10, 0, 2)?;
         let event_id = OutboxEventId::parse("outbox_retry_overflow")?;
         assert_eq!(
             policy.transition_after_failure(
@@ -294,7 +318,7 @@ mod tests {
 
     #[test]
     fn jitter_is_bounded_by_configured_max() -> Result<(), Box<dyn std::error::Error>> {
-        let policy = RetryPolicy::new(10_000, 10_000, 2_500, AttemptLimit::new(2)?)?;
+        let policy = RetryPolicy::configured(10_000, 10_000, 2_500, 2)?;
         let event_id = OutboxEventId::parse("outbox_retry_capped")?;
         let state = policy.transition_after_failure(
             DeliveryState::new(),
