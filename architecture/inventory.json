@@ -34,7 +34,8 @@
       "migrations/d1/0008_profile_generation_deactivation.sql",
       "migrations/d1/0009_governed_mutation_error_taxonomy.sql",
       "migrations/d1/0010_mailbox_vertical_slice.sql",
-      "migrations/d1/0011_mailbox_governed_guards.sql"
+      "migrations/d1/0011_mailbox_governed_guards.sql",
+      "migrations/d1/0012_integration_event_foundation.sql"
     ]
   },
   "routing": {
