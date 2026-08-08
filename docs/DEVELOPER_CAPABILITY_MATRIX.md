@@ -6,22 +6,21 @@
 
 ## 1. Purpose
 
-This matrix answers **what is actually implemented and at what evidence level on accepted
-`main`**. It does not define what should be implemented next.
+This matrix answers **what is actually implemented on accepted `main` and at what evidence level**.
+It does not define execution order; `DEVELOPMENT_PLAN.md` does.
 
-A feature branch or PR description is not accepted implementation evidence. A capability
-becomes an accepted `main` claim only after the bounded diff is merged with the required
-exact-head permanent CI/evidence.
+A feature branch, queued branch, issue or PR description is not accepted implementation evidence.
+A capability becomes an accepted `main` claim only after guarded merge under the exact-head policy.
 
 ## 2. Evidence Levels
 
 | Level | Meaning |
 |---|---|
-| **Composed** | Wired into the accepted executable composition root and covered by its CI lane. |
+| **Composed** | Wired into the accepted executable composition root and covered by permanent CI. |
 | **Library** | Typed reusable implementation exists but is not fully wired into the accepted user path. |
-| **Synthetic** | Invariants/protocol are proven with deterministic fake/generated evidence; real provider/runtime is not claimed. |
-| **Target** | Normatively planned but executable implementation is absent/incomplete. |
-| **External** | Requires real provider, physical host, policy, signing or independent evidence outside repository-local CI. |
+| **Synthetic** | Invariants/protocol are proven deterministically without claiming a real provider/runtime. |
+| **Target** | Normatively planned but executable implementation is absent or incomplete. |
+| **External** | Requires real provider, physical host, signing, policy or independent evidence. |
 
 No level by itself means production readiness.
 
@@ -29,54 +28,51 @@ No level by itself means production readiness.
 
 | Capability | Level on accepted `main` | Accepted scope | Still Target / External |
 |---|---|---|---|
-| Rust workspace / primitives | Composed | Exact toolchain, typed opaque IDs, tenant/actor context, positive versions, strict lint/policy gates. | External runtime is not required for this claim. |
-| Identity / memberships / ACL | Composed | Access identity adapter, memberships, owner bootstrap/transfer, invitation create/accept, membership status lifecycle, profile/client grants, neutral disclosure and governed D1 commands. Identity governance plus verified-identity ceremonies are independently Cargo-isolated in `use-cases-identity`; profile/client grant/revoke remain application-owned behind thin capability transports. | Production Access/IdP deployment is External; later client/profile/mailbox application crate extraction remains just-in-time Target work only where growth pressure justifies it. |
-| Client Registry | Composed | Current create/query/assignment/grant metadata paths and D1 schema. Client create/query and client grant/revoke are application-owned; profile assignment remains non-authorizing. | Registry 2.0 contacts/merge/richer lifecycle and CRM Party authority are Target. |
-| Profile catalog | Composed | Current create/query/grant/assignment metadata paths, typed profile state and active generation pointer. Create/query, assignment and profile grant/revoke are application-owned; assignment remains non-authorizing. | Remaining Phase 0 convergence is outside these accepted profile catalog paths. |
-| Profile generation registry | Composed | Governed metadata register/query/verify/activate/deactivate/quarantine, replay/evidence, audit/outbox and pointer integrity. | Production R2 verification/device unwrap/cross-device evidence is External. |
-| Profile coordinator | Composed | Durable Object journal, sequence/version/epoch/fencing, timeout/drain/recovery, application-thin HTTP ingress and D1 projection with permanent Step-5 boundary enforcement. | Remote production concurrency evidence is External. |
-| Full Profile Bridge operator flow | Composed / Synthetic | Explicit synthetic executable composes claim, fake device identity/enrollment, coordinator lease, generation ownership, writer lock, local lifecycle, fake Camouhost protocol and failure ordering. | Real Camoufox, production device keys, remote enrollment/coordinator and production R2 lifecycle are External. |
-| Device identity/key ports | Synthetic | Typed ports and deterministic fake implementations. | Production CNG/DPAPI/TPM protection/revoke/recovery is External. |
-| Camouhost IPC/process supervision | Synthetic | Versioned typed messages, fake Camouhost, process state machine and clean-stop evidence. | Real bundled Python/Camoufox lifecycle on physical host is External. |
-| Runtime bundle | Synthetic | Manifest/inventory/path safety/digest/approval/rollback tests and synthetic selection. | Trusted signed distribution/update channel is External. |
-| Local profile lifecycle | Library / Synthetic | Workspace marking, inventory, lock ownership, clone-only recovery, quota/support policy and composed synthetic operator tests. | Full real-browser/kernel-lock physical-host evidence is External. |
-| Encrypted cloud generations | Synthetic | XChaCha20-Poly1305 container, immutable in-memory lifecycle, pointer/rollback/quarantine/orphan policy. | Production R2 adapter/device unwrap/remote recovery atomicity evidence is External. |
-| Certification | Synthetic | Typed policy, deterministic matrix, drift/prohibited outcomes, privacy-safe summary/update rollback state. | Real Camoufox observations and independent certification are External. |
-| Mailbox operations | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, secret-handle-only DTOs, idempotency/audit/outbox, Worker metadata/job paths and synthetic provider-decision path. | Real Gmail/IMAP/browser execution, message search/body retrieval, production scheduling and provider evidence are Target/External. |
-| React web UI | Composed / Synthetic | Accepted React/Vite/TS operator shell and current session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces with permanent Frontend Gate. The migrated session/client/problem/mutation public contract slice is generated deterministically from the accepted Rust contract, and sibling-feature internal/alias imports are fail-closed. | Remaining public contract coverage expands incrementally with its backend slices; complete detail/list routes, client Mail search/body UI and real Bridge/provider deployment remain Target/External. |
-| Cross-component standalone acceptance | Composed / Synthetic | Metadata-only deterministic manifest/validator covering governed D1, generation integrity, Worker/adapters native+WASM, synthetic Bridge and frontend tests/build. Permanent lanes enforce thin identity/client/profile/coordinator Worker boundaries, assignment-as-ACL negative evidence, capability-owned fail-closed route composition and deterministic architecture-inventory consistency. | Real deployment/provider/device evidence is External. |
-| Integration events / durable notifications | Composed / Synthetic | Accepted Phase 1A versioned envelope, evolved D1 outbox, metadata-only `notification_events`, tenant/consumer/outbox idempotency, sanitized Queue dispatch, thin scheduled/Queue ingress, canonical-source guards and deterministic duplicate/failure-order evidence. | Phase 1B delivery hardening/catch-up/operations is the unique NEXT; retry/backoff/max-attempt/DLQ/cursors/retention remain Target until accepted. |
-| Client Registry 2.0 | Target | Existing client create/query/grant/assignment baseline is accepted; the expert standalone registry target is defined by strict Phase 2A–2C sequencing. | Phase 2 is blocked until Phase 1B acceptance; encrypted contacts, lifecycle/merge and complete registry UI remain Target. |
-| Read models/global search | Target | CQRS-lite/query boundary and search targets defined. | Strict Phase 2D implementation is not accepted. |
-| Client-scoped mailbox message search/body | Target | Product/query/security contract is normative. | Phase 2D defines the query contract; Phase 2E cloud and 2F browser execution remain Target. |
-| Realtime UserNotificationHub | Target | Durable-event-backed topology is normative. | Strict Phase 2G implementation is not accepted. |
-| Complete standalone UI/E2E | Target | UI/acceptance target is normative. | Strict Phase 2H–2I implementation is not accepted; Phase 2J closes production evidence/rollout. |
-| External CRM integration | Target | Future-only contract-isolated Party/adapter direction is documented separately; it is not part of active product completion. | No CRM implementation is active; it can be considered only after standalone Phase 2J completion. |
-| Production readiness | External | Evidence intake/readiness interlocks exist; Phase 2J is the final standalone evidence/rollout gate. | Required external evidence remains incomplete; `production_ready=false` until Phase 2J acceptance. |
+| Rust workspace / primitives | Composed | Exact toolchain, typed opaque IDs, tenant/actor context, positive versions, strict lint/policy gates. | New capability IDs are added only in owning phases. |
+| Identity / memberships / ACL | Composed | Access identity adapter, memberships, owner bootstrap/transfer, invitations, membership lifecycle, profile/client grants, neutral disclosure and governed D1 commands. `use-cases-identity` is independently isolated. | Production Access/IdP evidence is External. |
+| Client Registry baseline | Composed | Current client create/query/grant/assignment metadata paths and D1 schema. Client create/query and grants are application-owned; assignment is non-authorizing. | Domain decomposition, encrypted contacts, richer lifecycle/merge and complete Registry UI are Phase 2A–2C Target. |
+| Profile catalog | Composed | Current create/query/grant/assignment metadata paths, profile state and active generation pointer. | Remaining real external runtime evidence is later Target/External. |
+| Profile generation registry | Composed | Governed register/query/verify/activate/deactivate/quarantine, replay/evidence, audit/outbox and pointer integrity. | Production R2/device unwrap/cross-device evidence is External. |
+| Profile coordinator | Composed | Durable Object journal, sequence/version/epoch/fencing, timeout/drain/recovery, application-thin HTTP ingress and D1 projection. | Remote production concurrency evidence is External. |
+| Full Profile Bridge operator flow | Composed / Synthetic | Synthetic executable composes claim, fake device identity, coordinator lease, generation ownership, writer lock, local lifecycle and fake Camouhost failure ordering. | Real Camoufox, production keys, remote enrollment/coordinator and real R2 lifecycle are External. |
+| Local profile lifecycle / materialization | Library / Synthetic | Workspace marking, inventory, lock ownership, clone-only recovery, quota/support policy and synthetic operator composition. | Real browser/kernel-lock, multi-device and production R2 evidence remains Phase 2F/2I/2J Target/External. |
+| Encrypted cloud generations | Synthetic | XChaCha20-Poly1305 container, immutable lifecycle, pointer/rollback/quarantine/orphan policy. | Production R2/device unwrap/remote recovery atomicity evidence is External. |
+| Mailbox operations baseline | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, secret-handle-only DTOs, idempotency/audit/outbox, Worker metadata/job paths and synthetic provider decisions. | Mailbox-domain decomposition, real cloud/browser execution and message search/body retrieval are Phase 2D–2F Target/External. |
+| React web UI baseline | Composed / Synthetic | React/Vite/TS shell and current session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces. Migrated session/client/problem/mutation contracts are generated. Sibling-feature internal/alias imports are fail-closed. | Feature-owned route composition (A5), complete routes, full generated public DTO coverage, Client Mail and complete admin UX remain Phase 2C/2H Target. |
+| Cross-component standalone acceptance | Composed / Synthetic | Deterministic metadata-only manifest covering governed D1, generation integrity, Worker/adapters native+WASM, synthetic Bridge and frontend build/tests. | Real deployment/provider/device evidence is External. |
+| Integration event envelope/outbox | Composed / Synthetic | Phase 1A versioned envelope, event registry, evolved D1 outbox, metadata-only notification events, Queue dispatch, source guards and durable consumer idempotency. | Phase 1B retry/backoff/DLQ/cursors/catch-up/retention/operations remains Target. |
+| Notification delivery/catch-up operations | Target | Phase 1A provides the durable event source and current idempotent consumer foundation. | `notification-domain`, `use-cases-notifications`, delivery attempts, DLQ, cursors, replay, catch-up and retention are Phase 1B. |
+| Client contact protection | Target | Data-classification and architecture contracts require encrypted display values and tenant-keyed exact lookup. | Actual client contact encryption/HMAC/key-version persistence is **not** implemented; Phase 2A–2B owns it. |
+| Client Registry 2.0 | Target | Expert standalone registry target and strict 2A–2C sequence are normative. | `client-domain` split, `use-cases-clients`, contacts, lifecycle/merge, projections and UI remain Target. |
+| Read models/global search | Target | CQRS/query/security target is normative. | `use-cases-query`, read-model ports/projections and global search are Phase 2D. |
+| Client-scoped mailbox message search/body | Target | Product/query/security contract is normative. | 2D defines query contract; 2E cloud and 2F browser implementations remain Target. |
+| Device job/browser mailbox execution | Target / Synthetic foundation | Bridge/session/materialization primitives exist synthetically. | Durable server device-job domain/application path and real browser lane are Phase 2F. |
+| Realtime UserNotificationHub | Target | Durable-event-backed topology is normative. | Phase 2G implementation is not accepted. |
+| Complete standalone UI/E2E | Target | Product target is normative. | Phase 2H–2I implementation is not accepted; Phase 2J closes real rollout evidence. |
+| External CRM integration | Target / Future | Future-only contract-isolated Party/adapter direction is documented separately. | No active CRM implementation; it may be considered only after standalone Phase 2J. |
+| Production readiness | External | Evidence intake/readiness interlocks exist. | Mandatory external evidence is incomplete; `production_ready=false` until Phase 2J acceptance. |
 
-## 4. Current Application-Boundary Convergence
+## 4. Architecture Obligation Status
 
-Accepted capability behavior and clean application ownership are separate claims. Phase 0 moves
-provider-independent orchestration behind application use cases without changing public behavior.
+This table prevents historical architecture requirements from being misread as completed merely
+because phase numbering changed.
 
-Accepted Phase 0 slices through **0N** establish application ownership for client create/query/grant,
-profile create/query/assignment/grant, mailbox binding/job, generation, identity governance/
-ceremonies and coordinator ingress, plus the first real compile-time application Cargo boundary,
-generated frontend contract/feature-boundary enforcement, modular fail-closed route ownership and
-a deterministic machine-readable architecture/docs inventory. Phase 0 is complete on accepted
-`main`.
-
-As of this matrix date:
-
-- accepted `main` includes Phase 0K application-thin coordinator ingress with permanent Step-5 ownership enforcement;
-- accepted Phase 0L places identity governance plus verified-identity ceremonies in independent `use-cases-identity`, proven by native tests, explicit Workers-WASM compile and composed regressions;
-- `identity_acl` intentionally remains in shared `use-cases` because its current helpers cross client/profile contexts;
-- accepted Phase 0M uses `control-plane-contract` as the canonical migrated public Rust transport source, commits deterministic OpenAPI/TypeScript output, consumes generated types on real frontend API surfaces, and permanently rejects sibling-feature internals plus resolver-alias bypasses;
-- accepted Phase 0N splits route matching into capability-owned classifiers behind one composed fail-closed entrypoint, prevents unknown `/api/*`, `/auth/*` and `/bridge/*` variants from reaching SPA assets, and permanently verifies deterministic `architecture/inventory.json` plus selected documentation consistency claims;
-- accepted Phase 1A composes the versioned integration-event envelope, evolved durable outbox, metadata-only notification persistence, Queue dispatcher/consumer and durable consumer idempotency behind provider-neutral ports, with canonical-source and payload-sanitization evidence on native/WASM paths;
-- the current execution plan, not this matrix, determines subsequent order; Phase 1B is the unique NEXT, Phase 2A–2J follow strictly in order after Phase 1B, and external CRM is future development only.
-
-Do not interpret a feature branch's `Composed` wiring or PR description as accepted `main`.
+| ID | Requirement | Accepted-main status | Fixed execution owner |
+|---|---|---|---|
+| A1 | Adapter dependency boundary | **Accepted** — corrected inward dependency rule + executable allowlists. | Preserve continuously. |
+| A2 | `application-ports` splitting | **Accepted** — Phase 0A/PR #79 split capability modules with thin facade. | Preserve; add modules with owning capabilities. |
+| A3 | Domain aggregate splitting | **Open** — `client-domain` and `mailbox-domain` remain monolithic today. | Client half 2A; mailbox half 2E. |
+| A4 | OpenAPI -> TypeScript generation | **Partially accepted** — generator/CI and migrated slice exist, but handwritten Profile/Mailbox/Generation/Coordinator projections still exist. | Expand generated coverage with every new 2A–2H public surface. |
+| A5 | Feature-sliced SPA route composition | **Open** — root router still directly assembles feature workspaces. | Phase 2C before route-family expansion. |
+| A6 | Architecture consistency gate | **Accepted** — deterministic inventory/docs consistency in CI. | Expand coverage with new modules/routes/contracts. |
+| A7 | Route classifier modularization | **Accepted** — capability-owned fail-closed classifiers. | Preserve for new route families. |
+| A8 | CQRS/read-model boundary | **Open**. | Phase 2D via independent `use-cases-query`. |
+| 6.1 | Integration event envelope | **Accepted foundation** in Phase 1A. | Extend registry/versioned events only. |
+| 6.2 | Durable-before-notify | **Accepted foundation / ongoing invariant**. | 1B durable delivery; 2E–2G/2I full failure-order proof. |
+| 6.3 | At-least-once consumer idempotency | **Accepted for current event consumer, not every future consumer**. | 1B hardening; 2E/2F new consumers. |
+| 6.4 | Authorization-before-projection | **Partially composed** on current paths. | 1B catch-up; 2D query/provider fetch; 2G realtime. |
+| 6.5 | PII contact protection | **Open for client contacts**. Phase 1A sanitizer does not satisfy this requirement. | 2A protected-value/crypto boundary; 2B D1 encryption/HMAC/key rotation. |
+| 6.6 | Profile materialization | **Library/Synthetic foundation**. | 2F browser/device integration; 2I recovery; 2J real physical evidence. |
 
 ## 5. Current Module Ownership
 
@@ -88,33 +84,32 @@ crates/*-domain
   pure provider-independent invariants/state machines
 
 crates/application-ports
-  capability-owned interfaces required by application workflows, including accepted integration-event outbox/publisher/notification/idempotency ports
+  one accepted Cargo crate with capability-owned interface modules
 
 crates/control-plane-contract
-  accepted canonical public control-plane transport contract, deterministic OpenAPI export and capability-owned fail-closed route classifiers behind one composed entrypoint
+  canonical migrated public control-plane contracts, generated OpenAPI source and fail-closed route classifiers
 
 crates/use-cases-identity
-  accepted independent identity governance + verified-identity ceremony application context
+  independent identity governance + verified-identity application context
 
 crates/use-cases
-  accepted shared application crate for remaining contexts; identity modules are compatibility re-exports only; Phase 1A dispatcher and foundation consumer semantics are application-owned here
+  remaining shared application contexts plus accepted Phase 1A event orchestration pending the fixed extractions in DEVELOPMENT_PLAN
 
 crates/cloudflare-adapters
-  D1/Access/DO/R2/Queue/provider implementations that depend inward, including the accepted Phase 1A D1 integration-event repository and Queue publisher adapter
+  D1/Access/DO/R2/Queue/provider implementations depending inward
 
 apps/control-plane-worker
-  thin Worker/DO/Queue/Scheduled composition and transport; coordinator and accepted Phase 1A event ingress remain application-thin on accepted main
+  thin Worker/DO/Queue/Scheduled composition and transport
 
 apps/profile-bridge
   Windows-native local/device/runtime composition
 
 frontend
-  React presentation/navigation/query cache; migrated public API types consume committed generated TypeScript, with permanent sibling-feature boundary enforcement
+  React presentation/navigation/query cache; migrated public API types consume generated TypeScript
 ```
 
-A rule expressible without a provider belongs in domain/application code, not an adapter/UI.
-Lease/fencing/session state belongs to `session-domain`; a Durable Object is its runtime
-coordination adapter and is not a second business catalog.
+The fixed future extraction points are normative in `DEVELOPMENT_PLAN.md`: notifications in 1B,
+clients in 2A, query in 2D, mailboxes in 2E and devices in 2F.
 
 ## 6. Current End-To-End Boundaries
 
@@ -123,57 +118,52 @@ coordination adapter and is not a second business catalog.
 ```text
 React / same-origin request
   -> fail-closed route classification
-  -> Access identity verification
-  -> live membership/grant resolution or verified pre-membership ceremony context
-  -> capability application use case
+  -> verified identity
+  -> live membership/grant resolution
+  -> capability application command/query
   -> typed adapter
   -> governed durable result/projection
 ```
 
-The Worker always re-authorizes. UI does not invent authorization or storage access. For owner
-transfer, invitation create and membership status, non-owner denial remains neutral before
-request-body parsing; application use cases own authorization, checked versions, command domains
-and exact replay sequencing. Owner bootstrap and invitation accept use separate verified-identity
-ceremony contracts so a transient actor context used for evidence generation is never treated as
-membership authorization. Concrete D1 mutation types remain adapter-only.
+UI never invents authorization or storage access. Concrete D1 mutation types remain adapter-only.
 
 ### Profile generation/runtime path
 
-Catalog generation metadata and synthetic Bridge/runtime composition are repository-tested,
-but real R2/device/Camoufox behavior remains External. D1 is authoritative for the active
-generation pointer; DO/session fencing controls writer concurrency; local workspace is
-materialization/cache/recoverable dirty state, not cloud authority.
+D1 is authoritative for generation metadata/active pointer; DO/session fencing owns writer
+coordination; local workspace is materialization/cache/recoverable dirty state, not cloud authority.
+Real R2/device/Camoufox behavior remains External until proven.
 
 ### Mailbox path
 
-Current accepted mailbox capability is metadata/job oriented. Full message payload search/body
-view is a Target product capability. The planned contract is client-scoped and authorized
-before provider fetch; message body is allowed in the authorized product view but not logs,
-audit/events/telemetry.
+Current accepted mailbox capability is metadata/job oriented. Full message search/body view remains
+Target. The planned contract is client-scoped and authorizes before provider fetch; message content
+is permitted only in the authorized response/UI and prohibited from ordinary technical channels.
 
 ## 7. Definition Of A Complete New Capability
 
 A capability is not accepted as Composed until all applicable items exist:
 
 1. versioned public/internal contract;
-2. pure domain decision where provider-independent policy exists;
-3. minimal owned application ports;
-4. application authorization/idempotency/version sequencing;
+2. pure domain decision where provider-independent state exists;
+3. minimal capability-owned application ports;
+4. application authorization/idempotency/version/failure sequencing;
 5. concrete adapter/migration where required;
-6. executable composition wiring;
+6. thin executable composition wiring;
 7. replay/failure/forbidden-access/boundary tests;
-8. permanent CI policy where the boundary matters;
-9. matrix/docs updated only for proven claims;
-10. exact-head green + bounded review + guarded merge;
-11. real external evidence only for provider/physical/runtime claims.
+8. permanent positive + negative CI policy for expensive architecture regressions;
+9. generated public frontend contracts where applicable;
+10. capability matrix/docs updated only for proven claims;
+11. exact-head green + bounded review + guarded merge;
+12. real external evidence only for provider/physical/runtime claims.
 
 ## 8. Documentation Authority
 
-- execution order: `DEVELOPMENT_PLAN.md`;
+- execution order and fixed modular extraction points: `DEVELOPMENT_PLAN.md`;
 - stable architecture: `ARCHITECTURE.md` + accepted ADRs;
 - data handling: `DATA_CLASSIFICATION.md`;
 - product/UI target: `UI_ARCHITECTURE.md`;
 - accepted implementation level: this matrix;
-- historical delivery: `DELIVERY_ROADMAP.md`.
+- historical delivery: `DELIVERY_ROADMAP.md`;
+- post-standalone CRM evolution: `FUTURE_DEVELOPMENT.md`.
 
-See [`INDEX.md`](./INDEX.md) for the repository documentation map.
+See [`INDEX.md`](./INDEX.md) for the documentation map.
