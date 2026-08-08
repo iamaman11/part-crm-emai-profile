@@ -46,7 +46,10 @@ impl IntegrationEventPayload {
         if !trimmed.bytes().all(|byte| {
             byte.is_ascii_alphanumeric()
                 || byte.is_ascii_whitespace()
-                || matches!(byte, b'{' | b'}' | b'[' | b']' | b'"' | b':' | b',' | b'_' | b'-' | b'.')
+                || matches!(
+                    byte,
+                    b'{' | b'}' | b'[' | b']' | b'"' | b':' | b',' | b'_' | b'-' | b'.'
+                )
         }) {
             return Err(IntegrationEventContractError::InvalidPayload);
         }
@@ -209,23 +212,22 @@ fn valid_symbol(value: &str, maximum: usize) -> bool {
     let length = value.len();
     (1..=maximum).contains(&length)
         && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || matches!(byte, b'.' | b'_' | b'-')
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
         })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        INTEGRATION_EVENT_ENVELOPE_VERSION, IntegrationEventEnvelope,
-        IntegrationEventPayload,
+        INTEGRATION_EVENT_ENVELOPE_VERSION, IntegrationEventEnvelope, IntegrationEventPayload,
     };
     use profile_platform_primitives::{
         AggregateVersion, OpaqueId, OutboxEventId, TenantId, UnixMillis,
     };
 
-    fn envelope(payload: IntegrationEventPayload) -> Result<IntegrationEventEnvelope, Box<dyn std::error::Error>> {
+    fn envelope(
+        payload: IntegrationEventPayload,
+    ) -> Result<IntegrationEventEnvelope, Box<dyn std::error::Error>> {
         Ok(IntegrationEventEnvelope::new(
             OutboxEventId::parse("outbox_01JEVENT")?,
             TenantId::parse("tenant_01JEVENT")?,
@@ -240,7 +242,8 @@ mod tests {
     }
 
     #[test]
-    fn versioned_envelope_is_provider_neutral_and_stable() -> Result<(), Box<dyn std::error::Error>> {
+    fn versioned_envelope_is_provider_neutral_and_stable() -> Result<(), Box<dyn std::error::Error>>
+    {
         let event = envelope(IntegrationEventPayload::empty())?;
         assert_eq!(event.envelope_version(), INTEGRATION_EVENT_ENVELOPE_VERSION);
         assert_eq!(event.event_type(), "client.created.v1");
@@ -277,7 +280,10 @@ mod tests {
             r#"{"subject":"private"}"#,
             r#"{"access_token":"token"}"#,
         ] {
-            assert!(IntegrationEventPayload::metadata_json(payload).is_err(), "payload unexpectedly accepted: {payload}");
+            assert!(
+                IntegrationEventPayload::metadata_json(payload).is_err(),
+                "payload unexpectedly accepted: {payload}"
+            );
         }
     }
 
@@ -286,7 +292,10 @@ mod tests {
         let payload = IntegrationEventPayload::metadata_json(
             r#"{"resource_id":"client_01JABCDEF","result_code":"created"}"#,
         )?;
-        assert_eq!(payload.as_str(), r#"{"resource_id":"client_01JABCDEF","result_code":"created"}"#);
+        assert_eq!(
+            payload.as_str(),
+            r#"{"resource_id":"client_01JABCDEF","result_code":"created"}"#
+        );
         envelope(payload)?;
         Ok(())
     }
