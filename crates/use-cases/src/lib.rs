@@ -4,6 +4,7 @@ pub mod client_grants;
 pub mod clients;
 pub mod coordinator_ingress;
 pub mod error;
+pub mod foundation_event_consumer;
 pub mod generations;
 pub mod identity_acl;
 pub mod integration_events;
