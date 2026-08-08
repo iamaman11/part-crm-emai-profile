@@ -23,27 +23,52 @@ REQUIRED_FILES = (
     "crates/notification-domain/src/delivery.rs",
     "crates/notification-domain/src/cursor.rs",
     "crates/application-ports/src/notifications.rs",
+    "crates/application-ports/src/integration_events.rs",
     "crates/use-cases-notifications/src/lib.rs",
+    "crates/use-cases-notifications/src/error.rs",
     "crates/use-cases-notifications/src/integration_events.rs",
     "crates/use-cases-notifications/src/foundation_event_consumer.rs",
     "crates/use-cases-notifications/src/retry.rs",
     "crates/use-cases-notifications/src/delivery.rs",
+    "crates/use-cases-notifications/src/replay.rs",
+    "crates/use-cases-notifications/src/catch_up.rs",
+    "crates/use-cases-notifications/src/retention.rs",
+    "crates/use-cases-notifications/src/operations.rs",
     "crates/cloudflare-adapters/src/d1_notifications.rs",
+    "crates/cloudflare-adapters/src/d1_notification_operations.rs",
+    "crates/cloudflare-adapters/src/d1_integration_events.rs",
     "apps/control-plane-worker/src/integration_events.rs",
     "crates/use-cases/src/integration_events.rs",
     "crates/use-cases/src/foundation_event_consumer.rs",
 )
 
 APPLICATION_PORT_SYMBOLS = (
+    "pub trait NotificationAuthorizationPort",
     "pub trait NotificationDeliveryRepositoryPort",
     "pub trait NotificationCursorRepositoryPort",
     "pub trait NotificationCatchUpRepositoryPort",
     "pub trait NotificationReplayRepositoryPort",
+    "pub trait NotificationRetentionRepositoryPort",
+    "pub trait NotificationOperationsRepositoryPort",
 )
 
-ADAPTER_SYMBOLS = (
+EVENT_PORT_SYMBOLS = ("pub trait IntegrationEventSourcePort",)
+
+DELIVERY_ADAPTER_SYMBOLS = (
     "impl NotificationDeliveryRepositoryPort for D1NotificationRepository",
     "impl NotificationCursorRepositoryPort for D1NotificationRepository",
+)
+
+OPERATIONS_ADAPTER_SYMBOLS = (
+    "impl NotificationAuthorizationPort for D1NotificationOperationsRepository",
+    "impl NotificationCatchUpRepositoryPort for D1NotificationOperationsRepository",
+    "impl NotificationReplayRepositoryPort for D1NotificationOperationsRepository",
+    "impl NotificationRetentionRepositoryPort for D1NotificationOperationsRepository",
+    "impl NotificationOperationsRepositoryPort for D1NotificationOperationsRepository",
+)
+
+EVENT_SOURCE_ADAPTER_SYMBOLS = (
+    "impl IntegrationEventSourcePort for D1IntegrationEventRepository",
 )
 
 WORKER_COMPOSITION_SYMBOLS = (
@@ -77,6 +102,16 @@ PROHIBITED_SOURCE_MARKERS = (
     "thread_rng",
     "getrandom",
     "Math::random",
+)
+
+OPERATIONS_ADAPTER_PROHIBITED_MARKERS = (
+    "payload_json",
+    "IntegrationEventPayload",
+    "serde_json",
+    "message_body",
+    "mail_body",
+    "raw_error",
+    "provider_error",
 )
 
 
@@ -143,12 +178,39 @@ def validate(root: Path) -> list[str]:
                     f"outer/runtime marker {marker!r}"
                 )
 
+    integration_ports = root / "crates/application-ports/src/integration_events.rs"
+    if integration_ports.is_file():
+        text = read(integration_ports)
+        for symbol in EVENT_PORT_SYMBOLS:
+            if symbol not in text:
+                errors.append(f"application-ports/integration_events.rs must own `{symbol}`")
+
     d1_adapter = root / "crates/cloudflare-adapters/src/d1_notifications.rs"
     if d1_adapter.is_file():
         adapter = read(d1_adapter)
-        for symbol in ADAPTER_SYMBOLS:
+        for symbol in DELIVERY_ADAPTER_SYMBOLS:
             if symbol not in adapter:
-                errors.append(f"D1 notification adapter missing `{symbol}`")
+                errors.append(f"D1 notification delivery adapter missing `{symbol}`")
+
+    operations_adapter = root / "crates/cloudflare-adapters/src/d1_notification_operations.rs"
+    if operations_adapter.is_file():
+        adapter = read(operations_adapter)
+        for symbol in OPERATIONS_ADAPTER_SYMBOLS:
+            if symbol not in adapter:
+                errors.append(f"D1 notification operations adapter missing `{symbol}`")
+        for marker in OPERATIONS_ADAPTER_PROHIBITED_MARKERS:
+            if marker in adapter:
+                errors.append(
+                    "D1 notification operations adapter must remain payload/error free; "
+                    f"found {marker!r}"
+                )
+
+    event_adapter = root / "crates/cloudflare-adapters/src/d1_integration_events.rs"
+    if event_adapter.is_file():
+        adapter = read(event_adapter)
+        for symbol in EVENT_SOURCE_ADAPTER_SYMBOLS:
+            if symbol not in adapter:
+                errors.append(f"canonical integration event adapter missing `{symbol}`")
 
     worker_composition = root / "apps/control-plane-worker/src/integration_events.rs"
     if worker_composition.is_file():
@@ -200,17 +262,20 @@ def validate(root: Path) -> list[str]:
     for relative, expected in COMPATIBILITY_FACADES.items():
         path = root / relative
         if path.is_file() and read(path).strip() != expected:
-            errors.append(
-                f"{relative} must remain a thin temporary compatibility re-export"
-            )
+            errors.append(f"{relative} must remain a thin temporary compatibility re-export")
 
     notification_lib = root / "crates/use-cases-notifications/src/lib.rs"
     if notification_lib.is_file():
         lib = read(notification_lib)
         for declaration in (
+            "pub mod catch_up;",
             "pub mod delivery;",
+            "pub mod error;",
             "pub mod foundation_event_consumer;",
             "pub mod integration_events;",
+            "pub mod operations;",
+            "pub mod replay;",
+            "pub mod retention;",
             "pub mod retry;",
         ):
             if declaration not in lib:
@@ -252,6 +317,10 @@ def write_valid_fixture(root: Path) -> None:
         "\n".join(APPLICATION_PORT_SYMBOLS) + "\n",
         encoding="utf-8",
     )
+    (root / "crates/application-ports/src/integration_events.rs").write_text(
+        "\n".join(EVENT_PORT_SYMBOLS) + "\n",
+        encoding="utf-8",
+    )
     (root / "crates/use-cases-notifications/Cargo.toml").write_text(
         "[package]\nname='use-cases-notifications'\nversion='0.1.0'\n"
         "[dependencies]\napplication-ports = {}\ncontracts = {}\n"
@@ -264,7 +333,15 @@ def write_valid_fixture(root: Path) -> None:
         encoding="utf-8",
     )
     (root / "crates/cloudflare-adapters/src/d1_notifications.rs").write_text(
-        "\n".join(ADAPTER_SYMBOLS) + "\n",
+        "\n".join(DELIVERY_ADAPTER_SYMBOLS) + "\n",
+        encoding="utf-8",
+    )
+    (root / "crates/cloudflare-adapters/src/d1_notification_operations.rs").write_text(
+        "\n".join(OPERATIONS_ADAPTER_SYMBOLS) + "\n",
+        encoding="utf-8",
+    )
+    (root / "crates/cloudflare-adapters/src/d1_integration_events.rs").write_text(
+        "\n".join(EVENT_SOURCE_ADAPTER_SYMBOLS) + "\n",
         encoding="utf-8",
     )
     (root / "apps/control-plane-worker/Cargo.toml").write_text(
@@ -282,8 +359,9 @@ def write_valid_fixture(root: Path) -> None:
         encoding="utf-8",
     )
     (root / "crates/use-cases-notifications/src/lib.rs").write_text(
-        "pub mod delivery;\npub mod foundation_event_consumer;\n"
-        "pub mod integration_events;\npub mod retry;\n",
+        "pub mod catch_up;\npub mod delivery;\npub mod error;\n"
+        "pub mod foundation_event_consumer;\npub mod integration_events;\n"
+        "pub mod operations;\npub mod replay;\npub mod retention;\npub mod retry;\n",
         encoding="utf-8",
     )
     for relative, content in COMPATIBILITY_FACADES.items():
@@ -331,11 +409,22 @@ def self_test() -> int:
             return 1
 
         write_valid_fixture(root)
-        adapter = root / "crates/cloudflare-adapters/src/d1_notifications.rs"
-        adapter.write_text("// missing port implementations\n", encoding="utf-8")
+        adapter = root / "crates/cloudflare-adapters/src/d1_notification_operations.rs"
+        adapter.write_text(
+            "\n".join(OPERATIONS_ADAPTER_SYMBOLS) + "\nconst BAD: &str = \"payload_json\";\n",
+            encoding="utf-8",
+        )
         errors = validate(root)
-        if not any("D1 notification adapter missing" in error for error in errors):
-            print("missing D1 notification port implementation fixture unexpectedly passed")
+        if not any("payload/error free" in error for error in errors):
+            print("payload parsing in notification operations adapter unexpectedly passed")
+            return 1
+
+        write_valid_fixture(root)
+        event_adapter = root / "crates/cloudflare-adapters/src/d1_integration_events.rs"
+        event_adapter.write_text("// source port missing\n", encoding="utf-8")
+        errors = validate(root)
+        if not any("canonical integration event adapter missing" in error for error in errors):
+            print("missing canonical event source fixture unexpectedly passed")
             return 1
 
         write_valid_fixture(root)
