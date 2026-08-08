@@ -1,27 +1,22 @@
 use crate::access_session::{
-    correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
+    correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
-use crate::mutation_failure::mutation_failure;
-use crate::request_evidence::{audit_event_id, outbox_event_id};
-use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
-use cloudflare_adapters::d1_identity_acl::{
-    MutationEnvelope, ResolvedActor, ResolvedMembershipRole,
-};
-use cloudflare_adapters::d1_profile_generations::{
-    ActivateGenerationMutation, D1ProfileGenerationRepository, DeactivateGenerationMutation,
-    GenerationProjection, GenerationStatus, QuarantineGenerationMutation,
-    RegisterGenerationMutation, VerifyGenerationMutation,
-};
-use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
-use profile_platform_primitives::{
-    AggregateVersion, AuditEventId, GenerationId, IdempotencyKey, OutboxEventId, ProfileId,
-    UnixMillis,
-};
+use crate::command_evidence;
+use crate::composition::profile_generation_application;
+use application_ports::generations::{GenerationReadModel, GenerationStatus};
+use control_plane_contract::RouteClass;
+use identity_access_domain::MembershipRole;
+use profile_platform_primitives::{ActorContext, AggregateVersion, GenerationId, ProfileId};
 use serde::{Deserialize, Serialize};
-use worker::{Date, Env, Error, Request, Response, Result};
-
-const IDEMPOTENCY_HEADER: &str = "Idempotency-Key";
-const IDEMPOTENCY_TTL_MS: u64 = 86_400_000;
+use use_cases::generations::{
+    GenerationMutationOutcome, GenerationOperationError, ProfileGenerationVersionCommand,
+    QuarantineGenerationCommand, RegisterGenerationCommand, VerifyGenerationCommand,
+    authorize_generation_mutation, execute_activate_generation, execute_deactivate_generation,
+    execute_quarantine_generation, execute_register_generation, execute_verify_generation,
+    get_visible_generation, next_generation_version, validate_generation_registration,
+    validate_generation_verification_reference,
+};
+use worker::{Env, Request, Response, Result};
 
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
@@ -31,393 +26,322 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
         .filter(|segment| !segment.is_empty())
         .collect();
     let tenant_id = segments.get(3).copied().unwrap_or_default();
-    let profile_id = match segments
+    let profile_id = segments
         .get(5)
-        .and_then(|value| ProfileId::parse((*value).to_owned()).ok())
-    {
-        Some(value) => value,
-        None => return neutral_not_found(&correlation_hint(request)),
-    };
+        .and_then(|value| ProfileId::parse((*value).to_owned()).ok());
     let generation_id = segments
         .get(7)
         .and_then(|value| GenerationId::parse((*value).to_owned()).ok());
+
     let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
         return neutral_not_found(&correlation_hint(request));
     };
+    let role = membership_role(&actor);
 
     match route {
-        RouteClass::ProfileGenerationResourceApi => {
-            let Some(generation_id) = generation_id else {
+        RouteClass::ProfileGenerationCollectionApi => {
+            if let Err(error) = authorize_generation_mutation(role) {
+                return operation_failure(actor.actor().correlation_id().as_str(), error);
+            }
+            let Some(profile_id) = profile_id else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            get_generation(env, &actor, &profile_id, &generation_id).await
+            register_generation(request, env, actor.actor(), role, profile_id).await
         }
-        RouteClass::ProfileGenerationCollectionApi => {
-            if actor.role() != ResolvedMembershipRole::TenantOwner {
+        RouteClass::ProfileGenerationResourceApi => {
+            let (Some(profile_id), Some(generation_id)) = (profile_id, generation_id) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
-            }
-            register_generation(request, env, &actor, &profile_id).await
+            };
+            get_generation(env, actor.actor(), role, &profile_id, &generation_id).await
         }
         RouteClass::ProfileGenerationVerifyApi => {
-            if actor.role() != ResolvedMembershipRole::TenantOwner {
-                return neutral_not_found(actor.actor().correlation_id().as_str());
+            if let Err(error) = authorize_generation_mutation(role) {
+                return operation_failure(actor.actor().correlation_id().as_str(), error);
             }
-            let Some(generation_id) = generation_id else {
+            let (Some(profile_id), Some(generation_id)) = (profile_id, generation_id) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            verify_generation(request, env, &actor, &profile_id, &generation_id).await
+            verify_generation(request, env, actor.actor(), role, profile_id, generation_id).await
         }
         RouteClass::ProfileGenerationActivateApi => {
-            if actor.role() != ResolvedMembershipRole::TenantOwner {
-                return neutral_not_found(actor.actor().correlation_id().as_str());
+            if let Err(error) = authorize_generation_mutation(role) {
+                return operation_failure(actor.actor().correlation_id().as_str(), error);
             }
-            let Some(generation_id) = generation_id else {
+            let (Some(profile_id), Some(generation_id)) = (profile_id, generation_id) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            activate_generation(request, env, &actor, &profile_id, &generation_id).await
+            change_profile_generation(
+                request,
+                env,
+                actor.actor(),
+                role,
+                profile_id,
+                generation_id,
+                true,
+            )
+            .await
         }
         RouteClass::ProfileGenerationDeactivateApi => {
-            if actor.role() != ResolvedMembershipRole::TenantOwner {
-                return neutral_not_found(actor.actor().correlation_id().as_str());
+            if let Err(error) = authorize_generation_mutation(role) {
+                return operation_failure(actor.actor().correlation_id().as_str(), error);
             }
-            let Some(generation_id) = generation_id else {
+            let (Some(profile_id), Some(generation_id)) = (profile_id, generation_id) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            deactivate_generation(request, env, &actor, &profile_id, &generation_id).await
+            change_profile_generation(
+                request,
+                env,
+                actor.actor(),
+                role,
+                profile_id,
+                generation_id,
+                false,
+            )
+            .await
         }
         RouteClass::ProfileGenerationQuarantineApi => {
-            if actor.role() != ResolvedMembershipRole::TenantOwner {
-                return neutral_not_found(actor.actor().correlation_id().as_str());
+            if let Err(error) = authorize_generation_mutation(role) {
+                return operation_failure(actor.actor().correlation_id().as_str(), error);
             }
-            let Some(generation_id) = generation_id else {
+            let (Some(profile_id), Some(generation_id)) = (profile_id, generation_id) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            quarantine_generation(request, env, &actor, &profile_id, &generation_id).await
+            quarantine_generation(request, env, actor.actor(), role, profile_id, generation_id)
+                .await
         }
         _ => neutral_not_found(actor.actor().correlation_id().as_str()),
     }
 }
 
-async fn get_generation(
-    env: &Env,
-    actor: &ResolvedActor,
-    profile_id: &ProfileId,
-    generation_id: &GenerationId,
-) -> Result<Response> {
-    let repository = D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?);
-    let Some(generation) = repository
-        .find_visible(
-            actor.actor().tenant_scope(),
-            actor.actor().actor_id(),
-            actor.role(),
-            profile_id,
-            generation_id,
-        )
-        .await?
-    else {
-        return neutral_not_found(actor.actor().correlation_id().as_str());
-    };
-    Response::from_json(&GenerationResponse::from(&generation))
-}
-
 async fn register_generation(
     request: &mut Request,
     env: &Env,
-    actor: &ResolvedActor,
-    profile_id: &ProfileId,
+    actor: &ActorContext,
+    role: MembershipRole,
+    profile_id: ProfileId,
 ) -> Result<Response> {
     let body = match request.json::<RegisterGenerationRequest>().await {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let generation_id = match GenerationId::parse(body.generation_id) {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if !valid_object_key(&body.object_key)
-        || !valid_digest(&body.metadata_digest)
-        || !valid_digest(&body.container_digest)
-    {
-        return invalid_request(request);
+    if let Err(error) = validate_generation_registration(
+        &body.object_key,
+        &body.metadata_digest,
+        &body.container_digest,
+    ) {
+        return operation_failure(actor.correlation_id().as_str(), error);
     }
-    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
+    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if let Some(response) = replay_response(
-        env,
+    let application = profile_generation_application(env)?;
+    match execute_register_generation(
         actor,
-        "profile_generation.register",
-        &envelope,
-        generation_id.as_str(),
-        1,
-        201,
+        role,
+        &application,
+        RegisterGenerationCommand {
+            profile_id,
+            generation_id,
+            object_key: body.object_key,
+            metadata_digest: body.metadata_digest,
+            container_digest: body.container_digest,
+            evidence,
+        },
     )
-    .await?
+    .await
     {
-        return Ok(response);
+        Ok(outcome) => mutation_receipt(&outcome, 201),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
-    let mutation = RegisterGenerationMutation {
-        profile_id,
-        generation_id: &generation_id,
-        object_key: &body.object_key,
-        metadata_digest: &body.metadata_digest,
-        container_digest: &body.container_digest,
-        envelope: envelope.identity(),
-    };
-    match D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .register(actor.actor(), mutation)
-        .await
-    {
-        Ok(_) => mutation_receipt("registered", generation_id.as_str(), 1, 201),
-        Err(error) => mutation_failure(request, error),
+}
+
+async fn get_generation(
+    env: &Env,
+    actor: &ActorContext,
+    role: MembershipRole,
+    profile_id: &ProfileId,
+    generation_id: &GenerationId,
+) -> Result<Response> {
+    let application = profile_generation_application(env)?;
+    match get_visible_generation(actor, role, &application, profile_id, generation_id).await {
+        Ok(generation) => Response::from_json(&GenerationResponse::from(&generation)),
+        Err(GenerationOperationError::NotFound) => {
+            neutral_not_found(actor.correlation_id().as_str())
+        }
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
 
 async fn verify_generation(
     request: &mut Request,
     env: &Env,
-    actor: &ResolvedActor,
-    profile_id: &ProfileId,
-    generation_id: &GenerationId,
+    actor: &ActorContext,
+    role: MembershipRole,
+    profile_id: ProfileId,
+    generation_id: GenerationId,
 ) -> Result<Response> {
     let body = match request.json::<VerifyGenerationRequest>().await {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let expected_version = match AggregateVersion::new(body.expected_generation_version) {
+    let expected_generation_version = match AggregateVersion::new(body.expected_generation_version)
+    {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if !valid_verification_reference(&body.verification_reference) {
-        return invalid_request(request);
+    if let Err(error) = validate_generation_verification_reference(&body.verification_reference) {
+        return operation_failure(actor.correlation_id().as_str(), error);
     }
-    let response_version = match next_version(expected_version) {
-        Some(value) => value,
-        None => return internal_failure(request),
-    };
-    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
+    if let Err(error) = next_generation_version(expected_generation_version) {
+        return operation_failure(actor.correlation_id().as_str(), error);
+    }
+    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    if let Some(response) = replay_response(
-        env,
+    let application = profile_generation_application(env)?;
+    match execute_verify_generation(
         actor,
-        "profile_generation.verify",
-        &envelope,
-        generation_id.as_str(),
-        response_version,
-        200,
+        role,
+        &application,
+        VerifyGenerationCommand {
+            profile_id,
+            generation_id,
+            expected_generation_version,
+            verification_reference: body.verification_reference,
+            evidence,
+        },
     )
-    .await?
+    .await
     {
-        return Ok(response);
-    }
-    let mutation = VerifyGenerationMutation {
-        profile_id,
-        generation_id,
-        expected_generation_version: expected_version,
-        verification_reference: &body.verification_reference,
-        envelope: envelope.identity(),
-    };
-    match D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .verify(actor.actor(), mutation)
-        .await
-    {
-        Ok(_) => mutation_receipt("verified", generation_id.as_str(), response_version, 200),
-        Err(error) => mutation_failure(request, error),
+        Ok(outcome) => mutation_receipt(&outcome, 200),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
 
-async fn activate_generation(
+async fn change_profile_generation(
     request: &mut Request,
     env: &Env,
-    actor: &ResolvedActor,
-    profile_id: &ProfileId,
-    generation_id: &GenerationId,
+    actor: &ActorContext,
+    role: MembershipRole,
+    profile_id: ProfileId,
+    generation_id: GenerationId,
+    activate: bool,
 ) -> Result<Response> {
-    let body = match request.json::<ActivateGenerationRequest>().await {
+    let body = match request.json::<ProfileGenerationVersionRequest>().await {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let expected_version = match AggregateVersion::new(body.expected_profile_version) {
+    let expected_profile_version = match AggregateVersion::new(body.expected_profile_version) {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let response_version = match next_version(expected_version) {
-        Some(value) => value,
-        None => return internal_failure(request),
-    };
-    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    if let Some(response) = replay_response(
-        env,
-        actor,
-        "profile_generation.activate",
-        &envelope,
-        generation_id.as_str(),
-        response_version,
-        200,
-    )
-    .await?
-    {
-        return Ok(response);
+    if let Err(error) = next_generation_version(expected_profile_version) {
+        return operation_failure(actor.correlation_id().as_str(), error);
     }
-    let mutation = ActivateGenerationMutation {
+    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let application = profile_generation_application(env)?;
+    let command = ProfileGenerationVersionCommand {
         profile_id,
         generation_id,
-        expected_profile_version: expected_version,
-        envelope: envelope.identity(),
+        expected_profile_version,
+        evidence,
     };
-    match D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .activate(actor.actor(), mutation)
-        .await
-    {
-        Ok(_) => mutation_receipt("activated", generation_id.as_str(), response_version, 200),
-        Err(error) => mutation_failure(request, error),
-    }
-}
-
-async fn deactivate_generation(
-    request: &mut Request,
-    env: &Env,
-    actor: &ResolvedActor,
-    profile_id: &ProfileId,
-    generation_id: &GenerationId,
-) -> Result<Response> {
-    let body = match request.json::<DeactivateGenerationRequest>().await {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
+    let result = if activate {
+        execute_activate_generation(actor, role, &application, command).await
+    } else {
+        execute_deactivate_generation(actor, role, &application, command).await
     };
-    let expected_version = match AggregateVersion::new(body.expected_profile_version) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let response_version = match next_version(expected_version) {
-        Some(value) => value,
-        None => return internal_failure(request),
-    };
-    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    if let Some(response) = replay_response(
-        env,
-        actor,
-        "profile_generation.deactivate",
-        &envelope,
-        generation_id.as_str(),
-        response_version,
-        200,
-    )
-    .await?
-    {
-        return Ok(response);
-    }
-    let mutation = DeactivateGenerationMutation {
-        profile_id,
-        generation_id,
-        expected_profile_version: expected_version,
-        envelope: envelope.identity(),
-    };
-    match D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .deactivate(actor.actor(), mutation)
-        .await
-    {
-        Ok(_) => mutation_receipt("deactivated", generation_id.as_str(), response_version, 200),
-        Err(error) => mutation_failure(request, error),
+    match result {
+        Ok(outcome) => mutation_receipt(&outcome, 200),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
 
 async fn quarantine_generation(
     request: &mut Request,
     env: &Env,
-    actor: &ResolvedActor,
-    profile_id: &ProfileId,
-    generation_id: &GenerationId,
+    actor: &ActorContext,
+    role: MembershipRole,
+    profile_id: ProfileId,
+    generation_id: GenerationId,
 ) -> Result<Response> {
     let body = match request.json::<QuarantineGenerationRequest>().await {
         Ok(value) => value,
-        Err(_) => return invalid_request(request),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let expected_version = match AggregateVersion::new(body.expected_generation_version) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let response_version = match next_version(expected_version) {
-        Some(value) => value,
-        None => return internal_failure(request),
-    };
-    let envelope = match EnvelopeOwned::from_request(request, actor, body.request_digest) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    if let Some(response) = replay_response(
-        env,
-        actor,
-        "profile_generation.quarantine",
-        &envelope,
-        generation_id.as_str(),
-        response_version,
-        200,
-    )
-    .await?
+    let expected_generation_version = match AggregateVersion::new(body.expected_generation_version)
     {
-        return Ok(response);
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    if let Err(error) = next_generation_version(expected_generation_version) {
+        return operation_failure(actor.correlation_id().as_str(), error);
     }
-    let mutation = QuarantineGenerationMutation {
-        profile_id,
-        generation_id,
-        expected_generation_version: expected_version,
-        envelope: envelope.identity(),
+    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    match D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .quarantine(actor.actor(), mutation)
-        .await
+    let application = profile_generation_application(env)?;
+    match execute_quarantine_generation(
+        actor,
+        role,
+        &application,
+        QuarantineGenerationCommand {
+            profile_id,
+            generation_id,
+            expected_generation_version,
+            evidence,
+        },
+    )
+    .await
     {
-        Ok(_) => mutation_receipt("quarantined", generation_id.as_str(), response_version, 200),
-        Err(error) => mutation_failure(request, error),
+        Ok(outcome) => mutation_receipt(&outcome, 200),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
 
-async fn replay_response(
-    env: &Env,
-    actor: &ResolvedActor,
-    command_name: &str,
-    envelope: &EnvelopeOwned,
-    resource_id: &str,
-    aggregate_version: u64,
-    success_status: u16,
-) -> Result<Option<Response>> {
-    let decision = D1IdempotencyRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .decide(
-            actor.actor().tenant_scope(),
-            actor.actor().actor_id(),
-            &envelope.idempotency_key,
-            command_name,
-            &envelope.request_digest,
-            envelope.now,
-        )
-        .await?;
-    match decision {
-        IdempotencyDecision::Miss => Ok(None),
-        IdempotencyDecision::Replay(receipt) => mutation_receipt(
-            receipt.result_code(),
-            receipt.result_reference().unwrap_or(resource_id),
-            aggregate_version,
-            success_status,
-        )
-        .map(Some),
-        IdempotencyDecision::Conflict => problem(
-            actor.actor().correlation_id().as_str(),
-            409,
-            "conflict",
-            "Conflict",
-        )
-        .map(Some),
+fn operation_failure(correlation_id: &str, error: GenerationOperationError) -> Result<Response> {
+    match error {
+        GenerationOperationError::InvalidRequest => {
+            problem(correlation_id, 400, "invalid_request", "Invalid Request")
+        }
+        GenerationOperationError::NotFound => neutral_not_found(correlation_id),
+        GenerationOperationError::VersionConflict => {
+            problem(correlation_id, 409, "version_conflict", "Version Conflict")
+        }
+        GenerationOperationError::InvalidState => {
+            problem(correlation_id, 409, "invalid_state", "Invalid State")
+        }
+        GenerationOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
+        GenerationOperationError::IntegrityFailure => problem(
+            correlation_id,
+            500,
+            "integrity_failure",
+            "Integrity Failure",
+        ),
+        GenerationOperationError::InternalFailure => {
+            problem(correlation_id, 500, "internal_failure", "Internal Failure")
+        }
+        GenerationOperationError::DependencyUnavailable => problem(
+            correlation_id,
+            503,
+            "dependency_unavailable",
+            "Dependency Unavailable",
+        ),
     }
+}
+
+fn invalid_request(correlation_id: &str) -> Result<Response> {
+    problem(correlation_id, 400, "invalid_request", "Invalid Request")
 }
 
 #[derive(Serialize)]
@@ -431,8 +355,8 @@ struct GenerationResponse<'a> {
     verification_reference: Option<&'a str>,
 }
 
-impl<'a> From<&'a GenerationProjection> for GenerationResponse<'a> {
-    fn from(generation: &'a GenerationProjection) -> Self {
+impl<'a> From<&'a GenerationReadModel> for GenerationResponse<'a> {
+    fn from(generation: &'a GenerationReadModel) -> Self {
         Self {
             generation_id: generation.generation_id().as_str(),
             metadata_digest: generation.metadata_digest(),
@@ -456,81 +380,13 @@ struct MutationReceipt<'a> {
     aggregate_version: u64,
 }
 
-fn mutation_receipt(
-    result_code: &str,
-    resource_id: &str,
-    aggregate_version: u64,
-    status: u16,
-) -> Result<Response> {
+fn mutation_receipt(outcome: &GenerationMutationOutcome, status: u16) -> Result<Response> {
     Response::from_json(&MutationReceipt {
-        result_code,
-        resource_id,
-        aggregate_version,
+        result_code: outcome.result_code(),
+        resource_id: outcome.resource_id(),
+        aggregate_version: outcome.aggregate_version().value(),
     })
     .map(|response| response.with_status(status))
-}
-
-struct EnvelopeOwned {
-    idempotency_key: IdempotencyKey,
-    request_digest: String,
-    audit_event_id: AuditEventId,
-    outbox_event_id: OutboxEventId,
-    now: UnixMillis,
-    expires_at: UnixMillis,
-    payload_json: String,
-}
-
-impl EnvelopeOwned {
-    fn from_request(
-        request: &Request,
-        actor: &ResolvedActor,
-        request_digest: String,
-    ) -> Result<Self> {
-        if !valid_digest(&request_digest) {
-            return Err(Error::RustError("request digest is invalid".to_owned()));
-        }
-        let key = request
-            .headers()
-            .get(IDEMPOTENCY_HEADER)?
-            .ok_or_else(|| Error::RustError("idempotency key missing".to_owned()))?;
-        let idempotency_key =
-            IdempotencyKey::parse(key).map_err(|error| Error::RustError(error.to_string()))?;
-        let audit_event_id = audit_event_id(
-            actor.actor().tenant_scope().tenant_id(),
-            actor.actor().actor_id(),
-            &idempotency_key,
-        )?;
-        let outbox_event_id = outbox_event_id(
-            actor.actor().tenant_scope().tenant_id(),
-            actor.actor().actor_id(),
-            &idempotency_key,
-        )?;
-        let now = Date::now().as_millis();
-        let expires_at = now
-            .checked_add(IDEMPOTENCY_TTL_MS)
-            .ok_or_else(|| Error::RustError("idempotency expiry overflow".to_owned()))?;
-        Ok(Self {
-            idempotency_key,
-            request_digest,
-            audit_event_id,
-            outbox_event_id,
-            now: UnixMillis::new(now),
-            expires_at: UnixMillis::new(expires_at),
-            payload_json: "{}".to_owned(),
-        })
-    }
-
-    fn identity(&self) -> MutationEnvelope<'_> {
-        MutationEnvelope {
-            idempotency_key: &self.idempotency_key,
-            request_digest: &self.request_digest,
-            audit_event_id: &self.audit_event_id,
-            outbox_event_id: &self.outbox_event_id,
-            payload_json: &self.payload_json,
-            now: self.now,
-            idempotency_expires_at: self.expires_at,
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -553,14 +409,7 @@ struct VerifyGenerationRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ActivateGenerationRequest {
-    expected_profile_version: u64,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DeactivateGenerationRequest {
+struct ProfileGenerationVersionRequest {
     expected_profile_version: u64,
     request_digest: String,
 }
@@ -572,81 +421,46 @@ struct QuarantineGenerationRequest {
     request_digest: String,
 }
 
-fn valid_object_key(value: &str) -> bool {
-    (16..=512).contains(&value.len())
-        && !value.starts_with('/')
-        && !value.contains("..")
-        && !value.contains('\\')
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':')
-        })
-}
-
-fn valid_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-}
-
-fn valid_verification_reference(value: &str) -> bool {
-    (8..=256).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b':'))
-}
-
-fn next_version(version: AggregateVersion) -> Option<u64> {
-    version.next().ok().map(AggregateVersion::value)
-}
-
-fn invalid_request(request: &Request) -> Result<Response> {
-    problem(
-        &correlation_hint(request),
-        400,
-        "invalid_request",
-        "Invalid Request",
-    )
-}
-
-fn internal_failure(request: &Request) -> Result<Response> {
-    problem(
-        &correlation_hint(request),
-        500,
-        "internal_failure",
-        "Internal Failure",
-    )
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        ActivateGenerationRequest, next_version, valid_digest, valid_object_key,
-        valid_verification_reference,
-    };
-    use profile_platform_primitives::AggregateVersion;
+    use super::{GenerationResponse, MutationReceipt, RegisterGenerationRequest};
 
     #[test]
-    fn request_metadata_is_canonical_and_versions_never_saturate()
+    fn generation_transport_preserves_legacy_shape_and_rejects_unknown_fields()
     -> Result<(), Box<dyn std::error::Error>> {
-        assert!(valid_object_key("profiles/v1/generation.enc"));
-        assert!(!valid_object_key("../generation.enc"));
-        assert!(!valid_object_key("profiles\\generation.enc"));
-        assert!(valid_digest(&"a".repeat(64)));
-        assert!(!valid_digest(&"A".repeat(64)));
-        assert!(valid_verification_reference("review:generation_01"));
-        assert!(!valid_verification_reference("review generation"));
-        assert_eq!(next_version(AggregateVersion::INITIAL), Some(2));
-        assert_eq!(next_version(AggregateVersion::new(u64::MAX)?), None);
-        Ok(())
-    }
+        let valid = r#"{"generationId":"generation_01JTEST","objectKey":"profiles/v1/generation.enc","metadataDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","containerDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requestDigest":"request-digest-01JTEST"}"#;
+        assert!(serde_json::from_str::<RegisterGenerationRequest>(valid).is_ok());
+        let unknown = r#"{"generationId":"generation_01JTEST","objectKey":"profiles/v1/generation.enc","metadataDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","containerDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requestDigest":"request-digest-01JTEST","password":"forbidden"}"#;
+        assert!(serde_json::from_str::<RegisterGenerationRequest>(unknown).is_err());
 
-    #[test]
-    fn request_dtos_reject_unknown_fields() {
-        let digest = "a".repeat(64);
-        let payload = format!(
-            r#"{{"expectedProfileVersion":1,"requestDigest":"{digest}","unexpected":true}}"#
-        );
-        assert!(serde_json::from_str::<ActivateGenerationRequest>(&payload).is_err());
+        let receipt = serde_json::to_value(MutationReceipt {
+            result_code: "registered",
+            resource_id: "generation_01JTEST",
+            aggregate_version: 1,
+        })?;
+        assert!(receipt.get("resultCode").is_some());
+        assert!(receipt.get("resourceId").is_some());
+        assert!(receipt.get("aggregateVersion").is_some());
+
+        let response = serde_json::to_value(GenerationResponse {
+            generation_id: "generation_01JTEST",
+            metadata_digest: "a",
+            container_digest: "b",
+            status: "VERIFIED",
+            version: 2,
+            verification_reference: Some("review:generation_01"),
+        })?;
+        for key in [
+            "generationId",
+            "metadataDigest",
+            "containerDigest",
+            "status",
+            "version",
+            "verificationReference",
+        ] {
+            assert!(response.get(key).is_some(), "missing {key}");
+        }
+        assert!(response.get("objectKey").is_none());
+        Ok(())
     }
 }
