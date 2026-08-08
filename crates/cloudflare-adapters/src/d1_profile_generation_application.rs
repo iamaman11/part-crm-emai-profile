@@ -7,9 +7,10 @@ use crate::d1_profile_generations::{
 };
 use application_ports::CommandExecutionEvidence;
 use application_ports::generations::{
-    GenerationApplicationPort, GenerationPortError, GenerationPortErrorClass, GenerationReadModel,
-    GenerationReplayDecision, GenerationReplayReceipt, GenerationProfileVersionWrite,
-    GenerationStatus, QuarantineGenerationWrite, RegisterGenerationWrite, VerifyGenerationWrite,
+    GenerationApplicationPort, GenerationPortError, GenerationPortErrorClass,
+    GenerationProfileVersionWrite, GenerationReadModel, GenerationReplayDecision,
+    GenerationReplayReceipt, GenerationStatus, QuarantineGenerationWrite, RegisterGenerationWrite,
+    VerifyGenerationWrite,
 };
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, ActorId, GenerationId, ProfileId, TenantScope};
@@ -59,7 +60,7 @@ impl GenerationApplicationPort for D1ProfileGenerationApplicationRepository {
     ) -> Result<(), GenerationPortError> {
         let evidence = write.evidence();
         self.generations
-            .register_generation(
+            .register(
                 actor,
                 RegisterGenerationMutation {
                     profile_id: write.profile_id(),
@@ -82,7 +83,7 @@ impl GenerationApplicationPort for D1ProfileGenerationApplicationRepository {
     ) -> Result<(), GenerationPortError> {
         let evidence = write.evidence();
         self.generations
-            .verify_generation(
+            .verify(
                 actor,
                 VerifyGenerationMutation {
                     profile_id: write.profile_id(),
@@ -104,7 +105,7 @@ impl GenerationApplicationPort for D1ProfileGenerationApplicationRepository {
     ) -> Result<(), GenerationPortError> {
         let evidence = write.evidence();
         self.generations
-            .activate_generation(
+            .activate(
                 actor,
                 ActivateGenerationMutation {
                     profile_id: write.profile_id(),
@@ -125,7 +126,7 @@ impl GenerationApplicationPort for D1ProfileGenerationApplicationRepository {
     ) -> Result<(), GenerationPortError> {
         let evidence = write.evidence();
         self.generations
-            .deactivate_generation(
+            .deactivate(
                 actor,
                 DeactivateGenerationMutation {
                     profile_id: write.profile_id(),
@@ -146,7 +147,7 @@ impl GenerationApplicationPort for D1ProfileGenerationApplicationRepository {
     ) -> Result<(), GenerationPortError> {
         let evidence = write.evidence();
         self.generations
-            .quarantine_generation(
+            .quarantine(
                 actor,
                 QuarantineGenerationMutation {
                     profile_id: write.profile_id(),
@@ -169,13 +170,7 @@ impl GenerationApplicationPort for D1ProfileGenerationApplicationRepository {
         generation_id: &GenerationId,
     ) -> Result<Option<GenerationReadModel>, GenerationPortError> {
         self.generations
-            .find_visible_generation(
-                scope,
-                actor_id,
-                map_role(role),
-                profile_id,
-                generation_id,
-            )
+            .find_visible(scope, actor_id, map_role(role), profile_id, generation_id)
             .await
             .map_err(map_dependency_error)
             .map(|projection| {
@@ -245,13 +240,20 @@ fn map_dependency_error(_error: Error) -> GenerationPortError {
 }
 
 fn classify_write_failure(message: &str) -> GenerationPortErrorClass {
-    if message.contains("not_found") {
+    if message.contains("owner_required")
+        || message.contains("profile_missing")
+        || message.contains("generation_missing")
+        || message.contains("profile_generation_missing")
+        || message.contains("not_found")
+    {
         return GenerationPortErrorClass::NotFound;
     }
-    if message.contains("version_mismatch") {
+    if message.contains("state_mismatch") || message.contains("version_mismatch") {
         return GenerationPortErrorClass::VersionConflict;
     }
-    if message.contains("invalid_state")
+    if message.contains("not_verified")
+        || message.contains("active_profile_generation_cannot_be_quarantined")
+        || message.contains("invalid_state")
         || message.contains("active_generation_forbidden")
         || message.contains("profile_generation_relation_invalid")
     {
@@ -282,15 +284,19 @@ mod tests {
     #[test]
     fn generation_write_failure_mapping_matches_worker_taxonomy() {
         assert_eq!(
-            classify_write_failure("profile_generation_not_found"),
+            classify_write_failure("profile_generation_register_profile_missing"),
             GenerationPortErrorClass::NotFound
         );
         assert_eq!(
-            classify_write_failure("profile_version_mismatch"),
+            classify_write_failure("profile_generation_activate_profile_state_mismatch"),
             GenerationPortErrorClass::VersionConflict
         );
         assert_eq!(
-            classify_write_failure("profile_generation_invalid_state"),
+            classify_write_failure("profile_generation_not_verified"),
+            GenerationPortErrorClass::InvalidState
+        );
+        assert_eq!(
+            classify_write_failure("active_profile_generation_cannot_be_quarantined"),
             GenerationPortErrorClass::InvalidState
         );
         assert_eq!(
