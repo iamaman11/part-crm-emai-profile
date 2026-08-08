@@ -52,6 +52,14 @@ def main() -> int:
         "generated frontend contract drift",
         [sys.executable, str(ROOT / "scripts" / "generate-frontend-contracts.py"), "--check"],
     )
+    run(
+        "architecture inventory and docs consistency",
+        [sys.executable, str(ROOT / "scripts" / "generate-architecture-inventory.py"), "--check"],
+    )
+    run(
+        "architecture inventory negative self-test",
+        [sys.executable, str(ROOT / "scripts" / "generate-architecture-inventory.py"), "--self-test"],
+    )
 
     status_path = ROOT / "docs" / "status.json"
     print("\n==> docs/status.json syntax")
