@@ -43,7 +43,7 @@ No level by itself means production readiness.
 | Encrypted cloud generations | Synthetic | XChaCha20-Poly1305 container, immutable in-memory lifecycle, pointer/rollback/quarantine/orphan policy. | Production R2 adapter/device unwrap/remote recovery atomicity evidence is External. |
 | Certification | Synthetic | Typed policy, deterministic matrix, drift/prohibited outcomes, privacy-safe summary/update rollback state. | Real Camoufox observations and independent certification are External. |
 | Mailbox operations | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, secret-handle-only DTOs, idempotency/audit/outbox, Worker metadata/job paths and synthetic provider-decision path. | Real Gmail/IMAP/browser execution, message search/body retrieval, production scheduling and provider evidence are Target/External. |
-| React web UI | Composed / Synthetic | Accepted React/Vite/TS operator shell and current session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces with permanent Frontend Gate. | Generated public TS contracts, sibling-feature import enforcement, complete detail/list routes, client Mail search/body UI, real Bridge/provider deployment remain Target/External. |
+| React web UI | Composed / Synthetic | Accepted React/Vite/TS operator shell and current session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces with permanent Frontend Gate. The migrated session/client/problem/mutation public contract slice is generated deterministically from the accepted Rust contract, and sibling-feature internal/alias imports are fail-closed. | Remaining public contract coverage expands incrementally with its backend slices; complete detail/list routes, client Mail search/body UI and real Bridge/provider deployment remain Target/External. |
 | Cross-component standalone acceptance | Composed / Synthetic | Metadata-only deterministic manifest/validator covering governed D1, generation integrity, Worker/adapters native+WASM, synthetic Bridge and frontend tests/build. Permanent lanes enforce thin identity/client/profile/coordinator Worker boundaries while retaining assignment-as-ACL negative evidence. | Real deployment/provider/device evidence is External. |
 | Integration events / durable notifications | Target | Architecture/plan contracts defined. | Phase 1 implementation not accepted. |
 | Client Registry 2.0 | Target | Target model/constraints defined in current plan. | Phase 2 implementation not accepted. |
@@ -59,16 +59,18 @@ No level by itself means production readiness.
 Accepted capability behavior and clean application ownership are separate claims. Phase 0 moves
 provider-independent orchestration behind application use cases without changing public behavior.
 
-Accepted Phase 0 slices through **0L** establish application ownership for client create/query/grant,
+Accepted Phase 0 slices through **0M** establish application ownership for client create/query/grant,
 profile create/query/assignment/grant, mailbox binding/job, generation, identity governance/
-ceremonies and coordinator ingress, plus the first real compile-time application Cargo boundary.
+ceremonies and coordinator ingress, plus the first real compile-time application Cargo boundary
+and generated frontend contract/feature-boundary enforcement.
 
 As of this matrix date:
 
 - accepted `main` includes Phase 0K application-thin coordinator ingress with permanent Step-5 ownership enforcement;
 - accepted Phase 0L places identity governance plus verified-identity ceremonies in independent `use-cases-identity`, proven by native tests, explicit Workers-WASM compile and composed regressions;
 - `identity_acl` intentionally remains in shared `use-cases` because its current helpers cross client/profile contexts;
-- the current execution plan, not this matrix, determines subsequent order; Phase 0M is next planned.
+- accepted Phase 0M uses `control-plane-contract` as the canonical migrated public Rust transport source, commits deterministic OpenAPI/TypeScript output, consumes generated types on real frontend API surfaces, and permanently rejects sibling-feature internals plus resolver-alias bypasses;
+- the current execution plan, not this matrix, determines subsequent order; Phase 0N is next planned.
 
 Do not interpret a feature branch's `Composed` wiring or PR description as accepted `main`.
 
@@ -83,6 +85,9 @@ crates/*-domain
 
 crates/application-ports
   capability-owned interfaces required by application workflows
+
+crates/control-plane-contract
+  accepted canonical public control-plane transport contract and deterministic OpenAPI export
 
 crates/use-cases-identity
   accepted independent identity governance + verified-identity ceremony application context
@@ -100,7 +105,7 @@ apps/profile-bridge
   Windows-native local/device/runtime composition
 
 frontend
-  React presentation/navigation/query cache; generated public contracts are a Phase 0 target
+  React presentation/navigation/query cache; migrated public API types consume committed generated TypeScript, with permanent sibling-feature boundary enforcement
 ```
 
 A rule expressible without a provider belongs in domain/application code, not an adapter/UI.
