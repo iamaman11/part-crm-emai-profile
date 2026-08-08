@@ -1,55 +1,55 @@
 # Architecture Map
 
-**Статус:** normative target architecture
+**Status:** normative target architecture  
+**Date:** 2026-08-08  
+**For:** developers, reviewers, operators and future CRM integration work
 
-**Дата:** 2026-08-05
+This document defines stable architecture boundaries and invariants. It does **not** define
+implementation order; current execution order lives in [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md).
 
-**Для кого:** developer, reviewer, operator и будущая CRM integration team
+## 1. System Boundary
 
-## 1. Системная Граница
+Browser Profile Platform is a standalone product and future external CRM bounded context.
+It owns browser profiles, generations, sessions, profile-client assignments, profile ACL,
+certification, mailbox runtime integration and cloud/local lifecycle.
 
-Browser Profile Platform является самостоятельным продуктом и будущим внешним
-CRM bounded context. Он владеет профилями, поколениями, browser sessions,
-назначениями профилей клиентам, profile ACL, certification и cloud lifecycle.
+Before CRM integration, the standalone Client Registry owns client cards. After CRM cutover,
+CRM Party/Customer Master may become authoritative for client master fields while this
+platform keeps an opaque `party_ref`/external reference and profile-runtime ownership.
 
-До CRM integration локальный Client Registry владеет минимальной client card.
-После integration CRM Party/Customer Master становится authoritative owner, а
-платформа хранит `party_ref` и read projection. Cloudflare, D1, R2, Python и
-Camoufox являются adapters/runtime, но не источником domain policy.
+Cloudflare, D1, R2, Durable Objects, Windows, Python and Camoufox are adapters/runtime
+technologies, never sources of domain policy.
 
 ## 2. Runtime Topology
 
 ```text
-Browser routes through Cloudflare Access
-  -> app.example.com (one origin, one deployment)
-    -> Rust Worker /api/*
-    -> React SPA through Workers Static Assets
-    -> D1 authoritative standalone catalog + audit + outbox
-    -> Durable Object profile coordinator
-    -> Queues and Scheduled Worker consumers
-    -> R2 encrypted immutable objects
-    -> Workers Secrets/Secrets Store key root and service secrets
+Browser through Cloudflare Access
+  -> app.example.com
+     -> Rust Worker /api/* /auth/* /bridge/*
+     -> React SPA via Workers Static Assets
+     -> D1 authoritative business/catalog data + audit/outbox/read projections
+     -> per-profile Durable Object session coordinator
+     -> Queues / Scheduled consumers
+     -> R2 encrypted immutable objects
+     -> Cloudflare secret/key providers
 
 Web UI
   -> profilebridge://claim/<single-use-code>
-    -> Windows Profile Bridge
-      -> HTTPS Worker API + device proof
-      -> local SQLite cache/outbox
-      -> local encrypted staging/materialization
-      -> typed local IPC
-        -> embedded Python Camouhost
-          -> separate visible Camoufox process
+     -> Windows Profile Bridge
+        -> authenticated Worker/device protocol
+        -> local SQLite cache/outbox
+        -> local encrypted materialization/workspace
+        -> typed local IPC
+           -> Camouhost
+              -> separate Camoufox process
 ```
 
-Standalone v1 не имеет VM/backend daemon, PostgreSQL или Keycloak. Cloudflare
-Workers выполняет только control-plane code. Camoufox, browser profile data,
-filesystem locks и native process supervision остаются на Windows-компьютере.
-Cloudflare Browser Rendering/Browser Run не заменяет Camoufox, а Containers не
-используются как stateful profile filesystem.
+Standalone v1 has no required VM/backend daemon, PostgreSQL or Keycloak. Workers executes
+control-plane code only. Camoufox/browser filesystem/process supervision stays on Windows.
 
-## 3. Deployment И URL Boundary
+## 3. Deployment And URL Boundary
 
-Один Workers deployment обслуживает:
+One Workers deployment serves the SPA and browser-facing API on one origin.
 
 ```text
 https://app.example.com/             React SPA
@@ -57,208 +57,289 @@ https://app.example.com/profiles/*   SPA routes
 https://app.example.com/clients/*    SPA routes
 https://app.example.com/api/v1/*     Rust Worker API
 https://app.example.com/auth/*       identity/bootstrap endpoints
-https://app.example.com/bridge/*     enrollment/claim endpoints
+https://app.example.com/bridge/*     device enrollment/claim endpoints
 ```
 
-Static Assets использует SPA fallback, а Worker запускается первым для
-`/api/*`, `/auth/*` и `/bridge/*`. UI и API same-origin, поэтому CORS не является
-частью штатной browser-модели. Browser routes защищает Cloudflare Access; Worker
-проверяет Access JWT и затем живой membership/grant. `/bridge/*` принимает только
-rate-limited device/enrollment protocol: enrollment требует actor-bound
-single-use intent, остальные команды требуют device signature и short-lived app
-token. Access доказывает identity, но не право на profile/client, а Bridge не
-зависит от browser cookie.
+`/api/*`, `/auth/*` and `/bridge/*` are fail-closed Worker routes and must never fall through
+to SPA assets on unknown methods/versions. Cloudflare Access authenticates browser users;
+the Worker always applies live application membership/grants. Device-bound Bridge routes use
+a separate proof/token policy and do not rely on browser cookies.
 
-## 4. Слои И Разрешенные Зависимости
+## 4. Allowed Dependency Direction
+
+Clean Architecture direction is inward:
 
 ```text
-apps
-  -> use-cases
-    -> application-ports + domains + contracts + primitives
-
-adapters
-  -> application-ports + contracts + primitives
-
-domains
-  -> primitives
+primitives
+contracts -> primitives
+domains -> contracts + primitives
+application-ports -> domains + contracts + primitives
+use-cases -> application-ports + domains + contracts + primitives
+adapters -> application-ports + domains + contracts + primitives + provider SDKs
+apps -> use-cases + adapters + contracts + primitives
+frontend -> generated public contracts + frontend shared/entities/feature public APIs
 ```
+
+The important prohibition is **inner -> outer**. An outer adapter may depend on inner domain
+value/state types when implementing an application port. Domain/use-case/application-port
+code may not depend on concrete Cloudflare/Windows/React/provider implementations.
 
 ### `primitives`
 
-Opaque IDs, tenant scope, safe path segments, digests, time/value types и общие
-validation primitives. Здесь нет HTTP, Cloudflare bindings, SQL, authorization
-storage или browser-specific behavior.
+Opaque IDs, tenant scope, safe path segments, digests, time/value types and provider-neutral
+validation primitives. No storage/runtime/business workflow.
 
-### Domain Crates
+### Domain crates
 
-- `identity-access-domain`: tenant owner, memberships, grants и authorization
-  decisions;
-- `client-domain`: client cards, contact points и assignment rules;
-- `profile-domain`: profile, generation, snapshot и fingerprint policies;
-- `session-domain`: launch intent, lease, fencing, session and recovery states;
-- `mailbox-domain`: provider-neutral mailbox binding/check rules.
+- `identity-access-domain`: tenant owner, memberships, grants and authorization decisions;
+- `client-domain`: client/contact/assignment rules;
+- `profile-domain`: profile/generation lifecycle policy;
+- `session-domain`: launch intent, lease epoch, fencing, session and recovery states;
+- `mailbox-domain`: provider-neutral mailbox binding/job/runtime-lane rules.
 
-Domain принимает value objects и возвращает decisions/events. Он собирается как
-обычный native Rust для tests/Profile Bridge/будущей CRM и как
-`wasm32-unknown-unknown` dependency Cloudflare Worker. Он не знает о D1, Durable
-Objects, R2, Access, Windows, Python или wall-clock singleton.
+Domains contain pure decisions/state machines and compile without D1/Workers/Windows/Python.
 
 ### `application-ports`
 
-Порт принадлежит use case, который его потребляет:
+Ports are owned by application needs and grouped by capability: identity, clients, profiles,
+generations, sessions, mailboxes, notifications/search/devices/CRM as those capabilities are
+introduced. Read and write capabilities are separated where useful.
 
-- tenant-scoped catalog repositories;
-- live identity, membership и authorization;
-- profile coordinator, clock, idempotency, audit и outbox;
-- object store, envelope encryption и key provider;
-- local workspace и browser runtime;
-- certification checker/artifact store;
-- mailbox provider и CRM Party projection.
+The current plan may keep `application-ports` as one Cargo crate with capability modules while
+that remains clear. It is not required to split every port into a separate crate.
 
-Read/write capabilities разделяются. Adapter реализует порт, но не определяет
-domain policy.
+### Use cases
 
-### `use-cases`
+One application command/query owns one workflow. A use case:
 
-Один public handler соответствует одной application command/query. Use case:
+1. receives verified actor/tenant/request context;
+2. applies live authorization intent;
+3. loads state/projections through typed ports;
+4. invokes pure domain decisions;
+5. sequences idempotency/versioning/repository work;
+6. persists canonical state + audit/outbox atomically within one D1 boundary where possible;
+7. initiates external side effects only after the durable transition that authorizes them;
+8. returns stable provider-neutral results/problems.
 
-1. принимает verified actor, typed tenant scope и versioned request;
-2. выполняет live membership/grant check;
-3. загружает aggregate через tenant-scoped ports;
-4. вызывает pure domain decision;
-5. сохраняет state, idempotency, audit и outbox в одной D1 batch transaction,
-   если данные принадлежат одной D1 boundary;
-6. инициирует внешние side effects только после durable state transition;
-7. повтор безопасен и возвращает тот же logical result.
+Use cases never call concrete Cloudflare SDKs. High-growth independent application contexts
+should become separate Cargo crates when that improves compile-time dependency isolation;
+crate splitting is not an excuse for one-crate-per-function fragmentation.
 
-Use case не формирует browser UI и не вызывает concrete Cloudflare SDK напрямую.
+### Adapters
 
-### `adapters`
+Adapters implement ports and map provider/storage/runtime behavior:
 
-- `cloudflare`: Access claims, D1, Durable Objects, R2, Queues, Secrets;
-- `windows`: CNG/DPAPI, filesystem, process tree, custom protocol, updater;
-- `camouhost`: typed IPC к Python/Camoufox;
-- `crm`: будущие OIDC, PostgreSQL и Party projection adapters.
+- Cloudflare: Access, D1, R2, Queues, Durable Objects, secrets;
+- Windows: CNG/DPAPI, filesystem, process tree, custom protocol, updater;
+- Camouhost: typed IPC to Python/Camoufox;
+- mailbox providers: Gmail/API/IMAP/browser-backed providers;
+- CRM: future Party/OIDC/PostgreSQL integration adapters.
 
-Adapter переводит protocol/storage errors в стабильную application taxonomy и
-не проталкивает SDK types в domain.
+Adapters may depend inward on domain/application types. They may not redefine domain policy
+or expose provider SDK types across inner boundaries.
 
-### `apps`
+### Apps / ingress
 
-- `control-plane-worker`: `workers-rs` routing, assets binding, limits, DTO
-  mapping, queue/scheduled handlers и composition root;
-- `profile-bridge`: device trust, local materialization, supervisor и updater;
-- `camouhost`: узкий typed browser runtime provider;
-- `web`: React SPA, не владеющая business decisions.
+`apps/control-plane-worker` and Durable Object ingress are protocol/composition surfaces:
+parse/authenticate, construct adapters/context, call one application command/query, map the
+typed result. Ordinary transports do not own D1 mutation construction, authorization policy,
+idempotency workflow or provider-specific business sequencing.
 
-Workers runtime не поддерживает native threads, поэтому cloud app не зависит от
-Tokio multi-thread runtime, Axum или SQLx. Tokio разрешен в native Bridge.
+`apps/profile-bridge` owns Windows-native device trust, materialization and process/runtime
+composition. React owns presentation/navigation/remote-cache behavior only.
 
-## 5. Cloud Data Ownership
+## 5. Core Data Ownership
 
 | Aggregate/data | Authoritative owner | Storage/coordination boundary |
 |---|---|---|
-| Tenant/Membership/Grant | Identity & Access | D1 mutation + audit/outbox |
-| ClientRecord | Client Registry | D1 mutation + audit/outbox |
-| Profile/Assignment | Profile Catalog | D1 mutation + audit/outbox |
-| Active generation pointer | Profile Catalog | D1 compare-and-set after verification |
-| Lease/session/fencing | Runtime Sessions | one Durable Object per profile |
-| Snapshot payload | Profile Storage | immutable encrypted R2 object |
-| CertificationRun | Certification | D1 decision + sanitized immutable R2 evidence |
-| MailboxBinding | Mailbox Operations | D1 metadata; secret handle only |
-| Device local state | Profile Bridge | encrypted workspace + SQLite cache/outbox |
+| Tenant/Membership/Grant | Identity & Access | D1 + audit/outbox |
+| ClientRecord | Client Registry | D1 + audit/outbox |
+| Profile/Assignment | Profile Catalog | D1 + audit/outbox |
+| Active generation pointer | Profile Catalog | D1 fenced/CAS activation after verification |
+| Lease/session/fencing | Runtime Sessions | one Durable Object per profile + `session-domain` |
+| Encrypted generation payload | Profile Storage | immutable R2 object |
+| Certification result/evidence | Certification | D1 sanitized decision + governed evidence object |
+| MailboxBinding/jobs/results | Mailbox Operations | D1 metadata; credential secret handle only |
+| Mailbox message body | Provider/authorized transient projection by default | not canonical D1/R2 storage in initial design |
+| Device local state | Profile Bridge | encrypted workspace + local SQLite cache/outbox |
 
-D1 является authoritative catalog для standalone v1. Durable Object не является
-вторым каталогом: он сериализует profile commands, выдает monotonic lease epoch и
-держит минимальное recoverable coordination state. D1 хранит бизнес-проекцию и
-последний принятый session/generation result.
+D1 is the standalone business/catalog authority. Durable Object is **not** a parallel catalog;
+it serializes session work, issues monotonic fencing and keeps minimal recoverable coordinator
+state. Session transitions belong to `session-domain`, not `profile-domain`.
 
-## 6. Transaction Model
+## 6. D1 / Durable Object / R2 Transaction Model
 
-D1, Durable Object и R2 не образуют distributed transaction. Protocol обязан
-быть crash-safe:
+There is no distributed transaction across D1, DO and R2.
 
-1. command получает idempotency key и ожидаемую aggregate version;
-2. profile Durable Object сериализует writer transitions и выдает fencing token;
-3. Bridge загружает новый immutable R2 object по новому generation key;
-4. verifier проверяет object, manifest, digest и restore-readability;
-5. D1 compare-and-set активирует pointer только для актуального fencing token;
-6. outbox/queue публикует projection/event;
-7. reconciler удаляет orphan objects и повторяет incomplete transitions.
+Generation lifecycle follows crash-safe saga/reconciliation semantics:
 
-Pointer на непроверенный object, mutable active R2 key и last-write-wins
-запрещены. Queue delivery считается at-least-once; consumer всегда idempotent.
+1. command carries idempotency + expected aggregate version;
+2. per-profile coordinator serializes writer state and supplies fencing;
+3. Bridge creates a new immutable encrypted generation object;
+4. verifier checks manifest/digest/restore readability;
+5. D1 compare-and-set activates only the expected generation/version/fencing outcome;
+6. audit/outbox/event follows durable acceptance;
+7. orphan/incomplete transitions are reconciled under bounded retention/recovery policy.
 
-## 7. D1 Isolation Rules
+Forbidden:
 
-D1 не предоставляет PostgreSQL RLS, поэтому standalone isolation строится явно:
+- mutable active R2 key;
+- “latest timestamp/object listing wins”;
+- last-write-wins generation activation;
+- deleting dirty local state before verified sync;
+- stale fencing token activating/overwriting newer generation.
 
-- первая production deployment обслуживает один tenant/организацию, но много
-  users с default-deny grants;
-- каждый tenant-owned PK/FK/unique key включает `tenant_id`;
-- repository method невозможно вызвать без `TenantScope` и `ActorContext`;
-- raw unscoped D1 access разрешен только migration/reconciliation adapter;
-- UI никогда не получает D1 binding или прямой storage URL;
-- list/get скрывают различие между чужим и отсутствующим resource;
-- cross-tenant и IDOR negative suite обязательны на каждый public endpoint;
-- переход к нескольким независимым tenants требует отдельного ADR: D1-per-tenant,
-  controlled sharding либо ранний перенос catalog adapter в PostgreSQL CRM.
+## 7. Durable Object / Session Boundary
 
-В будущей CRM PostgreSQL adapter добавляет `FORCE ROW LEVEL SECURITY` как defense
-in depth, не меняя domain/use-case contracts.
+A profile Durable Object is a distributed coordination adapter/runtime boundary for the pure
+session state machine. It may keep only state needed for lease/session recovery and
+serialization.
 
-## 8. Identity И Device Trust
+It must not become authoritative for:
 
-- Cloudflare Access выполняет workforce login через approved IdP или email OTP;
-- приложение не хранит пароль пользователя и не реализует password reset;
-- Worker проверяет issuer, audience, signature, expiry и subject Access JWT;
-- app membership связывает Access identity с tenant и может быть немедленно
-  revoked независимо от Access session;
-- owner управляет invitations/memberships и resource grants;
-- Bridge enrollment требует одновременно logged-in actor, single-use code и
-  новую device-bound key pair;
-- private device key защищается Windows CNG/DPAPI, TPM используется при наличии;
-- Bridge получает short-lived app token только после proof-of-possession;
-- постоянный bearer R2 credential на device запрещен.
+- client cards;
+- profile catalog metadata;
+- grants;
+- mailbox business catalog;
+- CRM Party data.
 
-## 9. Key Hierarchy
+D1 stores business projections and accepted session/generation outcomes. The Worker/DO ingress
+should become thin transport/application composition; cleaning ingress does **not** move
+lease/fencing state into `profile-domain`.
+
+## 8. Authorization And Query Boundary
+
+Cloudflare Access proves identity, not resource authorization. Every public application query
+or command rechecks active tenant membership and required grants.
+
+Authorization is applied before:
+
+- list/search result construction;
+- detail projection construction;
+- realtime history/catch-up projection;
+- CRM-facing projection;
+- provider mailbox search;
+- full message-body retrieval.
+
+Frontend filtering is never an authorization mechanism. Foreign/missing resources use the
+accepted neutral-disclosure behavior.
+
+## 9. Mailbox Message Data Boundary
+
+Mailbox message content is authorized product data, classified according to
+`DATA_CLASSIFICATION.md`.
+
+The default design is simple:
+
+- client-scoped message search is an application query;
+- provider/Bridge adapters perform search/fetch behind a provider-neutral port;
+- full body is fetched on demand for an authorized view;
+- no mandatory central D1 blind/full-text index;
+- no canonical D1/R2 body copy by default;
+- message body/subject/addresses do not enter ordinary logs/audit/realtime/events/support;
+- HTML mail is sanitized/sandboxed; tracking images/active content disabled by default.
+
+Any later central encrypted/full-text/blind index requires a separate threat/storage/retention
+decision.
+
+## 10. D1 Isolation Rules
+
+Standalone isolation is explicit because D1 has no PostgreSQL RLS:
+
+- first production deployment may be one organization with multiple users/default-deny grants;
+- tenant-owned keys/uniqueness include `tenant_id`;
+- normal repository/application APIs require typed tenant scope;
+- raw unscoped D1 access is restricted to approved migration/reconciliation adapters;
+- UI/Bridge never receives D1 binding/direct storage URL;
+- cross-tenant/IDOR negative tests cover every public capability;
+- multi-tenant expansion beyond the accepted deployment model requires an explicit ADR or
+  catalog-adapter strategy.
+
+A future PostgreSQL CRM adapter may add FORCE RLS as defense in depth without changing domain
+contracts.
+
+## 11. Identity And Device Trust
+
+- Cloudflare Access handles workforce login through approved IdP/email OTP;
+- application membership/grants can revoke access independently of Access session;
+- owner manages invitations/memberships/resource grants;
+- Bridge enrollment binds a logged-in actor, single-use intent and device key pair;
+- private device keys use approved Windows protection adapters;
+- Bridge gets short-lived app authorization after proof-of-possession;
+- long-lived bearer R2/device bucket credentials are forbidden.
+
+## 12. Key Hierarchy
 
 ```text
 Cloudflare secret root wrapping key (versioned)
-  -> wrapped tenant KEK in D1
-    -> wrapped generation DEK in generation metadata
-      -> AEAD encrypted profile archive in R2
+  -> wrapped tenant KEK in governed metadata
+     -> wrapped generation DEK
+        -> AEAD encrypted immutable generation in R2
 ```
 
-Root key не хранится в Git, D1, R2, logs или client bundle. Production promotion
-запрещен до ADR, который фиксирует rotation, dual-read/single-write, offline
-recovery escrow, restore drill, operator separation и key-loss procedure.
-Workers Secrets/Secrets Store является storage primitive, но не заменяет эту
-политику. Если требования потребуют HSM/external KMS, меняется только key-provider
-adapter.
+Plain root/KEK/DEK material never belongs in Git, D1, R2, logs or client bundles. Production
+promotion requires explicit rotation, recovery/escrow, restore and operator-separation policy.
 
-## 10. Compile-Time И CI Enforcement
+## 13. Events, Queues And Realtime
 
-- domain crate manifests имеют dependency allowlist;
-- `worker`, D1/R2 bindings, Windows APIs, Python и browser dependencies запрещены
-  в domain crates;
-- Cargo metadata architecture test fail-ит forbidden edges;
-- OpenAPI/protobuf compatibility проверяется в CI;
-- frontend импортирует только generated public API types;
-- Rust native unit/property tests проверяют domain state machines;
-- Cloudflare integration tests выполняют production Worker build с D1/R2/DO/
-  Queue bindings; Vitest используется только как test harness;
-- Playwright проверяет SPA/API/Access projections, Windows lane проверяет Bridge;
-- `cargo deny`, Clippy, formatting, secret scan, migration tests и signed artifact
-  verification входят в единый quality gate.
+Queues are at-least-once; consumers are idempotent. Canonical mutation is durable before
+notification.
 
-## 11. Целевая Структура
+Outbox consumers require bounded retries, maximum attempts, DLQ/terminal handling,
+sanitized alerting and idempotent replay.
+
+Realtime uses safe versioned event envelopes as invalidation/change signals. WebSocket state
+is never canonical business state and never carries prohibited secrets/PII/mail bodies.
+
+## 14. Frontend Boundary
+
+Frontend rules:
+
+- generated public API/event DTOs/enums are authoritative;
+- TanStack Query owns remote state;
+- business authorization/decisions remain server-side;
+- sibling feature internals are not imported directly;
+- cross-feature composition uses shared/entities/app/routes or explicit feature public APIs;
+- high-impact server mutations are not optimistically shown as committed success;
+- mailbox body is not persisted in Web Storage or telemetry.
+
+Generated-contract drift and sibling-feature violations are permanent CI targets in Phase 0.
+
+## 15. Compile-Time And CI Enforcement
+
+Permanent policy should cover:
+
+- dependency allowlists / forbidden outer dependencies;
+- Worker/DO transport thinness;
+- D1 governed write boundaries;
+- contract compatibility;
+- generated frontend contract drift;
+- frontend feature-boundary imports;
+- cross-tenant/IDOR negative fixtures;
+- D1 migration/replay invariants;
+- generation freshness/fencing;
+- secret/PII/content scans;
+- native + WASM + Windows/release composition as applicable;
+- exact-head acceptance before merge.
+
+A policy rule should have a positive repository check and, where practical, a deliberately
+forbidden fixture proving the checker fails closed.
+
+## 16. Target Structure
+
+Target structure is capability-oriented; exact crate names may evolve through the normative
+Phase 0 split, but dependency direction may not.
 
 ```text
 apps/
-  control-plane-worker/      # Rust workers-rs/WASM composition root
-  profile-bridge/            # Windows-native supervisor and updater
-  camouhost/                 # Python runtime provider
+  control-plane-worker/
+    ingress/http/
+    ingress/queue/
+    ingress/scheduled/
+    durable_objects/
+    composition/
+  profile-bridge/
+
 crates/
   primitives/
   contracts/
@@ -268,88 +349,72 @@ crates/
   session-domain/
   mailbox-domain/
   application-ports/
-  use-cases/
+  use-cases-identity/
+  use-cases-clients/
+  use-cases-profiles/
+  use-cases-mailboxes/
+  # later: notifications/search/devices/crm projection as justified
   cloudflare-adapters/
   windows-adapters/
-frontend/
-proto/
-migrations/d1/
-runtime/
-deploy/cloudflare/
-docs/
+
+frontend/src/
+  app/
+  routes/
+  features/
+  entities/
+  shared/api/generated/
+  shared/ui/
 ```
 
-## 12. Как Добавлять Функциональность
+A temporary compatibility facade is allowed during crate migration but must not become the
+permanent cross-domain orchestration owner.
 
-### Новый Use Case
+## 17. Prohibited Shortcuts
 
-1. Добавить versioned command/query contract.
-2. Добавить domain decision или использовать существующий aggregate method.
-3. Определить минимальные owned ports.
-4. Реализовать orchestration, authorization, idempotency и audit.
-5. Реализовать adapter и migration при необходимости.
-6. Подключить handler в composition root.
-7. Добавить contract, failure, replay и forbidden-access tests.
+- inner domain/application import from adapter/app/provider SDK;
+- domain policy implemented in React or provider adapter;
+- D1/R2 direct access from frontend/Bridge/domain;
+- authorization only by Access policy or hidden UI button;
+- Durable Object as parallel business catalog;
+- session lease/fencing moved to `profile-domain` merely for convenience;
+- mutable active R2 object or newest-object heuristic;
+- deleting browser lock files blindly;
+- snapshotting live browser directory;
+- email/client/message subject in technical IDs/paths/object keys;
+- long-lived device bearer/bucket credential;
+- generic remote `exec` instead of typed device command;
+- message body in ordinary logs/audit/events/telemetry/support;
+- direct CRM table/entity dependency from Profile Platform core.
 
-### Новый Cloud Provider Adapter
+## 18. CRM Boundary
 
-Реализовать port и пройти contract suite. Domain и public profile manifest не
-меняются. Provider-specific retry/limits остаются в adapter.
+CRM integration preserves platform IDs/contracts/state machines and replaces/adapts outer
+ownership only where explicitly cut over.
 
-### Новый Browser Runtime Или OS Lane
+Default synchronization is versioned event/projection based and async-first. This does not
+require every user-triggered HTTP acknowledgement to be asynchronous. Core domain/application
+code never imports CRM implementation details.
 
-Добавить отдельный signed runtime bundle, capability manifest, process
-supervisor и certification lane. Один artifact не объявляется cross-platform.
-
-## 13. Запрещенные Сокращения
-
-- domain import из adapter/app;
-- D1/R2 вызов из React, Camouhost или domain;
-- authorization только Cloudflare Access policy или скрытием UI-кнопки;
-- direct D1 access из frontend/Bridge;
-- Durable Object как параллельный бизнес-каталог;
-- mutable R2 object как active profile;
-- удаление browser lock files;
-- snapshot live browser directory;
-- email/client name в path, URL или object key;
-- long-lived bearer token или bucket credential на device;
-- generic remote `exec` вместо typed command;
-- Cloudflare Container/Browser Run как Camoufox runtime без отдельного ADR.
-
-## 14. Future CRM Migration
-
-При интеграции сохраняются IDs, contracts, state machines и audit semantics.
-Заменяются composition/adapters:
+Possible adapter replacements after accepted cutover:
 
 ```text
-Cloudflare Access -> CRM OIDC/identity adapter
+Cloudflare Access -> CRM OIDC identity adapter
 D1 catalog        -> PostgreSQL/SQLx + FORCE RLS adapter
-Queues            -> CRM job/outbox adapter при необходимости
-local ClientRegistry -> CRM Party projection
+local ClientRegistry -> CRM Party projection/command adapter
 ```
 
-R2 и Profile Bridge могут остаться без изменений. Прямой доступ к таблицам CRM
-и дублирование domain rules в CRM запрещены.
+R2 generations, session state machine and Profile Bridge browser lifecycle remain independent.
 
-## 15. Официальные Основания
+## 19. Documentation Authority / Reading Order
 
-- [Cloudflare Workers Rust support](https://developers.cloudflare.com/workers/languages/rust/)
-- [Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/)
-- [Durable Objects storage and transactions](https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/)
-- [D1 data security](https://developers.cloudflare.com/d1/reference/data-security/)
-- [R2 Workers API](https://developers.cloudflare.com/r2/get-started/workers-api/)
-- [Cloudflare Access identity providers](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/)
-- [Workers testing](https://developers.cloudflare.com/workers/testing/)
+1. [`INDEX.md`](./INDEX.md)
+2. [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md) for current execution order
+3. this `ARCHITECTURE.md` for stable boundaries
+4. relevant accepted ADR/security/data-classification document
+5. [`DEVELOPER_CAPABILITY_MATRIX.md`](./DEVELOPER_CAPABILITY_MATRIX.md) for actual accepted implementation/evidence level
+6. capability-specific contracts/tests/runbooks
+7. historical `DELIVERY_ROADMAP.md` / root `IMPLEMENTATION_PLAN.md` only when historical context is needed
 
-## 16. Порядок Чтения
-
-1. [`../README.md`](../README.md)
-2. [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md)
-3. этот architecture map;
-4. [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md)
-5. [`../PROFILE_LIFECYCLE_PLAN.md`](../PROFILE_LIFECYCLE_PLAN.md)
-6. ADR нужного bounded context;
-7. tests/contracts соответствующего vertical slice.
-
-Если code и документ расходятся, gate должен падать. Изменение инварианта сначала
-оформляется ADR, затем contract/migration tests и только после этого code.
+If code and a normative invariant diverge, the gate should fail. Invariant changes are first
+recorded in architecture/ADR/contracts and only then implemented. Execution-order changes are
+made only in `DEVELOPMENT_PLAN.md`.
