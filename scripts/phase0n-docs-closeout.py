@@ -15,7 +15,7 @@ plan = "docs/DEVELOPMENT_PLAN.md"
 replace_once(
     plan,
     "**Tracking:** Phase 0M accepted via #106/#107; next planned Phase 0N; plan consolidation history #96  ",
-    "**Tracking:** Phase 0N accepted via #110/#111; Phase 0 complete; next planned Phase 1A; plan consolidation history #96  ",
+    "**Tracking:** Phase 0N accepted via #110/#111; Phase 0 complete; next planned Phase 1A; plan consolidation history #96",
 )
 replace_once(
     plan,
