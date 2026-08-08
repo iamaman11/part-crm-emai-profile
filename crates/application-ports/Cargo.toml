@@ -10,6 +10,7 @@ client-domain.workspace = true
 contracts.workspace = true
 identity-access-domain.workspace = true
 mailbox-domain.workspace = true
+notification-domain.workspace = true
 profile-domain.workspace = true
 profile-platform-primitives.workspace = true
 session-domain.workspace = true
