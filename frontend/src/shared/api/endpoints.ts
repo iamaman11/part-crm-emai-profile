@@ -1,4 +1,5 @@
 import { newIdempotencyKey, requestJson, sha256Hex } from './client';
+import type { ClientCreateRequest, ClientGrantRequest } from './generated/control-plane';
 import type {
   ActorSession,
   ClientProjection,
@@ -9,6 +10,9 @@ import type {
   MutationReceipt,
   ProfileProjection,
 } from './types';
+
+export type CreateClientInput = Omit<ClientCreateRequest, 'requestDigest'>;
+export type SetClientGrantInput = Omit<ClientGrantRequest, 'requestDigest'>;
 
 function segment(value: string): string {
   if (!value || value.includes('/') || value.includes('\\')) {
@@ -82,7 +86,7 @@ export function getClient(tenantId: string, clientId: string): Promise<ClientPro
 
 export function createClient(
   tenantId: string,
-  input: { clientId: string; kind: 'PERSON' | 'ORGANIZATION'; displayName: string },
+  input: CreateClientInput,
 ): Promise<MutationReceipt | undefined> {
   return mutate(`/api/v1/tenants/${segment(tenantId)}/clients`, tenantId, 'POST', input);
 }
@@ -91,7 +95,7 @@ export function setClientGrant(
   tenantId: string,
   clientId: string,
   actorId: string,
-  input: { role: 'CLIENT_VIEWER' | 'CLIENT_EDITOR'; reason: string; expectedClientVersion: number },
+  input: SetClientGrantInput,
   revoke = false,
 ): Promise<MutationReceipt | undefined> {
   return mutate(
