@@ -2,7 +2,7 @@
 
 **Status:** normative post-composition execution plan  
 **Date:** 2026-08-08  
-**Tracking:** issue #96  
+**Tracking:** active Phase 0H issue #92; plan consolidation history #96  
 **Production readiness:** unchanged; `production_ready=false` until external evidence gates are satisfied
 
 ## 1. Authority And Scope
@@ -46,8 +46,30 @@ evidence satisfy its issue acceptance. PR descriptions are not implementation ev
 Before merge the branch must be synchronized to the latest `main` and end at
 `behind_by=0`.
 
-After 0H, continue the Phase 0 sequence below. Do not begin Phase 1 product expansion
-while Phase 0 acceptance remains incomplete.
+After 0H, continue the Phase 0 sequence below. Do not begin the next sequential
+architecture slice while the current slice is still awaiting bounded acceptance.
+
+### 2.1 Critical-path execution policy
+
+Development optimizes for the shortest **safe path to accepted product capability**, not for
+the maximum number of concurrent branches or the largest refactor.
+
+Rules:
+
+- one sequential architecture/governance slice is active at a time when slices touch the same
+  Worker/governed-write/application boundary;
+- dependency-independent work may proceed in parallel only when it cannot create competing
+  edits or invalidate the active slice baseline;
+- every push runs `python scripts/verify-fast.py`; boundary switches/final acceptance also run
+  `python scripts/verify-fast.py --with-compile` before expensive full CI;
+- use the permanent workflow matrix for acceptance, not as an interactive formatter/compiler;
+- Cargo/application crate extraction is **just in time**: split a capability when current or
+  immediately upcoming growth benefits from compile-time isolation, not as speculative churn;
+- frontend capability ships incrementally with the backend/query contract that enables it;
+  Phase 7 is completion/polish, not a big-bang frontend start;
+- long-lead External work (Cloudflare environments, Windows hosts/signing, key recovery,
+  privacy/license/security review) runs as a parallel operational workstream from now onward,
+  while production promotion remains Phase 10 and still requires accepted evidence.
 
 ## 3. Non-Negotiable Architecture Rules
 
@@ -217,13 +239,14 @@ Target:
 
 This slice must not redesign the proven coordinator state machine merely to move code.
 
-### Phase 0L — Real application Cargo boundaries
+### Phase 0L — Just-in-time application Cargo boundaries
 
 The current capability modules inside one `crates/use-cases` crate are not the final growth
-boundary. Before Phase 1/3 growth, split independent high-growth application contexts into
-workspace crates where the dependency graph benefits from compile-time isolation.
+boundary. Establish the first independent application crates where the dependency graph and
+immediately upcoming growth justify compile-time isolation, then continue extracting later
+capabilities just in time rather than performing one speculative all-capabilities migration.
 
-Initial direction:
+Expected growth direction remains:
 
 ```text
 use-cases-identity
@@ -232,17 +255,19 @@ use-cases-profiles
 use-cases-mailboxes
 ```
 
-Later phases add independent crates such as notification/search/device/CRM projection only
+but only the contexts with demonstrated dependency/growth pressure are mandatory in the first
+0L slice. Later phases add or extract notification/search/device/CRM application contexts only
 when those capabilities exist.
 
 Rules:
 
 - do not create one crate per function;
+- do not split a capability merely to satisfy a naming target;
 - shared neutral evidence/value/contracts remain in primitives/contracts/application-ports;
 - a temporary compatibility facade may re-export during migration;
 - no circular capability dependencies;
 - provider SDKs remain outside all use-case crates;
-- capability crates compile/test independently.
+- extracted capability crates compile/test independently.
 
 `application-ports` may remain one Cargo crate with capability modules while that keeps a
 clear dependency graph; split it into multiple crates only if actual dependency pressure
@@ -280,7 +305,7 @@ Phase 0 is complete only when all are true:
 - ordinary Worker/DO transports do not own provider/D1 business orchestration;
 - remaining legacy governance routes have bounded application owners;
 - coordinator ingress is thin without moving session semantics to the wrong domain;
-- use-case growth has real Cargo isolation where justified;
+- current high-growth use-case contexts have real Cargo isolation where justified;
 - generated public TS contracts are CI-enforced;
 - frontend sibling-feature boundaries are CI-enforced;
 - route classification remains fail-closed and modular;
@@ -290,36 +315,53 @@ Phase 0 is complete only when all are true:
 ## 5. Phase 1 — Integration Events, Outbox And Notification Persistence
 
 **Goal:** establish one durable event/outbox substrate before richer registry, mailbox and
-realtime behavior depend on it.
+realtime behavior depend on it, while avoiding unnecessary blocking of independent product
+work once the safe foundation exists.
 
-Build:
+### Phase 1A — Durable event/outbox foundation
+
+Build and accept first:
 
 - versioned integration event envelope;
-- `notification_events`, `notification_deliveries`, evolved `outbox_events`,
-  `consumer_idempotency`, `user_event_cursors` as required;
+- evolved `outbox_events` and minimal notification-event persistence required by the contract;
 - outbox dispatcher and Queue adapter;
-- idempotent consumer registry;
-- authorized catch-up by user/grants and event cursor;
-- bounded retention/compaction that never removes canonical business state.
+- idempotent consumer registry / `consumer_idempotency` as required;
+- payload sanitizer enforcing the existing PII/secret/content policy;
+- duplicate-delivery neutrality.
 
-Delivery policy is mandatory:
+Acceptance:
 
+- canonical mutation + audit/outbox remain atomic within their D1 boundary;
+- duplicate delivery has no duplicate logical effect;
+- prohibited PII/secrets/mail bodies are rejected from event payloads;
+- consumer processing is replay-safe for the accepted event set.
+
+After Phase 1A is accepted, **Phase 2 may begin** because Client Registry expansion only needs
+the durable event/outbox contract. Phase 1B may proceed in parallel when it does not overlap
+with the active Phase 2 files/contracts.
+
+### Phase 1B — Delivery hardening, catch-up and operations
+
+Complete before real asynchronous provider/device execution in Phases 4–5 and before realtime
+Phase 6:
+
+- `notification_deliveries`, `user_event_cursors` and authorized catch-up as required;
 - deterministic attempt accounting;
 - exponential backoff with bounded jitter;
 - maximum automatic attempts;
 - DLQ or equivalent terminal failure lane;
 - sanitized alerting/operational visibility;
 - operator-safe replay procedure;
-- replay idempotency and auditability.
+- replay idempotency and auditability;
+- bounded retention/compaction that never removes canonical business state.
 
 Acceptance:
 
-- duplicate delivery is side-effect neutral;
 - poison messages reach DLQ/terminal state after the configured bound;
 - retries do not hot-loop;
-- DLQ/event payload sanitizer rejects prohibited PII/secrets;
 - replay after remediation cannot duplicate the logical effect;
-- unauthorized users cannot query event history.
+- unauthorized users cannot query event history/catch-up;
+- operational payloads remain sanitized.
 
 ## 6. Phase 2 — Client Registry 2.0 And Assignment Model
 
@@ -347,7 +389,9 @@ Acceptance:
 - one client may have multiple profiles;
 - member projections are grant-filtered;
 - exact contact lookup does not require plaintext scan;
-- no name/contact-derived technical IDs/paths/keys.
+- no name/contact-derived technical IDs/paths/keys;
+- Client Registry UI is incrementally usable for the accepted create/update/archive/assignment
+  projections rather than deferred to Phase 7.
 
 ## 7. Phase 3 — Read Models, Global Search And Client Mail Query Contract
 
@@ -426,7 +470,8 @@ bounded internal search behind the same port. A future central/local index requi
 storage/security/retention decision.
 
 Phase 3 proves API/read-model/authorization semantics with deterministic fakes. Real provider
-execution belongs to Phases 4–5.
+execution belongs to Phases 4–5. The matching search/client-mail UI is implemented against the
+fake/query contract in this phase so provider work is not coupled to a later big-bang UI.
 
 Acceptance:
 
@@ -439,6 +484,9 @@ Acceptance:
 ## 8. Phase 4 — Mailbox Operations 2.0 And Cloud Provider Lane
 
 **Goal:** implement real cloud-capable mailbox operations behind one provider-neutral model.
+
+**Prerequisite:** Phase 1B delivery hardening is accepted before enabling real asynchronous
+scheduled provider execution.
 
 Mailbox job states:
 
@@ -493,6 +541,8 @@ Acceptance:
 **Goal:** support providers requiring an authorized browser profile without using the web
 WebSocket as a device command channel.
 
+**Prerequisite:** Phase 1B delivery hardening is accepted.
+
 Target flow:
 
 ```text
@@ -522,7 +572,8 @@ Real Camoufox/physical-host behavior remains External until accepted evidence ex
 
 ## 10. Phase 6 — Realtime UserNotificationHub
 
-**Goal:** deliver low-latency safe change signals after durable event persistence exists.
+**Goal:** deliver low-latency safe change signals after durable event persistence and Phase 1B
+catch-up/delivery hardening exist.
 
 Topology:
 
@@ -550,7 +601,8 @@ without in-memory-only security/cursor state.
 
 ## 11. Phase 7 — Complete Standalone UI
 
-**Goal:** finish the operator product on top of accepted application/query contracts.
+**Goal:** finish and polish the operator product on top of UI capabilities delivered
+incrementally in Phases 2–6; do not defer ordinary usable frontend flows until this phase.
 
 Primary information-architecture priority:
 
@@ -658,9 +710,14 @@ code never imports CRM tables/entities/SDK implementation details.
 
 ## 14. Phase 10 — Production Evidence And Rollout
 
-Code may prepare adapters, validators and runbooks, but production promotion still requires
-real accepted evidence for the existing external gates, including as applicable:
+Production promotion remains Phase 10, but the underlying long-lead External work is a
+**parallel operational workstream beginning immediately**. Repository implementation must not
+wait until Phase 10 to request/provision resources whose lead time could block release.
 
+Code may prepare adapters, validators and runbooks, while the parallel workstream advances real
+accepted evidence for the existing external gates, including as applicable:
+
+- revoke/rotate and verify any known exposed legacy credential before prototype reuse;
 - isolated Cloudflare resources/budgets;
 - trusted Windows signing/update channel;
 - primary/secondary physical Windows evidence;
@@ -673,39 +730,42 @@ real accepted evidence for the existing external gates, including as applicable:
 - independent security/cryptographic review.
 
 `production_ready` remains `false` until those gates are satisfied with real reviewable
-evidence.
+evidence. Parallel preparation or provisioning never changes an External evidence claim by
+itself.
 
 ## 15. Architecture Gates For Every Future PR
 
 Every applicable capability PR must satisfy:
 
-1. **Layer gate** — no outward dependency from domain/application code.
-2. **Transport-thinness gate** — ordinary ingress does not own provider/D1 orchestration.
-3. **Contract gate** — public API/event/bridge changes are versioned/compatibility checked.
-4. **Frontend generation gate** — generated contracts are deterministic and clean.
-5. **Frontend feature gate** — sibling-feature internals cannot be imported.
-6. **Tenant/IDOR gate** — authorization occurs before projection/provider fetch.
-7. **Idempotency gate** — duplicate HTTP/Queue/device result has no duplicate logical effect.
-8. **Transaction gate** — canonical D1 mutation + audit/outbox are atomic within one D1
+1. **Fast-preflight gate** — locally reproducible formatting/policy/compile failures are caught
+   before expensive full CI (`scripts/verify-fast.py`, plus `--with-compile` where applicable).
+2. **Layer gate** — no outward dependency from domain/application code.
+3. **Transport-thinness gate** — ordinary ingress does not own provider/D1 orchestration.
+4. **Contract gate** — public API/event/bridge changes are versioned/compatibility checked.
+5. **Frontend generation gate** — generated contracts are deterministic and clean.
+6. **Frontend feature gate** — sibling-feature internals cannot be imported.
+7. **Tenant/IDOR gate** — authorization occurs before projection/provider fetch.
+8. **Idempotency gate** — duplicate HTTP/Queue/device result has no duplicate logical effect.
+9. **Transaction gate** — canonical D1 mutation + audit/outbox are atomic within one D1
    boundary.
-9. **Secret/PII/content gate** — prohibited payloads never enter logs/events/audit/support.
-10. **Failure-order gate** — external side effects follow the durable transition that
+10. **Secret/PII/content gate** — prohibited payloads never enter logs/events/audit/support.
+11. **Failure-order gate** — external side effects follow the durable transition that
     authorizes them.
-11. **Generation freshness gate** — active generation + lease/fencing controls writer launch
+12. **Generation freshness gate** — active generation + lease/fencing controls writer launch
     and activation.
-12. **Exact-head gate** — all permanent workflows green on one unchanged final head.
-13. **Review gate** — zero blocking reviews/unresolved threads before merge.
-14. **Evidence-scope gate** — synthetic/local evidence never promotes External claims.
+13. **Exact-head gate** — all permanent workflows green on one unchanged final head.
+14. **Review gate** — zero blocking reviews/unresolved threads before merge.
+15. **Evidence-scope gate** — synthetic/local evidence never promotes External claims.
 
 For architecture-boundary migrations use the proven fail-safe switch discipline:
 
 1. add inward port/use case and adapter;
-2. prove native/WASM inward behavior;
+2. run fast preflight and prove native/WASM inward behavior;
 3. switch live transport while retaining fallback;
 4. prove post-switch native/WASM behavior;
 5. remove only superseded fallback;
 6. make permanent policy/docs reflect the proven final ownership;
-7. run exact-head full acceptance;
+7. synchronize to current `main`, run fast preflight, then exact-head full acceptance;
 8. guarded squash merge with expected head SHA.
 
 ## 16. Documentation And Developer Workflow
@@ -733,6 +793,10 @@ Documentation discipline:
 - `docs/INDEX.md` must classify new normative/historical/evidence documents;
 - machine-checkable claims should be enforced by CI rather than prose alone.
 
+Development-loop discipline is defined in `CONTRIBUTING.md`; this plan defines sequencing.
+Where possible, cheap deterministic checks run before push and full permanent CI runs only on a
+head intended to advance acceptance.
+
 ## 17. Recommended PR Slicing
 
 Do not implement a whole phase in one PR. Preferred order:
@@ -742,25 +806,27 @@ Phase 0H profile grant
   -> 0I client grant
   -> 0J identity governance lifecycle
   -> 0K coordinator ingress
-  -> 0L use-case Cargo boundaries
+  -> 0L first justified use-case Cargo extraction(s)
   -> 0M generated TS + frontend feature boundary
   -> 0N route classifier + architecture/docs inventory
 
-Phase 1 event contract/domain
-  -> persistence migration
+Phase 1A event contract/persistence foundation
   -> dispatcher/idempotent consumer
-  -> retry/DLQ/replay
-  -> authorized catch-up
 
 Phase 2 client aggregate/contact crypto
   -> D1 adapter
   -> merge/assignment lifecycle
-  -> API/UI projections
+  -> API + incremental UI projections
+
+Phase 1B may proceed dependency-independently after 1A
+  -> retry/max-attempt/DLQ/replay
+  -> authorized catch-up/retention
+  -> must finish before real Phase 4/5 async execution and Phase 6 realtime
 
 Phase 3 read-model schema
   -> global query service
   -> client-mail query contracts/fakes
-  -> API/UI integration
+  -> API + incremental UI integration
 
 Phase 4 cloud mailbox provider contract
   -> scheduler/Queue
@@ -775,13 +841,15 @@ Phase 6 notification hub
   -> catch-up/reconnect
   -> frontend realtime
 
-Phase 7 UI capabilities incrementally
+Phase 7 complete/polish remaining UI capability gaps
 Phase 8 cross-component acceptance
 Phase 9 CRM contracts/projection before cutover adapters
-Phase 10 external evidence/promotion
+Phase 10 production promotion over evidence advanced in the parallel External workstream
 ```
 
-Each slice gets its own issue, branch, bounded diff, exact-head CI and guarded squash merge.
+Each sequential slice gets its own issue, branch, bounded diff, exact-head CI and guarded squash
+merge. Parallel work must be dependency-independent and must not turn multiple stale drafts into
+the critical path.
 
 ## 18. Final Product Definition Of Done
 
@@ -806,5 +874,20 @@ The standalone + CRM-ready target is complete only when, at the correct evidence
 ## 19. Immediate Next Action
 
 Finish **Phase 0H (#92 / PR #93)** against the latest `main` using the fail-safe application
-boundary sequence above. Only after its guarded merge start a fresh Phase 0I branch from the
-new accepted `main`.
+boundary sequence above. The immediate loop is:
+
+```text
+sync #93 to current main
+  -> fast preflight / format clean
+  -> prove inward native + WASM
+  -> switch only ProfileGrantApi to thin transport
+  -> prove post-switch native + WASM
+  -> remove superseded legacy profile-grant orchestration
+  -> update permanent boundary/evidence/docs
+  -> fast preflight --with-compile
+  -> behind_by=0 + 12/12 exact-head workflows + zero blocking review
+  -> guarded squash merge
+```
+
+Only after that merge start Phase 0I from the new accepted `main`. In parallel, continue
+long-lead External gate preparation without changing `production_ready=false`.
