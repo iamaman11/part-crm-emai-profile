@@ -29,6 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/materialize-linear-roadmap.py
+          sed -i 's/[[:space:]]\+$//' docs/FUTURE_DEVELOPMENT.md
           python scripts/generate-architecture-inventory.py --check
           python - <<'PY'
           from pathlib import Path
