@@ -323,8 +323,8 @@ mod tests {
     };
 
     #[test]
-    fn canonical_transport_models_keep_wire_field_names()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn canonical_transport_models_keep_wire_field_names() -> Result<(), Box<dyn std::error::Error>>
+    {
         let session = serde_json::to_value(ActorSession {
             tenant_id: "tenant_01JCONTRACT".to_owned(),
             actor_id: "actor_01JCONTRACT".to_owned(),
@@ -401,8 +401,7 @@ mod tests {
             assert!(problem_type.starts_with("urn:part-crm:problem:"));
             if code != "internal_failure" {
                 assert_ne!(
-                    problem_type,
-                    "urn:part-crm:problem:internal-failure",
+                    problem_type, "urn:part-crm:problem:internal-failure",
                     "known problem code {code} fell through"
                 );
             }
