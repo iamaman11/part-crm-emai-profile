@@ -16,6 +16,7 @@ MONOLITH_USE_CASE_MODULES = (
     "client_grants", "clients", "coordinator_ingress", "error", "generations", "identity_acl",
     "mailbox_jobs", "mailboxes", "profile_assignments", "profile_grants", "profiles",
 )
+CLIENT_USE_CASE_MODULES = ("client_grants", "clients", "contacts", "error", "lifecycle")
 
 PORT_OWNERS = {
     "audit.rs": ("pub trait AuditPort", "pub struct AuditRecord", "pub enum AuditResult"),
@@ -34,8 +35,6 @@ PORT_OWNERS = {
 }
 
 MONOLITH_USE_CASE_OWNERS = {
-    "client_grants.rs": ("pub struct ExecuteClientGrantCommand", "pub async fn execute_client_grant", "pub fn authorize_client_grant", "pub fn next_client_grant_version"),
-    "clients.rs": ("pub struct CreateClientCommand", "pub fn decide_create_client", "pub struct ExecuteCreateClientCommand", "pub async fn execute_create_client", "pub async fn get_visible_client"),
     "coordinator_ingress.rs": ("pub struct CoordinatorIngressAccess", "pub async fn prepare_coordinator_ingress", "pub async fn execute_prepared_coordinator_ingress"),
     "error.rs": ("pub struct ApplicationError",),
     "generations.rs": ("pub async fn execute_register_generation", "pub async fn get_visible_generation", "pub async fn execute_verify_generation", "pub async fn execute_activate_generation", "pub async fn execute_deactivate_generation", "pub async fn execute_quarantine_generation"),
@@ -43,6 +42,13 @@ MONOLITH_USE_CASE_OWNERS = {
     "profile_assignments.rs": ("pub struct ExecuteAssignProfileCommand", "pub async fn execute_assign_profile", "pub fn authorize_profile_assignment", "pub fn next_profile_assignment_version"),
     "profile_grants.rs": ("pub struct ExecuteProfileGrantCommand", "pub async fn execute_profile_grant", "pub fn authorize_profile_grant", "pub fn next_profile_grant_version"),
     "profiles.rs": ("pub struct OpenProfileCommand", "pub fn decide_open_profile", "pub struct ExecuteCreateProfileCommand", "pub async fn execute_create_profile", "pub async fn get_visible_profile"),
+}
+
+CLIENT_USE_CASE_OWNERS = {
+    "clients.rs": ("pub struct CreateClientCommand", "pub fn decide_create_client", "pub struct ExecuteCreateClientCommand", "pub async fn execute_create_client", "pub async fn get_visible_client"),
+    "client_grants.rs": ("pub struct ExecuteClientGrantCommand", "pub async fn execute_client_grant", "pub fn authorize_client_grant", "pub fn next_client_grant_version"),
+    "contacts.rs": ("pub struct TransientContactValue", "pub async fn prepare_protected_contact", "pub fn authorize_contact_mutation"),
+    "lifecycle.rs": ("pub struct UpdateClientCommand", "pub struct ArchiveClientCommand", "pub async fn execute_update_client", "pub async fn execute_archive_client", "pub fn authorize_client_lifecycle"),
 }
 
 IDENTITY_USE_CASE_OWNERS = {
@@ -59,9 +65,11 @@ def validate(root: Path) -> list[str]:
     errors: list[str] = []
     ports_dir = root / "crates/application-ports/src"
     mono_dir = root / "crates/use-cases/src"
+    clients_dir = root / "crates/use-cases-clients/src"
     identity_dir = root / "crates/use-cases-identity/src"
     ports_lib = read(ports_dir / "lib.rs") if (ports_dir / "lib.rs").is_file() else ""
     mono_lib = read(mono_dir / "lib.rs") if (mono_dir / "lib.rs").is_file() else ""
+    clients_lib = read(clients_dir / "lib.rs") if (clients_dir / "lib.rs").is_file() else ""
     identity_lib = read(identity_dir / "lib.rs") if (identity_dir / "lib.rs").is_file() else ""
 
     for module in PORT_MODULES:
@@ -80,6 +88,14 @@ def validate(root: Path) -> list[str]:
         if not path.is_file() or not read(path).strip():
             errors.append(f"missing/non-empty monolith use-case module: {path.relative_to(root)}")
 
+    for module in CLIENT_USE_CASE_MODULES:
+        declaration = f"pub mod {module};"
+        path = clients_dir / f"{module}.rs"
+        if declaration not in clients_lib:
+            errors.append(f"use-cases-clients facade missing `{declaration}`")
+        if not path.is_file() or not read(path).strip():
+            errors.append(f"missing extracted client module: {path.relative_to(root)}")
+
     for extracted in ("identity_ceremonies", "identity_governance"):
         if f"pub mod {extracted};" in mono_lib or (mono_dir / f"{extracted}.rs").exists():
             errors.append(f"extracted identity owner returned to monolithic use-cases: {extracted}")
@@ -89,9 +105,21 @@ def validate(root: Path) -> list[str]:
         if not path.is_file() or not read(path).strip():
             errors.append(f"missing extracted identity module: {path.relative_to(root)}")
 
-    compatibility = "pub use use_cases_identity::{identity_ceremonies, identity_governance};"
-    if compatibility not in mono_lib:
+    identity_compatibility = "pub use use_cases_identity::{identity_ceremonies, identity_governance};"
+    if identity_compatibility not in mono_lib:
         errors.append("monolithic compatibility facade must explicitly re-export use-cases-identity")
+
+    client_compatibility = {
+        "clients.rs": "pub use use_cases_clients::clients::*;",
+        "client_grants.rs": "pub use use_cases_clients::client_grants::*;",
+    }
+    for filename, reexport in client_compatibility.items():
+        source = read(mono_dir / filename) if (mono_dir / filename).is_file() else ""
+        if reexport not in source:
+            errors.append(f"monolithic client compatibility facade missing `{reexport}`")
+        for symbol in CLIENT_USE_CASE_OWNERS[filename]:
+            if symbol in source:
+                errors.append(f"extracted client owner returned to monolithic use-cases: {symbol}")
 
     for filename, symbols in PORT_OWNERS.items():
         owner = read(ports_dir / filename) if (ports_dir / filename).is_file() else ""
@@ -108,6 +136,14 @@ def validate(root: Path) -> list[str]:
                 errors.append(f"{filename} must own `{symbol}`")
             if symbol in mono_lib:
                 errors.append(f"use-cases facade must not own `{symbol}`")
+
+    for filename, symbols in CLIENT_USE_CASE_OWNERS.items():
+        owner = read(clients_dir / filename) if (clients_dir / filename).is_file() else ""
+        for symbol in symbols:
+            if symbol not in owner:
+                errors.append(f"use-cases-clients/{filename} must own `{symbol}`")
+            if symbol in clients_lib:
+                errors.append(f"client application facade must not implement `{symbol}`")
 
     for filename, symbols in IDENTITY_USE_CASE_OWNERS.items():
         owner = read(identity_dir / filename) if (identity_dir / filename).is_file() else ""
@@ -145,20 +181,27 @@ def validate(root: Path) -> list[str]:
 def write_self_test_fixture(root: Path) -> None:
     ports = root / "crates/application-ports/src"
     mono = root / "crates/use-cases/src"
+    clients = root / "crates/use-cases-clients/src"
     identity = root / "crates/use-cases-identity/src"
     ports.mkdir(parents=True)
     mono.mkdir(parents=True)
+    clients.mkdir(parents=True)
     identity.mkdir(parents=True)
     for module in PORT_MODULES:
         (ports / f"{module}.rs").write_text("// fixture\n", encoding="utf-8")
     for module in MONOLITH_USE_CASE_MODULES:
         (mono / f"{module}.rs").write_text("// fixture\n", encoding="utf-8")
+    for module in CLIENT_USE_CASE_MODULES:
+        (clients / f"{module}.rs").write_text("// fixture\n", encoding="utf-8")
     for module in IDENTITY_USE_CASE_OWNERS:
         (identity / module).write_text("// fixture\n", encoding="utf-8")
     (ports / "lib.rs").write_text("\n".join(f"pub mod {m};" for m in PORT_MODULES), encoding="utf-8")
+    (clients / "lib.rs").write_text("\n".join(f"pub mod {m};" for m in CLIENT_USE_CASE_MODULES), encoding="utf-8")
     (identity / "lib.rs").write_text("pub mod identity_ceremonies;\npub mod identity_governance;\n", encoding="utf-8")
-    # Deliberate regression: old owner returns to the monolith.
+    # Deliberate regression: old identity owner returns to the monolith.
     (mono / "identity_governance.rs").write_text("// forbidden duplicate owner\n", encoding="utf-8")
+    (mono / "clients.rs").write_text("pub use use_cases_clients::clients::*;\n", encoding="utf-8")
+    (mono / "client_grants.rs").write_text("pub use use_cases_clients::client_grants::*;\n", encoding="utf-8")
     (mono / "lib.rs").write_text(
         "\n".join(f"pub mod {m};" for m in MONOLITH_USE_CASE_MODULES)
         + "\npub mod identity_governance;\n"
