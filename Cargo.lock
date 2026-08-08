@@ -531,6 +531,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "notification-domain"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -873,6 +880,7 @@ dependencies = [
  "profile-platform-primitives",
  "session-domain",
  "use-cases-identity",
+ "use-cases-notifications",
 ]
 
 [[package]]
@@ -881,6 +889,16 @@ version = "0.1.0"
 dependencies = [
  "application-ports",
  "identity-access-domain",
+ "profile-platform-primitives",
+]
+
+[[package]]
+name = "use-cases-notifications"
+version = "0.1.0"
+dependencies = [
+ "application-ports",
+ "contracts",
+ "notification-domain",
  "profile-platform-primitives",
 ]
 
