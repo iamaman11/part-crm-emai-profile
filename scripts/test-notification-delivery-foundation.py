@@ -9,8 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "migrations" / "d1"
 TENANT_ID = "tenant_01_notify_test"
-ACTOR_ID = "actor_owner_notify_test"
-IDENTITY_ID = "identity_owner_notify_test"
+ACTOR_ID = "actor_member_notify_test"
+IDENTITY_ID = "identity_member_notify_test"
 CONSUMER_ID = "consumer_notify_v1"
 EVENT_A = "outbox_01_notify_a"
 EVENT_B = "outbox_01_notify_b"
@@ -48,7 +48,7 @@ def seed_actor(connection: sqlite3.Connection) -> None:
         INSERT INTO memberships (
             tenant_id, actor_id, identity_id, role, status, version,
             created_at_ms, updated_at_ms
-        ) VALUES (?, ?, ?, 'TENANT_OWNER', 'ACTIVE', 1, 1, 1)
+        ) VALUES (?, ?, ?, 'MEMBER', 'ACTIVE', 1, 1, 1)
         """,
         (TENANT_ID, ACTOR_ID, IDENTITY_ID),
     )
@@ -87,7 +87,7 @@ def ready_delivery(connection: sqlite3.Connection, event_id: str = EVENT_A) -> N
     )
 
 
-def test_delivery_state_shape_and_sanitized_failure_metadata() -> None:
+def test_delivery_state_shape_and_sanitization() -> None:
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")
     try:
@@ -98,66 +98,47 @@ def test_delivery_state_shape_and_sanitized_failure_metadata() -> None:
 
         columns = {
             row[1]
-            for row in connection.execute("PRAGMA table_info(notification_deliveries)").fetchall()
+            for row in connection.execute("PRAGMA table_info(notification_deliveries)")
         }
+        assert {"raw_error", "provider_error", "payload_json"}.isdisjoint(columns)
         assert "failure_class" in columns
-        assert "raw_error" not in columns
-        assert "provider_error" not in columns
-        assert "payload_json" not in columns
 
-        expect_integrity_error(
-            lambda: connection.execute(
-                """
-                INSERT INTO notification_deliveries (
-                    tenant_id, consumer_id, outbox_event_id, delivery_state,
-                    attempt_count, created_at_ms, updated_at_ms
-                ) VALUES (?, 'consumer_bad_ready', ?, 'READY', 1, 20, 20)
-                """,
-                (TENANT_ID, EVENT_A),
-            ),
-            "CHECK constraint failed",
+        invalid_statements = (
+            """
+            UPDATE notification_deliveries
+            SET delivery_state='RETRY_SCHEDULED', attempt_count=1,
+                last_attempt_at_ms=30, next_attempt_at_ms=NULL,
+                failure_class='DEPENDENCY_UNAVAILABLE', updated_at_ms=30
+            WHERE tenant_id=? AND consumer_id=? AND outbox_event_id=?
+            """,
+            """
+            UPDATE notification_deliveries
+            SET delivery_state='RETRY_SCHEDULED', attempt_count=1,
+                last_attempt_at_ms=30, next_attempt_at_ms=30,
+                failure_class='DEPENDENCY_UNAVAILABLE', updated_at_ms=30
+            WHERE tenant_id=? AND consumer_id=? AND outbox_event_id=?
+            """,
+            """
+            UPDATE notification_deliveries
+            SET delivery_state='DEAD_LETTER', attempt_count=3,
+                last_attempt_at_ms=30, terminal_at_ms=NULL,
+                failure_class='DEPENDENCY_UNAVAILABLE', updated_at_ms=30
+            WHERE tenant_id=? AND consumer_id=? AND outbox_event_id=?
+            """,
         )
-        connection.rollback()
-
-        expect_integrity_error(
-            lambda: connection.execute(
-                """
-                UPDATE notification_deliveries
-                SET delivery_state = 'RETRY_SCHEDULED',
-                    attempt_count = 1,
-                    last_attempt_at_ms = 30,
-                    next_attempt_at_ms = 30,
-                    failure_class = 'DEPENDENCY_UNAVAILABLE',
-                    updated_at_ms = 30
-                WHERE tenant_id = ? AND consumer_id = ? AND outbox_event_id = ?
-                """,
-                (TENANT_ID, CONSUMER_ID, EVENT_A),
-            ),
-            "CHECK constraint failed",
-        )
-        connection.rollback()
-
-        expect_integrity_error(
-            lambda: connection.execute(
-                """
-                UPDATE notification_deliveries
-                SET delivery_state = 'DEAD_LETTER',
-                    attempt_count = 3,
-                    last_attempt_at_ms = 30,
-                    terminal_at_ms = 30,
-                    failure_class = NULL,
-                    updated_at_ms = 30
-                WHERE tenant_id = ? AND consumer_id = ? AND outbox_event_id = ?
-                """,
-                (TENANT_ID, CONSUMER_ID, EVENT_A),
-            ),
-            "CHECK constraint failed",
-        )
+        for statement in invalid_statements:
+            expect_integrity_error(
+                lambda statement=statement: connection.execute(
+                    statement, (TENANT_ID, CONSUMER_ID, EVENT_A)
+                ),
+                "CHECK constraint failed",
+            )
+            connection.rollback()
     finally:
         connection.close()
 
 
-def test_operational_delivery_delete_cannot_delete_canonical_event() -> None:
+def test_delivery_retention_cannot_delete_canonical_event() -> None:
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")
     try:
@@ -169,37 +150,35 @@ def test_operational_delivery_delete_cannot_delete_canonical_event() -> None:
 
         expect_integrity_error(
             lambda: connection.execute(
-                "DELETE FROM outbox_events WHERE tenant_id = ? AND outbox_event_id = ?",
+                "DELETE FROM outbox_events WHERE tenant_id=? AND outbox_event_id=?",
                 (TENANT_ID, EVENT_A),
             ),
             "FOREIGN KEY constraint failed",
         )
         connection.rollback()
-
         connection.execute(
             """
             DELETE FROM notification_deliveries
-            WHERE tenant_id = ? AND consumer_id = ? AND outbox_event_id = ?
+            WHERE tenant_id=? AND consumer_id=? AND outbox_event_id=?
             """,
             (TENANT_ID, CONSUMER_ID, EVENT_A),
         )
         assert connection.execute(
-            "SELECT COUNT(*) FROM outbox_events WHERE tenant_id = ? AND outbox_event_id = ?",
+            "SELECT COUNT(*) FROM outbox_events WHERE tenant_id=? AND outbox_event_id=?",
             (TENANT_ID, EVENT_A),
         ).fetchone()[0] == 1
     finally:
         connection.close()
 
 
-def test_cursor_is_source_bound_monotonic_and_requires_live_membership() -> None:
+def test_cursor_is_source_bound_monotonic_and_live_member_only() -> None:
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")
     try:
         apply_migrations(connection)
         seed_actor(connection)
-        seed_event(connection, EVENT_A, 10)
-        seed_event(connection, EVENT_B, 10)
-        seed_event(connection, EVENT_C, 11)
+        for event_id, occurred_at in ((EVENT_A, 10), (EVENT_B, 10), (EVENT_C, 11)):
+            seed_event(connection, event_id, occurred_at)
         connection.commit()
 
         connection.execute(
@@ -213,16 +192,16 @@ def test_cursor_is_source_bound_monotonic_and_requires_live_membership() -> None
         connection.execute(
             """
             UPDATE user_event_cursors
-            SET occurred_at_ms = 10, outbox_event_id = ?, updated_at_ms = 21
-            WHERE tenant_id = ? AND actor_id = ?
+            SET occurred_at_ms=10, outbox_event_id=?, updated_at_ms=21
+            WHERE tenant_id=? AND actor_id=?
             """,
             (EVENT_B, TENANT_ID, ACTOR_ID),
         )
         connection.execute(
             """
             UPDATE user_event_cursors
-            SET occurred_at_ms = 11, outbox_event_id = ?, updated_at_ms = 22
-            WHERE tenant_id = ? AND actor_id = ?
+            SET occurred_at_ms=11, outbox_event_id=?, updated_at_ms=22
+            WHERE tenant_id=? AND actor_id=?
             """,
             (EVENT_C, TENANT_ID, ACTOR_ID),
         )
@@ -232,8 +211,8 @@ def test_cursor_is_source_bound_monotonic_and_requires_live_membership() -> None
             lambda: connection.execute(
                 """
                 UPDATE user_event_cursors
-                SET occurred_at_ms = 10, outbox_event_id = ?, updated_at_ms = 23
-                WHERE tenant_id = ? AND actor_id = ?
+                SET occurred_at_ms=10, outbox_event_id=?, updated_at_ms=23
+                WHERE tenant_id=? AND actor_id=?
                 """,
                 (EVENT_B, TENANT_ID, ACTOR_ID),
             ),
@@ -245,8 +224,8 @@ def test_cursor_is_source_bound_monotonic_and_requires_live_membership() -> None
             lambda: connection.execute(
                 """
                 UPDATE user_event_cursors
-                SET occurred_at_ms = 12, outbox_event_id = ?, updated_at_ms = 23
-                WHERE tenant_id = ? AND actor_id = ?
+                SET occurred_at_ms=12, outbox_event_id=?, updated_at_ms=23
+                WHERE tenant_id=? AND actor_id=?
                 """,
                 (EVENT_C, TENANT_ID, ACTOR_ID),
             ),
@@ -257,8 +236,8 @@ def test_cursor_is_source_bound_monotonic_and_requires_live_membership() -> None
         connection.execute(
             """
             UPDATE memberships
-            SET status = 'SUSPENDED', version = version + 1, updated_at_ms = 30
-            WHERE tenant_id = ? AND actor_id = ?
+            SET status='REVOKED', version=version+1, updated_at_ms=30
+            WHERE tenant_id=? AND actor_id=?
             """,
             (TENANT_ID, ACTOR_ID),
         )
@@ -266,9 +245,8 @@ def test_cursor_is_source_bound_monotonic_and_requires_live_membership() -> None
         expect_integrity_error(
             lambda: connection.execute(
                 """
-                UPDATE user_event_cursors
-                SET updated_at_ms = 31
-                WHERE tenant_id = ? AND actor_id = ?
+                UPDATE user_event_cursors SET updated_at_ms=31
+                WHERE tenant_id=? AND actor_id=?
                 """,
                 (TENANT_ID, ACTOR_ID),
             ),
@@ -278,7 +256,7 @@ def test_cursor_is_source_bound_monotonic_and_requires_live_membership() -> None
         connection.close()
 
 
-def test_delivery_source_tenant_is_fail_closed() -> None:
+def test_delivery_source_is_fail_closed() -> None:
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")
     try:
@@ -302,12 +280,12 @@ def test_delivery_source_tenant_is_fail_closed() -> None:
 
 
 def main() -> int:
-    tests = [
-        test_delivery_state_shape_and_sanitized_failure_metadata,
-        test_operational_delivery_delete_cannot_delete_canonical_event,
-        test_cursor_is_source_bound_monotonic_and_requires_live_membership,
-        test_delivery_source_tenant_is_fail_closed,
-    ]
+    tests = (
+        test_delivery_state_shape_and_sanitization,
+        test_delivery_retention_cannot_delete_canonical_event,
+        test_cursor_is_source_bound_monotonic_and_live_member_only,
+        test_delivery_source_is_fail_closed,
+    )
     for test in tests:
         test()
     print(f"Phase 1B delivery/cursor D1 invariants passed ({len(tests)} tests).")
