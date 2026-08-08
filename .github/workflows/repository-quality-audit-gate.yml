@@ -38,6 +38,7 @@ jobs:
           python -m py_compile scripts/check-mailbox-job-worker-application-boundary.py
           python -m py_compile scripts/check-frontend-feature-boundaries.py
           python -m py_compile scripts/generate-architecture-inventory.py
+          python -m py_compile scripts/test-architecture-inventory-negative.py
 
       - name: Enforce GitHub Actions Node 24 checkout runtime
         run: python scripts/check-github-actions-runtime.py
@@ -94,8 +95,8 @@ jobs:
       - name: Verify architecture inventory and documentation consistency
         run: python scripts/generate-architecture-inventory.py --check
 
-      - name: Prove architecture inventory drift is detected
-        run: python scripts/generate-architecture-inventory.py --self-test
+      - name: Prove architecture inventory drift is rejected
+        run: python scripts/test-architecture-inventory-negative.py
 
       - name: Test hardened pure boundaries
         run: >-
