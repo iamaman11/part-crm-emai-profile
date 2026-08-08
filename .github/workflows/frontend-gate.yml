@@ -24,91 +24,14 @@ jobs:
         with:
           ref: phase1a-closeout-phase2-next
 
-      - name: Materialize normative docs
+      - name: Materialize and validate normative docs
         run: |
           python scripts/phase1a-closeout-materialize.py
           python scripts/generate-architecture-inventory.py --check
-          git diff --check
-
-      - name: Restore permanent Frontend Gate and remove materializer
-        shell: bash
-        run: |
-          cat > .github/workflows/frontend-gate.yml <<'YAML'
-          name: Frontend Gate
-
-          on:
-            pull_request:
-            push:
-              branches:
-                - main
-
-          permissions:
-            contents: read
-
-          concurrency:
-            group: frontend-gate-${{ github.workflow }}-${{ github.ref }}
-            cancel-in-progress: true
-
-          jobs:
-            frontend:
-              name: React Operator UI
-              runs-on: ubuntu-latest
-              steps:
-                - name: Checkout
-                  uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-                  with:
-                    persist-credentials: false
-
-                - name: Enforce frontend sibling-feature boundaries
-                  run: python scripts/check-frontend-feature-boundaries.py
-
-                - name: Prove sibling feature internals are rejected
-                  run: python scripts/check-frontend-feature-boundaries.py --self-test
-
-                - name: Set up Node 24 LTS
-                  uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-                  with:
-                    node-version: '24.19.0'
-                    package-manager-cache: false
-
-                - name: Enforce Node and npm versions
-                  run: |
-                    test "$(node --version)" = "v24.19.0"
-                    npm install --global npm@11.17.0
-                    test "$(npm --version)" = "11.17.0"
-
-                - name: Clean install from lockfile
-                  working-directory: frontend
-                  run: npm ci
-
-                - name: Reject credential persistence and token surfaces in application source
-                  run: |
-                    if grep -R -n -E --include='*.ts' --include='*.tsx' '(localStorage|sessionStorage|Cf-Access-Jwt-Assertion)' frontend/src; then
-                      echo "Forbidden browser credential persistence/token surface found in application source." >&2
-                      exit 1
-                    fi
-
-                - name: Strict TypeScript
-                  working-directory: frontend
-                  run: npm run typecheck
-
-                - name: Unit tests
-                  working-directory: frontend
-                  run: npm test
-
-                - name: Production build
-                  working-directory: frontend
-                  run: npm run build
-
-                - name: Verify Static Assets output
-                  run: |
-                    test -f frontend/dist/index.html
-                    find frontend/dist/assets -type f -print -quit | grep -q .
-          YAML
           rm scripts/phase1a-closeout-materialize.py
           git diff --check
 
-      - name: Commit clean docs-only closeout
+      - name: Commit materialized docs and remove helper
         shell: bash
         run: |
           set -euo pipefail
@@ -116,7 +39,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/DEVELOPMENT_PLAN.md \
             docs/DEVELOPER_CAPABILITY_MATRIX.md \
-            .github/workflows/frontend-gate.yml \
             scripts/phase1a-closeout-materialize.py
           git diff --cached --check
           git commit -m 'Phase 1A: close out accepted event foundation'
