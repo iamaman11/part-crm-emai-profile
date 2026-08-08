@@ -15,36 +15,60 @@ FOR EACH ROW
 BEGIN
     SELECT RAISE(ABORT, 'outbox_payload_invalid')
     WHERE length(NEW.payload_json) > 4096
-       OR instr(lower(NEW.payload_json), '"access_token"') > 0
-       OR instr(lower(NEW.payload_json), '"authorization"') > 0
-       OR instr(lower(NEW.payload_json), '"body_html"') > 0
-       OR instr(lower(NEW.payload_json), '"cookie"') > 0
-       OR instr(lower(NEW.payload_json), '"cookies"') > 0
-       OR instr(lower(NEW.payload_json), '"credential"') > 0
-       OR instr(lower(NEW.payload_json), '"display_name"') > 0
-       OR instr(lower(NEW.payload_json), '"email"') > 0
-       OR instr(lower(NEW.payload_json), '"mail_body"') > 0
-       OR instr(lower(NEW.payload_json), '"message_body"') > 0
-       OR instr(lower(NEW.payload_json), '"oauth_token"') > 0
-       OR instr(lower(NEW.payload_json), '"password"') > 0
-       OR instr(lower(NEW.payload_json), '"phone"') > 0
-       OR instr(lower(NEW.payload_json), '"proxy_credentials"') > 0
-       OR instr(lower(NEW.payload_json), '"raw_message"') > 0
-       OR instr(lower(NEW.payload_json), '"recipient"') > 0
-       OR instr(lower(NEW.payload_json), '"refresh_token"') > 0
-       OR instr(lower(NEW.payload_json), '"secret"') > 0
-       OR instr(lower(NEW.payload_json), '"secret_handle"') > 0
-       OR instr(lower(NEW.payload_json), '"sender"') > 0
-       OR instr(lower(NEW.payload_json), '"snippet"') > 0
-       OR instr(lower(NEW.payload_json), '"subject"') > 0;
+       OR CASE
+            WHEN json_valid(NEW.payload_json) = 1 THEN EXISTS (
+                SELECT 1
+                FROM json_tree(NEW.payload_json)
+                WHERE json_tree.key IS NOT NULL
+                  AND lower(CAST(json_tree.key AS TEXT)) IN (
+                      'access_token',
+                      'authorization',
+                      'body_html',
+                      'cookie',
+                      'cookies',
+                      'credential',
+                      'display_name',
+                      'email',
+                      'mail_body',
+                      'message_body',
+                      'oauth_token',
+                      'password',
+                      'phone',
+                      'proxy_credentials',
+                      'raw_message',
+                      'recipient',
+                      'refresh_token',
+                      'secret',
+                      'secret_handle',
+                      'sender',
+                      'snippet',
+                      'subject'
+                  )
+            )
+            ELSE 0
+          END;
+END;
+
+CREATE TRIGGER outbox_event_version_guard
+BEFORE INSERT ON outbox_events
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'outbox_event_version_mismatch')
+    WHERE NEW.event_type NOT LIKE ('%.v' || CAST(NEW.event_version AS TEXT));
 END;
 
 CREATE TABLE notification_events (
     tenant_id TEXT NOT NULL,
     outbox_event_id TEXT NOT NULL,
     envelope_version INTEGER NOT NULL CHECK(envelope_version = 1),
+    aggregate_type TEXT NOT NULL CHECK(length(trim(aggregate_type)) BETWEEN 1 AND 64),
+    aggregate_id TEXT NOT NULL CHECK(length(aggregate_id) BETWEEN 8 AND 96),
+    aggregate_version INTEGER NOT NULL CHECK(aggregate_version >= 1),
     event_type TEXT NOT NULL CHECK(length(trim(event_type)) BETWEEN 1 AND 160),
     event_version INTEGER NOT NULL CHECK(event_version BETWEEN 1 AND 65535),
+    payload_json TEXT NOT NULL
+        CHECK(json_valid(payload_json))
+        CHECK(length(payload_json) <= 4096),
     occurred_at_ms INTEGER NOT NULL CHECK(occurred_at_ms >= 0),
     persisted_at_ms INTEGER NOT NULL CHECK(persisted_at_ms >= 0),
     PRIMARY KEY (tenant_id, outbox_event_id),
@@ -52,6 +76,27 @@ CREATE TABLE notification_events (
     FOREIGN KEY (tenant_id, outbox_event_id)
         REFERENCES outbox_events(tenant_id, outbox_event_id) ON DELETE CASCADE
 ) STRICT;
+
+CREATE TRIGGER notification_event_source_guard
+BEFORE INSERT ON notification_events
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'notification_event_source_mismatch')
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM outbox_events
+        WHERE tenant_id = NEW.tenant_id
+          AND outbox_event_id = NEW.outbox_event_id
+          AND envelope_version = NEW.envelope_version
+          AND aggregate_type = NEW.aggregate_type
+          AND aggregate_id = NEW.aggregate_id
+          AND aggregate_version = NEW.aggregate_version
+          AND event_type = NEW.event_type
+          AND event_version = NEW.event_version
+          AND payload_json = NEW.payload_json
+          AND created_at_ms = NEW.occurred_at_ms
+    );
+END;
 
 CREATE INDEX notification_events_tenant_time
     ON notification_events(tenant_id, occurred_at_ms DESC, outbox_event_id DESC);
@@ -70,6 +115,21 @@ CREATE TABLE consumer_idempotency (
     FOREIGN KEY (tenant_id, outbox_event_id)
         REFERENCES outbox_events(tenant_id, outbox_event_id) ON DELETE CASCADE
 ) STRICT;
+
+CREATE TRIGGER consumer_idempotency_source_guard
+BEFORE INSERT ON consumer_idempotency
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'consumer_event_source_mismatch')
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM outbox_events
+        WHERE tenant_id = NEW.tenant_id
+          AND outbox_event_id = NEW.outbox_event_id
+          AND event_type = NEW.event_type
+          AND event_version = NEW.event_version
+    );
+END;
 
 CREATE INDEX consumer_idempotency_event_lookup
     ON consumer_idempotency(tenant_id, outbox_event_id, consumer_id);
