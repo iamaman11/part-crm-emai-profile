@@ -50,6 +50,7 @@
         "crates/use-cases/src/coordinator_ingress.rs",
         "crates/cloudflare-adapters/src/coordinator_ingress.rs",
         "apps/control-plane-worker/src/profile_coordinator.rs",
+        "scripts/check-step5-profile-coordinator.py",
         "apps/profile-bridge/src/operator_flow.rs",
         "apps/profile-bridge/src/bin/profile-bridge-synthetic.rs"
       ]
