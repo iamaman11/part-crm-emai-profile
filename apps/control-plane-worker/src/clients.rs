@@ -5,8 +5,10 @@ use crate::command_evidence;
 use crate::composition::client_application;
 use client_domain::{ClientKind, ClientStatus};
 use control_plane_contract::RouteClass;
+use control_plane_contract::public_api::{
+    ClientCreateRequest, ClientGrantRequest, ClientProjection, MutationReceipt,
+};
 use profile_platform_primitives::{ActorId, AggregateVersion, ClientId};
-use serde::{Deserialize, Serialize};
 use use_cases::client_grants::{
     ClientGrantAction, ClientGrantOperationError, ClientGrantOutcome, ExecuteClientGrantCommand,
     authorize_client_grant, execute_client_grant,
@@ -103,7 +105,7 @@ async fn get_client(
     )
     .await
     {
-        Ok(client) => Response::from_json(&ClientResponse::from(&client)),
+        Ok(client) => Response::from_json(&client_projection(&client)),
         Err(ClientOperationError::NotFound) => {
             neutral_not_found(actor.actor().correlation_id().as_str())
         }
@@ -240,19 +242,11 @@ fn no_content() -> Result<Response> {
     Response::empty().map(|response| response.with_status(204))
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MutationReceipt<'a> {
-    result_code: &'a str,
-    resource_id: &'a str,
-    aggregate_version: u64,
-}
-
 fn mutation_receipt(outcome: &ClientMutationOutcome) -> Result<Response> {
     let status = if outcome.replayed() { 200 } else { 201 };
     Response::from_json(&MutationReceipt {
-        result_code: outcome.result_code(),
-        resource_id: outcome.resource_id(),
+        result_code: outcome.result_code().to_owned(),
+        resource_id: outcome.resource_id().to_owned(),
         aggregate_version: outcome.aggregate_version().value(),
     })
     .map(|response| response.with_status(status))
@@ -260,81 +254,53 @@ fn mutation_receipt(outcome: &ClientMutationOutcome) -> Result<Response> {
 
 fn client_grant_receipt(outcome: &ClientGrantOutcome) -> Result<Response> {
     Response::from_json(&MutationReceipt {
-        result_code: outcome.result_code(),
-        resource_id: outcome.resource_id(),
+        result_code: outcome.result_code().to_owned(),
+        resource_id: outcome.resource_id().to_owned(),
         aggregate_version: outcome.aggregate_version().value(),
     })
     .map(|response| response.with_status(200))
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientResponse<'a> {
-    client_id: &'a str,
-    kind: &'static str,
-    display_name: &'a str,
-    status: &'static str,
-    version: u64,
-}
-
-impl<'a> From<&'a ClientDetails> for ClientResponse<'a> {
-    fn from(client: &'a ClientDetails) -> Self {
-        Self {
-            client_id: client.client_id().as_str(),
-            kind: match client.kind() {
-                ClientKind::Person => "PERSON",
-                ClientKind::Organization => "ORGANIZATION",
-            },
-            display_name: client.display_name(),
-            status: match client.status() {
-                ClientStatus::Active => "ACTIVE",
-                ClientStatus::Archived => "ARCHIVED",
-                ClientStatus::Merged => "MERGED",
-            },
-            version: client.version().value(),
+fn client_projection(client: &ClientDetails) -> ClientProjection {
+    ClientProjection {
+        client_id: client.client_id().as_str().to_owned(),
+        kind: match client.kind() {
+            ClientKind::Person => "PERSON",
+            ClientKind::Organization => "ORGANIZATION",
         }
+        .to_owned(),
+        display_name: client.display_name().to_owned(),
+        status: match client.status() {
+            ClientStatus::Active => "ACTIVE",
+            ClientStatus::Archived => "ARCHIVED",
+            ClientStatus::Merged => "MERGED",
+        }
+        .to_owned(),
+        version: client.version().value(),
     }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientCreateRequest {
-    client_id: String,
-    kind: String,
-    display_name: String,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientGrantRequest {
-    role: String,
-    reason: String,
-    expected_client_version: u64,
-    request_digest: String,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ClientGrantRequest, ClientResponse, MutationReceipt};
+    use super::{ClientGrantRequest, ClientProjection, MutationReceipt};
 
     #[test]
     fn transport_models_keep_camel_case_contract_field_names()
     -> Result<(), Box<dyn std::error::Error>> {
         let mutation = serde_json::to_value(MutationReceipt {
-            result_code: "created",
-            resource_id: "client_01JTRANSPORT",
+            result_code: "created".to_owned(),
+            resource_id: "client_01JTRANSPORT".to_owned(),
             aggregate_version: 1,
         })?;
         assert!(mutation.get("resultCode").is_some());
         assert!(mutation.get("resourceId").is_some());
         assert!(mutation.get("aggregateVersion").is_some());
 
-        let response = serde_json::to_value(ClientResponse {
-            client_id: "client_01JTRANSPORT",
-            kind: "PERSON",
-            display_name: "Client",
-            status: "ACTIVE",
+        let response = serde_json::to_value(ClientProjection {
+            client_id: "client_01JTRANSPORT".to_owned(),
+            kind: "PERSON".to_owned(),
+            display_name: "Client".to_owned(),
+            status: "ACTIVE".to_owned(),
             version: 1,
         })?;
         assert!(response.get("clientId").is_some());

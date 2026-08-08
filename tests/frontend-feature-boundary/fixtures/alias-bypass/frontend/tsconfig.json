@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "paths": {
+      "@profiles/*": ["src/features/profiles/*"]
+    }
+  }
+}

@@ -43,9 +43,15 @@ def main() -> int:
         "check-step4-governed-writes.py",
         "check-step5-profile-coordinator.py",
         "check-step6-windows-bridge.py",
+        "check-frontend-feature-boundaries.py",
     ]
     for script in scripts:
         run(script, [sys.executable, str(ROOT / "scripts" / script)])
+
+    run(
+        "generated frontend contract drift",
+        [sys.executable, str(ROOT / "scripts" / "generate-frontend-contracts.py"), "--check"],
+    )
 
     status_path = ROOT / "docs" / "status.json"
     print("\n==> docs/status.json syntax")

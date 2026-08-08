@@ -4,9 +4,11 @@ use cloudflare_adapters::d1_identity_acl::{
     D1IdentityAclRepository, ResolvedActor, ResolvedMembershipRole,
 };
 use control_plane_contract::D1_CATALOG_BINDING;
+use control_plane_contract::public_api::{
+    ActorSession, PROBLEM_CONTENT_TYPE, ProblemPayload, problem_type_for_code,
+};
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{CorrelationId, TenantId, TenantScope};
-use serde::Serialize;
 use worker::{Date, Env, Error, Fetch, Request, Response, Result, Url};
 
 const ACCESS_TOKEN_HEADER: &str = "Cf-Access-Jwt-Assertion";
@@ -14,7 +16,6 @@ const TENANT_HEADER: &str = "X-Tenant-Id";
 const CORRELATION_HEADER: &str = "X-Correlation-Id";
 const ACCESS_ISSUER_VAR: &str = "ACCESS_ISSUER";
 const ACCESS_AUDIENCE_VAR: &str = "ACCESS_AUDIENCE";
-const PROBLEM_CONTENT_TYPE: &str = "application/problem+json";
 
 pub struct VerifiedRequestIdentity {
     scope: TenantScope,
@@ -43,7 +44,20 @@ pub async fn session_response(request: &Request, env: &Env) -> Result<Response> 
     let Some(resolved) = resolve_active_request_actor(request, env, None).await? else {
         return neutral_not_found(&correlation_hint(request));
     };
-    Response::from_json(&ActorSessionResponse::from(&resolved))
+    Response::from_json(&ActorSession {
+        tenant_id: resolved
+            .actor()
+            .tenant_scope()
+            .tenant_id()
+            .as_str()
+            .to_owned(),
+        actor_id: resolved.actor().actor_id().as_str().to_owned(),
+        role: match resolved.role() {
+            ResolvedMembershipRole::TenantOwner => "TENANT_OWNER",
+            ResolvedMembershipRole::Member => "MEMBER",
+        }
+        .to_owned(),
+    })
 }
 
 pub async fn resolve_active_request_actor(
@@ -139,67 +153,18 @@ pub async fn verify_request_identity(
     }))
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ActorSessionResponse<'a> {
-    tenant_id: &'a str,
-    actor_id: &'a str,
-    role: &'static str,
-}
-
-impl<'a> From<&'a ResolvedActor> for ActorSessionResponse<'a> {
-    fn from(resolved: &'a ResolvedActor) -> Self {
-        Self {
-            tenant_id: resolved.actor().tenant_scope().tenant_id().as_str(),
-            actor_id: resolved.actor().actor_id().as_str(),
-            role: match resolved.role() {
-                ResolvedMembershipRole::TenantOwner => "TENANT_OWNER",
-                ResolvedMembershipRole::Member => "MEMBER",
-            },
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct Problem<'a> {
-    #[serde(rename = "type")]
-    problem_type: &'static str,
-    title: &'static str,
-    status: u16,
-    code: &'static str,
-    correlation_id: &'a str,
-}
-
-#[must_use]
-fn problem_type_for_code(code: &str) -> &'static str {
-    match code {
-        "not_found" => "urn:part-crm:problem:not-found",
-        "forbidden" => "urn:part-crm:problem:forbidden",
-        "invalid_request" => "urn:part-crm:problem:invalid-request",
-        "invalid_state" => "urn:part-crm:problem:invalid-state",
-        "version_conflict" => "urn:part-crm:problem:version-conflict",
-        "lease_conflict" => "urn:part-crm:problem:lease-conflict",
-        "replay_rejected" => "urn:part-crm:problem:replay-rejected",
-        "dependency_unavailable" => "urn:part-crm:problem:dependency-unavailable",
-        "integrity_failure" => "urn:part-crm:problem:integrity-failure",
-        "internal_failure" => "urn:part-crm:problem:internal-failure",
-        "conflict" => "urn:part-crm:problem:conflict",
-        _ => "urn:part-crm:problem:internal-failure",
-    }
-}
-
 pub fn problem(
     correlation_id: &str,
     status: u16,
     code: &'static str,
     title: &'static str,
 ) -> Result<Response> {
-    let mut response = Response::from_json(&Problem {
-        problem_type: problem_type_for_code(code),
-        title,
+    let mut response = Response::from_json(&ProblemPayload {
+        problem_type: problem_type_for_code(code).to_owned(),
+        title: title.to_owned(),
         status,
-        code,
-        correlation_id,
+        code: code.to_owned(),
+        correlation_id: correlation_id.to_owned(),
     })?
     .with_status(status);
     response

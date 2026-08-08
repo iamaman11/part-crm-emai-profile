@@ -23,6 +23,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Enforce frontend sibling-feature boundaries
+        run: python scripts/check-frontend-feature-boundaries.py
+
+      - name: Prove sibling feature internals are rejected
+        run: python scripts/check-frontend-feature-boundaries.py --self-test
+
       - name: Set up Node 24 LTS
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:

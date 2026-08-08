@@ -36,6 +36,7 @@ jobs:
           python -m py_compile scripts/check-generation-worker-application-boundary.py
           python -m py_compile scripts/check-mailbox-binding-worker-application-boundary.py
           python -m py_compile scripts/check-mailbox-job-worker-application-boundary.py
+          python -m py_compile scripts/check-frontend-feature-boundaries.py
 
       - name: Enforce GitHub Actions Node 24 checkout runtime
         run: python scripts/check-github-actions-runtime.py
@@ -82,6 +83,12 @@ jobs:
 
       - name: Prove direct D1 and provider mailbox job transport is rejected
         run: python scripts/check-mailbox-job-worker-application-boundary.py --self-test
+
+      - name: Enforce frontend sibling-feature boundaries
+        run: python scripts/check-frontend-feature-boundaries.py
+
+      - name: Prove sibling feature internals are rejected
+        run: python scripts/check-frontend-feature-boundaries.py --self-test
 
       - name: Test hardened pure boundaries
         run: >-

@@ -1,24 +1,11 @@
-export type MembershipRole = 'TENANT_OWNER' | 'MEMBER';
-
-export interface ActorSession {
-  tenantId: string;
-  actorId: string;
-  role: MembershipRole;
-}
-
-export interface MutationReceipt {
-  resultCode: string;
-  resourceId: string;
-  aggregateVersion: number;
-}
-
-export interface ClientProjection {
-  clientId: string;
-  kind: 'PERSON' | 'ORGANIZATION';
-  displayName: string;
-  status: string;
-  version: number;
-}
+export type {
+  ActorSession,
+  ClientProjection,
+  MembershipRole,
+  MutationReceipt,
+  ProblemCode,
+  ProblemPayload,
+} from './generated/control-plane';
 
 export interface ProfileProjection {
   profileId: string;
@@ -79,25 +66,4 @@ export interface CoordinatorResponse {
   fencing_token: string | null;
   epoch: number | null;
   projection: CoordinatorProjection;
-}
-
-export type ProblemCode =
-  | 'not_found'
-  | 'forbidden'
-  | 'invalid_request'
-  | 'invalid_state'
-  | 'version_conflict'
-  | 'lease_conflict'
-  | 'replay_rejected'
-  | 'dependency_unavailable'
-  | 'integrity_failure'
-  | 'internal_failure'
-  | 'conflict';
-
-export interface ProblemPayload {
-  type: string;
-  title: string;
-  status: number;
-  code: ProblemCode;
-  correlation_id: string;
 }

@@ -1,20 +1,9 @@
+import { ProblemCodeValues } from './generated/control-plane';
 import type { ProblemCode, ProblemPayload } from './types';
 
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const JSON_MEDIA_TYPES = ['application/json', 'application/problem+json'];
-const PROBLEM_CODES = new Set<ProblemCode>([
-  'not_found',
-  'forbidden',
-  'invalid_request',
-  'invalid_state',
-  'version_conflict',
-  'lease_conflict',
-  'replay_rejected',
-  'dependency_unavailable',
-  'integrity_failure',
-  'internal_failure',
-  'conflict',
-]);
+const PROBLEM_CODES = new Set<ProblemCode>(ProblemCodeValues);
 
 export class ApiProblem extends Error {
   readonly status: number;
