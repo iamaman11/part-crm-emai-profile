@@ -143,9 +143,12 @@ impl DeliveryState {
         if self.is_terminal() {
             return Err(DeliveryTransitionError::TerminalState);
         }
+        if self.attempts().value() >= attempt_limit.value() {
+            return Err(DeliveryTransitionError::AttemptLimitAlreadyReached);
+        }
 
         let attempts = self.attempts().increment()?;
-        if attempts.value() >= attempt_limit.value() {
+        if attempts.value() == attempt_limit.value() {
             if next_attempt_at.is_some() {
                 return Err(DeliveryTransitionError::UnexpectedTerminalRetrySchedule);
             }
@@ -179,6 +182,7 @@ impl Default for DeliveryState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeliveryTransitionError {
+    AttemptLimitAlreadyReached,
     AttemptOverflow,
     InvalidRetrySchedule,
     MissingRetrySchedule,
@@ -189,6 +193,9 @@ pub enum DeliveryTransitionError {
 impl fmt::Display for DeliveryTransitionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::AttemptLimitAlreadyReached => {
+                "non-terminal notification delivery already reached its attempt limit"
+            }
             Self::AttemptOverflow => "notification delivery attempt counter overflow",
             Self::InvalidRetrySchedule => {
                 "notification retry schedule must be strictly after the failed attempt"
