@@ -28,6 +28,7 @@ CLASSIFIERS = [
     ("profiles", "crates/control-plane-contract/src/routes/profiles.rs"),
     ("generations", "crates/control-plane-contract/src/routes/generations.rs"),
     ("mailboxes", "crates/control-plane-contract/src/routes/mailboxes.rs"),
+    ("notifications", "crates/control-plane-contract/src/routes/notifications.rs"),
 ]
 
 ROUTE_SPECS = [
@@ -59,6 +60,10 @@ ROUTE_SPECS = [
     ("MailboxJobCollectionApi", "mailboxes", ["POST"], "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs", True),
     ("MailboxJobResourceApi", "mailboxes", ["GET"], "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01", True),
     ("MailboxJobRunApi", "mailboxes", ["POST"], "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}/run", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run", True),
+    ("NotificationEventCollectionApi", "notifications", ["GET"], "/api/v1/tenants/{tenant_id}/notifications/events", "/api/v1/tenants/tenant_01/notifications/events", True),
+    ("NotificationEventAckApi", "notifications", ["POST"], "/api/v1/tenants/{tenant_id}/notifications/events/ack", "/api/v1/tenants/tenant_01/notifications/events/ack", True),
+    ("NotificationReplayCollectionApi", "notifications", ["POST"], "/api/v1/tenants/{tenant_id}/notifications/replays", "/api/v1/tenants/tenant_01/notifications/replays", True),
+    ("NotificationOperationsApi", "notifications", ["GET"], "/api/v1/tenants/{tenant_id}/notifications/operations", "/api/v1/tenants/tenant_01/notifications/operations", True),
 ]
 
 GENERATED_CONTRACTS = [

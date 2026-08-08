@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Fail-closed ownership checks for the Phase 1A event/outbox foundation."""
+"""Fail-closed ownership checks for the accepted Phase 1A event/outbox foundation.
+
+Phase 1B extracted the accepted Phase 1A orchestration into `use-cases-notifications`; this checker
+preserves the original Phase 1A registry, sanitizer, durable-source and thin-transport invariants
+without resurrecting the superseded shared `use-cases` owner.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,11 @@ PURE_FILES = [
     ROOT / "crates" / "contracts" / "src" / "integration_events.rs",
     ROOT / "crates" / "contracts" / "src" / "integration_event_registry.rs",
     ROOT / "crates" / "application-ports" / "src" / "integration_events.rs",
+    ROOT / "crates" / "use-cases-notifications" / "src" / "integration_events.rs",
+    ROOT / "crates" / "use-cases-notifications" / "src" / "foundation_event_consumer.rs",
+]
+
+SUPERSEDED_OWNERS = [
     ROOT / "crates" / "use-cases" / "src" / "integration_events.rs",
     ROOT / "crates" / "use-cases" / "src" / "foundation_event_consumer.rs",
 ]
@@ -38,6 +48,12 @@ def require_files(paths: list[Path]) -> None:
     missing = [path.relative_to(ROOT).as_posix() for path in paths if not path.is_file()]
     if missing:
         raise SystemExit(f"Phase 1A boundary files missing: {missing}")
+
+
+def forbid_superseded_owner() -> None:
+    present = [path.relative_to(ROOT).as_posix() for path in SUPERSEDED_OWNERS if path.exists()]
+    if present:
+        raise SystemExit(f"Phase 1A orchestration must stay extracted after Phase 1B: {present}")
 
 
 def forbid_temporary_materializers() -> None:
@@ -74,18 +90,15 @@ def enforce_thin_worker_transport() -> None:
         "INSERT INTO",
         "UPDATE outbox_events",
         "query!(",
-        "retry",
-        "backoff",
-        "dead_letter",
-        "dlq",
-        "max_attempt",
+        "accept_foundation_delivery_once(",
+        "message.attempts",
     )
     violations = [marker for marker in prohibited if marker.lower() in worker.lower()]
     if violations:
         raise SystemExit(f"Worker integration-event transport owns forbidden logic: {violations}")
     required = (
         "dispatch_pending_events",
-        "accept_foundation_delivery_once",
+        "process_foundation_delivery",
         "message.ack()",
     )
     missing = [marker for marker in required if marker not in worker]
@@ -132,9 +145,6 @@ def enforce_phase1a_not_phase1b() -> None:
     ).lower()
     if "integration_events" not in wrangler or "queues.consumers" not in wrangler:
         raise SystemExit("Cloudflare example is missing the Integration Events producer/consumer")
-    for marker in ("max_retries", "dead_letter_queue"):
-        if marker in wrangler:
-            raise SystemExit(f"Phase 1B Queue policy leaked into Phase 1A: {marker}")
 
 
 def registered_events() -> set[str]:
@@ -185,12 +195,13 @@ def enforce_registry_covers_current_producers() -> None:
 
 def main() -> None:
     require_files(PURE_FILES + PRODUCER_FILES)
+    forbid_superseded_owner()
     forbid_temporary_materializers()
     forbid_outer_dependencies()
     enforce_thin_worker_transport()
     enforce_phase1a_not_phase1b()
     enforce_registry_covers_current_producers()
-    print("Phase 1A event/outbox ownership, registry and scope boundaries passed.")
+    print("Phase 1A event/outbox invariants remain green under Phase 1B extraction.")
 
 
 if __name__ == "__main__":

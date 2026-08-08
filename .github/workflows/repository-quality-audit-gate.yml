@@ -40,7 +40,9 @@ jobs:
           python -m py_compile scripts/generate-architecture-inventory.py
           python -m py_compile scripts/test-architecture-inventory-negative.py
           python -m py_compile scripts/check-phase1a-event-boundaries.py
+          python -m py_compile scripts/check-phase1b-notification-boundaries.py
           python -m py_compile scripts/test-integration-event-foundation.py
+          python -m py_compile scripts/test-notification-delivery-foundation.py
 
       - name: Enforce GitHub Actions Node 24 checkout runtime
         run: python scripts/check-github-actions-runtime.py
@@ -57,6 +59,12 @@ jobs:
 
       - name: Prove collapsed capability facades are rejected
         run: python scripts/check-capability-module-layout.py --self-test
+
+      - name: Enforce Phase 1B notification ownership boundaries
+        run: python scripts/check-phase1b-notification-boundaries.py
+
+      - name: Prove provider leakage and duplicate notification ownership are rejected
+        run: python scripts/check-phase1b-notification-boundaries.py --self-test
 
       - name: Enforce thin client Worker application boundary
         run: python scripts/check-worker-application-boundary.py
@@ -105,6 +113,24 @@ jobs:
 
       - name: Prove Phase 1A durable outbox and consumer idempotency
         run: python scripts/test-integration-event-foundation.py
+
+      - name: Prove Phase 1B delivery and cursor D1 invariants
+        run: python scripts/test-notification-delivery-foundation.py
+
+      - name: Test Phase 1B notification inner boundaries
+        run: >-
+          cargo test --locked
+          -p notification-domain
+          -p application-ports
+          -p use-cases-notifications
+
+      - name: Check Phase 1B notification inner boundaries for Workers target
+        run: >-
+          cargo check --locked
+          -p notification-domain
+          -p application-ports
+          -p use-cases-notifications
+          --target wasm32-unknown-unknown
 
       - name: Test hardened pure boundaries
         run: >-

@@ -9,6 +9,7 @@ mod integration_events;
 mod mailbox_bindings;
 mod mailbox_jobs;
 mod mutation_failure;
+mod notifications;
 mod profile_coordinator;
 mod profile_coordinator_ingress;
 mod profile_generations;
@@ -22,6 +23,7 @@ use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use cloudflare_adapters::d1_idempotency::D1IdempotencyRepository;
 use cloudflare_adapters::d1_identity_acl::D1IdentityAclRepository;
 use cloudflare_adapters::d1_mailboxes::D1MailboxRepository;
+use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
 use cloudflare_adapters::integration_event_queue::IntegrationEventQueueMessage;
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
@@ -72,6 +74,12 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         RouteClass::MailboxJobCollectionApi
         | RouteClass::MailboxJobResourceApi
         | RouteClass::MailboxJobRunApi => mailbox_jobs::dispatch(route, &mut request, &env).await,
+        RouteClass::NotificationEventCollectionApi
+        | RouteClass::NotificationEventAckApi
+        | RouteClass::NotificationReplayCollectionApi
+        | RouteClass::NotificationOperationsApi => {
+            notifications::dispatch(route, &mut request, &env).await
+        }
         RouteClass::OwnerBootstrapApi
         | RouteClass::OwnerTransferApi
         | RouteClass::InvitationCollectionApi
@@ -95,8 +103,8 @@ pub async fn integration_event_schedule(
     env: Env,
     _context: ScheduleContext,
 ) {
-    if let Err(error) = integration_events::dispatch_pending(&env).await {
-        worker::console_error!("integration event dispatch failed: {error}");
+    if integration_events::dispatch_pending(&env).await.is_err() {
+        worker::console_error!("notification scheduled operation failed");
     }
 }
 
@@ -119,6 +127,8 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _identity_acl_repository = D1IdentityAclRepository::new(identity_catalog);
     let mailbox_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _mailbox_repository = D1MailboxRepository::new(mailbox_catalog);
+    let notification_catalog = env.d1(D1_CATALOG_BINDING)?;
+    let _notification_repository = D1NotificationOperationsRepository::new(notification_catalog);
     let idempotency_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _idempotency_repository = D1IdempotencyRepository::new(idempotency_catalog);
     let _objects = env.bucket(R2_PROFILES_BINDING)?;

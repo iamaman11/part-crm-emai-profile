@@ -12,6 +12,7 @@ pub mod identity_governance;
 pub mod integration_events;
 pub mod mailbox_jobs;
 pub mod mailboxes;
+pub mod notifications;
 pub mod profiles;
 pub mod sessions;
 
@@ -23,8 +24,18 @@ pub use generations::{GenerationObjectReference, GenerationObjectStorePort};
 pub use identity::MembershipRepository;
 pub use integration_events::{
     ConsumerClaim, ConsumerIdempotencyPort, IntegrationEventOutboxPort, IntegrationEventPortError,
-    IntegrationEventPortErrorClass, IntegrationEventPublisherPort, NotificationEventPort,
+    IntegrationEventPortErrorClass, IntegrationEventPublisherPort, IntegrationEventSourcePort,
+    NotificationEventPort,
 };
 pub use mailboxes::{MailboxObservation, MailboxProviderPort};
+pub use notifications::{
+    CursorAdvanceWriteOutcome, DeliveryTransitionWriteOutcome, NotificationAuthorizationPort,
+    NotificationCapability, NotificationCatchUpRepositoryPort, NotificationCursorRepositoryPort,
+    NotificationDeliveryRepositoryPort, NotificationEventPage, NotificationEventRecord,
+    NotificationOperationsRepositoryPort, NotificationOperationsSnapshot, NotificationPortError,
+    NotificationPortErrorClass, NotificationReplayIntent, NotificationReplayRepositoryPort,
+    NotificationRetentionOutcome, NotificationRetentionRepositoryPort, PendingNotificationReplay,
+    ReplayPreparationOutcome, ReplayReasonClass,
+};
 pub use profiles::ProfileRepository;
 pub use sessions::ProfileCoordinatorPort;

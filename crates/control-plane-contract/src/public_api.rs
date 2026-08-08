@@ -6,6 +6,11 @@ pub const MEMBERSHIP_ROLES: [&str; 2] = ["TENANT_OWNER", "MEMBER"];
 pub const CLIENT_KINDS: [&str; 2] = ["PERSON", "ORGANIZATION"];
 pub const CLIENT_STATUSES: [&str; 3] = ["ACTIVE", "ARCHIVED", "MERGED"];
 pub const CLIENT_GRANT_ROLES: [&str; 2] = ["CLIENT_VIEWER", "CLIENT_EDITOR"];
+pub const NOTIFICATION_REPLAY_REASONS: [&str; 3] = [
+    "DEPENDENCY_RECOVERED",
+    "OPERATOR_REMEDIATION",
+    "INTEGRITY_REVALIDATED",
+];
 pub const PROBLEM_CODES: [&str; 11] = [
     "not_found",
     "forbidden",
@@ -62,6 +67,58 @@ pub struct ClientGrantRequest {
     pub reason: String,
     pub expected_client_version: u64,
     pub request_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationEventProjection {
+    pub event_id: String,
+    pub aggregate_type: String,
+    pub aggregate_id: String,
+    pub event_type: String,
+    pub occurred_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationCatchUpProjection {
+    pub events: Vec<NotificationEventProjection>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationCatchUpAckRequest {
+    pub event_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationReplayRequest {
+    pub replay_id: String,
+    pub consumer_id: String,
+    pub event_id: String,
+    pub audit_event_id: String,
+    pub reason_class: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationReplayReceipt {
+    pub replay_id: String,
+    pub result_code: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationOperationsProjection {
+    pub ready_count: u64,
+    pub retry_scheduled_count: u64,
+    pub delivered_count: u64,
+    pub dead_letter_count: u64,
+    pub pending_replay_count: u64,
+    pub max_attempt_count: u16,
+    pub oldest_open_age_ms: Option<u64>,
+    pub catch_up_lag_count: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -173,6 +230,64 @@ pub fn openapi_document() -> Value {
                         "503": problem_response()
                     }
                 }
+            },
+            "/api/v1/tenants/{tenantId}/notifications/events": {
+                "get": {
+                    "operationId": "getNotificationCatchUp",
+                    "parameters": [tenant_path_parameter()],
+                    "responses": {
+                        "200": json_response("NotificationCatchUpProjection"),
+                        "403": problem_response(),
+                        "404": problem_response(),
+                        "500": problem_response(),
+                        "503": problem_response()
+                    }
+                }
+            },
+            "/api/v1/tenants/{tenantId}/notifications/events/ack": {
+                "post": {
+                    "operationId": "acknowledgeNotificationCatchUp",
+                    "parameters": [tenant_path_parameter()],
+                    "requestBody": json_request("NotificationCatchUpAckRequest"),
+                    "responses": {
+                        "204": {"description": "Catch-up cursor advanced or already current"},
+                        "400": problem_response(),
+                        "403": problem_response(),
+                        "404": problem_response(),
+                        "409": problem_response(),
+                        "500": problem_response(),
+                        "503": problem_response()
+                    }
+                }
+            },
+            "/api/v1/tenants/{tenantId}/notifications/replays": {
+                "post": {
+                    "operationId": "prepareNotificationReplay",
+                    "parameters": [tenant_path_parameter()],
+                    "requestBody": json_request("NotificationReplayRequest"),
+                    "responses": {
+                        "200": json_response("NotificationReplayReceipt"),
+                        "400": problem_response(),
+                        "403": problem_response(),
+                        "404": problem_response(),
+                        "409": problem_response(),
+                        "500": problem_response(),
+                        "503": problem_response()
+                    }
+                }
+            },
+            "/api/v1/tenants/{tenantId}/notifications/operations": {
+                "get": {
+                    "operationId": "getNotificationOperations",
+                    "parameters": [tenant_path_parameter()],
+                    "responses": {
+                        "200": json_response("NotificationOperationsProjection"),
+                        "403": problem_response(),
+                        "404": problem_response(),
+                        "500": problem_response(),
+                        "503": problem_response()
+                    }
+                }
             }
         },
         "components": {
@@ -181,6 +296,7 @@ pub fn openapi_document() -> Value {
                 "ClientKind": string_enum(&CLIENT_KINDS),
                 "ClientStatus": string_enum(&CLIENT_STATUSES),
                 "ClientGrantRole": string_enum(&CLIENT_GRANT_ROLES),
+                "NotificationReplayReason": string_enum(&NOTIFICATION_REPLAY_REASONS),
                 "ProblemCode": string_enum(&PROBLEM_CODES),
                 "ActorSession": {
                     "type": "object",
@@ -232,6 +348,88 @@ pub fn openapi_document() -> Value {
                         "reason": {"type": "string"},
                         "expectedClientVersion": {"type": "integer", "format": "uint64", "minimum": 1},
                         "requestDigest": digest_schema()
+                    }
+                },
+                "NotificationEventProjection": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["eventId", "aggregateType", "aggregateId", "eventType", "occurredAtMs"],
+                    "properties": {
+                        "eventId": {"type": "string"},
+                        "aggregateType": {"type": "string"},
+                        "aggregateId": {"type": "string"},
+                        "eventType": {"type": "string"},
+                        "occurredAtMs": {"type": "integer", "format": "uint64", "minimum": 0}
+                    }
+                },
+                "NotificationCatchUpProjection": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["events"],
+                    "properties": {
+                        "events": {
+                            "type": "array",
+                            "maxItems": 200,
+                            "items": schema_ref("NotificationEventProjection")
+                        }
+                    }
+                },
+                "NotificationCatchUpAckRequest": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["eventId"],
+                    "properties": {
+                        "eventId": {"type": "string"}
+                    }
+                },
+                "NotificationReplayRequest": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["replayId", "consumerId", "eventId", "auditEventId", "reasonClass"],
+                    "properties": {
+                        "replayId": {"type": "string"},
+                        "consumerId": {"type": "string"},
+                        "eventId": {"type": "string"},
+                        "auditEventId": {"type": "string"},
+                        "reasonClass": schema_ref("NotificationReplayReason")
+                    }
+                },
+                "NotificationReplayReceipt": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["replayId", "resultCode"],
+                    "properties": {
+                        "replayId": {"type": "string"},
+                        "resultCode": {"type": "string", "enum": ["prepared", "duplicate"]}
+                    }
+                },
+                "NotificationOperationsProjection": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "readyCount",
+                        "retryScheduledCount",
+                        "deliveredCount",
+                        "deadLetterCount",
+                        "pendingReplayCount",
+                        "maxAttemptCount",
+                        "oldestOpenAgeMs",
+                        "catchUpLagCount"
+                    ],
+                    "properties": {
+                        "readyCount": {"type": "integer", "format": "uint64", "minimum": 0},
+                        "retryScheduledCount": {"type": "integer", "format": "uint64", "minimum": 0},
+                        "deliveredCount": {"type": "integer", "format": "uint64", "minimum": 0},
+                        "deadLetterCount": {"type": "integer", "format": "uint64", "minimum": 0},
+                        "pendingReplayCount": {"type": "integer", "format": "uint64", "minimum": 0},
+                        "maxAttemptCount": {"type": "integer", "format": "uint16", "minimum": 0, "maximum": 64},
+                        "oldestOpenAgeMs": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 0,
+                            "nullable": true
+                        },
+                        "catchUpLagCount": {"type": "integer", "format": "uint64", "minimum": 0}
                     }
                 },
                 "ProblemPayload": {
@@ -318,8 +516,10 @@ fn problem_response() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActorSession, ClientCreateRequest, ClientProjection, MutationReceipt, PROBLEM_CODES,
-        ProblemPayload, openapi_document, problem_type_for_code,
+        ActorSession, ClientCreateRequest, ClientProjection, MutationReceipt,
+        NotificationCatchUpAckRequest, NotificationEventProjection,
+        NotificationOperationsProjection, NotificationReplayRequest, PROBLEM_CODES, ProblemPayload,
+        openapi_document, problem_type_for_code,
     };
 
     #[test]
@@ -352,6 +552,31 @@ mod tests {
         assert!(client.get("clientId").is_some());
         assert!(client.get("displayName").is_some());
 
+        let event = serde_json::to_value(NotificationEventProjection {
+            event_id: "outbox_01JCONTRACT".to_owned(),
+            aggregate_type: "client".to_owned(),
+            aggregate_id: "client_01JCONTRACT".to_owned(),
+            event_type: "client.created.v1".to_owned(),
+            occurred_at_ms: 10,
+        })?;
+        assert!(event.get("eventId").is_some());
+        assert!(event.get("occurredAtMs").is_some());
+        assert!(event.get("payload").is_none());
+
+        let operations = serde_json::to_value(NotificationOperationsProjection {
+            ready_count: 1,
+            retry_scheduled_count: 2,
+            delivered_count: 3,
+            dead_letter_count: 4,
+            pending_replay_count: 5,
+            max_attempt_count: 6,
+            oldest_open_age_ms: Some(7),
+            catch_up_lag_count: 8,
+        })?;
+        assert!(operations.get("deadLetterCount").is_some());
+        assert!(operations.get("oldestOpenAgeMs").is_some());
+        assert!(operations.get("eventId").is_none());
+
         let problem = serde_json::to_value(ProblemPayload {
             problem_type: "urn:part-crm:problem:not-found".to_owned(),
             title: "Not Found".to_owned(),
@@ -377,6 +602,24 @@ mod tests {
     }
 
     #[test]
+    fn notification_requests_keep_bounded_metadata_only_shapes() {
+        let ack = serde_json::from_str::<NotificationCatchUpAckRequest>(
+            r#"{"eventId":"outbox_01JCONTRACT"}"#,
+        );
+        assert!(ack.is_ok());
+        let replay = serde_json::from_str::<NotificationReplayRequest>(
+            r#"{
+                "replayId":"replay_01JCONTRACT",
+                "consumerId":"consumer_01JCONTRACT",
+                "eventId":"outbox_01JCONTRACT",
+                "auditEventId":"audit_01JCONTRACT",
+                "reasonClass":"OPERATOR_REMEDIATION"
+            }"#,
+        );
+        assert!(replay.is_ok());
+    }
+
+    #[test]
     fn openapi_contains_migrated_components_and_paths() {
         let document = openapi_document();
         let schemas = &document["components"]["schemas"];
@@ -386,12 +629,29 @@ mod tests {
             "ClientProjection",
             "ClientCreateRequest",
             "ClientGrantRequest",
+            "NotificationEventProjection",
+            "NotificationCatchUpProjection",
+            "NotificationCatchUpAckRequest",
+            "NotificationReplayRequest",
+            "NotificationReplayReceipt",
+            "NotificationOperationsProjection",
             "ProblemPayload",
         ] {
             assert!(schemas.get(name).is_some(), "missing schema {name}");
         }
         assert!(document["paths"]["/api/v1/session"]["get"].is_object());
         assert!(document["paths"]["/api/v1/tenants/{tenantId}/clients"]["post"].is_object());
+        assert!(
+            document["paths"]["/api/v1/tenants/{tenantId}/notifications/events"]["get"].is_object()
+        );
+        assert!(
+            document["paths"]["/api/v1/tenants/{tenantId}/notifications/replays"]["post"]
+                .is_object()
+        );
+        assert!(
+            document["paths"]["/api/v1/tenants/{tenantId}/notifications/operations"]["get"]
+                .is_object()
+        );
     }
 
     #[test]

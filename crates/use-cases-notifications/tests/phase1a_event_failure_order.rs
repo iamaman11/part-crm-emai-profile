@@ -7,8 +7,8 @@ use profile_platform_primitives::{
     AggregateVersion, OpaqueId, OutboxEventId, TenantId, UnixMillis,
 };
 use std::cell::Cell;
-use use_cases::foundation_event_consumer::accept_foundation_delivery_once;
-use use_cases::integration_events::IntegrationEventOperationError;
+use use_cases_notifications::foundation_event_consumer::accept_foundation_delivery_once;
+use use_cases_notifications::integration_events::IntegrationEventOperationError;
 
 struct FailingNotificationConsumer {
     claim_calls: Cell<u32>,

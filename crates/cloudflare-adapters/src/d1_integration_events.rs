@@ -1,6 +1,6 @@
 use application_ports::{
     ConsumerClaim, ConsumerIdempotencyPort, IntegrationEventOutboxPort, IntegrationEventPortError,
-    IntegrationEventPortErrorClass, NotificationEventPort,
+    IntegrationEventPortErrorClass, IntegrationEventSourcePort, NotificationEventPort,
 };
 use contracts::{
     INTEGRATION_EVENT_ENVELOPE_VERSION, IntegrationEventEnvelope, IntegrationEventPayload,
@@ -29,6 +29,23 @@ FROM outbox_events
 WHERE published_at_ms IS NULL
 ORDER BY created_at_ms ASC, outbox_event_id ASC
 LIMIT ?
+"#;
+
+const LOAD_EVENT: &str = r#"
+SELECT
+    tenant_id,
+    outbox_event_id,
+    aggregate_type,
+    aggregate_id,
+    aggregate_version,
+    event_type,
+    event_version,
+    envelope_version,
+    payload_json,
+    created_at_ms
+FROM outbox_events
+WHERE tenant_id = ?
+  AND outbox_event_id = ?
 "#;
 
 const MARK_PUBLISHED: &str = r#"
@@ -164,6 +181,27 @@ impl IntegrationEventOutboxPort for D1IntegrationEventRepository {
         .await
         .map_err(map_worker_error)?;
         Ok(())
+    }
+}
+
+impl IntegrationEventSourcePort for D1IntegrationEventRepository {
+    async fn load_event(
+        &self,
+        tenant_id: &TenantId,
+        event_id: &OutboxEventId,
+    ) -> Result<Option<IntegrationEventEnvelope>, IntegrationEventPortError> {
+        query!(
+            &self.database,
+            LOAD_EVENT,
+            tenant_id.as_str(),
+            event_id.as_str()
+        )
+        .map_err(map_worker_error)?
+        .first::<PendingOutboxRow>(None)
+        .await
+        .map_err(map_worker_error)?
+        .map(PendingOutboxRow::into_event)
+        .transpose()
     }
 }
 

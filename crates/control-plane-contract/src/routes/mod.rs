@@ -3,6 +3,7 @@ mod foundation;
 mod generations;
 mod identity;
 mod mailboxes;
+mod notifications;
 mod profiles;
 
 use crate::{RouteClass, is_dynamic_path};
@@ -37,6 +38,9 @@ pub(super) fn classify(method: &str, path: &str) -> RouteClass {
         return route;
     }
     if let Some(route) = mailboxes::classify(method, segments) {
+        return route;
+    }
+    if let Some(route) = notifications::classify(method, segments) {
         return route;
     }
 
