@@ -106,7 +106,8 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
             let (Some(profile_id), Some(generation_id)) = (profile_id, generation_id) else {
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
-            quarantine_generation(request, env, actor.actor(), role, profile_id, generation_id).await
+            quarantine_generation(request, env, actor.actor(), role, profile_id, generation_id)
+                .await
         }
         _ => neutral_not_found(actor.actor().correlation_id().as_str()),
     }
@@ -188,7 +189,8 @@ async fn verify_generation(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let expected_generation_version = match AggregateVersion::new(body.expected_generation_version) {
+    let expected_generation_version = match AggregateVersion::new(body.expected_generation_version)
+    {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -276,7 +278,8 @@ async fn quarantine_generation(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let expected_generation_version = match AggregateVersion::new(body.expected_generation_version) {
+    let expected_generation_version = match AggregateVersion::new(body.expected_generation_version)
+    {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
