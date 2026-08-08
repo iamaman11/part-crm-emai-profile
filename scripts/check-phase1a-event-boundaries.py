@@ -35,6 +35,12 @@ def require_files(paths: list[Path]) -> None:
         raise SystemExit(f"Phase 1A boundary files missing: {missing}")
 
 
+def forbid_temporary_materializers() -> None:
+    temporary = ROOT / "scripts" / "phase1a-source-guard-materialize.py"
+    if temporary.exists():
+        raise SystemExit("temporary Phase 1A source-guard materializer must not be tracked")
+
+
 def forbid_outer_dependencies() -> None:
     prohibited = (
         "cloudflare",
@@ -82,16 +88,23 @@ def enforce_thin_worker_transport() -> None:
         raise SystemExit(f"Worker integration-event transport missing thin composition markers: {missing}")
 
 
+def sql_surface(path: Path) -> str:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return "\n".join(line.split("--", 1)[0] for line in lines).lower()
+
+
 def enforce_phase1a_not_phase1b() -> None:
-    migration = (ROOT / "migrations" / "d1" / "0012_integration_event_foundation.sql").read_text(
-        encoding="utf-8"
-    ).lower()
+    migration = sql_surface(ROOT / "migrations" / "d1" / "0012_integration_event_foundation.sql")
     required = (
         "alter table outbox_events",
         "envelope_version",
         "event_version",
-        "create table consumer_idempotency",
         "outbox_event_payload_guard",
+        "outbox_event_version_guard",
+        "create table notification_events",
+        "notification_event_source_guard",
+        "create table consumer_idempotency",
+        "consumer_idempotency_source_guard",
     )
     missing = [marker for marker in required if marker not in migration]
     if missing:
@@ -153,6 +166,7 @@ def enforce_registry_covers_current_producers() -> None:
 
 def main() -> None:
     require_files(PURE_FILES + PRODUCER_FILES)
+    forbid_temporary_materializers()
     forbid_outer_dependencies()
     enforce_thin_worker_transport()
     enforce_phase1a_not_phase1b()
