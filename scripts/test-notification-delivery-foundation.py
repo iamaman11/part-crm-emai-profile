@@ -95,6 +95,7 @@ def test_delivery_state_shape_and_sanitization() -> None:
         seed_actor(connection)
         seed_event(connection, EVENT_A, 10)
         ready_delivery(connection)
+        connection.commit()
 
         columns = {
             row[1]
