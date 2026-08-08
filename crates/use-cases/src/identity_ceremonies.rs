@@ -134,12 +134,8 @@ pub async fn execute_owner_bootstrap<P: IdentityCeremonyApplicationPort>(
         return Err(IdentityGovernanceOperationError::Conflict);
     }
 
-    let context = VerifiedIdentityCeremonyContext::new(
-        scope,
-        command.actor_id,
-        correlation_id,
-        identity,
-    );
+    let context =
+        VerifiedIdentityCeremonyContext::new(scope, command.actor_id, correlation_id, identity);
     let resource_id = context.scope().tenant_id().as_str().to_owned();
     let write = BootstrapOwnerWrite::new(
         command.identity_id,
@@ -190,12 +186,8 @@ pub async fn execute_invitation_accept<P: IdentityCeremonyApplicationPort>(
         .await;
     }
 
-    let context = VerifiedIdentityCeremonyContext::new(
-        scope,
-        command.actor_id,
-        correlation_id,
-        identity,
-    );
+    let context =
+        VerifiedIdentityCeremonyContext::new(scope, command.actor_id, correlation_id, identity);
     let resource_id = context.actor_id().as_str().to_owned();
     let write = InvitationAcceptWrite::new(
         command.invitation_id,
@@ -260,10 +252,7 @@ fn fresh_outcome(result_code: &str, resource_id: String) -> IdentityCeremonyOutc
     }
 }
 
-fn replay_outcome(
-    resource_id: &str,
-    receipt: &IdentityReplayReceipt,
-) -> IdentityCeremonyOutcome {
+fn replay_outcome(resource_id: &str, receipt: &IdentityReplayReceipt) -> IdentityCeremonyOutcome {
     IdentityCeremonyOutcome {
         result_code: receipt.result_code().to_owned(),
         resource_id: receipt.result_reference().unwrap_or(resource_id).to_owned(),
