@@ -39,6 +39,23 @@ BEGIN
        OR instr(lower(NEW.payload_json), '"subject"') > 0;
 END;
 
+CREATE TABLE notification_events (
+    tenant_id TEXT NOT NULL,
+    outbox_event_id TEXT NOT NULL,
+    envelope_version INTEGER NOT NULL CHECK(envelope_version = 1),
+    event_type TEXT NOT NULL CHECK(length(trim(event_type)) BETWEEN 1 AND 160),
+    event_version INTEGER NOT NULL CHECK(event_version BETWEEN 1 AND 65535),
+    occurred_at_ms INTEGER NOT NULL CHECK(occurred_at_ms >= 0),
+    persisted_at_ms INTEGER NOT NULL CHECK(persisted_at_ms >= 0),
+    PRIMARY KEY (tenant_id, outbox_event_id),
+    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, outbox_event_id)
+        REFERENCES outbox_events(tenant_id, outbox_event_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX notification_events_tenant_time
+    ON notification_events(tenant_id, occurred_at_ms DESC, outbox_event_id DESC);
+
 CREATE TABLE consumer_idempotency (
     tenant_id TEXT NOT NULL,
     consumer_id TEXT NOT NULL
