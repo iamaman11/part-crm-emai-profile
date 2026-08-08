@@ -5,6 +5,7 @@ pub mod clients;
 pub mod error;
 pub mod generations;
 pub mod identity_acl;
+pub mod identity_governance;
 pub mod mailbox_jobs;
 pub mod mailboxes;
 pub mod profile_assignments;
