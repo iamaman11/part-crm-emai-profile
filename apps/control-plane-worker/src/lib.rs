@@ -20,7 +20,6 @@ use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use cloudflare_adapters::d1_idempotency::D1IdempotencyRepository;
 use cloudflare_adapters::d1_identity_acl::D1IdentityAclRepository;
 use cloudflare_adapters::d1_mailboxes::D1MailboxRepository;
-use cloudflare_adapters::d1_profile_generations::D1ProfileGenerationRepository;
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
     STATIC_ASSETS_BINDING, VERIFICATION_QUEUE_BINDING, classify_route,
@@ -95,8 +94,6 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _catalog_repository = D1CatalogRepository::new(catalog);
     let identity_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _identity_acl_repository = D1IdentityAclRepository::new(identity_catalog);
-    let generation_catalog = env.d1(D1_CATALOG_BINDING)?;
-    let _generation_repository = D1ProfileGenerationRepository::new(generation_catalog);
     let mailbox_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _mailbox_repository = D1MailboxRepository::new(mailbox_catalog);
     let idempotency_catalog = env.d1(D1_CATALOG_BINDING)?;

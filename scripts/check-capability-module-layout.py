@@ -20,7 +20,15 @@ PORT_MODULES = (
     "profiles",
     "sessions",
 )
-USE_CASE_MODULES = ("clients", "error", "identity_acl", "mailbox_jobs", "mailboxes", "profiles")
+USE_CASE_MODULES = (
+    "clients",
+    "error",
+    "generations",
+    "identity_acl",
+    "mailbox_jobs",
+    "mailboxes",
+    "profiles",
+)
 
 PORT_OWNERS = {
     "audit.rs": ("pub trait AuditPort", "pub struct AuditRecord", "pub enum AuditResult"),
@@ -31,7 +39,13 @@ PORT_OWNERS = {
     ),
     "clock.rs": ("pub trait ClockPort",),
     "commands.rs": ("pub struct CommandExecutionEvidence",),
-    "generations.rs": ("pub struct GenerationObjectReference", "pub trait GenerationObjectStorePort"),
+    "generations.rs": (
+        "pub struct GenerationObjectReference",
+        "pub trait GenerationObjectStorePort",
+        "pub trait GenerationApplicationPort",
+        "pub struct GenerationReadModel",
+        "pub struct RegisterGenerationWrite",
+    ),
     "identity.rs": ("pub trait MembershipRepository",),
     "mailbox_jobs.rs": (
         "pub trait MailboxJobApplicationPort",
@@ -56,6 +70,14 @@ USE_CASE_OWNERS = {
         "pub async fn get_visible_client",
     ),
     "error.rs": ("pub struct ApplicationError",),
+    "generations.rs": (
+        "pub async fn execute_register_generation",
+        "pub async fn get_visible_generation",
+        "pub async fn execute_verify_generation",
+        "pub async fn execute_activate_generation",
+        "pub async fn execute_deactivate_generation",
+        "pub async fn execute_quarantine_generation",
+    ),
     "mailbox_jobs.rs": (
         "pub async fn execute_create_mailbox_job",
         "pub async fn get_mailbox_job",
