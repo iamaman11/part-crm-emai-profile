@@ -28,11 +28,13 @@ pub use integration_events::{
 };
 pub use mailboxes::{MailboxObservation, MailboxProviderPort};
 pub use notifications::{
-    CursorAdvanceWriteOutcome, DeliveryTransitionWriteOutcome, NotificationCatchUpRepositoryPort,
-    NotificationCursorRepositoryPort, NotificationDeliveryRepositoryPort, NotificationEventPage,
-    NotificationEventRecord, NotificationPortError, NotificationPortErrorClass,
-    NotificationReplayIntent, NotificationReplayRepositoryPort, ReplayIntentWriteOutcome,
-    ReplayReasonClass,
+    CursorAdvanceWriteOutcome, DeliveryTransitionWriteOutcome, NotificationAuthorizationPort,
+    NotificationCapability, NotificationCatchUpRepositoryPort, NotificationCursorRepositoryPort,
+    NotificationDeliveryRepositoryPort, NotificationEventPage, NotificationEventRecord,
+    NotificationOperationsRepositoryPort, NotificationOperationsSnapshot, NotificationPortError,
+    NotificationPortErrorClass, NotificationReplayIntent, NotificationReplayRepositoryPort,
+    NotificationRetentionOutcome, NotificationRetentionRepositoryPort, PendingNotificationReplay,
+    ReplayPreparationOutcome, ReplayReasonClass,
 };
 pub use profiles::ProfileRepository;
 pub use sessions::ProfileCoordinatorPort;
