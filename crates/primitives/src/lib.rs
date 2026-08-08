@@ -82,6 +82,7 @@ define_typed_id!(ActorId);
 define_typed_id!(IdentityId);
 define_typed_id!(InvitationId);
 define_typed_id!(ClientId);
+define_typed_id!(ContactPointId);
 define_typed_id!(ProfileId);
 define_typed_id!(GenerationId);
 define_typed_id!(AssignmentId);
@@ -218,7 +219,8 @@ impl UnixMillis {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActorContext, ActorId, AggregateVersion, CorrelationId, OpaqueId, TenantId, TenantScope,
+        ActorContext, ActorId, AggregateVersion, ContactPointId, CorrelationId, OpaqueId, TenantId,
+        TenantScope,
     };
 
     #[test]
@@ -232,6 +234,16 @@ mod tests {
         assert_eq!(actor.tenant_scope().tenant_id(), &tenant_id);
         assert_eq!(actor.actor_id(), &actor_id);
         assert_eq!(actor.correlation_id(), &correlation_id);
+        Ok(())
+    }
+
+    #[test]
+    fn contact_point_ids_are_opaque_and_reject_contact_values() -> Result<(), Box<dyn std::error::Error>> {
+        let id = ContactPointId::parse("contact_01JABCDEF")?;
+        assert_eq!(id.as_str(), "contact_01JABCDEF");
+        assert!(ContactPointId::parse("person@example.com").is_err());
+        assert!(ContactPointId::parse("+48123456789").is_err());
+        assert!(ContactPointId::parse("https://example.com").is_err());
         Ok(())
     }
 
