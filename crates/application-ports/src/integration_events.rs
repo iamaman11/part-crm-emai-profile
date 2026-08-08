@@ -1,3 +1,8 @@
+#![allow(async_fn_in_trait)]
+
+// These ports are repository-internal and intentionally support both native and Workers/WASM
+// implementations; requiring `Send` futures here would over-constrain the provider boundary.
+
 use contracts::IntegrationEventEnvelope;
 use core::fmt;
 use profile_platform_primitives::{OpaqueId, OutboxEventId, TenantId, UnixMillis};
