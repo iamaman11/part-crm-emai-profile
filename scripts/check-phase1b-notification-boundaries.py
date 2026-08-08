@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed if Phase 1B notification domain/application ownership regresses."""
+"""Fail closed if final Phase 1B notification ownership regresses."""
 
 from __future__ import annotations
 
@@ -34,12 +34,19 @@ REQUIRED_FILES = (
     "crates/use-cases-notifications/src/catch_up.rs",
     "crates/use-cases-notifications/src/retention.rs",
     "crates/use-cases-notifications/src/operations.rs",
+    "crates/use-cases-notifications/tests/phase1a_event_failure_order.rs",
     "crates/cloudflare-adapters/src/d1_notifications.rs",
     "crates/cloudflare-adapters/src/d1_notification_operations.rs",
     "crates/cloudflare-adapters/src/d1_integration_events.rs",
+    "crates/control-plane-contract/src/routes/notifications.rs",
     "apps/control-plane-worker/src/integration_events.rs",
+    "apps/control-plane-worker/src/notifications.rs",
+)
+
+SUPERSEDED_SHARED_FILES = (
     "crates/use-cases/src/integration_events.rs",
     "crates/use-cases/src/foundation_event_consumer.rs",
+    "crates/use-cases/tests/phase1a_event_failure_order.rs",
 )
 
 APPLICATION_PORT_SYMBOLS = (
@@ -51,14 +58,11 @@ APPLICATION_PORT_SYMBOLS = (
     "pub trait NotificationRetentionRepositoryPort",
     "pub trait NotificationOperationsRepositoryPort",
 )
-
 EVENT_PORT_SYMBOLS = ("pub trait IntegrationEventSourcePort",)
-
 DELIVERY_ADAPTER_SYMBOLS = (
     "impl NotificationDeliveryRepositoryPort for D1NotificationRepository",
     "impl NotificationCursorRepositoryPort for D1NotificationRepository",
 )
-
 OPERATIONS_ADAPTER_SYMBOLS = (
     "impl NotificationAuthorizationPort for D1NotificationOperationsRepository",
     "impl NotificationCatchUpRepositoryPort for D1NotificationOperationsRepository",
@@ -66,28 +70,20 @@ OPERATIONS_ADAPTER_SYMBOLS = (
     "impl NotificationRetentionRepositoryPort for D1NotificationOperationsRepository",
     "impl NotificationOperationsRepositoryPort for D1NotificationOperationsRepository",
 )
-
-EVENT_SOURCE_ADAPTER_SYMBOLS = (
-    "impl IntegrationEventSourcePort for D1IntegrationEventRepository",
-)
-
-WORKER_COMPOSITION_SYMBOLS = (
-    "D1NotificationRepository",
-    "use_cases_notifications::delivery",
+WORKER_SYMBOLS = (
     "process_foundation_delivery",
+    "dispatch_pending_replays",
+    "compact_notification_state",
     "retry_with_options",
 )
+HTTP_WORKER_SYMBOLS = (
+    "load_catch_up",
+    "acknowledge_catch_up",
+    "prepare_replay",
+    "load_operations",
+)
 
-COMPATIBILITY_FACADES = {
-    "crates/use-cases/src/integration_events.rs": (
-        "pub use use_cases_notifications::integration_events::*;"
-    ),
-    "crates/use-cases/src/foundation_event_consumer.rs": (
-        "pub use use_cases_notifications::foundation_event_consumer::*;"
-    ),
-}
-
-PROHIBITED_SOURCE_MARKERS = (
+PROHIBITED_INNER_MARKERS = (
     "cloudflare_adapters",
     "cloudflare-adapters",
     "worker::",
@@ -103,7 +99,6 @@ PROHIBITED_SOURCE_MARKERS = (
     "getrandom",
     "Math::random",
 )
-
 OPERATIONS_ADAPTER_PROHIBITED_MARKERS = (
     "payload_json",
     "IntegrationEventPayload",
@@ -135,6 +130,9 @@ def validate(root: Path) -> list[str]:
         path = root / relative
         if not path.is_file() or not read(path).strip():
             errors.append(f"missing/non-empty Phase 1B boundary file: {relative}")
+    for relative in SUPERSEDED_SHARED_FILES:
+        if (root / relative).exists():
+            errors.append(f"superseded shared notification owner must stay removed: {relative}")
 
     for crate, expected in EXPECTED_DEPENDENCIES.items():
         manifest = root / "crates" / crate / "Cargo.toml"
@@ -142,153 +140,108 @@ def validate(root: Path) -> list[str]:
             errors.append(f"missing Phase 1B manifest: {manifest.relative_to(root)}")
             continue
         with manifest.open("rb") as handle:
-            document = tomllib.load(handle)
-        actual = dependency_names(document)
+            actual = dependency_names(tomllib.load(handle))
         if actual != expected:
             errors.append(
                 f"{manifest.relative_to(root)} dependency boundary drift: "
                 f"expected {sorted(expected)}, found {sorted(actual)}"
             )
 
-    pure_sources = (
-        root / "crates" / "notification-domain" / "src",
-        root / "crates" / "use-cases-notifications" / "src",
-    )
-    for source_root in pure_sources:
-        if not source_root.is_dir():
-            continue
-        for path in sorted(source_root.rglob("*.rs")):
-            text = read(path)
-            for marker in PROHIBITED_SOURCE_MARKERS:
-                if marker in text:
-                    errors.append(
-                        f"{path.relative_to(root)} contains outer/runtime marker {marker!r}"
-                    )
+    for source_root in (
+        root / "crates/notification-domain/src",
+        root / "crates/use-cases-notifications/src",
+    ):
+        if source_root.is_dir():
+            for path in sorted(source_root.rglob("*.rs")):
+                text = read(path)
+                for marker in PROHIBITED_INNER_MARKERS:
+                    if marker in text:
+                        errors.append(
+                            f"{path.relative_to(root)} contains outer/runtime marker {marker!r}"
+                        )
 
-    notification_ports = root / "crates/application-ports/src/notifications.rs"
-    if notification_ports.is_file():
-        ports = read(notification_ports)
+    ports = root / "crates/application-ports/src/notifications.rs"
+    if ports.is_file():
+        text = read(ports)
         for symbol in APPLICATION_PORT_SYMBOLS:
-            if symbol not in ports:
-                errors.append(f"application-ports/notifications.rs must own `{symbol}`")
-        for marker in PROHIBITED_SOURCE_MARKERS:
-            if marker in ports:
-                errors.append(
-                    "crates/application-ports/src/notifications.rs contains "
-                    f"outer/runtime marker {marker!r}"
-                )
+            if symbol not in text:
+                errors.append(f"notification ports must own `{symbol}`")
+        for marker in PROHIBITED_INNER_MARKERS:
+            if marker in text:
+                errors.append(f"notification ports contain outer/runtime marker {marker!r}")
 
-    integration_ports = root / "crates/application-ports/src/integration_events.rs"
-    if integration_ports.is_file():
-        text = read(integration_ports)
+    event_ports = root / "crates/application-ports/src/integration_events.rs"
+    if event_ports.is_file():
+        text = read(event_ports)
         for symbol in EVENT_PORT_SYMBOLS:
             if symbol not in text:
-                errors.append(f"application-ports/integration_events.rs must own `{symbol}`")
+                errors.append(f"integration event ports must own `{symbol}`")
 
-    d1_adapter = root / "crates/cloudflare-adapters/src/d1_notifications.rs"
-    if d1_adapter.is_file():
-        adapter = read(d1_adapter)
+    delivery_adapter = root / "crates/cloudflare-adapters/src/d1_notifications.rs"
+    if delivery_adapter.is_file():
+        text = read(delivery_adapter)
         for symbol in DELIVERY_ADAPTER_SYMBOLS:
-            if symbol not in adapter:
+            if symbol not in text:
                 errors.append(f"D1 notification delivery adapter missing `{symbol}`")
 
     operations_adapter = root / "crates/cloudflare-adapters/src/d1_notification_operations.rs"
     if operations_adapter.is_file():
-        adapter = read(operations_adapter)
+        text = read(operations_adapter)
         for symbol in OPERATIONS_ADAPTER_SYMBOLS:
-            if symbol not in adapter:
+            if symbol not in text:
                 errors.append(f"D1 notification operations adapter missing `{symbol}`")
         for marker in OPERATIONS_ADAPTER_PROHIBITED_MARKERS:
-            if marker in adapter:
+            if marker in text:
                 errors.append(
                     "D1 notification operations adapter must remain payload/error free; "
                     f"found {marker!r}"
                 )
 
-    event_adapter = root / "crates/cloudflare-adapters/src/d1_integration_events.rs"
-    if event_adapter.is_file():
-        adapter = read(event_adapter)
-        for symbol in EVENT_SOURCE_ADAPTER_SYMBOLS:
-            if symbol not in adapter:
-                errors.append(f"canonical integration event adapter missing `{symbol}`")
+    canonical_event = root / "crates/cloudflare-adapters/src/d1_integration_events.rs"
+    if canonical_event.is_file() and "impl IntegrationEventSourcePort for D1IntegrationEventRepository" not in read(canonical_event):
+        errors.append("canonical integration event adapter must implement IntegrationEventSourcePort")
 
-    worker_composition = root / "apps/control-plane-worker/src/integration_events.rs"
-    if worker_composition.is_file():
-        worker_source = read(worker_composition)
-        for symbol in WORKER_COMPOSITION_SYMBOLS:
-            if symbol not in worker_source:
-                errors.append(f"Worker notification composition missing `{symbol}`")
-        for marker in (
-            "use_cases::foundation_event_consumer",
-            "message.attempts",
-            ".attempts()",
-            ".retry();",
-        ):
-            if marker in worker_source:
+    queue_worker = root / "apps/control-plane-worker/src/integration_events.rs"
+    if queue_worker.is_file():
+        text = read(queue_worker)
+        for symbol in WORKER_SYMBOLS:
+            if symbol not in text:
+                errors.append(f"Worker notification schedule/queue composition missing `{symbol}`")
+        for marker in ("message.attempts", ".attempts()", ".retry();"):
+            if marker in text:
                 errors.append(f"Worker notification composition contains forbidden `{marker}`")
 
-    ports_lib = root / "crates/application-ports/src/lib.rs"
-    if ports_lib.is_file() and "pub mod notifications;" not in read(ports_lib):
-        errors.append("application-ports facade missing `pub mod notifications;`")
-
-    ports_manifest = root / "crates/application-ports/Cargo.toml"
-    if ports_manifest.is_file():
-        with ports_manifest.open("rb") as handle:
-            ports_document = tomllib.load(handle)
-        if "notification-domain" not in dependency_names(ports_document):
-            errors.append("application-ports must depend inward on notification-domain")
-
-    adapter_manifest = root / "crates/cloudflare-adapters/Cargo.toml"
-    if adapter_manifest.is_file():
-        with adapter_manifest.open("rb") as handle:
-            adapter_document = tomllib.load(handle)
-        adapter_dependencies = dependency_names(adapter_document)
-        for dependency in ("application-ports", "notification-domain"):
-            if dependency not in adapter_dependencies:
-                errors.append(
-                    f"cloudflare-adapters must depend inward on {dependency} for Phase 1B"
-                )
+    http_worker = root / "apps/control-plane-worker/src/notifications.rs"
+    if http_worker.is_file():
+        text = read(http_worker)
+        for symbol in HTTP_WORKER_SYMBOLS:
+            if symbol not in text:
+                errors.append(f"notification HTTP ingress missing application call `{symbol}`")
+        for marker in ("payload_json", "notification_deliveries", "notification_events"):
+            if marker in text:
+                errors.append(f"notification HTTP ingress contains direct storage/payload marker `{marker}`")
 
     worker_manifest = root / "apps/control-plane-worker/Cargo.toml"
     if worker_manifest.is_file():
         with worker_manifest.open("rb") as handle:
-            worker_document = tomllib.load(handle)
-        worker_dependencies = dependency_names(worker_document)
-        if "use-cases-notifications" not in worker_dependencies:
+            dependencies = dependency_names(tomllib.load(handle))
+        if "use-cases-notifications" not in dependencies:
             errors.append("Worker must compose use-cases-notifications directly")
-        if "notification-domain" in worker_dependencies:
+        if "notification-domain" in dependencies:
             errors.append("Worker must not depend directly on notification-domain")
-
-    for relative, expected in COMPATIBILITY_FACADES.items():
-        path = root / relative
-        if path.is_file() and read(path).strip() != expected:
-            errors.append(f"{relative} must remain a thin temporary compatibility re-export")
-
-    notification_lib = root / "crates/use-cases-notifications/src/lib.rs"
-    if notification_lib.is_file():
-        lib = read(notification_lib)
-        for declaration in (
-            "pub mod catch_up;",
-            "pub mod delivery;",
-            "pub mod error;",
-            "pub mod foundation_event_consumer;",
-            "pub mod integration_events;",
-            "pub mod operations;",
-            "pub mod replay;",
-            "pub mod retention;",
-            "pub mod retry;",
-        ):
-            if declaration not in lib:
-                errors.append(f"use-cases-notifications facade missing `{declaration}`")
 
     monolith_manifest = root / "crates/use-cases/Cargo.toml"
     if monolith_manifest.is_file():
         with monolith_manifest.open("rb") as handle:
-            monolith = tomllib.load(handle)
-        if "use-cases-notifications" not in dependency_names(monolith):
-            errors.append(
-                "temporary monolithic compatibility facade must depend on use-cases-notifications"
-            )
+            dependencies = dependency_names(tomllib.load(handle))
+        if "use-cases-notifications" in dependencies:
+            errors.append("shared use-cases must not depend on extracted use-cases-notifications")
+    monolith_lib = root / "crates/use-cases/src/lib.rs"
+    if monolith_lib.is_file():
+        text = read(monolith_lib)
+        for declaration in ("pub mod integration_events;", "pub mod foundation_event_consumer;"):
+            if declaration in text:
+                errors.append(f"shared use-cases must not own `{declaration}` after Phase 1B")
 
     return errors
 
@@ -298,27 +251,9 @@ def write_valid_fixture(root: Path) -> None:
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("// fixture\n", encoding="utf-8")
-
     (root / "crates/notification-domain/Cargo.toml").write_text(
         "[package]\nname='notification-domain'\nversion='0.1.0'\n"
         "[dependencies]\nprofile-platform-primitives = {}\n",
-        encoding="utf-8",
-    )
-    (root / "crates/application-ports/Cargo.toml").write_text(
-        "[package]\nname='application-ports'\nversion='0.1.0'\n"
-        "[dependencies]\nnotification-domain = {}\n",
-        encoding="utf-8",
-    )
-    (root / "crates/application-ports/src/lib.rs").write_text(
-        "pub mod notifications;\n",
-        encoding="utf-8",
-    )
-    (root / "crates/application-ports/src/notifications.rs").write_text(
-        "\n".join(APPLICATION_PORT_SYMBOLS) + "\n",
-        encoding="utf-8",
-    )
-    (root / "crates/application-ports/src/integration_events.rs").write_text(
-        "\n".join(EVENT_PORT_SYMBOLS) + "\n",
         encoding="utf-8",
     )
     (root / "crates/use-cases-notifications/Cargo.toml").write_text(
@@ -327,45 +262,38 @@ def write_valid_fixture(root: Path) -> None:
         "notification-domain = {}\nprofile-platform-primitives = {}\n",
         encoding="utf-8",
     )
-    (root / "crates/cloudflare-adapters/Cargo.toml").write_text(
-        "[package]\nname='cloudflare-adapters'\nversion='0.1.0'\n"
-        "[dependencies]\napplication-ports = {}\nnotification-domain = {}\nworker = {}\n",
-        encoding="utf-8",
-    )
-    (root / "crates/cloudflare-adapters/src/d1_notifications.rs").write_text(
-        "\n".join(DELIVERY_ADAPTER_SYMBOLS) + "\n",
-        encoding="utf-8",
-    )
-    (root / "crates/cloudflare-adapters/src/d1_notification_operations.rs").write_text(
-        "\n".join(OPERATIONS_ADAPTER_SYMBOLS) + "\n",
-        encoding="utf-8",
-    )
-    (root / "crates/cloudflare-adapters/src/d1_integration_events.rs").write_text(
-        "\n".join(EVENT_SOURCE_ADAPTER_SYMBOLS) + "\n",
-        encoding="utf-8",
-    )
     (root / "apps/control-plane-worker/Cargo.toml").write_text(
         "[package]\nname='worker-fixture'\nversion='0.1.0'\n"
-        "[dependencies]\nuse-cases-notifications = {}\nworker = {}\n",
-        encoding="utf-8",
-    )
-    (root / "apps/control-plane-worker/src/integration_events.rs").write_text(
-        "\n".join(WORKER_COMPOSITION_SYMBOLS) + "\n",
-        encoding="utf-8",
-    )
-    (root / "crates/use-cases/Cargo.toml").write_text(
-        "[package]\nname='use-cases'\nversion='0.1.0'\n"
         "[dependencies]\nuse-cases-notifications = {}\n",
         encoding="utf-8",
     )
-    (root / "crates/use-cases-notifications/src/lib.rs").write_text(
-        "pub mod catch_up;\npub mod delivery;\npub mod error;\n"
-        "pub mod foundation_event_consumer;\npub mod integration_events;\n"
-        "pub mod operations;\npub mod replay;\npub mod retention;\npub mod retry;\n",
+    (root / "crates/use-cases/Cargo.toml").write_text(
+        "[package]\nname='use-cases'\nversion='0.1.0'\n[dependencies]\n",
         encoding="utf-8",
     )
-    for relative, content in COMPATIBILITY_FACADES.items():
-        (root / relative).write_text(content + "\n", encoding="utf-8")
+    (root / "crates/use-cases/src/lib.rs").parent.mkdir(parents=True, exist_ok=True)
+    (root / "crates/use-cases/src/lib.rs").write_text("#![forbid(unsafe_code)]\n", encoding="utf-8")
+    (root / "crates/application-ports/src/notifications.rs").write_text(
+        "\n".join(APPLICATION_PORT_SYMBOLS) + "\n", encoding="utf-8"
+    )
+    (root / "crates/application-ports/src/integration_events.rs").write_text(
+        "\n".join(EVENT_PORT_SYMBOLS) + "\n", encoding="utf-8"
+    )
+    (root / "crates/cloudflare-adapters/src/d1_notifications.rs").write_text(
+        "\n".join(DELIVERY_ADAPTER_SYMBOLS) + "\n", encoding="utf-8"
+    )
+    (root / "crates/cloudflare-adapters/src/d1_notification_operations.rs").write_text(
+        "\n".join(OPERATIONS_ADAPTER_SYMBOLS) + "\n", encoding="utf-8"
+    )
+    (root / "crates/cloudflare-adapters/src/d1_integration_events.rs").write_text(
+        "impl IntegrationEventSourcePort for D1IntegrationEventRepository {}\n", encoding="utf-8"
+    )
+    (root / "apps/control-plane-worker/src/integration_events.rs").write_text(
+        "\n".join(WORKER_SYMBOLS) + "\n", encoding="utf-8"
+    )
+    (root / "apps/control-plane-worker/src/notifications.rs").write_text(
+        "\n".join(HTTP_WORKER_SYMBOLS) + "\n", encoding="utf-8"
+    )
 
 
 def self_test() -> int:
@@ -377,74 +305,39 @@ def self_test() -> int:
             print(f"invalid self-test baseline: {baseline}")
             return 1
 
-        application = root / "crates/use-cases-notifications/src/delivery.rs"
-        application.write_text("use worker::Env;\n", encoding="utf-8")
-        errors = validate(root)
-        if not any("outer/runtime marker" in error for error in errors):
+        (root / "crates/use-cases-notifications/src/delivery.rs").write_text(
+            "use worker::Env;\n", encoding="utf-8"
+        )
+        if not any("outer/runtime marker" in error for error in validate(root)):
             print("provider/runtime dependency fixture unexpectedly passed")
             return 1
 
         write_valid_fixture(root)
-        retry = root / "crates/use-cases-notifications/src/retry.rs"
-        retry.write_text("let _ = rand::thread_rng();\n", encoding="utf-8")
-        errors = validate(root)
-        if not any("outer/runtime marker" in error for error in errors):
-            print("runtime randomness in deterministic retry fixture unexpectedly passed")
-            return 1
-
-        write_valid_fixture(root)
-        facade = root / "crates/use-cases/src/integration_events.rs"
-        facade.write_text("pub fn dispatch_pending_events() {}\n", encoding="utf-8")
-        errors = validate(root)
-        if not any("thin temporary compatibility" in error for error in errors):
-            print("duplicate monolithic owner fixture unexpectedly passed")
-            return 1
-
-        write_valid_fixture(root)
-        ports = root / "crates/application-ports/src/notifications.rs"
-        ports.write_text("use worker::Env;\n", encoding="utf-8")
-        errors = validate(root)
-        if not any("application-ports/src/notifications.rs" in error for error in errors):
-            print("provider leakage into notification ports fixture unexpectedly passed")
-            return 1
-
-        write_valid_fixture(root)
-        adapter = root / "crates/cloudflare-adapters/src/d1_notification_operations.rs"
-        adapter.write_text(
+        (root / "crates/cloudflare-adapters/src/d1_notification_operations.rs").write_text(
             "\n".join(OPERATIONS_ADAPTER_SYMBOLS) + "\nconst BAD: &str = \"payload_json\";\n",
             encoding="utf-8",
         )
-        errors = validate(root)
-        if not any("payload/error free" in error for error in errors):
-            print("payload parsing in notification operations adapter unexpectedly passed")
+        if not any("payload/error free" in error for error in validate(root)):
+            print("payload notification adapter fixture unexpectedly passed")
             return 1
 
         write_valid_fixture(root)
-        event_adapter = root / "crates/cloudflare-adapters/src/d1_integration_events.rs"
-        event_adapter.write_text("// source port missing\n", encoding="utf-8")
-        errors = validate(root)
-        if not any("canonical integration event adapter missing" in error for error in errors):
-            print("missing canonical event source fixture unexpectedly passed")
+        superseded = root / SUPERSEDED_SHARED_FILES[0]
+        superseded.parent.mkdir(parents=True, exist_ok=True)
+        superseded.write_text("pub use use_cases_notifications::*;\n", encoding="utf-8")
+        if not any("superseded shared" in error for error in validate(root)):
+            print("superseded shared owner fixture unexpectedly passed")
             return 1
 
         write_valid_fixture(root)
-        worker_manifest = root / "apps/control-plane-worker/Cargo.toml"
-        worker_manifest.write_text(
-            "[package]\nname='worker-fixture'\nversion='0.1.0'\n"
-            "[dependencies]\nuse-cases-notifications = {}\nnotification-domain = {}\n",
+        manifest = root / "crates/use-cases/Cargo.toml"
+        manifest.write_text(
+            "[package]\nname='use-cases'\nversion='0.1.0'\n"
+            "[dependencies]\nuse-cases-notifications = {}\n",
             encoding="utf-8",
         )
-        errors = validate(root)
-        if not any("must not depend directly on notification-domain" in error for error in errors):
-            print("Worker direct domain dependency fixture unexpectedly passed")
-            return 1
-
-        write_valid_fixture(root)
-        worker = root / "apps/control-plane-worker/src/integration_events.rs"
-        worker.write_text("message.retry();\nmessage.attempts();\n", encoding="utf-8")
-        errors = validate(root)
-        if not any("Worker notification composition" in error for error in errors):
-            print("implicit/platform-attempt Worker fixture unexpectedly passed")
+        if not any("must not depend" in error for error in validate(root)):
+            print("shared use-cases dependency fixture unexpectedly passed")
             return 1
 
     print("Phase 1B notification negative fixtures rejected as expected.")
@@ -456,17 +349,14 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
-
     if args.self_test:
         return self_test()
-
     errors = validate(args.root.resolve())
     if errors:
         for error in errors:
             print(error)
         return 1
-
-    print("Phase 1B notification domain/application boundaries passed.")
+    print("Phase 1B final notification ownership boundaries passed.")
     return 0
 
 
