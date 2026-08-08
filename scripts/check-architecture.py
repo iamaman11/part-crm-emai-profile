@@ -11,7 +11,7 @@ from pathlib import Path
 PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
     "profile-platform-primitives": set(),
     "contracts": {"profile-platform-primitives"},
-    "control-plane-contract": set(),
+    "control-plane-contract": {"serde", "serde_json"},
     "identity-access-domain": {"profile-platform-primitives", "contracts"},
     "client-domain": {"profile-platform-primitives", "contracts"},
     "profile-domain": {"profile-platform-primitives", "contracts"},
