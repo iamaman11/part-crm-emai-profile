@@ -30,9 +30,9 @@ No level by itself means production readiness.
 | Capability | Level on accepted `main` | Accepted scope | Still Target / External |
 |---|---|---|---|
 | Rust workspace / primitives | Composed | Exact toolchain, typed opaque IDs, tenant/actor context, positive versions, strict lint/policy gates. | External runtime is not required for this claim. |
-| Identity / memberships / ACL | Composed | Access identity adapter, memberships, owner lifecycle, invitations, profile/client grants, neutral disclosure, governed D1 commands. | Production Access/IdP deployment is External; remaining Worker application-boundary convergence is Phase 0 work. |
+| Identity / memberships / ACL | Composed | Access identity adapter, memberships, owner lifecycle, invitations, profile/client grants, neutral disclosure, governed D1 commands. Profile grant/revoke is application-owned behind a thin profile Worker transport; legacy direct Worker grant orchestration is permanently rejected. | Production Access/IdP deployment is External; client-grant and identity-governance application-boundary convergence remains Phase 0 work. |
 | Client Registry | Composed | Current create/query/assignment/grant metadata paths and D1 schema. | Registry 2.0 contacts/merge/richer lifecycle and CRM Party authority are Target. |
-| Profile catalog | Composed | Current create/query/grant/assignment metadata paths, typed profile state and active generation pointer. | Phase 0 application-boundary convergence for remaining legacy orchestration is not yet fully accepted. |
+| Profile catalog | Composed | Current create/query/grant/assignment metadata paths, typed profile state and active generation pointer. Create/query, assignment and profile grant/revoke are application-owned; assignment remains non-authorizing. | Remaining Phase 0 convergence is outside these accepted profile catalog paths. |
 | Profile generation registry | Composed | Governed metadata register/query/verify/activate/deactivate/quarantine, replay/evidence, audit/outbox and pointer integrity. | Production R2 verification/device unwrap/cross-device evidence is External. |
 | Profile coordinator | Composed | Durable Object journal, sequence/version/epoch/fencing, timeout/drain/recovery and D1 projection. | Phase 0 coordinator-ingress thinness is Target; remote production concurrency evidence is External. |
 | Full Profile Bridge operator flow | Composed / Synthetic | Explicit synthetic executable composes claim, fake device identity/enrollment, coordinator lease, generation ownership, writer lock, local lifecycle, fake Camouhost protocol and failure ordering. | Real Camoufox, production device keys, remote enrollment/coordinator and production R2 lifecycle are External. |
@@ -44,7 +44,7 @@ No level by itself means production readiness.
 | Certification | Synthetic | Typed policy, deterministic matrix, drift/prohibited outcomes, privacy-safe summary/update rollback state. | Real Camoufox observations and independent certification are External. |
 | Mailbox operations | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, secret-handle-only DTOs, idempotency/audit/outbox, Worker metadata/job paths and synthetic provider-decision path. | Real Gmail/IMAP/browser execution, message search/body retrieval, production scheduling and provider evidence are Target/External. |
 | React web UI | Composed / Synthetic | Accepted React/Vite/TS operator shell and current session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces with permanent Frontend Gate. | Generated public TS contracts, sibling-feature import enforcement, complete detail/list routes, client Mail search/body UI, real Bridge/provider deployment remain Target/External. |
-| Cross-component standalone acceptance | Composed / Synthetic | Metadata-only deterministic manifest/validator covering governed D1, generation integrity, Worker/adapters native+WASM, synthetic Bridge and frontend tests/build. | Real deployment/provider/device evidence is External. |
+| Cross-component standalone acceptance | Composed / Synthetic | Metadata-only deterministic manifest/validator covering governed D1, generation integrity, Worker/adapters native+WASM, synthetic Bridge and frontend tests/build. The permanent lane also enforces the thin profile Worker boundary while retaining assignment-as-ACL negative evidence. | Real deployment/provider/device evidence is External. |
 | Integration events / durable notifications | Target | Architecture/plan contracts defined. | Phase 1 implementation not accepted. |
 | Client Registry 2.0 | Target | Target model/constraints defined in current plan. | Phase 2 implementation not accepted. |
 | Read models/global search | Target | CQRS-lite/query boundary and search targets defined. | Phase 3 implementation not accepted. |
@@ -60,12 +60,12 @@ Accepted capability behavior and clean application ownership are separate claims
 capabilities are already Composed through legacy Worker orchestration while Phase 0 is moving
 that orchestration behind application use cases without changing public behavior.
 
-Accepted Phase 0 slices through 0G established the pattern for client/profile create/query,
-mailbox binding/job, generation and profile assignment paths.
+Accepted Phase 0 slices through 0H established the pattern for client/profile create/query,
+mailbox binding/job, generation, profile assignment and profile grant/revoke paths.
 
 As of this matrix date:
 
-- Phase 0H profile-grant application-boundary work is still **draft/unmerged** (#92 / PR #93);
+- Phase 0H profile-grant application-boundary ownership is accepted through #92 / PR #93;
 - later client-grant, identity-governance and coordinator-ingress convergence remains Target;
 - the current execution plan, not this matrix, determines their order.
 
@@ -118,7 +118,10 @@ React / same-origin request
   -> governed durable result/projection
 ```
 
-The Worker always re-authorizes. UI does not invent authorization or storage access.
+The Worker always re-authorizes. UI does not invent authorization or storage access. For
+`ProfileGrantApi`, owner denial remains neutral before request-body parsing, the profile
+application use case owns version/idempotency/replay sequencing and only the adapter maps the
+concrete governed D1 grant/revoke mutation.
 
 ### Profile generation/runtime path
 

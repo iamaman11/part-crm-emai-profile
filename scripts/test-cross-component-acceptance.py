@@ -98,7 +98,12 @@ def validate_manifest() -> dict[str, object]:
         fail("disposable identity fields are incomplete or unexpected")
     for field, prefix in ID_PREFIXES.items():
         value = identity[field]
-        if not isinstance(value, str) or not value.startswith(prefix) or "/" in value or "\\" in value:
+        if (
+            not isinstance(value, str)
+            or not value.startswith(prefix)
+            or "/" in value
+            or "\\" in value
+        ):
             fail(f"invalid opaque disposable identifier: {field}")
 
     phases = manifest.get("phases")
@@ -114,7 +119,11 @@ def validate_manifest() -> dict[str, object]:
         if not isinstance(evidence, list) or not evidence:
             fail(f"phase {order} has no evidence references")
         for relative in evidence:
-            if not isinstance(relative, str) or relative.startswith("/") or ".." in Path(relative).parts:
+            if (
+                not isinstance(relative, str)
+                or relative.startswith("/")
+                or ".." in Path(relative).parts
+            ):
                 fail(f"unsafe evidence path in phase {order}")
             if not (ROOT / relative).is_file():
                 fail(f"missing evidence file for phase {order}: {relative}")
@@ -145,6 +154,7 @@ def validate_composition_surfaces() -> None:
             "ProfileGenerationActivateApi",
             "ProfileCoordinatorApi",
             "ProfileAssignmentApi",
+            "ProfileGrantApi",
         ],
         "Worker route contract",
     )
@@ -155,12 +165,23 @@ def validate_composition_surfaces() -> None:
         [
             "OwnerBootstrapApi",
             "ClientGrantApi",
-            "ProfileGrantApi",
         ],
-        "remaining identity/grant Worker composition",
+        "remaining identity/client-grant Worker composition",
     )
-    if "ProfileAssignmentApi" in api or "AssignProfileMutation" in api or "async fn assign_profile(" in api:
-        fail("profile assignment orchestration must not remain in legacy api.rs")
+    for forbidden in (
+        "ProfileAssignmentApi",
+        "AssignProfileMutation",
+        "async fn assign_profile(",
+        "ProfileGrantApi",
+        "ProfileGrantMutation",
+        "ProfileGrantValue",
+        "async fn update_profile_grant(",
+        "struct ProfileGrantRequest",
+        "PROFILE_GRANT_COMMAND",
+        "PROFILE_GRANT_REVOKE_COMMAND",
+    ):
+        if forbidden in api:
+            fail(f"migrated profile orchestration must not remain in legacy api.rs: {forbidden}")
 
     worker_lib = read("apps/control-plane-worker/src/lib.rs")
     require_all(
@@ -171,6 +192,7 @@ def validate_composition_surfaces() -> None:
             "RouteClass::ProfileCollectionApi",
             "RouteClass::ProfileResourceApi",
             "RouteClass::ProfileAssignmentApi",
+            "RouteClass::ProfileGrantApi",
             "profiles::dispatch(route, &mut request, &env).await",
             "RouteClass::ProfileGenerationCollectionApi",
             "profile_generations::dispatch(route, &mut request, &env).await",
@@ -198,11 +220,14 @@ def validate_composition_surfaces() -> None:
     require_all(
         profile_transport,
         [
+            "RouteClass::ProfileGrantApi",
             "execute_create_profile",
             "get_visible_profile",
             "execute_assign_profile",
             "authorize_profile_assignment",
             "next_profile_assignment_version",
+            "execute_profile_grant",
+            "authorize_profile_grant",
             "profile_application(env)",
         ],
         "profile Worker application transport",
@@ -225,14 +250,30 @@ def validate_composition_surfaces() -> None:
         ],
         "profile assignment application use cases",
     )
+    grant_use_cases = read("crates/use-cases/src/profile_grants.rs")
+    require_all(
+        grant_use_cases,
+        [
+            "pub async fn execute_profile_grant",
+            "pub fn authorize_profile_grant",
+            "pub fn next_profile_grant_version",
+            "decide_profile_grant_replay",
+            "ProfileGrantPortErrorClass::Conflict",
+        ],
+        "profile grant application use cases",
+    )
     profile_adapter = read("crates/cloudflare-adapters/src/d1_profiles.rs")
     require_all(
         profile_adapter,
         [
             "impl ProfileApplicationPort for D1ProfileApplicationRepository",
             "impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository",
+            "impl ProfileGrantApplicationPort for D1ProfileApplicationRepository",
             "AssignProfileMutation",
             ".assign_profile(actor, mutation)",
+            "ProfileGrantMutation",
+            ".grant_profile(actor, mutation)",
+            ".revoke_profile_grant(actor, mutation)",
             "D1IdempotencyRepository",
         ],
         "profile D1 application adapter",
@@ -243,10 +284,13 @@ def validate_composition_surfaces() -> None:
         [
             "profile_assignment_commands",
             "pub async fn assign_profile",
+            "profile_grant_commands",
+            "pub async fn grant_profile",
+            "pub async fn revoke_profile_grant",
             "expected_profile_version",
             '"profile.assign_client"',
         ],
-        "profile assignment atomic D1 command",
+        "profile assignment/grant atomic D1 commands",
     )
 
     generation_transport = read("apps/control-plane-worker/src/profile_generations.rs")
@@ -426,7 +470,11 @@ def validate_composition_surfaces() -> None:
                 fail(f"forbidden browser credential/token surface in application source: {path}")
 
     neutral = read("frontend/src/shared/ui/StatusMessage.test.tsx")
-    require_all(neutral, ["not_found", "forbidden", "Resource unavailable"], "neutral UI disclosure test")
+    require_all(
+        neutral,
+        ["not_found", "forbidden", "Resource unavailable"],
+        "neutral UI disclosure test",
+    )
 
 
 def main() -> int:

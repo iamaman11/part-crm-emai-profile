@@ -15,6 +15,7 @@ FORBIDDEN_PROFILE_TRANSPORT_TOKENS = (
     "D1IdempotencyRepository",
     "CreateProfileMutation",
     "AssignProfileMutation",
+    "ProfileGrantMutation",
     "D1Database",
 )
 
@@ -23,18 +24,27 @@ REQUIRED_PROFILE_TRANSPORT_TOKENS = (
     "get_visible_profile",
     "execute_assign_profile",
     "authorize_profile_assignment",
+    "execute_profile_grant",
+    "authorize_profile_grant",
     "profile_application(env)",
 )
 
 LEGACY_PROFILE_API_TOKENS = (
     "RouteClass::ProfileAssignmentApi",
+    "RouteClass::ProfileGrantApi",
     "async fn create_profile(",
     "async fn get_profile(",
     "async fn assign_profile(",
+    "async fn update_profile_grant(",
     "struct ProfileCreateRequest",
     "struct ProfileResponse",
     "struct AssignmentRequest",
+    "struct ProfileGrantRequest",
     "AssignProfileMutation",
+    "ProfileGrantMutation",
+    "ProfileGrantValue",
+    "PROFILE_GRANT_COMMAND",
+    "PROFILE_GRANT_REVOKE_COMMAND",
 )
 
 
@@ -55,6 +65,7 @@ def validate(root: Path) -> list[str]:
     ports_path = root / "crates/application-ports/src/profiles.rs"
     use_cases_path = root / "crates/use-cases/src/profiles.rs"
     assignment_use_cases_path = root / "crates/use-cases/src/profile_assignments.rs"
+    grant_use_cases_path = root / "crates/use-cases/src/profile_grants.rs"
     adapter_path = root / "crates/cloudflare-adapters/src/d1_profiles.rs"
 
     required_paths = (
@@ -65,6 +76,7 @@ def validate(root: Path) -> list[str]:
         ports_path,
         use_cases_path,
         assignment_use_cases_path,
+        grant_use_cases_path,
         adapter_path,
     )
     for path in required_paths:
@@ -80,6 +92,7 @@ def validate(root: Path) -> list[str]:
     ports = read(ports_path)
     use_cases = read(use_cases_path)
     assignment_use_cases = read(assignment_use_cases_path)
+    grant_use_cases = read(grant_use_cases_path)
     adapter = read(adapter_path)
 
     for token in FORBIDDEN_PROFILE_TRANSPORT_TOKENS:
@@ -94,23 +107,32 @@ def validate(root: Path) -> list[str]:
         "RouteClass::ProfileCollectionApi",
         "RouteClass::ProfileResourceApi",
         "RouteClass::ProfileAssignmentApi",
+        "RouteClass::ProfileGrantApi",
         "profiles::dispatch(route, &mut request, &env).await",
     ):
         if route_token not in worker_lib:
             errors.append(f"Worker composition root missing profile route token `{route_token}`")
 
-    if "D1ProfileApplicationRepository" not in composition or "env.d1(D1_CATALOG_BINDING)?" not in composition:
+    if (
+        "D1ProfileApplicationRepository" not in composition
+        or "env.d1(D1_CATALOG_BINDING)?" not in composition
+    ):
         errors.append("Worker composition root must construct the D1 profile application adapter")
 
     for token in (
         "pub trait ProfileApplicationPort",
         "pub trait ProfileAssignmentApplicationPort",
         "pub struct ProfileAssignmentWrite",
+        "pub trait ProfileGrantApplicationPort",
+        "pub struct ProfileGrantWrite",
     ):
         if token not in ports:
             errors.append(f"application profile ports missing `{token}`")
 
-    if "pub async fn execute_create_profile" not in use_cases or "pub async fn get_visible_profile" not in use_cases:
+    if (
+        "pub async fn execute_create_profile" not in use_cases
+        or "pub async fn get_visible_profile" not in use_cases
+    ):
         errors.append("profile use cases must own create/query orchestration")
     for token in (
         "pub async fn execute_assign_profile",
@@ -120,13 +142,30 @@ def validate(root: Path) -> list[str]:
     ):
         if token not in assignment_use_cases:
             errors.append(f"profile assignment use cases missing `{token}`")
+    for token in (
+        "pub async fn execute_profile_grant",
+        "pub fn authorize_profile_grant",
+        "pub fn next_profile_grant_version",
+        "decide_profile_grant_replay",
+    ):
+        if token not in grant_use_cases:
+            errors.append(f"profile grant use cases missing `{token}`")
 
     if "impl ProfileApplicationPort for D1ProfileApplicationRepository" not in adapter:
         errors.append("Cloudflare adapter must implement the inward profile application port")
     if "impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository" not in adapter:
         errors.append("Cloudflare adapter must implement the inward profile assignment port")
+    if "impl ProfileGrantApplicationPort for D1ProfileApplicationRepository" not in adapter:
+        errors.append("Cloudflare adapter must implement the inward profile grant port")
     if "AssignProfileMutation" not in adapter or ".assign_profile(actor, mutation)" not in adapter:
         errors.append("Cloudflare profile adapter must own the atomic assignment mutation mapping")
+    for token in (
+        "ProfileGrantMutation",
+        ".grant_profile(actor, mutation)",
+        ".revoke_profile_grant(actor, mutation)",
+    ):
+        if token not in adapter:
+            errors.append(f"Cloudflare profile adapter missing grant mapping token `{token}`")
 
     for token in LEGACY_PROFILE_API_TOKENS:
         if token in legacy_api:
@@ -146,7 +185,8 @@ def write_self_test_fixture(root: Path) -> None:
     (worker / "profiles.rs").write_text(
         "use cloudflare_adapters::d1_identity_queries::D1IdentityQueryRepository;\n"
         "fn route() { execute_create_profile(); get_visible_profile(); execute_assign_profile(); "
-        "authorize_profile_assignment(); profile_application(env); AssignProfileMutation; }\n",
+        "authorize_profile_assignment(); execute_profile_grant(); authorize_profile_grant(); "
+        "profile_application(env); ProfileGrantMutation; }\n",
         encoding="utf-8",
     )
     (worker / "composition.rs").write_text(
@@ -155,17 +195,21 @@ def write_self_test_fixture(root: Path) -> None:
     )
     (worker / "lib.rs").write_text(
         "RouteClass::ProfileCollectionApi RouteClass::ProfileResourceApi "
-        "RouteClass::ProfileAssignmentApi profiles::dispatch(route, &mut request, &env).await\n",
+        "RouteClass::ProfileAssignmentApi RouteClass::ProfileGrantApi "
+        "profiles::dispatch(route, &mut request, &env).await\n",
         encoding="utf-8",
     )
     (worker / "api.rs").write_text(
-        "RouteClass::ProfileAssignmentApi async fn assign_profile() {} struct AssignmentRequest;\n",
+        "RouteClass::ProfileGrantApi async fn update_profile_grant() {} "
+        "struct ProfileGrantRequest; ProfileGrantMutation; PROFILE_GRANT_COMMAND;\n",
         encoding="utf-8",
     )
     (ports / "profiles.rs").write_text(
         "pub trait ProfileApplicationPort {}\n"
         "pub trait ProfileAssignmentApplicationPort {}\n"
-        "pub struct ProfileAssignmentWrite;\n",
+        "pub struct ProfileAssignmentWrite;\n"
+        "pub trait ProfileGrantApplicationPort {}\n"
+        "pub struct ProfileGrantWrite;\n",
         encoding="utf-8",
     )
     (use_cases / "profiles.rs").write_text(
@@ -179,10 +223,20 @@ def write_self_test_fixture(root: Path) -> None:
         "fn replay() { decide_assignment_replay(); }\n",
         encoding="utf-8",
     )
+    (use_cases / "profile_grants.rs").write_text(
+        "pub async fn execute_profile_grant() {}\n"
+        "pub fn authorize_profile_grant() {}\n"
+        "pub fn next_profile_grant_version() {}\n"
+        "fn replay() { decide_profile_grant_replay(); }\n",
+        encoding="utf-8",
+    )
     (adapters / "d1_profiles.rs").write_text(
         "impl ProfileApplicationPort for D1ProfileApplicationRepository {}\n"
         "impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository {}\n"
-        "fn write() { AssignProfileMutation; repo.assign_profile(actor, mutation); }\n",
+        "impl ProfileGrantApplicationPort for D1ProfileApplicationRepository {}\n"
+        "fn write() { AssignProfileMutation; repo.assign_profile(actor, mutation); "
+        "ProfileGrantMutation; repo.grant_profile(actor, mutation); "
+        "repo.revoke_profile_grant(actor, mutation); }\n",
         encoding="utf-8",
     )
 

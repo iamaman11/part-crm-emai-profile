@@ -28,6 +28,7 @@ USE_CASE_MODULES = (
     "mailbox_jobs",
     "mailboxes",
     "profile_assignments",
+    "profile_grants",
     "profiles",
 )
 
@@ -60,6 +61,8 @@ PORT_OWNERS = {
         "pub struct ProfileCreateWrite",
         "pub trait ProfileAssignmentApplicationPort",
         "pub struct ProfileAssignmentWrite",
+        "pub trait ProfileGrantApplicationPort",
+        "pub struct ProfileGrantWrite",
     ),
     "sessions.rs": ("pub trait ProfileCoordinatorPort",),
 }
@@ -93,6 +96,12 @@ USE_CASE_OWNERS = {
         "pub async fn execute_assign_profile",
         "pub fn authorize_profile_assignment",
         "pub fn next_profile_assignment_version",
+    ),
+    "profile_grants.rs": (
+        "pub struct ExecuteProfileGrantCommand",
+        "pub async fn execute_profile_grant",
+        "pub fn authorize_profile_grant",
+        "pub fn next_profile_grant_version",
     ),
     "profiles.rs": (
         "pub struct OpenProfileCommand",
@@ -135,7 +144,9 @@ def validate(root: Path) -> list[str]:
             errors.append(f"application-ports facade missing `{declaration}`")
         path = ports_dir / f"{module}.rs"
         if not path.is_file() or not read(path).strip():
-            errors.append(f"missing/non-empty application-ports capability module: {path.relative_to(root)}")
+            errors.append(
+                f"missing/non-empty application-ports capability module: {path.relative_to(root)}"
+            )
 
     for module in USE_CASE_MODULES:
         declaration = f"pub mod {module};"
@@ -143,7 +154,9 @@ def validate(root: Path) -> list[str]:
             errors.append(f"use-cases facade missing `{declaration}`")
         path = use_cases_dir / f"{module}.rs"
         if not path.is_file() or not read(path).strip():
-            errors.append(f"missing/non-empty use-cases capability module: {path.relative_to(root)}")
+            errors.append(
+                f"missing/non-empty use-cases capability module: {path.relative_to(root)}"
+            )
 
     for filename, symbols in PORT_OWNERS.items():
         owner_text = read(ports_dir / filename) if (ports_dir / filename).is_file() else ""

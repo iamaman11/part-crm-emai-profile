@@ -37,8 +37,9 @@ jobs:
 
       - name: Validate deterministic acceptance manifest and composition surfaces
         run: |
-          python -m py_compile scripts/test-cross-component-acceptance.py
+          python -m py_compile scripts/test-cross-component-acceptance.py scripts/check-profile-worker-application-boundary.py
           python scripts/test-cross-component-acceptance.py
+          python scripts/check-profile-worker-application-boundary.py
 
       - name: Prove governed tenant client profile and mailbox invariants
         run: |
