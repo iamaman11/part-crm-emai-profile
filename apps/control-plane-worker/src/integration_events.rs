@@ -5,7 +5,7 @@ use cloudflare_adapters::integration_event_queue::{
 use profile_platform_primitives::{OpaqueId, UnixMillis};
 use use_cases::foundation_event_consumer::accept_foundation_delivery_once;
 use use_cases::integration_events::dispatch_pending_events;
-use worker::{Date, Env, Error, MessageBatch, Result};
+use worker::{Date, Env, Error, MessageBatch, MessageExt, Result};
 
 pub const INTEGRATION_EVENTS_QUEUE_BINDING: &str = "INTEGRATION_EVENTS";
 const FOUNDATION_CONSUMER_ID: &str = "consumer_foundation_v1";
@@ -54,6 +54,6 @@ fn operation_error(error: use_cases::integration_events::IntegrationEventOperati
     Error::RustError(error.to_string())
 }
 
-fn identifier_error(error: profile_platform_primitives::OpaqueIdError) -> Error {
+fn identifier_error(error: profile_platform_primitives::ParseOpaqueIdError) -> Error {
     Error::RustError(error.to_string())
 }
