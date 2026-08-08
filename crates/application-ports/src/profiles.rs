@@ -136,6 +136,81 @@ impl ProfileAssignmentWrite {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProfileGrantRole {
+    Viewer,
+    Operator,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileGrantWrite {
+    target_actor_id: ActorId,
+    profile_id: ProfileId,
+    expected_profile_version: AggregateVersion,
+    role: ProfileGrantRole,
+    reason: String,
+    evidence: CommandExecutionEvidence,
+    event_payload_json: String,
+}
+
+impl ProfileGrantWrite {
+    #[must_use]
+    pub fn new(
+        target_actor_id: ActorId,
+        profile_id: ProfileId,
+        expected_profile_version: AggregateVersion,
+        role: ProfileGrantRole,
+        reason: impl Into<String>,
+        evidence: CommandExecutionEvidence,
+        event_payload_json: impl Into<String>,
+    ) -> Self {
+        Self {
+            target_actor_id,
+            profile_id,
+            expected_profile_version,
+            role,
+            reason: reason.into(),
+            evidence,
+            event_payload_json: event_payload_json.into(),
+        }
+    }
+
+    #[must_use]
+    pub const fn target_actor_id(&self) -> &ActorId {
+        &self.target_actor_id
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn expected_profile_version(&self) -> AggregateVersion {
+        self.expected_profile_version
+    }
+
+    #[must_use]
+    pub const fn role(&self) -> ProfileGrantRole {
+        self.role
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub fn event_payload_json(&self) -> &str {
+        &self.event_payload_json
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileReplayReceipt {
     result_code: String,
@@ -259,6 +334,50 @@ impl fmt::Display for ProfileAssignmentPortError {
 
 impl std::error::Error for ProfileAssignmentPortError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProfileGrantPortErrorClass {
+    NotFound,
+    VersionConflict,
+    InvalidState,
+    Conflict,
+    IntegrityFailure,
+    InternalFailure,
+    DependencyUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProfileGrantPortError {
+    class: ProfileGrantPortErrorClass,
+}
+
+impl ProfileGrantPortError {
+    #[must_use]
+    pub const fn new(class: ProfileGrantPortErrorClass) -> Self {
+        Self { class }
+    }
+
+    #[must_use]
+    pub const fn class(self) -> ProfileGrantPortErrorClass {
+        self.class
+    }
+}
+
+impl fmt::Display for ProfileGrantPortError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self.class {
+            ProfileGrantPortErrorClass::NotFound => "profile grant not found",
+            ProfileGrantPortErrorClass::VersionConflict => "profile grant version conflict",
+            ProfileGrantPortErrorClass::InvalidState => "profile grant invalid state",
+            ProfileGrantPortErrorClass::Conflict => "profile grant conflict",
+            ProfileGrantPortErrorClass::IntegrityFailure => "profile grant integrity failure",
+            ProfileGrantPortErrorClass::InternalFailure => "profile grant internal failure",
+            ProfileGrantPortErrorClass::DependencyUnavailable => "profile grant dependency unavailable",
+        })
+    }
+}
+
+impl std::error::Error for ProfileGrantPortError {}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileReadModel {
     profile_id: ProfileId,
@@ -342,4 +461,26 @@ pub trait ProfileAssignmentApplicationPort {
         actor: &ActorContext,
         write: &ProfileAssignmentWrite,
     ) -> Result<(), ProfileAssignmentPortError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ProfileGrantApplicationPort {
+    async fn decide_profile_grant_replay(
+        &self,
+        actor: &ActorContext,
+        command_name: &str,
+        evidence: &CommandExecutionEvidence,
+    ) -> Result<ProfileReplayDecision, ProfileGrantPortError>;
+
+    async fn grant_profile(
+        &self,
+        actor: &ActorContext,
+        write: &ProfileGrantWrite,
+    ) -> Result<(), ProfileGrantPortError>;
+
+    async fn revoke_profile_grant(
+        &self,
+        actor: &ActorContext,
+        write: &ProfileGrantWrite,
+    ) -> Result<(), ProfileGrantPortError>;
 }
