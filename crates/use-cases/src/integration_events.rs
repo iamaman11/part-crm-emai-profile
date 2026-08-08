@@ -63,10 +63,7 @@ where
         return Err(IntegrationEventOperationError::InvalidRequest);
     }
 
-    let events = outbox
-        .load_pending(limit)
-        .await
-        .map_err(map_port_error)?;
+    let events = outbox.load_pending(limit).await.map_err(map_port_error)?;
     let mut published = 0_u32;
     for event in events {
         publisher.publish(&event).await.map_err(map_port_error)?;
