@@ -48,8 +48,7 @@ impl D1IdentityCeremonyApplicationRepository {
     }
 
     fn snapshot_matches(&self, snapshot: &VerifiedIdentitySnapshot) -> bool {
-        snapshot.subject() == self.verified_identity.subject()
-            && snapshot.contact_hint() == self.verified_identity.contact_hint()
+        snapshot_matches(&self.verified_identity, snapshot)
     }
 }
 
@@ -184,9 +183,17 @@ impl IdentityCeremonyApplicationPort for D1IdentityCeremonyApplicationRepository
     }
 }
 
+fn snapshot_matches(
+    verified_identity: &VerifiedExternalIdentity,
+    snapshot: &VerifiedIdentitySnapshot,
+) -> bool {
+    snapshot.subject() == verified_identity.subject()
+        && snapshot.contact_hint() == verified_identity.contact_hint()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::D1IdentityCeremonyApplicationRepository;
+    use super::snapshot_matches;
     use crate::access_identity::DeterministicFakeIdentityAdapter;
     use application_ports::identity_ceremonies::VerifiedIdentitySnapshot;
 
@@ -197,32 +204,20 @@ mod tests {
             Some("contact-hint".to_owned()),
         )?
         .verify();
-        let repository = D1IdentityCeremonyApplicationRepository {
-            identity: unsafe_unreachable_repository(),
-            idempotency: unsafe_unreachable_idempotency(),
-            invitation_acceptance: unsafe_unreachable_acceptance(),
-            verified_identity: verified,
-        };
-        assert!(repository.snapshot_matches(&VerifiedIdentitySnapshot::new(
-            "subject-01JIDENTITYCEREMONY",
-            Some("contact-hint".to_owned()),
-        )));
-        assert!(!repository.snapshot_matches(&VerifiedIdentitySnapshot::new(
-            "subject-01JOTHER",
-            Some("contact-hint".to_owned()),
-        )));
+        assert!(snapshot_matches(
+            &verified,
+            &VerifiedIdentitySnapshot::new(
+                "subject-01JIDENTITYCEREMONY",
+                Some("contact-hint".to_owned()),
+            )
+        ));
+        assert!(!snapshot_matches(
+            &verified,
+            &VerifiedIdentitySnapshot::new(
+                "subject-01JOTHER",
+                Some("contact-hint".to_owned()),
+            )
+        ));
         Ok(())
-    }
-
-    fn unsafe_unreachable_repository() -> crate::d1_identity_acl::D1IdentityAclRepository {
-        panic!("snapshot test must not construct a D1 repository")
-    }
-
-    fn unsafe_unreachable_idempotency() -> crate::d1_idempotency::D1IdempotencyRepository {
-        panic!("snapshot test must not construct an idempotency repository")
-    }
-
-    fn unsafe_unreachable_acceptance() -> crate::d1_invitation_acceptance::D1InvitationAcceptanceRepository {
-        panic!("snapshot test must not construct an invitation acceptance repository")
     }
 }
