@@ -41,6 +41,18 @@ impl fmt::Display for CoordinatorIngressOperationError {
 impl std::error::Error for CoordinatorIngressOperationError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoordinatorIngressAccess {
+    profile_id: ProfileId,
+}
+
+impl CoordinatorIngressAccess {
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CoordinatorIngressRequest {
     Snapshot,
     Command(ExecuteCoordinatorCommand),
@@ -98,24 +110,35 @@ pub enum CoordinatorCommandInput {
     MarkRecovered,
 }
 
-pub async fn execute_coordinator_ingress<
-    P: CoordinatorIngressApplicationPort,
-    C: CoordinatorIngressClockPort,
->(
+pub async fn prepare_coordinator_ingress<P: CoordinatorIngressApplicationPort>(
     actor: &ActorContext,
     role: MembershipRole,
     profile_id: &ProfileId,
     port: &P,
-    clock: &C,
-    request: CoordinatorIngressRequest,
-) -> Result<CoordinatorRuntimeResult, CoordinatorIngressOperationError> {
+) -> Result<CoordinatorIngressAccess, CoordinatorIngressOperationError> {
     let profile = port
         .find_visible_profile(actor, role, profile_id)
         .await
         .map_err(map_port_error)?
         .ok_or(CoordinatorIngressOperationError::NotFound)?;
     require_coordinatable(&profile)?;
+    Ok(CoordinatorIngressAccess {
+        profile_id: profile_id.clone(),
+    })
+}
 
+pub async fn execute_prepared_coordinator_ingress<
+    P: CoordinatorIngressApplicationPort,
+    C: CoordinatorIngressClockPort,
+>(
+    actor: &ActorContext,
+    role: MembershipRole,
+    access: &CoordinatorIngressAccess,
+    port: &P,
+    clock: &C,
+    request: CoordinatorIngressRequest,
+) -> Result<CoordinatorRuntimeResult, CoordinatorIngressOperationError> {
+    let profile_id = access.profile_id();
     let result = match request {
         CoordinatorIngressRequest::Snapshot => port
             .snapshot(actor.tenant_scope(), profile_id)
