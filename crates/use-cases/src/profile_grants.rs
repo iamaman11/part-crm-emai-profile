@@ -1,7 +1,7 @@
 use application_ports::CommandExecutionEvidence;
 use application_ports::profiles::{
-    ProfileGrantApplicationPort, ProfileGrantPortError, ProfileGrantPortErrorClass, ProfileGrantRole,
-    ProfileGrantWrite, ProfileReplayDecision, ProfileReplayReceipt,
+    ProfileGrantApplicationPort, ProfileGrantPortError, ProfileGrantPortErrorClass,
+    ProfileGrantRole, ProfileGrantWrite, ProfileReplayDecision, ProfileReplayReceipt,
 };
 use core::fmt;
 use identity_access_domain::MembershipRole;
@@ -145,7 +145,9 @@ pub fn next_profile_grant_version(
         .map_err(|_| ProfileGrantOperationError::InternalFailure)
 }
 
-pub fn parse_profile_grant_role(value: &str) -> Result<ProfileGrantRole, ProfileGrantOperationError> {
+pub fn parse_profile_grant_role(
+    value: &str,
+) -> Result<ProfileGrantRole, ProfileGrantOperationError> {
     match value {
         "PROFILE_VIEWER" => Ok(ProfileGrantRole::Viewer),
         "PROFILE_OPERATOR" => Ok(ProfileGrantRole::Operator),
@@ -251,9 +253,7 @@ fn map_port_error(error: ProfileGrantPortError) -> ProfileGrantOperationError {
         ProfileGrantPortErrorClass::IntegrityFailure => {
             ProfileGrantOperationError::IntegrityFailure
         }
-        ProfileGrantPortErrorClass::InternalFailure => {
-            ProfileGrantOperationError::InternalFailure
-        }
+        ProfileGrantPortErrorClass::InternalFailure => ProfileGrantOperationError::InternalFailure,
         ProfileGrantPortErrorClass::DependencyUnavailable => {
             ProfileGrantOperationError::DependencyUnavailable
         }
@@ -437,7 +437,8 @@ mod tests {
     }
 
     #[test]
-    fn grant_and_revoke_use_distinct_idempotency_domains() -> Result<(), Box<dyn std::error::Error>> {
+    fn grant_and_revoke_use_distinct_idempotency_domains() -> Result<(), Box<dyn std::error::Error>>
+    {
         let grant = FakePort::new(vec![ProfileReplayDecision::Miss]);
         block_on(execute_profile_grant(
             &actor()?,
