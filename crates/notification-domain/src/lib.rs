@@ -5,6 +5,6 @@ pub mod delivery;
 
 pub use cursor::{CursorAdvanceError, NotificationCursor};
 pub use delivery::{
-    AttemptLimit, DeliveryAttemptCount, DeliveryFailureClass, DeliveryState,
+    AttemptLimit, DeliveryAttemptCount, DeliveryFailureClass, DeliveryRestoreError, DeliveryState,
     DeliveryTransitionError,
 };
