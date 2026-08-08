@@ -1,8 +1,8 @@
 # Developer Capability and Module Matrix
 
 **Статус:** normative developer orientation  
-**Дата:** 2026-08-07  
-**Tracking:** completed hardening #41; completed composition epic #43; generation slice #44 / PR #51; Profile Bridge slice #54 / PR #55; mailbox slice #56 / PR #60 + repair #61 / PR #62; React UI #63 / PR #64; cross-component acceptance #65 / PR #66
+**Дата:** 2026-08-08  
+**Tracking:** completed hardening #41; completed composition epic #43; generation slice #44 / PR #51; Profile Bridge slice #54 / PR #55; mailbox slice #56 / PR #60 + repair #61 / PR #62; React UI #63 / PR #64; cross-component acceptance #65 / PR #66; profile grant application boundary #92 / PR #93
 
 ## 1. Зачем Нужен Этот Документ
 
@@ -39,9 +39,9 @@ accepted только после exact-head green и merge. Поэтому во 
 | Capability | Текущий уровень | Фактически реализовано | Не реализовано / не доказано |
 |---|---|---|---|
 | Rust workspace и pure primitives | Composed | Exact toolchain, typed opaque IDs, tenant/actor context, positive aggregate versions, strict lint policy. | Нет внешнего runtime dependency. |
-| Identity, memberships и ACL | Composed | Access identity adapter, memberships, owner lifecycle, invitations, profile/client grants, neutral disclosure, governed D1 commands. | Реальный production Access/IdP deployment остаётся External. |
+| Identity, memberships и ACL | Composed | Access identity adapter, memberships, owner lifecycle, invitations, profile/client grants, neutral disclosure, governed D1 commands. Profile grant/revoke orchestration is owned by the profile application use case/port and the Worker route is transport-only; direct legacy `api.rs` profile-grant orchestration is permanently rejected. | Реальный production Access/IdP deployment остаётся External. Client grant and remaining identity lifecycle application-boundary convergence continue in later Phase 0 slices. |
 | Client Registry | Composed | Create/query/assignment/grant bounded Worker paths и D1 schema. | Полный CRM Customer Master, merge UI и advanced contact workflows — Target. |
-| Profile catalog | Composed | Create/query/grant/assignment metadata paths, typed profile state и active generation pointer. | Реальные encrypted object operations выполняются не catalog, а будущим R2/provider flow. |
+| Profile catalog | Composed | Create/query/grant/assignment metadata paths, typed profile state и active generation pointer. Create/query, assignment and profile grant/revoke execute through capability-owned application boundaries; assignment remains non-authorizing. | Реальные encrypted object operations выполняются не catalog, а будущим R2/provider flow. |
 | Profile generation registry | Composed | Metadata-only register/query/verify/activate/deactivate/quarantine routes, exact command+digest+expiry replay, collision-resistant deterministic evidence IDs, command journals, audit/outbox, monotonic time, immutable digests/object identity и verified-pointer integrity. | Production R2 object verification, device unwrap и cross-device execution — External. |
 | Profile Coordinator | Composed | Durable Object journal, monotonic sequence/version/epoch, fencing, timeout/drain/recovery, D1 projection. | Remote production concurrency evidence — External. |
 | Full Profile Bridge operator flow | Composed / Synthetic | Explicit `profile-bridge-synthetic` binary composes strict claim parsing, device/key/auth/enrollment, coordinator lease validation, approved runtime selection, existing generation ownership, Bridge writer lock, local lifecycle, Camouhost v1 negotiation, supervised launch/close, process stop confirmation, recovery state and fail-closed cleanup blocking. The default `profile-bridge` binary remains the accepted narrow claim-only CLI and is preserved as `default-run`. | Real Camoufox execution, production device-key protection, remote enrollment/coordinator providers, production R2 generation lifecycle and physical Windows evidence remain External. |
@@ -53,7 +53,7 @@ accepted только после exact-head green и merge. Поэтому во 
 | Certification | Synthetic | Typed policy, deterministic matrix, prohibited/incomplete/drift outcomes, privacy-safe summary and update rollback state. | Real Camoufox observations, specialized-site review and independent certification — External. |
 | Mailbox operations | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, strict secret-handle-only request DTOs, idempotency/audit/outbox, versioned Worker create/query/revoke/job/run routes and metadata-only synthetic provider decision path. Adapter modules are exported and exercised by Worker native/WASM/release and Cloudflare adapter tests. | Real Gmail API/IMAP/browser provider execution, mailbox message payload processing, production scheduling and external provider evidence remain unproven. |
 | React web UI | Composed / Synthetic | Accepted PR #64 provides exact Node 24.19.0/npm 11.17.0 workspace, React 19/Vite 8/TypeScript 7, same-origin typed API/problem layer, tenant-scoped operator shell, session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces, neutral disclosure, high-impact confirmation, strict tests and permanent Frontend Gate. Worker Static Assets targets `frontend/dist`. | No deployed Cloudflare Access UI, real Bridge onboarding/custom-URI acceptance, real provider execution, or missing backend list APIs are claimed. |
-| Cross-component standalone acceptance | Composed / Synthetic | Accepted PR #66 provides a deterministic metadata-only manifest/validator and permanent read-only lane that executes governed D1 invariants, generation integrity, Worker/adapters native+WASM, actual synthetic Bridge CLI, and Node24 frontend tests/build in one repository-local flow. Exact accepted head and 12/12 CI are recorded in the evidence index. | No external deployment/provider/device evidence is implied; all production gates remain External. |
+| Cross-component standalone acceptance | Composed / Synthetic | Accepted PR #66 provides a deterministic metadata-only manifest/validator and permanent read-only lane that executes governed D1 invariants, generation integrity, Worker/adapters native+WASM, actual synthetic Bridge CLI, and Node24 frontend tests/build in one repository-local flow. The same lane retains explicit-grant authorization and assignment-as-ACL negative evidence while profile grant transport ownership evolves. | No external deployment/provider/device evidence is implied; all production gates remain External. |
 | CRM integration | Target | Versioned boundary principles and replaceable adapter direction documented. | CRM Party projection, OIDC/PostgreSQL adapters and event integration отсутствуют. |
 | Production readiness | External | Immutable evidence intake, readiness projection and GitHub attestation interlocks are composed. | Mandatory external evidence matrix currently incomplete; `production_ready` remains `false`. |
 
@@ -67,18 +67,24 @@ crates/*-domain
   Pure decisions and state machines. No Worker, D1, Windows, Python or HTTP.
 
 crates/application-ports
-  Interfaces owned by application needs. No concrete provider behavior.
+  Interfaces owned by application needs. Profile create/query, assignment and grant
+  ports are capability-owned modules; no concrete provider behavior.
 
 crates/use-cases
-  Authorization-aware application decisions. No concrete Cloudflare SDK.
+  Authorization-aware application decisions. Profile grant/revoke owns owner intent,
+  checked version sequencing, distinct idempotency domains and conflict-only replay.
+  No concrete Cloudflare SDK.
 
 crates/cloudflare-adapters
   D1, Access, Durable Object serialization/projection and Worker-facing adapters.
-  Storage validation may duplicate pure value checks as defense-in-depth, but may
-  not import domain policy into provider code.
+  Profile D1 adapter maps the application profile-grant port onto the accepted atomic
+  governed grant/revoke mutations. Storage validation may duplicate pure value checks
+  as defense-in-depth, but may not import domain policy into provider code.
 
 apps/control-plane-worker
-  Cloudflare Worker composition root and route/DTO/problem mapping.
+  Cloudflare Worker composition root and route/DTO/problem mapping. Migrated profile
+  grant transport may authenticate/parse/map only; it cannot recreate D1/idempotency
+  orchestration or provider mutation DTOs.
 
 apps/profile-bridge
   Windows executable plus Bridge-local libraries. `profile-bridge` remains the
@@ -104,14 +110,18 @@ HTTP request
   -> fail-closed route classification
   -> Access identity verification
   -> active membership/grant resolution
-  -> exact idempotency decision for generation mutations
+  -> capability application command/query
+  -> exact idempotency/version sequencing in the application boundary
   -> typed D1 or Durable Object adapter
   -> governed transaction/projection
   -> stable response/problem shape
 ```
 
-This path is repository-built and integration-tested, but not a claim of deployed
-production infrastructure.
+For `ProfileGrantApi`, owner denial is neutral before request-body parsing; the
+application use case owns grant/revoke command domains and replay semantics; the
+Cloudflare adapter owns the concrete governed mutation mapping. Assignment remains
+non-authorizing. This path is repository-built and integration-tested, but not a
+claim of deployed production infrastructure.
 
 ### React operator path (PR #64 candidate)
 
@@ -128,8 +138,8 @@ Cloudflare Static Assets / frontend/dist
 The UI intentionally does not invent list/read APIs that the Worker does not own.
 Client/profile/generation/mailbox resources are resolved by explicit opaque ID.
 High-impact mutations are confirmed and never optimistically treated as success.
-This is repository-local composition evidence only until PR #64 is accepted and
-external deployment evidence exists.
+This is repository-local composition evidence only until external deployment evidence
+exists.
 
 ### Profile generation path
 
@@ -196,10 +206,11 @@ A capability is not considered fully composed until all applicable items exist:
 
 ## 7. Local Verification Entry Point
 
-Use the exact commands in [`../CONTRIBUTING.md`](../CONTRIBUTING.md). CI remains
-the acceptance authority because it also executes Windows, Wrangler/D1, WASM,
-Worker release, runtime, local-profile, encrypted-generation, certification,
-frontend and external-evidence lanes.
+Use the exact commands in [`../CONTRIBUTING.md`](../CONTRIBUTING.md). Run
+`python scripts/verify-fast.py` before push and the `--with-compile` lane before
+boundary acceptance. CI remains the acceptance authority because it also executes
+Windows, Wrangler/D1, WASM, Worker release, runtime, local-profile,
+encrypted-generation, certification, frontend and external-evidence lanes.
 
 For the Profile Bridge composition slice, `cargo test --locked -p profile-bridge --all-targets`
 covers the library state machine, explicit synthetic executable and integration
@@ -215,6 +226,6 @@ verification.
 ## 8. Audit Exclusion
 
 Repository quality and composition work under issues #41, #43, #44, #54, #56,
-#61 and #63 does not inspect, modify or operate the legacy proxy credential/provider.
-That external item remains separate and has no effect on repository-local
-architecture findings.
+#61, #63 and #92 does not inspect, modify or operate the legacy proxy
+credential/provider. That external item remains separate and has no effect on
+repository-local architecture findings.
