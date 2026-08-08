@@ -52,7 +52,7 @@ CREATE TABLE notification_deliveries (
             AND last_attempt_at_ms IS NOT NULL
             AND next_attempt_at_ms IS NULL
             AND delivered_at_ms IS NOT NULL
-            AND delivered_at_ms >= last_attempt_at_ms
+            AND delivered_at_ms = last_attempt_at_ms
             AND terminal_at_ms IS NULL
             AND failure_class IS NULL)
         OR
@@ -62,7 +62,7 @@ CREATE TABLE notification_deliveries (
             AND next_attempt_at_ms IS NULL
             AND delivered_at_ms IS NULL
             AND terminal_at_ms IS NOT NULL
-            AND terminal_at_ms >= last_attempt_at_ms
+            AND terminal_at_ms = last_attempt_at_ms
             AND failure_class IS NOT NULL)
     )
 ) STRICT;
@@ -79,6 +79,33 @@ BEGIN
           AND outbox_event_id = NEW.outbox_event_id
           AND created_at_ms <= NEW.created_at_ms
     );
+END;
+
+CREATE TRIGGER notification_delivery_transition_guard
+BEFORE UPDATE ON notification_deliveries
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'notification_delivery_identity_immutable')
+    WHERE NEW.tenant_id <> OLD.tenant_id
+       OR NEW.consumer_id <> OLD.consumer_id
+       OR NEW.outbox_event_id <> OLD.outbox_event_id;
+
+    SELECT RAISE(ABORT, 'notification_delivery_terminal_immutable')
+    WHERE OLD.delivery_state IN ('DELIVERED', 'DEAD_LETTER');
+
+    SELECT RAISE(ABORT, 'notification_delivery_attempt_sequence_invalid')
+    WHERE NEW.attempt_count <> OLD.attempt_count + 1;
+
+    SELECT RAISE(ABORT, 'notification_delivery_transition_invalid')
+    WHERE NEW.delivery_state = 'READY';
+
+    SELECT RAISE(ABORT, 'notification_delivery_attempt_time_invalid')
+    WHERE NEW.last_attempt_at_ms IS NULL
+       OR NEW.last_attempt_at_ms < OLD.created_at_ms
+       OR (
+            OLD.delivery_state = 'RETRY_SCHEDULED'
+            AND NEW.last_attempt_at_ms < OLD.next_attempt_at_ms
+       );
 END;
 
 CREATE INDEX notification_deliveries_due
