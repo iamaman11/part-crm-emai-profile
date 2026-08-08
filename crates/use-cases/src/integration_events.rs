@@ -89,12 +89,7 @@ where
     C: ConsumerIdempotencyPort,
 {
     match consumer
-        .claim(
-            event.tenant_id(),
-            consumer_id,
-            event.event_id(),
-            consumed_at,
-        )
+        .claim(consumer_id, event, consumed_at)
         .await
         .map_err(map_port_error)?
     {
@@ -282,9 +277,8 @@ mod tests {
     impl ConsumerIdempotencyPort for FakeConsumer {
         async fn claim(
             &self,
-            _tenant_id: &TenantId,
             _consumer_id: &OpaqueId,
-            _event_id: &OutboxEventId,
+            _event: &IntegrationEventEnvelope,
             _consumed_at: UnixMillis,
         ) -> Result<ConsumerClaim, IntegrationEventPortError> {
             if self.claimed.replace(true) {
