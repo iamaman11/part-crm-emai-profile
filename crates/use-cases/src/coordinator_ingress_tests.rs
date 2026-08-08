@@ -4,9 +4,7 @@ use application_ports::coordinator_ingress::{
     CoordinatorIngressApplicationPort, CoordinatorIngressPortError, CoordinatorProfileAccess,
     CoordinatorProjectionSnapshot, CoordinatorRuntimeOutcome, CoordinatorRuntimeResult,
 };
-use profile_platform_primitives::{
-    ActorId, CorrelationId, OutboxEventId, TenantId, TenantScope,
-};
+use profile_platform_primitives::{ActorId, CorrelationId, OutboxEventId, TenantId, TenantScope};
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
@@ -257,8 +255,8 @@ fn owner_only_recovery_stops_non_owner_before_execute() -> Result<(), Box<dyn st
 }
 
 #[test]
-fn invalid_launch_ttl_stops_before_execute_and_projection()
--> Result<(), Box<dyn std::error::Error>> {
+fn invalid_launch_ttl_stops_before_execute_and_projection() -> Result<(), Box<dyn std::error::Error>>
+{
     let port = FakePort::new(Some(CoordinatorProfileAccess::new("READY", true)));
     let request = CoordinatorIngressRequest::Command(envelope_input(
         CoordinatorCommandInput::IssueLaunchIntent {
@@ -286,11 +284,12 @@ fn invalid_launch_ttl_stops_before_execute_and_projection()
 #[test]
 fn claim_generates_fencing_token_once_and_projects() -> Result<(), Box<dyn std::error::Error>> {
     let port = FakePort::new(Some(CoordinatorProfileAccess::new("READY", true)));
-    let request = CoordinatorIngressRequest::Command(envelope_input(CoordinatorCommandInput::Claim {
-        launch_intent_id: LaunchIntentId::parse("launch_01JCOORDINGRESS")?,
-        device_id: DeviceId::parse("device_01JCOORDINGRESS")?,
-        session_id: SessionId::parse("session_01JCOORDINGRESS")?,
-    })?);
+    let request =
+        CoordinatorIngressRequest::Command(envelope_input(CoordinatorCommandInput::Claim {
+            launch_intent_id: LaunchIntentId::parse("launch_01JCOORDINGRESS")?,
+            device_id: DeviceId::parse("device_01JCOORDINGRESS")?,
+            session_id: SessionId::parse("session_01JCOORDINGRESS")?,
+        })?);
     block_on(execute_coordinator_ingress(
         &actor()?,
         MembershipRole::Member,
