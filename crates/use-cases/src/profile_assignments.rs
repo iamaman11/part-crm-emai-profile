@@ -414,8 +414,12 @@ mod tests {
     }
 
     #[test]
-    fn write_conflict_with_replay_miss_remains_conflict() -> Result<(), Box<dyn std::error::Error>> {
-        let port = FakePort::new(vec![ProfileReplayDecision::Miss, ProfileReplayDecision::Miss]);
+    fn write_conflict_with_replay_miss_remains_conflict() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let port = FakePort::new(vec![
+            ProfileReplayDecision::Miss,
+            ProfileReplayDecision::Miss,
+        ]);
         port.write_error
             .set(Some(ProfileAssignmentPortErrorClass::Conflict));
         assert_eq!(
@@ -433,7 +437,8 @@ mod tests {
     }
 
     #[test]
-    fn non_conflict_write_failure_never_rechecks_replay() -> Result<(), Box<dyn std::error::Error>> {
+    fn non_conflict_write_failure_never_rechecks_replay() -> Result<(), Box<dyn std::error::Error>>
+    {
         let port = FakePort::new(vec![
             ProfileReplayDecision::Miss,
             ProfileReplayDecision::Replay(ProfileReplayReceipt::new("assigned", None)),
