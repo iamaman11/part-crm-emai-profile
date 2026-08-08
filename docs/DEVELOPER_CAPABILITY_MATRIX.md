@@ -1,220 +1,162 @@
 # Developer Capability and Module Matrix
 
-**Статус:** normative developer orientation  
-**Дата:** 2026-08-07  
-**Tracking:** completed hardening #41; completed composition epic #43; generation slice #44 / PR #51; Profile Bridge slice #54 / PR #55; mailbox slice #56 / PR #60 + repair #61 / PR #62; React UI #63 / PR #64; cross-component acceptance #65 / PR #66
+**Status:** normative accepted implementation/evidence orientation  
+**Date:** 2026-08-08  
+**Execution order:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
 
-## 1. Зачем Нужен Этот Документ
+## 1. Purpose
 
-Repository Steps 0–10 приняли много строгих domain, adapter, workflow и synthetic
-boundaries. Слово `accepted` означает, что конкретный bounded claim подтверждён
-кодом и permanent CI. Оно не означает, что весь целевой продукт уже собран,
-развёрнут или проверен на реальных внешних ресурсах.
+This matrix answers **what is actually implemented and at what evidence level on accepted
+`main`**. It does not define what should be implemented next.
 
-Эта матрица является быстрым источником истины для разработчика:
+A feature branch or PR description is not accepted implementation evidence. A capability
+becomes an accepted `main` claim only after the bounded diff is merged with the required
+exact-head permanent CI/evidence.
 
-- что реально вызывается текущим composition root;
-- что реализовано как reusable pure domain/library;
-- что доказано только synthetic/fake harness;
-- что пока существует только как target architecture или external gate.
+## 2. Evidence Levels
 
-## 2. Уровни Готовности
-
-| Уровень | Значение |
+| Level | Meaning |
 |---|---|
-| **Composed** | Подключено к текущему executable composition root и проверяется его CI lane. |
-| **Library** | Реальная typed implementation существует, но не полностью подключена к пользовательскому executable path. |
-| **Synthetic** | Invariants и protocol доказаны fake/in-memory/generated fixtures; real provider/runtime не заявлен. |
-| **Target** | Нормативно спроектировано, но executable implementation отсутствует или неполна. |
-| **External** | Требует provider, physical host, policy, signing или независимого evidence вне GitHub CI. |
+| **Composed** | Wired into the accepted executable composition root and covered by its CI lane. |
+| **Library** | Typed reusable implementation exists but is not fully wired into the accepted user path. |
+| **Synthetic** | Invariants/protocol are proven with deterministic fake/generated evidence; real provider/runtime is not claimed. |
+| **Target** | Normatively planned but executable implementation is absent/incomplete. |
+| **External** | Requires real provider, physical host, policy, signing or independent evidence outside repository-local CI. |
 
-Ни один уровень сам по себе не означает production readiness. `Composed` описывает
-исполняемую wiring/composition форму capability; repository claim становится
-accepted только после exact-head green и merge. Поэтому во время review capability
-может быть `Composed` в feature branch, но состоянием `main` становится только
-после acceptance.
+No level by itself means production readiness.
 
-## 3. Текущая Capability Matrix
+## 3. Accepted Capability Matrix
 
-| Capability | Текущий уровень | Фактически реализовано | Не реализовано / не доказано |
+| Capability | Level on accepted `main` | Accepted scope | Still Target / External |
 |---|---|---|---|
-| Rust workspace и pure primitives | Composed | Exact toolchain, typed opaque IDs, tenant/actor context, positive aggregate versions, strict lint policy. | Нет внешнего runtime dependency. |
-| Identity, memberships и ACL | Composed | Access identity adapter, memberships, owner lifecycle, invitations, profile/client grants, neutral disclosure, governed D1 commands. | Реальный production Access/IdP deployment остаётся External. |
-| Client Registry | Composed | Create/query/assignment/grant bounded Worker paths и D1 schema. | Полный CRM Customer Master, merge UI и advanced contact workflows — Target. |
-| Profile catalog | Composed | Create/query/grant/assignment metadata paths, typed profile state и active generation pointer. | Реальные encrypted object operations выполняются не catalog, а будущим R2/provider flow. |
-| Profile generation registry | Composed | Metadata-only register/query/verify/activate/deactivate/quarantine routes, exact command+digest+expiry replay, collision-resistant deterministic evidence IDs, command journals, audit/outbox, monotonic time, immutable digests/object identity и verified-pointer integrity. | Production R2 object verification, device unwrap и cross-device execution — External. |
-| Profile Coordinator | Composed | Durable Object journal, monotonic sequence/version/epoch, fencing, timeout/drain/recovery, D1 projection. | Remote production concurrency evidence — External. |
-| Full Profile Bridge operator flow | Composed / Synthetic | Explicit `profile-bridge-synthetic` binary composes strict claim parsing, device/key/auth/enrollment, coordinator lease validation, approved runtime selection, existing generation ownership, Bridge writer lock, local lifecycle, Camouhost v1 negotiation, supervised launch/close, process stop confirmation, recovery state and fail-closed cleanup blocking. The default `profile-bridge` binary remains the accepted narrow claim-only CLI and is preserved as `default-run`. | Real Camoufox execution, production device-key protection, remote enrollment/coordinator providers, production R2 generation lifecycle and physical Windows evidence remain External. |
-| Device identity/key ports | Synthetic | Typed ports и deterministic fake implementations used only by explicit synthetic composition/tests. | Production CNG/DPAPI/TPM unwrap/revoke/recovery — External. |
-| Camouhost IPC и process supervision | Synthetic | Versioned messages, fake Camouhost, process state machine, generated subprocess/runtime fixtures and exact clean-stop confirmation. | Real bundled Python/Camoufox lifecycle на physical host — External. |
-| Runtime bundle | Synthetic | Canonical manifest, inventory, path/case safety, digest checks, approval/rollback tests and composed synthetic selection before lease/local runtime use. | Trusted signed distribution/update channel — External. |
-| Local profile lifecycle | Library / Synthetic | Marked workspace, inventory, lock ownership, clone-only recovery, quota/support policies and composed synthetic operator tests. | Full kernel-lock/real-browser integration on physical Windows hosts — External. |
-| Encrypted cloud generations | Synthetic | XChaCha20-Poly1305 container, metadata authentication, nonce domain, immutable in-memory lifecycle, pointer/rollback/quarantine/orphan policies. | Production R2 adapter, device unwrap and remote R2/D1 atomicity — External. |
-| Certification | Synthetic | Typed policy, deterministic matrix, prohibited/incomplete/drift outcomes, privacy-safe summary and update rollback state. | Real Camoufox observations, specialized-site review and independent certification — External. |
-| Mailbox operations | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, strict secret-handle-only request DTOs, idempotency/audit/outbox, versioned Worker create/query/revoke/job/run routes and metadata-only synthetic provider decision path. Adapter modules are exported and exercised by Worker native/WASM/release and Cloudflare adapter tests. | Real Gmail API/IMAP/browser provider execution, mailbox message payload processing, production scheduling and external provider evidence remain unproven. |
-| React web UI | Composed / Synthetic | Accepted PR #64 provides exact Node 24.19.0/npm 11.17.0 workspace, React 19/Vite 8/TypeScript 7, same-origin typed API/problem layer, tenant-scoped operator shell, session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces, neutral disclosure, high-impact confirmation, strict tests and permanent Frontend Gate. Worker Static Assets targets `frontend/dist`. | No deployed Cloudflare Access UI, real Bridge onboarding/custom-URI acceptance, real provider execution, or missing backend list APIs are claimed. |
-| Cross-component standalone acceptance | Composed / Synthetic | Accepted PR #66 provides a deterministic metadata-only manifest/validator and permanent read-only lane that executes governed D1 invariants, generation integrity, Worker/adapters native+WASM, actual synthetic Bridge CLI, and Node24 frontend tests/build in one repository-local flow. Exact accepted head and 12/12 CI are recorded in the evidence index. | No external deployment/provider/device evidence is implied; all production gates remain External. |
-| CRM integration | Target | Versioned boundary principles and replaceable adapter direction documented. | CRM Party projection, OIDC/PostgreSQL adapters and event integration отсутствуют. |
-| Production readiness | External | Immutable evidence intake, readiness projection and GitHub attestation interlocks are composed. | Mandatory external evidence matrix currently incomplete; `production_ready` remains `false`. |
+| Rust workspace / primitives | Composed | Exact toolchain, typed opaque IDs, tenant/actor context, positive versions, strict lint/policy gates. | External runtime is not required for this claim. |
+| Identity / memberships / ACL | Composed | Access identity adapter, memberships, owner lifecycle, invitations, profile/client grants, neutral disclosure, governed D1 commands. | Production Access/IdP deployment is External; remaining Worker application-boundary convergence is Phase 0 work. |
+| Client Registry | Composed | Current create/query/assignment/grant metadata paths and D1 schema. | Registry 2.0 contacts/merge/richer lifecycle and CRM Party authority are Target. |
+| Profile catalog | Composed | Current create/query/grant/assignment metadata paths, typed profile state and active generation pointer. | Phase 0 application-boundary convergence for remaining legacy orchestration is not yet fully accepted. |
+| Profile generation registry | Composed | Governed metadata register/query/verify/activate/deactivate/quarantine, replay/evidence, audit/outbox and pointer integrity. | Production R2 verification/device unwrap/cross-device evidence is External. |
+| Profile coordinator | Composed | Durable Object journal, sequence/version/epoch/fencing, timeout/drain/recovery and D1 projection. | Phase 0 coordinator-ingress thinness is Target; remote production concurrency evidence is External. |
+| Full Profile Bridge operator flow | Composed / Synthetic | Explicit synthetic executable composes claim, fake device identity/enrollment, coordinator lease, generation ownership, writer lock, local lifecycle, fake Camouhost protocol and failure ordering. | Real Camoufox, production device keys, remote enrollment/coordinator and production R2 lifecycle are External. |
+| Device identity/key ports | Synthetic | Typed ports and deterministic fake implementations. | Production CNG/DPAPI/TPM protection/revoke/recovery is External. |
+| Camouhost IPC/process supervision | Synthetic | Versioned typed messages, fake Camouhost, process state machine and clean-stop evidence. | Real bundled Python/Camoufox lifecycle on physical host is External. |
+| Runtime bundle | Synthetic | Manifest/inventory/path safety/digest/approval/rollback tests and synthetic selection. | Trusted signed distribution/update channel is External. |
+| Local profile lifecycle | Library / Synthetic | Workspace marking, inventory, lock ownership, clone-only recovery, quota/support policy and composed synthetic operator tests. | Full real-browser/kernel-lock physical-host evidence is External. |
+| Encrypted cloud generations | Synthetic | XChaCha20-Poly1305 container, immutable in-memory lifecycle, pointer/rollback/quarantine/orphan policy. | Production R2 adapter/device unwrap/remote recovery atomicity evidence is External. |
+| Certification | Synthetic | Typed policy, deterministic matrix, drift/prohibited outcomes, privacy-safe summary/update rollback state. | Real Camoufox observations and independent certification are External. |
+| Mailbox operations | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, secret-handle-only DTOs, idempotency/audit/outbox, Worker metadata/job paths and synthetic provider-decision path. | Real Gmail/IMAP/browser execution, message search/body retrieval, production scheduling and provider evidence are Target/External. |
+| React web UI | Composed / Synthetic | Accepted React/Vite/TS operator shell and current session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces with permanent Frontend Gate. | Generated public TS contracts, sibling-feature import enforcement, complete detail/list routes, client Mail search/body UI, real Bridge/provider deployment remain Target/External. |
+| Cross-component standalone acceptance | Composed / Synthetic | Metadata-only deterministic manifest/validator covering governed D1, generation integrity, Worker/adapters native+WASM, synthetic Bridge and frontend tests/build. | Real deployment/provider/device evidence is External. |
+| Integration events / durable notifications | Target | Architecture/plan contracts defined. | Phase 1 implementation not accepted. |
+| Client Registry 2.0 | Target | Target model/constraints defined in current plan. | Phase 2 implementation not accepted. |
+| Read models/global search | Target | CQRS-lite/query boundary and search targets defined. | Phase 3 implementation not accepted. |
+| Client-scoped mailbox message search/body | Target | Product/query/security contract is normative. | Provider-neutral query implementation and real provider/browser lanes are Phases 3–5. |
+| Realtime UserNotificationHub | Target | Durable-event-backed topology is normative. | Phase 6 implementation not accepted. |
+| Complete standalone UI/E2E | Target | UI/acceptance target is normative. | Phases 7–8 implementation not accepted. |
+| CRM integration | Target | Contract/event isolation, Party reference and replaceable-adapter direction are defined. | CRM Party projection/OIDC/PostgreSQL/cutover not accepted. |
+| Production readiness | External | Evidence intake/readiness interlocks exist. | Required external evidence remains incomplete; `production_ready=false`. |
 
-## 4. Module Ownership
+## 4. Current Application-Boundary Convergence
+
+Accepted capability behavior and clean application ownership are separate claims. Some
+capabilities are already Composed through legacy Worker orchestration while Phase 0 is moving
+that orchestration behind application use cases without changing public behavior.
+
+Accepted Phase 0 slices through 0G established the pattern for client/profile create/query,
+mailbox binding/job, generation and profile assignment paths.
+
+As of this matrix date:
+
+- Phase 0H profile-grant application-boundary work is still **draft/unmerged** (#92 / PR #93);
+- later client-grant, identity-governance and coordinator-ingress convergence remains Target;
+- the current execution plan, not this matrix, determines their order.
+
+Do not interpret a feature branch's `Composed` wiring or PR description as accepted `main`.
+
+## 5. Current Module Ownership
 
 ```text
 crates/primitives
-  Stable value objects only. No provider, storage or business workflow.
+  stable provider-neutral value objects
 
 crates/*-domain
-  Pure decisions and state machines. No Worker, D1, Windows, Python or HTTP.
+  pure provider-independent invariants/state machines
 
 crates/application-ports
-  Interfaces owned by application needs. No concrete provider behavior.
+  capability-owned interfaces required by application workflows
 
 crates/use-cases
-  Authorization-aware application decisions. No concrete Cloudflare SDK.
+  current accepted application crate with capability modules
+  (Phase 0 target: split independent high-growth contexts into real Cargo crates)
 
 crates/cloudflare-adapters
-  D1, Access, Durable Object serialization/projection and Worker-facing adapters.
-  Storage validation may duplicate pure value checks as defense-in-depth, but may
-  not import domain policy into provider code.
+  D1/Access/DO/R2/Queue/provider implementations that depend inward
 
 apps/control-plane-worker
-  Cloudflare Worker composition root and route/DTO/problem mapping.
+  Worker/DO composition and transport; Phase 0 continues removing legacy orchestration
 
 apps/profile-bridge
-  Windows executable plus Bridge-local libraries. `profile-bridge` remains the
-  narrow default claim-only CLI. `profile-bridge-synthetic` is the explicit
-  repository-local composed operator path and must never be described as a real
-  Camoufox or production-provider implementation.
+  Windows-native local/device/runtime composition
 
 frontend
-  React operator composition only. Routes/forms display accepted projections and
-  invoke typed same-origin API calls; authorization, lifecycle transitions and
-  provider decisions remain server-side. No secret/token persistence in Web Storage.
+  React presentation/navigation/query cache; generated public contracts are a Phase 0 target
 ```
 
-A developer must not move policy downward into an adapter or upward into a UI.
-If a rule can be expressed without a provider, it belongs in a domain/use case.
+A rule expressible without a provider belongs in domain/application code, not an adapter/UI.
+Lease/fencing/session state belongs to `session-domain`; a Durable Object is its runtime
+coordination adapter and is not a second business catalog.
 
-## 5. Current End-to-End Paths
+## 6. Current End-To-End Boundaries
 
-### Worker API path
+### Browser/API path
 
 ```text
-HTTP request
+React / same-origin request
   -> fail-closed route classification
   -> Access identity verification
-  -> active membership/grant resolution
-  -> exact idempotency decision for generation mutations
-  -> typed D1 or Durable Object adapter
-  -> governed transaction/projection
-  -> stable response/problem shape
+  -> live membership/grant resolution
+  -> application/legacy bounded path depending on accepted Phase 0 migration status
+  -> typed adapter
+  -> governed durable result/projection
 ```
 
-This path is repository-built and integration-tested, but not a claim of deployed
-production infrastructure.
+The Worker always re-authorizes. UI does not invent authorization or storage access.
 
-### React operator path (PR #64 candidate)
+### Profile generation/runtime path
 
-```text
-Cloudflare Static Assets / frontend/dist
-  -> React operator route
-  -> explicit tenant + opaque resource ID
-  -> same-origin /api/v1 request
-  -> bounded JSON/problem normalization
-  -> Worker re-authorizes every operation
-  -> authoritative server projection/result
-```
+Catalog generation metadata and synthetic Bridge/runtime composition are repository-tested,
+but real R2/device/Camoufox behavior remains External. D1 is authoritative for the active
+generation pointer; DO/session fencing controls writer concurrency; local workspace is
+materialization/cache/recoverable dirty state, not cloud authority.
 
-The UI intentionally does not invent list/read APIs that the Worker does not own.
-Client/profile/generation/mailbox resources are resolved by explicit opaque ID.
-High-impact mutations are confirmed and never optimistically treated as success.
-This is repository-local composition evidence only until PR #64 is accepted and
-external deployment evidence exists.
+### Mailbox path
 
-### Profile generation path
+Current accepted mailbox capability is metadata/job oriented. Full message payload search/body
+view is a Target product capability. The planned contract is client-scoped and authorized
+before provider fetch; message body is allowed in the authorized product view but not logs,
+audit/events/telemetry.
 
-```text
-register immutable metadata
-  -> governed verification decision
-  -> atomic activation of exact VERIFIED generation
-  -> READY profile + active_generation_id
-  -> coordinator eligibility
-  -> governed exact-pointer deactivation when isolation is required
-  -> SUSPENDED profile + NULL pointer
-  -> optional generation quarantine
-```
+## 7. Definition Of A Complete New Capability
 
-The registry proves catalog/lifecycle consistency. It does not prove that a real
-R2 object exists, decrypts on a device or launches successfully in Camoufox.
+A capability is not accepted as Composed until all applicable items exist:
 
-### Profile Bridge paths
-
-The default accepted CLI stays deliberately narrow:
-
-```text
-profile-bridge profilebridge://claim/<opaque-code>
-  -> strict URI parsing
-  -> redacted claim result
-```
-
-The repository-local composed path is explicit and synthetic:
-
-```text
-profile-bridge-synthetic profilebridge://claim/<opaque-code> <absolute-materialization-root>
-  -> strict claim redemption
-  -> deterministic fake device identity + key handle
-  -> explicit synthetic authentication/enrollment
-  -> approved runtime selection
-  -> coordinator lease acquisition + exact tenant/profile/device validation
-  -> existing generation workspace + Bridge writer lock using lease epoch
-  -> LocalGenerationRecord InUse
-  -> supervised process spawn + Camouhost v1 Hello/Launch
-  -> exact clean Close + process stop confirmation
-  -> DirtyLocal + writer lock release + coordinator lease close
-```
-
-Any runtime/protocol failure after local use transitions to `RecoveryRequired`.
-Cleanup failures remain observable; unresolved cleanup blocks another operator
-session in the same composed instance. This proves composition and failure
-ordering only. It does not prove a real Camoufox binary, real remote enrollment,
-production coordinator deployment, production key protection or R2 object use.
-
-## 6. Definition of a Complete New Capability
-
-A capability is not considered fully composed until all applicable items exist:
-
-1. versioned contract or typed command;
-2. pure domain decision and negative tests;
+1. versioned public/internal contract;
+2. pure domain decision where provider-independent policy exists;
 3. minimal owned application ports;
-4. authorization, exact idempotency and stable error mapping;
-5. concrete adapter plus forward-only migration where required;
-6. executable composition-root wiring;
-7. replay, failure, forbidden-access and boundary tests;
-8. developer documentation updated in this matrix;
-9. exact-head permanent CI and squash merge;
-10. external evidence only when the claim depends on real infrastructure/runtime.
+4. application authorization/idempotency/version sequencing;
+5. concrete adapter/migration where required;
+6. executable composition wiring;
+7. replay/failure/forbidden-access/boundary tests;
+8. permanent CI policy where the boundary matters;
+9. matrix/docs updated only for proven claims;
+10. exact-head green + bounded review + guarded merge;
+11. real external evidence only for provider/physical/runtime claims.
 
-## 7. Local Verification Entry Point
+## 8. Documentation Authority
 
-Use the exact commands in [`../CONTRIBUTING.md`](../CONTRIBUTING.md). CI remains
-the acceptance authority because it also executes Windows, Wrangler/D1, WASM,
-Worker release, runtime, local-profile, encrypted-generation, certification,
-frontend and external-evidence lanes.
+- execution order: `DEVELOPMENT_PLAN.md`;
+- stable architecture: `ARCHITECTURE.md` + accepted ADRs;
+- data handling: `DATA_CLASSIFICATION.md`;
+- product/UI target: `UI_ARCHITECTURE.md`;
+- accepted implementation level: this matrix;
+- historical delivery: `DELIVERY_ROADMAP.md`.
 
-For the Profile Bridge composition slice, `cargo test --locked -p profile-bridge --all-targets`
-covers the library state machine, explicit synthetic executable and integration
-failure-ordering regressions. Repository acceptance still requires every permanent
-workflow on the same final head.
-
-For the accepted React UI, `frontend/.nvmrc`, `package.json` engines/packageManager
-and `.github/workflows/frontend-gate.yml` pin Node `24.19.0` and npm `11.17.0`.
-The permanent lane performs `npm ci`, strict TypeScript, Vitest, Vite production
-build, application-source credential-persistence scanning and Static Assets output
-verification.
-
-## 8. Audit Exclusion
-
-Repository quality and composition work under issues #41, #43, #44, #54, #56,
-#61 and #63 does not inspect, modify or operate the legacy proxy credential/provider.
-That external item remains separate and has no effect on repository-local
-architecture findings.
+See [`INDEX.md`](./INDEX.md) for the repository documentation map.
