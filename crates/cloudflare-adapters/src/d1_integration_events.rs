@@ -1,6 +1,6 @@
 use application_ports::{
     ConsumerClaim, ConsumerIdempotencyPort, IntegrationEventOutboxPort, IntegrationEventPortError,
-    IntegrationEventPortErrorClass,
+    IntegrationEventPortErrorClass, NotificationEventPort,
 };
 use contracts::{
     INTEGRATION_EVENT_ENVELOPE_VERSION, IntegrationEventEnvelope, IntegrationEventPayload,
@@ -37,6 +37,19 @@ SET published_at_ms = ?
 WHERE tenant_id = ?
   AND outbox_event_id = ?
   AND published_at_ms IS NULL
+"#;
+
+const PERSIST_NOTIFICATION: &str = r#"
+INSERT INTO notification_events (
+    tenant_id,
+    outbox_event_id,
+    envelope_version,
+    event_type,
+    event_version,
+    occurred_at_ms,
+    persisted_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (tenant_id, outbox_event_id) DO NOTHING
 "#;
 
 const CLAIM_CONSUMER: &str = r#"
@@ -140,6 +153,33 @@ impl IntegrationEventOutboxPort for D1IntegrationEventRepository {
             published_at,
             tenant_id.as_str(),
             event_id.as_str()
+        )
+        .map_err(map_worker_error)?
+        .run()
+        .await
+        .map_err(map_worker_error)?;
+        Ok(())
+    }
+}
+
+impl NotificationEventPort for D1IntegrationEventRepository {
+    async fn persist_notification_event(
+        &self,
+        event: &IntegrationEventEnvelope,
+        persisted_at: UnixMillis,
+    ) -> Result<(), IntegrationEventPortError> {
+        let occurred_at = sqlite_integer(event.occurred_at())?;
+        let persisted_at = sqlite_integer(persisted_at)?;
+        query!(
+            &self.database,
+            PERSIST_NOTIFICATION,
+            event.tenant_id().as_str(),
+            event.event_id().as_str(),
+            i64::from(event.envelope_version()),
+            event.event_type(),
+            i64::from(event.event_version()),
+            occurred_at,
+            persisted_at
         )
         .map_err(map_worker_error)?
         .run()
