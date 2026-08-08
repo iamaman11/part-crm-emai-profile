@@ -41,6 +41,7 @@ CREATE TABLE notification_deliveries (
         (delivery_state = 'RETRY_SCHEDULED'
             AND attempt_count BETWEEN 1 AND 63
             AND last_attempt_at_ms IS NOT NULL
+            AND next_attempt_at_ms IS NOT NULL
             AND next_attempt_at_ms > last_attempt_at_ms
             AND delivered_at_ms IS NULL
             AND terminal_at_ms IS NULL
@@ -50,6 +51,7 @@ CREATE TABLE notification_deliveries (
             AND attempt_count BETWEEN 1 AND 64
             AND last_attempt_at_ms IS NOT NULL
             AND next_attempt_at_ms IS NULL
+            AND delivered_at_ms IS NOT NULL
             AND delivered_at_ms >= last_attempt_at_ms
             AND terminal_at_ms IS NULL
             AND failure_class IS NULL)
@@ -59,6 +61,7 @@ CREATE TABLE notification_deliveries (
             AND last_attempt_at_ms IS NOT NULL
             AND next_attempt_at_ms IS NULL
             AND delivered_at_ms IS NULL
+            AND terminal_at_ms IS NOT NULL
             AND terminal_at_ms >= last_attempt_at_ms
             AND failure_class IS NOT NULL)
     )
