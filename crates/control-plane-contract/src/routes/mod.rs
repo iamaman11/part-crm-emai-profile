@@ -5,7 +5,7 @@ mod identity;
 mod mailboxes;
 mod profiles;
 
-use crate::RouteClass;
+use crate::{RouteClass, is_dynamic_path};
 
 #[must_use]
 pub(super) fn classify(method: &str, path: &str) -> RouteClass {
@@ -40,7 +40,7 @@ pub(super) fn classify(method: &str, path: &str) -> RouteClass {
         return route;
     }
 
-    if is_dynamic_namespace(path) {
+    if is_dynamic_path(path) {
         RouteClass::DynamicRouteNotFound
     } else {
         RouteClass::StaticAssets
@@ -50,13 +50,4 @@ pub(super) fn classify(method: &str, path: &str) -> RouteClass {
 #[must_use]
 fn is_bridge_namespace(path: &str) -> bool {
     path == "/bridge" || path.starts_with("/bridge/")
-}
-
-#[must_use]
-fn is_dynamic_namespace(path: &str) -> bool {
-    path == "/api"
-        || path.starts_with("/api/")
-        || path == "/auth"
-        || path.starts_with("/auth/")
-        || is_bridge_namespace(path)
 }
