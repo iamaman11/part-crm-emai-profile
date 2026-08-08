@@ -1,0 +1,33 @@
+name: Phase 0L Lockfile Generator
+
+on:
+  push:
+    branches:
+      - phase0l-identity-application-crate
+
+permissions:
+  contents: write
+
+jobs:
+  generate-lockfile:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase0l-identity-application-crate
+          fetch-depth: 0
+      - name: Generate Cargo lockfile
+        run: cargo generate-lockfile
+      - name: Commit lockfile only when changed
+        shell: bash
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Phase 0L: regenerate workspace lockfile"
+          git push origin HEAD:phase0l-identity-application-crate
