@@ -6,9 +6,7 @@ use crate::d1_identity_acl::{
 };
 use crate::d1_identity_failure::{map_identity_dependency_error, map_identity_write_error};
 use crate::d1_identity_governance::{map_replay_decision, mutation_envelope};
-use crate::d1_invitation_acceptance::{
-    AcceptInvitationMutation, D1InvitationAcceptanceRepository,
-};
+use crate::d1_invitation_acceptance::{AcceptInvitationMutation, D1InvitationAcceptanceRepository};
 use application_ports::CommandExecutionEvidence;
 use application_ports::identity_ceremonies::{
     ActiveIdentityBinding, BootstrapOwnerWrite, IdentityCeremonyApplicationPort,
@@ -91,10 +89,7 @@ impl IdentityCeremonyApplicationPort for D1IdentityCeremonyApplicationRepository
             .tenant_boundary(scope)
             .await
             .map(|boundary| {
-                TenantIdentityBoundary::new(
-                    boundary.membership_count,
-                    boundary.active_owner_count,
-                )
+                TenantIdentityBoundary::new(boundary.membership_count, boundary.active_owner_count)
             })
             .map_err(map_identity_dependency_error)
     }
@@ -213,10 +208,7 @@ mod tests {
         ));
         assert!(!snapshot_matches(
             &verified,
-            &VerifiedIdentitySnapshot::new(
-                "subject-01JOTHER",
-                Some("contact-hint".to_owned()),
-            )
+            &VerifiedIdentitySnapshot::new("subject-01JOTHER", Some("contact-hint".to_owned()),)
         ));
         Ok(())
     }
