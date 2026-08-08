@@ -9,6 +9,7 @@ mod mailbox_bindings;
 mod mailbox_jobs;
 mod mutation_failure;
 mod profile_coordinator;
+mod profile_generation_transport;
 mod profile_generations;
 mod profiles;
 mod request_evidence;
@@ -57,7 +58,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::ProfileGenerationActivateApi
         | RouteClass::ProfileGenerationDeactivateApi
         | RouteClass::ProfileGenerationQuarantineApi => {
-            profile_generations::dispatch(route, &mut request, &env).await
+            profile_generation_transport::dispatch(route, &mut request, &env).await
         }
         RouteClass::MailboxBindingCollectionApi
         | RouteClass::MailboxBindingResourceApi
