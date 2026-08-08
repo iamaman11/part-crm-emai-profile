@@ -2,7 +2,7 @@
 
 **Status:** normative post-composition execution plan  
 **Date:** 2026-08-08  
-**Tracking:** active Phase 0L issue/PR #104; plan consolidation history #96  
+**Tracking:** Phase 0L accepted via #104; next planned Phase 0M; plan consolidation history #96  
 **Production readiness:** unchanged; `production_ready=false` until external evidence gates are satisfied
 
 ## 1. Authority And Scope
@@ -30,25 +30,21 @@ remain External until the existing evidence process accepts real evidence.
 
 ## 2. Current Accepted Baseline And Active Slice
 
-Repository Steps 0–10 and the accepted post-composition slices through **Phase 0K** provide
+Repository Steps 0–10 and the accepted post-composition slices through **Phase 0L** provide
 the current code baseline: typed domain/application boundaries, governed D1 writes,
-profile generations, application-thin coordinator ingress, synthetic Bridge/runtime lanes,
-mailbox metadata/jobs, React composition and exact-head cross-component acceptance.
+profile generations, application-thin coordinator ingress, the first real application Cargo
+boundary (`use-cases-identity`), synthetic Bridge/runtime lanes, mailbox metadata/jobs, React
+composition and exact-head cross-component acceptance.
 
-The current unfinished architecture-convergence slice is:
+Phase 0L was accepted through issue/PR **#104** with guarded squash merge
+`f26528f0f99d69a24ae1c4c307c1f3458ef64e05`. Identity governance plus verified-identity
+ceremonies now compile/test independently in `use-cases-identity`; `identity_acl` deliberately
+remains with cross-client/profile query helpers because moving it would create a false
+identity-only boundary.
 
-- **Phase 0L — Just-in-time application Cargo boundaries**;
-- tracking issue / draft PR **#104**.
-
-Phase 0L is **not accepted or merged** until its actual final diff, exact-head CI and merge
-evidence satisfy #104 acceptance. The first justified extraction is the identity application
-context (`use-cases-identity`); `identity_acl` deliberately remains with cross-client/profile
-query helpers because moving it would create a false identity-only boundary. PR descriptions
-are not implementation evidence. Before merge the branch must be synchronized to the latest
-`main` and end at `behind_by=0`.
-
-After 0L, continue with Phase 0M from the new accepted `main`. Do not begin the next
-sequential architecture slice while 0L is still awaiting bounded acceptance.
+No sequential Phase 0 implementation slice is active in this closeout. The **next planned
+slice is Phase 0M — generated frontend contracts and feature-boundary enforcement**, which must
+start from the accepted Phase 0L `main` in its own bounded issue/branch/PR.
 
 ### 2.1 Critical-path execution policy
 
@@ -240,7 +236,7 @@ Target:
 
 This slice must not redesign the proven coordinator state machine merely to move code.
 
-### Phase 0L — Just-in-time application Cargo boundaries — ACTIVE
+### Phase 0L — Just-in-time application Cargo boundaries — ACCEPTED
 
 The current capability modules inside one `crates/use-cases` crate are not the final growth
 boundary. Establish the first independent application crates where the dependency graph and
@@ -274,7 +270,7 @@ Rules:
 clear dependency graph; split it into multiple crates only if actual dependency pressure
 justifies the added surface.
 
-### Phase 0M — Generated frontend contracts and feature-boundary enforcement
+### Phase 0M — Generated frontend contracts and feature-boundary enforcement — NEXT
 
 Implement deterministic OpenAPI -> TypeScript generation and remove handwritten duplicate
 server DTO/enums.
@@ -874,24 +870,22 @@ The standalone + CRM-ready target is complete only when, at the correct evidence
 
 ## 19. Immediate Next Action
 
-Finish **Phase 0L (#104 / PR #104)** against the latest accepted Phase 0K `main`. The bounded
-first extraction is `use-cases-identity`, owning identity governance plus verified-identity
-ceremonies with only inward application/domain dependencies. Keep `identity_acl` in the shared
-use-case crate until a real client/profile boundary extraction justifies moving its mixed query
-helpers.
+Start **Phase 0M — generated frontend contracts and feature-boundary enforcement** from the
+accepted Phase 0L `main`. Create a fresh bounded issue/branch/PR before implementation; do not
+fold 0M work into the completed #104 history.
+
+Primary 0M acceptance target:
 
 ```text
-keep #104 synchronized to current main
-  -> physical identity application ownership lives only in use-cases-identity
-  -> preserve implementation-free compatibility re-export where needed
-  -> prove extracted crate native tests + explicit WASM check
-  -> prove composed Worker/Windows/cross-component regression
-  -> enforce dependency and capability-layout gates
-  -> exact Cargo.lock workspace delta only; no dependency version drift
-  -> update normative docs without promoting External claims
-  -> behind_by=0 + 12/12 exact-head workflows + zero blocking review
-  -> guarded squash merge
+OpenAPI/public contract source of truth
+  -> deterministic TypeScript generation
+  -> no handwritten duplicate server DTO/enums
+  -> regeneration produces no diff
+  -> sibling feature internals cannot be imported
+  -> positive repository check + deliberately forbidden fixture
+  -> exact-head permanent CI + guarded merge
 ```
 
-Only after that merge start Phase 0M from the new accepted `main`. In parallel, continue
-long-lead External gate preparation without changing `production_ready=false`.
+Keep the new `use-cases-identity` compile-time boundary intact, extract later application
+contexts only when actual dependency/growth pressure justifies it, and continue long-lead
+External gate preparation without changing `production_ready=false`.
