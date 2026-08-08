@@ -22,8 +22,8 @@ pub use commands::CommandExecutionEvidence;
 pub use generations::{GenerationObjectReference, GenerationObjectStorePort};
 pub use identity::MembershipRepository;
 pub use integration_events::{
-    ConsumerClaim, ConsumerIdempotencyPort, IntegrationEventOutboxPort,
-    IntegrationEventPortError, IntegrationEventPortErrorClass, IntegrationEventPublisherPort,
+    ConsumerClaim, ConsumerIdempotencyPort, IntegrationEventOutboxPort, IntegrationEventPortError,
+    IntegrationEventPortErrorClass, IntegrationEventPublisherPort,
 };
 pub use mailboxes::{MailboxObservation, MailboxProviderPort};
 pub use profiles::ProfileRepository;
