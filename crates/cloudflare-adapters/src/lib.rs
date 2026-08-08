@@ -8,6 +8,7 @@ mod d1_command_identity;
 pub mod d1_governed_commands;
 pub mod d1_idempotency;
 pub mod d1_identity_acl;
+pub mod d1_identity_governance;
 pub mod d1_identity_queries;
 pub mod d1_invitation_acceptance;
 pub mod d1_mailbox_bindings;
