@@ -145,6 +145,11 @@ jobs:
       - name: Test Cloudflare adapter logic
         run: cargo test --locked -p cloudflare-adapters --lib
 
+      - name: Check extracted identity application crate for Workers target
+        run: >-
+          cargo check --locked --target wasm32-unknown-unknown
+          -p use-cases-identity
+
       - name: Check pure crates for Workers target
         run: >-
           cargo check --locked --target wasm32-unknown-unknown
