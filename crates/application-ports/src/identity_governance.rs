@@ -1,6 +1,8 @@
 use crate::CommandExecutionEvidence;
 use core::fmt;
-use profile_platform_primitives::{ActorContext, ActorId, AggregateVersion, InvitationId, UnixMillis};
+use profile_platform_primitives::{
+    ActorContext, ActorId, AggregateVersion, InvitationId, UnixMillis,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IdentityReplayReceipt {
