@@ -149,20 +149,19 @@ impl IntegrationEventOutboxPort for D1IntegrationEventRepository {
 impl ConsumerIdempotencyPort for D1IntegrationEventRepository {
     async fn claim(
         &self,
-        tenant_id: &TenantId,
         consumer_id: &OpaqueId,
-        event_id: &OutboxEventId,
+        event: &IntegrationEventEnvelope,
         consumed_at: UnixMillis,
     ) -> Result<ConsumerClaim, IntegrationEventPortError> {
         let consumed_at = sqlite_integer(consumed_at)?;
         let row = query!(
             &self.database,
             CLAIM_CONSUMER,
-            tenant_id.as_str(),
+            event.tenant_id().as_str(),
             consumer_id.as_str(),
-            event_id.as_str(),
-            "integration.event.v1",
-            1_i64,
+            event.event_id().as_str(),
+            event.event_type(),
+            i64::from(event.event_version()),
             consumed_at
         )
         .map_err(map_worker_error)?
