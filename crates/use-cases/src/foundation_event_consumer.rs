@@ -1,4 +1,4 @@
-use application_ports::ConsumerIdempotencyPort;
+use application_ports::{ConsumerIdempotencyPort, NotificationEventPort};
 use contracts::{IntegrationEventEnvelope, is_foundation_event_type};
 use profile_platform_primitives::{OpaqueId, UnixMillis};
 
@@ -13,11 +13,15 @@ pub async fn accept_foundation_delivery_once<C>(
     consumed_at: UnixMillis,
 ) -> Result<ConsumerDeliveryOutcome, IntegrationEventOperationError>
 where
-    C: ConsumerIdempotencyPort,
+    C: ConsumerIdempotencyPort + NotificationEventPort,
 {
     if !is_foundation_event_type(event.event_type()) {
         return Err(IntegrationEventOperationError::InvalidRequest);
     }
+    consumer
+        .persist_notification_event(event, consumed_at)
+        .await
+        .map_err(crate::integration_events::map_port_error)?;
     accept_delivery_once(consumer, consumer_id, event, consumed_at).await
 }
 
@@ -25,7 +29,7 @@ where
 mod tests {
     use super::accept_foundation_delivery_once;
     use application_ports::{
-        ConsumerClaim, ConsumerIdempotencyPort, IntegrationEventPortError,
+        ConsumerClaim, ConsumerIdempotencyPort, IntegrationEventPortError, NotificationEventPort,
     };
     use contracts::{IntegrationEventEnvelope, IntegrationEventPayload};
     use profile_platform_primitives::{
@@ -33,18 +37,30 @@ mod tests {
     };
     use std::cell::Cell;
 
-    struct ClaimCounter {
-        calls: Cell<u32>,
+    struct ConsumerProbe {
+        notification_calls: Cell<u32>,
+        claim_calls: Cell<u32>,
     }
 
-    impl ConsumerIdempotencyPort for ClaimCounter {
+    impl NotificationEventPort for ConsumerProbe {
+        async fn persist_notification_event(
+            &self,
+            _event: &IntegrationEventEnvelope,
+            _persisted_at: UnixMillis,
+        ) -> Result<(), IntegrationEventPortError> {
+            self.notification_calls.set(self.notification_calls.get() + 1);
+            Ok(())
+        }
+    }
+
+    impl ConsumerIdempotencyPort for ConsumerProbe {
         async fn claim(
             &self,
             _consumer_id: &OpaqueId,
             _event: &IntegrationEventEnvelope,
             _consumed_at: UnixMillis,
         ) -> Result<ConsumerClaim, IntegrationEventPortError> {
-            self.calls.set(self.calls.get() + 1);
+            self.claim_calls.set(self.claim_calls.get() + 1);
             Ok(ConsumerClaim::Claimed)
         }
     }
@@ -64,9 +80,11 @@ mod tests {
     }
 
     #[test]
-    fn unknown_event_is_rejected_before_durable_claim() -> Result<(), Box<dyn std::error::Error>> {
-        let consumer = ClaimCounter {
-            calls: Cell::new(0),
+    fn unknown_event_is_rejected_before_notification_or_claim()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let consumer = ConsumerProbe {
+            notification_calls: Cell::new(0),
+            claim_calls: Cell::new(0),
         };
         let consumer_id = OpaqueId::parse("consumer_foundation_v1")?;
         let result = block_on(accept_foundation_delivery_once(
@@ -76,14 +94,17 @@ mod tests {
             UnixMillis::new(2),
         ));
         assert!(result.is_err());
-        assert_eq!(consumer.calls.get(), 0);
+        assert_eq!(consumer.notification_calls.get(), 0);
+        assert_eq!(consumer.claim_calls.get(), 0);
         Ok(())
     }
 
     #[test]
-    fn known_event_reaches_durable_claim() -> Result<(), Box<dyn std::error::Error>> {
-        let consumer = ClaimCounter {
-            calls: Cell::new(0),
+    fn known_event_persists_notification_before_durable_claim()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let consumer = ConsumerProbe {
+            notification_calls: Cell::new(0),
+            claim_calls: Cell::new(0),
         };
         let consumer_id = OpaqueId::parse("consumer_foundation_v1")?;
         let result = block_on(accept_foundation_delivery_once(
@@ -93,7 +114,8 @@ mod tests {
             UnixMillis::new(2),
         ));
         assert!(result.is_ok());
-        assert_eq!(consumer.calls.get(), 1);
+        assert_eq!(consumer.notification_calls.get(), 1);
+        assert_eq!(consumer.claim_calls.get(), 1);
         Ok(())
     }
 
