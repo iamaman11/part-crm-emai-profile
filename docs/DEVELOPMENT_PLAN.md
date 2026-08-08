@@ -2,7 +2,7 @@
 
 **Status:** normative post-composition execution plan  
 **Date:** 2026-08-08  
-**Tracking:** Phase 1A accepted via #114/#115; Phase 0 complete; next sequential slice Phase 2A; Phase 1B eligible dependency-independently; plan consolidation history #96
+**Tracking:** Phase 1A accepted via #114/#115; Phase 0 complete; Phase 1B #120 is the unique NEXT; Phase 2 starts only after Phase 1B acceptance; external CRM is future development only; plan consolidation history #96
 **Production readiness:** unchanged; `production_ready=false` until external evidence gates are satisfied
 
 ## 1. Authority And Scope
@@ -72,11 +72,11 @@ scheduled ingress application-thin. Canonical-source guards reject forged event 
 prohibited PII/secrets/mail bodies fail closed before persistence, and duplicate accepted delivery
 has no duplicate logical effect. Phase 1B retry/backoff/DLQ/catch-up/retention remains unimplemented.
 
-**Phase 0 remains complete on accepted `main`, and Phase 1A is accepted.** The **next planned
-sequential slice is Phase 2A — client aggregate and contact crypto foundation**, starting from the
-accepted Phase 1A `main` in its own bounded issue/branch/PR. Phase 1B is eligible to proceed
-only dependency-independently and must finish before real asynchronous provider/device execution
-in Phases 4–5 and before Phase 6 realtime.
+**Phase 0 remains complete on accepted `main`, and Phase 1A is accepted.** The active
+implementation path is now deliberately linear: **Phase 1B is the unique NEXT** and Phase 2 does
+not advance until Phase 1B is accepted and closed out on `main`. The already-created Phase 2A
+issue #118/branch is queued only; it is not an active acceptance lane while Phase 1B is open.
+External CRM integration is not an active phase and cannot block the standalone product path.
 
 ### 2.1 Critical-path execution policy
 
@@ -85,10 +85,11 @@ the maximum number of concurrent branches or the largest refactor.
 
 Rules:
 
-- one sequential architecture/governance slice is active at a time when slices touch the same
-  Worker/governed-write/application boundary;
-- dependency-independent work may proceed in parallel only when it cannot create competing
-  edits or invalidate the active slice baseline;
+- exactly one active implementation slice is on the product critical path at a time;
+- the next implementation slice starts only after the previous slice is accepted, merged and its
+  normative closeout advances the next marker;
+- no dependency-independent product branch is used to bypass this sequence; operational collection
+  of External evidence may continue outside the implementation path but never changes `NEXT`;
 - every push runs `python scripts/verify-fast.py`; boundary switches/final acceptance also run
   `python scripts/verify-fast.py --with-compile` before expensive full CI;
 - use the permanent workflow matrix for acceptance, not as an interactive formatter/compiler;
@@ -358,291 +359,190 @@ Phase 0 is complete only when all are true:
 - architecture/docs inventory is consistent;
 - all permanent workflows are green on the exact accepted head.
 
-## 5. Phase 1 — Integration Events, Outbox And Notification Persistence
+## 5. Phase 1 — Durable Integration And Delivery Foundation
 
-**Goal:** establish one durable event/outbox substrate before richer registry, mailbox and
-realtime behavior depend on it, while avoiding unnecessary blocking of independent product
-work once the safe foundation exists.
+**Goal:** finish the durable asynchronous substrate completely before product expansion depends on it.
+Phase 1 is infrastructure/application foundation. Phase 2 does not begin until Phase 1 is complete.
 
 ### Phase 1A — Durable event/outbox foundation — ACCEPTED
 
 Accepted implementation:
 
 - versioned integration event envelope;
-- evolved `outbox_events` and minimal notification-event persistence required by the contract;
+- evolved `outbox_events` and metadata-only notification-event persistence;
 - outbox dispatcher and Queue adapter;
-- idempotent consumer registry / `consumer_idempotency` as required;
+- tenant/consumer/outbox idempotency;
 - payload sanitizer enforcing the existing PII/secret/content policy;
-- duplicate-delivery neutrality.
-
-Acceptance:
-
-- canonical mutation + audit/outbox remain atomic within their D1 boundary;
-- duplicate delivery has no duplicate logical effect;
-- prohibited PII/secrets/mail bodies are rejected from event payloads;
-- consumer processing is replay-safe for the accepted event set.
+- duplicate-delivery neutrality and canonical-source validation.
 
 Acceptance used exact source head `21b4bc65cd1bb117504c0a0cfe18c8c11e411f25`, 12/12 permanent
 workflows green, `behind_by=0`, zero blocking reviews/threads and guarded squash merge #115
 `0186b780f7fed4b7c5e7f212c2fe437cbc46a5e5`.
 
-With Phase 1A accepted, **Phase 2 may begin** because Client Registry expansion only needs the
-durable event/outbox contract. Phase 1B may proceed in parallel when it does not overlap with
-the active Phase 2 files/contracts; it remains mandatory before real asynchronous Phases 4–5
-and before Phase 6 realtime.
+### Phase 1B — Delivery hardening, catch-up and operations — NEXT
 
-### Phase 1B — Delivery hardening, catch-up and operations
+**Goal:** make the Phase 1A substrate operationally safe before any richer mailbox/device/realtime
+product behavior is allowed to depend on it.
 
-Complete before real asynchronous provider/device execution in Phases 4–5 and before realtime
-Phase 6:
+Implement in this order inside the bounded Phase 1B slice family:
 
-- `notification_deliveries`, `user_event_cursors` and authorized catch-up as required;
-- deterministic attempt accounting;
-- exponential backoff with bounded jitter;
-- maximum automatic attempts;
-- DLQ or equivalent terminal failure lane;
-- sanitized alerting/operational visibility;
-- operator-safe replay procedure;
-- replay idempotency and auditability;
-- bounded retention/compaction that never removes canonical business state.
+1. durable `notification_deliveries` and `user_event_cursors` needed for delivery/catch-up state;
+2. deterministic attempt accounting and next-attempt scheduling;
+3. exponential backoff with bounded jitter and a configured maximum automatic attempt count;
+4. terminal failure/DLQ lane with sanitized failure metadata only;
+5. operator-safe remediation/replay with explicit idempotency and audit evidence;
+6. authorized catch-up that applies tenant/live-membership/grant checks before event history exposure;
+7. bounded retention/compaction for delivery/cursor state without deleting canonical business state;
+8. sanitized operational visibility/alerts that never expose prohibited PII, secrets or mailbox bodies.
 
-Acceptance:
+Phase 1B acceptance requires all of the following on one unchanged final head:
 
-- poison messages reach DLQ/terminal state after the configured bound;
-- retries do not hot-loop;
-- replay after remediation cannot duplicate the logical effect;
-- unauthorized users cannot query event history/catch-up;
-- operational payloads remain sanitized.
+- poison messages reach terminal/DLQ state after the configured bound;
+- retries cannot hot-loop and retry timing is deterministic under the accepted jitter contract;
+- replay after remediation cannot duplicate the logical business effect;
+- unauthorized/revoked actors cannot query catch-up/event history;
+- disconnect/reconnect catch-up is durable rather than process-memory-only;
+- Phase 1A event sanitation, canonical-source, transaction and duplicate-neutrality evidence remains green;
+- permanent 12/12 workflows succeed, `behind_by=0`, diff is bounded, reviews/threads are zero,
+  and guarded squash merge uses the exact accepted source SHA.
 
-## 6. Phase 2 — Client Registry 2.0 And Assignment Model
+**Phase 1 completion gate:** Phase 1 is complete only after Phase 1B is accepted and its docs closeout
+advances Phase 2A to `NEXT`. No Phase 2 implementation PR may merge before that gate.
 
-**Goal:** complete the standalone business client model before search and CRM integration.
+## 6. Phase 2 — Expert Standalone Product Completion
 
-### Phase 2A — Client aggregate and contact crypto foundation — NEXT
+**Goal:** turn the accepted platform foundation into a complete, secure, operator-usable standalone
+product. Phase 2 is the entire remaining active product program. Every slice below is mandatory and
+strictly sequential: **2A → 2B → 2C → 2D → 2E → 2F → 2G → 2H → 2I → 2J**.
 
-Start Phase 2 with the first bounded registry slice rather than the whole phase:
+A Phase 2 slice starts only after the immediately preceding slice is accepted and its normative
+closeout advances the next marker. No later Phase 2 slice is an alternative or parallel lane.
 
-- provider-neutral client aggregate/value model for `PERSON|ORGANIZATION`, lifecycle status and
-  versioned metadata;
-- encrypted-at-rest contact display values and tenant-keyed HMAC exact-lookup tokens;
-- no plaintext contact scan and no name/contact-derived technical identifiers;
-- application-owned create/update/archive intent behind ports before transport wiring;
-- additive D1 schema/adapter work only after inward native/WASM proof;
-- assignment/merge lifecycle and wider API/UI projections remain later Phase 2 slices unless the
-  bounded 2A issue proves they are required for the same invariant.
+### Phase 2A — Client aggregate and contact crypto foundation
 
-Phase 2A acceptance must retain Phase 1A durable mutation/audit/outbox semantics and all existing
-authorization-before-projection, PII and generated-contract boundaries.
+Build the inward client/contact foundation first:
 
-Client card target:
-
-- opaque `client_id`, `PERSON|ORGANIZATION`;
-- display name + optional legal name;
-- `ACTIVE|ARCHIVED|MERGED`;
-- country, locale, timezone, tags, structured notes;
-- encrypted email/phone/URL contact points;
-- optional opaque `external_party_ref`;
-- aggregate version/timestamps;
-- profile, mailbox, grant, assignment/activity/audit projections.
-
-`ProfileClientAssignment` is historical/business association only. Reassignment closes the
-previous active assignment, creates the new assignment and emits audit/outbox. Assignment
-never grants profile/client access.
+- extend the provider-neutral client aggregate/value model for `PERSON|ORGANIZATION`, lifecycle
+  status and versioned metadata;
+- typed contact-point identity/type/value contracts without using PII as technical identifiers;
+- encrypted-at-rest contact display representation;
+- tenant-keyed HMAC exact-lookup token contract;
+- application-owned create/update/archive intent behind ports before D1/transport wiring;
+- native + Workers-WASM proof before outer adapters.
 
 Acceptance:
 
-- owner create/update/archive/merge through application services;
-- one profile has at most one active primary client assignment;
-- one client may have multiple profiles;
-- member projections are grant-filtered;
-- exact contact lookup does not require plaintext scan;
-- no name/contact-derived technical IDs/paths/keys;
-- Client Registry UI is incrementally usable for the accepted create/update/archive/assignment
-  projections rather than deferred to Phase 7.
+- plaintext contact values cannot cross the persistence port by type;
+- no plaintext contact scan is required for exact lookup;
+- no client name/email/phone/URL is used in IDs, paths, keys, metric labels or correlation IDs;
+- Phase 1 durable mutation/audit/outbox invariants remain green.
 
-## 7. Phase 3 — Read Models, Global Search And Client Mail Query Contract
+### Phase 2B — Client persistence and lifecycle command path
 
-**Goal:** add explicit CQRS-lite read boundaries and safe discovery.
+Wire the 2A model into authoritative storage and application commands:
 
-### 7.1 Read-model boundary
+- additive D1 schema for encrypted contact values, key/version metadata and tenant-keyed lookup tokens;
+- application-owned client update/archive lifecycle with checked aggregate versions;
+- atomic canonical client mutation + idempotency + audit + outbox;
+- contact encryption/token adapter behind the inward crypto port;
+- tenant-scoped exact-contact lookup without plaintext scan;
+- migration and negative tests proving raw contact persistence is rejected.
 
-Lists/search/detail projections use application query services + typed read-model ports.
-Mutation aggregates are not hydrated merely to render large tables/search results.
-Authorization/grant filtering happens before projection construction.
+Acceptance:
 
-### 7.2 Global search
+- D1 never stores raw contact display values;
+- wrong-tenant tokens cannot resolve another tenant's contact;
+- failed crypto/persistence leaves no partial canonical mutation/audit/outbox state;
+- create/update/archive replay is duplicate-neutral.
 
-Conceptual endpoint:
+### Phase 2C — Client merge, assignment, grant-safe projections and Client Registry UI
 
-```text
-GET /api/v1/search?q=<query>&types=client,profile,member,mailbox
-```
+Complete the business registry semantics before broad search:
 
-Primary global result types:
+- explicit `MERGED` lifecycle and deterministic source/target merge rules;
+- historical `ProfileClientAssignment` reassignment: close previous active assignment, create next,
+  emit audit/outbox, never grant access;
+- one active primary client assignment per profile and multiple profiles per client;
+- grant-filtered client/profile/assignment/activity projections;
+- generated public contracts for the accepted new client surfaces;
+- usable Client Registry UI for create/update/archive/merge/contact/assignment/grant projections.
 
-- clients;
-- profiles;
-- members/users subject to owner/admin disclosure policy;
-- mailbox binding/provider/status metadata.
+Acceptance:
 
-Devices remain searchable/filterable inside the Devices administration screen but are not a
-primary business global-search type.
+- merge cannot create identity/tenant ambiguity or resurrect archived state;
+- assignment remains non-authorizing in application, D1 and UI evidence;
+- revoked members lose projections without count/existence leakage;
+- ordinary registry workflows are usable without CLI.
 
-Rules:
+### Phase 2D — Read models, global search and client-mail query contract
 
-- typed tenant scope mandatory;
-- stable cursor pagination and bounded cost;
-- supported predicates are index-backed;
-- R2/browser filesystem are never queried for catalog search;
-- fuzzy/prefix PII search remains blocked without an accepted ADR.
+Build explicit query boundaries after registry semantics are stable:
 
-### 7.3 Client-scoped mailbox message search
+- CQRS-lite read-model ports/services for lists/search/detail projections;
+- tenant/grant filtering before projection construction;
+- bounded indexed global search for clients, profiles, permitted members and mailbox metadata;
+- provider-neutral `SearchClientMailboxMessages` and `GetClientMailboxMessage` application contracts;
+- deterministic fake provider/Bridge query adapters;
+- incremental Client -> Mail UI against those contracts.
 
-Provide provider-neutral application queries conceptually equivalent to:
-
-- `SearchClientMailboxMessages`;
-- `GetClientMailboxMessage`.
-
-Primary UX:
-
-```text
-Client -> Mail -> search -> results -> open message -> full body
-```
-
-Authorized users can search a selected client's eligible mailbox bindings by at least:
-
-- subject;
-- sender;
-- recipient;
-- message body text;
-- date/time filters.
-
-Search results are bounded metadata/snippet projections. Opening a result fetches the full
-authorized message body by opaque provider-scoped reference.
-
-Mandatory order:
+Mandatory query order:
 
 ```text
 authenticate actor
   -> tenant + live membership/grants
   -> authorize client/mailbox context
-  -> resolve only eligible mailbox bindings
+  -> resolve eligible mailbox bindings
   -> provider/Bridge query adapter
   -> bounded result/body projection
 ```
 
-The initial product does **not** require central D1 full-text storage, blind index or n-gram
-index. Provider-native search/fetch is preferred where practical; an adapter may perform a
-bounded internal search behind the same port. A future central/local index requires its own
-storage/security/retention decision.
-
-Phase 3 proves API/read-model/authorization semantics with deterministic fakes. Real provider
-execution belongs to Phases 4–5. The matching search/client-mail UI is implemented against the
-fake/query contract in this phase so provider work is not coupled to a later big-bang UI.
-
 Acceptance:
 
 - no cross-tenant/result-count leakage;
-- revoked grants disappear according to the accepted consistency contract;
-- provider search/body fetch is not called before authorization succeeds;
-- a foreign message reference cannot bypass client/mailbox authorization;
-- full body can be returned by the fake without entering logs/audit/events/telemetry.
+- provider/body fetch is never called before authorization succeeds;
+- foreign message references cannot bypass client/mailbox authorization;
+- full synthetic body can be displayed without entering audit/events/logs/telemetry/browser storage.
 
-## 8. Phase 4 — Mailbox Operations 2.0 And Cloud Provider Lane
+### Phase 2E — Cloud mailbox provider lane
 
-**Goal:** implement real cloud-capable mailbox operations behind one provider-neutral model.
+Implement the real cloud-capable provider path only after Phase 1 and the query contract are complete:
 
-**Prerequisite:** Phase 1B delivery hardening is accepted before enabling real asynchronous
-scheduled provider execution.
-
-Mailbox job states:
-
-```text
-SCHEDULED
-QUEUED
-PENDING_DEVICE
-RUNNING
-SUCCEEDED
-RETRY_PENDING
-AUTH_REQUIRED
-PROFILE_BUSY
-FAILED
-SUSPENDED
-```
-
-Cloud lane includes Gmail API, IMAP and future standard provider APIs.
-
-Canonical scheduled flow:
-
-```text
-Scheduled trigger
-  -> Queue mailbox.check.requested
-  -> mailbox policy/runtime selection
-  -> provider execution
-  -> D1: mailbox state + observation + audit + outbox
-  -> notification pipeline
-```
-
-The cloud provider adapters also implement the Phase 3 message-query contract:
-
-- subject/sender/recipient/body search where provider capabilities allow;
-- bounded provider-neutral result mapping;
-- selected full message-body fetch;
-- no canonical D1/R2 body copy required;
-- message content never enters ordinary audit/outbox/realtime payloads.
-
-Mailbox scheduled checks and interactive message search are separate application use cases
-even when they share a provider adapter.
+- cloud provider adapter contract implementations (Gmail API/IMAP as selected by product support);
+- scheduled Queue execution using the accepted Phase 1 retry/DLQ/idempotency substrate;
+- mailbox state/observation mutation + audit/outbox;
+- provider-native subject/sender/recipient/body search where supported;
+- bounded result mapping and selected full-body fetch;
+- deterministic auth-required/suspended/failure transitions.
 
 Acceptance:
 
-- duplicate Queue deliveries do not duplicate business results/counters/events;
-- revoked/suspended binding cannot execute;
-- retry/auth-required transitions are deterministic;
-- provider fake/real integration contract proves search + body retrieval;
-- unauthorized search/body fetch stops before provider access;
-- real provider claims remain External until real evidence exists.
+- duplicate Queue delivery cannot duplicate logical results/counters/events;
+- revoked/suspended bindings cannot execute;
+- message content never enters ordinary audit/outbox/realtime payloads;
+- provider integration evidence is clearly separated into repository-local versus External claims.
 
-## 9. Phase 5 — Durable Device Jobs And Browser/Camoufox Mailbox Lane
+### Phase 2F — Durable device jobs and browser mailbox lane
 
-**Goal:** support providers requiring an authorized browser profile without using the web
-WebSocket as a device command channel.
+Add providers that require an authorized browser profile:
 
-**Prerequisite:** Phase 1B delivery hardening is accepted.
+- durable device job/request state and authenticated claim/result protocol;
+- offline device -> explicit `PENDING_DEVICE`;
+- profile contention -> explicit `PROFILE_BUSY`;
+- claim/result idempotency, lease and fencing checks;
+- current generation/certification validation before browser execution;
+- Profile Bridge implementation of the same Phase 2D message query/body contract;
+- stale device result rejection after claim turnover.
 
-Target flow:
+Acceptance:
 
-```text
-Cloud Queue / interactive request
-  -> durable job/request state
-  -> device claim channel
-  -> authenticated device-bound Profile Bridge
-  -> current profile generation + lease/fencing
-  -> certified Camoufox mailbox mode
-  -> result/body projection
-  -> D1 commit/outbox where mutation exists
-```
+- Bridge cannot claim another tenant/device job;
+- offline/contended states are never reported as false success/empty result;
+- stale results cannot overwrite a newer claim/generation;
+- cloud and browser lanes satisfy one provider-neutral application contract.
 
-Requirements:
+### Phase 2G — Durable realtime notification hub
 
-- offline device -> explicit `PENDING_DEVICE`, never false empty/success;
-- profile contention -> `PROFILE_BUSY`;
-- claim/result are idempotent, leased and fencing-aware;
-- stale device result is rejected after claim turnover;
-- Bridge cannot claim arbitrary tenant jobs;
-- browser lane implements the same `SearchClientMailboxMessages` /
-  `GetClientMailboxMessage` contract as the cloud lane;
-- challenge/fingerprint drift follows certification policy rather than silently changing
-  browser mode.
-
-Real Camoufox/physical-host behavior remains External until accepted evidence exists.
-
-## 10. Phase 6 — Realtime UserNotificationHub
-
-**Goal:** deliver low-latency safe change signals after durable event persistence and Phase 1B
-catch-up/delivery hardening exist.
-
-Topology:
+Build realtime only after durable retry/catch-up and business/query semantics exist:
 
 ```text
 canonical state + outbox
@@ -653,33 +553,27 @@ canonical state + outbox
   -> HTTPS refetch of canonical projection
 ```
 
-Capabilities:
+Requirements:
 
 - multiple tabs/devices;
-- reconnect with exponential backoff+jitter;
-- cursor/catch-up after disconnect;
-- session/mailbox/grant/device/cloud/certification change signals;
-- membership revoke closes sockets and blocks reconnect;
-- bounded reauthorization policy;
-- no prohibited PII/secrets/message bodies in event envelopes.
+- durable cursor catch-up after reconnect;
+- bounded reauthorization and membership-revoke disconnect;
+- no authoritative business state stored only in the WebSocket/DO process memory;
+- no prohibited PII/secrets/message bodies in realtime envelopes;
+- React treats realtime as invalidation/change signal and refetches canonical projections.
 
-Acceptance includes duplicate safety, catch-up, revocation and DO hibernation reconstruction
-without in-memory-only security/cursor state.
+### Phase 2H — Complete standalone UI and administration UX
 
-## 11. Phase 7 — Complete Standalone UI
-
-**Goal:** finish and polish the operator product on top of UI capabilities delivered
-incrementally in Phases 2–6; do not defer ordinary usable frontend flows until this phase.
-
-Primary information-architecture priority:
+Finish all ordinary operator workflows without CLI:
 
 1. Clients / Profiles;
 2. Users & Access;
-3. Mail on the Client detail;
-4. Mailboxes for provider/binding/job administration;
-5. Devices for infrastructure administration.
+3. Client detail -> Mail search/result/body;
+4. Mailboxes provider/binding/job administration;
+5. Devices and sessions infrastructure administration;
+6. Audit/settings/error/recovery surfaces.
 
-Required routes include:
+Required route family remains:
 
 ```text
 /
@@ -695,110 +589,70 @@ Required routes include:
 /settings
 ```
 
-Client detail includes first-class `Mail`:
+UI acceptance:
 
-- message search and filters;
-- bounded result list with subject/sender/time/snippet;
-- full authorized message body viewer;
-- explicit offline/auth-required/browser-lane-pending states;
-- sanitized/sandboxed HTML, remote images/active content disabled by default;
-- no body persistence in Web Storage/telemetry.
+- generated public contracts only for migrated public DTOs;
+- strict sibling-feature boundaries;
+- no optimistic success for governed mutations;
+- explicit pending/offline/auth-required/profile-busy/retry/terminal states;
+- sanitized/sandboxed HTML mail with remote active content disabled by default;
+- no mailbox body or credential persistence in Web Storage/telemetry.
 
-Users & Access provides member search/filter, invitation/membership/grant administration and
-owner-transfer workflows. Devices remains a technical/admin screen.
+### Phase 2I — Standalone E2E, security, recovery and operational hardening
 
-Frontend rules:
+Prove the complete standalone product before production promotion:
 
-- generated public API/event types only;
-- TanStack Query owns remote state;
-- realtime invalidates/refetches authoritative state;
-- sibling feature internals cannot be imported;
-- no optimistic success for grants, assignment, generation activation, session close,
-  mailbox result or profile sync commits.
+- end-to-end owner/member/client/profile/mailbox/device/realtime workflows;
+- grant/IDOR/revocation negative matrix;
+- duplicate/replay/terminal failure/recovery scenarios;
+- generation freshness/fencing/R2 failure and device turnover scenarios;
+- backup/restore and disaster/recovery runbooks for D1/R2/DO/Bridge-owned state;
+- bounded load/cost/performance tests for search, Queue, notification catch-up and UI-critical APIs;
+- support/evidence bundles remain allowlist/sanitized;
+- no uncontrolled plaintext PII/secret/message body in logs, audit, events or artifacts.
 
-## 12. Phase 8 — Standalone End-To-End Acceptance
+Acceptance requires one exact-head standalone release-candidate evidence set with all permanent
+workflows green and no unresolved architecture/security gaps inside repository-owned scope.
 
-**Goal:** prove the expanded standalone composition without inflating External claims.
+### Phase 2J — Standalone production-readiness evidence and rollout
 
-Repository-local/synthetic acceptance includes:
+Close the final release gates for the standalone product. This is the only active phase slice that
+can change `production_ready=false` after all required evidence is accepted.
 
-- owner creates/finds a client;
-- one client relates to multiple profiles and one profile has at most one active primary
-  client assignment;
-- member cannot see ungranted clients/profiles/messages;
-- owner/admin can find a member and inspect allowed grant projection;
-- authorized user searches client mail by subject/sender/body and opens full body;
-- foreign client/message reference cannot disclose result/body;
-- body absent from log/audit/outbox/realtime/telemetry evidence;
-- cloud and browser mailbox fakes satisfy the same application contracts;
-- duplicate Queue delivery is idempotent;
-- realtime reconnect catches up missed events;
-- membership revoke blocks commands/realtime;
-- offline device jobs remain durable;
-- generation freshness/fencing/R2 failure invariants remain green;
-- all permanent workflows run on one exact final head.
+Required evidence includes:
 
-Real provider/physical-host claims remain External.
-
-## 13. Phase 9 — CRM Boundary And Party Integration
-
-**Goal:** allow CRM to become authoritative for Party/client master data without coupling
-browser runtime internals to CRM.
-
-After cutover:
-
-```text
-CRM Party/Customer Master
-  -> canonical name/contact/status + party_ref
-
-Browser Profile Platform
-  -> profiles, assignments, generations, sessions, certification, mailbox runtime
-```
-
-Migration sequence:
-
-1. preserve standalone `client_id`;
-2. add/verify opaque `external_party_ref`;
-3. consume versioned CRM Party projection/events through a CRM adapter;
-4. reconcile/link standalone client and CRM Party;
-5. switch authority for name/contact/status only after parity acceptance;
-6. keep profile assignments/runtime ownership in Profile Platform;
-7. block local edits to CRM-owned fields or translate explicit commands through the CRM
-   adapter;
-8. optionally replace D1 catalog adapter with PostgreSQL/SQLx + RLS without changing
-   domain/application contracts;
-9. optionally replace Access identity adapter with CRM OIDC;
-10. leave R2 generations and Profile Bridge lifecycle independent.
-
-Integration is **event/contract isolated and async-first**, not dogmatically “100% async”.
-Durable events/projections are the default synchronization mechanism, while a user-triggered
-HTTP command may still return a synchronous acknowledgement/result. Core domain/application
-code never imports CRM tables/entities/SDK implementation details.
-
-## 14. Phase 10 — Production Evidence And Rollout
-
-Production promotion remains Phase 10, but the underlying long-lead External work is a
-**parallel operational workstream beginning immediately**. Repository implementation must not
-wait until Phase 10 to request/provision resources whose lead time could block release.
-
-Code may prepare adapters, validators and runbooks, while the parallel workstream advances real
-accepted evidence for the existing external gates, including as applicable:
-
-- revoke/rotate and verify any known exposed legacy credential before prototype reuse;
-- isolated Cloudflare resources/budgets;
-- trusted Windows signing/update channel;
-- primary/secondary physical Windows evidence;
-- key escrow/restore procedure;
+- isolated production Cloudflare resources, budgets and remote D1/R2/DO/Queue behavior;
+- trusted Windows signing/update path;
+- primary and secondary physical Windows evidence;
+- production device-key protection/unwrap and recovery procedure;
+- key escrow/restore drill;
 - privacy/retention approval;
 - product/license decisions;
-- real provider/fingerprint certification;
-- production device-key protection/unwrap;
-- remote R2/D1/DO recovery behavior;
-- independent security/cryptographic review.
+- real provider/fingerprint certification for supported production lanes;
+- remote backup/recovery/failure-order evidence;
+- independent security/cryptographic review for applicable production cryptography;
+- rollout/rollback/monitoring/runbook acceptance.
 
-`production_ready` remains `false` until those gates are satisfied with real reviewable
-evidence. Parallel preparation or provisioning never changes an External evidence claim by
-itself.
+Phase 2J acceptance changes `production_ready` only when every mandatory External gate is backed by
+real reviewable evidence. Missing evidence keeps `production_ready=false`; there is no code-only
+shortcut.
+
+## 7. Active Development Completion Gate
+
+The active development roadmap is complete only when Phase 2J is accepted. At that point the
+standalone application must be expert-grade and independently usable without any external CRM:
+
+- Client Registry 2.0 and assignment/grant semantics complete;
+- secure encrypted contact handling and exact lookup complete;
+- grant-safe global search and client mailbox search/body viewing complete;
+- cloud and browser mailbox lanes complete for supported providers;
+- durable retries/DLQ/replay/catch-up complete;
+- realtime durable-event-backed and non-authoritative;
+- complete operator/admin UI usable without CLI;
+- E2E/security/recovery/operational evidence accepted;
+- production evidence accepted and `production_ready=true` only at this final gate.
+
+External CRM integration is explicitly **not** a prerequisite for this completion gate.
 
 ## 15. Architecture Gates For Every Future PR
 
@@ -849,7 +703,7 @@ A developer should be able to determine ownership without repository-wide guessi
 | Windows filesystem/process/device behavior | Bridge/windows adapter boundary |
 | display/navigation/query invalidation | frontend feature/shared layer |
 | public wire shape | versioned contract |
-| CRM mapping | CRM adapter + versioned integration contract |
+| future CRM mapping | future-only CRM adapter + versioned integration contract; outside active Phase 1–2 execution |
 
 Documentation discipline:
 
@@ -864,100 +718,94 @@ Development-loop discipline is defined in `CONTRIBUTING.md`; this plan defines s
 Where possible, cheap deterministic checks run before push and full permanent CI runs only on a
 head intended to advance acceptance.
 
-## 17. Recommended PR Slicing
+## 17. Mandatory Sequential Execution Order
 
-Do not implement a whole phase in one PR. Preferred order:
+The active product path has no alternative or parallel implementation lane. The repository executes
+exactly this order:
 
 ```text
-Phase 0H profile grant
-  -> 0I client grant
-  -> 0J identity governance lifecycle
-  -> 0K coordinator ingress
-  -> 0L first justified use-case Cargo extraction(s)
-  -> 0M generated TS + frontend feature boundary
-  -> 0N route classifier + architecture/docs inventory
-
-Phase 1A event contract/persistence foundation
-  -> dispatcher/idempotent consumer
-
-Phase 2 client aggregate/contact crypto
-  -> D1 adapter
-  -> merge/assignment lifecycle
-  -> API + incremental UI projections
-
-Phase 1B may proceed dependency-independently after 1A
-  -> retry/max-attempt/DLQ/replay
-  -> authorized catch-up/retention
-  -> must finish before real Phase 4/5 async execution and Phase 6 realtime
-
-Phase 3 read-model schema
-  -> global query service
-  -> client-mail query contracts/fakes
-  -> API + incremental UI integration
-
-Phase 4 cloud mailbox provider contract
-  -> scheduler/Queue
-  -> provider message search/body
-
-Phase 5 durable device jobs
-  -> Bridge claim/result
-  -> browser-lane message search/body
-
-Phase 6 notification hub
-  -> auth/reauth
-  -> catch-up/reconnect
-  -> frontend realtime
-
-Phase 7 complete/polish remaining UI capability gaps
-Phase 8 cross-component acceptance
-Phase 9 CRM contracts/projection before cutover adapters
-Phase 10 production promotion over evidence advanced in the parallel External workstream
+Phase 0H -> 0I -> 0J -> 0K -> 0L -> 0M -> 0N        ACCEPTED
+Phase 1A durable event/outbox foundation              ACCEPTED
+Phase 1B delivery hardening/catch-up/operations       NEXT
+Phase 2A client aggregate/contact crypto
+Phase 2B client persistence/lifecycle
+Phase 2C merge/assignment/grant-safe projections + Client Registry UI
+Phase 2D read models/global search/client-mail query contract
+Phase 2E cloud mailbox provider lane
+Phase 2F durable device/browser mailbox lane
+Phase 2G realtime notification hub
+Phase 2H complete standalone UI/admin UX
+Phase 2I standalone E2E/security/recovery/operations hardening
+Phase 2J production-readiness evidence and rollout
 ```
 
-Each sequential slice gets its own issue, branch, bounded diff, exact-head CI and guarded squash
-merge. Parallel work must be dependency-independent and must not turn multiple stale drafts into
-the critical path.
+Rules:
 
-## 18. Final Product Definition Of Done
+1. only the item marked `NEXT` is implementation-active;
+2. every slice gets its own bounded issue/branch/draft PR;
+3. the next slice starts only after exact-head acceptance, guarded merge and normative closeout of
+   the previous slice;
+4. no later Phase 2 branch is merged early because it appears dependency-independent;
+5. External evidence collection may happen operationally, but it cannot change execution order or
+   promote a repository capability claim before its owning slice;
+6. external CRM integration is not part of this sequence and is documented only in
+   `FUTURE_DEVELOPMENT.md`.
 
-The standalone + CRM-ready target is complete only when, at the correct evidence level:
+## 18. Standalone Product Definition Of Done
 
-- clean application/adapter boundaries are enforced in code and CI;
-- client/profile/user/mailbox search is grant-safe;
-- authorized users can search a client's messages and read the full body;
-- mailbox content remains outside ordinary telemetry/audit/event payloads;
-- Client Registry 2.0 and profile-client assignment semantics are complete;
+The active Phase 1–2 roadmap is complete only when the standalone application itself is complete;
+CRM integration is not part of this definition.
+
+Definition of done:
+
+- clean application/adapter boundaries remain enforced in code and CI;
+- Client Registry supports create/update/archive/merge, encrypted contacts, exact lookup,
+  grants and historical profile assignment;
+- client/profile/user/mailbox search is tenant/grant-safe and bounded/index-backed where required;
+- authorized users can search a client's eligible mail and open the full body;
+- mailbox content remains outside ordinary telemetry/audit/event payloads and browser storage;
 - cloud and browser mailbox lanes share provider-neutral application contracts;
-- durable jobs/retries/DLQ/replay are operationally safe;
-- realtime is durable-event-backed and never authoritative itself;
-- complete UI works without CLI for ordinary product/admin workflows;
-- D1 is authoritative for catalog pointers, DO for session coordination, R2 for immutable
-  encrypted objects and Bridge for local runtime/materialization;
-- stale devices/sessions cannot overwrite newer generations;
-- standalone `client_id` links to CRM Party without changing profile IDs;
-- CRM integration requires no R2 generation migration or browser lifecycle rewrite;
-- all External production gates are separately satisfied with real evidence.
+- durable jobs/retries/DLQ/replay/catch-up are operationally safe;
+- realtime is durable-event-backed, revocation-aware and never authoritative by itself;
+- complete UI/admin workflows work without CLI for ordinary operation;
+- D1 remains authoritative for catalog/business metadata, DO for session/realtime coordination,
+  R2 for immutable encrypted generation objects and Bridge for local runtime/materialization;
+- stale devices/sessions cannot overwrite newer generations/claims;
+- backup, restore, recovery, rollout and rollback procedures are proven at the required evidence level;
+- required real provider/physical-host/security/privacy evidence is accepted;
+- all permanent workflows are green on exact accepted heads and unresolved reviews/threads are zero;
+- `production_ready=true` is allowed only after Phase 2J accepts every mandatory external gate.
+
+A standalone release must not require an external CRM. CRM/Party authority integration is future
+product evolution documented separately and can be evaluated only after this definition of done is met.
 
 ## 19. Immediate Next Action
 
-Start **Phase 2A — client aggregate and contact crypto foundation** from the accepted Phase 1A
-`main`. Create a fresh bounded issue/branch/PR before implementation; do not fold Phase 2A into the
-completed #114/#115 history. Phase 1B delivery hardening may proceed only dependency-independently
-and must not be mixed into the first Client Registry slice.
+Start **Phase 1B — delivery hardening, catch-up and operations** under issue #120 from the accepted
+Phase 1A main. Phase 1B is the **only** active implementation slice.
 
-Primary Phase 2A acceptance target:
+Do not advance Phase 2A issue #118 or the existing `phase2a-client-contact-foundation` branch while
+Phase 1B is unaccepted. Retain that branch only as queued work; rebase/review it after the Phase 1B
+closeout marks Phase 2A `NEXT`.
+
+Primary Phase 1B acceptance target:
 
 ```text
-provider-neutral client aggregate + lifecycle values
-  -> encrypted contact display values
-  -> tenant-keyed HMAC exact-contact lookup tokens
-  -> no plaintext contact scan or PII-derived technical identifiers
-  -> application-owned create/update/archive intent behind ports
-  -> additive D1 adapter/schema only after inward proof
-  -> canonical mutation + audit/outbox remains atomic
+notification_deliveries + user_event_cursors
+  -> deterministic attempt accounting
+  -> bounded exponential backoff + jitter
+  -> maximum automatic attempts
+  -> terminal/DLQ failure lane
+  -> operator-safe idempotent replay
+  -> authorized durable catch-up
+  -> bounded retention/compaction
+  -> sanitized operational visibility
+  -> Phase 1A invariants remain green
   -> exact-head permanent CI + guarded merge
 ```
 
-Keep all accepted Phase 0 and Phase 1A boundaries, generated-contract/feature-boundary rules and
-architecture inventory checks intact. Continue long-lead External gate preparation in parallel
-without changing `production_ready=false`; real provider/physical-host evidence remains External.
+After Phase 1B acceptance, proceed exactly through Phase 2A -> 2B -> 2C -> 2D -> 2E -> 2F -> 2G
+-> 2H -> 2I -> 2J. No active Phase 3 exists. External CRM integration remains future development
+only and must not enter the standalone critical path.
+
+Keep `production_ready=false` until Phase 2J accepts all mandatory real external evidence.

@@ -21,6 +21,10 @@ explicit.
 - [`PROFILE_APPLICATION_BOUNDARY.md`](./PROFILE_APPLICATION_BOUNDARY.md) — capability-specific profile application-boundary architecture/evidence.
 - [`PROFILE_GENERATION_REGISTRY.md`](./PROFILE_GENERATION_REGISTRY.md) — profile-generation lifecycle/storage contract.
 
+## Future Development — Not Active Execution
+
+- [`FUTURE_DEVELOPMENT.md`](./FUTURE_DEVELOPMENT.md) — post-standalone evolution only. External CRM/Party integration is explicitly outside the active Phase 1–2 critical path and can be considered only after Phase 2J production-readiness closure.
+
 ## Historical / Design Baseline
 
 - [`DELIVERY_ROADMAP.md`](./DELIVERY_ROADMAP.md) — historical Repository Steps 0–10 and their delivery discipline. Old Step 11–12 sketches are superseded by current `DEVELOPMENT_PLAN.md` phases.
@@ -32,7 +36,8 @@ explicit.
 1. **What to implement next:** `DEVELOPMENT_PLAN.md` only.
 2. **How the architecture is allowed to work:** `ARCHITECTURE.md` + accepted ADR/security/data-classification invariants.
 3. **What is actually implemented/accepted:** `DEVELOPER_CAPABILITY_MATRIX.md` + merged code/CI/evidence.
-4. **Historical rationale:** old roadmaps/plans; they never override current execution order.
+4. **Future development:** `FUTURE_DEVELOPMENT.md` records post-standalone ideas only; it never supplies `NEXT` and never overrides the active Phase 1–2 order.
+5. **Historical rationale:** old roadmaps/plans; they never override current execution order.
 
 A plan/specification is not an implementation claim. PR descriptions are not acceptance
 evidence; the actual merged diff and exact-head gates are authoritative.
