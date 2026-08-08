@@ -44,17 +44,11 @@ pub async fn dispatch(
         D1_CATALOG_BINDING,
         PROFILE_COORDINATOR_BINDING,
     );
-    let access = match prepare_coordinator_ingress(
-        actor.actor(),
-        role,
-        &profile_id,
-        &application,
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(error) => return operation_error(error, actor.actor().correlation_id().as_str()),
-    };
+    let access =
+        match prepare_coordinator_ingress(actor.actor(), role, &profile_id, &application).await {
+            Ok(value) => value,
+            Err(error) => return operation_error(error, actor.actor().correlation_id().as_str()),
+        };
 
     let command = match request.method() {
         Method::Get => CoordinatorIngressRequest::Snapshot,
@@ -96,7 +90,10 @@ fn membership_role(role: ResolvedMembershipRole) -> MembershipRole {
     }
 }
 
-fn operation_error(error: CoordinatorIngressOperationError, correlation_id: &str) -> Result<Response> {
+fn operation_error(
+    error: CoordinatorIngressOperationError,
+    correlation_id: &str,
+) -> Result<Response> {
     match error {
         CoordinatorIngressOperationError::InvalidRequest => invalid_request(correlation_id),
         CoordinatorIngressOperationError::NotFound => neutral_not_found(correlation_id),
@@ -112,12 +109,7 @@ fn operation_error(error: CoordinatorIngressOperationError, correlation_id: &str
 }
 
 fn invalid_request(correlation_id: &str) -> Result<Response> {
-    problem(
-        correlation_id,
-        400,
-        "invalid_request",
-        "Invalid Request",
-    )
+    problem(correlation_id, 400, "invalid_request", "Invalid Request")
 }
 
 #[derive(Deserialize)]
@@ -250,9 +242,7 @@ impl CoordinatorApiResponse {
             version: value.version().value(),
             sequence: value.sequence(),
             replayed: value.replayed(),
-            fencing_token: value
-                .fencing_token()
-                .map(|token| token.as_str().to_owned()),
+            fencing_token: value.fencing_token().map(|token| token.as_str().to_owned()),
             epoch: value.epoch(),
             projection: CoordinatorApiProjection::from_snapshot(value.projection()),
         }
