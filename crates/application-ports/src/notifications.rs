@@ -3,10 +3,11 @@
 // Notification ports are provider-neutral contracts. Implementations may be native or Workers/WASM;
 // requiring `Send` futures here would over-constrain the outer adapter boundary.
 
+use contracts::IntegrationEventEnvelope;
 use core::fmt;
 use notification_domain::{DeliveryState, NotificationCursor};
 use profile_platform_primitives::{
-    ActorContext, ActorId, OpaqueId, OutboxEventId, TenantId, TenantScope, UnixMillis,
+    ActorContext, ActorId, AuditEventId, OpaqueId, OutboxEventId, TenantId, TenantScope, UnixMillis,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +49,23 @@ impl fmt::Display for NotificationPortError {
 }
 
 impl std::error::Error for NotificationPortError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NotificationCapability {
+    CatchUp,
+    Remediate,
+    ObserveOperations,
+}
+
+pub trait NotificationAuthorizationPort {
+    /// Resolves current membership/role state. Authorization must never be inferred from stale
+    /// notification state or historical grants.
+    async fn is_authorized(
+        &self,
+        actor: &ActorContext,
+        capability: NotificationCapability,
+    ) -> Result<bool, NotificationPortError>;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeliveryTransitionWriteOutcome {
@@ -199,7 +217,9 @@ pub enum ReplayReasonClass {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NotificationReplayIntent {
     replay_id: OpaqueId,
+    consumer_id: OpaqueId,
     event_id: OutboxEventId,
+    audit_event_id: AuditEventId,
     reason_class: ReplayReasonClass,
     requested_at: UnixMillis,
 }
@@ -208,13 +228,17 @@ impl NotificationReplayIntent {
     #[must_use]
     pub const fn new(
         replay_id: OpaqueId,
+        consumer_id: OpaqueId,
         event_id: OutboxEventId,
+        audit_event_id: AuditEventId,
         reason_class: ReplayReasonClass,
         requested_at: UnixMillis,
     ) -> Self {
         Self {
             replay_id,
+            consumer_id,
             event_id,
+            audit_event_id,
             reason_class,
             requested_at,
         }
@@ -226,8 +250,18 @@ impl NotificationReplayIntent {
     }
 
     #[must_use]
+    pub const fn consumer_id(&self) -> &OpaqueId {
+        &self.consumer_id
+    }
+
+    #[must_use]
     pub const fn event_id(&self) -> &OutboxEventId {
         &self.event_id
+    }
+
+    #[must_use]
+    pub const fn audit_event_id(&self) -> &AuditEventId {
+        &self.audit_event_id
     }
 
     #[must_use]
@@ -242,16 +276,186 @@ impl NotificationReplayIntent {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReplayIntentWriteOutcome {
-    Recorded,
+pub enum ReplayPreparationOutcome {
+    Prepared,
     Duplicate,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingNotificationReplay {
+    replay_id: OpaqueId,
+    event: IntegrationEventEnvelope,
+}
+
+impl PendingNotificationReplay {
+    #[must_use]
+    pub const fn new(replay_id: OpaqueId, event: IntegrationEventEnvelope) -> Self {
+        Self { replay_id, event }
+    }
+
+    #[must_use]
+    pub const fn replay_id(&self) -> &OpaqueId {
+        &self.replay_id
+    }
+
+    #[must_use]
+    pub const fn event(&self) -> &IntegrationEventEnvelope {
+        &self.event
+    }
+}
+
 pub trait NotificationReplayRepositoryPort {
-    /// Persists immutable replay intent before any replay publication occurs.
-    async fn record_replay_intent(
+    /// Atomically records immutable audit/replay evidence, creates a pending replay dispatch and
+    /// reopens exactly one matching dead-letter delivery. Duplicate replay IDs are neutral.
+    async fn prepare_replay(
         &self,
         actor: &ActorContext,
         intent: &NotificationReplayIntent,
-    ) -> Result<ReplayIntentWriteOutcome, NotificationPortError>;
+    ) -> Result<ReplayPreparationOutcome, NotificationPortError>;
+
+    async fn load_pending_replays(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<PendingNotificationReplay>, NotificationPortError>;
+
+    async fn mark_replay_published(
+        &self,
+        tenant_id: &TenantId,
+        replay_id: &OpaqueId,
+        published_at: UnixMillis,
+    ) -> Result<(), NotificationPortError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NotificationRetentionOutcome {
+    deliveries_removed: u32,
+    cursors_removed: u32,
+    replay_dispatches_removed: u32,
+}
+
+impl NotificationRetentionOutcome {
+    #[must_use]
+    pub const fn new(
+        deliveries_removed: u32,
+        cursors_removed: u32,
+        replay_dispatches_removed: u32,
+    ) -> Self {
+        Self {
+            deliveries_removed,
+            cursors_removed,
+            replay_dispatches_removed,
+        }
+    }
+
+    #[must_use]
+    pub const fn deliveries_removed(self) -> u32 {
+        self.deliveries_removed
+    }
+
+    #[must_use]
+    pub const fn cursors_removed(self) -> u32 {
+        self.cursors_removed
+    }
+
+    #[must_use]
+    pub const fn replay_dispatches_removed(self) -> u32 {
+        self.replay_dispatches_removed
+    }
+}
+
+pub trait NotificationRetentionRepositoryPort {
+    /// Removes only bounded operational state. Canonical outbox/business state, immutable replay
+    /// intent and audit evidence are outside this delete surface.
+    async fn compact_operational_state(
+        &self,
+        before: UnixMillis,
+        limit: u32,
+    ) -> Result<NotificationRetentionOutcome, NotificationPortError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NotificationOperationsSnapshot {
+    ready_count: u64,
+    retry_scheduled_count: u64,
+    delivered_count: u64,
+    dead_letter_count: u64,
+    pending_replay_count: u64,
+    max_attempt_count: u16,
+    oldest_open_created_at: Option<UnixMillis>,
+    catch_up_lag_count: u64,
+}
+
+impl NotificationOperationsSnapshot {
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub const fn new(
+        ready_count: u64,
+        retry_scheduled_count: u64,
+        delivered_count: u64,
+        dead_letter_count: u64,
+        pending_replay_count: u64,
+        max_attempt_count: u16,
+        oldest_open_created_at: Option<UnixMillis>,
+        catch_up_lag_count: u64,
+    ) -> Self {
+        Self {
+            ready_count,
+            retry_scheduled_count,
+            delivered_count,
+            dead_letter_count,
+            pending_replay_count,
+            max_attempt_count,
+            oldest_open_created_at,
+            catch_up_lag_count,
+        }
+    }
+
+    #[must_use]
+    pub const fn ready_count(self) -> u64 {
+        self.ready_count
+    }
+
+    #[must_use]
+    pub const fn retry_scheduled_count(self) -> u64 {
+        self.retry_scheduled_count
+    }
+
+    #[must_use]
+    pub const fn delivered_count(self) -> u64 {
+        self.delivered_count
+    }
+
+    #[must_use]
+    pub const fn dead_letter_count(self) -> u64 {
+        self.dead_letter_count
+    }
+
+    #[must_use]
+    pub const fn pending_replay_count(self) -> u64 {
+        self.pending_replay_count
+    }
+
+    #[must_use]
+    pub const fn max_attempt_count(self) -> u16 {
+        self.max_attempt_count
+    }
+
+    #[must_use]
+    pub const fn oldest_open_created_at(self) -> Option<UnixMillis> {
+        self.oldest_open_created_at
+    }
+
+    #[must_use]
+    pub const fn catch_up_lag_count(self) -> u64 {
+        self.catch_up_lag_count
+    }
+}
+
+pub trait NotificationOperationsRepositoryPort {
+    /// Returns sanitizer-safe, low-cardinality operational aggregates only. Implementations must
+    /// not return event IDs, payloads, credentials, mailbox content or raw errors.
+    async fn load_operations_snapshot(
+        &self,
+        actor: &ActorContext,
+    ) -> Result<NotificationOperationsSnapshot, NotificationPortError>;
 }
