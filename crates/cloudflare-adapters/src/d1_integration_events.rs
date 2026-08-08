@@ -44,11 +44,15 @@ INSERT INTO notification_events (
     tenant_id,
     outbox_event_id,
     envelope_version,
+    aggregate_type,
+    aggregate_id,
+    aggregate_version,
     event_type,
     event_version,
+    payload_json,
     occurred_at_ms,
     persisted_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (tenant_id, outbox_event_id) DO NOTHING
 "#;
 
@@ -93,7 +97,8 @@ impl PendingOutboxRow {
         let event_version = u16::try_from(self.event_version).map_err(|_| integrity_failure())?;
         let occurred_at = u64::try_from(self.created_at_ms).map_err(|_| integrity_failure())?;
         let tenant_id = TenantId::parse(self.tenant_id).map_err(|_| integrity_failure())?;
-        let event_id = OutboxEventId::parse(self.outbox_event_id).map_err(|_| integrity_failure())?;
+        let event_id =
+            OutboxEventId::parse(self.outbox_event_id).map_err(|_| integrity_failure())?;
         let aggregate_id = OpaqueId::parse(self.aggregate_id).map_err(|_| integrity_failure())?;
         let payload = IntegrationEventPayload::metadata_json(self.payload_json)
             .map_err(|_| integrity_failure())?;
@@ -168,6 +173,8 @@ impl NotificationEventPort for D1IntegrationEventRepository {
         event: &IntegrationEventEnvelope,
         persisted_at: UnixMillis,
     ) -> Result<(), IntegrationEventPortError> {
+        let aggregate_version =
+            i64::try_from(event.aggregate_version().value()).map_err(|_| integrity_failure())?;
         let occurred_at = sqlite_integer(event.occurred_at())?;
         let persisted_at = sqlite_integer(persisted_at)?;
         query!(
@@ -176,8 +183,12 @@ impl NotificationEventPort for D1IntegrationEventRepository {
             event.tenant_id().as_str(),
             event.event_id().as_str(),
             i64::from(event.envelope_version()),
+            event.aggregate_type(),
+            event.aggregate_id().as_str(),
+            aggregate_version,
             event.event_type(),
             i64::from(event.event_version()),
+            event.payload().as_str(),
             occurred_at,
             persisted_at
         )
@@ -251,7 +262,8 @@ mod tests {
     }
 
     #[test]
-    fn pending_row_reconstructs_typed_sanitized_envelope() -> Result<(), Box<dyn std::error::Error>> {
+    fn pending_row_reconstructs_typed_sanitized_envelope() -> Result<(), Box<dyn std::error::Error>>
+    {
         let event = row("client.created.v1", "{}").into_event()?;
         assert_eq!(event.event_type(), "client.created.v1");
         assert_eq!(event.payload().as_str(), "{}");
