@@ -2,7 +2,7 @@
 
 **Status:** normative post-composition execution plan  
 **Date:** 2026-08-08  
-**Tracking:** Phase 0L accepted via #104; next planned Phase 0M; plan consolidation history #96  
+**Tracking:** Phase 0M accepted via #106/#107; next planned Phase 0N; plan consolidation history #96  
 **Production readiness:** unchanged; `production_ready=false` until external evidence gates are satisfied
 
 ## 1. Authority And Scope
@@ -30,11 +30,12 @@ remain External until the existing evidence process accepts real evidence.
 
 ## 2. Current Accepted Baseline And Active Slice
 
-Repository Steps 0–10 and the accepted post-composition slices through **Phase 0L** provide
+Repository Steps 0–10 and the accepted post-composition slices through **Phase 0M** provide
 the current code baseline: typed domain/application boundaries, governed D1 writes,
 profile generations, application-thin coordinator ingress, the first real application Cargo
 boundary (`use-cases-identity`), synthetic Bridge/runtime lanes, mailbox metadata/jobs, React
-composition and exact-head cross-component acceptance.
+composition, deterministic generated public frontend contracts, enforced frontend feature
+boundaries and exact-head cross-component acceptance.
 
 Phase 0L was accepted through issue/PR **#104** with guarded squash merge
 `f26528f0f99d69a24ae1c4c307c1f3458ef64e05`. Identity governance plus verified-identity
@@ -42,9 +43,17 @@ ceremonies now compile/test independently in `use-cases-identity`; `identity_acl
 remains with cross-client/profile query helpers because moving it would create a false
 identity-only boundary.
 
+Phase 0M was accepted through issue **#106** / PR **#107** with guarded squash merge
+`ada3a88a0ff8b995047fd20ae8b6b8ded837a753` from exact proven source head
+`6c2f6c170ed90595ac50436191a79eb77d5d8c5d`. The existing `control-plane-contract` crate now owns
+the migrated session/client/problem/mutation public Rust transport contracts; deterministic
+OpenAPI and TypeScript artifacts are committed and regeneration is fail-closed. Real frontend
+API surfaces consume those generated types, and permanent policy rejects direct sibling-feature
+internal imports plus TypeScript/Vite alias escape hatches.
+
 No sequential Phase 0 implementation slice is active in this closeout. The **next planned
-slice is Phase 0M — generated frontend contracts and feature-boundary enforcement**, which must
-start from the accepted Phase 0L `main` in its own bounded issue/branch/PR.
+slice is Phase 0N — route classifier, architecture inventory and documentation consistency**,
+which must start from the accepted Phase 0M `main` in its own bounded issue/branch/PR.
 
 ### 2.1 Critical-path execution policy
 
@@ -270,20 +279,27 @@ Rules:
 clear dependency graph; split it into multiple crates only if actual dependency pressure
 justifies the added surface.
 
-### Phase 0M — Generated frontend contracts and feature-boundary enforcement — NEXT
+### Phase 0M — Generated frontend contracts and feature-boundary enforcement — ACCEPTED
 
-Implement deterministic OpenAPI -> TypeScript generation and remove handwritten duplicate
-server DTO/enums.
+Accepted implementation:
 
-Add permanent CI:
+- `control-plane-contract` owns the migrated canonical public Rust DTO/schema source for the
+  session/client/problem/mutation vertical slice; live Worker session/client transports use it;
+- Rust deterministically exports `contracts/generated/control-plane.openapi.json`, and the
+  repository-owned pinned-toolchain generator deterministically renders
+  `frontend/src/shared/api/generated/control-plane.ts` with explicit `DO NOT EDIT` ownership;
+- real frontend session/client/problem/mutation surfaces consume generated types and migrated
+  handwritten duplicate DTO/enums are removed;
+- `python scripts/generate-frontend-contracts.py --check` makes regeneration drift fail closed in
+  fast preflight and permanent Quality Gate;
+- frontend feature policy rejects direct sibling-feature internals through alternate relative
+  paths and fails closed on TypeScript/Vite resolver aliases until explicitly understood;
+- positive repository checks plus sibling-internal and alias-bypass negative fixtures are
+  permanent Frontend/Quality/Repository Quality evidence;
+- acceptance used exact source head `6c2f6c170ed90595ac50436191a79eb77d5d8c5d`, 12/12 permanent
+  workflows green, `behind_by=0`, zero blocking reviews/threads and guarded squash merge #107.
 
-- regeneration must produce no diff;
-- feature X cannot import sibling feature Y internals;
-- cross-feature composition uses `shared`, `entities`, app/routes or an explicitly public
-  feature API;
-- positive repository check + deliberately forbidden fixture.
-
-### Phase 0N — Route classifier, architecture inventory and documentation consistency
+### Phase 0N — Route classifier, architecture inventory and documentation consistency — NEXT
 
 Finish the remaining DX/convergence items:
 
@@ -870,22 +886,22 @@ The standalone + CRM-ready target is complete only when, at the correct evidence
 
 ## 19. Immediate Next Action
 
-Start **Phase 0M — generated frontend contracts and feature-boundary enforcement** from the
-accepted Phase 0L `main`. Create a fresh bounded issue/branch/PR before implementation; do not
-fold 0M work into the completed #104 history.
+Start **Phase 0N — route classifier, architecture inventory and documentation consistency** from
+the accepted Phase 0M `main`. Create a fresh bounded issue/branch/PR before implementation; do
+not fold 0N work into the completed #106/#107 history.
 
-Primary 0M acceptance target:
+Primary 0N acceptance target:
 
 ```text
-OpenAPI/public contract source of truth
-  -> deterministic TypeScript generation
-  -> no handwritten duplicate server DTO/enums
-  -> regeneration produces no diff
-  -> sibling feature internals cannot be imported
-  -> positive repository check + deliberately forbidden fixture
+capability-owned route classifiers
+  -> one composed fail-closed classifier
+  -> unknown /api/*, /auth/* and /bridge/* versions/methods never reach SPA
+  -> machine-readable workspace/migration/route/generated-contract inventory
+  -> CI consistency checks for machine-verifiable documentation claims
+  -> docs/INDEX.md remains current; no parallel normative roadmap
   -> exact-head permanent CI + guarded merge
 ```
 
-Keep the new `use-cases-identity` compile-time boundary intact, extract later application
-contexts only when actual dependency/growth pressure justifies it, and continue long-lead
-External gate preparation without changing `production_ready=false`.
+Keep the accepted `use-cases-identity` and Phase 0M generated-contract/feature-boundary rules
+intact, add no speculative Cargo splitting without real dependency/growth pressure, and continue
+long-lead External gate preparation without changing `production_ready=false`.
