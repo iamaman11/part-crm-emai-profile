@@ -2,6 +2,7 @@
 
 pub mod client_grants;
 pub mod clients;
+pub mod coordinator_ingress;
 pub mod error;
 pub mod generations;
 pub mod identity_acl;
