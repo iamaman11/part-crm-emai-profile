@@ -117,11 +117,10 @@ pub async fn execute_coordinator_ingress<
     require_coordinatable(&profile)?;
 
     let result = match request {
-        CoordinatorIngressRequest::Snapshot => {
-            port.snapshot(actor.tenant_scope(), profile_id)
-                .await
-                .map_err(map_port_error)?
-        }
+        CoordinatorIngressRequest::Snapshot => port
+            .snapshot(actor.tenant_scope(), profile_id)
+            .await
+            .map_err(map_port_error)?,
         CoordinatorIngressRequest::Command(command) => {
             if matches!(command.command, CoordinatorCommandInput::MarkRecovered)
                 && role != MembershipRole::TenantOwner
@@ -152,7 +151,10 @@ fn require_coordinatable(
     profile: &CoordinatorProfileAccess,
 ) -> Result<(), CoordinatorIngressOperationError> {
     if profile.has_active_generation()
-        && matches!(profile.status(), "READY" | "IN_USE" | "DIRTY_LOCAL" | "SYNCING")
+        && matches!(
+            profile.status(),
+            "READY" | "IN_USE" | "DIRTY_LOCAL" | "SYNCING"
+        )
     {
         Ok(())
     } else {
