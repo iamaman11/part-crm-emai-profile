@@ -40,7 +40,8 @@ struct FakePort {
     project_calls: Cell<u32>,
     fencing_calls: Cell<u32>,
     outbox_calls: Cell<u32>,
-    runtime_error: Cell<Option<application_ports::coordinator_ingress::CoordinatorIngressPortErrorClass>>,
+    runtime_error:
+        Cell<Option<application_ports::coordinator_ingress::CoordinatorIngressPortErrorClass>>,
 }
 
 impl FakePort {
@@ -105,14 +106,16 @@ impl CoordinatorIngressApplicationPort for FakePort {
 
     fn new_fencing_token(&self) -> Result<FencingToken, CoordinatorIngressPortError> {
         self.fencing_calls.set(self.fencing_calls.get() + 1);
-        FencingToken::parse("fence_01JCOORDINGRESS")
-            .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))
+        FencingToken::parse("fence_01JCOORDINGRESS").map_err(|_| {
+            CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure)
+        })
     }
 
     fn new_outbox_event_id(&self) -> Result<OutboxEventId, CoordinatorIngressPortError> {
         self.outbox_calls.set(self.outbox_calls.get() + 1);
-        OutboxEventId::parse("outbox_01JCOORDINGRESS")
-            .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))
+        OutboxEventId::parse("outbox_01JCOORDINGRESS").map_err(|_| {
+            CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure)
+        })
     }
 
     async fn snapshot(
@@ -122,8 +125,9 @@ impl CoordinatorIngressApplicationPort for FakePort {
     ) -> Result<CoordinatorRuntimeResult, CoordinatorIngressPortError> {
         self.snapshot_calls.set(self.snapshot_calls.get() + 1);
         self.maybe_runtime_error()?;
-        self.runtime_result()
-            .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))
+        self.runtime_result().map_err(|_| {
+            CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure)
+        })
     }
 
     async fn execute(
@@ -134,8 +138,9 @@ impl CoordinatorIngressApplicationPort for FakePort {
     ) -> Result<CoordinatorRuntimeResult, CoordinatorIngressPortError> {
         self.execute_calls.set(self.execute_calls.get() + 1);
         self.maybe_runtime_error()?;
-        self.runtime_result()
-            .map_err(|_| CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure))
+        self.runtime_result().map_err(|_| {
+            CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure)
+        })
     }
 
     async fn project(
@@ -169,7 +174,9 @@ fn clock() -> FakeClock {
     }
 }
 
-fn envelope_input(command: CoordinatorCommandInput) -> Result<ExecuteCoordinatorCommand, Box<dyn std::error::Error>> {
+fn envelope_input(
+    command: CoordinatorCommandInput,
+) -> Result<ExecuteCoordinatorCommand, Box<dyn std::error::Error>> {
     Ok(ExecuteCoordinatorCommand::new(
         IdempotencyKey::parse("idem_01JCOORDINGRESS")?,
         1,
@@ -237,7 +244,9 @@ fn owner_only_recovery_stops_non_owner_before_execute() -> Result<(), Box<dyn st
             &profile_id()?,
             &port,
             &clock(),
-            CoordinatorIngressRequest::Command(envelope_input(CoordinatorCommandInput::MarkRecovered)?),
+            CoordinatorIngressRequest::Command(envelope_input(
+                CoordinatorCommandInput::MarkRecovered
+            )?),
         )),
         Err(CoordinatorIngressOperationError::NotFound)
     );
@@ -248,7 +257,8 @@ fn owner_only_recovery_stops_non_owner_before_execute() -> Result<(), Box<dyn st
 }
 
 #[test]
-fn invalid_launch_ttl_stops_before_execute_and_projection() -> Result<(), Box<dyn std::error::Error>> {
+fn invalid_launch_ttl_stops_before_execute_and_projection()
+-> Result<(), Box<dyn std::error::Error>> {
     let port = FakePort::new(Some(CoordinatorProfileAccess::new("READY", true)));
     let request = CoordinatorIngressRequest::Command(envelope_input(
         CoordinatorCommandInput::IssueLaunchIntent {
