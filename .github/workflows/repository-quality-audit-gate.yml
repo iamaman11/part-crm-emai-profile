@@ -42,6 +42,7 @@ jobs:
           python -m py_compile scripts/check-phase1a-event-boundaries.py
           python -m py_compile scripts/check-phase1b-notification-boundaries.py
           python -m py_compile scripts/test-integration-event-foundation.py
+          python -m py_compile scripts/test-notification-delivery-foundation.py
 
       - name: Enforce GitHub Actions Node 24 checkout runtime
         run: python scripts/check-github-actions-runtime.py
@@ -112,6 +113,9 @@ jobs:
 
       - name: Prove Phase 1A durable outbox and consumer idempotency
         run: python scripts/test-integration-event-foundation.py
+
+      - name: Prove Phase 1B delivery and cursor D1 invariants
+        run: python scripts/test-notification-delivery-foundation.py
 
       - name: Test Phase 1B notification inner boundaries
         run: >-
