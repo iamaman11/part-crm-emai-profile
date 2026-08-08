@@ -561,7 +561,9 @@ const fn failure_class_to_storage(value: DeliveryFailureClass) -> &'static str {
     }
 }
 
-fn required_failure_class(value: Option<&str>) -> Result<DeliveryFailureClass, NotificationPortError> {
+fn required_failure_class(
+    value: Option<&str>,
+) -> Result<DeliveryFailureClass, NotificationPortError> {
     match value {
         Some("DEPENDENCY_UNAVAILABLE") => Ok(DeliveryFailureClass::DependencyUnavailable),
         Some("REJECTED") => Ok(DeliveryFailureClass::Rejected),

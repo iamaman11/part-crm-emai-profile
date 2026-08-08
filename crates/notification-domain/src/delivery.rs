@@ -112,11 +112,7 @@ impl DeliveryState {
             return Err(DeliveryRestoreError::InvalidRetrySchedule);
         }
         Ok(Self::RetryScheduled {
-            attempts: DeliveryAttemptCount::restore(
-                attempt_count,
-                1,
-                MAX_RETRYABLE_ATTEMPTS,
-            )?,
+            attempts: DeliveryAttemptCount::restore(attempt_count, 1, MAX_RETRYABLE_ATTEMPTS)?,
             last_attempt_at,
             next_attempt_at,
             failure_class,
@@ -180,8 +176,9 @@ impl DeliveryState {
     #[must_use]
     pub const fn failure_class(self) -> Option<DeliveryFailureClass> {
         match self {
-            Self::RetryScheduled { failure_class, .. }
-            | Self::DeadLetter { failure_class, .. } => Some(failure_class),
+            Self::RetryScheduled { failure_class, .. } | Self::DeadLetter { failure_class, .. } => {
+                Some(failure_class)
+            }
             Self::Ready { .. } | Self::Delivered { .. } => None,
         }
     }

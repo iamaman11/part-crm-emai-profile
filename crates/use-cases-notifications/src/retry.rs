@@ -146,11 +146,7 @@ impl RetryPolicy {
     }
 }
 
-fn deterministic_jitter_sample(
-    event_id: &OutboxEventId,
-    failed_attempt: u16,
-    width: u64,
-) -> u64 {
+fn deterministic_jitter_sample(event_id: &OutboxEventId, failed_attempt: u16, width: u64) -> u64 {
     let mut accumulator = 0_u64;
     for byte in event_id.as_str().bytes() {
         accumulator = (accumulator * 131 + u64::from(byte)) % JITTER_HASH_MODULUS;

@@ -115,12 +115,7 @@ where
         }
         Err(error) => {
             let next = retry_policy
-                .transition_after_failure(
-                    state,
-                    now,
-                    event.event_id(),
-                    failure_class(error),
-                )
+                .transition_after_failure(state, now, event.event_id(), failure_class(error))
                 .map_err(DeliveryProcessingError::RetryScheduling)?;
             match deliveries
                 .compare_and_swap_delivery(
@@ -194,7 +189,9 @@ const fn failure_class(error: IntegrationEventOperationError) -> DeliveryFailure
     match error {
         IntegrationEventOperationError::InvalidRequest => DeliveryFailureClass::Rejected,
         IntegrationEventOperationError::Conflict
-        | IntegrationEventOperationError::IntegrityFailure => DeliveryFailureClass::IntegrityFailure,
+        | IntegrationEventOperationError::IntegrityFailure => {
+            DeliveryFailureClass::IntegrityFailure
+        }
         IntegrationEventOperationError::InternalFailure => DeliveryFailureClass::InternalFailure,
         IntegrationEventOperationError::DependencyUnavailable => {
             DeliveryFailureClass::DependencyUnavailable
@@ -387,8 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_duplicate_queue_delivery_is_neutral()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn successful_duplicate_queue_delivery_is_neutral() -> Result<(), Box<dyn std::error::Error>> {
         let repository = FakeDeliveryRepository::new();
         let consumer = ConsumerProbe::accepting();
         let consumer_id = OpaqueId::parse("consumer_foundation_v1")?;
@@ -536,8 +532,8 @@ mod tests {
     }
 
     #[test]
-    fn stale_cas_reconciles_to_concurrent_terminal_state()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn stale_cas_reconciles_to_concurrent_terminal_state() -> Result<(), Box<dyn std::error::Error>>
+    {
         let concurrent = DeliveryState::restore_delivered(1, UnixMillis::new(20))?;
         let repository = FakeDeliveryRepository::with_stale_replacement(concurrent);
         let consumer = ConsumerProbe::accepting();
