@@ -4,7 +4,7 @@ use application_ports::{
     NotificationCatchUpRepositoryPort, NotificationCursorRepositoryPort, NotificationEventRecord,
 };
 use notification_domain::NotificationCursor;
-use profile_platform_primitives::{ActorContext, UnixMillis};
+use profile_platform_primitives::{ActorContext, OutboxEventId, UnixMillis};
 
 pub const MAX_CATCH_UP_PAGE_SIZE: u32 = 200;
 
@@ -96,6 +96,48 @@ where
         .map_err(Into::into)
 }
 
+/// Acknowledges one event only if it is still present in the actor's current authorized page.
+/// The client never supplies a raw cursor, so it cannot skip hidden or unauthorized events.
+pub async fn acknowledge_catch_up<A, C, H>(
+    authorization: &A,
+    cursors: &C,
+    history: &H,
+    actor: &ActorContext,
+    event_id: &OutboxEventId,
+    delivered_at: UnixMillis,
+) -> Result<CursorAdvanceWriteOutcome, NotificationOperationError>
+where
+    A: NotificationAuthorizationPort,
+    C: NotificationCursorRepositoryPort,
+    H: NotificationCatchUpRepositoryPort,
+{
+    let batch = load_catch_up(
+        authorization,
+        cursors,
+        history,
+        actor,
+        MAX_CATCH_UP_PAGE_SIZE,
+    )
+    .await?;
+    let next = batch
+        .events()
+        .iter()
+        .find(|event| event.event_id() == event_id)
+        .map(NotificationEventRecord::cursor)
+        .ok_or(NotificationOperationError::InvalidInput)?;
+
+    cursors
+        .compare_and_advance_user_cursor(
+            actor.tenant_scope(),
+            actor.actor_id(),
+            batch.expected_cursor(),
+            &next,
+            delivered_at,
+        )
+        .await
+        .map_err(Into::into)
+}
+
 fn validate_page(
     expected: Option<&NotificationCursor>,
     events: &[NotificationEventRecord],
@@ -171,7 +213,10 @@ mod tests {
 
     #[test]
     fn page_cannot_exceed_requested_bound() -> Result<(), Box<dyn std::error::Error>> {
-        let events = vec![event(1, "outbox_01JCATCHUP_A")?, event(2, "outbox_01JCATCHUP_B")?];
+        let events = vec![
+            event(1, "outbox_01JCATCHUP_A")?,
+            event(2, "outbox_01JCATCHUP_B")?,
+        ];
         assert!(validate_page(None, &events, 1).is_err());
         Ok(())
     }
