@@ -6,6 +6,7 @@ pub mod generations;
 pub mod identity_acl;
 pub mod mailbox_jobs;
 pub mod mailboxes;
+pub mod profile_assignments;
 pub mod profiles;
 
 pub use clients::{CreateClientCommand, decide_create_client};

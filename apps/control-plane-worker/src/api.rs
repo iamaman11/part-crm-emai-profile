@@ -7,19 +7,18 @@ use crate::request_evidence::{audit_event_id, outbox_event_id};
 use cloudflare_adapters::d1_governed_commands::D1GovernedCommandRepository;
 use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use cloudflare_adapters::d1_identity_acl::{
-    AssignProfileMutation, BootstrapOwnerMutation, ClientGrantMutation, ClientGrantValue,
-    CreateInvitationMutation, D1IdentityAclRepository, MembershipStatusMutation,
-    MembershipStatusValue, MutationEnvelope as IdentityEnvelope, OwnerTransferMutation,
-    ProfileGrantMutation, ProfileGrantValue, ResolvedActor, ResolvedMembershipRole,
-    VerifiedBootstrapContext,
+    BootstrapOwnerMutation, ClientGrantMutation, ClientGrantValue, CreateInvitationMutation,
+    D1IdentityAclRepository, MembershipStatusMutation, MembershipStatusValue,
+    MutationEnvelope as IdentityEnvelope, OwnerTransferMutation, ProfileGrantMutation,
+    ProfileGrantValue, ResolvedActor, ResolvedMembershipRole, VerifiedBootstrapContext,
 };
 use cloudflare_adapters::d1_invitation_acceptance::{
     AcceptInvitationMutation, D1InvitationAcceptanceRepository,
 };
 use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
 use profile_platform_primitives::{
-    ActorId, AggregateVersion, AssignmentId, AuditEventId, ClientId, IdempotencyKey, IdentityId,
-    InvitationId, OutboxEventId, ProfileId, TenantScope, UnixMillis,
+    ActorId, AggregateVersion, AuditEventId, ClientId, IdempotencyKey, IdentityId, InvitationId,
+    OutboxEventId, ProfileId, TenantScope, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
 use worker::{Date, Env, Error, Request, Response, Result};
@@ -31,7 +30,6 @@ const OWNER_BOOTSTRAP_COMMAND: &str = "tenant.owner_bootstrap";
 const OWNER_TRANSFER_COMMAND: &str = "membership.owner_transfer";
 const INVITATION_CREATE_COMMAND: &str = "invitation.create";
 const INVITATION_ACCEPT_COMMAND: &str = "invitation.accept";
-const PROFILE_ASSIGN_COMMAND: &str = "profile.assign_client";
 const PROFILE_GRANT_COMMAND: &str = "profile.grant";
 const PROFILE_GRANT_REVOKE_COMMAND: &str = "profile.grant_revoke";
 const CLIENT_GRANT_COMMAND: &str = "client.grant";
@@ -62,10 +60,6 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
             let client_id = segments.get(5).copied().unwrap_or_default();
             let actor_id = segments.get(7).copied().unwrap_or_default();
             update_client_grant(request, env, tenant_id, client_id, actor_id).await
-        }
-        RouteClass::ProfileAssignmentApi => {
-            let profile_id = segments.get(5).copied().unwrap_or_default();
-            assign_profile(request, env, tenant_id, profile_id).await
         }
         RouteClass::ProfileGrantApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
@@ -501,87 +495,6 @@ async fn update_membership_status(
                 command_name,
                 &envelope,
                 target_actor_id.as_str(),
-                response_version,
-                200,
-                error,
-            )
-            .await
-        }
-    }
-}
-
-async fn assign_profile(
-    request: &mut Request,
-    env: &Env,
-    tenant_id: &str,
-    profile_id: &str,
-) -> Result<Response> {
-    let Some(actor) = active_owner(request, env, tenant_id).await? else {
-        return neutral_not_found(&correlation_hint(request));
-    };
-    let body = match request.json::<AssignmentRequest>().await {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let profile_id = match ProfileId::parse(profile_id) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let assignment_id = match AssignmentId::parse(body.assignment_id) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let client_id = match ClientId::parse(body.client_id) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let expected_profile_version = match AggregateVersion::new(body.expected_profile_version) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let response_version = match next_aggregate_version(expected_profile_version) {
-        Some(value) => value,
-        None => return internal_failure(request),
-    };
-    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    if let Some(response) = replay_for_actor(
-        request,
-        env,
-        &actor,
-        PROFILE_ASSIGN_COMMAND,
-        &envelope,
-        assignment_id.as_str(),
-        response_version,
-        200,
-    )
-    .await?
-    {
-        return Ok(response);
-    }
-    let mutation = AssignProfileMutation {
-        assignment_id: &assignment_id,
-        profile_id: &profile_id,
-        client_id: &client_id,
-        expected_profile_version,
-        reason: &body.reason,
-        envelope: envelope.identity(),
-    };
-    let result = D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?)
-        .assign_profile(actor.actor(), mutation)
-        .await;
-    match result {
-        Ok(_) => mutation_receipt("assigned", assignment_id.as_str(), response_version, 200),
-        Err(error) => {
-            mutation_failure_or_replay_for_actor(
-                request,
-                env,
-                &actor,
-                PROFILE_ASSIGN_COMMAND,
-                &envelope,
-                assignment_id.as_str(),
                 response_version,
                 200,
                 error,
@@ -1088,16 +1001,6 @@ struct InvitationAcceptRequest {
 struct MembershipStatusRequest {
     status: String,
     expected_version: u64,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AssignmentRequest {
-    assignment_id: String,
-    client_id: String,
-    reason: String,
-    expected_profile_version: u64,
     request_digest: String,
 }
 

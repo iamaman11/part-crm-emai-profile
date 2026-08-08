@@ -4,7 +4,8 @@ use identity_access_domain::MembershipRole;
 pub use profile_domain::ProfileStatus;
 use profile_domain::{BrowserProfile, ProfileGeneration};
 use profile_platform_primitives::{
-    ActorContext, ActorId, AggregateVersion, ClientId, GenerationId, ProfileId, TenantScope,
+    ActorContext, ActorId, AggregateVersion, AssignmentId, ClientId, GenerationId, ProfileId,
+    TenantScope,
 };
 
 pub trait ProfileRepository {
@@ -53,6 +54,75 @@ impl ProfileCreateWrite {
     #[must_use]
     pub const fn profile(&self) -> &BrowserProfile {
         &self.profile
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub fn event_payload_json(&self) -> &str {
+        &self.event_payload_json
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileAssignmentWrite {
+    assignment_id: AssignmentId,
+    profile_id: ProfileId,
+    client_id: ClientId,
+    expected_profile_version: AggregateVersion,
+    reason: String,
+    evidence: CommandExecutionEvidence,
+    event_payload_json: String,
+}
+
+impl ProfileAssignmentWrite {
+    #[must_use]
+    pub fn new(
+        assignment_id: AssignmentId,
+        profile_id: ProfileId,
+        client_id: ClientId,
+        expected_profile_version: AggregateVersion,
+        reason: impl Into<String>,
+        evidence: CommandExecutionEvidence,
+        event_payload_json: impl Into<String>,
+    ) -> Self {
+        Self {
+            assignment_id,
+            profile_id,
+            client_id,
+            expected_profile_version,
+            reason: reason.into(),
+            evidence,
+            event_payload_json: event_payload_json.into(),
+        }
+    }
+
+    #[must_use]
+    pub const fn assignment_id(&self) -> &AssignmentId {
+        &self.assignment_id
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn client_id(&self) -> &ClientId {
+        &self.client_id
+    }
+
+    #[must_use]
+    pub const fn expected_profile_version(&self) -> AggregateVersion {
+        self.expected_profile_version
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
     }
 
     #[must_use]
@@ -137,6 +207,58 @@ impl fmt::Display for ProfilePortError {
 
 impl std::error::Error for ProfilePortError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProfileAssignmentPortErrorClass {
+    NotFound,
+    VersionConflict,
+    InvalidState,
+    Conflict,
+    IntegrityFailure,
+    InternalFailure,
+    DependencyUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProfileAssignmentPortError {
+    class: ProfileAssignmentPortErrorClass,
+}
+
+impl ProfileAssignmentPortError {
+    #[must_use]
+    pub const fn new(class: ProfileAssignmentPortErrorClass) -> Self {
+        Self { class }
+    }
+
+    #[must_use]
+    pub const fn class(self) -> ProfileAssignmentPortErrorClass {
+        self.class
+    }
+}
+
+impl fmt::Display for ProfileAssignmentPortError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self.class {
+            ProfileAssignmentPortErrorClass::NotFound => "profile assignment not found",
+            ProfileAssignmentPortErrorClass::VersionConflict => {
+                "profile assignment version conflict"
+            }
+            ProfileAssignmentPortErrorClass::InvalidState => "profile assignment invalid state",
+            ProfileAssignmentPortErrorClass::Conflict => "profile assignment conflict",
+            ProfileAssignmentPortErrorClass::IntegrityFailure => {
+                "profile assignment integrity failure"
+            }
+            ProfileAssignmentPortErrorClass::InternalFailure => {
+                "profile assignment internal failure"
+            }
+            ProfileAssignmentPortErrorClass::DependencyUnavailable => {
+                "profile assignment dependency unavailable"
+            }
+        })
+    }
+}
+
+impl std::error::Error for ProfileAssignmentPortError {}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileReadModel {
     profile_id: ProfileId,
@@ -204,4 +326,20 @@ pub trait ProfileApplicationPort {
         role: MembershipRole,
         profile_id: &ProfileId,
     ) -> Result<Option<ProfileReadModel>, ProfilePortError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ProfileAssignmentApplicationPort {
+    async fn decide_assignment_replay(
+        &self,
+        actor: &ActorContext,
+        command_name: &str,
+        evidence: &CommandExecutionEvidence,
+    ) -> Result<ProfileReplayDecision, ProfileAssignmentPortError>;
+
+    async fn assign_profile(
+        &self,
+        actor: &ActorContext,
+        write: &ProfileAssignmentWrite,
+    ) -> Result<(), ProfileAssignmentPortError>;
 }

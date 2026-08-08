@@ -1,27 +1,29 @@
 # Profile Application Boundary
 
-**Status:** Phase 0 reference pattern for the migrated profile create / visible-by-ID vertical.
+**Status:** Phase 0 accepted architecture for profile create / visible-by-ID / assignment.
 
-**Scope:** repository architecture only. Assignments, profile grants, generation lifecycle, coordinator behavior and mailbox routes remain outside this slice. This document does not claim production readiness.
+**Scope:** repository architecture only. Profile grants, generation lifecycle, coordinator behavior and mailbox routes remain separate verticals. This document does not claim production readiness.
 
 ## Purpose
 
-Profile create and visible-by-ID are the second bounded Phase 0 vertical moved from Worker-owned orchestration to an application-owned command/query path, following the accepted client reference vertical:
+The profile capability now owns create, visible-by-ID and client-assignment orchestration behind provider-neutral application contracts:
 
 ```text
 HTTP / Workers SDK
   -> apps/control-plane-worker/src/profiles.rs
      transport parsing + authenticated actor context + protocol mapping
   -> crates/use-cases/src/profiles.rs
-     authorization intent + replay/write/query sequencing
+     create/query authorization + replay/write/query sequencing
+  -> crates/use-cases/src/profile_assignments.rs
+     assignment authorization + replay/write/version sequencing
   -> crates/application-ports/src/profiles.rs
-     provider-neutral inward contract
+     provider-neutral inward profile + assignment contracts
   -> crates/cloudflare-adapters/src/d1_profiles.rs
      governed D1/idempotency/visibility adapter
   -> existing atomic D1 command/query implementations
 ```
 
-Concrete D1 construction is isolated in `apps/control-plane-worker/src/composition.rs`. The migrated profile transport must not import provider D1 modules, construct `CreateProfileMutation`, or instantiate D1 repositories directly.
+Concrete D1 construction is isolated in `apps/control-plane-worker/src/composition.rs`. The migrated profile transport must not import provider D1 modules, construct governed mutation DTOs, or instantiate D1 repositories directly.
 
 ## Profile Create Ownership
 
@@ -51,9 +53,29 @@ The transport preserves the existing response shape:
 - `version`;
 - optional `linkedClientId`.
 
+## Profile Assignment Ownership
+
+`ProfileAssignmentApi` is owned by the same thin `profiles.rs` transport but has a dedicated pure use-case module so assignment semantics do not become mixed into create/query logic.
+
+The accepted ordering and compatibility rules are:
+
+1. assignment remains tenant-owner-only and owner resolution happens before request-body parsing;
+2. `assignmentId`, path `profileId`, `clientId`, `reason`, `expectedProfileVersion` and generic `requestDigest` keep their existing protocol roles;
+3. the legacy request DTO remains tolerant of unknown fields; Phase 0G does not silently harden that public parsing contract;
+4. response aggregate version is `expectedProfileVersion + 1` using checked arithmetic; overflow fails before replay/write;
+5. exact pre-write idempotency replay skips the governed write;
+6. fresh assignment remains HTTP `200`, result code `assigned`, resource reference equal to the assignment ID;
+7. unlike generation Phase 0F, a conflict-class assignment write failure performs exactly one post-conflict exact replay lookup; an exact replay succeeds, while replay miss/conflict remains a conflict;
+8. non-conflict write failures do not perform that second replay lookup;
+9. `D1ProfileApplicationRepository` maps the inward assignment write to the existing `AssignProfileMutation` and `D1GovernedCommandRepository::assign_profile` transaction rather than duplicating SQL;
+10. the existing governed D1 batch remains the source of atomic command-journal, assignment, idempotency, audit and outbox mechanics;
+11. assignment remains business/history association only. It never grants profile/client visibility and must remain separate from explicit grant ACLs.
+
+Stable public failure classes remain neutral not-found, version conflict, invalid state, conflict, integrity failure, internal failure and dependency unavailable. Provider/storage failures are not collapsed into business not-found.
+
 ## Command Evidence
 
-The vertical reuses provider-neutral `application-ports::CommandExecutionEvidence` for:
+The profile vertical reuses provider-neutral `application-ports::CommandExecutionEvidence` for:
 
 - idempotency key;
 - request digest;
@@ -62,23 +84,25 @@ The vertical reuses provider-neutral `application-ports::CommandExecutionEvidenc
 - command timestamp;
 - idempotency expiry timestamp.
 
-The HTTP/Workers layer derives the evidence, while the concrete D1 mutation envelope remains adapter-owned.
+The generic request-digest rule remains the existing 16–256-character evidence contract. The HTTP/Workers layer derives evidence, while concrete D1 mutation envelopes remain adapter-owned.
 
 ## CI Enforcement
 
 Permanent Repository Quality Audit checks enforce:
 
-- capability-owned `ProfileApplicationPort`, `ProfileCreateWrite`, `ExecuteCreateProfileCommand`, `execute_create_profile` and `get_visible_profile` symbols;
+- capability-owned `ProfileApplicationPort`, `ProfileAssignmentApplicationPort`, `ProfileCreateWrite`, `ProfileAssignmentWrite`, create/query symbols and dedicated assignment use-case symbols;
 - `check-profile-worker-application-boundary.py` rejects direct D1/provider orchestration in `profiles.rs`;
-- the same policy rejects return of superseded create/get profile handlers and DTOs in legacy `api.rs`;
-- its negative self-test deliberately restores both a direct D1 import and a legacy profile handler and proves they are rejected;
-- the Step 4 governed-write policy proves `profile.create` orchestration in the application layer while retaining the existing atomic governed D1 implementation;
-- cross-component acceptance proves live routing through `lib.rs -> profiles.rs -> use-cases` without weakening assignment/grant evidence.
+- the same policy requires live `ProfileAssignmentApi` routing through `profiles.rs` and rejects return of superseded create/get/assignment handlers, DTOs or `AssignProfileMutation` in legacy `api.rs`;
+- its negative self-test deliberately restores direct provider orchestration and a legacy assignment handler and proves both are rejected;
+- Cross-Component acceptance resolves assignment orchestration through `profiles.rs -> profile_assignments.rs -> d1_profiles.rs` while retaining atomic D1 command evidence in `d1_governed_commands.rs`;
+- the existing `assignmentDoesNotAuthorize` negative evidence remains mandatory.
 
-Pure fake-port tests, adapter tests, Worker native tests, WASM checks and the release Worker build remain separate evidence layers.
+Pure fake-port tests separately prove non-owner stop-before-replay/write, overflow-before-replay/write, exact pre-write replay, conflict-only post-write replay and non-conflict no-recheck. Adapter tests preserve stable assignment failure mapping. Worker native/WASM and governed D1 acceptance remain separate evidence layers.
 
 ## Remaining Phase 0 Work
 
-This slice does **not** close architecture gap A0. Remaining Worker-owned route families must migrate in bounded verticals rather than by expanding this PR. In particular, profile assignments, profile grants, identity/governance routes, generation orchestration and mailbox orchestration keep their current ownership until their own accepted slices.
+This slice does **not** close architecture gap A0. Remaining Worker-owned route families must migrate in bounded verticals rather than by expanding this PR. Profile grants, client grants and identity/membership/invitation governance remain in the legacy governance module until their own accepted slices.
+
+Generation and mailbox orchestration are already behind their accepted application boundaries and are not reopened by this slice.
 
 `production_ready=false` remains unchanged.

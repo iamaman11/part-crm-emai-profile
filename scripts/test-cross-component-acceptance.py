@@ -144,6 +144,7 @@ def validate_composition_surfaces() -> None:
             "MailboxJobRunApi",
             "ProfileGenerationActivateApi",
             "ProfileCoordinatorApi",
+            "ProfileAssignmentApi",
         ],
         "Worker route contract",
     )
@@ -153,11 +154,13 @@ def validate_composition_surfaces() -> None:
         api,
         [
             "OwnerBootstrapApi",
-            "ProfileAssignmentApi",
+            "ClientGrantApi",
             "ProfileGrantApi",
         ],
-        "remaining identity/profile governance Worker composition",
+        "remaining identity/grant Worker composition",
     )
+    if "ProfileAssignmentApi" in api or "AssignProfileMutation" in api or "async fn assign_profile(" in api:
+        fail("profile assignment orchestration must not remain in legacy api.rs")
 
     worker_lib = read("apps/control-plane-worker/src/lib.rs")
     require_all(
@@ -165,7 +168,9 @@ def validate_composition_surfaces() -> None:
         [
             "RouteClass::ClientCollectionApi | RouteClass::ClientResourceApi",
             "clients::dispatch(route, &mut request, &env).await",
-            "RouteClass::ProfileCollectionApi | RouteClass::ProfileResourceApi",
+            "RouteClass::ProfileCollectionApi",
+            "RouteClass::ProfileResourceApi",
+            "RouteClass::ProfileAssignmentApi",
             "profiles::dispatch(route, &mut request, &env).await",
             "RouteClass::ProfileGenerationCollectionApi",
             "profile_generations::dispatch(route, &mut request, &env).await",
@@ -188,17 +193,60 @@ def validate_composition_surfaces() -> None:
         ["pub async fn execute_create_client", "pub async fn get_visible_client"],
         "client application use cases",
     )
+
     profile_transport = read("apps/control-plane-worker/src/profiles.rs")
     require_all(
         profile_transport,
-        ["execute_create_profile", "get_visible_profile", "profile_application(env)"],
+        [
+            "execute_create_profile",
+            "get_visible_profile",
+            "execute_assign_profile",
+            "authorize_profile_assignment",
+            "next_profile_assignment_version",
+            "profile_application(env)",
+        ],
         "profile Worker application transport",
     )
     profile_use_cases = read("crates/use-cases/src/profiles.rs")
     require_all(
         profile_use_cases,
         ["pub async fn execute_create_profile", "pub async fn get_visible_profile"],
-        "profile application use cases",
+        "profile create/query application use cases",
+    )
+    assignment_use_cases = read("crates/use-cases/src/profile_assignments.rs")
+    require_all(
+        assignment_use_cases,
+        [
+            "pub async fn execute_assign_profile",
+            "pub fn authorize_profile_assignment",
+            "pub fn next_profile_assignment_version",
+            "decide_assignment_replay",
+            "ProfileAssignmentPortErrorClass::Conflict",
+        ],
+        "profile assignment application use cases",
+    )
+    profile_adapter = read("crates/cloudflare-adapters/src/d1_profiles.rs")
+    require_all(
+        profile_adapter,
+        [
+            "impl ProfileApplicationPort for D1ProfileApplicationRepository",
+            "impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository",
+            "AssignProfileMutation",
+            ".assign_profile(actor, mutation)",
+            "D1IdempotencyRepository",
+        ],
+        "profile D1 application adapter",
+    )
+    governed_commands = read("crates/cloudflare-adapters/src/d1_governed_commands.rs")
+    require_all(
+        governed_commands,
+        [
+            "profile_assignment_commands",
+            "pub async fn assign_profile",
+            "expected_profile_version",
+            '"profile.assign_client"',
+        ],
+        "profile assignment atomic D1 command",
     )
 
     generation_transport = read("apps/control-plane-worker/src/profile_generations.rs")

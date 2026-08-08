@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed if the migrated profile Worker transport regains D1 orchestration."""
+"""Fail closed if migrated profile Worker transports regain D1 orchestration."""
 
 from __future__ import annotations
 
@@ -14,20 +14,27 @@ FORBIDDEN_PROFILE_TRANSPORT_TOKENS = (
     "D1IdentityQueryRepository",
     "D1IdempotencyRepository",
     "CreateProfileMutation",
+    "AssignProfileMutation",
     "D1Database",
 )
 
 REQUIRED_PROFILE_TRANSPORT_TOKENS = (
     "execute_create_profile",
     "get_visible_profile",
+    "execute_assign_profile",
+    "authorize_profile_assignment",
     "profile_application(env)",
 )
 
 LEGACY_PROFILE_API_TOKENS = (
+    "RouteClass::ProfileAssignmentApi",
     "async fn create_profile(",
     "async fn get_profile(",
+    "async fn assign_profile(",
     "struct ProfileCreateRequest",
     "struct ProfileResponse",
+    "struct AssignmentRequest",
+    "AssignProfileMutation",
 )
 
 
@@ -47,6 +54,7 @@ def validate(root: Path) -> list[str]:
     legacy_api_path = worker / "api.rs"
     ports_path = root / "crates/application-ports/src/profiles.rs"
     use_cases_path = root / "crates/use-cases/src/profiles.rs"
+    assignment_use_cases_path = root / "crates/use-cases/src/profile_assignments.rs"
     adapter_path = root / "crates/cloudflare-adapters/src/d1_profiles.rs"
 
     required_paths = (
@@ -56,6 +64,7 @@ def validate(root: Path) -> list[str]:
         legacy_api_path,
         ports_path,
         use_cases_path,
+        assignment_use_cases_path,
         adapter_path,
     )
     for path in required_paths:
@@ -70,6 +79,7 @@ def validate(root: Path) -> list[str]:
     legacy_api = read(legacy_api_path)
     ports = read(ports_path)
     use_cases = read(use_cases_path)
+    assignment_use_cases = read(assignment_use_cases_path)
     adapter = read(adapter_path)
 
     for token in FORBIDDEN_PROFILE_TRANSPORT_TOKENS:
@@ -80,23 +90,47 @@ def validate(root: Path) -> list[str]:
         if token not in transport:
             errors.append(f"profile Worker transport missing application call token `{token}`")
 
-    route_fragment = "RouteClass::ProfileCollectionApi | RouteClass::ProfileResourceApi"
-    if route_fragment not in worker_lib or "profiles::dispatch(route, &mut request, &env).await" not in worker_lib:
-        errors.append("Worker composition root must route profile collection/resource APIs to profiles::dispatch")
+    for route_token in (
+        "RouteClass::ProfileCollectionApi",
+        "RouteClass::ProfileResourceApi",
+        "RouteClass::ProfileAssignmentApi",
+        "profiles::dispatch(route, &mut request, &env).await",
+    ):
+        if route_token not in worker_lib:
+            errors.append(f"Worker composition root missing profile route token `{route_token}`")
 
     if "D1ProfileApplicationRepository" not in composition or "env.d1(D1_CATALOG_BINDING)?" not in composition:
         errors.append("Worker composition root must construct the D1 profile application adapter")
 
-    if "pub trait ProfileApplicationPort" not in ports:
-        errors.append("application ports must own ProfileApplicationPort")
+    for token in (
+        "pub trait ProfileApplicationPort",
+        "pub trait ProfileAssignmentApplicationPort",
+        "pub struct ProfileAssignmentWrite",
+    ):
+        if token not in ports:
+            errors.append(f"application profile ports missing `{token}`")
+
     if "pub async fn execute_create_profile" not in use_cases or "pub async fn get_visible_profile" not in use_cases:
         errors.append("profile use cases must own create/query orchestration")
+    for token in (
+        "pub async fn execute_assign_profile",
+        "pub fn authorize_profile_assignment",
+        "pub fn next_profile_assignment_version",
+        "decide_assignment_replay",
+    ):
+        if token not in assignment_use_cases:
+            errors.append(f"profile assignment use cases missing `{token}`")
+
     if "impl ProfileApplicationPort for D1ProfileApplicationRepository" not in adapter:
         errors.append("Cloudflare adapter must implement the inward profile application port")
+    if "impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository" not in adapter:
+        errors.append("Cloudflare adapter must implement the inward profile assignment port")
+    if "AssignProfileMutation" not in adapter or ".assign_profile(actor, mutation)" not in adapter:
+        errors.append("Cloudflare profile adapter must own the atomic assignment mutation mapping")
 
     for token in LEGACY_PROFILE_API_TOKENS:
         if token in legacy_api:
-            errors.append(f"legacy profile create/query implementation remains in api.rs: `{token}`")
+            errors.append(f"legacy migrated profile implementation remains in api.rs: `{token}`")
 
     return errors
 
@@ -111,7 +145,8 @@ def write_self_test_fixture(root: Path) -> None:
 
     (worker / "profiles.rs").write_text(
         "use cloudflare_adapters::d1_identity_queries::D1IdentityQueryRepository;\n"
-        "fn route() { execute_create_profile(); get_visible_profile(); profile_application(env); }\n",
+        "fn route() { execute_create_profile(); get_visible_profile(); execute_assign_profile(); "
+        "authorize_profile_assignment(); profile_application(env); AssignProfileMutation; }\n",
         encoding="utf-8",
     )
     (worker / "composition.rs").write_text(
@@ -119,18 +154,35 @@ def write_self_test_fixture(root: Path) -> None:
         encoding="utf-8",
     )
     (worker / "lib.rs").write_text(
-        "RouteClass::ProfileCollectionApi | RouteClass::ProfileResourceApi => "
-        "profiles::dispatch(route, &mut request, &env).await\n",
+        "RouteClass::ProfileCollectionApi RouteClass::ProfileResourceApi "
+        "RouteClass::ProfileAssignmentApi profiles::dispatch(route, &mut request, &env).await\n",
         encoding="utf-8",
     )
-    (worker / "api.rs").write_text("async fn create_profile() {}\n", encoding="utf-8")
-    (ports / "profiles.rs").write_text("pub trait ProfileApplicationPort {}\n", encoding="utf-8")
+    (worker / "api.rs").write_text(
+        "RouteClass::ProfileAssignmentApi async fn assign_profile() {} struct AssignmentRequest;\n",
+        encoding="utf-8",
+    )
+    (ports / "profiles.rs").write_text(
+        "pub trait ProfileApplicationPort {}\n"
+        "pub trait ProfileAssignmentApplicationPort {}\n"
+        "pub struct ProfileAssignmentWrite;\n",
+        encoding="utf-8",
+    )
     (use_cases / "profiles.rs").write_text(
         "pub async fn execute_create_profile() {}\npub async fn get_visible_profile() {}\n",
         encoding="utf-8",
     )
+    (use_cases / "profile_assignments.rs").write_text(
+        "pub async fn execute_assign_profile() {}\n"
+        "pub fn authorize_profile_assignment() {}\n"
+        "pub fn next_profile_assignment_version() {}\n"
+        "fn replay() { decide_assignment_replay(); }\n",
+        encoding="utf-8",
+    )
     (adapters / "d1_profiles.rs").write_text(
-        "impl ProfileApplicationPort for D1ProfileApplicationRepository {}\n",
+        "impl ProfileApplicationPort for D1ProfileApplicationRepository {}\n"
+        "impl ProfileAssignmentApplicationPort for D1ProfileApplicationRepository {}\n"
+        "fn write() { AssignProfileMutation; repo.assign_profile(actor, mutation); }\n",
         encoding="utf-8",
     )
 
@@ -147,7 +199,7 @@ def main() -> int:
             write_self_test_fixture(fixture)
             errors = validate(fixture)
             has_provider_rejection = any("provider token" in error for error in errors)
-            has_legacy_rejection = any("legacy profile" in error for error in errors)
+            has_legacy_rejection = any("legacy migrated profile" in error for error in errors)
             if not (has_provider_rejection and has_legacy_rejection):
                 print("negative direct-D1 and legacy profile fixtures unexpectedly passed")
                 for error in errors:

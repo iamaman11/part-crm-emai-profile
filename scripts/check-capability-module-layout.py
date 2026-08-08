@@ -27,6 +27,7 @@ USE_CASE_MODULES = (
     "identity_acl",
     "mailbox_jobs",
     "mailboxes",
+    "profile_assignments",
     "profiles",
 )
 
@@ -57,6 +58,8 @@ PORT_OWNERS = {
         "pub trait ProfileRepository",
         "pub trait ProfileApplicationPort",
         "pub struct ProfileCreateWrite",
+        "pub trait ProfileAssignmentApplicationPort",
+        "pub struct ProfileAssignmentWrite",
     ),
     "sessions.rs": ("pub trait ProfileCoordinatorPort",),
 }
@@ -84,6 +87,12 @@ USE_CASE_OWNERS = {
         "pub async fn execute_run_mailbox_job",
         "pub fn validate_create_mailbox_job_request",
         "pub fn validate_mailbox_job_run_version",
+    ),
+    "profile_assignments.rs": (
+        "pub struct ExecuteAssignProfileCommand",
+        "pub async fn execute_assign_profile",
+        "pub fn authorize_profile_assignment",
+        "pub fn next_profile_assignment_version",
     ),
     "profiles.rs": (
         "pub struct OpenProfileCommand",
