@@ -5,11 +5,17 @@ use crate::command_evidence;
 use crate::composition::profile_application;
 use application_ports::profiles::ProfileStatus;
 use control_plane_contract::RouteClass;
-use profile_platform_primitives::{AggregateVersion, AssignmentId, ClientId, ProfileId};
+use profile_platform_primitives::{
+    ActorId, AggregateVersion, AssignmentId, ClientId, ProfileId,
+};
 use serde::{Deserialize, Serialize};
 use use_cases::profile_assignments::{
     ExecuteAssignProfileCommand, ProfileAssignmentOperationError, ProfileAssignmentOutcome,
     authorize_profile_assignment, execute_assign_profile, next_profile_assignment_version,
+};
+use use_cases::profile_grants::{
+    ExecuteProfileGrantCommand, ProfileGrantAction, ProfileGrantOperationError, ProfileGrantOutcome,
+    authorize_profile_grant, execute_profile_grant,
 };
 use use_cases::profiles::{
     ExecuteCreateProfileCommand, ProfileDetails, ProfileMutationOutcome, ProfileOperationError,
@@ -35,6 +41,11 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
         RouteClass::ProfileAssignmentApi => {
             let profile_id = segments.get(5).copied().unwrap_or_default();
             assign_profile(request, env, tenant_id, profile_id).await
+        }
+        RouteClass::ProfileGrantApi => {
+            let profile_id = segments.get(5).copied().unwrap_or_default();
+            let actor_id = segments.get(7).copied().unwrap_or_default();
+            update_profile_grant(request, env, tenant_id, profile_id, actor_id).await
         }
         _ => neutral_not_found(&correlation_hint(request)),
     }
@@ -168,6 +179,70 @@ async fn assign_profile(
     }
 }
 
+async fn update_profile_grant(
+    request: &mut Request,
+    env: &Env,
+    tenant_id: &str,
+    profile_id: &str,
+    target_actor_id: &str,
+) -> Result<Response> {
+    let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
+        return neutral_not_found(&correlation_hint(request));
+    };
+    let role = membership_role(&actor);
+    if let Err(error) = authorize_profile_grant(role) {
+        return profile_grant_failure(actor.actor().correlation_id().as_str(), error);
+    }
+
+    let body = match request.json::<ProfileGrantRequest>().await {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let profile_id = match ProfileId::parse(profile_id) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let target_actor_id = match ActorId::parse(target_actor_id) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let expected_profile_version = match AggregateVersion::new(body.expected_profile_version) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let evidence = match command_evidence::from_request(request, actor.actor(), body.request_digest)
+    {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
+    };
+    let action = if request.method().as_ref() == "DELETE" {
+        ProfileGrantAction::Revoke
+    } else {
+        ProfileGrantAction::Grant
+    };
+    let application = profile_application(env)?;
+    match execute_profile_grant(
+        actor.actor(),
+        role,
+        &application,
+        action,
+        ExecuteProfileGrantCommand::new(
+            target_actor_id,
+            profile_id,
+            expected_profile_version,
+            body.role,
+            body.reason,
+            evidence,
+        ),
+    )
+    .await
+    {
+        Ok(_) if action == ProfileGrantAction::Revoke => no_content(),
+        Ok(outcome) => profile_grant_receipt(&outcome),
+        Err(error) => profile_grant_failure(actor.actor().correlation_id().as_str(), error),
+    }
+}
+
 fn operation_failure(correlation_id: &str, error: ProfileOperationError) -> Result<Response> {
     match error {
         ProfileOperationError::NotFound => neutral_not_found(correlation_id),
@@ -223,8 +298,46 @@ fn assignment_failure(
     }
 }
 
+fn profile_grant_failure(
+    correlation_id: &str,
+    error: ProfileGrantOperationError,
+) -> Result<Response> {
+    match error {
+        ProfileGrantOperationError::InvalidRequest => invalid_request(correlation_id),
+        ProfileGrantOperationError::NotFound => neutral_not_found(correlation_id),
+        ProfileGrantOperationError::VersionConflict => {
+            problem(correlation_id, 409, "version_conflict", "Version Conflict")
+        }
+        ProfileGrantOperationError::InvalidState => {
+            problem(correlation_id, 409, "invalid_state", "Invalid State")
+        }
+        ProfileGrantOperationError::Conflict => {
+            problem(correlation_id, 409, "conflict", "Conflict")
+        }
+        ProfileGrantOperationError::IntegrityFailure => problem(
+            correlation_id,
+            500,
+            "integrity_failure",
+            "Integrity Failure",
+        ),
+        ProfileGrantOperationError::InternalFailure => {
+            problem(correlation_id, 500, "internal_failure", "Internal Failure")
+        }
+        ProfileGrantOperationError::DependencyUnavailable => problem(
+            correlation_id,
+            503,
+            "dependency_unavailable",
+            "Dependency Unavailable",
+        ),
+    }
+}
+
 fn invalid_request(correlation_id: &str) -> Result<Response> {
     problem(correlation_id, 400, "invalid_request", "Invalid Request")
+}
+
+fn no_content() -> Result<Response> {
+    Ok(Response::empty()?.with_status(204))
 }
 
 #[derive(Serialize)]
@@ -246,6 +359,15 @@ fn mutation_receipt(outcome: &ProfileMutationOutcome) -> Result<Response> {
 }
 
 fn assignment_receipt(outcome: &ProfileAssignmentOutcome) -> Result<Response> {
+    Response::from_json(&MutationReceipt {
+        result_code: outcome.result_code(),
+        resource_id: outcome.resource_id(),
+        aggregate_version: outcome.aggregate_version().value(),
+    })
+    .map(|response| response.with_status(200))
+}
+
+fn profile_grant_receipt(outcome: &ProfileGrantOutcome) -> Result<Response> {
     Response::from_json(&MutationReceipt {
         result_code: outcome.result_code(),
         resource_id: outcome.resource_id(),
@@ -301,9 +423,18 @@ struct AssignmentRequest {
     request_digest: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileGrantRequest {
+    role: String,
+    reason: String,
+    expected_profile_version: u64,
+    request_digest: String,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AssignmentRequest, MutationReceipt, ProfileResponse};
+    use super::{AssignmentRequest, MutationReceipt, ProfileGrantRequest, ProfileResponse};
 
     #[test]
     fn transport_models_keep_camel_case_contract_field_names()
@@ -339,5 +470,17 @@ mod tests {
             "legacyIgnoredField":"still-tolerated"
         }"#;
         assert!(serde_json::from_str::<AssignmentRequest>(payload).is_ok());
+    }
+
+    #[test]
+    fn profile_grant_request_preserves_legacy_unknown_field_tolerance() {
+        let payload = r#"{
+            "role":"PROFILE_VIEWER",
+            "reason":"legacy-compatible",
+            "expectedProfileVersion":1,
+            "requestDigest":"request-digest-01JTRANSPORT",
+            "legacyIgnoredField":"still-tolerated"
+        }"#;
+        assert!(serde_json::from_str::<ProfileGrantRequest>(payload).is_ok());
     }
 }
