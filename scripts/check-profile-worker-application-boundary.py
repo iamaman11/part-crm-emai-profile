@@ -72,7 +72,6 @@ def validate(root: Path) -> list[str]:
         profile_path,
         composition_path,
         lib_path,
-        legacy_api_path,
         ports_path,
         use_cases_path,
         assignment_use_cases_path,
@@ -88,7 +87,7 @@ def validate(root: Path) -> list[str]:
     transport = read(profile_path)
     composition = read(composition_path)
     worker_lib = read(lib_path)
-    legacy_api = read(legacy_api_path)
+    legacy_api = read(legacy_api_path) if legacy_api_path.is_file() else ""
     ports = read(ports_path)
     use_cases = read(use_cases_path)
     assignment_use_cases = read(assignment_use_cases_path)
