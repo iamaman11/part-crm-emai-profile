@@ -256,7 +256,8 @@ def validate_composition_surfaces() -> None:
             "profile_generation_activate_commands",
             "expected_profile_version",
             "profile_generation.verify",
-            "active_profile_generation_cannot_be_quarantined",
+            "profile_generation.quarantine",
+            "expected_generation_version",
         ],
         "immutable generation atomic D1 adapter",
     )
