@@ -39,6 +39,8 @@ jobs:
           python -m py_compile scripts/check-frontend-feature-boundaries.py
           python -m py_compile scripts/generate-architecture-inventory.py
           python -m py_compile scripts/test-architecture-inventory-negative.py
+          python -m py_compile scripts/check-phase1a-event-boundaries.py
+          python -m py_compile scripts/test-integration-event-foundation.py
 
       - name: Enforce GitHub Actions Node 24 checkout runtime
         run: python scripts/check-github-actions-runtime.py
@@ -97,6 +99,12 @@ jobs:
 
       - name: Prove architecture inventory drift is rejected
         run: python scripts/test-architecture-inventory-negative.py
+
+      - name: Enforce Phase 1A event/outbox ownership and scope
+        run: python scripts/check-phase1a-event-boundaries.py
+
+      - name: Prove Phase 1A durable outbox and consumer idempotency
+        run: python scripts/test-integration-event-foundation.py
 
       - name: Test hardened pure boundaries
         run: >-
