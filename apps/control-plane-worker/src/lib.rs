@@ -5,6 +5,7 @@ mod api;
 mod clients;
 mod command_evidence;
 mod composition;
+mod identity;
 mod mailbox_bindings;
 mod mailbox_jobs;
 mod mutation_failure;
@@ -71,7 +72,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::OwnerTransferApi
         | RouteClass::InvitationCollectionApi
         | RouteClass::InvitationAcceptApi
-        | RouteClass::MembershipStatusApi => api::dispatch(route, &mut request, &env).await,
+        | RouteClass::MembershipStatusApi => identity::dispatch(route, &mut request, &env).await,
     }
 }
 
