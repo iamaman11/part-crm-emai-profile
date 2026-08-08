@@ -13,6 +13,7 @@ pub mod d1_identity_ceremonies;
 mod d1_identity_failure;
 pub mod d1_identity_governance;
 pub mod d1_identity_queries;
+pub mod d1_integration_events;
 pub mod d1_invitation_acceptance;
 pub mod d1_mailbox_bindings;
 pub mod d1_mailbox_jobs;
@@ -21,6 +22,7 @@ pub mod d1_profile_coordinator;
 pub mod d1_profile_generation_application;
 pub mod d1_profile_generations;
 pub mod d1_profiles;
+pub mod integration_event_queue;
 pub mod mailbox_provider;
 pub mod profile_coordinator;
 

@@ -12,6 +12,9 @@ binding = "ASSETS"
 run_worker_first = true
 not_found_handling = "single-page-application"
 
+[triggers]
+crons = ["* * * * *"]
+
 [[d1_databases]]
 binding = "CATALOG_DB"
 database_name = "REPLACE_WITH_D1_DATABASE_NAME"
@@ -24,6 +27,15 @@ bucket_name = "REPLACE_WITH_R2_BUCKET_NAME"
 [[queues.producers]]
 binding = "GENERATION_VERIFICATION"
 queue = "REPLACE_WITH_VERIFICATION_QUEUE_NAME"
+
+[[queues.producers]]
+binding = "INTEGRATION_EVENTS"
+queue = "REPLACE_WITH_INTEGRATION_EVENTS_QUEUE_NAME"
+
+[[queues.consumers]]
+queue = "REPLACE_WITH_INTEGRATION_EVENTS_QUEUE_NAME"
+max_batch_size = 10
+max_batch_timeout = 5
 
 [durable_objects]
 bindings = [

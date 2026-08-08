@@ -1,7 +1,16 @@
 #![forbid(unsafe_code)]
 
+pub mod integration_event_registry;
+pub mod integration_events;
+
 use core::fmt;
 use profile_platform_primitives::{ActorContext, IdempotencyKey};
+
+pub use integration_event_registry::{FOUNDATION_EVENT_TYPES_V1, is_foundation_event_type};
+pub use integration_events::{
+    INTEGRATION_EVENT_ENVELOPE_VERSION, IntegrationEventContractError, IntegrationEventEnvelope,
+    IntegrationEventPayload,
+};
 
 pub const WEB_API_VERSION: ContractVersion = ContractVersion::new(1, 0);
 pub const BRIDGE_PROTOCOL_VERSION: ContractVersion = ContractVersion::new(1, 0);
