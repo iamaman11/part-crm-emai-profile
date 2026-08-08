@@ -1,11 +1,7 @@
 use crate::CommandExecutionEvidence;
-use crate::identity_governance::{
-    IdentityGovernancePortError, IdentityReplayDecision,
-};
+use crate::identity_governance::{IdentityGovernancePortError, IdentityReplayDecision};
 use identity_access_domain::MembershipRole;
-use profile_platform_primitives::{
-    ActorId, CorrelationId, IdentityId, InvitationId, TenantScope,
-};
+use profile_platform_primitives::{ActorId, CorrelationId, IdentityId, InvitationId, TenantScope};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedIdentitySnapshot {
