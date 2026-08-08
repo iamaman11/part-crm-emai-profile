@@ -521,24 +521,24 @@ pub struct ProtectedContactWrite {
     expected_client_version: AggregateVersion,
     contact: ProtectedContactPoint,
     evidence: CommandExecutionEvidence,
-    event_payload_json: String,
+    event_payload_json: &'static str,
 }
 
 impl ProtectedContactWrite {
     #[must_use]
-    pub fn new(
+    pub const fn new(
         client_id: ClientId,
         expected_client_version: AggregateVersion,
         contact: ProtectedContactPoint,
         evidence: CommandExecutionEvidence,
-        event_payload_json: impl Into<String>,
+        event_payload_json: &'static str,
     ) -> Self {
         Self {
             client_id,
             expected_client_version,
             contact,
             evidence,
-            event_payload_json: event_payload_json.into(),
+            event_payload_json,
         }
     }
 
@@ -563,8 +563,8 @@ impl ProtectedContactWrite {
     }
 
     #[must_use]
-    pub fn event_payload_json(&self) -> &str {
-        &self.event_payload_json
+    pub const fn event_payload_json(&self) -> &str {
+        self.event_payload_json
     }
 }
 
