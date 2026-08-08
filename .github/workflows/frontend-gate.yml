@@ -7,40 +7,13 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: frontend-gate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  phase0n-docs-closeout:
-    name: Materialize Phase 0N docs closeout
-    if: github.event_name == 'pull_request' && github.head_ref == 'docs-phase0n-closeout' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout closeout branch
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: docs-phase0n-closeout
-
-      - name: Materialize accepted-main docs
-        run: python scripts/phase0n-docs-closeout.py
-
-      - name: Verify architecture and documentation consistency
-        run: python scripts/generate-architecture-inventory.py --check
-
-      - name: Commit accepted-main docs
-        shell: bash
-        run: |
-          set -euo pipefail
-          git diff --check
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add docs/DEVELOPMENT_PLAN.md docs/DEVELOPER_CAPABILITY_MATRIX.md
-          git commit -m 'Docs: mark Phase 0N accepted and advance to Phase 1A'
-          git push origin HEAD:docs-phase0n-closeout
-
   frontend:
     name: React Operator UI
     runs-on: ubuntu-latest
