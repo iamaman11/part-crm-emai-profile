@@ -17,6 +17,7 @@ explicit.
 ## Current Implementation / Evidence Orientation
 
 - [`DEVELOPER_CAPABILITY_MATRIX.md`](./DEVELOPER_CAPABILITY_MATRIX.md) — authoritative accepted implementation/evidence level (`Composed`, `Library`, `Synthetic`, `Target`, `External`).
+- [`../architecture/inventory.json`](../architecture/inventory.json) — deterministic machine-readable inventory of workspace members, D1 migrations, public route/classifier ownership, generated public contracts and documentation authority; CI verifies drift against repository truth.
 - [`PROFILE_APPLICATION_BOUNDARY.md`](./PROFILE_APPLICATION_BOUNDARY.md) — capability-specific profile application-boundary architecture/evidence.
 - [`PROFILE_GENERATION_REGISTRY.md`](./PROFILE_GENERATION_REGISTRY.md) — profile-generation lifecycle/storage contract.
 
