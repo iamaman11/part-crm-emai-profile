@@ -20,6 +20,7 @@ dependencies = [
  "contracts",
  "identity-access-domain",
  "mailbox-domain",
+ "notification-domain",
  "profile-domain",
  "profile-platform-primitives",
  "session-domain",
