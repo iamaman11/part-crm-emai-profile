@@ -232,7 +232,9 @@ def validate_composition_surfaces() -> None:
         if forbidden in identity_transport:
             fail(f"identity Worker transport regained provider orchestration: {forbidden}")
 
-    identity_governance_use_cases = read("crates/use-cases/src/identity_governance.rs")
+    identity_governance_use_cases = read(
+        "crates/use-cases-identity/src/identity_governance.rs"
+    )
     require_all(
         identity_governance_use_cases,
         [
@@ -248,7 +250,9 @@ def validate_composition_surfaces() -> None:
         ],
         "identity governance application use cases",
     )
-    identity_ceremony_use_cases = read("crates/use-cases/src/identity_ceremonies.rs")
+    identity_ceremony_use_cases = read(
+        "crates/use-cases-identity/src/identity_ceremonies.rs"
+    )
     require_all(
         identity_ceremony_use_cases,
         [

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when provider/runtime dependencies enter pure domain boundaries."""
+"""Fail when provider/runtime dependencies enter pure domain/application boundaries."""
 
 from __future__ import annotations
 
@@ -38,6 +38,11 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
         "session-domain",
         "mailbox-domain",
     },
+    "use-cases-identity": {
+        "profile-platform-primitives",
+        "identity-access-domain",
+        "application-ports",
+    },
     "use-cases": {
         "profile-platform-primitives",
         "contracts",
@@ -47,6 +52,7 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
         "session-domain",
         "mailbox-domain",
         "application-ports",
+        "use-cases-identity",
     },
 }
 

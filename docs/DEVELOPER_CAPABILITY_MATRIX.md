@@ -30,11 +30,11 @@ No level by itself means production readiness.
 | Capability | Level on accepted `main` | Accepted scope | Still Target / External |
 |---|---|---|---|
 | Rust workspace / primitives | Composed | Exact toolchain, typed opaque IDs, tenant/actor context, positive versions, strict lint/policy gates. | External runtime is not required for this claim. |
-| Identity / memberships / ACL | Composed | Access identity adapter, memberships, owner bootstrap/transfer, invitation create/accept, membership status lifecycle, profile/client grants, neutral disclosure and governed D1 commands. Identity governance/ceremonies plus profile/client grant/revoke are application-owned behind thin capability transports; the legacy mixed Worker `api.rs` orchestration surface is removed and permanently rejected. | Production Access/IdP deployment is External; coordinator-ingress convergence remains Phase 0 work. |
+| Identity / memberships / ACL | Composed | Access identity adapter, memberships, owner bootstrap/transfer, invitation create/accept, membership status lifecycle, profile/client grants, neutral disclosure and governed D1 commands. Identity governance/ceremonies plus profile/client grant/revoke are application-owned behind thin capability transports; the legacy mixed Worker `api.rs` orchestration surface is removed and permanently rejected. | Production Access/IdP deployment is External; first real application Cargo isolation remains active Phase 0 work until 0L merges. |
 | Client Registry | Composed | Current create/query/assignment/grant metadata paths and D1 schema. Client create/query and client grant/revoke are application-owned; profile assignment remains non-authorizing. | Registry 2.0 contacts/merge/richer lifecycle and CRM Party authority are Target. |
 | Profile catalog | Composed | Current create/query/grant/assignment metadata paths, typed profile state and active generation pointer. Create/query, assignment and profile grant/revoke are application-owned; assignment remains non-authorizing. | Remaining Phase 0 convergence is outside these accepted profile catalog paths. |
 | Profile generation registry | Composed | Governed metadata register/query/verify/activate/deactivate/quarantine, replay/evidence, audit/outbox and pointer integrity. | Production R2 verification/device unwrap/cross-device evidence is External. |
-| Profile coordinator | Composed | Durable Object journal, sequence/version/epoch/fencing, timeout/drain/recovery and D1 projection. | Phase 0 coordinator-ingress thinness is Target; remote production concurrency evidence is External. |
+| Profile coordinator | Composed | Durable Object journal, sequence/version/epoch/fencing, timeout/drain/recovery, application-thin HTTP ingress and D1 projection with permanent Step-5 boundary enforcement. | Remote production concurrency evidence is External. |
 | Full Profile Bridge operator flow | Composed / Synthetic | Explicit synthetic executable composes claim, fake device identity/enrollment, coordinator lease, generation ownership, writer lock, local lifecycle, fake Camouhost protocol and failure ordering. | Real Camoufox, production device keys, remote enrollment/coordinator and production R2 lifecycle are External. |
 | Device identity/key ports | Synthetic | Typed ports and deterministic fake implementations. | Production CNG/DPAPI/TPM protection/revoke/recovery is External. |
 | Camouhost IPC/process supervision | Synthetic | Versioned typed messages, fake Camouhost, process state machine and clean-stop evidence. | Real bundled Python/Camoufox lifecycle on physical host is External. |
@@ -44,7 +44,7 @@ No level by itself means production readiness.
 | Certification | Synthetic | Typed policy, deterministic matrix, drift/prohibited outcomes, privacy-safe summary/update rollback state. | Real Camoufox observations and independent certification are External. |
 | Mailbox operations | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, secret-handle-only DTOs, idempotency/audit/outbox, Worker metadata/job paths and synthetic provider-decision path. | Real Gmail/IMAP/browser execution, message search/body retrieval, production scheduling and provider evidence are Target/External. |
 | React web UI | Composed / Synthetic | Accepted React/Vite/TS operator shell and current session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces with permanent Frontend Gate. | Generated public TS contracts, sibling-feature import enforcement, complete detail/list routes, client Mail search/body UI, real Bridge/provider deployment remain Target/External. |
-| Cross-component standalone acceptance | Composed / Synthetic | Metadata-only deterministic manifest/validator covering governed D1, generation integrity, Worker/adapters native+WASM, synthetic Bridge and frontend tests/build. Permanent lanes enforce thin identity/client/profile Worker boundaries while retaining assignment-as-ACL negative evidence. | Real deployment/provider/device evidence is External. |
+| Cross-component standalone acceptance | Composed / Synthetic | Metadata-only deterministic manifest/validator covering governed D1, generation integrity, Worker/adapters native+WASM, synthetic Bridge and frontend tests/build. Permanent lanes enforce thin identity/client/profile/coordinator Worker boundaries while retaining assignment-as-ACL negative evidence. | Real deployment/provider/device evidence is External. |
 | Integration events / durable notifications | Target | Architecture/plan contracts defined. | Phase 1 implementation not accepted. |
 | Client Registry 2.0 | Target | Target model/constraints defined in current plan. | Phase 2 implementation not accepted. |
 | Read models/global search | Target | CQRS-lite/query boundary and search targets defined. | Phase 3 implementation not accepted. |
@@ -59,15 +59,15 @@ No level by itself means production readiness.
 Accepted capability behavior and clean application ownership are separate claims. Phase 0 moves
 provider-independent orchestration behind application use cases without changing public behavior.
 
-Accepted Phase 0 slices through **0J** establish application ownership for client create/query/grant,
-profile create/query/assignment/grant, mailbox binding/job, generation and identity governance/
-ceremony paths. The active Phase 0K coordinator-ingress branch is not an accepted `main` claim
-until its guarded merge.
+Accepted Phase 0 slices through **0K** establish application ownership for client create/query/grant,
+profile create/query/assignment/grant, mailbox binding/job, generation, identity governance/
+ceremonies and coordinator ingress. The active Phase 0L Cargo-boundary branch is not an accepted
+`main` claim until its guarded merge.
 
 As of this matrix date:
 
-- accepted `main` includes Phase 0J identity-governance application-boundary ownership and permanent rejection of the legacy mixed Worker `api.rs` surface;
-- Phase 0K coordinator-ingress convergence is tracked by #102 / PR #103 and remains unaccepted until exact-head permanent CI plus guarded merge;
+- accepted `main` includes Phase 0K application-thin coordinator ingress with permanent Step-5 ownership enforcement;
+- Phase 0L first real application Cargo extraction is tracked by issue / draft PR #104 and remains unaccepted until exact-head permanent CI plus guarded merge;
 - the current execution plan, not this matrix, determines subsequent order.
 
 Do not interpret a feature branch's `Composed` wiring or PR description as accepted `main`.
@@ -85,14 +85,14 @@ crates/application-ports
   capability-owned interfaces required by application workflows
 
 crates/use-cases
-  current accepted application crate with capability modules
-  (Phase 0 target: split independent high-growth contexts into real Cargo crates)
+  accepted shared application crate with capability modules
+  (active Phase 0L branch extracts the first justified independent identity context)
 
 crates/cloudflare-adapters
   D1/Access/DO/R2/Queue/provider implementations that depend inward
 
 apps/control-plane-worker
-  thin Worker/DO composition and transport; coordinator ingress remains the active Phase 0 convergence target until 0K merge
+  thin Worker/DO composition and transport; coordinator ingress is application-thin on accepted main
 
 apps/profile-bridge
   Windows-native local/device/runtime composition
