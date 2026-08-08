@@ -154,7 +154,8 @@ fn accept_command() -> Result<ExecuteInvitationAcceptCommand, Box<dyn std::error
 }
 
 #[test]
-fn bootstrap_existing_identity_actor_mismatch_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+fn bootstrap_existing_identity_actor_mismatch_fails_closed()
+-> Result<(), Box<dyn std::error::Error>> {
     let port = FakePort::new();
     *port.binding.borrow_mut() = Some(ActiveIdentityBinding::new(
         ActorId::parse("actor_01JOTHER")?,
@@ -182,9 +183,12 @@ fn existing_owner_exact_bootstrap_replay_skips_write() -> Result<(), Box<dyn std
         actor_id()?,
         MembershipRole::TenantOwner,
     ));
-    port.replay.borrow_mut().push(IdentityReplayDecision::Replay(
-        IdentityReplayReceipt::new("bootstrapped", None),
-    ));
+    port.replay
+        .borrow_mut()
+        .push(IdentityReplayDecision::Replay(IdentityReplayReceipt::new(
+            "bootstrapped",
+            None,
+        )));
     let outcome = block_on(execute_owner_bootstrap(
         scope()?,
         correlation_id()?,
@@ -199,7 +203,8 @@ fn existing_owner_exact_bootstrap_replay_skips_write() -> Result<(), Box<dyn std
 }
 
 #[test]
-fn occupied_tenant_boundary_stops_bootstrap_before_write() -> Result<(), Box<dyn std::error::Error>> {
+fn occupied_tenant_boundary_stops_bootstrap_before_write() -> Result<(), Box<dyn std::error::Error>>
+{
     let port = FakePort::new();
     port.boundary.set(TenantIdentityBoundary::new(1, 1));
     assert_eq!(
@@ -218,7 +223,8 @@ fn occupied_tenant_boundary_stops_bootstrap_before_write() -> Result<(), Box<dyn
 }
 
 #[test]
-fn invitation_accept_existing_actor_mismatch_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+fn invitation_accept_existing_actor_mismatch_fails_closed() -> Result<(), Box<dyn std::error::Error>>
+{
     let port = FakePort::new();
     *port.binding.borrow_mut() = Some(ActiveIdentityBinding::new(
         ActorId::parse("actor_01JOTHER")?,
@@ -243,9 +249,11 @@ fn invitation_accept_conflict_rechecks_exact_replay() -> Result<(), Box<dyn std:
     let port = FakePort::new();
     port.write_error
         .set(Some(IdentityGovernancePortErrorClass::Conflict));
-    port.replay.borrow_mut().push(IdentityReplayDecision::Replay(
-        IdentityReplayReceipt::new("accepted", None),
-    ));
+    port.replay
+        .borrow_mut()
+        .push(IdentityReplayDecision::Replay(IdentityReplayReceipt::new(
+            "accepted", None,
+        )));
     let outcome = block_on(execute_invitation_accept(
         scope()?,
         correlation_id()?,
