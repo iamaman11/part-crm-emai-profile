@@ -166,6 +166,7 @@ dependencies = [
  "contracts",
  "identity-access-domain",
  "mailbox-domain",
+ "notification-domain",
  "profile-platform-primitives",
  "serde",
  "serde_json",
