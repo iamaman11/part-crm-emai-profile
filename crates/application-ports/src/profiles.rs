@@ -371,7 +371,9 @@ impl fmt::Display for ProfileGrantPortError {
             ProfileGrantPortErrorClass::Conflict => "profile grant conflict",
             ProfileGrantPortErrorClass::IntegrityFailure => "profile grant integrity failure",
             ProfileGrantPortErrorClass::InternalFailure => "profile grant internal failure",
-            ProfileGrantPortErrorClass::DependencyUnavailable => "profile grant dependency unavailable",
+            ProfileGrantPortErrorClass::DependencyUnavailable => {
+                "profile grant dependency unavailable"
+            }
         })
     }
 }
