@@ -1,8 +1,14 @@
 use crate::commands::CommandExecutionEvidence;
-use client_domain::{ClientKind, ClientRecord, ClientStatus};
+use client_domain::{
+    ClientKind, ClientRecord, ClientStatus, ContactKind, ContactNormalizationVersion,
+    ContactProtectionVersion, EncryptedContactValue, ExactLookupHmacInput, ExactLookupToken,
+    NormalizedContactValue, ProtectedContactPoint,
+};
 use core::fmt;
 use identity_access_domain::MembershipRole;
-use profile_platform_primitives::{ActorContext, ActorId, AggregateVersion, ClientId, TenantScope};
+use profile_platform_primitives::{
+    ActorContext, ActorId, AggregateVersion, ClientId, ContactPointId, TenantId, TenantScope,
+};
 
 pub trait ClientRepository {
     type Error;
@@ -52,6 +58,51 @@ impl ClientCreateWrite {
     #[must_use]
     pub fn requested_display_name(&self) -> &str {
         &self.requested_display_name
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub fn event_payload_json(&self) -> &str {
+        &self.event_payload_json
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientLifecycleWrite {
+    client: ClientRecord,
+    expected_version: AggregateVersion,
+    evidence: CommandExecutionEvidence,
+    event_payload_json: String,
+}
+
+impl ClientLifecycleWrite {
+    #[must_use]
+    pub fn new(
+        client: ClientRecord,
+        expected_version: AggregateVersion,
+        evidence: CommandExecutionEvidence,
+        event_payload_json: impl Into<String>,
+    ) -> Self {
+        Self {
+            client,
+            expected_version,
+            evidence,
+            event_payload_json: event_payload_json.into(),
+        }
+    }
+
+    #[must_use]
+    pub const fn client(&self) -> &ClientRecord {
+        &self.client
+    }
+
+    #[must_use]
+    pub const fn expected_version(&self) -> AggregateVersion {
+        self.expected_version
     }
 
     #[must_use]
@@ -310,6 +361,213 @@ impl fmt::Display for ClientGrantPortError {
 
 impl std::error::Error for ClientGrantPortError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContactEncryptionKeyDomain {
+    ClientContactDisplay,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContactLookupKeyDomain {
+    TenantExactLookup,
+}
+
+pub struct ContactEncryptionRequest<'a> {
+    tenant_id: &'a TenantId,
+    contact_point_id: &'a ContactPointId,
+    protection_version: ContactProtectionVersion,
+    normalized_value: &'a NormalizedContactValue,
+}
+
+impl<'a> ContactEncryptionRequest<'a> {
+    #[must_use]
+    pub const fn new(
+        tenant_id: &'a TenantId,
+        contact_point_id: &'a ContactPointId,
+        protection_version: ContactProtectionVersion,
+        normalized_value: &'a NormalizedContactValue,
+    ) -> Self {
+        Self {
+            tenant_id,
+            contact_point_id,
+            protection_version,
+            normalized_value,
+        }
+    }
+
+    #[must_use]
+    pub const fn key_domain(&self) -> ContactEncryptionKeyDomain {
+        ContactEncryptionKeyDomain::ClientContactDisplay
+    }
+
+    #[must_use]
+    pub const fn tenant_id(&self) -> &TenantId {
+        self.tenant_id
+    }
+
+    #[must_use]
+    pub const fn contact_point_id(&self) -> &ContactPointId {
+        self.contact_point_id
+    }
+
+    #[must_use]
+    pub const fn protection_version(&self) -> ContactProtectionVersion {
+        self.protection_version
+    }
+
+    #[must_use]
+    pub const fn normalized_value(&self) -> &NormalizedContactValue {
+        self.normalized_value
+    }
+}
+
+pub struct ContactExactLookupRequest<'a> {
+    tenant_id: &'a TenantId,
+    contact_point_id: &'a ContactPointId,
+    kind: ContactKind,
+    normalization_version: ContactNormalizationVersion,
+    hmac_input: &'a ExactLookupHmacInput,
+}
+
+impl<'a> ContactExactLookupRequest<'a> {
+    #[must_use]
+    pub const fn new(
+        tenant_id: &'a TenantId,
+        contact_point_id: &'a ContactPointId,
+        kind: ContactKind,
+        normalization_version: ContactNormalizationVersion,
+        hmac_input: &'a ExactLookupHmacInput,
+    ) -> Self {
+        Self {
+            tenant_id,
+            contact_point_id,
+            kind,
+            normalization_version,
+            hmac_input,
+        }
+    }
+
+    #[must_use]
+    pub const fn key_domain(&self) -> ContactLookupKeyDomain {
+        ContactLookupKeyDomain::TenantExactLookup
+    }
+
+    #[must_use]
+    pub const fn tenant_id(&self) -> &TenantId {
+        self.tenant_id
+    }
+
+    #[must_use]
+    pub const fn contact_point_id(&self) -> &ContactPointId {
+        self.contact_point_id
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> ContactKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn normalization_version(&self) -> ContactNormalizationVersion {
+        self.normalization_version
+    }
+
+    #[must_use]
+    pub const fn hmac_input(&self) -> &ExactLookupHmacInput {
+        self.hmac_input
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContactProtectionPortErrorClass {
+    KeyUnavailable,
+    InvalidProtectedValue,
+    InternalFailure,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContactProtectionPortError {
+    class: ContactProtectionPortErrorClass,
+}
+
+impl ContactProtectionPortError {
+    #[must_use]
+    pub const fn new(class: ContactProtectionPortErrorClass) -> Self {
+        Self { class }
+    }
+
+    #[must_use]
+    pub const fn class(self) -> ContactProtectionPortErrorClass {
+        self.class
+    }
+}
+
+impl fmt::Display for ContactProtectionPortError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self.class {
+            ContactProtectionPortErrorClass::KeyUnavailable => "contact protection key unavailable",
+            ContactProtectionPortErrorClass::InvalidProtectedValue => {
+                "contact protector returned invalid protected value"
+            }
+            ContactProtectionPortErrorClass::InternalFailure => "contact protection internal failure",
+        })
+    }
+}
+
+impl std::error::Error for ContactProtectionPortError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtectedContactWrite {
+    client_id: ClientId,
+    expected_client_version: AggregateVersion,
+    contact: ProtectedContactPoint,
+    evidence: CommandExecutionEvidence,
+    event_payload_json: String,
+}
+
+impl ProtectedContactWrite {
+    #[must_use]
+    pub fn new(
+        client_id: ClientId,
+        expected_client_version: AggregateVersion,
+        contact: ProtectedContactPoint,
+        evidence: CommandExecutionEvidence,
+        event_payload_json: impl Into<String>,
+    ) -> Self {
+        Self {
+            client_id,
+            expected_client_version,
+            contact,
+            evidence,
+            event_payload_json: event_payload_json.into(),
+        }
+    }
+
+    #[must_use]
+    pub const fn client_id(&self) -> &ClientId {
+        &self.client_id
+    }
+
+    #[must_use]
+    pub const fn expected_client_version(&self) -> AggregateVersion {
+        self.expected_client_version
+    }
+
+    #[must_use]
+    pub const fn contact(&self) -> &ProtectedContactPoint {
+        &self.contact
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub fn event_payload_json(&self) -> &str {
+        &self.event_payload_json
+    }
+}
+
 #[allow(async_fn_in_trait)]
 pub trait ClientApplicationPort {
     async fn decide_replay(
@@ -354,4 +612,50 @@ pub trait ClientGrantApplicationPort {
         actor: &ActorContext,
         write: &ClientGrantWrite,
     ) -> Result<(), ClientGrantPortError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ClientLifecycleApplicationPort {
+    async fn load_client_for_mutation(
+        &self,
+        scope: &TenantScope,
+        client_id: &ClientId,
+    ) -> Result<Option<ClientRecord>, ClientPortError>;
+
+    async fn decide_client_lifecycle_replay(
+        &self,
+        actor: &ActorContext,
+        command_name: &str,
+        evidence: &CommandExecutionEvidence,
+    ) -> Result<ClientReplayDecision, ClientPortError>;
+
+    async fn persist_client_lifecycle(
+        &self,
+        actor: &ActorContext,
+        write: &ClientLifecycleWrite,
+    ) -> Result<(), ClientPortError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ContactProtectionPort {
+    async fn encrypt_contact_display(
+        &self,
+        request: ContactEncryptionRequest<'_>,
+    ) -> Result<EncryptedContactValue, ContactProtectionPortError>;
+
+    async fn derive_exact_lookup_token(
+        &self,
+        request: ContactExactLookupRequest<'_>,
+    ) -> Result<ExactLookupToken, ContactProtectionPortError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ProtectedClientContactRepositoryPort {
+    type Error;
+
+    async fn persist_protected_contact(
+        &self,
+        actor: &ActorContext,
+        write: &ProtectedContactWrite,
+    ) -> Result<(), Self::Error>;
 }
