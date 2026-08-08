@@ -9,8 +9,8 @@ use application_ports::CommandExecutionEvidence;
 use application_ports::profiles::{
     ProfileApplicationPort, ProfileAssignmentApplicationPort, ProfileAssignmentPortError,
     ProfileAssignmentPortErrorClass, ProfileAssignmentWrite, ProfileCreateWrite,
-    ProfileGrantApplicationPort, ProfileGrantPortError, ProfileGrantPortErrorClass,
-    ProfileGrantRole, ProfileGrantWrite, ProfilePortError, ProfilePortErrorClass, ProfileReadModel,
+    ProfileGrantApplicationPort, ProfileGrantPortError, ProfileGrantPortErrorClass, ProfileGrantRole,
+    ProfileGrantWrite, ProfilePortError, ProfilePortErrorClass, ProfileReadModel,
     ProfileReplayDecision, ProfileReplayReceipt, ProfileStatus,
 };
 use identity_access_domain::MembershipRole;
@@ -197,9 +197,7 @@ impl D1ProfileApplicationRepository {
         } else {
             self.governed.grant_profile(actor, mutation).await
         };
-        result
-            .map(|_| ())
-            .map_err(map_profile_grant_write_error)
+        result.map(|_| ()).map_err(map_profile_grant_write_error)
     }
 }
 
