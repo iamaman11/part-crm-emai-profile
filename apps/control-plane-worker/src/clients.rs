@@ -9,11 +9,11 @@ use control_plane_contract::public_api::{
     ClientCreateRequest, ClientGrantRequest, ClientProjection, MutationReceipt,
 };
 use profile_platform_primitives::{ActorId, AggregateVersion, ClientId};
-use use_cases::client_grants::{
+use use_cases_clients::client_grants::{
     ClientGrantAction, ClientGrantOperationError, ClientGrantOutcome, ExecuteClientGrantCommand,
     authorize_client_grant, execute_client_grant,
 };
-use use_cases::clients::{
+use use_cases_clients::clients::{
     ClientDetails, ClientMutationOutcome, ClientOperationError, ExecuteCreateClientCommand,
     authorize_client_create, execute_create_client, get_visible_client,
 };
