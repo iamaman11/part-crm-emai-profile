@@ -9,6 +9,38 @@ ALTER TABLE outbox_events
     ADD COLUMN event_version INTEGER NOT NULL DEFAULT 1
         CHECK(event_version BETWEEN 1 AND 65535);
 
+CREATE TRIGGER outbox_event_payload_guard
+BEFORE INSERT ON outbox_events
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'outbox_payload_invalid')
+    WHERE length(NEW.payload_json) > 4096
+       OR substr(trim(NEW.payload_json), 1, 1) <> '{'
+       OR substr(trim(NEW.payload_json), -1, 1) <> '}'
+       OR instr(lower(NEW.payload_json), '"access_token"') > 0
+       OR instr(lower(NEW.payload_json), '"authorization"') > 0
+       OR instr(lower(NEW.payload_json), '"body_html"') > 0
+       OR instr(lower(NEW.payload_json), '"cookie"') > 0
+       OR instr(lower(NEW.payload_json), '"cookies"') > 0
+       OR instr(lower(NEW.payload_json), '"credential"') > 0
+       OR instr(lower(NEW.payload_json), '"display_name"') > 0
+       OR instr(lower(NEW.payload_json), '"email"') > 0
+       OR instr(lower(NEW.payload_json), '"mail_body"') > 0
+       OR instr(lower(NEW.payload_json), '"message_body"') > 0
+       OR instr(lower(NEW.payload_json), '"oauth_token"') > 0
+       OR instr(lower(NEW.payload_json), '"password"') > 0
+       OR instr(lower(NEW.payload_json), '"phone"') > 0
+       OR instr(lower(NEW.payload_json), '"proxy_credentials"') > 0
+       OR instr(lower(NEW.payload_json), '"raw_message"') > 0
+       OR instr(lower(NEW.payload_json), '"recipient"') > 0
+       OR instr(lower(NEW.payload_json), '"refresh_token"') > 0
+       OR instr(lower(NEW.payload_json), '"secret"') > 0
+       OR instr(lower(NEW.payload_json), '"secret_handle"') > 0
+       OR instr(lower(NEW.payload_json), '"sender"') > 0
+       OR instr(lower(NEW.payload_json), '"snippet"') > 0
+       OR instr(lower(NEW.payload_json), '"subject"') > 0;
+END;
+
 CREATE TABLE consumer_idempotency (
     tenant_id TEXT NOT NULL,
     consumer_id TEXT NOT NULL
