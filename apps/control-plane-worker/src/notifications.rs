@@ -1,6 +1,7 @@
 use crate::access_session::{
     correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
 };
+use application_ports::NotificationReplayIntent;
 use application_ports::{CursorAdvanceWriteOutcome, ReplayPreparationOutcome, ReplayReasonClass};
 use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
 use cloudflare_adapters::d1_notifications::D1NotificationRepository;
@@ -14,7 +15,6 @@ use use_cases_notifications::catch_up::{acknowledge_catch_up, load_catch_up};
 use use_cases_notifications::error::NotificationOperationError;
 use use_cases_notifications::operations::load_operations;
 use use_cases_notifications::replay::prepare_replay;
-use application_ports::NotificationReplayIntent;
 use worker::{Date, Env, Request, Response, Result};
 
 const DEFAULT_CATCH_UP_PAGE_SIZE: u32 = 100;
@@ -29,9 +29,7 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
     let tenant_id = segments.get(3).copied().unwrap_or_default();
 
     match route {
-        RouteClass::NotificationEventCollectionApi => {
-            get_catch_up(request, env, tenant_id).await
-        }
+        RouteClass::NotificationEventCollectionApi => get_catch_up(request, env, tenant_id).await,
         RouteClass::NotificationEventAckApi => acknowledge(request, env, tenant_id).await,
         RouteClass::NotificationReplayCollectionApi => {
             prepare_operator_replay(request, env, tenant_id).await
@@ -48,7 +46,8 @@ async fn get_catch_up(request: &Request, env: &Env, tenant_id: &str) -> Result<R
     let operations = D1NotificationOperationsRepository::new(
         env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
     );
-    let cursors = D1NotificationRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
+    let cursors =
+        D1NotificationRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
     match load_catch_up(
         &operations,
         &cursors,
@@ -90,7 +89,8 @@ async fn acknowledge(request: &mut Request, env: &Env, tenant_id: &str) -> Resul
     let operations = D1NotificationOperationsRepository::new(
         env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
     );
-    let cursors = D1NotificationRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
+    let cursors =
+        D1NotificationRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
     let now = UnixMillis::new(Date::now().as_millis());
     match acknowledge_catch_up(
         &operations,
@@ -202,10 +202,7 @@ async fn get_operations(request: &Request, env: &Env, tenant_id: &str) -> Result
     }
 }
 
-fn operation_failure(
-    correlation_id: &str,
-    error: NotificationOperationError,
-) -> Result<Response> {
+fn operation_failure(correlation_id: &str, error: NotificationOperationError) -> Result<Response> {
     match error {
         NotificationOperationError::Forbidden => {
             problem(correlation_id, 403, "forbidden", "Forbidden")

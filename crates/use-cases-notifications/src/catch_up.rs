@@ -143,7 +143,9 @@ fn validate_page(
     events: &[NotificationEventRecord],
     limit: u32,
 ) -> Result<Option<NotificationCursor>, NotificationOperationError> {
-    if events.len() > usize::try_from(limit).map_err(|_| NotificationOperationError::InvalidInput)? {
+    if events.len()
+        > usize::try_from(limit).map_err(|_| NotificationOperationError::InvalidInput)?
+    {
         return Err(NotificationOperationError::IntegrityFailure);
     }
 
@@ -186,8 +188,8 @@ mod tests {
     }
 
     #[test]
-    fn page_must_be_strictly_ordered_after_durable_cursor()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn page_must_be_strictly_ordered_after_durable_cursor() -> Result<(), Box<dyn std::error::Error>>
+    {
         let expected = NotificationCursor::new(
             UnixMillis::new(10),
             OutboxEventId::parse("outbox_01JCATCHUP_A")?,

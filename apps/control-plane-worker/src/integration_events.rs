@@ -57,8 +57,9 @@ pub async fn dispatch_pending(env: &Env) -> Result<()> {
 
     let retention_database = env.d1(control_plane_contract::D1_CATALOG_BINDING)?;
     let retention = D1NotificationOperationsRepository::new(retention_database);
-    let retention_policy = NotificationRetentionPolicy::new(RETENTION_TTL_MS, RETENTION_BATCH_LIMIT)
-        .map_err(notification_operation_error)?;
+    let retention_policy =
+        NotificationRetentionPolicy::new(RETENTION_TTL_MS, RETENTION_BATCH_LIMIT)
+            .map_err(notification_operation_error)?;
     compact_notification_state(&retention, now, retention_policy)
         .await
         .map_err(notification_operation_error)?;

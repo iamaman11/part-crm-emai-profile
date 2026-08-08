@@ -1,7 +1,5 @@
 use crate::error::NotificationOperationError;
-use application_ports::{
-    NotificationRetentionOutcome, NotificationRetentionRepositoryPort,
-};
+use application_ports::{NotificationRetentionOutcome, NotificationRetentionRepositoryPort};
 use profile_platform_primitives::UnixMillis;
 
 const MIN_RETENTION_MS: u64 = 86_400_000;
@@ -70,6 +68,8 @@ mod tests {
         assert!(NotificationRetentionPolicy::new(MIN_RETENTION_MS, 1).is_ok());
         assert!(NotificationRetentionPolicy::new(MAX_RETENTION_MS, MAX_RETENTION_BATCH).is_ok());
         assert!(NotificationRetentionPolicy::new(MAX_RETENTION_MS + 1, 1).is_err());
-        assert!(NotificationRetentionPolicy::new(MIN_RETENTION_MS, MAX_RETENTION_BATCH + 1).is_err());
+        assert!(
+            NotificationRetentionPolicy::new(MIN_RETENTION_MS, MAX_RETENTION_BATCH + 1).is_err()
+        );
     }
 }

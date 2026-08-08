@@ -340,7 +340,10 @@ mod tests {
             ("GET", "/api/v1/tenants/tenant_01/notifications/replays"),
             ("POST", "/api/v1/tenants/tenant_01/notifications/operations"),
         ] {
-            assert_eq!(classify_route(method, path), RouteClass::DynamicRouteNotFound);
+            assert_eq!(
+                classify_route(method, path),
+                RouteClass::DynamicRouteNotFound
+            );
         }
     }
 

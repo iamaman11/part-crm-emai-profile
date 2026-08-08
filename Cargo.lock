@@ -883,7 +883,6 @@ dependencies = [
  "profile-platform-primitives",
  "session-domain",
  "use-cases-identity",
- "use-cases-notifications",
 ]
 
 [[package]]

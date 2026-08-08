@@ -517,9 +517,9 @@ fn problem_response() -> Value {
 mod tests {
     use super::{
         ActorSession, ClientCreateRequest, ClientProjection, MutationReceipt,
-        NotificationCatchUpAckRequest, NotificationEventProjection, NotificationOperationsProjection,
-        NotificationReplayRequest, PROBLEM_CODES, ProblemPayload, openapi_document,
-        problem_type_for_code,
+        NotificationCatchUpAckRequest, NotificationEventProjection,
+        NotificationOperationsProjection, NotificationReplayRequest, PROBLEM_CODES, ProblemPayload,
+        openapi_document, problem_type_for_code,
     };
 
     #[test]
@@ -642,8 +642,7 @@ mod tests {
         assert!(document["paths"]["/api/v1/session"]["get"].is_object());
         assert!(document["paths"]["/api/v1/tenants/{tenantId}/clients"]["post"].is_object());
         assert!(
-            document["paths"]["/api/v1/tenants/{tenantId}/notifications/events"]["get"]
-                .is_object()
+            document["paths"]["/api/v1/tenants/{tenantId}/notifications/events"]["get"].is_object()
         );
         assert!(
             document["paths"]["/api/v1/tenants/{tenantId}/notifications/replays"]["post"]

@@ -116,16 +116,7 @@ mod tests {
     #[test]
     fn operations_exposes_age_and_counts_only() -> Result<(), Box<dyn std::error::Error>> {
         let view = map_snapshot(
-            NotificationOperationsSnapshot::new(
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                Some(UnixMillis::new(90)),
-                7,
-            ),
+            NotificationOperationsSnapshot::new(1, 2, 3, 4, 5, 6, Some(UnixMillis::new(90)), 7),
             UnixMillis::new(100),
         )?;
         assert_eq!(view.ready_count(), 1);

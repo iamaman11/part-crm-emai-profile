@@ -6,9 +6,7 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
         ["api", "v1", "tenants", _, "notifications", "events"] if method == "GET" => {
             Some(RouteClass::NotificationEventCollectionApi)
         }
-        ["api", "v1", "tenants", _, "notifications", "events", "ack"]
-            if method == "POST" =>
-        {
+        ["api", "v1", "tenants", _, "notifications", "events", "ack"] if method == "POST" => {
             Some(RouteClass::NotificationEventAckApi)
         }
         ["api", "v1", "tenants", _, "notifications", "replays"] if method == "POST" => {

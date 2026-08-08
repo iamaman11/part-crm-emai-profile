@@ -589,8 +589,8 @@ impl NotificationOperationsRepositoryPort for D1NotificationOperationsRepository
         .await
         .map_err(map_worker_error)?
         .ok_or_else(|| NotificationPortError::new(NotificationPortErrorClass::Conflict))?;
-        let max_attempt_count = u16::try_from(non_negative(row.max_attempt_count)?)
-            .map_err(|_| integrity_failure())?;
+        let max_attempt_count =
+            u16::try_from(non_negative(row.max_attempt_count)?).map_err(|_| integrity_failure())?;
         if max_attempt_count > 64 {
             return Err(integrity_failure());
         }
