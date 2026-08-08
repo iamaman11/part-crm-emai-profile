@@ -46,7 +46,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         RouteClass::ClientCollectionApi | RouteClass::ClientResourceApi => {
             clients::dispatch(route, &mut request, &env).await
         }
-        RouteClass::ProfileCollectionApi | RouteClass::ProfileResourceApi => {
+        RouteClass::ProfileCollectionApi
+        | RouteClass::ProfileResourceApi
+        | RouteClass::ProfileAssignmentApi => {
             profiles::dispatch(route, &mut request, &env).await
         }
         RouteClass::ProfileCoordinatorApi => dispatch_profile_coordinator(&mut request, &env).await,
@@ -72,7 +74,6 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::InvitationAcceptApi
         | RouteClass::MembershipStatusApi
         | RouteClass::ClientGrantApi
-        | RouteClass::ProfileAssignmentApi
         | RouteClass::ProfileGrantApi => api::dispatch(route, &mut request, &env).await,
     }
 }
