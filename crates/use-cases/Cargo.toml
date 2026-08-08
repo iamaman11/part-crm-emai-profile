@@ -14,7 +14,6 @@ profile-domain.workspace = true
 profile-platform-primitives.workspace = true
 session-domain.workspace = true
 use-cases-identity.workspace = true
-use-cases-notifications.workspace = true
 
 [lints]
 workspace = true
