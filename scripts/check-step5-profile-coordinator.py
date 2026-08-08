@@ -160,11 +160,12 @@ def main() -> int:
         transport_path = root / "apps/control-plane-worker/src/profile_coordinator_ingress.rs"
         if transport_path.exists():
             transport = transport_path.read_text(encoding="utf-8")
-            prepare_index = transport.find("prepare_coordinator_ingress")
-            body_index = transport.find("request.json::<CoordinatorCommandRequest>()")
-            execute_index = transport.find("execute_prepared_coordinator_ingress")
-            if min(prepare_index, body_index, execute_index) < 0 or not (
-                prepare_index < body_index < execute_index
+            dispatch_index = transport.find("pub async fn dispatch")
+            prepare_index = transport.find("prepare_coordinator_ingress(", dispatch_index)
+            body_index = transport.find("request.json::<CoordinatorCommandRequest>()", dispatch_index)
+            execute_index = transport.find("execute_prepared_coordinator_ingress(", body_index)
+            if min(dispatch_index, prepare_index, body_index, execute_index) < 0 or not (
+                dispatch_index < prepare_index < body_index < execute_index
             ):
                 errors.append(
                     "coordinator transport must complete visibility preparation before POST body parsing and execution"
