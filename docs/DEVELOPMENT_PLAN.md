@@ -2,7 +2,7 @@
 
 **Status:** normative post-composition execution plan  
 **Date:** 2026-08-08  
-**Tracking:** Phase 0N accepted via #110/#111; Phase 0 complete; next planned Phase 1A; plan consolidation history #96
+**Tracking:** Phase 1A accepted via #114/#115; Phase 0 complete; next sequential slice Phase 2A; Phase 1B eligible dependency-independently; plan consolidation history #96
 **Production readiness:** unchanged; `production_ready=false` until external evidence gates are satisfied
 
 ## 1. Authority And Scope
@@ -30,13 +30,14 @@ remain External until the existing evidence process accepts real evidence.
 
 ## 2. Current Accepted Baseline And Active Slice
 
-Repository Steps 0–10 and the accepted post-composition slices through **Phase 0N** provide
+Repository Steps 0–10 and the accepted post-composition slices through **Phase 1A** provide
 the current code baseline: typed domain/application boundaries, governed D1 writes,
 profile generations, application-thin coordinator ingress, the first real application Cargo
 boundary (`use-cases-identity`), synthetic Bridge/runtime lanes, mailbox metadata/jobs, React
 composition, deterministic generated public frontend contracts, enforced frontend feature
 boundaries, capability-owned fail-closed route classification, a deterministic machine-readable
-architecture inventory and exact-head cross-component acceptance.
+architecture inventory, a versioned durable integration-event/outbox substrate with replay-safe
+notification persistence and exact-head cross-component acceptance.
 
 Phase 0L was accepted through issue/PR **#104** with guarded squash merge
 `f26528f0f99d69a24ae1c4c307c1f3458ef64e05`. Identity governance plus verified-identity
@@ -62,10 +63,20 @@ members, contiguous D1 migrations, route/classifier ownership, generated public 
 documentation authority; stale/tampered/missing inventory and selected documentation drift are
 permanently rejected by preflight and CI.
 
-**Phase 0 is complete on accepted `main`.** No sequential Phase 0 implementation slice remains.
-The **next planned slice is Phase 1A — durable event/outbox foundation**, which must start from
-the accepted Phase 0N `main` in its own bounded issue/branch/PR. Phase 1B remains later delivery
-hardening and must not be folded into the initial 1A foundation slice.
+Phase 1A was accepted through issue **#114** / PR **#115** with guarded squash merge
+`0186b780f7fed4b7c5e7f212c2fe437cbc46a5e5` from exact proven source head
+`21b4bc65cd1bb117504c0a0cfe18c8c11e411f25`. The accepted foundation versions the integration
+event envelope, evolves the existing durable outbox, persists metadata-only notification events,
+adds tenant/consumer/outbox idempotency, dispatches through the Queue adapter and keeps Queue/
+scheduled ingress application-thin. Canonical-source guards reject forged event metadata/payload,
+prohibited PII/secrets/mail bodies fail closed before persistence, and duplicate accepted delivery
+has no duplicate logical effect. Phase 1B retry/backoff/DLQ/catch-up/retention remains unimplemented.
+
+**Phase 0 remains complete on accepted `main`, and Phase 1A is accepted.** The **next planned
+sequential slice is Phase 2A — client aggregate and contact crypto foundation**, starting from the
+accepted Phase 1A `main` in its own bounded issue/branch/PR. Phase 1B is eligible to proceed
+only dependency-independently and must finish before real asynchronous provider/device execution
+in Phases 4–5 and before Phase 6 realtime.
 
 ### 2.1 Critical-path execution policy
 
@@ -353,9 +364,9 @@ Phase 0 is complete only when all are true:
 realtime behavior depend on it, while avoiding unnecessary blocking of independent product
 work once the safe foundation exists.
 
-### Phase 1A — Durable event/outbox foundation — NEXT
+### Phase 1A — Durable event/outbox foundation — ACCEPTED
 
-Build and accept first:
+Accepted implementation:
 
 - versioned integration event envelope;
 - evolved `outbox_events` and minimal notification-event persistence required by the contract;
@@ -371,9 +382,14 @@ Acceptance:
 - prohibited PII/secrets/mail bodies are rejected from event payloads;
 - consumer processing is replay-safe for the accepted event set.
 
-After Phase 1A is accepted, **Phase 2 may begin** because Client Registry expansion only needs
-the durable event/outbox contract. Phase 1B may proceed in parallel when it does not overlap
-with the active Phase 2 files/contracts.
+Acceptance used exact source head `21b4bc65cd1bb117504c0a0cfe18c8c11e411f25`, 12/12 permanent
+workflows green, `behind_by=0`, zero blocking reviews/threads and guarded squash merge #115
+`0186b780f7fed4b7c5e7f212c2fe437cbc46a5e5`.
+
+With Phase 1A accepted, **Phase 2 may begin** because Client Registry expansion only needs the
+durable event/outbox contract. Phase 1B may proceed in parallel when it does not overlap with
+the active Phase 2 files/contracts; it remains mandatory before real asynchronous Phases 4–5
+and before Phase 6 realtime.
 
 ### Phase 1B — Delivery hardening, catch-up and operations
 
@@ -401,6 +417,22 @@ Acceptance:
 ## 6. Phase 2 — Client Registry 2.0 And Assignment Model
 
 **Goal:** complete the standalone business client model before search and CRM integration.
+
+### Phase 2A — Client aggregate and contact crypto foundation — NEXT
+
+Start Phase 2 with the first bounded registry slice rather than the whole phase:
+
+- provider-neutral client aggregate/value model for `PERSON|ORGANIZATION`, lifecycle status and
+  versioned metadata;
+- encrypted-at-rest contact display values and tenant-keyed HMAC exact-lookup tokens;
+- no plaintext contact scan and no name/contact-derived technical identifiers;
+- application-owned create/update/archive intent behind ports before transport wiring;
+- additive D1 schema/adapter work only after inward native/WASM proof;
+- assignment/merge lifecycle and wider API/UI projections remain later Phase 2 slices unless the
+  bounded 2A issue proves they are required for the same invariant.
+
+Phase 2A acceptance must retain Phase 1A durable mutation/audit/outbox semantics and all existing
+authorization-before-projection, PII and generated-contract boundaries.
 
 Client card target:
 
@@ -908,24 +940,24 @@ The standalone + CRM-ready target is complete only when, at the correct evidence
 
 ## 19. Immediate Next Action
 
-Start **Phase 1A — durable event/outbox foundation** from the accepted Phase 0N `main`.
-Create a fresh bounded issue/branch/PR before implementation; do not fold Phase 1A work into the
-completed #110/#111 history or mix Phase 1B delivery hardening into the foundation slice.
+Start **Phase 2A — client aggregate and contact crypto foundation** from the accepted Phase 1A
+`main`. Create a fresh bounded issue/branch/PR before implementation; do not fold Phase 2A into the
+completed #114/#115 history. Phase 1B delivery hardening may proceed only dependency-independently
+and must not be mixed into the first Client Registry slice.
 
-Primary Phase 1A acceptance target:
+Primary Phase 2A acceptance target:
 
 ```text
-versioned integration event envelope
-  -> evolved durable outbox + minimal notification-event persistence
-  -> canonical mutation + audit/outbox atomicity within the D1 boundary
-  -> outbox dispatcher + Queue adapter
-  -> idempotent consumer registry / consumer_idempotency
-  -> payload sanitizer rejects prohibited PII, secrets and mailbox bodies
-  -> duplicate delivery has no duplicate logical effect
-  -> replay-safe accepted consumer set
+provider-neutral client aggregate + lifecycle values
+  -> encrypted contact display values
+  -> tenant-keyed HMAC exact-contact lookup tokens
+  -> no plaintext contact scan or PII-derived technical identifiers
+  -> application-owned create/update/archive intent behind ports
+  -> additive D1 adapter/schema only after inward proof
+  -> canonical mutation + audit/outbox remains atomic
   -> exact-head permanent CI + guarded merge
 ```
 
-Keep all accepted Phase 0 boundaries, generated-contract/feature-boundary rules and architecture
-inventory checks intact. Continue long-lead External gate preparation in parallel without changing
-`production_ready=false`; real provider/physical-host evidence remains External.
+Keep all accepted Phase 0 and Phase 1A boundaries, generated-contract/feature-boundary rules and
+architecture inventory checks intact. Continue long-lead External gate preparation in parallel
+without changing `production_ready=false`; real provider/physical-host evidence remains External.

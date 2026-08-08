@@ -45,7 +45,7 @@ No level by itself means production readiness.
 | Mailbox operations | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, secret-handle-only DTOs, idempotency/audit/outbox, Worker metadata/job paths and synthetic provider-decision path. | Real Gmail/IMAP/browser execution, message search/body retrieval, production scheduling and provider evidence are Target/External. |
 | React web UI | Composed / Synthetic | Accepted React/Vite/TS operator shell and current session/client/profile/ACL/assignment/generation/coordinator/mailbox/user surfaces with permanent Frontend Gate. The migrated session/client/problem/mutation public contract slice is generated deterministically from the accepted Rust contract, and sibling-feature internal/alias imports are fail-closed. | Remaining public contract coverage expands incrementally with its backend slices; complete detail/list routes, client Mail search/body UI and real Bridge/provider deployment remain Target/External. |
 | Cross-component standalone acceptance | Composed / Synthetic | Metadata-only deterministic manifest/validator covering governed D1, generation integrity, Worker/adapters native+WASM, synthetic Bridge and frontend tests/build. Permanent lanes enforce thin identity/client/profile/coordinator Worker boundaries, assignment-as-ACL negative evidence, capability-owned fail-closed route composition and deterministic architecture-inventory consistency. | Real deployment/provider/device evidence is External. |
-| Integration events / durable notifications | Target | Architecture/plan contracts defined. | Phase 1 implementation not accepted. |
+| Integration events / durable notifications | Composed / Synthetic | Accepted Phase 1A versioned envelope, evolved D1 outbox, metadata-only `notification_events`, tenant/consumer/outbox idempotency, sanitized Queue dispatch, thin scheduled/Queue ingress, canonical-source guards and deterministic duplicate/failure-order evidence. | Phase 1B retry/backoff/max-attempt/DLQ/catch-up/retention and real provider/device/realtime delivery remain Target/External. |
 | Client Registry 2.0 | Target | Target model/constraints defined in current plan. | Phase 2 implementation not accepted. |
 | Read models/global search | Target | CQRS-lite/query boundary and search targets defined. | Phase 3 implementation not accepted. |
 | Client-scoped mailbox message search/body | Target | Product/query/security contract is normative. | Provider-neutral query implementation and real provider/browser lanes are Phases 3–5. |
@@ -73,7 +73,8 @@ As of this matrix date:
 - `identity_acl` intentionally remains in shared `use-cases` because its current helpers cross client/profile contexts;
 - accepted Phase 0M uses `control-plane-contract` as the canonical migrated public Rust transport source, commits deterministic OpenAPI/TypeScript output, consumes generated types on real frontend API surfaces, and permanently rejects sibling-feature internals plus resolver-alias bypasses;
 - accepted Phase 0N splits route matching into capability-owned classifiers behind one composed fail-closed entrypoint, prevents unknown `/api/*`, `/auth/*` and `/bridge/*` variants from reaching SPA assets, and permanently verifies deterministic `architecture/inventory.json` plus selected documentation consistency claims;
-- the current execution plan, not this matrix, determines subsequent order; Phase 1A is next planned while integration events/durable notifications remain Target until that implementation is accepted.
+- accepted Phase 1A composes the versioned integration-event envelope, evolved durable outbox, metadata-only notification persistence, Queue dispatcher/consumer and durable consumer idempotency behind provider-neutral ports, with canonical-source and payload-sanitization evidence on native/WASM paths;
+- the current execution plan, not this matrix, determines subsequent order; Phase 2A is the next sequential slice, while Phase 1B is eligible dependency-independently and remains required before real async provider/device and realtime execution.
 
 Do not interpret a feature branch's `Composed` wiring or PR description as accepted `main`.
 
@@ -87,7 +88,7 @@ crates/*-domain
   pure provider-independent invariants/state machines
 
 crates/application-ports
-  capability-owned interfaces required by application workflows
+  capability-owned interfaces required by application workflows, including accepted integration-event outbox/publisher/notification/idempotency ports
 
 crates/control-plane-contract
   accepted canonical public control-plane transport contract, deterministic OpenAPI export and capability-owned fail-closed route classifiers behind one composed entrypoint
@@ -96,13 +97,13 @@ crates/use-cases-identity
   accepted independent identity governance + verified-identity ceremony application context
 
 crates/use-cases
-  accepted shared application crate for remaining contexts; identity modules are compatibility re-exports only
+  accepted shared application crate for remaining contexts; identity modules are compatibility re-exports only; Phase 1A dispatcher and foundation consumer semantics are application-owned here
 
 crates/cloudflare-adapters
-  D1/Access/DO/R2/Queue/provider implementations that depend inward
+  D1/Access/DO/R2/Queue/provider implementations that depend inward, including the accepted Phase 1A D1 integration-event repository and Queue publisher adapter
 
 apps/control-plane-worker
-  thin Worker/DO composition and transport; coordinator ingress is application-thin on accepted main
+  thin Worker/DO/Queue/Scheduled composition and transport; coordinator and accepted Phase 1A event ingress remain application-thin on accepted main
 
 apps/profile-bridge
   Windows-native local/device/runtime composition
