@@ -5,6 +5,7 @@ mod clients;
 mod command_evidence;
 mod composition;
 mod identity;
+mod integration_events;
 mod mailbox_bindings;
 mod mailbox_jobs;
 mod mutation_failure;
@@ -21,13 +22,16 @@ use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use cloudflare_adapters::d1_idempotency::D1IdempotencyRepository;
 use cloudflare_adapters::d1_identity_acl::D1IdentityAclRepository;
 use cloudflare_adapters::d1_mailboxes::D1MailboxRepository;
+use cloudflare_adapters::integration_event_queue::IntegrationEventQueueMessage;
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
     STATIC_ASSETS_BINDING, VERIFICATION_QUEUE_BINDING, classify_route,
 };
 use profile_platform_primitives::ProfileId;
 use session_domain::coordinator::coordinator_object_name;
-use worker::{Context, Env, Request, Response, Result, event};
+use worker::{
+    Context, Env, MessageBatch, Request, Response, Result, ScheduleContext, ScheduledEvent, event,
+};
 
 #[event(fetch, respond_with_errors)]
 pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
@@ -76,6 +80,26 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
     }
 }
 
+#[event(queue)]
+pub async fn integration_event_queue(
+    message_batch: MessageBatch<IntegrationEventQueueMessage>,
+    env: Env,
+    _context: Context,
+) -> Result<()> {
+    integration_events::consume(message_batch, &env).await
+}
+
+#[event(scheduled)]
+pub async fn integration_event_schedule(
+    _event: ScheduledEvent,
+    env: Env,
+    _context: ScheduleContext,
+) {
+    if let Err(error) = integration_events::dispatch_pending(&env).await {
+        worker::console_error!("integration event dispatch failed: {error}");
+    }
+}
+
 async fn dispatch_profile_coordinator(request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
     let segments: Vec<&str> = path
@@ -99,6 +123,7 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _idempotency_repository = D1IdempotencyRepository::new(idempotency_catalog);
     let _objects = env.bucket(R2_PROFILES_BINDING)?;
     let _verification = env.queue(VERIFICATION_QUEUE_BINDING)?;
+    let _integration_events = env.queue(integration_events::INTEGRATION_EVENTS_QUEUE_BINDING)?;
     let coordinator = env.durable_object(PROFILE_COORDINATOR_BINDING)?;
     let probe_profile = ProfileId::parse("profile_foundation")
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
