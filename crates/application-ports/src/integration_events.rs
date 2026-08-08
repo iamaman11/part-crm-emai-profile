@@ -73,6 +73,14 @@ pub trait IntegrationEventPublisherPort {
     ) -> Result<(), IntegrationEventPortError>;
 }
 
+pub trait NotificationEventPort {
+    async fn persist_notification_event(
+        &self,
+        event: &IntegrationEventEnvelope,
+        persisted_at: UnixMillis,
+    ) -> Result<(), IntegrationEventPortError>;
+}
+
 pub trait ConsumerIdempotencyPort {
     async fn claim(
         &self,
