@@ -19,6 +19,7 @@ CLIENT_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "clients.rs"
 PROFILE_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_profiles.rs"
 PROFILE_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "profiles.rs"
 PROFILE_ASSIGNMENT_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "profile_assignments.rs"
+PROFILE_GRANT_USE_CASES = ROOT / "crates" / "use-cases" / "src" / "profile_grants.rs"
 WORKER_API = ROOT / "apps" / "control-plane-worker" / "src" / "api.rs"
 
 LEGACY_WRITE_TOKENS = (
@@ -41,6 +42,12 @@ LEGACY_WORKER_MUTATION_TOKENS = (
     'const PROFILE_ASSIGN_COMMAND: &str = "profile.assign_client";',
     "AssignProfileMutation",
     "async fn assign_profile(",
+    'const PROFILE_GRANT_COMMAND: &str = "profile.grant";',
+    'const PROFILE_GRANT_REVOKE_COMMAND: &str = "profile.grant_revoke";',
+    "ProfileGrantMutation",
+    "ProfileGrantValue",
+    "async fn update_profile_grant(",
+    "struct ProfileGrantRequest",
 )
 
 REQUIRED_WORKER_MUTATION_TOKENS = (
@@ -53,8 +60,6 @@ REQUIRED_WORKER_MUTATION_TOKENS = (
     'const OWNER_TRANSFER_COMMAND: &str = "membership.owner_transfer";',
     'const INVITATION_CREATE_COMMAND: &str = "invitation.create";',
     'const INVITATION_ACCEPT_COMMAND: &str = "invitation.accept";',
-    'const PROFILE_GRANT_COMMAND: &str = "profile.grant";',
-    'const PROFILE_GRANT_REVOKE_COMMAND: &str = "profile.grant_revoke";',
     'const CLIENT_GRANT_COMMAND: &str = "client.grant";',
     'const CLIENT_GRANT_REVOKE_COMMAND: &str = "client.grant_revoke";',
 )
@@ -86,12 +91,24 @@ REQUIRED_PROFILE_ASSIGNMENT_APPLICATION_TOKENS = (
     "ProfileAssignmentPortErrorClass::Conflict",
 )
 
+REQUIRED_PROFILE_GRANT_APPLICATION_TOKENS = (
+    'const PROFILE_GRANT_COMMAND: &str = "profile.grant";',
+    'const PROFILE_GRANT_REVOKE_COMMAND: &str = "profile.grant_revoke";',
+    "decide_profile_grant_replay",
+    "port.grant_profile(actor, &write)",
+    "port.revoke_profile_grant(actor, &write)",
+    "ProfileGrantPortErrorClass::Conflict",
+)
+
 REQUIRED_PROFILE_ADAPTER_TOKENS = (
     "CreateProfileMutation",
     "AssignProfileMutation",
+    "ProfileGrantMutation",
     "MutationEnvelope",
     "create_profile(actor, mutation)",
     ".assign_profile(actor, mutation)",
+    ".grant_profile(actor, mutation)",
+    ".revoke_profile_grant(actor, mutation)",
 )
 
 REQUIRED_GOVERNED_TOKENS = (
@@ -126,6 +143,7 @@ def main() -> int:
     profile_adapter = PROFILE_ADAPTER.read_text(encoding="utf-8")
     profile_use_cases = PROFILE_USE_CASES.read_text(encoding="utf-8")
     profile_assignment_use_cases = PROFILE_ASSIGNMENT_USE_CASES.read_text(encoding="utf-8")
+    profile_grant_use_cases = PROFILE_GRANT_USE_CASES.read_text(encoding="utf-8")
     worker_api = WORKER_API.read_text(encoding="utf-8")
 
     errors: list[str] = []
@@ -150,6 +168,9 @@ def main() -> int:
     for token in REQUIRED_PROFILE_ASSIGNMENT_APPLICATION_TOKENS:
         if token not in profile_assignment_use_cases:
             errors.append(f"profile assignment orchestration is missing governed token: {token}")
+    for token in REQUIRED_PROFILE_GRANT_APPLICATION_TOKENS:
+        if token not in profile_grant_use_cases:
+            errors.append(f"profile grant orchestration is missing governed token: {token}")
     for token in REQUIRED_PROFILE_ADAPTER_TOKENS:
         if token not in profile_adapter:
             errors.append(f"profile D1 adapter is missing atomic mutation token: {token}")
