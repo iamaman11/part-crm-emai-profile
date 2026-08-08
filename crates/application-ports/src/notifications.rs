@@ -6,7 +6,7 @@
 use core::fmt;
 use notification_domain::{DeliveryState, NotificationCursor};
 use profile_platform_primitives::{
-    ActorContext, ActorId, OpaqueId, OutboxEventId, TenantScope, UnixMillis,
+    ActorContext, ActorId, OpaqueId, OutboxEventId, TenantId, TenantScope, UnixMillis,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,7 +58,7 @@ pub enum DeliveryTransitionWriteOutcome {
 pub trait NotificationDeliveryRepositoryPort {
     async fn load_or_create_delivery(
         &self,
-        scope: &TenantScope,
+        tenant_id: &TenantId,
         consumer_id: &OpaqueId,
         event_id: &OutboxEventId,
         created_at: UnixMillis,
@@ -66,7 +66,7 @@ pub trait NotificationDeliveryRepositoryPort {
 
     async fn compare_and_swap_delivery(
         &self,
-        scope: &TenantScope,
+        tenant_id: &TenantId,
         consumer_id: &OpaqueId,
         event_id: &OutboxEventId,
         expected: DeliveryState,
