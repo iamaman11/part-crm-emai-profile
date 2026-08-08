@@ -2,7 +2,7 @@
 
 **Status:** normative post-composition execution plan  
 **Date:** 2026-08-08  
-**Tracking:** active Phase 0H issue #92; plan consolidation history #96  
+**Tracking:** active Phase 0L issue/PR #104; plan consolidation history #96  
 **Production readiness:** unchanged; `production_ready=false` until external evidence gates are satisfied
 
 ## 1. Authority And Scope
@@ -30,24 +30,25 @@ remain External until the existing evidence process accepts real evidence.
 
 ## 2. Current Accepted Baseline And Active Slice
 
-Repository Steps 0–10 and the accepted post-composition slices through **Phase 0G** provide
+Repository Steps 0–10 and the accepted post-composition slices through **Phase 0K** provide
 the current code baseline: typed domain/application boundaries, governed D1 writes,
-profile generations, coordinator/session foundations, synthetic Bridge/runtime lanes,
+profile generations, application-thin coordinator ingress, synthetic Bridge/runtime lanes,
 mailbox metadata/jobs, React composition and exact-head cross-component acceptance.
 
 The current unfinished architecture-convergence slice is:
 
-- **Phase 0H — Profile grant application boundary**;
-- tracking issue **#92**;
-- draft PR **#93**.
+- **Phase 0L — Just-in-time application Cargo boundaries**;
+- tracking issue / draft PR **#104**.
 
-Phase 0H is **not accepted or merged** until its actual final diff, exact-head CI and merge
-evidence satisfy its issue acceptance. PR descriptions are not implementation evidence.
-Before merge the branch must be synchronized to the latest `main` and end at
-`behind_by=0`.
+Phase 0L is **not accepted or merged** until its actual final diff, exact-head CI and merge
+evidence satisfy #104 acceptance. The first justified extraction is the identity application
+context (`use-cases-identity`); `identity_acl` deliberately remains with cross-client/profile
+query helpers because moving it would create a false identity-only boundary. PR descriptions
+are not implementation evidence. Before merge the branch must be synchronized to the latest
+`main` and end at `behind_by=0`.
 
-After 0H, continue the Phase 0 sequence below. Do not begin the next sequential
-architecture slice while the current slice is still awaiting bounded acceptance.
+After 0L, continue with Phase 0M from the new accepted `main`. Do not begin the next
+sequential architecture slice while 0L is still awaiting bounded acceptance.
 
 ### 2.1 Critical-path execution policy
 
@@ -82,9 +83,9 @@ primitives
 contracts -> primitives
 domains -> contracts + primitives
 application-ports -> domains + contracts + primitives
-use-cases -> application-ports + domains + contracts + primitives
+use-cases-* -> application-ports + domains + contracts + primitives
 adapters -> application-ports + domains + contracts + primitives + provider SDKs
-apps -> use-cases + adapters + contracts + primitives
+apps -> use-cases-* + adapters + contracts + primitives
 frontend -> generated public contracts + frontend shared/entities/feature public APIs
 ```
 
@@ -184,7 +185,7 @@ Realtime events are change signals, not authority. UI refetches canonical projec
 Phase 0 is intentionally split into bounded slices. Each slice preserves public behavior
 unless its own issue explicitly changes a contract.
 
-### Phase 0H — Profile grant application boundary — ACTIVE
+### Phase 0H — Profile grant application boundary — ACCEPTED
 
 Move only profile grant/revoke orchestration from legacy Worker governance into the profile
 application boundary.
@@ -204,7 +205,7 @@ Acceptance is exactly the bounded issue #92 discipline, including one unchanged 
 12 permanent workflows green, `behind_by=0`, bounded diff, no unexplained `Cargo.lock`
 change and zero blocking/unresolved reviews.
 
-### Phase 0I — Client grant application boundary
+### Phase 0I — Client grant application boundary — ACCEPTED
 
 Move `ClientGrantApi` grant/revoke orchestration out of legacy Worker governance using the
 accepted application-boundary pattern.
@@ -212,7 +213,7 @@ accepted application-boundary pattern.
 Keep this slice separate from identity lifecycle. Preserve owner authorization, neutral
 disclosure, idempotency domains, checked versions, D1 atomicity and stable public problems.
 
-### Phase 0J — Identity governance lifecycle application boundary
+### Phase 0J — Identity governance lifecycle application boundary — ACCEPTED
 
 Move remaining owner/bootstrap/transfer, invitation create/accept and membership
 status/revoke orchestration behind identity application services.
@@ -225,7 +226,7 @@ Requirements:
 - invitation/membership state transitions remain idempotent/fail-closed;
 - no UI-only authorization decisions.
 
-### Phase 0K — Profile coordinator ingress thinness
+### Phase 0K — Profile coordinator ingress thinness — ACCEPTED
 
 Clean the remaining thick coordinator ingress/DO composition boundary.
 
@@ -239,7 +240,7 @@ Target:
 
 This slice must not redesign the proven coordinator state machine merely to move code.
 
-### Phase 0L — Just-in-time application Cargo boundaries
+### Phase 0L — Just-in-time application Cargo boundaries — ACTIVE
 
 The current capability modules inside one `crates/use-cases` crate are not the final growth
 boundary. Establish the first independent application crates where the dependency graph and
@@ -873,21 +874,24 @@ The standalone + CRM-ready target is complete only when, at the correct evidence
 
 ## 19. Immediate Next Action
 
-Finish **Phase 0H (#92 / PR #93)** against the latest `main` using the fail-safe application
-boundary sequence above. The immediate loop is:
+Finish **Phase 0L (#104 / PR #104)** against the latest accepted Phase 0K `main`. The bounded
+first extraction is `use-cases-identity`, owning identity governance plus verified-identity
+ceremonies with only inward application/domain dependencies. Keep `identity_acl` in the shared
+use-case crate until a real client/profile boundary extraction justifies moving its mixed query
+helpers.
 
 ```text
-sync #93 to current main
-  -> fast preflight / format clean
-  -> prove inward native + WASM
-  -> switch only ProfileGrantApi to thin transport
-  -> prove post-switch native + WASM
-  -> remove superseded legacy profile-grant orchestration
-  -> update permanent boundary/evidence/docs
-  -> fast preflight --with-compile
+keep #104 synchronized to current main
+  -> physical identity application ownership lives only in use-cases-identity
+  -> preserve implementation-free compatibility re-export where needed
+  -> prove extracted crate native tests + explicit WASM check
+  -> prove composed Worker/Windows/cross-component regression
+  -> enforce dependency and capability-layout gates
+  -> exact Cargo.lock workspace delta only; no dependency version drift
+  -> update normative docs without promoting External claims
   -> behind_by=0 + 12/12 exact-head workflows + zero blocking review
   -> guarded squash merge
 ```
 
-Only after that merge start Phase 0I from the new accepted `main`. In parallel, continue
+Only after that merge start Phase 0M from the new accepted `main`. In parallel, continue
 long-lead External gate preparation without changing `production_ready=false`.
