@@ -73,6 +73,7 @@ dependencies = [
  "serde_json",
  "session-domain",
  "use-cases",
+ "use-cases-notifications",
  "wasm-bindgen",
  "worker",
 ]
