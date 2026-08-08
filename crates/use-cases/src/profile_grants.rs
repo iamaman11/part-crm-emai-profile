@@ -248,8 +248,12 @@ fn map_port_error(error: ProfileGrantPortError) -> ProfileGrantOperationError {
         ProfileGrantPortErrorClass::VersionConflict => ProfileGrantOperationError::VersionConflict,
         ProfileGrantPortErrorClass::InvalidState => ProfileGrantOperationError::InvalidState,
         ProfileGrantPortErrorClass::Conflict => ProfileGrantOperationError::Conflict,
-        ProfileGrantPortErrorClass::IntegrityFailure => ProfileGrantOperationError::IntegrityFailure,
-        ProfileGrantPortErrorClass::InternalFailure => ProfileGrantOperationError::InternalFailure,
+        ProfileGrantPortErrorClass::IntegrityFailure => {
+            ProfileGrantOperationError::IntegrityFailure
+        }
+        ProfileGrantPortErrorClass::InternalFailure => {
+            ProfileGrantOperationError::InternalFailure
+        }
         ProfileGrantPortErrorClass::DependencyUnavailable => {
             ProfileGrantOperationError::DependencyUnavailable
         }
@@ -442,7 +446,10 @@ mod tests {
             ProfileGrantAction::Grant,
             command(AggregateVersion::INITIAL, "PROFILE_VIEWER")?,
         ))?;
-        assert_eq!(grant.replay_commands.borrow().as_slice(), [PROFILE_GRANT_COMMAND]);
+        assert_eq!(
+            grant.replay_commands.borrow().as_slice(),
+            [PROFILE_GRANT_COMMAND]
+        );
         assert_eq!(grant.grant_calls.get(), 1);
 
         let revoke = FakePort::new(vec![ProfileReplayDecision::Miss]);
@@ -505,7 +512,8 @@ mod tests {
             ProfileReplayDecision::Miss,
             ProfileReplayDecision::Replay(ProfileReplayReceipt::new("granted", None)),
         ]);
-        port.write_error.set(Some(ProfileGrantPortErrorClass::Conflict));
+        port.write_error
+            .set(Some(ProfileGrantPortErrorClass::Conflict));
         let outcome = block_on(execute_profile_grant(
             &actor()?,
             MembershipRole::TenantOwner,
@@ -521,8 +529,12 @@ mod tests {
 
     #[test]
     fn conflict_recheck_miss_remains_conflict() -> Result<(), Box<dyn std::error::Error>> {
-        let port = FakePort::new(vec![ProfileReplayDecision::Miss, ProfileReplayDecision::Miss]);
-        port.write_error.set(Some(ProfileGrantPortErrorClass::Conflict));
+        let port = FakePort::new(vec![
+            ProfileReplayDecision::Miss,
+            ProfileReplayDecision::Miss,
+        ]);
+        port.write_error
+            .set(Some(ProfileGrantPortErrorClass::Conflict));
         assert_eq!(
             block_on(execute_profile_grant(
                 &actor()?,
