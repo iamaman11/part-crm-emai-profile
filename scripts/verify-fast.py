@@ -57,8 +57,8 @@ def main() -> int:
         [sys.executable, str(ROOT / "scripts" / "generate-architecture-inventory.py"), "--check"],
     )
     run(
-        "architecture inventory negative self-test",
-        [sys.executable, str(ROOT / "scripts" / "generate-architecture-inventory.py"), "--self-test"],
+        "architecture inventory negative proof",
+        [sys.executable, str(ROOT / "scripts" / "test-architecture-inventory-negative.py")],
     )
 
     status_path = ROOT / "docs" / "status.json"
