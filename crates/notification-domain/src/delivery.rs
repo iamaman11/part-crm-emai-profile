@@ -249,6 +249,18 @@ impl DeliveryState {
             failure_class,
         })
     }
+
+    /// Starts a fresh automatic-attempt cycle only after explicit operator remediation.
+    /// Delivered notifications are never replayable, and non-terminal state cannot be reset.
+    pub fn record_remediation(self) -> Result<Self, DeliveryTransitionError> {
+        match self {
+            Self::DeadLetter { .. } => Ok(Self::new()),
+            Self::Delivered { .. } => Err(DeliveryTransitionError::TerminalState),
+            Self::Ready { .. } | Self::RetryScheduled { .. } => {
+                Err(DeliveryTransitionError::RemediationRequiresDeadLetter)
+            }
+        }
+    }
 }
 
 impl Default for DeliveryState {
@@ -280,6 +292,7 @@ pub enum DeliveryTransitionError {
     AttemptOverflow,
     InvalidRetrySchedule,
     MissingRetrySchedule,
+    RemediationRequiresDeadLetter,
     TerminalState,
     UnexpectedTerminalRetrySchedule,
 }
@@ -295,6 +308,9 @@ impl fmt::Display for DeliveryTransitionError {
                 "notification retry schedule must be strictly after the failed attempt"
             }
             Self::MissingRetrySchedule => "non-terminal notification failure requires retry time",
+            Self::RemediationRequiresDeadLetter => {
+                "notification remediation requires a dead-letter delivery"
+            }
             Self::TerminalState => "notification delivery is already terminal",
             Self::UnexpectedTerminalRetrySchedule => {
                 "terminal notification failure must not carry retry time"
@@ -376,6 +392,28 @@ mod tests {
         assert!(matches!(terminal, DeliveryState::DeadLetter { .. }));
         assert_eq!(terminal.attempts().value(), 2);
         assert!(!terminal.is_due(UnixMillis::new(100)));
+        Ok(())
+    }
+
+    #[test]
+    fn remediation_only_reopens_dead_letter_as_fresh_cycle()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dead_letter = DeliveryState::new().record_failure(
+            UnixMillis::new(10),
+            None,
+            AttemptLimit::new(1)?,
+            DeliveryFailureClass::DependencyUnavailable,
+        )?;
+        assert_eq!(dead_letter.record_remediation()?, DeliveryState::new());
+        assert_eq!(
+            DeliveryState::new().record_remediation(),
+            Err(DeliveryTransitionError::RemediationRequiresDeadLetter)
+        );
+        let delivered = DeliveryState::new().record_success(UnixMillis::new(20))?;
+        assert_eq!(
+            delivered.record_remediation(),
+            Err(DeliveryTransitionError::TerminalState)
+        );
         Ok(())
     }
 
