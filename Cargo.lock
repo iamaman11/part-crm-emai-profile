@@ -73,6 +73,7 @@ dependencies = [
  "serde_json",
  "session-domain",
  "use-cases",
+ "use-cases-clients",
  "use-cases-notifications",
  "wasm-bindgen",
  "worker",
@@ -156,6 +157,7 @@ name = "client-domain"
 version = "0.1.0"
 dependencies = [
  "profile-platform-primitives",
+ "zeroize",
 ]
 
 [[package]]
@@ -180,7 +182,7 @@ dependencies = [
 name = "cmov"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
+checksum = "0c9ea1c441e926b9c82a8d023f6e1b7ae0adcfaa7d621814e4d60789bac751cb"
 
 [[package]]
 name = "contracts"
@@ -307,7 +309,7 @@ dependencies = [
 name = "futures-sink"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e34418ac499d6305c2fb5ad0ed2f6ac998c5f8ca209b4510f7f94242c647e307"
+checksum = "e34418ac499d6305c0b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
 name = "futures-task"
@@ -825,6 +827,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8323304221c2a851516f22236c5722a72eaa19749016521d6dff0824447d96d"
 dependencies = [
  "displaydoc",
+ "litemap",
+ "tinystr",
+ "writeable",
  "zerovec",
 ]
 
@@ -847,7 +852,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+checksum = "e6e4313cd5f8e8b4c1e34a26affafdf3d051dba08456b868789aaf9a4"
 
 [[package]]
 name = "universal-hash"
@@ -882,7 +887,20 @@ dependencies = [
  "profile-domain",
  "profile-platform-primitives",
  "session-domain",
+ "use-cases-clients",
  "use-cases-identity",
+]
+
+[[package]]
+name = "use-cases-clients"
+version = "0.1.0"
+dependencies = [
+ "application-ports",
+ "client-domain",
+ "contracts",
+ "identity-access-domain",
+ "profile-platform-primitives",
+ "zeroize",
 ]
 
 [[package]]
