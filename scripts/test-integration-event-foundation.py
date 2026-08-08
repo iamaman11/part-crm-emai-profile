@@ -51,6 +51,18 @@ def seed_tenant(connection: sqlite3.Connection) -> None:
     connection.commit()
 
 
+def seed_outbox(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        INSERT INTO outbox_events (
+            tenant_id, outbox_event_id, aggregate_type, aggregate_id,
+            aggregate_version, event_type, payload_json, created_at_ms
+        ) VALUES (?, ?, 'tenant', ?, 1, 'tenant.owner_bootstrapped.v1', '{}', 10)
+        """,
+        (TENANT_ID, EVENT_ID, TENANT_ID),
+    )
+
+
 def expect_integrity_error(operation, fragment: str) -> None:
     try:
         operation()
@@ -60,22 +72,14 @@ def expect_integrity_error(operation, fragment: str) -> None:
         raise AssertionError("operation unexpectedly satisfied a fail-closed D1 invariant")
 
 
-def test_versioned_outbox_and_duplicate_neutral_claim() -> None:
+def test_versioned_outbox_notification_and_duplicate_neutral_claim() -> None:
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")
     connection.row_factory = sqlite3.Row
     try:
         apply_migrations(connection)
         seed_tenant(connection)
-        connection.execute(
-            """
-            INSERT INTO outbox_events (
-                tenant_id, outbox_event_id, aggregate_type, aggregate_id,
-                aggregate_version, event_type, payload_json, created_at_ms
-            ) VALUES (?, ?, 'tenant', ?, 1, 'tenant.owner_bootstrapped.v1', '{}', 10)
-            """,
-            (TENANT_ID, EVENT_ID, TENANT_ID),
-        )
+        seed_outbox(connection)
         row = connection.execute(
             """
             SELECT envelope_version, event_version, published_at_ms
@@ -88,6 +92,45 @@ def test_versioned_outbox_and_duplicate_neutral_claim() -> None:
             1,
             1,
             None,
+        )
+
+        notification = (
+            TENANT_ID,
+            EVENT_ID,
+            1,
+            "tenant.owner_bootstrapped.v1",
+            1,
+            10,
+            19,
+        )
+        for _ in range(2):
+            connection.execute(
+                """
+                INSERT INTO notification_events (
+                    tenant_id, outbox_event_id, envelope_version,
+                    event_type, event_version, occurred_at_ms, persisted_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (tenant_id, outbox_event_id) DO NOTHING
+                """,
+                notification,
+            )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM notification_events WHERE tenant_id = ?",
+            (TENANT_ID,),
+        ).fetchone()[0] == 1
+        notification_row = connection.execute(
+            """
+            SELECT event_type, event_version, occurred_at_ms, persisted_at_ms
+            FROM notification_events
+            WHERE tenant_id = ? AND outbox_event_id = ?
+            """,
+            (TENANT_ID, EVENT_ID),
+        ).fetchone()
+        assert tuple(notification_row) == (
+            "tenant.owner_bootstrapped.v1",
+            1,
+            10,
+            19,
         )
 
         claim = (
@@ -167,12 +210,25 @@ def test_payload_guard_rejects_prohibited_content_before_persistence() -> None:
         connection.close()
 
 
-def test_consumer_claim_requires_real_tenant_event_pair() -> None:
+def test_notification_and_consumer_claim_require_real_tenant_event_pair() -> None:
     connection = sqlite3.connect(":memory:")
     connection.execute("PRAGMA foreign_keys = ON")
     try:
         apply_migrations(connection)
         seed_tenant(connection)
+        expect_integrity_error(
+            lambda: connection.execute(
+                """
+                INSERT INTO notification_events (
+                    tenant_id, outbox_event_id, envelope_version,
+                    event_type, event_version, occurred_at_ms, persisted_at_ms
+                ) VALUES (?, 'outbox_missing_event', 1,
+                          'tenant.owner_bootstrapped.v1', 1, 10, 20)
+                """,
+                (TENANT_ID,),
+            ),
+            "FOREIGN KEY constraint failed",
+        )
         expect_integrity_error(
             lambda: connection.execute(
                 """
@@ -191,10 +247,12 @@ def test_consumer_claim_requires_real_tenant_event_pair() -> None:
 
 
 def main() -> None:
-    test_versioned_outbox_and_duplicate_neutral_claim()
+    test_versioned_outbox_notification_and_duplicate_neutral_claim()
     test_payload_guard_rejects_prohibited_content_before_persistence()
-    test_consumer_claim_requires_real_tenant_event_pair()
-    print("Phase 1A durable outbox, sanitizer and consumer idempotency invariants passed.")
+    test_notification_and_consumer_claim_require_real_tenant_event_pair()
+    print(
+        "Phase 1A durable outbox, sanitizer, notification and consumer idempotency invariants passed."
+    )
 
 
 if __name__ == "__main__":
