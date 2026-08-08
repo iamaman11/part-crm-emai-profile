@@ -53,6 +53,6 @@ fn operation_error(error: use_cases::integration_events::IntegrationEventOperati
     Error::RustError(error.to_string())
 }
 
-fn identifier_error(error: profile_platform_primitives::ParseOpaqueIdError) -> Error {
+fn identifier_error(error: profile_platform_primitives::OpaqueIdError) -> Error {
     Error::RustError(error.to_string())
 }
