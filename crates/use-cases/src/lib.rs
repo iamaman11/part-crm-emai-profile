@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod client_grants;
 pub mod clients;
 pub mod error;
 pub mod generations;

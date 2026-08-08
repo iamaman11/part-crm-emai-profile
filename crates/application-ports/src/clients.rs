@@ -189,6 +189,127 @@ impl ClientReadModel {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClientGrantRole {
+    Viewer,
+    Editor,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientGrantWrite {
+    target_actor_id: ActorId,
+    client_id: ClientId,
+    expected_client_version: AggregateVersion,
+    role: ClientGrantRole,
+    reason: String,
+    evidence: CommandExecutionEvidence,
+    event_payload_json: String,
+}
+
+impl ClientGrantWrite {
+    #[must_use]
+    pub fn new(
+        target_actor_id: ActorId,
+        client_id: ClientId,
+        expected_client_version: AggregateVersion,
+        role: ClientGrantRole,
+        reason: impl Into<String>,
+        evidence: CommandExecutionEvidence,
+        event_payload_json: impl Into<String>,
+    ) -> Self {
+        Self {
+            target_actor_id,
+            client_id,
+            expected_client_version,
+            role,
+            reason: reason.into(),
+            evidence,
+            event_payload_json: event_payload_json.into(),
+        }
+    }
+
+    #[must_use]
+    pub const fn target_actor_id(&self) -> &ActorId {
+        &self.target_actor_id
+    }
+
+    #[must_use]
+    pub const fn client_id(&self) -> &ClientId {
+        &self.client_id
+    }
+
+    #[must_use]
+    pub const fn expected_client_version(&self) -> AggregateVersion {
+        self.expected_client_version
+    }
+
+    #[must_use]
+    pub const fn role(&self) -> ClientGrantRole {
+        self.role
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub fn event_payload_json(&self) -> &str {
+        &self.event_payload_json
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClientGrantPortErrorClass {
+    NotFound,
+    VersionConflict,
+    InvalidState,
+    Conflict,
+    IntegrityFailure,
+    InternalFailure,
+    DependencyUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClientGrantPortError {
+    class: ClientGrantPortErrorClass,
+}
+
+impl ClientGrantPortError {
+    #[must_use]
+    pub const fn new(class: ClientGrantPortErrorClass) -> Self {
+        Self { class }
+    }
+
+    #[must_use]
+    pub const fn class(self) -> ClientGrantPortErrorClass {
+        self.class
+    }
+}
+
+impl fmt::Display for ClientGrantPortError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self.class {
+            ClientGrantPortErrorClass::NotFound => "client grant not found",
+            ClientGrantPortErrorClass::VersionConflict => "client grant version conflict",
+            ClientGrantPortErrorClass::InvalidState => "client grant invalid state",
+            ClientGrantPortErrorClass::Conflict => "client grant conflict",
+            ClientGrantPortErrorClass::IntegrityFailure => "client grant integrity failure",
+            ClientGrantPortErrorClass::InternalFailure => "client grant internal failure",
+            ClientGrantPortErrorClass::DependencyUnavailable => {
+                "client grant dependency unavailable"
+            }
+        })
+    }
+}
+
+impl std::error::Error for ClientGrantPortError {}
+
 #[allow(async_fn_in_trait)]
 pub trait ClientApplicationPort {
     async fn decide_replay(
@@ -211,4 +332,26 @@ pub trait ClientApplicationPort {
         role: MembershipRole,
         client_id: &ClientId,
     ) -> Result<Option<ClientReadModel>, ClientPortError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ClientGrantApplicationPort {
+    async fn decide_client_grant_replay(
+        &self,
+        actor: &ActorContext,
+        command_name: &str,
+        evidence: &CommandExecutionEvidence,
+    ) -> Result<ClientReplayDecision, ClientGrantPortError>;
+
+    async fn grant_client(
+        &self,
+        actor: &ActorContext,
+        write: &ClientGrantWrite,
+    ) -> Result<(), ClientGrantPortError>;
+
+    async fn revoke_client_grant(
+        &self,
+        actor: &ActorContext,
+        write: &ClientGrantWrite,
+    ) -> Result<(), ClientGrantPortError>;
 }

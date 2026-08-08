@@ -153,6 +153,7 @@ def validate_composition_surfaces() -> None:
             "MailboxJobRunApi",
             "ProfileGenerationActivateApi",
             "ProfileCoordinatorApi",
+            "ClientGrantApi",
             "ProfileAssignmentApi",
             "ProfileGrantApi",
         ],
@@ -160,15 +161,15 @@ def validate_composition_surfaces() -> None:
     )
 
     api = read("apps/control-plane-worker/src/api.rs")
-    require_all(
-        api,
-        [
-            "OwnerBootstrapApi",
-            "ClientGrantApi",
-        ],
-        "remaining identity/client-grant Worker composition",
-    )
+    require_all(api, ["OwnerBootstrapApi"], "remaining identity Worker composition")
     for forbidden in (
+        "ClientGrantApi",
+        "ClientGrantMutation",
+        "ClientGrantValue",
+        "async fn update_client_grant(",
+        "struct ClientGrantRequest",
+        "CLIENT_GRANT_COMMAND",
+        "CLIENT_GRANT_REVOKE_COMMAND",
         "ProfileAssignmentApi",
         "AssignProfileMutation",
         "async fn assign_profile(",
@@ -181,13 +182,15 @@ def validate_composition_surfaces() -> None:
         "PROFILE_GRANT_REVOKE_COMMAND",
     ):
         if forbidden in api:
-            fail(f"migrated profile orchestration must not remain in legacy api.rs: {forbidden}")
+            fail(f"migrated client/profile orchestration must not remain in legacy api.rs: {forbidden}")
 
     worker_lib = read("apps/control-plane-worker/src/lib.rs")
     require_all(
         worker_lib,
         [
-            "RouteClass::ClientCollectionApi | RouteClass::ClientResourceApi",
+            "RouteClass::ClientCollectionApi",
+            "RouteClass::ClientResourceApi",
+            "RouteClass::ClientGrantApi",
             "clients::dispatch(route, &mut request, &env).await",
             "RouteClass::ProfileCollectionApi",
             "RouteClass::ProfileResourceApi",
@@ -206,14 +209,46 @@ def validate_composition_surfaces() -> None:
     client_transport = read("apps/control-plane-worker/src/clients.rs")
     require_all(
         client_transport,
-        ["execute_create_client", "get_visible_client", "client_application(env)"],
+        [
+            "RouteClass::ClientGrantApi",
+            "execute_create_client",
+            "get_visible_client",
+            "execute_client_grant",
+            "authorize_client_grant",
+            "client_application(env)",
+        ],
         "client Worker application transport",
     )
     client_use_cases = read("crates/use-cases/src/clients.rs")
     require_all(
         client_use_cases,
         ["pub async fn execute_create_client", "pub async fn get_visible_client"],
-        "client application use cases",
+        "client create/query application use cases",
+    )
+    client_grant_use_cases = read("crates/use-cases/src/client_grants.rs")
+    require_all(
+        client_grant_use_cases,
+        [
+            "pub async fn execute_client_grant",
+            "pub fn authorize_client_grant",
+            "pub fn next_client_grant_version",
+            "decide_client_grant_replay",
+            "ClientGrantPortErrorClass::Conflict",
+        ],
+        "client grant application use cases",
+    )
+    client_adapter = read("crates/cloudflare-adapters/src/d1_clients.rs")
+    require_all(
+        client_adapter,
+        [
+            "impl ClientApplicationPort for D1ClientApplicationRepository",
+            "impl ClientGrantApplicationPort for D1ClientApplicationRepository",
+            "ClientGrantMutation",
+            ".grant_client(actor, mutation)",
+            ".revoke_client_grant(actor, mutation)",
+            "D1IdempotencyRepository",
+        ],
+        "client D1 application adapter",
     )
 
     profile_transport = read("apps/control-plane-worker/src/profiles.rs")
@@ -282,6 +317,10 @@ def validate_composition_surfaces() -> None:
     require_all(
         governed_commands,
         [
+            "client_grant_commands",
+            "pub async fn grant_client",
+            "pub async fn revoke_client_grant",
+            "expected_client_version",
             "profile_assignment_commands",
             "pub async fn assign_profile",
             "profile_grant_commands",
@@ -290,7 +329,7 @@ def validate_composition_surfaces() -> None:
             "expected_profile_version",
             '"profile.assign_client"',
         ],
-        "profile assignment/grant atomic D1 commands",
+        "client/profile grant and assignment atomic D1 commands",
     )
 
     generation_transport = read("apps/control-plane-worker/src/profile_generations.rs")

@@ -7,17 +7,16 @@ use crate::request_evidence::{audit_event_id, outbox_event_id};
 use cloudflare_adapters::d1_governed_commands::D1GovernedCommandRepository;
 use cloudflare_adapters::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use cloudflare_adapters::d1_identity_acl::{
-    BootstrapOwnerMutation, ClientGrantMutation, ClientGrantValue, CreateInvitationMutation,
-    D1IdentityAclRepository, MembershipStatusMutation, MembershipStatusValue,
-    MutationEnvelope as IdentityEnvelope, OwnerTransferMutation, ResolvedActor,
-    ResolvedMembershipRole, VerifiedBootstrapContext,
+    BootstrapOwnerMutation, CreateInvitationMutation, D1IdentityAclRepository,
+    MembershipStatusMutation, MembershipStatusValue, MutationEnvelope as IdentityEnvelope,
+    OwnerTransferMutation, ResolvedActor, ResolvedMembershipRole, VerifiedBootstrapContext,
 };
 use cloudflare_adapters::d1_invitation_acceptance::{
     AcceptInvitationMutation, D1InvitationAcceptanceRepository,
 };
 use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
 use profile_platform_primitives::{
-    ActorId, AggregateVersion, AuditEventId, ClientId, IdempotencyKey, IdentityId, InvitationId,
+    ActorId, AggregateVersion, AuditEventId, IdempotencyKey, IdentityId, InvitationId,
     OutboxEventId, TenantScope, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
@@ -30,8 +29,6 @@ const OWNER_BOOTSTRAP_COMMAND: &str = "tenant.owner_bootstrap";
 const OWNER_TRANSFER_COMMAND: &str = "membership.owner_transfer";
 const INVITATION_CREATE_COMMAND: &str = "invitation.create";
 const INVITATION_ACCEPT_COMMAND: &str = "invitation.accept";
-const CLIENT_GRANT_COMMAND: &str = "client.grant";
-const CLIENT_GRANT_REVOKE_COMMAND: &str = "client.grant_revoke";
 
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
@@ -53,11 +50,6 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
         RouteClass::MembershipStatusApi => {
             let actor_id = segments.get(5).copied().unwrap_or_default();
             update_membership_status(request, env, tenant_id, actor_id).await
-        }
-        RouteClass::ClientGrantApi => {
-            let client_id = segments.get(5).copied().unwrap_or_default();
-            let actor_id = segments.get(7).copied().unwrap_or_default();
-            update_client_grant(request, env, tenant_id, client_id, actor_id).await
         }
         _ => neutral_not_found(&correlation_hint(request)),
     }
@@ -497,102 +489,6 @@ async fn update_membership_status(
     }
 }
 
-async fn update_client_grant(
-    request: &mut Request,
-    env: &Env,
-    tenant_id: &str,
-    client_id: &str,
-    target_actor_id: &str,
-) -> Result<Response> {
-    let Some(actor) = active_owner(request, env, tenant_id).await? else {
-        return neutral_not_found(&correlation_hint(request));
-    };
-    let body = match request.json::<ClientGrantRequest>().await {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let client_id = match ClientId::parse(client_id) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let target_actor_id = match ActorId::parse(target_actor_id) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let expected_client_version = match AggregateVersion::new(body.expected_client_version) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    let response_version = match next_aggregate_version(expected_client_version) {
-        Some(value) => value,
-        None => return internal_failure(request),
-    };
-    let role = match body.role.as_str() {
-        "CLIENT_VIEWER" => ClientGrantValue::Viewer,
-        "CLIENT_EDITOR" => ClientGrantValue::Editor,
-        _ => return invalid_request(request),
-    };
-    let revoke = request.method().as_ref() == "DELETE";
-    let command_name = if revoke {
-        CLIENT_GRANT_REVOKE_COMMAND
-    } else {
-        CLIENT_GRANT_COMMAND
-    };
-    let replay_status = if revoke { 204 } else { 200 };
-    let envelope = match EnvelopeOwned::from_actor(request, &actor, body.request_digest) {
-        Ok(value) => value,
-        Err(_) => return invalid_request(request),
-    };
-    if let Some(response) = replay_for_actor(
-        request,
-        env,
-        &actor,
-        command_name,
-        &envelope,
-        client_id.as_str(),
-        response_version,
-        replay_status,
-    )
-    .await?
-    {
-        return Ok(response);
-    }
-    let mutation = ClientGrantMutation {
-        target_actor_id: &target_actor_id,
-        client_id: &client_id,
-        expected_client_version,
-        role,
-        reason: &body.reason,
-        envelope: envelope.identity(),
-    };
-    let repository = D1GovernedCommandRepository::new(env.d1(D1_CATALOG_BINDING)?);
-    let result = if revoke {
-        repository
-            .revoke_client_grant(actor.actor(), mutation)
-            .await
-    } else {
-        repository.grant_client(actor.actor(), mutation).await
-    };
-    match result {
-        Ok(_) if revoke => no_content(),
-        Ok(_) => mutation_receipt("granted", client_id.as_str(), response_version, 200),
-        Err(error) => {
-            mutation_failure_or_replay_for_actor(
-                request,
-                env,
-                &actor,
-                command_name,
-                &envelope,
-                client_id.as_str(),
-                response_version,
-                replay_status,
-                error,
-            )
-            .await
-        }
-    }
-}
-
 async fn active_owner(
     request: &Request,
     env: &Env,
@@ -901,18 +797,9 @@ struct MembershipStatusRequest {
     request_digest: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientGrantRequest {
-    role: String,
-    reason: String,
-    expected_client_version: u64,
-    request_digest: String,
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{CLIENT_GRANT_COMMAND, CLIENT_GRANT_REVOKE_COMMAND, next_aggregate_version};
+    use super::next_aggregate_version;
     use profile_platform_primitives::AggregateVersion;
 
     #[test]
@@ -923,10 +810,5 @@ mod tests {
             None
         );
         Ok(())
-    }
-
-    #[test]
-    fn client_grant_and_revoke_commands_are_distinct_idempotency_domains() {
-        assert_ne!(CLIENT_GRANT_COMMAND, CLIENT_GRANT_REVOKE_COMMAND);
     }
 }

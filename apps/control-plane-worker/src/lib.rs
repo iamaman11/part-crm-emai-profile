@@ -43,9 +43,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
                 .await
         }
         RouteClass::AuthenticatedSessionApi => session_response(&request, &env).await,
-        RouteClass::ClientCollectionApi | RouteClass::ClientResourceApi => {
-            clients::dispatch(route, &mut request, &env).await
-        }
+        RouteClass::ClientCollectionApi
+        | RouteClass::ClientResourceApi
+        | RouteClass::ClientGrantApi => clients::dispatch(route, &mut request, &env).await,
         RouteClass::ProfileCollectionApi
         | RouteClass::ProfileResourceApi
         | RouteClass::ProfileAssignmentApi
@@ -71,8 +71,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::OwnerTransferApi
         | RouteClass::InvitationCollectionApi
         | RouteClass::InvitationAcceptApi
-        | RouteClass::MembershipStatusApi
-        | RouteClass::ClientGrantApi => api::dispatch(route, &mut request, &env).await,
+        | RouteClass::MembershipStatusApi => api::dispatch(route, &mut request, &env).await,
     }
 }
 

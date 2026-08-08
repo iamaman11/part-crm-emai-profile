@@ -21,6 +21,7 @@ PORT_MODULES = (
     "sessions",
 )
 USE_CASE_MODULES = (
+    "client_grants",
     "clients",
     "error",
     "generations",
@@ -38,6 +39,8 @@ PORT_OWNERS = {
         "pub trait ClientRepository",
         "pub trait ClientApplicationPort",
         "pub struct ClientCreateWrite",
+        "pub trait ClientGrantApplicationPort",
+        "pub struct ClientGrantWrite",
     ),
     "clock.rs": ("pub trait ClockPort",),
     "commands.rs": ("pub struct CommandExecutionEvidence",),
@@ -68,6 +71,12 @@ PORT_OWNERS = {
 }
 
 USE_CASE_OWNERS = {
+    "client_grants.rs": (
+        "pub struct ExecuteClientGrantCommand",
+        "pub async fn execute_client_grant",
+        "pub fn authorize_client_grant",
+        "pub fn next_client_grant_version",
+    ),
     "clients.rs": (
         "pub struct CreateClientCommand",
         "pub fn decide_create_client",
