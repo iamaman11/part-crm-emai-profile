@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod public_api;
+
 pub const D1_CATALOG_BINDING: &str = "CATALOG_DB";
 pub const R2_PROFILES_BINDING: &str = "PROFILE_OBJECTS";
 pub const VERIFICATION_QUEUE_BINDING: &str = "GENERATION_VERIFICATION";
