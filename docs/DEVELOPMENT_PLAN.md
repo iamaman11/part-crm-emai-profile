@@ -96,10 +96,10 @@ Rules:
 - Cargo/application crate extraction is **just in time**: split a capability when current or
   immediately upcoming growth benefits from compile-time isolation, not as speculative churn;
 - frontend capability ships incrementally with the backend/query contract that enables it;
-  Phase 7 is completion/polish, not a big-bang frontend start;
-- long-lead External work (Cloudflare environments, Windows hosts/signing, key recovery,
-  privacy/license/security review) runs as a parallel operational workstream from now onward,
-  while production promotion remains Phase 10 and still requires accepted evidence.
+  Phase 2H completes/polishes the already incremental UI rather than starting a big-bang frontend;
+- long-lead External evidence collection (Cloudflare environments, Windows hosts/signing, key
+  recovery, privacy/license/security review) may continue operationally, but implementation order
+  remains linear and production-readiness promotion belongs only to Phase 2J after accepted evidence.
 
 ## 3. Non-Negotiable Architecture Rules
 
