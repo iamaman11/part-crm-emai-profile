@@ -38,6 +38,7 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
         "profile-domain",
         "session-domain",
         "mailbox-domain",
+        "notification-domain",
     },
     "use-cases-identity": {
         "profile-platform-primitives",
