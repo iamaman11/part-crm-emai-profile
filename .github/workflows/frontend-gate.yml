@@ -7,58 +7,64 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: frontend-gate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  linear-roadmap-cleanup:
-    name: Clean stale roadmap phase references
-    if: github.event_name == 'pull_request' && github.head_ref == 'docs-linear-phase1-phase2-roadmap' && github.actor != 'github-actions[bot]'
+  frontend:
+    name: React Operator UI
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout roadmap branch
+      - name: Checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: docs-linear-phase1-phase2-roadmap
+          persist-credentials: false
 
-      - name: Clean and validate normative roadmap
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/fix-linear-roadmap-stale-refs.py
-          python scripts/generate-architecture-inventory.py --check
-          python - <<'PY'
-          from pathlib import Path
-          import re
-          plan = Path('docs/DEVELOPMENT_PLAN.md').read_text(encoding='utf-8')
-          next_sections = re.findall(r'^### (Phase [^\n]+?) — NEXT\s*$', plan, re.MULTILINE)
-          if next_sections != ['Phase 1B — Delivery hardening, catch-up and operations']:
-              raise SystemExit(f'unexpected NEXT sections: {next_sections}')
-          stale = [
-              token for token in (
-                  'Phase 7 is completion/polish',
-                  'production promotion remains Phase 10',
-                  'Phase 1B may proceed in parallel',
-                  'Phase 1B is eligible to proceed',
-              ) if token in plan
-          ]
-          if stale:
-              raise SystemExit(f'stale execution wording remains: {stale}')
-          print('Final linear roadmap wording checks passed.')
-          PY
-          rm scripts/fix-linear-roadmap-stale-refs.py
-          git diff --check
+      - name: Enforce frontend sibling-feature boundaries
+        run: python scripts/check-frontend-feature-boundaries.py
 
-      - name: Commit clean documentation
-        shell: bash
+      - name: Prove sibling feature internals are rejected
+        run: python scripts/check-frontend-feature-boundaries.py --self-test
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node and npm versions
         run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add docs/DEVELOPMENT_PLAN.md scripts/fix-linear-roadmap-stale-refs.py
-          git diff --cached --check
-          git commit -m 'Docs: remove stale phase references from linear roadmap'
-          git push origin HEAD:docs-linear-phase1-phase2-roadmap
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Clean install from lockfile
+        working-directory: frontend
+        run: npm ci
+
+      - name: Reject credential persistence and token surfaces in application source
+        run: |
+          if grep -R -n -E --include='*.ts' --include='*.tsx' '(localStorage|sessionStorage|Cf-Access-Jwt-Assertion)' frontend/src; then
+            echo "Forbidden browser credential persistence/token surface found in application source." >&2
+            exit 1
+          fi
+
+      - name: Strict TypeScript
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Production build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Verify Static Assets output
+        run: |
+          test -f frontend/dist/index.html
+          find frontend/dist/assets -type f -print -quit | grep -q .
