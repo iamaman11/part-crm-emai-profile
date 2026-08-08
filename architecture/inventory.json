@@ -14,12 +14,14 @@
     "crates/encrypted-generation-domain",
     "crates/identity-access-domain",
     "crates/mailbox-domain",
+    "crates/notification-domain",
     "crates/primitives",
     "crates/profile-domain",
     "crates/runtime-bundle-domain",
     "crates/session-domain",
     "crates/use-cases",
-    "crates/use-cases-identity"
+    "crates/use-cases-identity",
+    "crates/use-cases-notifications"
   ],
   "d1_migrations": {
     "directory": "migrations/d1",
