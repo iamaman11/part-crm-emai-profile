@@ -19,7 +19,7 @@
       "expectedOutcome": "active_actor_context",
       "evidence": [
         "apps/control-plane-worker/src/access_session.rs",
-        "apps/control-plane-worker/src/api.rs"
+        "apps/control-plane-worker/src/identity.rs"
       ]
     },
     {

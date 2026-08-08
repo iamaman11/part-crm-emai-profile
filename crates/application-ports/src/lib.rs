@@ -6,6 +6,8 @@ pub mod clock;
 pub mod commands;
 pub mod generations;
 pub mod identity;
+pub mod identity_ceremonies;
+pub mod identity_governance;
 pub mod mailbox_jobs;
 pub mod mailboxes;
 pub mod profiles;
