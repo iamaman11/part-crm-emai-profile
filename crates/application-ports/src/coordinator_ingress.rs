@@ -147,33 +147,70 @@ impl CoordinatorProjectionSnapshot {
     }
 
     #[must_use]
-    pub const fn tenant_id(&self) -> &TenantId { &self.tenant_id }
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+
     #[must_use]
-    pub const fn profile_id(&self) -> &ProfileId { &self.profile_id }
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
     #[must_use]
-    pub fn status(&self) -> &str { &self.status }
+    pub fn status(&self) -> &str {
+        &self.status
+    }
+
     #[must_use]
-    pub const fn version(&self) -> AggregateVersion { self.version }
+    pub const fn version(&self) -> AggregateVersion {
+        self.version
+    }
+
     #[must_use]
-    pub const fn sequence(&self) -> u64 { self.sequence }
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
     #[must_use]
-    pub const fn next_epoch(&self) -> u64 { self.next_epoch }
+    pub const fn next_epoch(&self) -> u64 {
+        self.next_epoch
+    }
+
     #[must_use]
-    pub const fn active_session_id(&self) -> Option<&SessionId> { self.active_session_id.as_ref() }
+    pub const fn active_session_id(&self) -> Option<&SessionId> {
+        self.active_session_id.as_ref()
+    }
+
     #[must_use]
-    pub const fn active_device_id(&self) -> Option<&DeviceId> { self.active_device_id.as_ref() }
+    pub const fn active_device_id(&self) -> Option<&DeviceId> {
+        self.active_device_id.as_ref()
+    }
+
     #[must_use]
-    pub const fn active_epoch(&self) -> Option<u64> { self.active_epoch }
+    pub const fn active_epoch(&self) -> Option<u64> {
+        self.active_epoch
+    }
+
     #[must_use]
-    pub const fn idle_expires_at(&self) -> Option<UnixMillis> { self.idle_expires_at }
+    pub const fn idle_expires_at(&self) -> Option<UnixMillis> {
+        self.idle_expires_at
+    }
+
     #[must_use]
-    pub const fn hard_expires_at(&self) -> Option<UnixMillis> { self.hard_expires_at }
+    pub const fn hard_expires_at(&self) -> Option<UnixMillis> {
+        self.hard_expires_at
+    }
+
     #[must_use]
-    pub const fn drain_deadline(&self) -> Option<UnixMillis> { self.drain_deadline }
+    pub const fn drain_deadline(&self) -> Option<UnixMillis> {
+        self.drain_deadline
+    }
+
     #[must_use]
     pub const fn pending_launch_intent_id(&self) -> Option<&LaunchIntentId> {
         self.pending_launch_intent_id.as_ref()
     }
+
     #[must_use]
     pub const fn pending_intent_expires_at(&self) -> Option<UnixMillis> {
         self.pending_intent_expires_at
@@ -214,19 +251,39 @@ impl CoordinatorRuntimeResult {
     }
 
     #[must_use]
-    pub const fn outcome(&self) -> CoordinatorRuntimeOutcome { self.outcome }
+    pub const fn outcome(&self) -> CoordinatorRuntimeOutcome {
+        self.outcome
+    }
+
     #[must_use]
-    pub const fn version(&self) -> AggregateVersion { self.version }
+    pub const fn version(&self) -> AggregateVersion {
+        self.version
+    }
+
     #[must_use]
-    pub const fn sequence(&self) -> u64 { self.sequence }
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
     #[must_use]
-    pub const fn replayed(&self) -> bool { self.replayed }
+    pub const fn replayed(&self) -> bool {
+        self.replayed
+    }
+
     #[must_use]
-    pub const fn fencing_token(&self) -> Option<&FencingToken> { self.fencing_token.as_ref() }
+    pub const fn fencing_token(&self) -> Option<&FencingToken> {
+        self.fencing_token.as_ref()
+    }
+
     #[must_use]
-    pub const fn epoch(&self) -> Option<u64> { self.epoch }
+    pub const fn epoch(&self) -> Option<u64> {
+        self.epoch
+    }
+
     #[must_use]
-    pub const fn projection(&self) -> &CoordinatorProjectionSnapshot { &self.projection }
+    pub const fn projection(&self) -> &CoordinatorProjectionSnapshot {
+        &self.projection
+    }
 }
 
 #[allow(async_fn_in_trait)]
