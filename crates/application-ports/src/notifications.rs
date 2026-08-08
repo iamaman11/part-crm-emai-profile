@@ -3,7 +3,6 @@
 // Notification ports are provider-neutral contracts. Implementations may be native or Workers/WASM;
 // requiring `Send` futures here would over-constrain the outer adapter boundary.
 
-use contracts::IntegrationEventEnvelope;
 use core::fmt;
 use notification_domain::{DeliveryState, NotificationCursor};
 use profile_platform_primitives::{
@@ -284,13 +283,18 @@ pub enum ReplayPreparationOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingNotificationReplay {
     replay_id: OpaqueId,
-    event: IntegrationEventEnvelope,
+    tenant_id: TenantId,
+    event_id: OutboxEventId,
 }
 
 impl PendingNotificationReplay {
     #[must_use]
-    pub const fn new(replay_id: OpaqueId, event: IntegrationEventEnvelope) -> Self {
-        Self { replay_id, event }
+    pub const fn new(replay_id: OpaqueId, tenant_id: TenantId, event_id: OutboxEventId) -> Self {
+        Self {
+            replay_id,
+            tenant_id,
+            event_id,
+        }
     }
 
     #[must_use]
@@ -299,8 +303,13 @@ impl PendingNotificationReplay {
     }
 
     #[must_use]
-    pub const fn event(&self) -> &IntegrationEventEnvelope {
-        &self.event
+    pub const fn tenant_id(&self) -> &TenantId {
+        &self.tenant_id
+    }
+
+    #[must_use]
+    pub const fn event_id(&self) -> &OutboxEventId {
+        &self.event_id
     }
 }
 
