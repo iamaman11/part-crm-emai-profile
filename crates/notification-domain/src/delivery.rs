@@ -2,6 +2,7 @@ use core::fmt;
 use profile_platform_primitives::UnixMillis;
 
 const MAX_CONFIGURED_ATTEMPTS: u16 = 64;
+const MAX_RETRYABLE_ATTEMPTS: u16 = MAX_CONFIGURED_ATTEMPTS - 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeliveryAttemptCount(u16);
@@ -19,6 +20,13 @@ impl DeliveryAttemptCount {
             .checked_add(1)
             .map(Self)
             .ok_or(DeliveryTransitionError::AttemptOverflow)
+    }
+
+    fn restore(value: u16, minimum: u16, maximum: u16) -> Result<Self, DeliveryRestoreError> {
+        if value < minimum || value > maximum {
+            return Err(DeliveryRestoreError::InvalidAttemptCount);
+        }
+        Ok(Self(value))
     }
 }
 
@@ -65,6 +73,7 @@ pub enum DeliveryState {
     },
     RetryScheduled {
         attempts: DeliveryAttemptCount,
+        last_attempt_at: UnixMillis,
         next_attempt_at: UnixMillis,
         failure_class: DeliveryFailureClass,
     },
@@ -87,6 +96,55 @@ impl DeliveryState {
         }
     }
 
+    pub fn restore_ready(attempt_count: u16) -> Result<Self, DeliveryRestoreError> {
+        Ok(Self::Ready {
+            attempts: DeliveryAttemptCount::restore(attempt_count, 0, 0)?,
+        })
+    }
+
+    pub fn restore_retry_scheduled(
+        attempt_count: u16,
+        last_attempt_at: UnixMillis,
+        next_attempt_at: UnixMillis,
+        failure_class: DeliveryFailureClass,
+    ) -> Result<Self, DeliveryRestoreError> {
+        if next_attempt_at.value() <= last_attempt_at.value() {
+            return Err(DeliveryRestoreError::InvalidRetrySchedule);
+        }
+        Ok(Self::RetryScheduled {
+            attempts: DeliveryAttemptCount::restore(
+                attempt_count,
+                1,
+                MAX_RETRYABLE_ATTEMPTS,
+            )?,
+            last_attempt_at,
+            next_attempt_at,
+            failure_class,
+        })
+    }
+
+    pub fn restore_delivered(
+        attempt_count: u16,
+        delivered_at: UnixMillis,
+    ) -> Result<Self, DeliveryRestoreError> {
+        Ok(Self::Delivered {
+            attempts: DeliveryAttemptCount::restore(attempt_count, 1, MAX_CONFIGURED_ATTEMPTS)?,
+            delivered_at,
+        })
+    }
+
+    pub fn restore_dead_letter(
+        attempt_count: u16,
+        terminal_at: UnixMillis,
+        failure_class: DeliveryFailureClass,
+    ) -> Result<Self, DeliveryRestoreError> {
+        Ok(Self::DeadLetter {
+            attempts: DeliveryAttemptCount::restore(attempt_count, 1, MAX_CONFIGURED_ATTEMPTS)?,
+            terminal_at,
+            failure_class,
+        })
+    }
+
     #[must_use]
     pub const fn attempts(self) -> DeliveryAttemptCount {
         match self {
@@ -98,12 +156,33 @@ impl DeliveryState {
     }
 
     #[must_use]
+    pub const fn last_attempt_at(self) -> Option<UnixMillis> {
+        match self {
+            Self::Ready { .. } => None,
+            Self::RetryScheduled {
+                last_attempt_at, ..
+            } => Some(last_attempt_at),
+            Self::Delivered { delivered_at, .. } => Some(delivered_at),
+            Self::DeadLetter { terminal_at, .. } => Some(terminal_at),
+        }
+    }
+
+    #[must_use]
     pub const fn next_attempt_at(self) -> Option<UnixMillis> {
         match self {
             Self::RetryScheduled {
                 next_attempt_at, ..
             } => Some(next_attempt_at),
             Self::Ready { .. } | Self::Delivered { .. } | Self::DeadLetter { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn failure_class(self) -> Option<DeliveryFailureClass> {
+        match self {
+            Self::RetryScheduled { failure_class, .. }
+            | Self::DeadLetter { failure_class, .. } => Some(failure_class),
+            Self::Ready { .. } | Self::Delivered { .. } => None,
         }
     }
 
@@ -168,6 +247,7 @@ impl DeliveryState {
 
         Ok(Self::RetryScheduled {
             attempts,
+            last_attempt_at: failed_at,
             next_attempt_at,
             failure_class,
         })
@@ -179,6 +259,23 @@ impl Default for DeliveryState {
         Self::new()
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeliveryRestoreError {
+    InvalidAttemptCount,
+    InvalidRetrySchedule,
+}
+
+impl fmt::Display for DeliveryRestoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidAttemptCount => "persisted notification delivery attempt count is invalid",
+            Self::InvalidRetrySchedule => "persisted notification retry schedule is invalid",
+        })
+    }
+}
+
+impl std::error::Error for DeliveryRestoreError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeliveryTransitionError {
@@ -214,8 +311,8 @@ impl std::error::Error for DeliveryTransitionError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        AttemptLimit, DeliveryFailureClass, DeliveryState, DeliveryTransitionError,
-        InvalidAttemptLimit,
+        AttemptLimit, DeliveryFailureClass, DeliveryRestoreError, DeliveryState,
+        DeliveryTransitionError, InvalidAttemptLimit,
     };
     use profile_platform_primitives::UnixMillis;
 
@@ -262,6 +359,7 @@ mod tests {
             DeliveryFailureClass::DependencyUnavailable,
         )?;
         assert!(matches!(first, DeliveryState::RetryScheduled { .. }));
+        assert_eq!(first.last_attempt_at(), Some(UnixMillis::new(10)));
         assert_eq!(
             first.record_failure(
                 UnixMillis::new(20),
@@ -281,6 +379,43 @@ mod tests {
         assert!(matches!(terminal, DeliveryState::DeadLetter { .. }));
         assert_eq!(terminal.attempts().value(), 2);
         assert!(!terminal.is_due(UnixMillis::new(100)));
+        Ok(())
+    }
+
+    #[test]
+    fn restore_is_fail_closed_for_malformed_persisted_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            DeliveryState::restore_ready(1),
+            Err(DeliveryRestoreError::InvalidAttemptCount)
+        );
+        assert_eq!(
+            DeliveryState::restore_retry_scheduled(
+                1,
+                UnixMillis::new(20),
+                UnixMillis::new(20),
+                DeliveryFailureClass::InternalFailure,
+            ),
+            Err(DeliveryRestoreError::InvalidRetrySchedule)
+        );
+        assert_eq!(
+            DeliveryState::restore_retry_scheduled(
+                64,
+                UnixMillis::new(20),
+                UnixMillis::new(21),
+                DeliveryFailureClass::InternalFailure,
+            ),
+            Err(DeliveryRestoreError::InvalidAttemptCount)
+        );
+        assert!(DeliveryState::restore_delivered(1, UnixMillis::new(30)).is_ok());
+        assert!(
+            DeliveryState::restore_dead_letter(
+                64,
+                UnixMillis::new(40),
+                DeliveryFailureClass::Rejected,
+            )
+            .is_ok()
+        );
         Ok(())
     }
 
