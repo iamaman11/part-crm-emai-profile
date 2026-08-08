@@ -139,16 +139,36 @@ pub async fn execute_update_client<P: ClientLifecycleApplicationPort>(
     {
         return Err(ClientLifecycleError::InvalidRequest);
     }
-    let mut client = load_exact_version(actor, port, &command.client_id, command.expected_version).await?;
-    client
-        .rename(command.display_name)
-        .map_err(map_client_error)?;
-    execute_lifecycle_write(
+
+    let next_version = next_version(command.expected_version)?;
+    if let Some(outcome) = decide_replay(
+        actor,
+        port,
+        CLIENT_UPDATE_COMMAND,
+        &command.client_id,
+        next_version,
+        &command.evidence,
+    )
+    .await?
+    {
+        return Ok(outcome);
+    }
+
+    let mut client = load_exact_version(
+        actor,
+        port,
+        &command.client_id,
+        command.expected_version,
+    )
+    .await?;
+    client.rename(command.display_name).map_err(map_client_error)?;
+    persist_lifecycle(
         actor,
         port,
         CLIENT_UPDATE_COMMAND,
         "updated",
         command.expected_version,
+        next_version,
         client,
         command.evidence,
     )
@@ -162,18 +182,67 @@ pub async fn execute_archive_client<P: ClientLifecycleApplicationPort>(
     command: ArchiveClientCommand,
 ) -> Result<ClientLifecycleOutcome, ClientLifecycleError> {
     authorize_client_lifecycle(role)?;
-    let mut client = load_exact_version(actor, port, &command.client_id, command.expected_version).await?;
+
+    let next_version = next_version(command.expected_version)?;
+    if let Some(outcome) = decide_replay(
+        actor,
+        port,
+        CLIENT_ARCHIVE_COMMAND,
+        &command.client_id,
+        next_version,
+        &command.evidence,
+    )
+    .await?
+    {
+        return Ok(outcome);
+    }
+
+    let mut client = load_exact_version(
+        actor,
+        port,
+        &command.client_id,
+        command.expected_version,
+    )
+    .await?;
     client.archive().map_err(map_client_error)?;
-    execute_lifecycle_write(
+    persist_lifecycle(
         actor,
         port,
         CLIENT_ARCHIVE_COMMAND,
         "archived",
         command.expected_version,
+        next_version,
         client,
         command.evidence,
     )
     .await
+}
+
+fn next_version(version: AggregateVersion) -> Result<AggregateVersion, ClientLifecycleError> {
+    version
+        .next()
+        .map_err(|_| ClientLifecycleError::InternalFailure)
+}
+
+async fn decide_replay<P: ClientLifecycleApplicationPort>(
+    actor: &ActorContext,
+    port: &P,
+    command_name: &str,
+    client_id: &ClientId,
+    next_version: AggregateVersion,
+    evidence: &CommandExecutionEvidence,
+) -> Result<Option<ClientLifecycleOutcome>, ClientLifecycleError> {
+    match port
+        .decide_client_lifecycle_replay(actor, command_name, evidence)
+        .await
+        .map_err(map_port_error)?
+    {
+        ClientReplayDecision::Miss => Ok(None),
+        ClientReplayDecision::Replay(receipt) => {
+            Ok(Some(replay_outcome(client_id, next_version, &receipt)))
+        }
+        ClientReplayDecision::Conflict => Err(ClientLifecycleError::Conflict),
+    }
 }
 
 async fn load_exact_version<P: ClientLifecycleApplicationPort>(
@@ -193,31 +262,24 @@ async fn load_exact_version<P: ClientLifecycleApplicationPort>(
     Ok(client)
 }
 
-async fn execute_lifecycle_write<P: ClientLifecycleApplicationPort>(
+#[allow(clippy::too_many_arguments)]
+async fn persist_lifecycle<P: ClientLifecycleApplicationPort>(
     actor: &ActorContext,
     port: &P,
     command_name: &str,
     fresh_result_code: &str,
     expected_version: AggregateVersion,
+    next_version: AggregateVersion,
     client: ClientRecord,
     evidence: CommandExecutionEvidence,
 ) -> Result<ClientLifecycleOutcome, ClientLifecycleError> {
-    match port
-        .decide_client_lifecycle_replay(actor, command_name, &evidence)
-        .await
-        .map_err(map_port_error)?
-    {
-        ClientReplayDecision::Miss => {}
-        ClientReplayDecision::Replay(receipt) => return Ok(replay_outcome(&client, &receipt)),
-        ClientReplayDecision::Conflict => return Err(ClientLifecycleError::Conflict),
-    }
-
+    debug_assert_eq!(client.version(), next_version);
     let write = ClientLifecycleWrite::new(client, expected_version, evidence, EVENT_PAYLOAD);
     match port.persist_client_lifecycle(actor, &write).await {
         Ok(()) => Ok(ClientLifecycleOutcome {
             result_code: fresh_result_code.to_owned(),
             resource_id: write.client().client_id().as_str().to_owned(),
-            aggregate_version: write.client().version(),
+            aggregate_version: next_version,
             replayed: false,
         }),
         Err(error) if error.class() == ClientPortErrorClass::Conflict => {
@@ -226,9 +288,11 @@ async fn execute_lifecycle_write<P: ClientLifecycleApplicationPort>(
                 .await
                 .map_err(map_port_error)?
             {
-                ClientReplayDecision::Replay(receipt) => {
-                    Ok(replay_outcome(write.client(), &receipt))
-                }
+                ClientReplayDecision::Replay(receipt) => Ok(replay_outcome(
+                    write.client().client_id(),
+                    next_version,
+                    &receipt,
+                )),
                 ClientReplayDecision::Miss | ClientReplayDecision::Conflict => {
                     Err(ClientLifecycleError::Conflict)
                 }
@@ -238,14 +302,18 @@ async fn execute_lifecycle_write<P: ClientLifecycleApplicationPort>(
     }
 }
 
-fn replay_outcome(client: &ClientRecord, receipt: &ClientReplayReceipt) -> ClientLifecycleOutcome {
+fn replay_outcome(
+    client_id: &ClientId,
+    version: AggregateVersion,
+    receipt: &ClientReplayReceipt,
+) -> ClientLifecycleOutcome {
     ClientLifecycleOutcome {
         result_code: receipt.result_code().to_owned(),
         resource_id: receipt
             .result_reference()
-            .unwrap_or(client.client_id().as_str())
+            .unwrap_or(client_id.as_str())
             .to_owned(),
-        aggregate_version: client.version(),
+        aggregate_version: version,
         replayed: true,
     }
 }
@@ -310,9 +378,9 @@ mod tests {
     }
 
     impl FakePort {
-        fn new(client: ClientRecord, replay: Vec<ClientReplayDecision>) -> Self {
+        fn new(client: Option<ClientRecord>, replay: Vec<ClientReplayDecision>) -> Self {
             Self {
-                loaded: RefCell::new(Some(client)),
+                loaded: RefCell::new(client),
                 replay: RefCell::new(replay),
                 load_calls: Cell::new(0),
                 replay_calls: Cell::new(0),
@@ -388,8 +456,8 @@ mod tests {
     }
 
     #[test]
-    fn authorization_precedes_load_version_replay_and_write() -> Result<(), Box<dyn std::error::Error>> {
-        let port = FakePort::new(client(AggregateVersion::INITIAL)?, Vec::new());
+    fn authorization_precedes_replay_load_and_write() -> Result<(), Box<dyn std::error::Error>> {
+        let port = FakePort::new(Some(client(AggregateVersion::INITIAL)?), Vec::new());
         let command = ArchiveClientCommand::new(
             ClientId::parse("client_01JLIFECYCLE")?,
             AggregateVersion::INITIAL,
@@ -404,40 +472,17 @@ mod tests {
             )),
             Err(ClientLifecycleError::NotFound)
         );
+        assert_eq!(port.replay_calls.get(), 0);
         assert_eq!(port.load_calls.get(), 0);
-        assert_eq!(port.replay_calls.get(), 0);
         assert_eq!(port.write_calls.get(), 0);
         Ok(())
     }
 
     #[test]
-    fn version_validation_precedes_replay_and_write() -> Result<(), Box<dyn std::error::Error>> {
-        let port = FakePort::new(client(AggregateVersion::new(2)?)?, Vec::new());
-        let command = ArchiveClientCommand::new(
-            ClientId::parse("client_01JLIFECYCLE")?,
-            AggregateVersion::INITIAL,
-            evidence()?,
-        );
-        assert_eq!(
-            block_on(execute_archive_client(
-                &actor()?,
-                MembershipRole::TenantOwner,
-                &port,
-                command,
-            )),
-            Err(ClientLifecycleError::VersionConflict)
-        );
-        assert_eq!(port.load_calls.get(), 1);
-        assert_eq!(port.replay_calls.get(), 0);
-        assert_eq!(port.write_calls.get(), 0);
-        Ok(())
-    }
-
-    #[test]
-    fn exact_replay_follows_validated_next_state_and_skips_write()
+    fn exact_replay_precedes_current_version_load_and_skips_write()
     -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(
-            client(AggregateVersion::INITIAL)?,
+            Some(client(AggregateVersion::new(2)?)?),
             vec![ClientReplayDecision::Replay(ClientReplayReceipt::new(
                 "updated",
                 None,
@@ -457,6 +502,35 @@ mod tests {
         ))?;
         assert!(outcome.replayed());
         assert_eq!(outcome.aggregate_version().value(), 2);
+        assert_eq!(port.replay_calls.get(), 1);
+        assert_eq!(port.load_calls.get(), 0);
+        assert_eq!(port.write_calls.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn version_validation_follows_replay_miss_and_precedes_write()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let port = FakePort::new(
+            Some(client(AggregateVersion::new(2)?)?),
+            vec![ClientReplayDecision::Miss],
+        );
+        let command = ArchiveClientCommand::new(
+            ClientId::parse("client_01JLIFECYCLE")?,
+            AggregateVersion::INITIAL,
+            evidence()?,
+        );
+        assert_eq!(
+            block_on(execute_archive_client(
+                &actor()?,
+                MembershipRole::TenantOwner,
+                &port,
+                command,
+            )),
+            Err(ClientLifecycleError::VersionConflict)
+        );
+        assert_eq!(port.replay_calls.get(), 1);
+        assert_eq!(port.load_calls.get(), 1);
         assert_eq!(port.write_calls.get(), 0);
         Ok(())
     }
@@ -464,7 +538,7 @@ mod tests {
     #[test]
     fn archive_intent_writes_only_mutated_typed_record() -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(
-            client(AggregateVersion::INITIAL)?,
+            Some(client(AggregateVersion::INITIAL)?),
             vec![ClientReplayDecision::Miss],
         );
         let command = ArchiveClientCommand::new(
