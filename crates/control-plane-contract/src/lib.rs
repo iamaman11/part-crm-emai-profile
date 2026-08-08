@@ -39,6 +39,10 @@ pub enum RouteClass {
     MailboxJobCollectionApi,
     MailboxJobResourceApi,
     MailboxJobRunApi,
+    NotificationEventCollectionApi,
+    NotificationEventAckApi,
+    NotificationReplayCollectionApi,
+    NotificationOperationsApi,
     DynamicRouteNotFound,
     BridgeDeniedByDefault,
     StaticAssets,
@@ -303,6 +307,44 @@ mod tests {
     }
 
     #[test]
+    fn notification_routes_are_specific_authenticated_and_fail_closed() {
+        let routes = [
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/notifications/events",
+                RouteClass::NotificationEventCollectionApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/notifications/events/ack",
+                RouteClass::NotificationEventAckApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/notifications/replays",
+                RouteClass::NotificationReplayCollectionApi,
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/notifications/operations",
+                RouteClass::NotificationOperationsApi,
+            ),
+        ];
+        for (method, path, expected) in routes {
+            let actual = classify_route(method, path);
+            assert_eq!(actual, expected);
+            assert!(is_authenticated_api(actual));
+        }
+        for (method, path) in [
+            ("POST", "/api/v1/tenants/tenant_01/notifications/events"),
+            ("GET", "/api/v1/tenants/tenant_01/notifications/replays"),
+            ("POST", "/api/v1/tenants/tenant_01/notifications/operations"),
+        ] {
+            assert_eq!(classify_route(method, path), RouteClass::DynamicRouteNotFound);
+        }
+    }
+
+    #[test]
     fn versioned_resource_wrong_methods_never_fall_back_to_static_assets() {
         for (method, path) in [
             (
@@ -327,6 +369,7 @@ mod tests {
                 "PUT",
                 "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
             ),
+            ("DELETE", "/api/v1/tenants/tenant_01/notifications/events"),
         ] {
             assert_eq!(
                 classify_route(method, path),
