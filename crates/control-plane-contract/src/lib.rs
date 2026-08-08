@@ -50,6 +50,11 @@ pub fn classify_route(method: &str, path: &str) -> RouteClass {
 }
 
 #[must_use]
+pub(crate) fn is_dynamic_path(path: &str) -> bool {
+    path == "/api" || path.starts_with("/api/") || path == "/auth" || path.starts_with("/auth/")
+}
+
+#[must_use]
 pub const fn is_authenticated_api(route: RouteClass) -> bool {
     !matches!(
         route,
