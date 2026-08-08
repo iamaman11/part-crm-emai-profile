@@ -7,44 +7,13 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: frontend-gate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  phase1a-materialize:
-    name: Materialize Phase 1A generated repository state
-    if: github.event_name == 'pull_request' && github.head_ref == 'phase1a-event-outbox-foundation' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout implementation branch
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: phase1a-event-outbox-foundation
-
-      - name: Materialize lockfile and architecture inventory
-        run: |
-          cargo generate-lockfile
-          python scripts/generate-architecture-inventory.py --write
-          python scripts/test-integration-event-foundation.py
-          git diff --check
-
-      - name: Commit generated repository state
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Cargo.lock architecture/inventory.json
-          if git diff --cached --quiet; then
-            echo 'Generated repository state already current.'
-            exit 0
-          fi
-          git commit -m 'Phase 1A: materialize lockfile and architecture inventory'
-          git push origin HEAD:phase1a-event-outbox-foundation
-
   frontend:
     name: React Operator UI
     runs-on: ubuntu-latest
