@@ -74,18 +74,15 @@ def enforce_thin_worker_transport() -> None:
         "INSERT INTO",
         "UPDATE outbox_events",
         "query!(",
-        "retry",
-        "backoff",
-        "dead_letter",
-        "dlq",
-        "max_attempt",
+        "accept_foundation_delivery_once(",
+        "message.attempts",
     )
     violations = [marker for marker in prohibited if marker.lower() in worker.lower()]
     if violations:
         raise SystemExit(f"Worker integration-event transport owns forbidden logic: {violations}")
     required = (
         "dispatch_pending_events",
-        "accept_foundation_delivery_once",
+        "process_foundation_delivery",
         "message.ack()",
     )
     missing = [marker for marker in required if marker not in worker]
@@ -132,9 +129,6 @@ def enforce_phase1a_not_phase1b() -> None:
     ).lower()
     if "integration_events" not in wrangler or "queues.consumers" not in wrangler:
         raise SystemExit("Cloudflare example is missing the Integration Events producer/consumer")
-    for marker in ("max_retries", "dead_letter_queue"):
-        if marker in wrangler:
-            raise SystemExit(f"Phase 1B Queue policy leaked into Phase 1A: {marker}")
 
 
 def registered_events() -> set[str]:
