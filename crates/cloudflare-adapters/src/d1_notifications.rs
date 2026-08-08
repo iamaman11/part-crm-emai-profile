@@ -3,7 +3,9 @@ use application_ports::{
     NotificationDeliveryRepositoryPort, NotificationPortError, NotificationPortErrorClass,
 };
 use notification_domain::{DeliveryFailureClass, DeliveryState, NotificationCursor};
-use profile_platform_primitives::{ActorId, OpaqueId, OutboxEventId, TenantScope, UnixMillis};
+use profile_platform_primitives::{
+    ActorId, OpaqueId, OutboxEventId, TenantId, TenantScope, UnixMillis,
+};
 use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::query;
@@ -299,14 +301,14 @@ impl D1NotificationRepository {
 
     async fn load_delivery(
         &self,
-        scope: &TenantScope,
+        tenant_id: &TenantId,
         consumer_id: &OpaqueId,
         event_id: &OutboxEventId,
     ) -> Result<DeliveryState, NotificationPortError> {
         let row = query!(
             &self.database,
             LOAD_DELIVERY,
-            scope.tenant_id().as_str(),
+            tenant_id.as_str(),
             consumer_id.as_str(),
             event_id.as_str()
         )
@@ -322,7 +324,7 @@ impl D1NotificationRepository {
 impl NotificationDeliveryRepositoryPort for D1NotificationRepository {
     async fn load_or_create_delivery(
         &self,
-        scope: &TenantScope,
+        tenant_id: &TenantId,
         consumer_id: &OpaqueId,
         event_id: &OutboxEventId,
         created_at: UnixMillis,
@@ -331,7 +333,7 @@ impl NotificationDeliveryRepositoryPort for D1NotificationRepository {
         query!(
             &self.database,
             INSERT_READY,
-            scope.tenant_id().as_str(),
+            tenant_id.as_str(),
             consumer_id.as_str(),
             event_id.as_str(),
             created_at,
@@ -341,12 +343,12 @@ impl NotificationDeliveryRepositoryPort for D1NotificationRepository {
         .run()
         .await
         .map_err(map_worker_error)?;
-        self.load_delivery(scope, consumer_id, event_id).await
+        self.load_delivery(tenant_id, consumer_id, event_id).await
     }
 
     async fn compare_and_swap_delivery(
         &self,
-        scope: &TenantScope,
+        tenant_id: &TenantId,
         consumer_id: &OpaqueId,
         event_id: &OutboxEventId,
         expected: DeliveryState,
@@ -372,7 +374,7 @@ impl NotificationDeliveryRepositoryPort for D1NotificationRepository {
                     next_attempt_at,
                     failure_class_to_storage(failure_class),
                     last_attempt_at,
-                    scope.tenant_id().as_str(),
+                    tenant_id.as_str(),
                     consumer_id.as_str(),
                     event_id.as_str(),
                     expected.state,
@@ -401,7 +403,7 @@ impl NotificationDeliveryRepositoryPort for D1NotificationRepository {
                     delivered_at,
                     delivered_at,
                     delivered_at,
-                    scope.tenant_id().as_str(),
+                    tenant_id.as_str(),
                     consumer_id.as_str(),
                     event_id.as_str(),
                     expected.state,
@@ -432,7 +434,7 @@ impl NotificationDeliveryRepositoryPort for D1NotificationRepository {
                     terminal_at,
                     failure_class_to_storage(failure_class),
                     terminal_at,
-                    scope.tenant_id().as_str(),
+                    tenant_id.as_str(),
                     consumer_id.as_str(),
                     event_id.as_str(),
                     expected.state,
@@ -596,7 +598,10 @@ mod tests {
         }
         .into_state()?;
         assert_eq!(state.attempts().value(), 2);
-        assert_eq!(state.failure_class(), Some(DeliveryFailureClass::DependencyUnavailable));
+        assert_eq!(
+            state.failure_class(),
+            Some(DeliveryFailureClass::DependencyUnavailable)
+        );
         Ok(())
     }
 
