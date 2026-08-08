@@ -15,8 +15,6 @@ FOR EACH ROW
 BEGIN
     SELECT RAISE(ABORT, 'outbox_payload_invalid')
     WHERE length(NEW.payload_json) > 4096
-       OR substr(trim(NEW.payload_json), 1, 1) <> '{'
-       OR substr(trim(NEW.payload_json), -1, 1) <> '}'
        OR instr(lower(NEW.payload_json), '"access_token"') > 0
        OR instr(lower(NEW.payload_json), '"authorization"') > 0
        OR instr(lower(NEW.payload_json), '"body_html"') > 0
