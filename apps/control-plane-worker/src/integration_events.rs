@@ -68,8 +68,7 @@ pub async fn consume(
         .await
         {
             Ok(
-                DeliveryProcessingOutcome::Delivered { .. }
-                | DeliveryProcessingOutcome::DeadLetter,
+                DeliveryProcessingOutcome::Delivered { .. } | DeliveryProcessingOutcome::DeadLetter,
             ) => message.ack(),
             Ok(DeliveryProcessingOutcome::RetryScheduled { retry_at }) => {
                 retry_after_seconds(&message, queue_delay_seconds(now, retry_at)?);
@@ -145,8 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_retry_delay_is_bounded_to_platform_limit()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn queue_retry_delay_is_bounded_to_platform_limit() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(
             queue_delay_seconds(UnixMillis::new(0), UnixMillis::new(90_000_000))?,
             86_400
