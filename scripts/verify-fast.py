@@ -48,6 +48,11 @@ def main() -> int:
     for script in scripts:
         run(script, [sys.executable, str(ROOT / "scripts" / script)])
 
+    run(
+        "generated frontend contract drift",
+        [sys.executable, str(ROOT / "scripts" / "generate-frontend-contracts.py"), "--check"],
+    )
+
     status_path = ROOT / "docs" / "status.json"
     print("\n==> docs/status.json syntax")
     with status_path.open("r", encoding="utf-8") as handle:
