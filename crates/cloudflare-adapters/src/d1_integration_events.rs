@@ -4,6 +4,7 @@ use application_ports::{
 };
 use contracts::{
     INTEGRATION_EVENT_ENVELOPE_VERSION, IntegrationEventEnvelope, IntegrationEventPayload,
+    is_foundation_event_type,
 };
 use profile_platform_primitives::{
     AggregateVersion, OpaqueId, OutboxEventId, TenantId, UnixMillis,
@@ -67,7 +68,9 @@ struct PendingOutboxRow {
 
 impl PendingOutboxRow {
     fn into_event(self) -> Result<IntegrationEventEnvelope, IntegrationEventPortError> {
-        if self.envelope_version != i64::from(INTEGRATION_EVENT_ENVELOPE_VERSION) {
+        if self.envelope_version != i64::from(INTEGRATION_EVENT_ENVELOPE_VERSION)
+            || !is_foundation_event_type(&self.event_type)
+        {
             return Err(integrity_failure());
         }
         let aggregate_version = u64::try_from(self.aggregate_version)
@@ -192,21 +195,24 @@ fn map_worker_error(_error: worker::Error) -> IntegrationEventPortError {
 mod tests {
     use super::PendingOutboxRow;
 
-    #[test]
-    fn pending_row_reconstructs_typed_sanitized_envelope() -> Result<(), Box<dyn std::error::Error>> {
-        let event = PendingOutboxRow {
+    fn row(event_type: &str, payload_json: &str) -> PendingOutboxRow {
+        PendingOutboxRow {
             tenant_id: "tenant_01JEVENT".to_owned(),
             outbox_event_id: "outbox_01JEVENT".to_owned(),
             aggregate_type: "client".to_owned(),
             aggregate_id: "client_01JEVENT".to_owned(),
             aggregate_version: 1,
-            event_type: "client.created.v1".to_owned(),
+            event_type: event_type.to_owned(),
             event_version: 1,
             envelope_version: 1,
-            payload_json: "{}".to_owned(),
+            payload_json: payload_json.to_owned(),
             created_at_ms: 42,
         }
-        .into_event()?;
+    }
+
+    #[test]
+    fn pending_row_reconstructs_typed_sanitized_envelope() -> Result<(), Box<dyn std::error::Error>> {
+        let event = row("client.created.v1", "{}").into_event()?;
         assert_eq!(event.event_type(), "client.created.v1");
         assert_eq!(event.payload().as_str(), "{}");
         Ok(())
@@ -214,19 +220,15 @@ mod tests {
 
     #[test]
     fn pending_row_rejects_prohibited_payload() {
-        let result = PendingOutboxRow {
-            tenant_id: "tenant_01JEVENT".to_owned(),
-            outbox_event_id: "outbox_01JEVENT".to_owned(),
-            aggregate_type: "client".to_owned(),
-            aggregate_id: "client_01JEVENT".to_owned(),
-            aggregate_version: 1,
-            event_type: "client.created.v1".to_owned(),
-            event_version: 1,
-            envelope_version: 1,
-            payload_json: r#"{"email":"private"}"#.to_owned(),
-            created_at_ms: 42,
-        }
-        .into_event();
-        assert!(result.is_err());
+        assert!(
+            row("client.created.v1", r#"{"email":"private"}"#)
+                .into_event()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn pending_row_rejects_unknown_event_before_publish() {
+        assert!(row("unknown.event.v1", "{}").into_event().is_err());
     }
 }
