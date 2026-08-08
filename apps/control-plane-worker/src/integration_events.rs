@@ -123,7 +123,9 @@ fn identifier_error(error: profile_platform_primitives::ParseOpaqueIdError) -> E
 
 #[cfg(test)]
 mod tests {
-    use super::queue_delay_seconds;
+    use super::{
+        MAX_QUEUE_DELAY_SECONDS, TRANSPORT_FAILURE_RETRY_SECONDS, queue_delay_seconds,
+    };
     use profile_platform_primitives::UnixMillis;
 
     #[test]
@@ -150,5 +152,11 @@ mod tests {
             86_400
         );
         Ok(())
+    }
+
+    #[test]
+    fn transport_failure_retry_is_delayed_and_platform_bounded() {
+        assert!(TRANSPORT_FAILURE_RETRY_SECONDS > 0);
+        assert!(u64::from(TRANSPORT_FAILURE_RETRY_SECONDS) <= MAX_QUEUE_DELAY_SECONDS);
     }
 }
