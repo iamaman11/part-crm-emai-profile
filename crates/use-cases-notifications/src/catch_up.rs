@@ -198,12 +198,10 @@ mod tests {
             event(10, "outbox_01JCATCHUP_B")?,
             event(11, "outbox_01JCATCHUP_C")?,
         ];
+        let next = validate_page(Some(&expected), &ordered, MAX_CATCH_UP_PAGE_SIZE)?;
         assert_eq!(
-            validate_page(Some(&expected), &ordered, MAX_CATCH_UP_PAGE_SIZE)?
-                .expect("non-empty page")
-                .event_id()
-                .as_str(),
-            "outbox_01JCATCHUP_C"
+            next.as_ref().map(|cursor| cursor.event_id().as_str()),
+            Some("outbox_01JCATCHUP_C")
         );
 
         let duplicate = vec![event(10, "outbox_01JCATCHUP_A")?];
