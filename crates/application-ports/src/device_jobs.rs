@@ -1,8 +1,6 @@
 use core::{fmt, future::Future};
 use device_domain::{DeviceJob, DeviceJobId, DeviceJobTarget};
-use profile_platform_primitives::{
-    ActorContext, AggregateVersion, DeviceId, TenantId, UnixMillis,
-};
+use profile_platform_primitives::{ActorContext, AggregateVersion, DeviceId, TenantId, UnixMillis};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceJobCapability {
