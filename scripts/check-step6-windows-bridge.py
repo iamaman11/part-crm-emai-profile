@@ -50,6 +50,24 @@ REPOSITORY_REQUIRED = {
         ".observe(workspace, device_id)",
         "evaluate_browser_launch(",
     ),
+    "apps/profile-bridge/src/browser_mail_query.rs": (
+        "pub struct BrowserMailExecutionProof",
+        "generation_id: GenerationId",
+        "device_job_id: DeviceJobId",
+        "device_claim_id: DeviceClaimId",
+        "device_job_fence: u64",
+        "coordinator_lease: ProfileLease",
+        "pub trait BrowserMailExecutionFencePort",
+        "pub trait BrowserMailRuntimePort",
+        "impl<F, R> ClientMailProviderQueryPort for BrowserClientMailQueryAdapter",
+        "self.require_current_execution().await?;",
+        ".search_messages(&self.proof",
+        ".get_message(&self.proof",
+        "stale_post_runtime_fence_discards_search_result",
+        "stale_post_runtime_fence_discards_message_body",
+        "binding_substitution_is_rejected_before_runtime",
+        "provider_binding_substitution_is_rejected_before_return",
+    ),
     "apps/profile-bridge/src/operator_flow.rs": (
         "pub trait BrowserLaunchPreflightPort",
         "browser_preflight: B",
@@ -285,6 +303,27 @@ def require_order(
         errors.append(f"Phase 2F ordering violated for {label}: {earlier} must precede {later}")
 
 
+def require_surrounded(
+    errors: list[str],
+    source: str,
+    guard: str,
+    operation: str,
+    label: str,
+) -> None:
+    first_guard = source.find(guard)
+    operation_at = source.find(operation)
+    second_guard = source.find(guard, first_guard + len(guard)) if first_guard >= 0 else -1
+    if (
+        first_guard < 0
+        or operation_at < 0
+        or second_guard < 0
+        or not first_guard < operation_at < second_guard
+    ):
+        errors.append(
+            f"Phase 2F fencing violated for {label}: {operation} must be guarded before and after"
+        )
+
+
 def enforce_phase2f_ordering(root: Path, errors: list[str]) -> None:
     operator = (root / "apps/profile-bridge/src/operator_flow.rs").read_text(encoding="utf-8")
     require_order(
@@ -392,6 +431,48 @@ def enforce_phase2f_ordering(root: Path, errors: list[str]) -> None:
                     f"{request_struct} must not accept trusted/server-owned field: {forbidden}"
                 )
 
+    browser_mail = (root / "apps/profile-bridge/src/browser_mail_query.rs").read_text(
+        encoding="utf-8"
+    )
+    browser_mail_production = browser_mail.split("#[cfg(test)]", 1)[0]
+    for forbidden in (
+        "D1Database",
+        "worker::",
+        "std::fs",
+        "bridge_outbox",
+        "mailbox_job_run_commands",
+    ):
+        if forbidden in browser_mail_production:
+            errors.append(
+                f"browser mail query adapter must remain transient and storage-free: {forbidden}"
+            )
+    impl_marker = "impl<F, R> ClientMailProviderQueryPort for BrowserClientMailQueryAdapter"
+    impl_start = browser_mail_production.find(impl_marker)
+    if impl_start < 0:
+        errors.append("missing Phase 2F browser Client Mail provider implementation")
+    else:
+        browser_impl = browser_mail_production[impl_start:]
+        get_start = browser_impl.find("async fn get_message(")
+        if get_start < 0:
+            errors.append("missing Phase 2F browser get-message implementation")
+        else:
+            search_body = browser_impl[:get_start]
+            get_body = browser_impl[get_start:]
+            require_surrounded(
+                errors,
+                search_body,
+                "self.require_current_execution().await?;",
+                ".search_messages(&self.proof",
+                "browser mail search result",
+            )
+            require_surrounded(
+                errors,
+                get_body,
+                "self.require_current_execution().await?;",
+                ".get_message(&self.proof",
+                "browser mail message body",
+            )
+
     synthetic = (root / "apps/profile-bridge/src/bin/profile-bridge-synthetic.rs").read_text(
         encoding="utf-8"
     )
@@ -443,6 +524,17 @@ def phase2f_ordering_self_test(errors: list[str]) -> None:
     )
     if not probe:
         errors.append("Phase 2F negative Worker actor/device-order fixture unexpectedly passed")
+
+    probe = []
+    require_surrounded(
+        probe,
+        "self.require_current_execution().await?; runtime.search_messages();",
+        "self.require_current_execution().await?;",
+        "runtime.search_messages()",
+        "negative browser-mail post-runtime fence fixture",
+    )
+    if not probe:
+        errors.append("Phase 2F negative browser-mail fencing fixture unexpectedly passed")
 
 
 def main() -> int:
