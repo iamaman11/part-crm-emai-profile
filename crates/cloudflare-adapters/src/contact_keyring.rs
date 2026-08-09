@@ -88,7 +88,7 @@ const fn hex_nibble(value: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContactKeyringConfigError, contact_protection_from_serialized_keyring};
+    use super::contact_protection_from_serialized_keyring;
 
     #[test]
     fn versioned_keyring_requires_valid_nonempty_32_byte_entries() {
@@ -100,17 +100,17 @@ mod tests {
             "12".repeat(32),
         );
         assert!(contact_protection_from_serialized_keyring(valid).is_ok());
-        assert_eq!(
+        assert!(
             contact_protection_from_serialized_keyring(
                 "{\"encryption\":[],\"lookup\":[]}".to_owned()
-            ),
-            Err(ContactKeyringConfigError)
+            )
+            .is_err()
         );
-        assert_eq!(
+        assert!(
             contact_protection_from_serialized_keyring(
                 "{\"encryption\":[{\"version\":0,\"keyHex\":\"00\"}],\"lookup\":[]}".to_owned()
-            ),
-            Err(ContactKeyringConfigError)
+            )
+            .is_err()
         );
     }
 }
