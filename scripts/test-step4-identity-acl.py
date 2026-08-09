@@ -104,12 +104,13 @@ def seed(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
-        INSERT INTO profile_client_assignments (
-            tenant_id, assignment_id, profile_id, client_id,
-            assigned_by_actor_id, assigned_at_ms, reason
-        ) VALUES (?, 'assignment_01_step4', ?, ?, ?, 40, 'historical assignment only')
+        INSERT INTO profile_assignment_commands (
+            tenant_id, command_id, command_actor_id, assignment_id,
+            profile_id, client_id, expected_profile_version, reason, executed_at_ms
+        ) VALUES (?, 'command_assignment_01_step4', ?, 'assignment_01_step4',
+                  ?, ?, 1, 'historical assignment only', 40)
         """,
-        (TENANT, PROFILE, CLIENT, MEMBER),
+        (TENANT, OWNER, PROFILE, CLIENT),
     )
     connection.commit()
 
