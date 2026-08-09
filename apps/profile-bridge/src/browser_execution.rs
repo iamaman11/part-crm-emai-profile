@@ -1,5 +1,5 @@
 use crate::local_profile::{GenerationWorkspace, LocalProfileError};
-use bridge_domain::browser_execution::{
+use browser_execution_domain::{
     BrowserExecutionError, BrowserIdentityManifest, BrowserWriterDecision, BrowserWriterObservation,
     MaterializationBinding, NetworkIdentityDecision, NetworkIdentityObservation, NetworkIdentityPolicy,
 };
@@ -43,7 +43,8 @@ pub fn persist_materialization_binding(
     let content = render_binding(binding);
     match OpenOptions::new().write(true).create_new(true).open(&path) {
         Ok(mut file) => {
-            file.write_all(content.as_bytes()).map_err(LocalProfileError::from)?;
+            file.write_all(content.as_bytes())
+                .map_err(LocalProfileError::from)?;
             file.sync_all().map_err(LocalProfileError::from)?;
             Ok(())
         }
@@ -83,9 +84,7 @@ pub fn evaluate_browser_launch(
         expected.profile_id(),
         expected.generation_id(),
     )?;
-    if &actual != expected
-        || workspace.inventory()?.inventory_digest() != expected.materialized_inventory_digest()
-    {
+    if &actual != expected {
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
 
@@ -101,6 +100,10 @@ pub fn evaluate_browser_launch(
         BrowserWriterDecision::RecoveryRequired => {
             return Err(BrowserLaunchBlocker::RecoveryRequired);
         }
+    }
+
+    if workspace.inventory()?.inventory_digest() != expected.materialized_inventory_digest() {
+        return Err(BrowserLaunchBlocker::MaterializationStale);
     }
 
     match network_policy.evaluate(network_observation) {
@@ -157,7 +160,7 @@ fn parse_binding(
             return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
         }
     }
-    if values.len() != 10 || values.get("schema") != Some(&MATERIALIZATION_SCHEMA) {
+    if values.len() != 11 || values.get("schema") != Some(&MATERIALIZATION_SCHEMA) {
         return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
     }
 
@@ -233,7 +236,7 @@ mod tests {
         BrowserLaunchBlocker, evaluate_browser_launch, persist_materialization_binding,
     };
     use crate::local_profile::MaterializationRoot;
-    use bridge_domain::browser_execution::{
+    use browser_execution_domain::{
         BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
         NetworkIdentityPolicy,
     };
@@ -351,7 +354,7 @@ mod tests {
                 &observation("route-a")?,
                 false,
             ),
-            Err(BrowserLaunchBlocker::MaterializationStale)
+            Err(BrowserLaunchBlocker::RecoveryRequired)
         );
         assert!(workspace.path().join(".parentlock").exists());
         fs::remove_dir_all(root_path)?;
