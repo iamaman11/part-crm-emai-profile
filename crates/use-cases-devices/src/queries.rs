@@ -89,7 +89,9 @@ where
 fn map_port_error(error: DeviceJobPortError) -> DeviceJobQueryError {
     match error.class() {
         DeviceJobPortErrorClass::IntegrityFailure => DeviceJobQueryError::IntegrityFailure,
-        DeviceJobPortErrorClass::DependencyUnavailable => DeviceJobQueryError::DependencyUnavailable,
+        DeviceJobPortErrorClass::DependencyUnavailable => {
+            DeviceJobQueryError::DependencyUnavailable
+        }
     }
 }
 
