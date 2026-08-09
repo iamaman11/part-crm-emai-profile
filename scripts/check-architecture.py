@@ -36,6 +36,7 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
         "contracts",
         "identity-access-domain",
         "client-domain",
+        "device-domain",
         "profile-domain",
         "session-domain",
         "mailbox-domain",
@@ -48,6 +49,11 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
         "client-domain",
         "application-ports",
         "zeroize",
+    },
+    "use-cases-devices": {
+        "profile-platform-primitives",
+        "device-domain",
+        "application-ports",
     },
     "use-cases-identity": {
         "profile-platform-primitives",
