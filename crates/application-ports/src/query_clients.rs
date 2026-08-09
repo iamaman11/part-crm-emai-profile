@@ -1,5 +1,6 @@
 use crate::query::{QueryPage, QueryPageRequest, QueryPortError};
 use client_domain::{ClientKind, ClientStatus};
+use core::future::Future;
 use profile_platform_primitives::{ActorContext, AggregateVersion, ClientId};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,21 +31,35 @@ impl ClientReadProjection {
     }
 
     #[must_use]
-    pub const fn client_id(&self) -> &ClientId { &self.client_id }
+    pub const fn client_id(&self) -> &ClientId {
+        &self.client_id
+    }
+
     #[must_use]
-    pub const fn kind(&self) -> ClientKind { self.kind }
+    pub const fn kind(&self) -> ClientKind {
+        self.kind
+    }
+
     #[must_use]
-    pub fn display_name(&self) -> &str { &self.display_name }
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
     #[must_use]
-    pub const fn status(&self) -> ClientStatus { self.status }
+    pub const fn status(&self) -> ClientStatus {
+        self.status
+    }
+
     #[must_use]
-    pub const fn version(&self) -> AggregateVersion { self.version }
+    pub const fn version(&self) -> AggregateVersion {
+        self.version
+    }
 }
 
 pub trait ClientReadModelPort {
-    async fn list_clients(
+    fn list_clients(
         &self,
         actor: &ActorContext,
         page: &QueryPageRequest,
-    ) -> Result<QueryPage<ClientReadProjection>, QueryPortError>;
+    ) -> impl Future<Output = Result<QueryPage<ClientReadProjection>, QueryPortError>>;
 }
