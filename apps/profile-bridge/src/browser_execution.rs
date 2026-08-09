@@ -503,12 +503,7 @@ mod tests {
             ),
             Err(BrowserLaunchBlocker::RecoveryRequired)
         );
-        assert!(
-            workspace
-                .path()
-                .join(super::BRIDGE_LOCK_FILE)
-                .exists()
-        );
+        assert!(workspace.path().join(super::BRIDGE_LOCK_FILE).exists());
         bridge_lock.release()?;
         remove_test_root(&root_path)?;
         Ok(())
