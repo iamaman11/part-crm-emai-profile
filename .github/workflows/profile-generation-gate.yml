@@ -25,8 +25,42 @@ jobs:
           ref: phase2f-device-browser-mailbox
           fetch-depth: 0
 
-      - name: Materialize formatting and generated consistency
+      - name: Materialize Bridge launch error contract and generated state
         run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('apps/profile-bridge/src/browser_execution.rs')
+          text = path.read_text(encoding='utf-8')
+          if 'impl core::fmt::Display for BrowserLaunchBlocker' not in text:
+              marker = '''impl From<LocalProfileError> for BrowserLaunchBlocker {
+    fn from(error: LocalProfileError) -> Self {
+        Self::LocalProfile(error)
+    }
+}
+'''
+              if text.count(marker) != 1:
+                  raise SystemExit('BrowserLaunchBlocker insertion marker changed')
+              addition = '''
+impl core::fmt::Display for BrowserLaunchBlocker {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::MaterializationStale => "browser materialization evidence is stale",
+            Self::ProfileBusy => "browser profile writer is currently active",
+            Self::RecoveryRequired => "browser profile writer state requires explicit recovery",
+            Self::RetryableNetworkRouteChurn => "browser network route identity changed retryably",
+            Self::NetworkPolicyMismatch => "browser network identity violates policy",
+            Self::InvalidMaterializationEvidence => "browser materialization evidence is invalid",
+            Self::LocalProfile(_) => "browser local profile operation failed",
+        })
+    }
+}
+
+impl std::error::Error for BrowserLaunchBlocker {}
+'''
+              text = text.replace(marker, marker + addition, 1)
+              path.write_text(text, encoding='utf-8')
+          PY
           cargo fmt --all
           cargo generate-lockfile
           python scripts/generate-architecture-inventory.py --write
