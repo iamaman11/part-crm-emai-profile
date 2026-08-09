@@ -1,3 +1,4 @@
+# Temporary branch-only validator; delete after validated product commit.
 name: Phase 2B Maintenance
 
 on:
