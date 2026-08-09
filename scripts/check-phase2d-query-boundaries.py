@@ -33,6 +33,22 @@ FORBIDDEN_DISCOVERY = (
     " MATCH ",
     "COUNT(",
 )
+CONFIDENTIAL_SINKS = (
+    "println!(",
+    "eprintln!(",
+    "dbg!(",
+    "tracing::",
+    "log::",
+    "AuditPort",
+    "IntegrationEvent",
+    "telemetry",
+)
+WEB_STORAGE_SINKS = (
+    "localStorage",
+    "sessionStorage",
+    "indexedDB",
+    "console.",
+)
 
 
 def fail(message: str) -> None:
@@ -56,6 +72,13 @@ def assert_no_discovery_sql(name: str, source: str) -> None:
             fail(f"unbounded/fuzzy query predicate is prohibited in {name}: {fragment}")
 
 
+def assert_no_confidential_sinks(name: str, source: str) -> None:
+    lowered = source.lower()
+    for sink in CONFIDENTIAL_SINKS:
+        if sink.lower() in lowered:
+            fail(f"confidential Client Mail data must not reach logging/audit/event sinks in {name}: {sink}")
+
+
 def enforce(root: Path) -> None:
     ports = root / "crates" / "application-ports" / "src"
     for name in QUERY_MODULES:
@@ -76,6 +99,7 @@ def enforce(root: Path) -> None:
         for fragment in FORBIDDEN_INNER:
             if fragment.lower() in source.lower():
                 fail(f"provider/runtime leakage in use-cases-query/{name}: {fragment}")
+    assert_no_confidential_sinks("use-cases-query/mail.rs", mail_application)
 
     required_functions = (
         "list_clients",
@@ -186,6 +210,29 @@ def enforce(root: Path) -> None:
     ):
         if required not in contact_sql:
             fail(f"exact contact D1 query missing grant-safe indexed predicate: {required}")
+
+    cloud_fake = read(adapters / "fake_mail_query.rs")
+    bridge_fake = read(root / "apps" / "profile-bridge" / "src" / "fake_mail_query.rs")
+    for name, source in (
+        ("cloudflare-adapters/fake_mail_query.rs", cloud_fake),
+        ("profile-bridge/fake_mail_query.rs", bridge_fake),
+    ):
+        if "ClientMailProviderQueryPort" not in source or "MailMessageBody::new" not in source:
+            fail(f"synthetic Client Mail adapter must implement the provider-neutral full-body contract: {name}")
+        assert_no_confidential_sinks(name, source)
+    for forbidden in ("worker::", "D1Database", "secret_handle", "std::fs", "std::process"):
+        if forbidden.lower() in cloud_fake.lower():
+            fail(f"fake cloud mail adapter must not execute real provider/storage runtime: {forbidden}")
+    for forbidden in ("std::fs", "std::process", "Command::", "windows_native"):
+        if forbidden.lower() in bridge_fake.lower():
+            fail(f"fake Bridge mail adapter must not execute device/runtime side effects: {forbidden}")
+
+    client_mail_ui = read(root / "frontend" / "src" / "features" / "clients" / "ClientMailPanel.tsx")
+    if "../../shared/api/generated/query-mail" not in client_mail_ui:
+        fail("Client Mail UI must consume the generated Rust-derived query contract")
+    for sink in WEB_STORAGE_SINKS:
+        if sink.lower() in client_mail_ui.lower():
+            fail(f"Client Mail UI must not persist or log query/message data: {sink}")
 
     if "profile_client_assignments" not in d1_query:
         fail("profile read projection must preserve assignment linkage")
