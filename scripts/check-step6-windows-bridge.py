@@ -142,6 +142,43 @@ REPOSITORY_REQUIRED = {
         "EXPLAIN QUERY PLAN",
         "assert claimable_ids(connection, 500) == []",
     ),
+    "crates/control-plane-contract/src/routes/devices.rs": (
+        "DeviceJobClaimableApi",
+        "DeviceJobClaimApi",
+        "DeviceJobHeartbeatApi",
+        "DeviceJobOutcomeApi",
+    ),
+    "apps/control-plane-worker/src/composition.rs": (
+        "pub fn authenticated_device",
+        "pub fn device_job_authorization",
+        "pub fn device_execution_preconditions",
+        "pub fn device_job_repository",
+    ),
+    "apps/control-plane-worker/src/device_jobs.rs": (
+        "resolve_active_request_actor",
+        "authenticated_device(env)?",
+        "authenticated_device_id(actor)",
+        "ResolvedAuthenticatedDevice",
+        "execute_list_claimable_device_jobs",
+        "execute_claim_device_job",
+        "execute_heartbeat_device_job",
+        "execute_apply_device_job_outcome",
+        "DEVICE_CLAIM_LEASE_MS",
+        "MAX_DEVICE_RETRY_DELAY_MS",
+        "Date::now().as_millis()",
+        "checked_future",
+        "deny_unknown_fields",
+        "transport_rejects_device_time_and_lease_substitution_fields",
+        "heartbeat_and_outcome_are_strict_and_retry_is_relative_only",
+    ),
+    "apps/control-plane-worker/src/lib.rs": (
+        "mod device_jobs;",
+        "RouteClass::DeviceJobClaimableApi",
+        "RouteClass::DeviceJobClaimApi",
+        "RouteClass::DeviceJobHeartbeatApi",
+        "RouteClass::DeviceJobOutcomeApi",
+        "device_jobs::dispatch(route, &mut request, &env).await",
+    ),
     "apps/profile-bridge/src/windows_native.rs": (
         "std::os::windows::ffi::OsStrExt",
         "pub fn encode_wide_argument",
@@ -225,6 +262,15 @@ def function_body(source: str, function_name: str) -> str:
     return source[start : next_start if next_start >= 0 else len(source)]
 
 
+def struct_body(source: str, struct_name: str) -> str:
+    marker = f"struct {struct_name} {{"
+    start = source.find(marker)
+    if start < 0:
+        return ""
+    end = source.find("\n}", start + len(marker))
+    return source[start : end + 2 if end >= 0 else len(source)]
+
+
 def require_order(
     errors: list[str],
     source: str,
@@ -302,6 +348,47 @@ def enforce_phase2f_ordering(root: Path, errors: list[str]) -> None:
                 "trusted device identity must come from verified actor binding, not a request header"
             )
 
+    worker_ingress = (root / "apps/control-plane-worker/src/device_jobs.rs").read_text(
+        encoding="utf-8"
+    )
+    dispatch_body = function_body(worker_ingress, "dispatch")
+    require_order(
+        errors,
+        dispatch_body,
+        "resolve_active_request_actor(",
+        "authenticated_device(env)?",
+        "Worker resolves verified actor before trusted device principal",
+    )
+    require_order(
+        errors,
+        dispatch_body,
+        "authenticated_device_id(actor)",
+        "execute_list_claimable_device_jobs(",
+        "Worker resolves trusted device before any device use-case dispatch",
+    )
+    if ".headers()" in worker_ingress or "X-Device-Id" in worker_ingress:
+        errors.append("device Worker ingress must not derive device identity from request headers")
+    for request_struct in (
+        "ClaimDeviceJobRequest",
+        "HeartbeatDeviceJobRequest",
+        "ApplyDeviceJobOutcomeRequest",
+    ):
+        body = struct_body(worker_ingress, request_struct)
+        if not body:
+            errors.append(f"missing strict Phase 2F Worker DTO: {request_struct}")
+            continue
+        for forbidden in (
+            "device_id",
+            "tenant_id",
+            "observed_at",
+            "lease_expires_at",
+            "retry_at",
+        ):
+            if forbidden in body:
+                errors.append(
+                    f"{request_struct} must not accept trusted/server-owned field: {forbidden}"
+                )
+
     synthetic = (root / "apps/profile-bridge/src/bin/profile-bridge-synthetic.rs").read_text(
         encoding="utf-8"
     )
@@ -342,6 +429,17 @@ def phase2f_ordering_self_test(errors: list[str]) -> None:
     )
     if not probe:
         errors.append("Phase 2F negative claimable-query device-auth fixture unexpectedly passed")
+
+    probe = []
+    require_order(
+        probe,
+        "authenticated_device(env)?; resolve_active_request_actor();",
+        "resolve_active_request_actor(",
+        "authenticated_device(env)?",
+        "negative Worker actor/device ordering fixture",
+    )
+    if not probe:
+        errors.append("Phase 2F negative Worker actor/device-order fixture unexpectedly passed")
 
 
 def main() -> int:
