@@ -1,15 +1,14 @@
 import { newIdempotencyKey, requestJson, sha256Hex } from './client';
+import type { ClientCreateRequest, ClientGrantRequest } from './generated/control-plane';
 import type {
   ClientArchiveRequest,
   ClientContactArchiveRequest,
   ClientContactUpsertRequest,
-  ClientCreateRequest,
-  ClientGrantRequest,
   ClientHistoryProjection,
   ClientListProjection,
   ClientMergeRequest,
   ClientUpdateRequest,
-} from './generated/control-plane';
+} from './generated/client-registry';
 import type {
   ActorSession,
   ClientProjection,
