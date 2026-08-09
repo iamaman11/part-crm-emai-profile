@@ -40,7 +40,9 @@ pub fn client_application(env: &Env) -> Result<D1ClientApplicationRepository> {
 }
 
 pub fn client_persistence_application(env: &Env) -> Result<D1ClientPersistenceRepository> {
-    Ok(D1ClientPersistenceRepository::new(env.d1(D1_CATALOG_BINDING)?))
+    Ok(D1ClientPersistenceRepository::new(
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
 }
 
 pub fn client_merge_application(env: &Env) -> Result<D1ClientMergeRepository> {
@@ -48,7 +50,9 @@ pub fn client_merge_application(env: &Env) -> Result<D1ClientMergeRepository> {
 }
 
 pub fn client_registry_projection(env: &Env) -> Result<D1ClientRegistryProjectionRepository> {
-    Ok(D1ClientRegistryProjectionRepository::new(env.d1(D1_CATALOG_BINDING)?))
+    Ok(D1ClientRegistryProjectionRepository::new(
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
 }
 
 #[cfg(target_arch = "wasm32")]

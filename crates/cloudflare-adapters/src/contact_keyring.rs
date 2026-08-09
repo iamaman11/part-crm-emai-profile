@@ -1,9 +1,9 @@
+#[cfg(target_arch = "wasm32")]
+use crate::contact_protection::WorkerCryptoNonceSource;
 use crate::contact_protection::{
     ContactEncryptionRootKey, ContactLookupRootKey, ContactProtectionKeyring,
     RustCryptoContactProtection,
 };
-#[cfg(target_arch = "wasm32")]
-use crate::contact_protection::WorkerCryptoNonceSource;
 use client_domain::{EncryptionKeyVersion, LookupKeyVersion};
 use serde::Deserialize;
 use zeroize::{Zeroize, Zeroizing};
@@ -47,7 +47,8 @@ fn parse_contact_protection_keyring(
             ))
         })
         .collect::<Result<Vec<_>, ContactKeyringConfigError>>()?;
-    ContactProtectionKeyring::new(encryption_keys, lookup_keys).map_err(|_| ContactKeyringConfigError)
+    ContactProtectionKeyring::new(encryption_keys, lookup_keys)
+        .map_err(|_| ContactKeyringConfigError)
 }
 
 #[derive(Deserialize)]

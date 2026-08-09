@@ -1,7 +1,8 @@
 use application_ports::client_registry::{
     ClientRegistryActivityProjection, ClientRegistryAssignmentProjection,
     ClientRegistryContactProjection, ClientRegistryHistoryProjection, ClientRegistryListItem,
-    ClientRegistryProjectionError, ClientRegistryProjectionErrorClass, ClientRegistryProjectionPort,
+    ClientRegistryProjectionError, ClientRegistryProjectionErrorClass,
+    ClientRegistryProjectionPort,
 };
 use client_domain::{AssignmentStatus, ClientKind, ClientStatus, ContactKind, ContactStatus};
 use identity_access_domain::MembershipRole;
@@ -174,9 +175,7 @@ impl D1ClientRegistryProjectionRepository {
         .all()
         .await
         .map_err(dependency_error)?;
-        let rows = result
-            .results::<ContactRow>()
-            .map_err(dependency_error)?;
+        let rows = result.results::<ContactRow>().map_err(dependency_error)?;
         marker_map(rows, map_contact_row)
     }
 
@@ -186,7 +185,8 @@ impl D1ClientRegistryProjectionRepository {
         actor_id: &ActorId,
         owner: i32,
         client_id: &ClientId,
-    ) -> Result<Option<Vec<ClientRegistryAssignmentProjection>>, ClientRegistryProjectionError> {
+    ) -> Result<Option<Vec<ClientRegistryAssignmentProjection>>, ClientRegistryProjectionError>
+    {
         let result = query!(
             &self.database,
             r#"
@@ -332,9 +332,7 @@ impl D1ClientRegistryProjectionRepository {
         .all()
         .await
         .map_err(dependency_error)?;
-        let rows = result
-            .results::<ActivityRow>()
-            .map_err(dependency_error)?;
+        let rows = result.results::<ActivityRow>().map_err(dependency_error)?;
         marker_map(rows, map_activity_row)
     }
 
@@ -620,7 +618,10 @@ const fn integrity_error() -> ClientRegistryProjectionError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActivityRow, AssignmentRow, ContactRow, map_activity_row, map_assignment_row, map_contact_row};
+    use super::{
+        ActivityRow, AssignmentRow, ContactRow, map_activity_row, map_assignment_row,
+        map_contact_row,
+    };
 
     #[test]
     fn left_join_marker_rows_map_to_empty_projection_items() {

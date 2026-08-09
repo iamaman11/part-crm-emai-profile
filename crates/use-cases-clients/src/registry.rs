@@ -103,8 +103,7 @@ mod tests {
             }
             Ok(if self.visible {
                 vec![ClientRegistryListItem::new(
-                    ClientId::parse("client_01JREGISTRY")
-                        .expect("valid test client identifier"),
+                    ClientId::parse("client_01JREGISTRY").expect("valid test client identifier"),
                     ClientKind::Person,
                     "Registry Client",
                     ClientStatus::Active,
@@ -121,7 +120,8 @@ mod tests {
             _actor_id: &ActorId,
             _role: MembershipRole,
             _client_id: &ClientId,
-        ) -> Result<Option<ClientRegistryHistoryProjection>, ClientRegistryProjectionError> {
+        ) -> Result<Option<ClientRegistryHistoryProjection>, ClientRegistryProjectionError>
+        {
             if let Some(class) = self.fail.get() {
                 return Err(ClientRegistryProjectionError::new(class));
             }
@@ -173,7 +173,8 @@ mod tests {
     }
 
     #[test]
-    fn projection_failures_keep_integrity_and_dependency_classes() -> Result<(), Box<dyn std::error::Error>> {
+    fn projection_failures_keep_integrity_and_dependency_classes()
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort {
             visible: true,
             fail: Cell::new(Some(ClientRegistryProjectionErrorClass::IntegrityFailure)),
@@ -186,8 +187,9 @@ mod tests {
             )),
             Err(ClientRegistryQueryError::IntegrityFailure)
         );
-        port.fail
-            .set(Some(ClientRegistryProjectionErrorClass::DependencyUnavailable));
+        port.fail.set(Some(
+            ClientRegistryProjectionErrorClass::DependencyUnavailable,
+        ));
         assert_eq!(
             block_on(list_visible_clients(
                 &actor()?,

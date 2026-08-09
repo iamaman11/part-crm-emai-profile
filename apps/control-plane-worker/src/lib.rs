@@ -132,7 +132,8 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let mailbox_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _mailbox_repository = D1MailboxRepository::new(mailbox_catalog);
     let notification_catalog = env.d1(D1_CATALOG_BINDING)?;
-    let _notification_operations_repository = D1NotificationOperationsRepository::new(notification_catalog);
+    let _notification_operations_repository =
+        D1NotificationOperationsRepository::new(notification_catalog);
     let idempotency_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _idempotency_repository = D1IdempotencyRepository::new(idempotency_catalog);
     let profile_objects = env.bucket(R2_PROFILES_BINDING)?;

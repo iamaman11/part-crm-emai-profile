@@ -458,7 +458,8 @@ mod tests {
     }
 
     #[test]
-    fn member_is_rejected_before_replay_context_or_write() -> Result<(), Box<dyn std::error::Error>> {
+    fn member_is_rejected_before_replay_context_or_write() -> Result<(), Box<dyn std::error::Error>>
+    {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -472,11 +473,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::Member,
                 &port,
-                command(
-                    AggregateVersion::INITIAL,
-                    "client_02JASSIGNAPP",
-                    20,
-                )?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20,)?,
             )),
             Err(ProfileAssignmentOperationError::NotFound)
         );
@@ -499,11 +496,7 @@ mod tests {
             &actor()?,
             MembershipRole::TenantOwner,
             &port,
-            command(
-                AggregateVersion::INITIAL,
-                "client_02JASSIGNAPP",
-                20,
-            )?,
+            command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20)?,
         ))?;
         assert!(outcome.replayed());
         assert_eq!(outcome.resource_id(), "assignment_existing");
@@ -527,11 +520,7 @@ mod tests {
             &actor()?,
             MembershipRole::TenantOwner,
             &port,
-            command(
-                AggregateVersion::INITIAL,
-                "client_02JASSIGNAPP",
-                20,
-            )?,
+            command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20)?,
         ))?;
         assert_eq!(outcome.result_code(), "assigned");
         assert_eq!(outcome.resource_id(), "assignment_02JASSIGNAPP");
@@ -544,7 +533,8 @@ mod tests {
     }
 
     #[test]
-    fn stale_expected_profile_version_fails_before_write() -> Result<(), Box<dyn std::error::Error>> {
+    fn stale_expected_profile_version_fails_before_write() -> Result<(), Box<dyn std::error::Error>>
+    {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -558,11 +548,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(
-                    AggregateVersion::INITIAL,
-                    "client_02JASSIGNAPP",
-                    20,
-                )?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20,)?,
             )),
             Err(ProfileAssignmentOperationError::VersionConflict)
         );
@@ -572,7 +558,8 @@ mod tests {
     }
 
     #[test]
-    fn reassignment_to_same_primary_client_is_domain_conflict() -> Result<(), Box<dyn std::error::Error>> {
+    fn reassignment_to_same_primary_client_is_domain_conflict()
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -586,11 +573,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(
-                    AggregateVersion::INITIAL,
-                    "client_01JASSIGNAPP",
-                    20,
-                )?,
+                command(AggregateVersion::INITIAL, "client_01JASSIGNAPP", 20,)?,
             )),
             Err(ProfileAssignmentOperationError::Conflict)
         );
@@ -599,7 +582,8 @@ mod tests {
     }
 
     #[test]
-    fn reassignment_time_regression_is_rejected_before_write() -> Result<(), Box<dyn std::error::Error>> {
+    fn reassignment_time_regression_is_rejected_before_write()
+    -> Result<(), Box<dyn std::error::Error>> {
         let port = FakePort::new(
             vec![ProfileReplayDecision::Miss],
             Some(context(
@@ -613,11 +597,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(
-                    AggregateVersion::INITIAL,
-                    "client_02JASSIGNAPP",
-                    5,
-                )?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 5,)?,
             )),
             Err(ProfileAssignmentOperationError::InvalidState)
         );
@@ -640,11 +620,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(
-                    AggregateVersion::INITIAL,
-                    "client_02JASSIGNAPP",
-                    20,
-                )?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20,)?,
             )),
             Err(ProfileAssignmentOperationError::NotFound)
         );
@@ -653,7 +629,8 @@ mod tests {
     }
 
     #[test]
-    fn persisted_current_assignment_inconsistency_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+    fn persisted_current_assignment_inconsistency_fails_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
         let current = CurrentProfileAssignmentSnapshot::new(
             AssignmentId::parse("assignment_01JASSIGNAPP")?,
             client("client_01JASSIGNAPP", ClientStatus::Archived)?,
@@ -674,11 +651,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(
-                    AggregateVersion::INITIAL,
-                    "client_02JASSIGNAPP",
-                    20,
-                )?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20,)?,
             )),
             Err(ProfileAssignmentOperationError::IntegrityFailure)
         );
@@ -708,11 +681,7 @@ mod tests {
             &actor()?,
             MembershipRole::TenantOwner,
             &port,
-            command(
-                AggregateVersion::INITIAL,
-                "client_02JASSIGNAPP",
-                20,
-            )?,
+            command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20)?,
         ))?;
         assert!(outcome.replayed());
         assert_eq!(outcome.resource_id(), "assignment_replayed");
@@ -732,11 +701,7 @@ mod tests {
                 &actor()?,
                 MembershipRole::TenantOwner,
                 &port,
-                command(
-                    AggregateVersion::INITIAL,
-                    "client_02JASSIGNAPP",
-                    20,
-                )?,
+                command(AggregateVersion::INITIAL, "client_02JASSIGNAPP", 20,)?,
             )),
             Err(ProfileAssignmentOperationError::DependencyUnavailable)
         );

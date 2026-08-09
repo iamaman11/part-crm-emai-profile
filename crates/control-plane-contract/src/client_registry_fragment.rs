@@ -124,10 +124,7 @@ fn decorate_legacy_transport_contract(fragment: &mut Value) {
             let Some(operation) = operation.as_object_mut() else {
                 continue;
             };
-            operation.insert(
-                "security".to_owned(),
-                json!([{"cloudflareAccessJwt": []}]),
-            );
+            operation.insert("security".to_owned(), json!([{"cloudflareAccessJwt": []}]));
             let parameters = operation
                 .entry("parameters")
                 .or_insert_with(|| Value::Array(Vec::new()));
@@ -150,11 +147,31 @@ mod tests {
     fn fragment_contains_only_additive_client_registry_surface() {
         let fragment = canonical_fragment();
         let paths = fragment["paths"].as_object().expect("fragment paths");
-        assert!(paths["/api/v1/tenants/{tenantId}/clients"].get("get").is_some());
-        assert!(paths["/api/v1/tenants/{tenantId}/clients"].get("post").is_none());
-        assert!(paths["/api/v1/tenants/{tenantId}/clients/{clientId}"].get("patch").is_some());
-        assert!(paths["/api/v1/tenants/{tenantId}/clients/{clientId}"].get("get").is_none());
-        assert!(paths["/api/v1/tenants/{tenantId}/clients/{clientId}/merge"].get("post").is_some());
+        assert!(
+            paths["/api/v1/tenants/{tenantId}/clients"]
+                .get("get")
+                .is_some()
+        );
+        assert!(
+            paths["/api/v1/tenants/{tenantId}/clients"]
+                .get("post")
+                .is_none()
+        );
+        assert!(
+            paths["/api/v1/tenants/{tenantId}/clients/{clientId}"]
+                .get("patch")
+                .is_some()
+        );
+        assert!(
+            paths["/api/v1/tenants/{tenantId}/clients/{clientId}"]
+                .get("get")
+                .is_none()
+        );
+        assert!(
+            paths["/api/v1/tenants/{tenantId}/clients/{clientId}/merge"]
+                .get("post")
+                .is_some()
+        );
     }
 
     #[test]

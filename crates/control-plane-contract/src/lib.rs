@@ -408,8 +408,14 @@ mod tests {
             ),
             ("PUT", "/api/v1/tenants/tenant_01/clients/client_01/archive"),
             ("GET", "/api/v1/tenants/tenant_01/clients/client_01/merge"),
-            ("POST", "/api/v1/tenants/tenant_01/clients/client_01/history"),
-            ("POST", "/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01"),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/clients/client_01/history",
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01",
+            ),
             ("GET", "/api/v1/tenants/tenant_01/mailboxes"),
             ("DELETE", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01"),
             (

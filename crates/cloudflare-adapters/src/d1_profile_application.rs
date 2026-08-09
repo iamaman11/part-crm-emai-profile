@@ -315,7 +315,9 @@ mod tests {
     #[test]
     fn persisted_versions_and_times_reject_invalid_sqlite_values() {
         assert_eq!(
-            aggregate_version(0).expect_err("zero version must fail").class(),
+            aggregate_version(0)
+                .expect_err("zero version must fail")
+                .class(),
             ProfileAssignmentPortErrorClass::IntegrityFailure
         );
         assert_eq!(

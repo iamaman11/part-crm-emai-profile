@@ -443,7 +443,8 @@ mod tests {
     }
 
     #[test]
-    fn exact_replay_short_circuits_before_load_and_write() -> Result<(), Box<dyn std::error::Error>> {
+    fn exact_replay_short_circuits_before_load_and_write() -> Result<(), Box<dyn std::error::Error>>
+    {
         let port = FakePort::new(client("client_01JMERGEAPP")?, client("client_02JMERGEAPP")?);
         port.push_replay(ClientReplayDecision::Replay(ClientReplayReceipt::new(
             "merged",

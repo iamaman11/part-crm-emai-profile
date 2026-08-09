@@ -447,7 +447,8 @@ mod tests {
     use crate::public_api::{ClientProjection, openapi_document};
 
     #[test]
-    fn client_registry_models_keep_camel_case_wire_names() -> Result<(), Box<dyn std::error::Error>> {
+    fn client_registry_models_keep_camel_case_wire_names() -> Result<(), Box<dyn std::error::Error>>
+    {
         let update = serde_json::to_value(ClientUpdateRequest {
             display_name: "Renamed".to_owned(),
             expected_client_version: 2,

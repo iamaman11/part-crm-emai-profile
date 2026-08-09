@@ -569,10 +569,14 @@ fn merge_failure(correlation_id: &str, error: ClientMergeApplicationError) -> Re
         ClientMergeApplicationError::InvalidRequest => invalid_request(correlation_id),
         ClientMergeApplicationError::VersionConflict => version_conflict(correlation_id),
         ClientMergeApplicationError::InvalidState => invalid_state(correlation_id),
-        ClientMergeApplicationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
+        ClientMergeApplicationError::Conflict => {
+            problem(correlation_id, 409, "conflict", "Conflict")
+        }
         ClientMergeApplicationError::IntegrityFailure => integrity_failure(correlation_id),
         ClientMergeApplicationError::InternalFailure => internal_failure(correlation_id),
-        ClientMergeApplicationError::DependencyUnavailable => dependency_unavailable(correlation_id),
+        ClientMergeApplicationError::DependencyUnavailable => {
+            dependency_unavailable(correlation_id)
+        }
     }
 }
 
