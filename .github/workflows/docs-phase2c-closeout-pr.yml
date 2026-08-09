@@ -21,7 +21,9 @@ jobs:
           persist-credentials: true
 
       - name: Materialize bounded docs closeout
-        run: python scripts/phase2c-docs-closeout.py
+        run: |
+          python scripts/phase2c-docs-closeout.py
+          python scripts/phase2c-docs-closeout-next.py
 
       - name: Validate docs closeout
         run: |
@@ -29,6 +31,7 @@ jobs:
           python scripts/generate-architecture-inventory.py --self-test
           grep -Fq 'Phase 2C — Client merge, assignment, grant-safe projections and modular Client Registry UI — ACCEPTED' docs/DEVELOPMENT_PLAN.md
           grep -Fq 'Phase 2D — CQRS read models, global search and client-mail query contract — NEXT' docs/DEVELOPMENT_PLAN.md
+          grep -Fq 'Start **Phase 2D — CQRS read models, global search and client-mail query contract**' docs/DEVELOPMENT_PLAN.md
           grep -Fq 'd3ad2e774a98ad5fed2565ba410ba9923062d170' docs/DEVELOPMENT_PLAN.md
           grep -Fq '042d0dc72fa37e99f971d61d21544609a69c6e31' docs/DEVELOPMENT_PLAN.md
           git diff --check
