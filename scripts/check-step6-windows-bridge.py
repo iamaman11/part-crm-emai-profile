@@ -106,6 +106,7 @@ REPOSITORY_REQUIRED = {
         "LIMIT 2",
         "Err(authentication_failed())",
         "Err(integrity_failure())",
+        'assert!(!LOAD_ACTIVE_DEVICE_BINDING.contains("X-Device-Id"))',
     ),
     "crates/cloudflare-adapters/src/d1_device_jobs.rs": (
         "LIST_CLAIMABLE_DEVICE_JOBS",
@@ -342,8 +343,9 @@ def enforce_phase2f_ordering(root: Path, errors: list[str]) -> None:
     identity_adapter = (
         root / "crates/cloudflare-adapters/src/d1_authenticated_device.rs"
     ).read_text(encoding="utf-8")
+    identity_production = identity_adapter.split("#[cfg(test)]", 1)[0]
     for forbidden in ("X-Device-Id", "X-Device-ID", "x-device-id"):
-        if forbidden in identity_adapter:
+        if forbidden in identity_production:
             errors.append(
                 "trusted device identity must come from verified actor binding, not a request header"
             )
@@ -366,14 +368,15 @@ def enforce_phase2f_ordering(root: Path, errors: list[str]) -> None:
         "execute_list_claimable_device_jobs(",
         "Worker resolves trusted device before any device use-case dispatch",
     )
-    if ".headers()" in worker_ingress or "X-Device-Id" in worker_ingress:
+    worker_production = worker_ingress.split("#[cfg(test)]", 1)[0]
+    if ".headers()" in worker_production or "X-Device-Id" in worker_production:
         errors.append("device Worker ingress must not derive device identity from request headers")
     for request_struct in (
         "ClaimDeviceJobRequest",
         "HeartbeatDeviceJobRequest",
         "ApplyDeviceJobOutcomeRequest",
     ):
-        body = struct_body(worker_ingress, request_struct)
+        body = struct_body(worker_production, request_struct)
         if not body:
             errors.append(f"missing strict Phase 2F Worker DTO: {request_struct}")
             continue
