@@ -2,9 +2,7 @@ use crate::commands::CommandExecutionEvidence;
 use crate::mailboxes::{MailboxBindingPortError, MailboxReplayDecision};
 use crate::query::QueryPortError;
 use core::future::Future;
-use profile_platform_primitives::{
-    ActorContext, MailboxBindingId, ProfileId, TenantScope,
-};
+use profile_platform_primitives::{ActorContext, MailboxBindingId, ProfileId, TenantScope};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserMailboxExecutionBinding {
