@@ -23,7 +23,7 @@ export class ApiProblem extends Error {
 
 export interface ApiRequestOptions {
   tenantId: string;
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   idempotencyKey?: string;
   signal?: AbortSignal | undefined;
