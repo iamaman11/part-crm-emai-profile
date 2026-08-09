@@ -1,0 +1,94 @@
+name: Phase 2B Compile Fixups
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2b-client-persistence-contact-crypto
+          persist-credentials: true
+      - name: Apply structured compile fixups
+        shell: python
+        run: |
+          from pathlib import Path
+
+          ports = Path('crates/application-ports/src/clients.rs')
+          text = ports.read_text(encoding='utf-8')
+          start = text.index("impl<'a> ContactExactLookupRequest<'a> {")
+          end = text.index('#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ContactProtectionPortErrorClass', start)
+          block = text[start:end]
+          if 'pub const fn key_domain(&self) -> ContactLookupKeyDomain' not in block:
+              anchor = '    #[must_use]\n    pub const fn tenant_id(&self) -> &\'a TenantId {'
+              if anchor not in block:
+                  raise SystemExit('exact lookup tenant getter anchor missing')
+              block = block.replace(
+                  anchor,
+                  '    #[must_use]\n    pub const fn key_domain(&self) -> ContactLookupKeyDomain {\n'
+                  '        ContactLookupKeyDomain::TenantExactLookup\n'
+                  '    }\n\n' + anchor,
+                  1,
+              )
+          text = text[:start] + block + text[end:]
+          text = text.replace(
+              '#[allow(async_fn_in_trait)]\n#[derive(Clone, Debug, Eq, PartialEq)]\npub struct ArchiveContactWrite',
+              '#[derive(Clone, Debug, Eq, PartialEq)]\npub struct ArchiveContactWrite',
+              1,
+          )
+          trait = 'pub trait ProtectedClientContactRepositoryPort {'
+          if '#[allow(async_fn_in_trait)]\n' + trait not in text:
+              text = text.replace(trait, '#[allow(async_fn_in_trait)]\n' + trait, 1)
+          ports.write_text(text, encoding='utf-8')
+
+          crypto = Path('crates/cloudflare-adapters/src/contact_protection.rs')
+          text = crypto.read_text(encoding='utf-8')
+          text = text.replace('let mut plaintext = cipher', 'let plaintext = cipher', 1)
+          old = '''let decoded = String::from_utf8(plaintext.clone()).map_err(|_| {
+              plaintext.zeroize();
+              ContactCryptoError::InvalidUtf8
+          })?;
+          plaintext.zeroize();'''
+          new = '''let decoded = String::from_utf8(plaintext).map_err(|error| {
+              let mut bytes = error.into_bytes();
+              bytes.zeroize();
+              ContactCryptoError::InvalidUtf8
+          })?;'''
+          if old not in text:
+              raise SystemExit('plaintext clone block missing')
+          text = text.replace(old, new, 1)
+          fn_start = text.index('fn lookup_tokens_are_tenant_separated_and_rotation_candidates_are_versioned()')
+          fn_end = text.index('\n    #[test]\n    fn keyring_rejects_duplicate_versions', fn_start)
+          block = text[fn_start:fn_end]
+          block = block.replace(
+              '        let contact_id = ContactPointId::parse("contact_01JCRYPTOA")?;\n',
+              '',
+              1,
+          )
+          block = block.replace('&tenant_a,\n            &contact_id,\n            ContactKind::Email,', '&tenant_a,\n            ContactKind::Email,', 1)
+          block = block.replace('&tenant_b,\n            &contact_id,\n            ContactKind::Email,', '&tenant_b,\n            ContactKind::Email,', 1)
+          text = text[:fn_start] + block + text[fn_end:]
+          crypto.write_text(text, encoding='utf-8')
+      - name: Format
+        run: cargo fmt --all
+      - name: Check Phase 2B inner native
+        run: cargo check --locked -p application-ports -p use-cases-clients
+      - name: Check Phase 2B adapter native
+        run: cargo check --locked -p cloudflare-adapters
+      - name: Check Phase 2B adapter and application for Workers target
+        run: cargo check --locked -p use-cases-clients -p cloudflare-adapters --target wasm32-unknown-unknown
+      - name: Commit checked fixups
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/application-ports/src/clients.rs crates/use-cases-clients/src/contacts.rs crates/cloudflare-adapters/src/contact_protection.rs crates/cloudflare-adapters/src/d1_client_persistence.rs
+          git commit -m 'Phase 2B: compile contact application and crypto layers'
+          git push origin HEAD:phase2b-client-persistence-contact-crypto
