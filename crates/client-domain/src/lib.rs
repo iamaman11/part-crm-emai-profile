@@ -7,7 +7,7 @@ mod merge;
 
 pub use assignment::{
     AssignmentError, AssignmentRole, AssignmentStatus, PrimaryAssignmentTransition,
-    ProfileClientAssignment, plan_primary_reassignment,
+    PrimaryReassignmentIntent, ProfileClientAssignment, plan_primary_reassignment,
 };
 pub use client::{ClientError, ClientKind, ClientRecord, ClientStatus};
 pub use contact_point::{
