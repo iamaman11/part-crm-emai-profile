@@ -7,89 +7,13 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: profile-generation-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  phase2f-browser-freshness-materialize:
-    if: github.event_name == 'pull_request' && github.head_ref == 'phase2f-device-browser-mailbox'
-    name: Phase 2F Browser Freshness Materialize And Verify
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout Phase 2F source branch
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: phase2f-device-browser-mailbox
-          fetch-depth: 0
-
-      - name: Materialize Bridge launch error contract and generated state
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('apps/profile-bridge/src/browser_execution.rs')
-          text = path.read_text(encoding='utf-8')
-          if 'impl core::fmt::Display for BrowserLaunchBlocker' not in text:
-              marker = '''impl From<LocalProfileError> for BrowserLaunchBlocker {
-    fn from(error: LocalProfileError) -> Self {
-        Self::LocalProfile(error)
-    }
-}
-'''
-              if text.count(marker) != 1:
-                  raise SystemExit('BrowserLaunchBlocker insertion marker changed')
-              addition = '''
-impl core::fmt::Display for BrowserLaunchBlocker {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str(match self {
-            Self::MaterializationStale => "browser materialization evidence is stale",
-            Self::ProfileBusy => "browser profile writer is currently active",
-            Self::RecoveryRequired => "browser profile writer state requires explicit recovery",
-            Self::RetryableNetworkRouteChurn => "browser network route identity changed retryably",
-            Self::NetworkPolicyMismatch => "browser network identity violates policy",
-            Self::InvalidMaterializationEvidence => "browser materialization evidence is invalid",
-            Self::LocalProfile(_) => "browser local profile operation failed",
-        })
-    }
-}
-
-impl std::error::Error for BrowserLaunchBlocker {}
-'''
-              text = text.replace(marker, marker + addition, 1)
-              path.write_text(text, encoding='utf-8')
-          PY
-          cargo fmt --all
-          cargo generate-lockfile
-          python scripts/generate-architecture-inventory.py --write
-          rustup target add wasm32-unknown-unknown
-
-      - name: Verify browser freshness slice before commit
-        run: |
-          set -euo pipefail
-          python scripts/check-architecture.py
-          python scripts/test-device-job-d1.py
-          cargo clippy --locked -p browser-execution-domain -p profile-bridge -p device-domain -p application-ports -p use-cases-devices --all-targets -- -D warnings
-          cargo test --locked -p browser-execution-domain -p profile-bridge -p device-domain -p application-ports -p use-cases-devices
-          cargo test --locked -p cloudflare-adapters --lib
-          cargo check --locked -p cloudflare-adapters --target wasm32-unknown-unknown
-          python scripts/generate-architecture-inventory.py --check
-          git diff --check
-
-      - name: Commit verified slice and restore permanent workflow
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main --depth=1
-          git checkout origin/main -- .github/workflows/profile-generation-gate.yml
-          git add -A
-          git diff --cached --check
-          git commit -m "Phase 2F: verify browser materialization freshness guards"
-          git push origin HEAD:phase2f-device-browser-mailbox
-
   profile-generation:
     name: Registry Domain D1 Adapter Worker And Contract
     runs-on: ubuntu-latest
