@@ -410,10 +410,10 @@ mod tests {
             runtime(binding_id),
         );
         let result = block_on(adapter.get_message(&scope()?, &reference));
-        match result {
-            Err(error) => assert_eq!(error.class(), QueryPortErrorClass::IntegrityFailure),
-            Ok(_) => panic!("stale post-runtime fence returned a message body"),
-        }
+        assert_eq!(
+            result.map(|_| ()),
+            Err(QueryPortError::new(QueryPortErrorClass::IntegrityFailure))
+        );
         assert_eq!(adapter.runtime.body_calls.get(), 1);
         assert_eq!(adapter.fence.calls.get(), 2);
         Ok(())
