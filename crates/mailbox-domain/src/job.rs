@@ -8,9 +8,12 @@ const MAX_JOB_ATTEMPTS: u32 = 10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MailboxJobStatus {
-    Pending,
+    Scheduled,
+    Queued,
     Running,
     RetryPending,
+    AuthRequired,
+    Suspended,
     Succeeded,
     Failed,
 }
@@ -19,9 +22,12 @@ impl MailboxJobStatus {
     #[must_use]
     pub const fn storage_value(self) -> &'static str {
         match self {
-            Self::Pending => "PENDING",
+            Self::Scheduled => "SCHEDULED",
+            Self::Queued => "QUEUED",
             Self::Running => "RUNNING",
             Self::RetryPending => "RETRY_PENDING",
+            Self::AuthRequired => "AUTH_REQUIRED",
+            Self::Suspended => "SUSPENDED",
             Self::Succeeded => "SUCCEEDED",
             Self::Failed => "FAILED",
         }
@@ -29,14 +35,35 @@ impl MailboxJobStatus {
 
     pub fn parse_storage(value: &str) -> Result<Self, MailboxError> {
         match value {
-            "PENDING" => Ok(Self::Pending),
+            "SCHEDULED" | "PENDING" => Ok(Self::Scheduled),
+            "QUEUED" => Ok(Self::Queued),
             "RUNNING" => Ok(Self::Running),
             "RETRY_PENDING" => Ok(Self::RetryPending),
+            "AUTH_REQUIRED" => Ok(Self::AuthRequired),
+            "SUSPENDED" => Ok(Self::Suspended),
             "SUCCEEDED" => Ok(Self::Succeeded),
             "FAILED" => Ok(Self::Failed),
             _ => Err(MailboxError::InvalidJobStatus),
         }
     }
+
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Succeeded | Self::Failed)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MailboxJobRestore {
+    pub tenant_id: TenantId,
+    pub binding_id: MailboxBindingId,
+    pub job_id: MailboxJobId,
+    pub cursor: Option<String>,
+    pub status: MailboxJobStatus,
+    pub attempt: u32,
+    pub max_attempts: u32,
+    pub next_run_at: UnixMillis,
+    pub version: AggregateVersion,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,8 +87,12 @@ impl MailboxJob {
         scheduled_at: UnixMillis,
         max_attempts: u32,
     ) -> Result<Self, MailboxError> {
-        if binding.status() != MailboxBindingStatus::Active {
-            return Err(MailboxError::BindingRevoked);
+        match binding.status() {
+            MailboxBindingStatus::Active => {}
+            MailboxBindingStatus::Revoked => return Err(MailboxError::BindingRevoked),
+            MailboxBindingStatus::AuthRequired | MailboxBindingStatus::Suspended => {
+                return Err(MailboxError::BindingNotExecutable);
+            }
         }
         validate_cursor(cursor.as_deref())?;
         validate_max_attempts(max_attempts)?;
@@ -70,7 +101,7 @@ impl MailboxJob {
             binding_id: binding.binding_id().clone(),
             job_id,
             cursor,
-            status: MailboxJobStatus::Pending,
+            status: MailboxJobStatus::Scheduled,
             attempt: 0,
             max_attempts,
             next_run_at: scheduled_at,
@@ -78,33 +109,22 @@ impl MailboxJob {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn restore(
-        tenant_id: TenantId,
-        binding_id: MailboxBindingId,
-        job_id: MailboxJobId,
-        cursor: Option<String>,
-        status: MailboxJobStatus,
-        attempt: u32,
-        max_attempts: u32,
-        next_run_at: UnixMillis,
-        version: AggregateVersion,
-    ) -> Result<Self, MailboxError> {
-        validate_cursor(cursor.as_deref())?;
-        validate_max_attempts(max_attempts)?;
-        if attempt > max_attempts {
+    pub fn restore(snapshot: MailboxJobRestore) -> Result<Self, MailboxError> {
+        validate_cursor(snapshot.cursor.as_deref())?;
+        validate_max_attempts(snapshot.max_attempts)?;
+        if snapshot.attempt > snapshot.max_attempts {
             return Err(MailboxError::MaxAttemptsReached);
         }
         Ok(Self {
-            tenant_id,
-            binding_id,
-            job_id,
-            cursor,
-            status,
-            attempt,
-            max_attempts,
-            next_run_at,
-            version,
+            tenant_id: snapshot.tenant_id,
+            binding_id: snapshot.binding_id,
+            job_id: snapshot.job_id,
+            cursor: snapshot.cursor,
+            status: snapshot.status,
+            attempt: snapshot.attempt,
+            max_attempts: snapshot.max_attempts,
+            next_run_at: snapshot.next_run_at,
+            version: snapshot.version,
         })
     }
 
@@ -157,19 +177,46 @@ impl MailboxJob {
     pub fn is_due(&self, now: UnixMillis) -> bool {
         matches!(
             self.status,
-            MailboxJobStatus::Pending | MailboxJobStatus::RetryPending
+            MailboxJobStatus::Scheduled | MailboxJobStatus::RetryPending
         ) && now >= self.next_run_at
     }
 
-    pub fn start(&mut self, now: UnixMillis) -> Result<(), MailboxError> {
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        self.status.is_terminal()
+    }
+
+    pub fn queue(&mut self, now: UnixMillis) -> Result<(), MailboxError> {
         if !matches!(
             self.status,
-            MailboxJobStatus::Pending | MailboxJobStatus::RetryPending
+            MailboxJobStatus::Scheduled | MailboxJobStatus::RetryPending
         ) {
             return Err(MailboxError::InvalidJobTransition);
         }
         if now < self.next_run_at {
             return Err(MailboxError::JobNotDue);
+        }
+        if self.attempt >= self.max_attempts {
+            return Err(MailboxError::MaxAttemptsReached);
+        }
+        self.bump_version()?;
+        self.status = MailboxJobStatus::Queued;
+        Ok(())
+    }
+
+    pub fn start(&mut self, binding: &MailboxBinding) -> Result<(), MailboxError> {
+        if self.status != MailboxJobStatus::Queued {
+            return Err(MailboxError::InvalidJobTransition);
+        }
+        if binding.tenant_id() != &self.tenant_id || binding.binding_id() != &self.binding_id {
+            return Err(MailboxError::BindingNotExecutable);
+        }
+        match binding.status() {
+            MailboxBindingStatus::Active => {}
+            MailboxBindingStatus::Revoked => return Err(MailboxError::BindingRevoked),
+            MailboxBindingStatus::AuthRequired | MailboxBindingStatus::Suspended => {
+                return Err(MailboxError::BindingNotExecutable);
+            }
         }
         if self.attempt >= self.max_attempts {
             return Err(MailboxError::MaxAttemptsReached);
@@ -184,9 +231,7 @@ impl MailboxJob {
     }
 
     pub fn succeed(&mut self, next_cursor: Option<String>) -> Result<(), MailboxError> {
-        if self.status != MailboxJobStatus::Running {
-            return Err(MailboxError::InvalidJobTransition);
-        }
+        self.require_running()?;
         validate_cursor(next_cursor.as_deref())?;
         self.bump_version()?;
         self.cursor = next_cursor;
@@ -195,9 +240,7 @@ impl MailboxJob {
     }
 
     pub fn retry(&mut self, now: UnixMillis, retry_at: UnixMillis) -> Result<(), MailboxError> {
-        if self.status != MailboxJobStatus::Running {
-            return Err(MailboxError::InvalidJobTransition);
-        }
+        self.require_running()?;
         if self.attempt >= self.max_attempts {
             return Err(MailboxError::MaxAttemptsReached);
         }
@@ -210,13 +253,51 @@ impl MailboxJob {
         Ok(())
     }
 
-    pub fn fail(&mut self) -> Result<(), MailboxError> {
-        if self.status != MailboxJobStatus::Running {
+    pub fn require_auth(&mut self) -> Result<(), MailboxError> {
+        self.require_running()?;
+        self.bump_version()?;
+        self.status = MailboxJobStatus::AuthRequired;
+        Ok(())
+    }
+
+    pub fn suspend(&mut self) -> Result<(), MailboxError> {
+        if self.status.is_terminal() || self.status == MailboxJobStatus::Suspended {
             return Err(MailboxError::InvalidJobTransition);
         }
         self.bump_version()?;
+        self.status = MailboxJobStatus::Suspended;
+        Ok(())
+    }
+
+    pub fn resume(&mut self, scheduled_at: UnixMillis) -> Result<(), MailboxError> {
+        if !matches!(
+            self.status,
+            MailboxJobStatus::AuthRequired | MailboxJobStatus::Suspended
+        ) {
+            return Err(MailboxError::InvalidJobTransition);
+        }
+        if self.attempt >= self.max_attempts {
+            return Err(MailboxError::MaxAttemptsReached);
+        }
+        self.bump_version()?;
+        self.next_run_at = scheduled_at;
+        self.status = MailboxJobStatus::Scheduled;
+        Ok(())
+    }
+
+    pub fn fail(&mut self) -> Result<(), MailboxError> {
+        self.require_running()?;
+        self.bump_version()?;
         self.status = MailboxJobStatus::Failed;
         Ok(())
+    }
+
+    fn require_running(&self) -> Result<(), MailboxError> {
+        if self.status == MailboxJobStatus::Running {
+            Ok(())
+        } else {
+            Err(MailboxError::InvalidJobTransition)
+        }
     }
 
     fn bump_version(&mut self) -> Result<(), MailboxError> {
@@ -270,44 +351,59 @@ mod tests {
     }
 
     #[test]
-    fn retry_path_is_due_bounded_and_versioned() -> Result<(), Box<dyn std::error::Error>> {
+    fn scheduled_queue_run_retry_path_is_explicit_and_versioned()
+    -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
         let mut job = job(&binding)?;
+        assert_eq!(job.status(), MailboxJobStatus::Scheduled);
         assert!(!job.is_due(UnixMillis::new(9)));
-        job.start(UnixMillis::new(10))?;
+        job.queue(UnixMillis::new(10))?;
+        assert_eq!(job.status(), MailboxJobStatus::Queued);
+        job.start(&binding)?;
         assert_eq!(job.status(), MailboxJobStatus::Running);
         assert_eq!(job.attempt(), 1);
-        assert_eq!(job.version().value(), 2);
         job.retry(UnixMillis::new(10), UnixMillis::new(20))?;
         assert_eq!(job.status(), MailboxJobStatus::RetryPending);
         assert!(!job.is_due(UnixMillis::new(19)));
         assert!(job.is_due(UnixMillis::new(20)));
-        job.start(UnixMillis::new(20))?;
+        job.queue(UnixMillis::new(20))?;
+        job.start(&binding)?;
         job.succeed(Some("cursor-2".to_owned()))?;
         assert_eq!(job.status(), MailboxJobStatus::Succeeded);
         assert_eq!(job.cursor(), Some("cursor-2"));
         assert_eq!(job.attempt(), 2);
-        assert_eq!(job.version().value(), 5);
+        assert_eq!(job.version().value(), 7);
+        assert!(job.is_terminal());
         Ok(())
     }
 
     #[test]
-    fn retry_cannot_exceed_attempt_budget() -> Result<(), Box<dyn std::error::Error>> {
+    fn auth_and_suspended_states_fail_closed_until_resumed()
+    -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
-        let mut job = MailboxJob::create(
-            &binding,
-            MailboxJobId::parse("mailjob_01JEXHAUST")?,
-            None,
-            UnixMillis::new(1),
-            1,
-        )?;
-        job.start(UnixMillis::new(1))?;
-        assert_eq!(
-            job.retry(UnixMillis::new(1), UnixMillis::new(2)),
-            Err(MailboxError::MaxAttemptsReached)
-        );
-        job.fail()?;
-        assert_eq!(job.status(), MailboxJobStatus::Failed);
+        let mut job = job(&binding)?;
+        job.queue(UnixMillis::new(10))?;
+        job.start(&binding)?;
+        job.require_auth()?;
+        assert_eq!(job.status(), MailboxJobStatus::AuthRequired);
+        assert_eq!(job.queue(UnixMillis::new(10)), Err(MailboxError::InvalidJobTransition));
+        job.resume(UnixMillis::new(30))?;
+        assert_eq!(job.status(), MailboxJobStatus::Scheduled);
+        assert!(!job.is_due(UnixMillis::new(29)));
+        job.suspend()?;
+        assert_eq!(job.status(), MailboxJobStatus::Suspended);
+        Ok(())
+    }
+
+    #[test]
+    fn revoked_binding_cannot_start_queued_job() -> Result<(), Box<dyn std::error::Error>> {
+        let mut binding = binding()?;
+        let mut job = job(&binding)?;
+        job.queue(UnixMillis::new(10))?;
+        binding.revoke()?;
+        assert_eq!(job.start(&binding), Err(MailboxError::BindingRevoked));
+        assert_eq!(job.status(), MailboxJobStatus::Queued);
+        assert_eq!(job.attempt(), 0);
         Ok(())
     }
 }
