@@ -1,7 +1,7 @@
 use crate::cloud_mailbox_secrets::{MailboxCredential, resolve_mailbox_credential};
 use crate::d1_mailboxes::D1MailboxRepository;
 use crate::gmail_mail_query::{get_gmail_message, search_gmail_messages};
-use crate::imap_mail_query::{get_imap_message, search_imap_messages};
+use crate::imap_query::{get_imap_message, search_imap_messages};
 use application_ports::mailboxes::MailboxProviderPortError;
 use application_ports::query::{QueryPage, QueryPortError, QueryPortErrorClass};
 use application_ports::query_mail_provider::{
