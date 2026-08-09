@@ -252,7 +252,7 @@ def create_and_run_job(connection: sqlite3.Connection) -> None:
     with connection:
         connection.execute(
             """
-            INSERT INTO mailbox_job_run_commands (
+            INSERT INTO mailbox_job_run_commands_v2 (
                 tenant_id, command_id, command_actor_id, binding_id, job_id,
                 expected_job_version, outcome_status, next_cursor, provider_status,
                 bounded_item_count, retry_at_ms, executed_at_ms
@@ -268,14 +268,15 @@ def create_and_run_job(connection: sqlite3.Connection) -> None:
             result_code="succeeded",
             resource_id=JOB,
             aggregate_type="mailbox_job",
-            aggregate_version=3,
+            aggregate_version=4,
             event_type="mailbox.job_succeeded.v1",
             now_ms=40,
         )
 
     row = connection.execute(
         """
-        SELECT status, attempt, cursor, provider_status, bounded_item_count, version
+        SELECT status, lifecycle_status, attempt, cursor, provider_status,
+               bounded_item_count, version
         FROM mailbox_jobs
         WHERE tenant_id = ? AND binding_id = ? AND job_id = ?
         """,
@@ -284,21 +285,22 @@ def create_and_run_job(connection: sqlite3.Connection) -> None:
     assert row is not None
     assert dict(row) == {
         "status": "SUCCEEDED",
+        "lifecycle_status": "SUCCEEDED",
         "attempt": 1,
         "cursor": "cursor-2",
         "provider_status": "SYNTHETIC_OK",
         "bounded_item_count": 2,
-        "version": 3,
+        "version": 4,
     }
 
     expect_abort(
         lambda: connection.execute(
             """
-            INSERT INTO mailbox_job_run_commands (
+            INSERT INTO mailbox_job_run_commands_v2 (
                 tenant_id, command_id, command_actor_id, binding_id, job_id,
                 expected_job_version, outcome_status, next_cursor, provider_status,
                 bounded_item_count, retry_at_ms, executed_at_ms
-            ) VALUES (?, 'command_mailbox_job_run_again', ?, ?, ?, 3, 'FAILED',
+            ) VALUES (?, 'command_mailbox_job_run_again', ?, ?, ?, 4, 'FAILED',
                       NULL, 'TERMINAL_FAILURE', 0, NULL, 41)
             """,
             (TENANT, OWNER, BINDING, JOB),
