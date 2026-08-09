@@ -25,22 +25,18 @@ jobs:
           from pathlib import Path
           path = Path('crates/use-cases-mailboxes/src/mailbox_jobs.rs')
           text = path.read_text(encoding='utf-8')
-          old = '''        MailboxJobStatus::Pending | MailboxJobStatus::Running => {
-              Err(MailboxJobOperationError::IntegrityFailure)
-          }
-'''
-          new = '''        MailboxJobStatus::Scheduled
+          old = 'MailboxJobStatus::Pending | MailboxJobStatus::Running'
+          new = '''MailboxJobStatus::Scheduled
           | MailboxJobStatus::Queued
           | MailboxJobStatus::Running
           | MailboxJobStatus::AuthRequired
-          | MailboxJobStatus::Suspended => Err(MailboxJobOperationError::IntegrityFailure),
-'''
+          | MailboxJobStatus::Suspended'''
           if text.count(old) != 1:
-              raise SystemExit('expected exactly one legacy mailbox run-result match')
+              raise SystemExit('expected exactly one legacy mailbox run-result token sequence')
           path.write_text(text.replace(old, new), encoding='utf-8')
           PY
           python scripts/generate-architecture-inventory.py --write
-          cargo fmt --all -- --check || cargo fmt --all
+          cargo fmt --all
           git rm .github/workflows/phase2e-consistency-materializer.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
