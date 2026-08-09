@@ -1,4 +1,4 @@
-use application_ports::{
+use application_ports::device_jobs::{
     DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobPortError, DeviceJobPortErrorClass,
 };
 use device_domain::DeviceJobTarget;
