@@ -404,9 +404,11 @@ fn result_code<D>(
         MailboxJobStatus::Succeeded => Ok("succeeded"),
         MailboxJobStatus::RetryPending => Ok("retry_pending"),
         MailboxJobStatus::Failed => Ok("failed"),
-        MailboxJobStatus::Pending | MailboxJobStatus::Running => {
-            Err(MailboxJobOperationError::IntegrityFailure)
-        }
+        MailboxJobStatus::Scheduled
+        | MailboxJobStatus::Queued
+        | MailboxJobStatus::Running
+        | MailboxJobStatus::AuthRequired
+        | MailboxJobStatus::Suspended => Err(MailboxJobOperationError::IntegrityFailure),
     }
 }
 
