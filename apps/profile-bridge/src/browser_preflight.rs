@@ -15,10 +15,7 @@ pub struct BrowserRuntimeObservation {
 
 impl BrowserRuntimeObservation {
     #[must_use]
-    pub const fn new(
-        network: NetworkIdentityObservation,
-        supervised_writer_active: bool,
-    ) -> Self {
+    pub const fn new(network: NetworkIdentityObservation, supervised_writer_active: bool) -> Self {
         Self {
             network,
             supervised_writer_active,
@@ -100,9 +97,7 @@ mod tests {
     use super::{
         BoundBrowserLaunchPreflight, BrowserRuntimeObservation, BrowserRuntimeObservationPort,
     };
-    use crate::browser_execution::{
-        BrowserLaunchBlocker, persist_materialization_binding,
-    };
+    use crate::browser_execution::{BrowserLaunchBlocker, persist_materialization_binding};
     use crate::local_profile::{BridgeWorkspaceLock, GenerationWorkspace, MaterializationRoot};
     use crate::operator_flow::BrowserLaunchPreflightPort;
     use crate::runtime_bundle::ApprovedRuntimeBundle;
