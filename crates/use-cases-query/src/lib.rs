@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
+pub mod contact;
 pub mod mail;
 
+pub use contact::lookup_clients_by_exact_contact;
 pub use mail::{get_client_mailbox_message, search_client_mailbox_messages};
 
 use application_ports::query::{
