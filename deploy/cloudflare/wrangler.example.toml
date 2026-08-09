@@ -32,10 +32,25 @@ queue = "REPLACE_WITH_VERIFICATION_QUEUE_NAME"
 binding = "INTEGRATION_EVENTS"
 queue = "REPLACE_WITH_INTEGRATION_EVENTS_QUEUE_NAME"
 
+[[queues.producers]]
+binding = "MAILBOX_JOBS"
+queue = "REPLACE_WITH_MAILBOX_JOBS_QUEUE_NAME"
+
 [[queues.consumers]]
 queue = "REPLACE_WITH_INTEGRATION_EVENTS_QUEUE_NAME"
 max_batch_size = 10
 max_batch_timeout = 5
+
+[[queues.consumers]]
+queue = "REPLACE_WITH_MAILBOX_JOBS_QUEUE_NAME"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 6
+dead_letter_queue = "REPLACE_WITH_MAILBOX_JOBS_DLQ_NAME"
+
+[[services]]
+binding = "MAILBOX_SECRET_RESOLVER"
+service = "REPLACE_WITH_MAILBOX_SECRET_RESOLVER_SERVICE"
 
 [durable_objects]
 bindings = [
