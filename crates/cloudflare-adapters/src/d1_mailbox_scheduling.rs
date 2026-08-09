@@ -100,7 +100,7 @@ RETURNING fence, lease_expires_at_ms
 "#;
 
 const LOAD_EXECUTION_LEASE: &str = r#"
-SELECT fence, lease_state, lease_expires_at_ms
+SELECT lease_state, lease_expires_at_ms
 FROM mailbox_job_execution_leases
 WHERE tenant_id = ?
   AND binding_id = ?
@@ -186,7 +186,6 @@ impl DueDispatchRow {
 
 #[derive(Clone, Debug, Deserialize)]
 struct LeaseRow {
-    fence: i64,
     lease_state: String,
     lease_expires_at_ms: i64,
 }
