@@ -11,6 +11,7 @@ pub fn canonical_fragment() -> Value {
 pub fn compatibility_fragment() -> Value {
     let mut fragment = canonical_fragment();
     remap_legacy_refs(&mut fragment);
+    inject_client_registry_problem(&mut fragment);
     decorate_legacy_transport_contract(&mut fragment);
     fragment
 }
@@ -71,7 +72,7 @@ fn remap_legacy_refs(value: &mut Value) {
                 if reference == "#/components/schemas/ClientProjection" {
                     *reference = "#/components/schemas/ClientView".to_owned();
                 } else if reference == "#/components/schemas/ProblemPayload" {
-                    *reference = "#/components/schemas/Problem".to_owned();
+                    *reference = "#/components/schemas/ClientRegistryProblem".to_owned();
                 }
             }
             for child in map.values_mut() {
@@ -85,6 +86,33 @@ fn remap_legacy_refs(value: &mut Value) {
         }
         _ => {}
     }
+}
+
+fn inject_client_registry_problem(fragment: &mut Value) {
+    let schemas = fragment
+        .pointer_mut("/components/schemas")
+        .and_then(Value::as_object_mut)
+        .expect("client registry fragment schemas");
+    assert!(
+        schemas
+            .insert(
+                "ClientRegistryProblem".to_owned(),
+                json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["type", "title", "status", "code", "correlation_id"],
+                    "properties": {
+                        "type": {"type": "string", "format": "uri"},
+                        "title": {"type": "string"},
+                        "status": {"type": "integer", "minimum": 400, "maximum": 599},
+                        "code": {"type": "string", "enum": public_api::PROBLEM_CODES},
+                        "correlation_id": {"type": "string", "minLength": 1}
+                    }
+                }),
+            )
+            .is_none(),
+        "ClientRegistryProblem schema must remain additive"
+    );
 }
 
 fn decorate_legacy_transport_contract(fragment: &mut Value) {
@@ -130,13 +158,20 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_fragment_uses_legacy_root_refs_and_transport_headers() {
+    fn compatibility_fragment_uses_legacy_client_view_and_full_problem_schema() {
         let fragment = compatibility_fragment();
         let rendered = serde_json::to_string(&fragment).expect("serialize fragment");
         assert!(!rendered.contains("#/components/schemas/ClientProjection"));
         assert!(!rendered.contains("#/components/schemas/ProblemPayload"));
         assert!(rendered.contains("#/components/schemas/ClientView"));
-        assert!(rendered.contains("#/components/schemas/Problem"));
+        assert!(rendered.contains("#/components/schemas/ClientRegistryProblem"));
+        let codes = fragment["components"]["schemas"]["ClientRegistryProblem"]["properties"]
+            ["code"]["enum"]
+            .as_array()
+            .expect("problem code enum");
+        assert!(codes.iter().any(|value| value == "version_conflict"));
+        assert!(codes.iter().any(|value| value == "integrity_failure"));
+        assert!(codes.iter().any(|value| value == "dependency_unavailable"));
         assert!(rendered.contains("#/components/parameters/CorrelationHeader"));
         assert!(rendered.contains("#/components/parameters/IdempotencyHeader"));
     }
