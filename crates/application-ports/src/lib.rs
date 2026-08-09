@@ -2,6 +2,8 @@
 
 pub mod audit;
 pub mod client_contact_lookup;
+pub mod client_merge;
+pub mod client_registry;
 pub mod clients;
 pub mod clock;
 pub mod commands;
@@ -14,6 +16,7 @@ pub mod integration_events;
 pub mod mailbox_jobs;
 pub mod mailboxes;
 pub mod notifications;
+pub mod profile_assignment_context;
 pub mod profiles;
 pub mod sessions;
 

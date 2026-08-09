@@ -139,6 +139,19 @@ impl ClientRecord {
         self.version = next_version;
         Ok(())
     }
+
+    pub(crate) fn mark_merged(&mut self) -> Result<(), ClientError> {
+        if self.status != ClientStatus::Active {
+            return Err(ClientError::InvalidStatusTransition);
+        }
+        let next_version = self
+            .version
+            .next()
+            .map_err(|_| ClientError::VersionOverflow)?;
+        self.status = ClientStatus::Merged;
+        self.version = next_version;
+        Ok(())
+    }
 }
 
 fn normalize_display_name(value: String) -> Result<String, ClientError> {
@@ -238,6 +251,22 @@ mod tests {
             Err(ClientError::InvalidStatusTransition)
         );
         assert_eq!(client.display_name(), "Synthetic Client");
+        Ok(())
+    }
+
+    #[test]
+    fn merged_transition_is_one_way() -> Result<(), Box<dyn std::error::Error>> {
+        let mut client = active_client()?;
+        client.mark_merged()?;
+        assert_eq!(client.status(), ClientStatus::Merged);
+        assert_eq!(client.version().value(), 2);
+        assert_eq!(
+            client.rename("resurrected"),
+            Err(ClientError::InvalidStatusTransition)
+        );
+        assert_eq!(client.archive(), Err(ClientError::InvalidStatusTransition));
+        assert_eq!(client.status(), ClientStatus::Merged);
+        assert_eq!(client.version().value(), 2);
         Ok(())
     }
 }

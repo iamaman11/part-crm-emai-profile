@@ -52,6 +52,10 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         RouteClass::AuthenticatedSessionApi => session_response(&request, &env).await,
         RouteClass::ClientCollectionApi
         | RouteClass::ClientResourceApi
+        | RouteClass::ClientArchiveApi
+        | RouteClass::ClientContactApi
+        | RouteClass::ClientMergeApi
+        | RouteClass::ClientHistoryApi
         | RouteClass::ClientGrantApi => clients::dispatch(route, &mut request, &env).await,
         RouteClass::ProfileCollectionApi
         | RouteClass::ProfileResourceApi
@@ -128,18 +132,18 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let mailbox_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _mailbox_repository = D1MailboxRepository::new(mailbox_catalog);
     let notification_catalog = env.d1(D1_CATALOG_BINDING)?;
-    let _notification_repository = D1NotificationOperationsRepository::new(notification_catalog);
+    let _notification_operations_repository =
+        D1NotificationOperationsRepository::new(notification_catalog);
     let idempotency_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _idempotency_repository = D1IdempotencyRepository::new(idempotency_catalog);
-    let _objects = env.bucket(R2_PROFILES_BINDING)?;
-    let _verification = env.queue(VERIFICATION_QUEUE_BINDING)?;
-    let _integration_events = env.queue(integration_events::INTEGRATION_EVENTS_QUEUE_BINDING)?;
+    let profile_objects = env.bucket(R2_PROFILES_BINDING)?;
+    let _verification_queue = env.queue(VERIFICATION_QUEUE_BINDING)?;
     let coordinator = env.durable_object(PROFILE_COORDINATOR_BINDING)?;
-    let probe_profile = ProfileId::parse("profile_foundation")
-        .map_err(|error| worker::Error::RustError(error.to_string()))?;
-    let _stub = coordinator
-        .id_from_name(&coordinator_object_name(&probe_profile))?
-        .get_stub()?;
-
+    let coordinator_id = coordinator.id_from_name(&coordinator_object_name(
+        &ProfileId::parse("profile_binding_probe")
+            .map_err(|error| worker::Error::RustError(error.to_string()))?,
+    ))?;
+    let _coordinator_stub = coordinator_id.get_stub()?;
+    let _ = profile_objects;
     Response::ok("bindings-ready")
 }

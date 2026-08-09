@@ -44,6 +44,8 @@ jobs:
           python -m py_compile scripts/check-phase2a-client-boundaries.py
           python -m py_compile scripts/check-phase2b-client-boundaries.py
           python -m py_compile scripts/test-phase2b-client-contacts.py
+          python -m py_compile scripts/check-phase2c-client-boundaries.py
+          python -m py_compile scripts/test-phase2c-client-merge-assignment.py
           python -m py_compile scripts/test-integration-event-foundation.py
           python -m py_compile scripts/test-notification-delivery-foundation.py
 
@@ -83,6 +85,15 @@ jobs:
 
       - name: Prove Phase 2B protected client-contact D1 invariants
         run: python scripts/test-phase2b-client-contacts.py
+
+      - name: Enforce Phase 2C client merge and assignment boundaries
+        run: python scripts/check-phase2c-client-boundaries.py
+
+      - name: Prove Phase 2C grant-transfer, resurrection and raw-mutation fixtures are rejected
+        run: python scripts/check-phase2c-client-boundaries.py --self-test
+
+      - name: Prove Phase 2C client merge and assignment D1 invariants
+        run: python scripts/test-phase2c-client-merge-assignment.py
 
       - name: Enforce thin client Worker application boundary
         run: python scripts/check-worker-application-boundary.py

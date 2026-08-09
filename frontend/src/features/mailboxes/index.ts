@@ -1,0 +1,1 @@
+export { createMailboxesRoute } from './route';

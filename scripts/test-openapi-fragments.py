@@ -106,18 +106,25 @@ def main() -> int:
             root / "openapi/v1/fragments/10-feature.json",
             {
                 "paths": {
+                    "/api/v1/base": {
+                        "post": {
+                            "operationId": "createBase",
+                            "responses": {"201": {"description": "created"}},
+                        }
+                    },
                     "/api/v1/feature": {
                         "post": {
                             "operationId": "createFeature",
                             "responses": {"201": {"description": "created"}},
                         }
-                    }
+                    },
                 },
                 "components": {"schemas": {"Feature": {"type": "object"}}},
             },
         )
         merged, _ = checker.load_openapi_tree(root)
         assert list(merged["paths"]) == ["/api/v1/base", "/api/v1/feature"]
+        assert set(merged["paths"]["/api/v1/base"]) == {"get", "post"}
         assert "Feature" in merged["components"]["schemas"]
 
     with tempfile.TemporaryDirectory() as temporary:
@@ -125,7 +132,16 @@ def main() -> int:
         write_json(root / "openapi/v1/openapi.json", root_document())
         write_json(
             root / "openapi/v1/fragments/duplicate-path.json",
-            {"paths": {"/api/v1/base": {}}},
+            {
+                "paths": {
+                    "/api/v1/base": {
+                        "get": {
+                            "operationId": "duplicateGetBase",
+                            "responses": {"200": {"description": "duplicate"}},
+                        }
+                    }
+                }
+            },
         )
         expect_value_error(
             lambda: checker.load_openapi_tree(root), "duplicate path entry"

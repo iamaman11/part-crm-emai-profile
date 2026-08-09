@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod client_registry_api;
 pub mod public_api;
 mod routes;
 
@@ -21,6 +22,10 @@ pub enum RouteClass {
     MembershipStatusApi,
     ClientCollectionApi,
     ClientResourceApi,
+    ClientArchiveApi,
+    ClientContactApi,
+    ClientMergeApi,
+    ClientHistoryApi,
     ClientGrantApi,
     ProfileCollectionApi,
     ProfileResourceApi,
@@ -177,8 +182,43 @@ mod tests {
             ),
             (
                 "GET",
+                "/api/v1/tenants/tenant_01/clients",
+                RouteClass::ClientCollectionApi,
+            ),
+            (
+                "GET",
                 "/api/v1/tenants/tenant_01/clients/client_01",
                 RouteClass::ClientResourceApi,
+            ),
+            (
+                "PATCH",
+                "/api/v1/tenants/tenant_01/clients/client_01",
+                RouteClass::ClientResourceApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/clients/client_01/archive",
+                RouteClass::ClientArchiveApi,
+            ),
+            (
+                "PUT",
+                "/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01",
+                RouteClass::ClientContactApi,
+            ),
+            (
+                "DELETE",
+                "/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01",
+                RouteClass::ClientContactApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/clients/client_01/merge",
+                RouteClass::ClientMergeApi,
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/clients/client_01/history",
+                RouteClass::ClientHistoryApi,
             ),
             (
                 "DELETE",
@@ -365,6 +405,16 @@ mod tests {
             (
                 "DELETE",
                 "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate",
+            ),
+            ("PUT", "/api/v1/tenants/tenant_01/clients/client_01/archive"),
+            ("GET", "/api/v1/tenants/tenant_01/clients/client_01/merge"),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/clients/client_01/history",
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01",
             ),
             ("GET", "/api/v1/tenants/tenant_01/mailboxes"),
             ("DELETE", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01"),

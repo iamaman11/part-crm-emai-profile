@@ -18,7 +18,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_PATH = ROOT / "architecture" / "inventory.json"
-ROUTES_ROOT = ROOT / "crates" / "control-plane-contract" / "src" / "routes"
 CONTRACT_LIB = ROOT / "crates" / "control-plane-contract" / "src" / "lib.rs"
 
 CLASSIFIERS = [
@@ -40,8 +39,12 @@ ROUTE_SPECS = [
     ("InvitationCollectionApi", "identity", ["POST"], "/api/v1/tenants/{tenant_id}/invitations", "/api/v1/tenants/tenant_01/invitations", True),
     ("InvitationAcceptApi", "identity", ["POST"], "/api/v1/tenants/{tenant_id}/invitations/{invitation_id}/accept", "/api/v1/tenants/tenant_01/invitations/invitation_01/accept", True),
     ("MembershipStatusApi", "identity", ["PUT"], "/api/v1/tenants/{tenant_id}/members/{actor_id}/status", "/api/v1/tenants/tenant_01/members/actor_01/status", True),
-    ("ClientCollectionApi", "clients", ["POST"], "/api/v1/tenants/{tenant_id}/clients", "/api/v1/tenants/tenant_01/clients", True),
-    ("ClientResourceApi", "clients", ["GET"], "/api/v1/tenants/{tenant_id}/clients/{client_id}", "/api/v1/tenants/tenant_01/clients/client_01", True),
+    ("ClientCollectionApi", "clients", ["GET", "POST"], "/api/v1/tenants/{tenant_id}/clients", "/api/v1/tenants/tenant_01/clients", True),
+    ("ClientResourceApi", "clients", ["GET", "PATCH"], "/api/v1/tenants/{tenant_id}/clients/{client_id}", "/api/v1/tenants/tenant_01/clients/client_01", True),
+    ("ClientArchiveApi", "clients", ["POST"], "/api/v1/tenants/{tenant_id}/clients/{client_id}/archive", "/api/v1/tenants/tenant_01/clients/client_01/archive", True),
+    ("ClientContactApi", "clients", ["DELETE", "PUT"], "/api/v1/tenants/{tenant_id}/clients/{client_id}/contacts/{contact_point_id}", "/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01", True),
+    ("ClientMergeApi", "clients", ["POST"], "/api/v1/tenants/{tenant_id}/clients/{client_id}/merge", "/api/v1/tenants/tenant_01/clients/client_01/merge", True),
+    ("ClientHistoryApi", "clients", ["GET"], "/api/v1/tenants/{tenant_id}/clients/{client_id}/history", "/api/v1/tenants/tenant_01/clients/client_01/history", True),
     ("ClientGrantApi", "clients", ["DELETE", "PUT"], "/api/v1/tenants/{tenant_id}/clients/{client_id}/grants/{actor_id}", "/api/v1/tenants/tenant_01/clients/client_01/grants/actor_01", True),
     ("ProfileCollectionApi", "profiles", ["POST"], "/api/v1/tenants/{tenant_id}/profiles", "/api/v1/tenants/tenant_01/profiles", True),
     ("ProfileResourceApi", "profiles", ["GET"], "/api/v1/tenants/{tenant_id}/profiles/{profile_id}", "/api/v1/tenants/tenant_01/profiles/profile_01", True),
@@ -73,7 +76,14 @@ GENERATED_CONTRACTS = [
         "openapi": "contracts/generated/control-plane.openapi.json",
         "typescript": "frontend/src/shared/api/generated/control-plane.ts",
         "generator": "scripts/generate-frontend-contracts.py",
-    }
+    },
+    {
+        "name": "client-registry-api",
+        "canonical_source": "crates/control-plane-contract/src/client_registry_api.rs",
+        "openapi": "openapi/v1/fragments/client-registry.json",
+        "typescript": "frontend/src/shared/api/generated/client-registry.ts",
+        "generator": "scripts/generate-frontend-contracts.py",
+    },
 ]
 
 REQUIRED_INDEX_LINKS = [
@@ -184,10 +194,7 @@ def build_inventory() -> dict[str, object]:
     inventory: dict[str, object] = {
         "schema_version": 1,
         "workspace_members": workspace_members(),
-        "d1_migrations": {
-            "directory": "migrations/d1",
-            "files": migration_files(),
-        },
+        "d1_migrations": {"directory": "migrations/d1", "files": migration_files()},
         "routing": {
             "composed_entrypoint": "crates/control-plane-contract/src/lib.rs::classify_route",
             "dynamic_namespaces": ["/api", "/auth", "/bridge"],

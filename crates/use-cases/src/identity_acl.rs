@@ -9,7 +9,7 @@ use identity_access_domain::{
 };
 use profile_domain::BrowserProfile;
 use profile_platform_primitives::{
-    ActorContext, ActorId, ClientId, ProfileId, TenantId, UnixMillis,
+    ActorContext, ActorId, AssignmentId, ClientId, ProfileId, TenantId, UnixMillis,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -144,6 +144,7 @@ pub fn decide_create_profile(
 pub fn decide_assign_profile_to_client(
     actor: &ActorContext,
     owner_membership: &Membership,
+    assignment_id: AssignmentId,
     profile: &BrowserProfile,
     client: &ClientRecord,
     now: UnixMillis,
@@ -159,6 +160,7 @@ pub fn decide_assign_profile_to_client(
 
     ProfileClientAssignment::assign(
         profile.tenant_id(),
+        assignment_id,
         profile.profile_id().clone(),
         client,
         actor.actor_id().clone(),
@@ -285,8 +287,8 @@ mod tests {
     };
     use profile_domain::BrowserProfile;
     use profile_platform_primitives::{
-        ActorContext, ActorId, ClientId, CorrelationId, ProfileId, TenantId, TenantScope,
-        UnixMillis,
+        ActorContext, ActorId, AssignmentId, ClientId, CorrelationId, ProfileId, TenantId,
+        TenantScope, UnixMillis,
     };
 
     struct Fixture {
@@ -393,6 +395,7 @@ mod tests {
         let assignment = decide_assign_profile_to_client(
             &fixture.owner_actor,
             &fixture.owner_membership,
+            AssignmentId::parse("assignment_01JACLTEST")?,
             &fixture.profile,
             &fixture.client,
             UnixMillis::new(100),

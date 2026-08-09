@@ -37,6 +37,8 @@ jobs:
           scripts/check-step6-windows-bridge.py
           scripts/check-no-temporary-step4.py
           scripts/check-frontend-feature-boundaries.py
+          scripts/check-phase2c-client-boundaries.py
+          scripts/test-phase2c-client-merge-assignment.py
           scripts/generate-frontend-contracts.py
           scripts/generate-architecture-inventory.py
           scripts/test-d1-schema.py
@@ -78,7 +80,7 @@ jobs:
       - name: Enforce Step 6 Windows Bridge boundaries
         run: python scripts/check-step6-windows-bridge.py
 
-      - name: Prove browser lock deletion fixture is rejected
+      - name: Prove browser runtime lock deletion fixture is rejected
         run: |
           if python scripts/check-step6-windows-bridge.py --root tests/windows-bridge/fixtures/deletes-browser-lock; then
             echo "Browser runtime lock deletion fixture unexpectedly passed." >&2
@@ -144,6 +146,15 @@ jobs:
             echo "Assignment-as-ACL fixture unexpectedly passed." >&2
             exit 1
           fi
+
+      - name: Enforce Phase 2C client merge and assignment boundaries
+        run: python scripts/check-phase2c-client-boundaries.py
+
+      - name: Prove Phase 2C grant-transfer, resurrection and raw-mutation fixtures are rejected
+        run: python scripts/check-phase2c-client-boundaries.py --self-test
+
+      - name: Prove Phase 2C client merge and assignment D1 invariants
+        run: python scripts/test-phase2c-client-merge-assignment.py
 
       - name: Format
         run: cargo fmt --all -- --check

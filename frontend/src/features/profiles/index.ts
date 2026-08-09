@@ -1,0 +1,1 @@
+export { createProfilesRoute } from './route';

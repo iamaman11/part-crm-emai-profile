@@ -56,6 +56,28 @@ def merge_unique_map(
         target[name] = value
 
 
+def merge_openapi_paths(
+    document_paths: dict[str, object],
+    fragment_paths: dict[str, object],
+    fragment_path: Path,
+) -> None:
+    for route, fragment_item in fragment_paths.items():
+        if not isinstance(fragment_item, dict):
+            raise ValueError(f"{fragment_path}: path {route!r} must be an object")
+        existing_item = document_paths.get(route)
+        if existing_item is None:
+            document_paths[route] = fragment_item
+            continue
+        if not isinstance(existing_item, dict):
+            raise ValueError(f"OpenAPI root path {route!r} must be an object")
+        for name, value in fragment_item.items():
+            if name in existing_item:
+                raise ValueError(
+                    f"{fragment_path}: duplicate path entry {route!r}.{name!r}"
+                )
+            existing_item[name] = value
+
+
 def merge_openapi_fragment(
     document: dict[str, object], fragment: dict[str, object], fragment_path: Path
 ) -> None:
@@ -71,12 +93,7 @@ def merge_openapi_fragment(
     document_paths = document.setdefault("paths", {})
     if not isinstance(document_paths, dict):
         raise ValueError("OpenAPI root paths must be an object")
-    merge_unique_map(
-        document_paths,
-        fragment_paths,
-        fragment_path=fragment_path,
-        namespace="path",
-    )
+    merge_openapi_paths(document_paths, fragment_paths, fragment_path)
 
     fragment_components = fragment.get("components", {})
     if not isinstance(fragment_components, dict):

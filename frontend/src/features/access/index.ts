@@ -1,0 +1,1 @@
+export { createAccessRoute } from './route';

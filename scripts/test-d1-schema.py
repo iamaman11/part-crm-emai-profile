@@ -204,12 +204,13 @@ def test_constraints_and_concealment() -> None:
         expect_integrity_error(
             lambda: connection.execute(
                 """
-                INSERT INTO profile_client_assignments (
-                    tenant_id, assignment_id, profile_id, client_id,
-                    assigned_by_actor_id, assigned_at_ms, reason
-                ) VALUES (?, 'assignment_cross_tenant', ?, ?, ?, 50, 'invalid tenant link')
+                INSERT INTO profile_assignment_commands (
+                    tenant_id, command_id, command_actor_id, assignment_id,
+                    profile_id, client_id, expected_profile_version, reason, executed_at_ms
+                ) VALUES (?, 'cmd_assignment_cross_tenant', ?, 'assignment_cross_tenant',
+                          ?, ?, 1, 'invalid tenant link', 50)
                 """,
-                (TENANT_A, PROFILE_A, CLIENT_B, OWNER_A),
+                (TENANT_A, OWNER_A, PROFILE_A, CLIENT_B),
             ),
             "assignment_client_not_active",
         )
@@ -222,12 +223,13 @@ def test_constraints_and_concealment() -> None:
         expect_integrity_error(
             lambda: connection.execute(
                 """
-                INSERT INTO profile_client_assignments (
-                    tenant_id, assignment_id, profile_id, client_id,
-                    assigned_by_actor_id, assigned_at_ms, reason
-                ) VALUES (?, 'assignment_archived', ?, ?, ?, 60, 'archived client')
+                INSERT INTO profile_assignment_commands (
+                    tenant_id, command_id, command_actor_id, assignment_id,
+                    profile_id, client_id, expected_profile_version, reason, executed_at_ms
+                ) VALUES (?, 'cmd_assignment_archived', ?, 'assignment_archived',
+                          ?, ?, 1, 'archived client', 60)
                 """,
-                (TENANT_A, PROFILE_A, CLIENT_A, OWNER_A),
+                (TENANT_A, OWNER_A, PROFILE_A, CLIENT_A),
             ),
             "assignment_client_not_active",
         )
@@ -240,27 +242,38 @@ def test_constraints_and_concealment() -> None:
         connection.commit()
         connection.execute(
             """
-            INSERT INTO profile_client_assignments (
-                tenant_id, assignment_id, profile_id, client_id,
-                assigned_by_actor_id, assigned_at_ms, reason
-            ) VALUES (?, 'assignment_primary_one', ?, ?, ?, 70, 'primary assignment')
+            INSERT INTO profile_assignment_commands (
+                tenant_id, command_id, command_actor_id, assignment_id,
+                profile_id, client_id, expected_profile_version, reason, executed_at_ms
+            ) VALUES (?, 'cmd_assignment_primary_one', ?, 'assignment_primary_one',
+                      ?, ?, 1, 'primary assignment', 70)
             """,
-            (TENANT_A, PROFILE_A, CLIENT_A, OWNER_A),
+            (TENANT_A, OWNER_A, PROFILE_A, CLIENT_A),
         )
         connection.commit()
         expect_integrity_error(
             lambda: connection.execute(
                 """
-                INSERT INTO profile_client_assignments (
-                    tenant_id, assignment_id, profile_id, client_id,
-                    assigned_by_actor_id, assigned_at_ms, reason
-                ) VALUES (?, 'assignment_primary_two', ?, ?, ?, 71, 'duplicate active assignment')
+                INSERT INTO profile_assignment_commands (
+                    tenant_id, command_id, command_actor_id, assignment_id,
+                    profile_id, client_id, expected_profile_version, reason, executed_at_ms
+                ) VALUES (?, 'cmd_assignment_primary_two', ?, 'assignment_primary_two',
+                          ?, ?, 2, 'duplicate active assignment', 71)
                 """,
-                (TENANT_A, PROFILE_A, CLIENT_A, OWNER_A),
+                (TENANT_A, OWNER_A, PROFILE_A, CLIENT_A),
             ),
-            "UNIQUE constraint failed",
+            "profile_assignment_same_client",
         )
         connection.rollback()
+        active_assignments = connection.execute(
+            """
+            SELECT COUNT(*) AS value
+            FROM profile_client_assignments
+            WHERE tenant_id = ? AND profile_id = ? AND closed_at_ms IS NULL
+            """,
+            (TENANT_A, PROFILE_A),
+        ).fetchone()["value"]
+        assert active_assignments == 1
 
         assert (
             connection.execute(

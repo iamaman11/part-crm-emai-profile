@@ -2,11 +2,14 @@
 
 pub mod access_identity;
 pub mod access_webcrypto;
+pub mod contact_keyring;
 pub mod contact_lookup;
 pub mod contact_protection;
 pub mod coordinator_ingress;
 pub mod d1_catalog;
+pub mod d1_client_merge;
 pub mod d1_client_persistence;
+pub mod d1_client_registry;
 pub mod d1_clients;
 mod d1_command_identity;
 pub mod d1_governed_commands;
@@ -23,6 +26,7 @@ pub mod d1_mailbox_jobs;
 pub mod d1_mailboxes;
 pub mod d1_notification_operations;
 pub mod d1_notifications;
+pub mod d1_profile_application;
 pub mod d1_profile_coordinator;
 pub mod d1_profile_generation_application;
 pub mod d1_profile_generations;

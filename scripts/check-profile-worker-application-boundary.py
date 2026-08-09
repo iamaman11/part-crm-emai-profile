@@ -63,20 +63,24 @@ def validate(root: Path) -> list[str]:
     lib_path = worker / "lib.rs"
     legacy_api_path = worker / "api.rs"
     ports_path = root / "crates/application-ports/src/profiles.rs"
+    context_ports_path = root / "crates/application-ports/src/profile_assignment_context.rs"
     use_cases_path = root / "crates/use-cases/src/profiles.rs"
     assignment_use_cases_path = root / "crates/use-cases/src/profile_assignments.rs"
     grant_use_cases_path = root / "crates/use-cases/src/profile_grants.rs"
     adapter_path = root / "crates/cloudflare-adapters/src/d1_profiles.rs"
+    bundle_adapter_path = root / "crates/cloudflare-adapters/src/d1_profile_application.rs"
 
     required_paths = (
         profile_path,
         composition_path,
         lib_path,
         ports_path,
+        context_ports_path,
         use_cases_path,
         assignment_use_cases_path,
         grant_use_cases_path,
         adapter_path,
+        bundle_adapter_path,
     )
     for path in required_paths:
         if not path.is_file():
@@ -89,10 +93,12 @@ def validate(root: Path) -> list[str]:
     worker_lib = read(lib_path)
     legacy_api = read(legacy_api_path) if legacy_api_path.is_file() else ""
     ports = read(ports_path)
+    context_ports = read(context_ports_path)
     use_cases = read(use_cases_path)
     assignment_use_cases = read(assignment_use_cases_path)
     grant_use_cases = read(grant_use_cases_path)
     adapter = read(adapter_path)
+    bundle_adapter = read(bundle_adapter_path)
 
     for token in FORBIDDEN_PROFILE_TRANSPORT_TOKENS:
         if token in transport:
@@ -113,10 +119,10 @@ def validate(root: Path) -> list[str]:
             errors.append(f"Worker composition root missing profile route token `{route_token}`")
 
     if (
-        "D1ProfileApplicationRepository" not in composition
+        "D1ProfileApplicationBundle" not in composition
         or "env.d1(D1_CATALOG_BINDING)?" not in composition
     ):
-        errors.append("Worker composition root must construct the D1 profile application adapter")
+        errors.append("Worker composition root must construct the composed D1 profile application adapter")
 
     for token in (
         "pub trait ProfileApplicationPort",
@@ -127,6 +133,13 @@ def validate(root: Path) -> list[str]:
     ):
         if token not in ports:
             errors.append(f"application profile ports missing `{token}`")
+    for token in (
+        "pub trait ProfileAssignmentContextPort",
+        "pub struct ProfileAssignmentContext",
+        "pub struct CurrentProfileAssignmentSnapshot",
+    ):
+        if token not in context_ports:
+            errors.append(f"application assignment-context port missing `{token}`")
 
     if (
         "pub async fn execute_create_profile" not in use_cases
@@ -138,6 +151,8 @@ def validate(root: Path) -> list[str]:
         "pub fn authorize_profile_assignment",
         "pub fn next_profile_assignment_version",
         "decide_assignment_replay",
+        "load_profile_assignment_context",
+        "plan_primary_reassignment",
     ):
         if token not in assignment_use_cases:
             errors.append(f"profile assignment use cases missing `{token}`")
@@ -166,6 +181,21 @@ def validate(root: Path) -> list[str]:
         if token not in adapter:
             errors.append(f"Cloudflare profile adapter missing grant mapping token `{token}`")
 
+    for token in (
+        "impl ProfileApplicationPort for D1ProfileApplicationBundle",
+        "impl ProfileAssignmentApplicationPort for D1ProfileApplicationBundle",
+        "impl ProfileGrantApplicationPort for D1ProfileApplicationBundle",
+        "impl ProfileAssignmentContextPort for D1ProfileApplicationBundle",
+        "profile.tenant_id = ?",
+        "assignment.closed_at_ms IS NULL",
+        "JOIN clients AS target",
+        "LEFT JOIN clients AS current_client",
+    ):
+        if token not in bundle_adapter:
+            errors.append(f"composed profile adapter missing assignment-context token `{token}`")
+    if "profile_grants" in bundle_adapter or "client_grants" in bundle_adapter:
+        errors.append("assignment-context query must not derive authorization from grants")
+
     for token in LEGACY_PROFILE_API_TOKENS:
         if token in legacy_api:
             errors.append(f"legacy migrated profile implementation remains in api.rs: `{token}`")
@@ -189,7 +219,7 @@ def write_self_test_fixture(root: Path) -> None:
         encoding="utf-8",
     )
     (worker / "composition.rs").write_text(
-        "D1ProfileApplicationRepository env.d1(D1_CATALOG_BINDING)?\n",
+        "D1ProfileApplicationBundle env.d1(D1_CATALOG_BINDING)?\n",
         encoding="utf-8",
     )
     (worker / "lib.rs").write_text(
@@ -211,15 +241,21 @@ def write_self_test_fixture(root: Path) -> None:
         "pub struct ProfileGrantWrite;\n",
         encoding="utf-8",
     )
+    (ports / "profile_assignment_context.rs").write_text(
+        "pub trait ProfileAssignmentContextPort {}\n"
+        "pub struct ProfileAssignmentContext;\n"
+        "pub struct CurrentProfileAssignmentSnapshot;\n",
+        encoding="utf-8",
+    )
     (use_cases / "profiles.rs").write_text(
         "pub async fn execute_create_profile() {}\npub async fn get_visible_profile() {}\n",
         encoding="utf-8",
     )
     (use_cases / "profile_assignments.rs").write_text(
-        "pub async fn execute_assign_profile() {}\n"
+        "pub async fn execute_assign_profile() { decide_assignment_replay(); "
+        "load_profile_assignment_context(); plan_primary_reassignment(); }\n"
         "pub fn authorize_profile_assignment() {}\n"
-        "pub fn next_profile_assignment_version() {}\n"
-        "fn replay() { decide_assignment_replay(); }\n",
+        "pub fn next_profile_assignment_version() {}\n",
         encoding="utf-8",
     )
     (use_cases / "profile_grants.rs").write_text(
@@ -238,6 +274,15 @@ def write_self_test_fixture(root: Path) -> None:
         "repo.revoke_profile_grant(actor, mutation); }\n",
         encoding="utf-8",
     )
+    (adapters / "d1_profile_application.rs").write_text(
+        "impl ProfileApplicationPort for D1ProfileApplicationBundle {}\n"
+        "impl ProfileAssignmentApplicationPort for D1ProfileApplicationBundle {}\n"
+        "impl ProfileGrantApplicationPort for D1ProfileApplicationBundle {}\n"
+        "impl ProfileAssignmentContextPort for D1ProfileApplicationBundle {}\n"
+        "JOIN clients AS target LEFT JOIN clients AS current_client "
+        "profile.tenant_id = ? assignment.closed_at_ms IS NULL profile_grants\n",
+        encoding="utf-8",
+    )
 
 
 def main() -> int:
@@ -253,12 +298,19 @@ def main() -> int:
             errors = validate(fixture)
             has_provider_rejection = any("provider token" in error for error in errors)
             has_legacy_rejection = any("legacy migrated profile" in error for error in errors)
-            if not (has_provider_rejection and has_legacy_rejection):
-                print("negative direct-D1 and legacy profile fixtures unexpectedly passed")
+            has_assignment_acl_rejection = any(
+                "must not derive authorization from grants" in error for error in errors
+            )
+            if not (
+                has_provider_rejection
+                and has_legacy_rejection
+                and has_assignment_acl_rejection
+            ):
+                print("negative direct-D1, legacy or assignment-ACL profile fixtures unexpectedly passed")
                 for error in errors:
                     print(error)
                 return 1
-            print("negative direct-D1 and legacy profile fixtures rejected as expected")
+            print("negative direct-D1, legacy and assignment-ACL profile fixtures rejected as expected")
             return 0
 
     errors = validate(args.root.resolve())
