@@ -1,6 +1,8 @@
 use core::{fmt, future::Future};
 use device_domain::{DeviceJob, DeviceJobId, DeviceJobTarget};
-use profile_platform_primitives::{ActorContext, AggregateVersion, DeviceId, TenantId};
+use profile_platform_primitives::{
+    ActorContext, AggregateVersion, DeviceId, TenantId, UnixMillis,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceJobCapability {
@@ -93,6 +95,16 @@ pub trait DeviceExecutionPreconditionPort {
         actor: &ActorContext,
         target: &DeviceJobTarget,
     ) -> impl Future<Output = Result<DeviceExecutionReadiness, DeviceJobPortError>>;
+}
+
+pub trait DeviceJobQueryPort {
+    fn list_claimable_device_jobs(
+        &self,
+        actor: &ActorContext,
+        device_id: &DeviceId,
+        now: UnixMillis,
+        limit: u16,
+    ) -> impl Future<Output = Result<Vec<DeviceJob>, DeviceJobPortError>>;
 }
 
 pub trait DeviceJobRepositoryPort {
