@@ -13,6 +13,7 @@ application-ports.workspace = true
 client-domain.workspace = true
 cloudflare-adapters.workspace = true
 control-plane-contract = { path = "../../crates/control-plane-contract" }
+device-domain.workspace = true
 identity-access-domain.workspace = true
 profile-platform-primitives.workspace = true
 serde = "=1.0.229"
@@ -21,6 +22,7 @@ session-domain.workspace = true
 sha2.workspace = true
 use-cases.workspace = true
 use-cases-clients.workspace = true
+use-cases-devices.workspace = true
 use-cases-notifications.workspace = true
 wasm-bindgen.workspace = true
 worker.workspace = true
