@@ -1,3 +1,4 @@
+# Trigger bounded closeout after workflow exists on branch.
 name: Phase 2B Docs Closeout Materializer
 
 on:
