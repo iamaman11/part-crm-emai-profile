@@ -901,6 +901,7 @@ dependencies = [
  "session-domain",
  "use-cases-clients",
  "use-cases-identity",
+ "use-cases-mailboxes",
 ]
 
 [[package]]
@@ -917,6 +918,15 @@ dependencies = [
 
 [[package]]
 name = "use-cases-identity"
+version = "0.1.0"
+dependencies = [
+ "application-ports",
+ "identity-access-domain",
+ "profile-platform-primitives",
+]
+
+[[package]]
+name = "use-cases-mailboxes"
 version = "0.1.0"
 dependencies = [
  "application-ports",
