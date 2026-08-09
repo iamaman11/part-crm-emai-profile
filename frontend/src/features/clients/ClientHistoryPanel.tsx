@@ -1,4 +1,4 @@
-import type { ClientHistoryProjection } from '../../shared/api/generated/control-plane';
+import type { ClientHistoryProjection } from '../../shared/api/generated/client-registry';
 
 export function ClientHistoryPanel({ history }: { history: ClientHistoryProjection | undefined }) {
   return (
