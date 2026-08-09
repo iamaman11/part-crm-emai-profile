@@ -84,6 +84,13 @@ GENERATED_CONTRACTS = [
         "typescript": "frontend/src/shared/api/generated/client-registry.ts",
         "generator": "scripts/generate-frontend-contracts.py",
     },
+    {
+        "name": "query-mail-api",
+        "canonical_source": "crates/control-plane-contract/src/bin/export_query_mail.rs",
+        "openapi": "openapi/v1/fragments/query-mail.json",
+        "typescript": "frontend/src/shared/api/generated/query-mail.ts",
+        "generator": "scripts/generate-frontend-contracts.py",
+    },
 ]
 
 REQUIRED_INDEX_LINKS = [
@@ -161,12 +168,63 @@ def validate_docs() -> None:
         raise SystemExit(f"docs/INDEX.md is missing authority links: {missing_links}")
 
     plan = (ROOT / "docs" / "DEVELOPMENT_PLAN.md").read_text(encoding="utf-8")
+    matrix = (ROOT / "docs" / "DEVELOPER_CAPABILITY_MATRIX.md").read_text(encoding="utf-8")
     next_sections = re.findall(r"^### (Phase [^\n]+?) — NEXT\s*$", plan, re.MULTILINE)
     if len(next_sections) != 1:
         raise SystemExit(f"DEVELOPMENT_PLAN.md must have exactly one Phase ... — NEXT section: {next_sections}")
     immediate = plan.split("## 19. Immediate Next Action", 1)
     if len(immediate) != 2 or next_sections[0].split(" — ", 1)[0] not in immediate[1]:
         raise SystemExit("Immediate Next Action is inconsistent with the unique NEXT phase")
+
+    required_plan_markers = (
+        "Phase 2D — CQRS read models, global search and client-mail query contract — ACCEPTED",
+        "Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — NEXT",
+        "Phase 2E issue #148 is the unique NEXT",
+        "| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D.**",
+        "| 6.4 | Authorization-before-projection | **Accepted through Phase 2D query/read-model scope.**",
+    )
+    stale_plan_markers = (
+        "Phase 2D issue #144 is the unique next implementation slice",
+        "| A8 | Query-side/CQRS read-model boundary | **Open.**",
+        "2D read/search/provider query; 2G realtime subscriptions",
+    )
+    required_matrix_markers = (
+        "| Client contact protection | Composed |",
+        "| Client Registry 2.0 | Composed |",
+        "| Read models/global search | Library / Synthetic |",
+        "| Client-scoped mailbox message search/body | Library / Synthetic |",
+        "| A3 | Domain aggregate splitting | **Client half accepted in Phase 2A**",
+        "| A5 | Feature-sliced SPA route composition | **Accepted in Phase 2C**",
+        "| A8 | CQRS/read-model boundary | **Accepted in Phase 2D**",
+        "| 6.5 | PII contact protection | **Accepted through Phase 2B/2D**",
+        "crates/use-cases-query",
+    )
+    stale_matrix_markers = (
+        "| Client contact protection | Target |",
+        "| Client Registry 2.0 | Target |",
+        "| Read models/global search | Target |",
+        "| A5 | Feature-sliced SPA route composition | **Open**",
+        "| A8 | CQRS/read-model boundary | **Open**",
+        "| 6.5 | PII contact protection | **Open for client contacts**",
+    )
+    for marker in required_plan_markers:
+        if marker not in plan:
+            raise SystemExit(f"DEVELOPMENT_PLAN.md is missing accepted-phase semantic marker: {marker}")
+    for marker in stale_plan_markers:
+        if marker in plan:
+            raise SystemExit(f"DEVELOPMENT_PLAN.md contains stale accepted-phase marker: {marker}")
+    for marker in required_matrix_markers:
+        if marker not in matrix:
+            raise SystemExit(f"DEVELOPER_CAPABILITY_MATRIX.md is missing accepted capability marker: {marker}")
+    for marker in stale_matrix_markers:
+        if marker in matrix:
+            raise SystemExit(f"DEVELOPER_CAPABILITY_MATRIX.md contains stale capability marker: {marker}")
+
+    for contract in GENERATED_CONTRACTS:
+        for key in ("canonical_source", "openapi", "typescript", "generator"):
+            relative_path = contract[key]
+            if not (ROOT / relative_path).is_file():
+                raise SystemExit(f"generated contract {contract['name']} references missing {key}: {relative_path}")
 
     status = json.loads((ROOT / "docs" / "status.json").read_text(encoding="utf-8"))
     if status.get("production_ready") is not False:
