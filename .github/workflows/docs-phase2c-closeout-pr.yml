@@ -1,0 +1,43 @@
+name: Phase 2C Docs Closeout PR
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  closeout:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'docs-phase2c-closeout'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout docs head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: docs-phase2c-closeout
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Materialize bounded docs closeout
+        run: python scripts/phase2c-docs-closeout.py
+
+      - name: Validate docs closeout
+        run: |
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/generate-architecture-inventory.py --self-test
+          grep -Fq 'Phase 2C — Client merge, assignment, grant-safe projections and modular Client Registry UI — ACCEPTED' docs/DEVELOPMENT_PLAN.md
+          grep -Fq 'Phase 2D — CQRS read models, global search and client-mail query contract — NEXT' docs/DEVELOPMENT_PLAN.md
+          grep -Fq 'd3ad2e774a98ad5fed2565ba410ba9923062d170' docs/DEVELOPMENT_PLAN.md
+          grep -Fq '042d0dc72fa37e99f971d61d21544609a69c6e31' docs/DEVELOPMENT_PLAN.md
+          git diff --check
+
+      - name: Commit validated docs only
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/DEVELOPMENT_PLAN.md docs/ARCHITECTURE.md
+          git diff --cached --check
+          git commit -m 'docs: close Phase 2C and advance Phase 2D'
+          git push origin HEAD:docs-phase2c-closeout
