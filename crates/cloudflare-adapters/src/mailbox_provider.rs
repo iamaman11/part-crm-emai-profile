@@ -5,7 +5,7 @@ use mailbox_domain::{
     MailboxBinding, MailboxJob, MailboxJobStatus, MailboxProvider, MailboxProviderFailure,
     validate_bounded_item_count, validate_cursor, validate_provider_status,
 };
-use std::future::{Ready, ready};
+use std::future::ready;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MetadataMailboxProviderAdapter {
@@ -58,7 +58,7 @@ impl MailboxProviderPort for MetadataMailboxProviderAdapter {
         &mut self,
         binding: &MailboxBinding,
         job: &MailboxJob,
-    ) -> Ready<Result<MailboxObservation, MailboxProviderPortError>> {
+    ) -> impl Future<Output = Result<MailboxObservation, MailboxProviderPortError>> {
         ready(self.check_now(binding, job))
     }
 }
@@ -124,7 +124,7 @@ impl MailboxProviderPort for DeterministicFakeMailboxProvider {
         &mut self,
         binding: &MailboxBinding,
         job: &MailboxJob,
-    ) -> Ready<Result<MailboxObservation, MailboxProviderPortError>> {
+    ) -> impl Future<Output = Result<MailboxObservation, MailboxProviderPortError>> {
         ready(self.check_now(binding, job))
     }
 }
