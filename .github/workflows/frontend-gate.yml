@@ -7,54 +7,13 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: frontend-gate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  docs-closeout-materialize:
-    name: Phase 2D Docs Closeout Materialization
-    if: github.event_name == 'pull_request' && github.head_ref == 'docs-phase2d-closeout'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout docs closeout branch
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: docs-phase2d-closeout
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Materialize normative closeout
-        run: python scripts/phase2d-docs-closeout.py
-
-      - name: Validate bounded closeout
-        run: |
-          test "$(git diff --name-only | sort | tr '\n' ' ')" = "docs/ARCHITECTURE.md docs/DEVELOPMENT_PLAN.md "
-          grep -q 'Phase 2D — CQRS read models, global search and client-mail query contract — ACCEPTED' docs/DEVELOPMENT_PLAN.md
-          grep -q 'Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — NEXT' docs/DEVELOPMENT_PLAN.md
-          grep -q 'Phase 2E issue #148 is the unique NEXT' docs/DEVELOPMENT_PLAN.md
-          grep -q 'ad491e2f0c9ba9f79130923fdde6fe1407af4dc5' docs/DEVELOPMENT_PLAN.md
-          grep -q '26f8fa82bdad02a5a0867b0d36748b915579ef1c' docs/DEVELOPMENT_PLAN.md
-          grep -q 'Phase 2D accepts capability-owned' docs/ARCHITECTURE.md
-          python scripts/generate-architecture-inventory.py --check
-          git diff --check
-
-      - name: Restore permanent workflow and commit docs only
-        run: |
-          git checkout origin/main -- .github/workflows/frontend-gate.yml
-          rm -f .github/workflows/phase2d-docs-closeout-materializer.yml
-          rm -f scripts/phase2d-docs-closeout-trigger.txt
-          rm -f scripts/phase2d-docs-closeout.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git diff --cached --check
-          test "$(git diff --cached --name-only origin/main | sort | tr '\n' ' ')" = "docs/ARCHITECTURE.md docs/DEVELOPMENT_PLAN.md "
-          git commit -m 'Docs: accept Phase 2D and mark Phase 2E next'
-          git push origin HEAD:docs-phase2d-closeout
-
   frontend:
     name: React Operator UI
     runs-on: ubuntu-latest
