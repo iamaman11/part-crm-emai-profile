@@ -3,8 +3,7 @@ use application_ports::mailboxes::{
 };
 use mailbox_domain::{
     MailboxBinding, MailboxJob, MailboxJobStatus, MailboxProvider, MailboxProviderFailure,
-    MailboxProviderFailureClass, validate_bounded_item_count, validate_cursor,
-    validate_provider_status,
+    validate_bounded_item_count, validate_cursor, validate_provider_status,
 };
 use std::future::{Ready, ready};
 
@@ -34,6 +33,24 @@ impl MetadataMailboxProviderAdapter {
             next_cursor,
         })
     }
+
+    fn check_now(
+        &self,
+        binding: &MailboxBinding,
+        job: &MailboxJob,
+    ) -> Result<MailboxObservation, MailboxProviderPortError> {
+        validate_binding_job(binding, job)?;
+        if binding.provider() != self.provider {
+            return Err(MailboxProviderPortError::IntegrityFailure);
+        }
+        MailboxObservation::new(
+            binding.binding_id().clone(),
+            self.provider_status.clone(),
+            self.bounded_item_count,
+            self.next_cursor.clone(),
+        )
+        .map_err(|_| MailboxProviderPortError::IntegrityFailure)
+    }
 }
 
 impl MailboxProviderPort for MetadataMailboxProviderAdapter {
@@ -42,19 +59,7 @@ impl MailboxProviderPort for MetadataMailboxProviderAdapter {
         binding: &MailboxBinding,
         job: &MailboxJob,
     ) -> Ready<Result<MailboxObservation, MailboxProviderPortError>> {
-        let result = validate_binding_job(binding, job).and_then(|()| {
-            if binding.provider() != self.provider {
-                return Err(MailboxProviderPortError::IntegrityFailure);
-            }
-            MailboxObservation::new(
-                binding.binding_id().clone(),
-                self.provider_status.clone(),
-                self.bounded_item_count,
-                self.next_cursor.clone(),
-            )
-            .map_err(|_| MailboxProviderPortError::IntegrityFailure)
-        });
-        ready(result)
+        ready(self.check_now(binding, job))
     }
 }
 
@@ -84,6 +89,34 @@ impl DeterministicFakeMailboxProvider {
     pub const fn calls(&self) -> u32 {
         self.calls
     }
+
+    fn check_now(
+        &mut self,
+        binding: &MailboxBinding,
+        job: &MailboxJob,
+    ) -> Result<MailboxObservation, MailboxProviderPortError> {
+        validate_binding_job(binding, job)?;
+        self.calls = self
+            .calls
+            .checked_add(1)
+            .ok_or(MailboxProviderPortError::IntegrityFailure)?;
+        match &self.outcome {
+            DeterministicMailboxOutcome::Success {
+                provider_status,
+                bounded_item_count,
+                next_cursor,
+            } => MailboxObservation::new(
+                binding.binding_id().clone(),
+                provider_status.clone(),
+                *bounded_item_count,
+                next_cursor.clone(),
+            )
+            .map_err(|_| MailboxProviderPortError::IntegrityFailure),
+            DeterministicMailboxOutcome::Failure(failure) => {
+                Err(MailboxProviderPortError::Failure(*failure))
+            }
+        }
+    }
 }
 
 impl MailboxProviderPort for DeterministicFakeMailboxProvider {
@@ -92,29 +125,7 @@ impl MailboxProviderPort for DeterministicFakeMailboxProvider {
         binding: &MailboxBinding,
         job: &MailboxJob,
     ) -> Ready<Result<MailboxObservation, MailboxProviderPortError>> {
-        let result = validate_binding_job(binding, job).and_then(|()| {
-            self.calls = self
-                .calls
-                .checked_add(1)
-                .ok_or(MailboxProviderPortError::IntegrityFailure)?;
-            match &self.outcome {
-                DeterministicMailboxOutcome::Success {
-                    provider_status,
-                    bounded_item_count,
-                    next_cursor,
-                } => MailboxObservation::new(
-                    binding.binding_id().clone(),
-                    provider_status.clone(),
-                    *bounded_item_count,
-                    next_cursor.clone(),
-                )
-                .map_err(|_| MailboxProviderPortError::IntegrityFailure),
-                DeterministicMailboxOutcome::Failure(failure) => {
-                    Err(MailboxProviderPortError::Failure(*failure))
-                }
-            }
-        });
-        ready(result)
+        ready(self.check_now(binding, job))
     }
 }
 
@@ -138,7 +149,7 @@ mod tests {
         DeterministicFakeMailboxProvider, DeterministicMailboxOutcome,
         MetadataMailboxProviderAdapter,
     };
-    use application_ports::mailboxes::{MailboxProviderPort, MailboxProviderPortError};
+    use application_ports::mailboxes::MailboxProviderPortError;
     use mailbox_domain::{
         MailboxBinding, MailboxJob, MailboxProvider, MailboxProviderFailure,
         MailboxProviderFailureClass,
@@ -174,13 +185,13 @@ mod tests {
     {
         let binding = binding()?;
         let job = running_job(&binding)?;
-        let mut adapter = MetadataMailboxProviderAdapter::new(
+        let adapter = MetadataMailboxProviderAdapter::new(
             MailboxProvider::Imap,
             "SYNTHETIC_OK",
             4,
             Some("cursor-next".to_owned()),
         )?;
-        let observation = adapter.check_mailbox(&binding, &job).into_inner()?;
+        let observation = adapter.check_now(&binding, &job)?;
         assert_eq!(observation.provider_status(), "SYNTHETIC_OK");
         assert_eq!(observation.bounded_item_count(), 4);
         assert_eq!(observation.next_cursor(), Some("cursor-next"));
@@ -197,7 +208,7 @@ mod tests {
             DeterministicMailboxOutcome::Failure(failure),
         );
         assert_eq!(
-            adapter.check_mailbox(&binding, &job).into_inner(),
+            adapter.check_now(&binding, &job),
             Err(MailboxProviderPortError::Failure(failure))
         );
         assert_eq!(adapter.calls(), 1);
@@ -209,10 +220,10 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let binding = binding()?;
         let job = running_job(&binding)?;
-        let mut adapter =
+        let adapter =
             MetadataMailboxProviderAdapter::new(MailboxProvider::GmailApi, "OK", 0, None)?;
         assert_eq!(
-            adapter.check_mailbox(&binding, &job).into_inner(),
+            adapter.check_now(&binding, &job),
             Err(MailboxProviderPortError::IntegrityFailure)
         );
         Ok(())
@@ -228,7 +239,7 @@ mod tests {
             calls: u32::MAX,
         };
         assert_eq!(
-            adapter.check_mailbox(&binding, &job).into_inner(),
+            adapter.check_now(&binding, &job),
             Err(MailboxProviderPortError::IntegrityFailure)
         );
         assert_eq!(adapter.calls(), u32::MAX);
