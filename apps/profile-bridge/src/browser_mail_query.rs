@@ -372,8 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_post_runtime_fence_discards_search_result()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn stale_post_runtime_fence_discards_search_result() -> Result<(), Box<dyn std::error::Error>> {
         let proof = proof()?;
         let binding_id = proof.binding_id().clone();
         let adapter = BrowserClientMailQueryAdapter::new(
@@ -395,8 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_post_runtime_fence_discards_message_body()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn stale_post_runtime_fence_discards_message_body() -> Result<(), Box<dyn std::error::Error>> {
         let proof = proof()?;
         let binding_id = proof.binding_id().clone();
         let reference = MailboxMessageReference::new(binding_id.clone(), "browser-message-1")?;
@@ -419,8 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn binding_substitution_is_rejected_before_runtime()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn binding_substitution_is_rejected_before_runtime() -> Result<(), Box<dyn std::error::Error>> {
         let proof = proof()?;
         let correct_binding = proof.binding_id().clone();
         let adapter = BrowserClientMailQueryAdapter::new(
