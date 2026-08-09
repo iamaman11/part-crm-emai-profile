@@ -1,7 +1,10 @@
 use core::fmt;
-use profile_platform_primitives::{DeviceClaimId, DeviceJobId, UnixMillis};
+use profile_platform_primitives::UnixMillis;
 
-use crate::target::DeviceJobTarget;
+use crate::{
+    id::{DeviceClaimId, DeviceJobId},
+    target::DeviceJobTarget,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceClaim {
@@ -121,9 +124,12 @@ impl std::error::Error for DeviceClaimError {}
 #[cfg(test)]
 mod tests {
     use super::{DeviceClaim, DeviceClaimError};
-    use crate::target::DeviceJobTarget;
+    use crate::{
+        id::{DeviceClaimId, DeviceJobId},
+        target::DeviceJobTarget,
+    };
     use profile_platform_primitives::{
-        DeviceClaimId, DeviceId, DeviceJobId, GenerationId, ProfileId, TenantId, UnixMillis,
+        DeviceId, GenerationId, ProfileId, TenantId, UnixMillis,
     };
 
     fn target() -> Result<DeviceJobTarget, Box<dyn std::error::Error>> {
