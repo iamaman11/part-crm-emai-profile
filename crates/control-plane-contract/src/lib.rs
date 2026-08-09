@@ -380,10 +380,7 @@ mod tests {
             assert!(is_authenticated_api(actual));
         }
         for (method, path) in [
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/device-jobs/claimable",
-            ),
+            ("POST", "/api/v1/tenants/tenant_01/device-jobs/claimable"),
             (
                 "GET",
                 "/api/v1/tenants/tenant_01/device-jobs/devjob_01/claim",
