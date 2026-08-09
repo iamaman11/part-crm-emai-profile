@@ -1,6 +1,6 @@
 use application_ports::query::{
-    QueryAuthorizationPort, QueryCapability, QueryCursor, QueryPage, QueryPageRequest, QueryPortError,
-    QueryPortErrorClass,
+    QueryAuthorizationPort, QueryCapability, QueryCursor, QueryPage, QueryPageRequest,
+    QueryPortError, QueryPortErrorClass,
 };
 use application_ports::query_clients::{ClientReadModelPort, ClientReadProjection};
 use application_ports::query_mailboxes::{MailboxReadModelPort, MailboxReadProjection};
@@ -67,9 +67,9 @@ impl QueryAuthorizationPort for D1QueryRepository {
             return Ok(false);
         };
         Ok(match capability {
-            QueryCapability::Clients | QueryCapability::Profiles | QueryCapability::GlobalSearch => {
-                true
-            }
+            QueryCapability::Clients
+            | QueryCapability::Profiles
+            | QueryCapability::GlobalSearch => true,
             QueryCapability::Members | QueryCapability::Mailboxes | QueryCapability::Mail => {
                 role == MembershipRole::TenantOwner
             }
@@ -125,9 +125,7 @@ impl ClientReadModelPort for D1QueryRepository {
         .await
         .map_err(dependency_error)?;
 
-        let rows = result
-            .results::<ClientRow>()
-            .map_err(dependency_error)?;
+        let rows = result.results::<ClientRow>().map_err(dependency_error)?;
         client_page(rows, page)
     }
 }
@@ -186,9 +184,7 @@ impl ProfileReadModelPort for D1QueryRepository {
         .await
         .map_err(dependency_error)?;
 
-        let rows = result
-            .results::<ProfileRow>()
-            .map_err(dependency_error)?;
+        let rows = result.results::<ProfileRow>().map_err(dependency_error)?;
         profile_page(rows, page)
     }
 }
@@ -229,9 +225,7 @@ impl MemberReadModelPort for D1QueryRepository {
         .await
         .map_err(dependency_error)?;
 
-        let rows = result
-            .results::<MemberRow>()
-            .map_err(dependency_error)?;
+        let rows = result.results::<MemberRow>().map_err(dependency_error)?;
         member_page(rows, page)
     }
 }
@@ -272,9 +266,7 @@ impl MailboxReadModelPort for D1QueryRepository {
         .await
         .map_err(dependency_error)?;
 
-        let rows = result
-            .results::<MailboxRow>()
-            .map_err(dependency_error)?;
+        let rows = result.results::<MailboxRow>().map_err(dependency_error)?;
         mailbox_page(rows, page)
     }
 }
