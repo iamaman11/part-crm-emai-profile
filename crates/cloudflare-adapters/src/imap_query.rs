@@ -48,13 +48,7 @@ pub(crate) async fn search_imap_messages(
     request: &SearchClientMailboxMessagesRequest,
     credential: &ImapCredential,
 ) -> Result<QueryPage<MailMessageSummary>, QueryPortError> {
-    let page_size = usize::from(
-        request
-            .page()
-            .limit()
-            .value()
-            .min(MAX_IMAP_QUERY_PAGE_SIZE),
-    );
+    let page_size = usize::from(request.page().limit().value().min(MAX_IMAP_QUERY_PAGE_SIZE));
     let mut session = ImapSession::connect(credential)
         .await
         .map_err(map_transport_error)?;
@@ -109,7 +103,11 @@ pub(crate) async fn search_imap_messages(
         let Some(metadata) = fetch_metadata(&mut session, *uid).await? else {
             continue;
         };
-        items.push(summary_from_imap(binding, snapshot.uid_validity, &metadata)?);
+        items.push(summary_from_imap(
+            binding,
+            snapshot.uid_validity,
+            &metadata,
+        )?);
     }
 
     let next_cursor = next_before_uid
@@ -177,10 +175,7 @@ async fn search_uid_window(
         return Err(integrity_failure());
     }
     let mut command = String::from("UID SEARCH ");
-    if request
-        .term()
-        .is_some_and(|term| !term.as_str().is_ascii())
-    {
+    if request.term().is_some_and(|term| !term.as_str().is_ascii()) {
         command.push_str("CHARSET UTF-8 ");
     }
     command.push_str("UID ");
@@ -211,7 +206,11 @@ async fn fetch_metadata(
         .await
         .map_err(map_transport_error)?;
     require_ok(&response)?;
-    if !response.bytes().windows(7).any(|window| window == b" FETCH ") {
+    if !response
+        .bytes()
+        .windows(7)
+        .any(|window| window == b" FETCH ")
+    {
         return Ok(None);
     }
     let response_text = response.text_lossy();
@@ -261,10 +260,7 @@ fn summary_from_imap(
 ) -> Result<MailMessageSummary, QueryPortError> {
     let reference = MailboxMessageReference::new(
         binding.binding_id().clone(),
-        format!(
-            "{IMAP_REFERENCE_PREFIX}{}:{}",
-            uid_validity, metadata.uid
-        ),
+        format!("{IMAP_REFERENCE_PREFIX}{}:{}", uid_validity, metadata.uid),
     )
     .map_err(|_| integrity_failure())?;
     Ok(MailMessageSummary::new(
@@ -492,7 +488,10 @@ fn unquote_parameter(value: &str) -> Result<String, QueryPortError> {
     Ok(output)
 }
 
-fn multipart_sections<'a>(body: &'a [u8], boundary: &[u8]) -> Result<Vec<&'a [u8]>, QueryPortError> {
+fn multipart_sections<'a>(
+    body: &'a [u8],
+    boundary: &[u8],
+) -> Result<Vec<&'a [u8]>, QueryPortError> {
     if boundary.is_empty() || boundary.len() > MAX_BOUNDARY_BYTES {
         return Err(integrity_failure());
     }
@@ -703,10 +702,7 @@ fn base64_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn decode_quoted_printable(
-    input: &[u8],
-    maximum_bytes: usize,
-) -> Result<Vec<u8>, QueryPortError> {
+fn decode_quoted_printable(input: &[u8], maximum_bytes: usize) -> Result<Vec<u8>, QueryPortError> {
     let mut output = Vec::with_capacity(input.len().min(maximum_bytes));
     let mut index = 0_usize;
     while index < input.len() {
@@ -967,8 +963,7 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
     let year_of_era = adjusted_year - era * 400;
     let adjusted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
     let day_of_year = (153 * adjusted_month + 2) / 5 + i64::from(day) - 1;
-    let day_of_era =
-        year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     Some(era * 146_097 + day_of_era - 719_468)
 }
 
@@ -1025,10 +1020,8 @@ fn parse_imap_cursor(cursor: &QueryCursor, uid_validity: u64) -> Result<u64, Que
 }
 
 fn imap_query_cursor(uid_validity: u64, before_uid: u64) -> Result<QueryCursor, QueryPortError> {
-    QueryCursor::parse(format!(
-        "{IMAP_CURSOR_PREFIX}{uid_validity}:{before_uid}"
-    ))
-    .map_err(|_| integrity_failure())
+    QueryCursor::parse(format!("{IMAP_CURSOR_PREFIX}{uid_validity}:{before_uid}"))
+        .map_err(|_| integrity_failure())
 }
 
 fn parse_imap_reference(reference: &str) -> Result<(u64, u64), QueryPortError> {
@@ -1105,15 +1098,15 @@ mod tests {
 
     #[test]
     fn imap_internal_date_respects_numeric_zone() -> Result<(), Box<dyn std::error::Error>> {
-        let utc = parse_imap_internal_date("09-Aug-2026 20:00:00 +0300")
-            .ok_or("date parse failed")?;
+        let utc =
+            parse_imap_internal_date("09-Aug-2026 20:00:00 +0300").ok_or("date parse failed")?;
         assert_eq!(utc.value(), 1_786_294_800_000);
         Ok(())
     }
 
     #[test]
-    fn literal_parser_uses_declared_length_not_delimiters()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn literal_parser_uses_declared_length_not_delimiters() -> Result<(), Box<dyn std::error::Error>>
+    {
         let response = b"* 1 FETCH (BODY[TEXT] {5}\r\na\r\nbc)\r\np000004 OK done\r\n";
         assert_eq!(extract_first_literal(response)?, Some(&b"a\r\nbc"[..]));
         Ok(())

@@ -200,7 +200,10 @@ async fn gmail_json_get(
     if response_content_length_exceeds(&response, maximum_bytes)? {
         return Err(integrity_failure());
     }
-    let bytes = response.bytes().await.map_err(|_| dependency_unavailable())?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|_| dependency_unavailable())?;
     if bytes.len() > maximum_bytes {
         return Err(integrity_failure());
     }
@@ -310,7 +313,9 @@ fn decode_base64url(value: &str, maximum_bytes: usize) -> Result<Vec<u8>, QueryP
     if value.bytes().any(|byte| byte.is_ascii_whitespace()) {
         return Err(integrity_failure());
     }
-    let padding = value.len().saturating_sub(value.trim_end_matches('=').len());
+    let padding = value
+        .len()
+        .saturating_sub(value.trim_end_matches('=').len());
     if padding > 2 {
         return Err(integrity_failure());
     }
@@ -377,8 +382,7 @@ fn parse_gmail_cursor(cursor: &QueryCursor) -> Result<&str, QueryPortError> {
 
 fn gmail_query_cursor(token: &str) -> Result<QueryCursor, QueryPortError> {
     validate_gmail_token(token)?;
-    QueryCursor::parse(format!("{GMAIL_CURSOR_PREFIX}{token}"))
-        .map_err(|_| integrity_failure())
+    QueryCursor::parse(format!("{GMAIL_CURSOR_PREFIX}{token}")).map_err(|_| integrity_failure())
 }
 
 fn parse_gmail_reference(reference: &str) -> Result<&str, QueryPortError> {
@@ -467,7 +471,8 @@ mod tests {
     }
 
     #[test]
-    fn gmail_base64url_decoder_is_bounded_and_canonical() -> Result<(), Box<dyn std::error::Error>> {
+    fn gmail_base64url_decoder_is_bounded_and_canonical() -> Result<(), Box<dyn std::error::Error>>
+    {
         assert_eq!(decode_base64url("SGVsbG8td29ybGQ", 64)?, b"Hello-world");
         assert_eq!(decode_base64url("SGVsbG8=", 64)?, b"Hello");
         assert!(decode_base64url("A", 64).is_err());

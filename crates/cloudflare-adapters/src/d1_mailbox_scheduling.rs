@@ -251,13 +251,18 @@ impl MailboxSchedulingRepositoryPort for D1MailboxSchedulingRepository {
         limit: u32,
     ) -> Result<Vec<MailboxJobDispatch>, MailboxJobPortError> {
         let now_ms = sqlite_unix(now)?;
-        let rows = query!(&self.database, LOAD_DUE_DISPATCHES, now_ms, i64::from(limit))
-            .map_err(map_worker_error)?
-            .all()
-            .await
-            .map_err(map_worker_error)?
-            .results::<DueDispatchRow>()
-            .map_err(map_worker_error)?;
+        let rows = query!(
+            &self.database,
+            LOAD_DUE_DISPATCHES,
+            now_ms,
+            i64::from(limit)
+        )
+        .map_err(map_worker_error)?
+        .all()
+        .await
+        .map_err(map_worker_error)?
+        .results::<DueDispatchRow>()
+        .map_err(map_worker_error)?;
         rows.into_iter()
             .map(DueDispatchRow::into_dispatch)
             .collect()

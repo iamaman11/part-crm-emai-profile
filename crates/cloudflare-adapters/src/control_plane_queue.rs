@@ -29,7 +29,10 @@ mod tests {
             "payload_json": "{}",
             "occurred_at_ms": 42
         }))?;
-        assert!(matches!(event, ControlPlaneQueueMessage::IntegrationEvent(_)));
+        assert!(matches!(
+            event,
+            ControlPlaneQueueMessage::IntegrationEvent(_)
+        ));
 
         let mailbox = serde_json::from_value::<ControlPlaneQueueMessage>(json!({
             "envelope_version": 1,

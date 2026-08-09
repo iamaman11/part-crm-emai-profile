@@ -49,9 +49,7 @@ pub(crate) struct ImapSession {
 }
 
 impl ImapSession {
-    pub(crate) async fn connect(
-        credential: &ImapCredential,
-    ) -> Result<Self, ImapTransportError> {
+    pub(crate) async fn connect(credential: &ImapCredential) -> Result<Self, ImapTransportError> {
         let transport = match credential.tls() {
             ImapTlsMode::Implicit => SecureTransport::On,
             ImapTlsMode::StartTls => SecureTransport::StartTls,
@@ -101,7 +99,9 @@ impl ImapSession {
         maximum_response_bytes: usize,
     ) -> Result<ImapCommandResponse, ImapTransportError> {
         if command.is_empty()
-            || command.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
+            || command
+                .bytes()
+                .any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
             || maximum_response_bytes == 0
         {
             return Err(ImapTransportError::IntegrityFailure);
@@ -227,7 +227,10 @@ mod tests {
     #[test]
     fn tagged_status_is_case_insensitive_and_tag_scoped() {
         let response = b"* STATUS INBOX (MESSAGES 1)\r\np000001 OK done\r\n";
-        assert_eq!(tagged_status(response, "p000001"), Some(ImapTaggedStatus::Ok));
+        assert_eq!(
+            tagged_status(response, "p000001"),
+            Some(ImapTaggedStatus::Ok)
+        );
         assert_eq!(tagged_status(response, "p000002"), None);
     }
 
