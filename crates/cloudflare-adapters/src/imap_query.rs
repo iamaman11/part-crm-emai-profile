@@ -2,48 +2,60 @@ use crate::cloud_mailbox_secrets::ImapCredential;
 use crate::imap_session::{
     ImapCommandResponse, ImapSession, ImapTaggedStatus, ImapTransportError, push_imap_quoted,
 };
-use application_ports::query::{QueryCursor, QueryPage, QueryPortError, QueryPortErrorClass};
+use application_ports::query::{
+    QueryCursor, QueryPage, QueryPageRequest, QueryPortError, QueryPortErrorClass,
+};
 use application_ports::query_mail_provider::{
-    MAX_MAIL_BODY_BYTES, MailMessageBody, MailMessageSummary, MailboxMessageReference,
+    ClientMailProviderQueryPort, MailMessageBody, MailMessageSummary, MailboxMessageReference,
     SearchClientMailboxMessagesRequest,
 };
 use mailbox_domain::MailboxBinding;
-use profile_platform_primitives::UnixMillis;
+use profile_platform_primitives::{MailboxBindingId, UnixMillis};
+use std::collections::BTreeMap;
 
-const IMAP_CURSOR_PREFIX: &str = "imap:";
-const IMAP_REFERENCE_PREFIX: &str = "imap:";
 const MAX_IMAP_QUERY_PAGE_SIZE: u16 = 25;
-const IMAP_SEARCH_WINDOW_UIDS: u64 = 500;
+const MAX_IMAP_UID_WINDOW: u64 = 500;
 const MAX_IMAP_SEARCH_WINDOWS: usize = 8;
 const MAX_IMAP_CONTROL_RESPONSE_BYTES: usize = 64 * 1024;
-const MAX_IMAP_METADATA_RESPONSE_BYTES: usize = 64 * 1024;
-const MAX_IMAP_BODY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_IMAP_METADATA_RESPONSE_BYTES: usize = 128 * 1024;
+const MAX_IMAP_BODY_RESPONSE_BYTES: usize = 1024 * 1024 + 128 * 1024;
 const MAX_HEADER_BLOCK_BYTES: usize = 64 * 1024;
-const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
-const MAX_MIME_PARTS: usize = 256;
-const MAX_MIME_DEPTH: usize = 16;
+const MAX_MIME_DEPTH: usize = 8;
+const MAX_MIME_PARTS: usize = 128;
 const MAX_BOUNDARY_BYTES: usize = 200;
-const MAX_MESSAGE_BYTES_FOR_BODY_READ: u64 = 2 * 1024 * 1024;
+const IMAP_CURSOR_PREFIX: &str = "imap:";
+const IMAP_REFERENCE_PREFIX: &str = "imap:";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ImapMailboxSnapshot {
-    uid_validity: u64,
-    uid_next: u64,
+pub(crate) struct ImapMailQueryProvider {
+    credential: ImapCredential,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ImapMessageMetadata {
-    uid: u64,
-    internal_date: UnixMillis,
-    subject: Option<String>,
-    sender: Option<String>,
-    content_type: Option<String>,
-    transfer_encoding: Option<String>,
-    content_disposition: Option<String>,
-    rfc822_size: Option<u64>,
+impl ImapMailQueryProvider {
+    #[must_use]
+    pub(crate) const fn new(credential: ImapCredential) -> Self {
+        Self { credential }
+    }
 }
 
-pub(crate) async fn search_imap_messages(
+impl ClientMailProviderQueryPort for ImapMailQueryProvider {
+    async fn search(
+        &self,
+        binding: &MailboxBinding,
+        request: &SearchClientMailboxMessagesRequest,
+    ) -> Result<QueryPage<MailMessageSummary>, QueryPortError> {
+        search_imap(binding, request, &self.credential).await
+    }
+
+    async fn get_body(
+        &self,
+        binding: &MailboxBinding,
+        reference: &MailboxMessageReference,
+    ) -> Result<Option<MailMessageBody>, QueryPortError> {
+        get_imap_body(binding, reference, &self.credential).await
+    }
+}
+
+async fn search_imap(
     binding: &MailboxBinding,
     request: &SearchClientMailboxMessagesRequest,
     credential: &ImapCredential,
@@ -53,50 +65,50 @@ pub(crate) async fn search_imap_messages(
         .await
         .map_err(map_transport_error)?;
     let snapshot = examine_inbox(&mut session).await?;
-    let mut before_uid = request
-        .page()
-        .cursor()
-        .map(|cursor| parse_imap_cursor(cursor, snapshot.uid_validity))
-        .transpose()?
-        .unwrap_or(snapshot.uid_next);
-    if before_uid == 0 || before_uid > snapshot.uid_next {
-        return Err(invalid_cursor());
+    let mut before_uid = snapshot.uid_next;
+    if let Some(cursor) = request.page().cursor() {
+        let (uid_validity, cursor_before_uid) = parse_imap_cursor(cursor.as_str())?;
+        if uid_validity != snapshot.uid_validity || cursor_before_uid == 0 {
+            return Err(invalid_cursor());
+        }
+        before_uid = cursor_before_uid.min(snapshot.uid_next);
     }
 
     let mut selected = Vec::with_capacity(page_size);
-    let mut continuation_before_uid = before_uid;
-    let mut exhausted = before_uid <= 1;
+    let mut next_before_uid = None;
+    let mut window_end = before_uid.saturating_sub(1);
     for _ in 0..MAX_IMAP_SEARCH_WINDOWS {
-        if before_uid <= 1 || selected.len() >= page_size {
-            exhausted = before_uid <= 1;
+        if window_end == 0 || selected.len() >= page_size {
             break;
         }
-        let end = before_uid - 1;
-        let start = end.saturating_sub(IMAP_SEARCH_WINDOW_UIDS - 1).max(1);
-        let mut uids = search_uid_window(&mut session, start, end, request).await?;
-        uids.sort_unstable();
-        uids.dedup();
-        uids.retain(|uid| *uid >= start && *uid <= end);
-        uids.reverse();
-        for uid in uids {
+        let window_start = window_end
+            .saturating_sub(MAX_IMAP_UID_WINDOW.saturating_sub(1))
+            .max(1);
+        let mut matches = search_uid_window(
+            &mut session,
+            window_start,
+            window_end,
+            request,
+        )
+        .await?;
+        matches.retain(|uid| *uid >= window_start && *uid <= window_end);
+        matches.sort_unstable_by(|left, right| right.cmp(left));
+        for uid in matches {
             if selected.len() == page_size {
                 break;
             }
             selected.push(uid);
         }
-        continuation_before_uid = start;
-        before_uid = start;
-        exhausted = start == 1;
+        if selected.len() == page_size {
+            next_before_uid = selected.last().copied();
+            break;
+        }
+        if window_start == 1 {
+            break;
+        }
+        window_end = window_start - 1;
+        next_before_uid = Some(window_end.saturating_add(1));
     }
-
-    let selected_full = selected.len() == page_size;
-    let next_before_uid = if selected_full {
-        selected.last().copied()
-    } else if exhausted {
-        None
-    } else {
-        Some(continuation_before_uid)
-    };
 
     let mut items = Vec::with_capacity(selected.len());
     for uid in &selected {
@@ -111,40 +123,69 @@ pub(crate) async fn search_imap_messages(
     }
 
     let next_cursor = next_before_uid
-        .filter(|before_uid| *before_uid > 1)
-        .map(|before_uid| imap_query_cursor(snapshot.uid_validity, before_uid))
+        .filter(|value| *value > 1)
+        .map(|value| imap_query_cursor(snapshot.uid_validity, value))
         .transpose()?;
-    Ok(QueryPage::new(items, next_cursor))
+    QueryPage::new(items, next_cursor).map_err(|_| integrity_failure())
 }
 
-pub(crate) async fn get_imap_message(
+async fn get_imap_body(
     binding: &MailboxBinding,
-    provider_reference: &str,
+    reference: &MailboxMessageReference,
     credential: &ImapCredential,
 ) -> Result<Option<MailMessageBody>, QueryPortError> {
-    let (reference_uid_validity, uid) = parse_imap_reference(provider_reference)?;
+    if reference.binding_id() != binding.binding_id() {
+        return Err(integrity_failure());
+    }
+    let (reference_uid_validity, uid) = parse_imap_reference(reference.provider_reference())?;
     let mut session = ImapSession::connect(credential)
         .await
         .map_err(map_transport_error)?;
     let snapshot = examine_inbox(&mut session).await?;
-    if snapshot.uid_validity != reference_uid_validity || uid == 0 || uid >= snapshot.uid_next {
+    if snapshot.uid_validity != reference_uid_validity {
         return Ok(None);
     }
-    let Some(metadata) = fetch_metadata(&mut session, uid).await? else {
-        return Ok(None);
-    };
-    if metadata
-        .rfc822_size
-        .is_some_and(|size| size > MAX_MESSAGE_BYTES_FOR_BODY_READ)
+    let command = format!("UID FETCH {uid} (UID BODY.PEEK[])");
+    let response = session
+        .execute(&command, MAX_IMAP_BODY_RESPONSE_BYTES)
+        .await
+        .map_err(map_transport_error)?;
+    require_ok(&response)?;
+    if !response
+        .bytes()
+        .windows(7)
+        .any(|window| window == b" FETCH ")
     {
+        return Ok(None);
+    }
+    let response_text = response.text_lossy();
+    let metadata_prefix = response_text
+        .split('{')
+        .next()
+        .ok_or_else(integrity_failure)?;
+    let parsed_uid = parse_fetch_atom_u64(metadata_prefix, "UID").ok_or_else(integrity_failure)?;
+    if parsed_uid != uid {
         return Err(integrity_failure());
     }
-    let body = fetch_body_text(&mut session, uid).await?;
-    let summary = summary_from_imap(binding, snapshot.uid_validity, &metadata)?;
-    let (text_body, html_body) = extract_imap_bodies(&metadata, &body)?;
-    MailMessageBody::new(summary, text_body, html_body)
-        .map(Some)
-        .map_err(|_| integrity_failure())
+    let raw_message = extract_first_literal(response.bytes())?.ok_or_else(integrity_failure)?;
+    if raw_message.len() > 1024 * 1024 {
+        return Err(integrity_failure());
+    }
+    let content = extract_mime_text(raw_message, 1024 * 1024)?;
+    MailMessageBody::new(reference.clone(), content).map(Some).map_err(|_| integrity_failure())
+}
+
+struct ImapMailboxSnapshot {
+    uid_validity: u64,
+    uid_next: u64,
+}
+
+struct ImapMessageMetadata {
+    uid: u64,
+    sent_at: UnixMillis,
+    subject: String,
+    sender: String,
+    size_bytes: Option<u64>,
 }
 
 async fn examine_inbox(session: &mut ImapSession) -> Result<ImapMailboxSnapshot, QueryPortError> {
@@ -175,17 +216,40 @@ async fn search_uid_window(
         return Err(integrity_failure());
     }
     let mut command = String::from("UID SEARCH ");
-    if request.term().is_some_and(|term| !term.as_str().is_ascii()) {
-        command.push_str("CHARSET UTF-8 ");
+    if let Some(term) = request.term() {
+        if !term.as_str().is_ascii() {
+            command.push_str("CHARSET UTF-8 ");
+        }
+        command.push_str("UID ");
+        command.push_str(&start.to_string());
+        command.push(':');
+        command.push_str(&end.to_string());
+        command.push_str(" TEXT");
+        let response = if term.as_str().is_ascii() {
+            command.push(' ');
+            push_imap_quoted(&mut command, term.as_str());
+            session
+                .execute(&command, MAX_IMAP_CONTROL_RESPONSE_BYTES)
+                .await
+                .map_err(map_transport_error)?
+        } else {
+            session
+                .execute_with_literal(
+                    &command,
+                    term.as_str().as_bytes(),
+                    MAX_IMAP_CONTROL_RESPONSE_BYTES,
+                )
+                .await
+                .map_err(map_transport_error)?
+        };
+        require_ok(&response)?;
+        return parse_search_uids(&response.text_lossy());
     }
+
     command.push_str("UID ");
     command.push_str(&start.to_string());
     command.push(':');
     command.push_str(&end.to_string());
-    if let Some(term) = request.term() {
-        command.push_str(" TEXT ");
-        push_imap_quoted(&mut command, term.as_str());
-    }
     let response = session
         .execute(&command, MAX_IMAP_CONTROL_RESPONSE_BYTES)
         .await
@@ -228,29 +292,22 @@ async fn fetch_metadata(
     if header_bytes.len() > MAX_HEADER_BLOCK_BYTES {
         return Err(integrity_failure());
     }
-    let headers = parse_header_block(header_bytes)?;
+    let headers = parse_headers(header_bytes)?;
     Ok(Some(ImapMessageMetadata {
         uid,
-        internal_date,
-        subject: bounded_header_value(&headers, "subject")?,
-        sender: bounded_header_value(&headers, "from")?,
-        content_type: bounded_header_value(&headers, "content-type")?,
-        transfer_encoding: bounded_header_value(&headers, "content-transfer-encoding")?,
-        content_disposition: bounded_header_value(&headers, "content-disposition")?,
-        rfc822_size,
+        sent_at: internal_date,
+        subject: headers
+            .get("subject")
+            .map(String::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        sender: headers
+            .get("from")
+            .map(String::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        size_bytes: rfc822_size,
     }))
-}
-
-async fn fetch_body_text(session: &mut ImapSession, uid: u64) -> Result<Vec<u8>, QueryPortError> {
-    let command = format!("UID FETCH {uid} (BODY.PEEK[TEXT])");
-    let response = session
-        .execute(&command, MAX_IMAP_BODY_RESPONSE_BYTES)
-        .await
-        .map_err(map_transport_error)?;
-    require_ok(&response)?;
-    Ok(extract_first_literal(response.bytes())?
-        .map(<[u8]>::to_vec)
-        .unwrap_or_default())
 }
 
 fn summary_from_imap(
@@ -263,229 +320,230 @@ fn summary_from_imap(
         format!("{IMAP_REFERENCE_PREFIX}{}:{}", uid_validity, metadata.uid),
     )
     .map_err(|_| integrity_failure())?;
-    Ok(MailMessageSummary::new(
+    MailMessageSummary::new(
         reference,
+        metadata.sent_at,
         metadata.subject.clone(),
         metadata.sender.clone(),
-        metadata.internal_date,
-    ))
+        metadata.size_bytes,
+    )
+    .map_err(|_| integrity_failure())
 }
 
-fn extract_imap_bodies(
-    metadata: &ImapMessageMetadata,
-    body: &[u8],
-) -> Result<(Option<String>, Option<String>), QueryPortError> {
-    if body.len() > MAX_IMAP_BODY_RESPONSE_BYTES {
-        return Err(integrity_failure());
-    }
-    let headers = PartHeaders {
-        content_type: metadata
-            .content_type
-            .clone()
-            .unwrap_or_else(|| "text/plain; charset=us-ascii".to_owned()),
-        transfer_encoding: metadata
-            .transfer_encoding
-            .clone()
-            .unwrap_or_else(|| "7bit".to_owned()),
-        content_disposition: metadata.content_disposition.clone(),
-    };
-    let mut output = BodyAccumulator::default();
-    let mut visited = 0_usize;
-    walk_mime_part(&headers, body, 0, &mut visited, &mut output)?;
-    Ok((
-        (!output.text.is_empty()).then_some(output.text),
-        (!output.html.is_empty()).then_some(output.html),
-    ))
-}
-
-#[derive(Clone, Debug)]
-struct PartHeaders {
-    content_type: String,
-    transfer_encoding: String,
-    content_disposition: Option<String>,
-}
-
-#[derive(Default)]
-struct BodyAccumulator {
-    text: String,
-    html: String,
-}
-
-fn walk_mime_part(
-    headers: &PartHeaders,
-    body: &[u8],
-    depth: usize,
-    visited: &mut usize,
-    output: &mut BodyAccumulator,
-) -> Result<(), QueryPortError> {
-    *visited = visited.checked_add(1).ok_or_else(integrity_failure)?;
-    if *visited > MAX_MIME_PARTS || depth > MAX_MIME_DEPTH {
-        return Err(integrity_failure());
-    }
-    if headers
-        .content_disposition
-        .as_deref()
-        .is_some_and(is_attachment_disposition)
-    {
-        return Ok(());
-    }
-    let parsed_type = parse_content_type(&headers.content_type)?;
-    if parsed_type.media_type.starts_with("multipart/") {
-        let boundary = parsed_type.boundary.ok_or_else(integrity_failure)?;
-        for section in multipart_sections(body, boundary.as_bytes())? {
-            let (header_block, part_body) = split_headers_body(section)?;
-            let parsed = parse_header_block(header_block)?;
-            let part_headers = PartHeaders {
-                content_type: bounded_header_value(&parsed, "content-type")?
-                    .unwrap_or_else(|| "text/plain; charset=us-ascii".to_owned()),
-                transfer_encoding: bounded_header_value(&parsed, "content-transfer-encoding")?
-                    .unwrap_or_else(|| "7bit".to_owned()),
-                content_disposition: bounded_header_value(&parsed, "content-disposition")?,
-            };
-            walk_mime_part(&part_headers, part_body, depth + 1, visited, output)?;
+fn parse_search_uids(text: &str) -> Result<Vec<u64>, QueryPortError> {
+    let line = text
+        .lines()
+        .find(|line| line.strip_suffix('\r').unwrap_or(line).starts_with("* SEARCH"))
+        .ok_or_else(integrity_failure)?;
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let suffix = line.strip_prefix("* SEARCH").ok_or_else(integrity_failure)?;
+    let mut uids = Vec::new();
+    for token in suffix.split_ascii_whitespace() {
+        let uid = token.parse::<u64>().map_err(|_| integrity_failure())?;
+        if uid == 0 {
+            return Err(integrity_failure());
         }
-        return Ok(());
+        uids.push(uid);
     }
-    let target = if parsed_type.media_type == "text/plain" {
-        Some(&mut output.text)
-    } else if parsed_type.media_type == "text/html" {
-        Some(&mut output.html)
-    } else {
-        None
-    };
-    let Some(target) = target else {
-        return Ok(());
-    };
-    let decoded = decode_transfer_encoding(body, &headers.transfer_encoding)?;
-    let Some(decoded) = decode_charset(&decoded, parsed_type.charset.as_deref())? else {
-        return Ok(());
-    };
-    if !target.is_empty() {
-        target.push('\n');
-    }
-    target.push_str(&decoded);
-    if output.text.len().saturating_add(output.html.len()) > MAX_MAIL_BODY_BYTES {
-        return Err(integrity_failure());
-    }
-    Ok(())
+    Ok(uids)
 }
 
-#[derive(Debug)]
-struct ParsedContentType {
-    media_type: String,
-    boundary: Option<String>,
-    charset: Option<String>,
+fn parse_bracket_u64(text: &str, atom: &str) -> Option<u64> {
+    let marker = format!("[{atom} ");
+    let start = text.find(&marker)? + marker.len();
+    let tail = text.get(start..)?;
+    let end = tail.find(']')?;
+    tail.get(..end)?.trim().parse::<u64>().ok()
 }
 
-fn parse_content_type(value: &str) -> Result<ParsedContentType, QueryPortError> {
-    let segments = split_header_parameters(value)?;
-    let media_type = segments
-        .first()
-        .map_or("", String::as_str)
-        .trim()
-        .to_ascii_lowercase();
-    if media_type.is_empty() || !media_type.contains('/') {
-        return Err(integrity_failure());
-    }
-    let mut boundary = None;
-    let mut charset = None;
-    for parameter in segments.iter().skip(1) {
-        let Some((name, value)) = parameter.split_once('=') else {
-            continue;
+fn parse_fetch_atom_u64(text: &str, atom: &str) -> Option<u64> {
+    let marker = format!("{atom} ");
+    let start = text.find(&marker)? + marker.len();
+    let tail = text.get(start..)?;
+    let token = tail
+        .split(|character: char| character.is_ascii_whitespace() || matches!(character, ')' | '('))
+        .next()?;
+    token.parse::<u64>().ok()
+}
+
+fn extract_first_literal(bytes: &[u8]) -> Result<Option<&[u8]>, QueryPortError> {
+    let mut cursor = 0_usize;
+    while cursor < bytes.len() {
+        let Some(open_offset) = bytes[cursor..].iter().position(|byte| *byte == b'{') else {
+            return Ok(None);
         };
-        let name = name.trim().to_ascii_lowercase();
-        let value = unquote_parameter(value.trim())?;
-        if name == "boundary" {
-            if value.is_empty()
-                || value.len() > MAX_BOUNDARY_BYTES
-                || value
-                    .bytes()
-                    .any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
-            {
-                return Err(integrity_failure());
-            }
-            boundary = Some(value);
-        } else if name == "charset" {
-            if value.len() > 64 {
-                return Err(integrity_failure());
-            }
-            charset = Some(value.to_ascii_lowercase());
+        let open = cursor
+            .checked_add(open_offset)
+            .ok_or_else(integrity_failure)?;
+        let Some(close_offset) = bytes[open..].iter().position(|byte| *byte == b'}') else {
+            return Err(integrity_failure());
+        };
+        let close = open
+            .checked_add(close_offset)
+            .ok_or_else(integrity_failure)?;
+        let length_text = std::str::from_utf8(
+            bytes
+                .get(open + 1..close)
+                .ok_or_else(integrity_failure)?,
+        )
+        .map_err(|_| integrity_failure())?;
+        if !length_text.bytes().all(|byte| byte.is_ascii_digit()) || length_text.is_empty() {
+            cursor = close.checked_add(1).ok_or_else(integrity_failure)?;
+            continue;
         }
+        let literal_length = length_text
+            .parse::<usize>()
+            .map_err(|_| integrity_failure())?;
+        let literal_start = close.checked_add(3).ok_or_else(integrity_failure)?;
+        if bytes.get(close + 1..literal_start) != Some(&b"\r\n"[..]) {
+            return Err(integrity_failure());
+        }
+        let literal_end = literal_start
+            .checked_add(literal_length)
+            .ok_or_else(integrity_failure)?;
+        let literal = bytes
+            .get(literal_start..literal_end)
+            .ok_or_else(integrity_failure)?;
+        return Ok(Some(literal));
     }
-    Ok(ParsedContentType {
-        media_type,
-        boundary,
-        charset,
-    })
+    Ok(None)
 }
 
-fn split_header_parameters(value: &str) -> Result<Vec<String>, QueryPortError> {
-    if value
-        .bytes()
-        .any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
-    {
-        return Err(integrity_failure());
-    }
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut quoted = false;
-    let mut escaped = false;
-    for character in value.chars() {
-        if escaped {
-            current.push(character);
-            escaped = false;
+fn parse_headers(bytes: &[u8]) -> Result<BTreeMap<String, String>, QueryPortError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| integrity_failure())?;
+    let mut headers = BTreeMap::new();
+    let mut current_name = None::<String>;
+    let mut current_value = String::new();
+    for raw_line in text.lines() {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        if line.is_empty() {
+            break;
+        }
+        if line.starts_with([' ', '\t']) {
+            if current_name.is_none() {
+                return Err(integrity_failure());
+            }
+            if !current_value.is_empty() {
+                current_value.push(' ');
+            }
+            current_value.push_str(line.trim());
+            if current_value.len() > MAX_HEADER_BLOCK_BYTES {
+                return Err(integrity_failure());
+            }
             continue;
         }
-        if quoted && character == '\\' {
-            current.push(character);
-            escaped = true;
-            continue;
+        if let Some(name) = current_name.take() {
+            headers.insert(name, current_value.trim().to_owned());
+            current_value.clear();
         }
-        if character == '"' {
-            quoted = !quoted;
-            current.push(character);
-            continue;
+        let (name, value) = line.split_once(':').ok_or_else(integrity_failure)?;
+        let normalized = name.trim().to_ascii_lowercase();
+        if normalized.is_empty() || normalized.len() > 128 {
+            return Err(integrity_failure());
         }
-        if character == ';' && !quoted {
-            segments.push(current.trim().to_owned());
-            current.clear();
-            continue;
-        }
-        current.push(character);
+        current_name = Some(normalized);
+        current_value.push_str(value.trim());
     }
-    if quoted || escaped {
-        return Err(integrity_failure());
+    if let Some(name) = current_name {
+        headers.insert(name, current_value.trim().to_owned());
     }
-    segments.push(current.trim().to_owned());
-    if segments.len() > 32 {
-        return Err(integrity_failure());
-    }
-    Ok(segments)
+    Ok(headers)
 }
 
-fn unquote_parameter(value: &str) -> Result<String, QueryPortError> {
-    if !value.starts_with('"') {
-        return Ok(value.trim().to_owned());
-    }
-    if !value.ends_with('"') || value.len() < 2 {
+fn extract_mime_text(message: &[u8], maximum_bytes: usize) -> Result<String, QueryPortError> {
+    let mut budget = MimeBudget {
+        remaining_parts: MAX_MIME_PARTS,
+        maximum_output_bytes: maximum_bytes,
+    };
+    let bytes = decode_mime_entity(message, 0, &mut budget)?;
+    String::from_utf8(bytes).map_err(|_| integrity_failure())
+}
+
+struct MimeBudget {
+    remaining_parts: usize,
+    maximum_output_bytes: usize,
+}
+
+fn decode_mime_entity(
+    entity: &[u8],
+    depth: usize,
+    budget: &mut MimeBudget,
+) -> Result<Vec<u8>, QueryPortError> {
+    if depth > MAX_MIME_DEPTH || budget.remaining_parts == 0 {
         return Err(integrity_failure());
     }
-    let mut output = String::new();
-    let mut escaped = false;
-    for character in value[1..value.len() - 1].chars() {
-        if escaped {
-            output.push(character);
-            escaped = false;
-        } else if character == '\\' {
-            escaped = true;
-        } else {
-            output.push(character);
+    budget.remaining_parts -= 1;
+    let (headers, body) = split_headers_body(entity)?;
+    let parsed_headers = parse_headers(headers)?;
+    let content_type = parsed_headers
+        .get("content-type")
+        .map(String::as_str)
+        .unwrap_or("text/plain");
+    if content_type.to_ascii_lowercase().starts_with("multipart/") {
+        let boundary = content_type_parameter(content_type, "boundary")?
+            .ok_or_else(integrity_failure)?;
+        let mut output = Vec::new();
+        for section in multipart_sections(body, boundary.as_bytes())? {
+            let decoded = decode_mime_entity(section, depth + 1, budget)?;
+            append_bounded(&mut output, &decoded, budget.maximum_output_bytes)?;
+        }
+        return Ok(output);
+    }
+    if content_type.to_ascii_lowercase().starts_with("message/rfc822") {
+        return decode_mime_entity(body, depth + 1, budget);
+    }
+    if !content_type.to_ascii_lowercase().starts_with("text/") {
+        return Ok(Vec::new());
+    }
+    let transfer_encoding = parsed_headers
+        .get("content-transfer-encoding")
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    match transfer_encoding.as_str() {
+        "" | "7bit" | "8bit" => {
+            if body.len() > budget.maximum_output_bytes {
+                return Err(integrity_failure());
+            }
+            Ok(body.to_vec())
+        }
+        "base64" => decode_base64(body, budget.maximum_output_bytes),
+        "quoted-printable" => decode_quoted_printable(body, budget.maximum_output_bytes),
+        _ => Err(integrity_failure()),
+    }
+}
+
+fn split_headers_body(entity: &[u8]) -> Result<(&[u8], &[u8]), QueryPortError> {
+    if let Some(index) = find_bytes(entity, b"\r\n\r\n") {
+        return Ok((&entity[..index], &entity[index + 4..]));
+    }
+    if let Some(index) = find_bytes(entity, b"\n\n") {
+        return Ok((&entity[..index], &entity[index + 2..]));
+    }
+    Ok((&[][..], entity))
+}
+
+fn content_type_parameter(content_type: &str, name: &str) -> Result<Option<String>, QueryPortError> {
+    let mut parts = content_type.split(';');
+    let _ = parts.next();
+    for part in parts {
+        let (parameter_name, value) = part.split_once('=').ok_or_else(integrity_failure)?;
+        if parameter_name.trim().eq_ignore_ascii_case(name) {
+            let value = value.trim();
+            let value = if value.starts_with('"') {
+                if !value.ends_with('"') || value.len() < 2 {
+                    return Err(integrity_failure());
+                }
+                &value[1..value.len() - 1]
+            } else {
+                value
+            };
+            if value.is_empty() || value.len() > MAX_BOUNDARY_BYTES {
+                return Err(integrity_failure());
+            }
+            return Ok(Some(value.to_owned()));
         }
     }
-    if escaped {
-        return Err(integrity_failure());
-    }
-    Ok(output)
+    Ok(None)
 }
 
 fn multipart_sections<'a>(
@@ -495,198 +553,96 @@ fn multipart_sections<'a>(
     if boundary.is_empty() || boundary.len() > MAX_BOUNDARY_BYTES {
         return Err(integrity_failure());
     }
-    let mut delimiter = Vec::with_capacity(boundary.len() + 2);
-    delimiter.extend_from_slice(b"--");
-    delimiter.extend_from_slice(boundary);
-    let mut delimiters = Vec::new();
+    let marker = [b"--".as_slice(), boundary].concat();
+    let closing_marker = [marker.as_slice(), b"--"].concat();
+    let mut sections = Vec::new();
+    let mut section_start = None::<usize>;
     let mut cursor = 0_usize;
-    while cursor < body.len() {
-        let line_start = cursor == 0 || body.get(cursor - 1) == Some(&b'\n');
-        if !line_start || !body[cursor..].starts_with(&delimiter) {
-            cursor += 1;
-            continue;
-        }
-        let after = cursor + delimiter.len();
-        let suffix = body.get(after).copied();
-        if !matches!(suffix, None | Some(b'-' | b'\r' | b'\n' | b' ' | b'\t')) {
-            cursor += 1;
-            continue;
-        }
-        let closing = body.get(after..after + 2) == Some(b"--");
+    while cursor <= body.len() {
         let line_end = body[cursor..]
             .iter()
             .position(|byte| *byte == b'\n')
-            .map(|offset| cursor + offset)
+            .map(|offset| cursor + offset + 1)
             .unwrap_or(body.len());
-        let content_start = if line_end < body.len() {
-            line_end + 1
-        } else {
-            line_end
-        };
-        delimiters.push((cursor, content_start, closing));
-        if delimiters.len() > MAX_MIME_PARTS + 1 {
-            return Err(integrity_failure());
+        let mut line = &body[cursor..line_end];
+        if line.ends_with(b"\n") {
+            line = &line[..line.len() - 1];
         }
-        cursor = content_start.max(cursor + 1);
-        if closing {
+        if line.ends_with(b"\r") {
+            line = &line[..line.len() - 1];
+        }
+        if line == marker.as_slice() || line == closing_marker.as_slice() {
+            if let Some(start) = section_start.take() {
+                let mut end = cursor;
+                while end > start && matches!(body[end - 1], b'\r' | b'\n') {
+                    end -= 1;
+                }
+                if end > start {
+                    sections.push(&body[start..end]);
+                    if sections.len() > MAX_MIME_PARTS {
+                        return Err(integrity_failure());
+                    }
+                }
+            }
+            if line == closing_marker.as_slice() {
+                break;
+            }
+            section_start = Some(line_end);
+        }
+        if line_end == body.len() {
             break;
         }
-    }
-    if delimiters.len() < 2 || !delimiters.last().is_some_and(|(_, _, closing)| *closing) {
-        return Err(integrity_failure());
-    }
-    let mut sections = Vec::new();
-    for pair in delimiters.windows(2) {
-        let (_, content_start, closing) = pair[0];
-        if closing {
-            break;
-        }
-        let (next_start, _, _) = pair[1];
-        let section_end = trim_trailing_line_break(body, content_start, next_start);
-        if section_end >= content_start {
-            sections.push(&body[content_start..section_end]);
-        }
+        cursor = line_end;
     }
     Ok(sections)
 }
 
-fn trim_trailing_line_break(body: &[u8], start: usize, mut end: usize) -> usize {
-    while end > start && matches!(body[end - 1], b'\r' | b'\n') {
-        end -= 1;
-    }
-    end
-}
-
-fn split_headers_body(section: &[u8]) -> Result<(&[u8], &[u8]), QueryPortError> {
-    if let Some(index) = find_bytes(section, b"\r\n\r\n") {
-        if index > MAX_HEADER_BLOCK_BYTES {
-            return Err(integrity_failure());
-        }
-        return Ok((&section[..index], &section[index + 4..]));
-    }
-    if let Some(index) = find_bytes(section, b"\n\n") {
-        if index > MAX_HEADER_BLOCK_BYTES {
-            return Err(integrity_failure());
-        }
-        return Ok((&section[..index], &section[index + 2..]));
-    }
-    Err(integrity_failure())
-}
-
-fn parse_header_block(bytes: &[u8]) -> Result<Vec<(String, String)>, QueryPortError> {
-    if bytes.len() > MAX_HEADER_BLOCK_BYTES {
+fn append_bounded(output: &mut Vec<u8>, value: &[u8], maximum_bytes: usize) -> Result<(), QueryPortError> {
+    if output.len().saturating_add(value.len()) > maximum_bytes {
         return Err(integrity_failure());
     }
-    let text = String::from_utf8_lossy(bytes);
-    let normalized = text.replace("\r\n", "\n");
-    let mut headers: Vec<(String, String)> = Vec::new();
-    for line in normalized.lines() {
-        if line.starts_with(' ') || line.starts_with('\t') {
-            let Some((_, value)) = headers.last_mut() else {
-                return Err(integrity_failure());
-            };
-            if !value.is_empty() {
-                value.push(' ');
-            }
-            value.push_str(line.trim());
-            continue;
-        }
-        if line.is_empty() {
-            continue;
-        }
-        let Some((name, value)) = line.split_once(':') else {
-            return Err(integrity_failure());
-        };
-        if name.is_empty()
-            || name.len() > 128
-            || !name
-                .bytes()
-                .all(|byte| (33..=126).contains(&byte) && byte != b':')
-        {
-            return Err(integrity_failure());
-        }
-        headers.push((name.to_ascii_lowercase(), value.trim().to_owned()));
-        if headers.len() > 256 {
-            return Err(integrity_failure());
-        }
-    }
-    Ok(headers)
-}
-
-fn bounded_header_value(
-    headers: &[(String, String)],
-    name: &str,
-) -> Result<Option<String>, QueryPortError> {
-    let value = headers
-        .iter()
-        .find(|(candidate, _)| candidate == name)
-        .map(|(_, value)| value.trim().to_owned());
-    if value.as_ref().is_some_and(|value| {
-        value.len() > MAX_HEADER_VALUE_BYTES
-            || value
-                .chars()
-                .any(|character| character.is_control() && character != '\t')
-    }) {
-        return Err(integrity_failure());
-    }
-    Ok(value.filter(|value| !value.is_empty()))
-}
-
-fn decode_transfer_encoding(body: &[u8], encoding: &str) -> Result<Vec<u8>, QueryPortError> {
-    let encoding = encoding.trim().to_ascii_lowercase();
-    match encoding.as_str() {
-        "" | "7bit" | "8bit" | "binary" => {
-            if body.len() > MAX_MAIL_BODY_BYTES {
-                return Err(integrity_failure());
-            }
-            Ok(body.to_vec())
-        }
-        "base64" => decode_base64(body, MAX_MAIL_BODY_BYTES),
-        "quoted-printable" => decode_quoted_printable(body, MAX_MAIL_BODY_BYTES),
-        _ => Err(integrity_failure()),
-    }
+    output.extend_from_slice(value);
+    Ok(())
 }
 
 fn decode_base64(input: &[u8], maximum_bytes: usize) -> Result<Vec<u8>, QueryPortError> {
-    let mut clean = Vec::with_capacity(input.len());
-    for byte in input.iter().copied() {
-        if !byte.is_ascii_whitespace() {
-            clean.push(byte);
+    let compact = input
+        .iter()
+        .copied()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect::<Vec<_>>();
+    if compact.len() > maximum_bytes.saturating_mul(2).saturating_add(16) {
+        return Err(integrity_failure());
+    }
+    if compact.len() % 4 != 0 {
+        return Err(integrity_failure());
+    }
+    let mut output = Vec::with_capacity((compact.len() / 4).saturating_mul(3));
+    for chunk in compact.chunks_exact(4) {
+        let a = base64_value(chunk[0]).ok_or_else(integrity_failure)?;
+        let b = base64_value(chunk[1]).ok_or_else(integrity_failure)?;
+        let c_padding = chunk[2] == b'=';
+        let d_padding = chunk[3] == b'=';
+        if c_padding && !d_padding {
+            return Err(integrity_failure());
         }
-    }
-    let padding = clean.iter().rev().take_while(|byte| **byte == b'=').count();
-    if padding > 2 {
-        return Err(integrity_failure());
-    }
-    let unpadded_len = clean.len().saturating_sub(padding);
-    if clean[..unpadded_len].contains(&b'=') || unpadded_len % 4 == 1 {
-        return Err(integrity_failure());
-    }
-    if padding > 0 && clean.len() % 4 != 0 {
-        return Err(integrity_failure());
-    }
-    let mut output = Vec::new();
-    let mut accumulator = 0_u32;
-    let mut bits = 0_u8;
-    for byte in clean[..unpadded_len].iter().copied() {
-        let value = base64_value(byte).ok_or_else(integrity_failure)?;
-        accumulator = (accumulator << 6) | u32::from(value);
-        bits += 6;
-        while bits >= 8 {
-            bits -= 8;
-            if output.len() == maximum_bytes {
-                return Err(integrity_failure());
-            }
-            output.push(((accumulator >> bits) & 0xff) as u8);
-        }
-        if bits == 0 {
-            accumulator = 0;
+        let c = if c_padding {
+            0
         } else {
-            accumulator &= (1_u32 << bits) - 1;
+            base64_value(chunk[2]).ok_or_else(integrity_failure)?
+        };
+        let d = if d_padding {
+            0
+        } else {
+            base64_value(chunk[3]).ok_or_else(integrity_failure)?
+        };
+        append_bounded(&mut output, &[a << 2 | b >> 4], maximum_bytes)?;
+        if !c_padding {
+            append_bounded(&mut output, &[b << 4 | c >> 2], maximum_bytes)?;
         }
-    }
-    if bits > 0 && accumulator != 0 {
-        return Err(integrity_failure());
+        if !d_padding {
+            append_bounded(&mut output, &[c << 6 | d], maximum_bytes)?;
+        }
     }
     Ok(output)
 }
@@ -696,8 +652,8 @@ fn base64_value(byte: u8) -> Option<u8> {
         b'A'..=b'Z' => Some(byte - b'A'),
         b'a'..=b'z' => Some(byte - b'a' + 26),
         b'0'..=b'9' => Some(byte - b'0' + 52),
-        b'+' | b'-' => Some(62),
-        b'/' | b'_' => Some(63),
+        b'+' => Some(62),
+        b'/' => Some(63),
         _ => None,
     }
 }
@@ -707,14 +663,11 @@ fn decode_quoted_printable(input: &[u8], maximum_bytes: usize) -> Result<Vec<u8>
     let mut index = 0_usize;
     while index < input.len() {
         if input[index] != b'=' {
-            if output.len() == maximum_bytes {
-                return Err(integrity_failure());
-            }
-            output.push(input[index]);
+            append_bounded(&mut output, &input[index..index + 1], maximum_bytes)?;
             index += 1;
             continue;
         }
-        if input.get(index + 1..index + 3) == Some(b"\r\n") {
+        if input.get(index + 1..index + 3) == Some(&b"\r\n"[..]) {
             index += 3;
             continue;
         }
@@ -722,15 +675,11 @@ fn decode_quoted_printable(input: &[u8], maximum_bytes: usize) -> Result<Vec<u8>
             index += 2;
             continue;
         }
-        if output.len() == maximum_bytes {
-            return Err(integrity_failure());
-        }
         let high = *input.get(index + 1).ok_or_else(integrity_failure)?;
         let low = *input.get(index + 2).ok_or_else(integrity_failure)?;
-        output.push(
-            (hex_value(high).ok_or_else(integrity_failure)? << 4)
-                | hex_value(low).ok_or_else(integrity_failure)?,
-        );
+        let high = hex_value(high).ok_or_else(integrity_failure)?;
+        let low = hex_value(low).ok_or_else(integrity_failure)?;
+        append_bounded(&mut output, &[high << 4 | low], maximum_bytes)?;
         index += 3;
     }
     Ok(output)
@@ -745,136 +694,28 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn decode_charset(bytes: &[u8], charset: Option<&str>) -> Result<Option<String>, QueryPortError> {
-    let charset = charset.unwrap_or("us-ascii").trim().to_ascii_lowercase();
-    match charset.as_str() {
-        "utf-8" | "utf8" => core::str::from_utf8(bytes)
-            .map(str::to_owned)
-            .map(Some)
-            .map_err(|_| integrity_failure()),
-        "us-ascii" | "ascii" => {
-            if !bytes.is_ascii() {
-                return Ok(None);
-            }
-            Ok(Some(
-                String::from_utf8(bytes.to_vec()).map_err(|_| integrity_failure())?,
-            ))
-        }
-        "iso-8859-1" | "latin1" | "latin-1" => Ok(Some(
-            bytes.iter().copied().map(char::from).collect::<String>(),
-        )),
-        "windows-1252" | "cp1252" => Ok(Some(decode_windows_1252(bytes))),
-        _ => {
-            if let Ok(value) = core::str::from_utf8(bytes) {
-                Ok(Some(value.to_owned()))
-            } else {
-                Ok(None)
-            }
-        }
-    }
-}
-
-fn decode_windows_1252(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .copied()
-        .map(|byte| match byte {
-            0x80 => '\u{20AC}',
-            0x82 => '\u{201A}',
-            0x83 => '\u{0192}',
-            0x84 => '\u{201E}',
-            0x85 => '\u{2026}',
-            0x86 => '\u{2020}',
-            0x87 => '\u{2021}',
-            0x88 => '\u{02C6}',
-            0x89 => '\u{2030}',
-            0x8A => '\u{0160}',
-            0x8B => '\u{2039}',
-            0x8C => '\u{0152}',
-            0x8E => '\u{017D}',
-            0x91 => '\u{2018}',
-            0x92 => '\u{2019}',
-            0x93 => '\u{201C}',
-            0x94 => '\u{201D}',
-            0x95 => '\u{2022}',
-            0x96 => '\u{2013}',
-            0x97 => '\u{2014}',
-            0x98 => '\u{02DC}',
-            0x99 => '\u{2122}',
-            0x9A => '\u{0161}',
-            0x9B => '\u{203A}',
-            0x9C => '\u{0153}',
-            0x9E => '\u{017E}',
-            0x9F => '\u{0178}',
-            _ => char::from(byte),
-        })
-        .collect()
-}
-
-fn is_attachment_disposition(value: &str) -> bool {
-    value
-        .split(';')
-        .next()
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("attachment"))
-}
-
-fn parse_search_uids(response: &str) -> Result<Vec<u64>, QueryPortError> {
-    let Some(line) = response.lines().find(|line| line.starts_with("* SEARCH")) else {
-        return Ok(Vec::new());
-    };
-    line.strip_prefix("* SEARCH")
-        .unwrap_or_default()
-        .split_ascii_whitespace()
-        .map(|value| {
-            value
-                .parse::<u64>()
-                .ok()
-                .filter(|value| *value > 0)
-                .ok_or_else(integrity_failure)
-        })
-        .collect()
-}
-
-fn parse_bracket_u64(response: &str, name: &str) -> Option<u64> {
-    let marker = format!("[{name} ");
-    let start = response.find(&marker)? + marker.len();
-    let tail = response.get(start..)?;
-    let end = tail.find(']')?;
-    tail[..end].trim().parse::<u64>().ok()
-}
-
-fn parse_fetch_atom_u64(response: &str, name: &str) -> Option<u64> {
-    let marker = format!("{name} ");
-    let start = response.find(&marker)? + marker.len();
-    let digits = response
-        .get(start..)?
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>();
-    digits.parse::<u64>().ok()
-}
-
-fn parse_internal_date_from_fetch(response: &str) -> Result<UnixMillis, QueryPortError> {
+fn parse_internal_date_from_fetch(text: &str) -> Result<UnixMillis, QueryPortError> {
     let marker = "INTERNALDATE \"";
-    let start = response.find(marker).ok_or_else(integrity_failure)? + marker.len();
-    let tail = response.get(start..).ok_or_else(integrity_failure)?;
+    let start = text.find(marker).ok_or_else(integrity_failure)? + marker.len();
+    let tail = text.get(start..).ok_or_else(integrity_failure)?;
     let end = tail.find('"').ok_or_else(integrity_failure)?;
-    parse_imap_internal_date(&tail[..end]).ok_or_else(integrity_failure)
+    parse_imap_internal_date(tail.get(..end).ok_or_else(integrity_failure)?)
+        .ok_or_else(integrity_failure)
 }
 
 fn parse_imap_internal_date(value: &str) -> Option<UnixMillis> {
-    let mut fields = value.split_ascii_whitespace();
-    let date = fields.next()?;
-    let time = fields.next()?;
-    let zone = fields.next()?;
-    if fields.next().is_some() {
+    let mut parts = value.split_ascii_whitespace();
+    let date = parts.next()?;
+    let time = parts.next()?;
+    let zone = parts.next()?;
+    if parts.next().is_some() {
         return None;
     }
     let mut date_parts = date.split('-');
-    let day = date_parts.next()?.trim().parse::<u32>().ok()?;
-    let month = parse_month(date_parts.next()?)?;
-    let year = date_parts.next()?.parse::<i32>().ok()?;
-    if date_parts.next().is_some() || day == 0 || day > days_in_month(year, month) {
+    let day = date_parts.next()?.parse::<u32>().ok()?;
+    let month = month_number(date_parts.next()?)?;
+    let year = date_parts.next()?.parse::<i64>().ok()?;
+    if date_parts.next().is_some() || !(1..=31).contains(&day) || year < 1970 {
         return None;
     }
     let mut time_parts = time.split(':');
@@ -888,37 +729,29 @@ fn parse_imap_internal_date(value: &str) -> Option<UnixMillis> {
     if zone_bytes.len() != 5 || !matches!(zone_bytes[0], b'+' | b'-') {
         return None;
     }
-    let zone_hours = core::str::from_utf8(&zone_bytes[1..3])
-        .ok()?
-        .parse::<i64>()
-        .ok()?;
-    let zone_minutes = core::str::from_utf8(&zone_bytes[3..5])
-        .ok()?
-        .parse::<i64>()
-        .ok()?;
-    if zone_hours > 23 || zone_minutes > 59 {
+    let zone_hour = std::str::from_utf8(&zone_bytes[1..3]).ok()?.parse::<i64>().ok()?;
+    let zone_minute = std::str::from_utf8(&zone_bytes[3..5]).ok()?.parse::<i64>().ok()?;
+    if zone_hour > 23 || zone_minute > 59 {
         return None;
     }
-    let zone_seconds = zone_hours
-        .checked_mul(3_600)?
-        .checked_add(zone_minutes.checked_mul(60)?)?;
-    let zone_seconds = if zone_bytes[0] == b'-' {
-        -zone_seconds
+    let offset_seconds = (zone_hour * 60 + zone_minute) * 60;
+    let offset_seconds = if zone_bytes[0] == b'-' {
+        -offset_seconds
     } else {
-        zone_seconds
+        offset_seconds
     };
     let days = days_from_civil(year, month, day)?;
     let local_seconds = days
         .checked_mul(86_400)?
-        .checked_add(i64::from(hour).checked_mul(3_600)?)?
-        .checked_add(i64::from(minute).checked_mul(60)?)?
+        .checked_add(i64::from(hour) * 3_600)?
+        .checked_add(i64::from(minute) * 60)?
         .checked_add(i64::from(second.min(59)))?;
-    let utc_seconds = local_seconds.checked_sub(zone_seconds)?;
-    let utc_seconds = u64::try_from(utc_seconds).ok()?;
-    Some(UnixMillis::new(utc_seconds.checked_mul(1_000)?))
+    let utc_seconds = local_seconds.checked_sub(offset_seconds)?;
+    let utc_millis = u64::try_from(utc_seconds).ok()?.checked_mul(1_000)?;
+    Some(UnixMillis::new(utc_millis))
 }
 
-fn parse_month(value: &str) -> Option<u32> {
+fn month_number(value: &str) -> Option<u32> {
     match value.to_ascii_lowercase().as_str() {
         "jan" => Some(1),
         "feb" => Some(2),
@@ -936,25 +769,11 @@ fn parse_month(value: &str) -> Option<u32> {
     }
 }
 
-fn days_in_month(year: i32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => 0,
-    }
-}
-
-fn is_leap_year(year: i32) -> bool {
-    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
-}
-
-fn days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
-    if !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
+fn days_from_civil(year: i64, month: u32, day: u32) -> Option<i64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
-    let adjusted_year = i64::from(year) - i64::from(month <= 2);
+    let adjusted_year = year - i64::from(month <= 2);
     let era = if adjusted_year >= 0 {
         adjusted_year
     } else {
@@ -967,43 +786,17 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
     Some(era * 146_097 + day_of_era - 719_468)
 }
 
-fn extract_first_literal(response: &[u8]) -> Result<Option<&[u8]>, QueryPortError> {
-    let Some(open) = response.iter().position(|byte| *byte == b'{') else {
-        return Ok(None);
-    };
-    let close = response
-        .get(open + 1..)
-        .and_then(|tail| tail.iter().position(|byte| *byte == b'}'))
-        .map(|offset| open + 1 + offset)
-        .ok_or_else(integrity_failure)?;
-    let length = core::str::from_utf8(&response[open + 1..close])
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .ok_or_else(integrity_failure)?;
-    let mut data_start = close + 1;
-    if response.get(data_start..data_start + 2) == Some(b"\r\n") {
-        data_start += 2;
-    } else if response.get(data_start) == Some(&b'\n') {
-        data_start += 1;
-    } else {
-        return Err(integrity_failure());
-    }
-    let data_end = data_start
-        .checked_add(length)
-        .ok_or_else(integrity_failure)?;
-    let data = response
-        .get(data_start..data_end)
-        .ok_or_else(integrity_failure)?;
-    Ok(Some(data))
+fn imap_query_cursor(uid_validity: u64, before_uid: u64) -> Result<QueryCursor, QueryPortError> {
+    QueryCursor::parse(format!("{IMAP_CURSOR_PREFIX}{uid_validity}:{before_uid}"))
+        .map_err(|_| integrity_failure())
 }
 
-fn parse_imap_cursor(cursor: &QueryCursor, uid_validity: u64) -> Result<u64, QueryPortError> {
+fn parse_imap_cursor(cursor: &str) -> Result<(u64, u64), QueryPortError> {
     let value = cursor
-        .as_str()
         .strip_prefix(IMAP_CURSOR_PREFIX)
         .ok_or_else(invalid_cursor)?;
-    let (cursor_validity, before_uid) = value.split_once(':').ok_or_else(invalid_cursor)?;
-    let cursor_validity = cursor_validity
+    let (uid_validity, before_uid) = value.split_once(':').ok_or_else(invalid_cursor)?;
+    let uid_validity = uid_validity
         .parse::<u64>()
         .ok()
         .filter(|value| *value > 0)
@@ -1013,15 +806,7 @@ fn parse_imap_cursor(cursor: &QueryCursor, uid_validity: u64) -> Result<u64, Que
         .ok()
         .filter(|value| *value > 0)
         .ok_or_else(invalid_cursor)?;
-    if cursor_validity != uid_validity {
-        return Err(invalid_cursor());
-    }
-    Ok(before_uid)
-}
-
-fn imap_query_cursor(uid_validity: u64, before_uid: u64) -> Result<QueryCursor, QueryPortError> {
-    QueryCursor::parse(format!("{IMAP_CURSOR_PREFIX}{uid_validity}:{before_uid}"))
-        .map_err(|_| integrity_failure())
+    Ok((uid_validity, before_uid))
 }
 
 fn parse_imap_reference(reference: &str) -> Result<(u64, u64), QueryPortError> {
@@ -1113,23 +898,21 @@ mod tests {
     }
 
     #[test]
-    fn transfer_decoders_are_bounded() -> Result<(), Box<dyn std::error::Error>> {
-        assert_eq!(decode_base64(b"SGVsbG8=", 64)?, b"Hello");
-        assert!(decode_base64(b"SGVsbG8=", 4).is_err());
-        assert_eq!(
-            decode_quoted_printable(b"hello=20world=\r\nnext", 64)?,
-            b"hello worldnext"
-        );
+    fn multipart_split_is_boundary_scoped() -> Result<(), Box<dyn std::error::Error>> {
+        let body = b"preamble\r\n--abc\r\nContent-Type: text/plain\r\n\r\none\r\n--abc\r\nContent-Type: text/plain\r\n\r\ntwo\r\n--abc--\r\nepilogue";
+        let sections = multipart_sections(body, b"abc")?;
+        assert_eq!(sections.len(), 2);
+        assert!(sections[0].ends_with(b"one"));
+        assert!(sections[1].ends_with(b"two"));
         Ok(())
     }
 
     #[test]
-    fn multipart_split_is_boundary_scoped() -> Result<(), Box<dyn std::error::Error>> {
-        let body = b"preamble\r\n--b\r\nContent-Type: text/plain\r\n\r\none\r\n--b\r\nContent-Type: text/html\r\n\r\n<b>two</b>\r\n--b--\r\n";
-        let sections = multipart_sections(body, b"b")?;
-        assert_eq!(sections.len(), 2);
-        assert!(sections[0].ends_with(b"one"));
-        assert!(sections[1].ends_with(b"<b>two</b>"));
+    fn transfer_decoders_are_bounded() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(decode_base64(b"SGVsbG8=", 16)?, b"Hello");
+        assert_eq!(decode_quoted_printable(b"hello=20world", 16)?, b"hello world");
+        assert!(decode_base64(b"SGVsbG8=", 4).is_err());
+        assert!(decode_quoted_printable(b"hello", 4).is_err());
         Ok(())
     }
 }
