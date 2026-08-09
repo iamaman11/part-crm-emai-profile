@@ -66,6 +66,12 @@ REPOSITORY_REQUIRED = {
     "crates/application-ports/src/device_jobs.rs": (
         "pub trait AuthenticatedDevicePort",
         "authenticated_device_id",
+        "pub trait DeviceJobQueryPort",
+        "list_claimable_device_jobs",
+    ),
+    "crates/application-ports/src/lib.rs": (
+        "AuthenticatedDevicePort",
+        "DeviceJobQueryPort",
     ),
     "crates/use-cases-devices/src/jobs.rs": (
         "execute_claim_device_job",
@@ -73,11 +79,46 @@ REPOSITORY_REQUIRED = {
         "execute_apply_device_job_outcome",
         "ensure_authenticated_device",
     ),
+    "crates/use-cases-devices/src/queries.rs": (
+        "MAX_CLAIMABLE_DEVICE_JOBS",
+        "execute_list_claimable_device_jobs",
+        ".authenticated_device_id(actor)",
+        ".list_claimable_device_jobs(actor, &device_id",
+        "DeviceJobCapability::Claim",
+        "DeviceExecutionReadiness::Ready",
+        "DeviceJobQueryError::IntegrityFailure",
+        "foreign_device_row_is_integrity_failure_before_projection",
+    ),
     "crates/use-cases-devices/tests/job_orchestration.rs": (
         "foreign_authenticated_device_cannot_claim_target",
         "assert_eq!(authorization.calls.get(), 0)",
         "assert_eq!(repository.loads.get(), 0)",
         "assert_eq!(repository.writes.get(), 0)",
+    ),
+    "crates/cloudflare-adapters/src/d1_device_jobs.rs": (
+        "LIST_CLAIMABLE_DEVICE_JOBS",
+        "job.tenant_id = ?",
+        "job.device_id = ?",
+        "authorization.status = 'ACTIVE'",
+        "membership.status = 'ACTIVE'",
+        "profile_grants",
+        "job.status = 'PENDING_DEVICE'",
+        "job.status IN ('PROFILE_BUSY', 'RETRY_SCHEDULED')",
+        "job.retry_at_ms <= ?",
+        "LIMIT ?",
+        "impl DeviceJobQueryPort for D1DeviceJobRepository",
+        "claimable_query_is_live_grant_device_authorization_and_due_scoped",
+    ),
+    "migrations/d1/0018_device_authorizations_and_jobs.sql": (
+        "CREATE INDEX device_jobs_claimable_device_lookup",
+        "tenant_id, device_id, status, retry_at_ms, updated_at_ms, job_id",
+    ),
+    "scripts/test-device-job-d1.py": (
+        "CLAIMABLE_QUERY",
+        "test_claimable_due_query_and_index",
+        "device_jobs_claimable_device_lookup",
+        "EXPLAIN QUERY PLAN",
+        "assert claimable_ids(connection, 500) == []",
     ),
     "apps/profile-bridge/src/windows_native.rs": (
         "std::os::windows::ffi::OsStrExt",
@@ -210,6 +251,26 @@ def enforce_phase2f_ordering(root: Path, errors: list[str]) -> None:
             f"{function_name} authenticated device before repository access",
         )
 
+    device_queries = (root / "crates/use-cases-devices/src/queries.rs").read_text(encoding="utf-8")
+    query_body = function_body(device_queries, "execute_list_claimable_device_jobs")
+    if not query_body:
+        errors.append("missing Phase 2F claimable device-job query operation")
+    else:
+        require_order(
+            errors,
+            query_body,
+            ".authenticated_device_id(actor)",
+            ".list_claimable_device_jobs(actor, &device_id",
+            "claimable query authenticates device before D1/provider query",
+        )
+        require_order(
+            errors,
+            query_body,
+            ".is_device_job_authorized(actor, target, DeviceJobCapability::Claim)",
+            ".evaluate_device_execution(actor, target)",
+            "claimable query authorization before execution precondition projection",
+        )
+
     synthetic = (root / "apps/profile-bridge/src/bin/profile-bridge-synthetic.rs").read_text(
         encoding="utf-8"
     )
@@ -239,6 +300,17 @@ def phase2f_ordering_self_test(errors: list[str]) -> None:
     )
     if not probe:
         errors.append("Phase 2F negative device-auth-order fixture unexpectedly passed")
+
+    probe = []
+    require_order(
+        probe,
+        ".list_claimable_device_jobs(actor, &device_id); .authenticated_device_id(actor);",
+        ".authenticated_device_id(actor)",
+        ".list_claimable_device_jobs(actor, &device_id",
+        "negative claimable-query device-auth fixture",
+    )
+    if not probe:
+        errors.append("Phase 2F negative claimable-query device-auth fixture unexpectedly passed")
 
 
 def main() -> int:
