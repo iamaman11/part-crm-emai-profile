@@ -1,10 +1,10 @@
 import { Link, Outlet, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import { TenantChooser } from './TenantContext';
-import { SessionPanel } from '../features/session/SessionPanel';
-import { ClientsWorkspace } from '../features/clients/ClientsWorkspace';
-import { ProfilesWorkspace } from '../features/profiles/ProfilesWorkspace';
-import { MailboxesWorkspace } from '../features/mailboxes/MailboxesWorkspace';
-import { AccessWorkspace } from '../features/access/AccessWorkspace';
+import { createAccessRoute } from '../features/access';
+import { createClientsRoute } from '../features/clients';
+import { createMailboxesRoute } from '../features/mailboxes';
+import { createProfilesRoute } from '../features/profiles';
+import { SessionPanel } from '../features/session';
 
 function Shell() {
   return (
@@ -51,10 +51,10 @@ function Dashboard() {
 
 const rootRoute = createRootRoute({ component: Shell });
 const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: Dashboard });
-const clientsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/clients', component: ClientsWorkspace });
-const profilesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/profiles', component: ProfilesWorkspace });
-const mailboxesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/mailboxes', component: MailboxesWorkspace });
-const usersRoute = createRoute({ getParentRoute: () => rootRoute, path: '/users', component: AccessWorkspace });
+const clientsRoute = createClientsRoute(rootRoute);
+const profilesRoute = createProfilesRoute(rootRoute);
+const mailboxesRoute = createMailboxesRoute(rootRoute);
+const usersRoute = createAccessRoute(rootRoute);
 
 const routeTree = rootRoute.addChildren([indexRoute, clientsRoute, profilesRoute, mailboxesRoute, usersRoute]);
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });
