@@ -386,11 +386,15 @@ mod tests {
     fn browser_execution_binding_transport_is_metadata_only_and_strict()
     -> Result<(), Box<dyn std::error::Error>> {
         let digest = "b".repeat(64);
-        let valid = format!(
-            r#"{{"profileId":"profile_01JTRANSPORT","requestDigest":"{digest}"}}"#
-        );
+        let valid = format!(r#"{{"profileId":"profile_01JTRANSPORT","requestDigest":"{digest}"}}"#);
         assert!(serde_json::from_str::<BindBrowserMailboxExecutionRequest>(&valid).is_ok());
-        for forbidden in ["deviceId", "generationId", "query", "messageBody", "secretHandle"] {
+        for forbidden in [
+            "deviceId",
+            "generationId",
+            "query",
+            "messageBody",
+            "secretHandle",
+        ] {
             let invalid = format!(
                 r#"{{"profileId":"profile_01JTRANSPORT","requestDigest":"{digest}","{forbidden}":"forbidden"}}"#
             );
