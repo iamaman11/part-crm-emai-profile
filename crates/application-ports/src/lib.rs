@@ -15,6 +15,7 @@ pub mod integration_events;
 pub mod mailbox_jobs;
 pub mod mailboxes;
 pub mod notifications;
+pub mod profile_assignment_context;
 pub mod profiles;
 pub mod sessions;
 
