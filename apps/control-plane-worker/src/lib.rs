@@ -149,7 +149,8 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _idempotency_repository = D1IdempotencyRepository::new(idempotency_catalog);
     let profile_objects = env.bucket(R2_PROFILES_BINDING)?;
     let _verification_queue = env.queue(VERIFICATION_QUEUE_BINDING)?;
-    let _integration_events_queue = env.queue(integration_events::INTEGRATION_EVENTS_QUEUE_BINDING)?;
+    let _integration_events_queue =
+        env.queue(integration_events::INTEGRATION_EVENTS_QUEUE_BINDING)?;
     let _mailbox_jobs_queue = env.queue(mailbox_scheduling::MAILBOX_JOBS_QUEUE_BINDING)?;
     let _mailbox_secret_resolver = env.service("MAILBOX_SECRET_RESOLVER")?;
     let coordinator = env.durable_object(PROFILE_COORDINATOR_BINDING)?;
