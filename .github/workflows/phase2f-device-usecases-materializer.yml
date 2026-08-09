@@ -1,0 +1,79 @@
+name: Phase 2F Device Use Cases Materializer
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/phase2f-device-usecases-materializer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.head_ref == 'phase2f-device-browser-mailbox'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Phase 2F branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2f-device-browser-mailbox
+
+      - name: Wire independent device application ownership
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one marker, found {count}: {old!r}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          root = Path('Cargo.toml')
+          replace_once(root, '    "crates/use-cases-clients",\n', '    "crates/use-cases-clients",\n    "crates/use-cases-devices",\n')
+          replace_once(root, 'use-cases-clients = { path = "crates/use-cases-clients" }\n', 'use-cases-clients = { path = "crates/use-cases-clients" }\nuse-cases-devices = { path = "crates/use-cases-devices" }\n')
+
+          ports_cargo = Path('crates/application-ports/Cargo.toml')
+          replace_once(ports_cargo, 'client-domain.workspace = true\n', 'client-domain.workspace = true\ndevice-domain.workspace = true\n')
+          ports_lib = Path('crates/application-ports/src/lib.rs')
+          replace_once(ports_lib, 'pub mod commands;\n', 'pub mod commands;\npub mod device_jobs;\n')
+
+          architecture = Path('scripts/check-architecture.py')
+          replace_once(
+              architecture,
+              '        "client-domain",\n        "mailbox-domain",\n',
+              '        "client-domain",\n        "device-domain",\n        "mailbox-domain",\n',
+          )
+          replace_once(
+              architecture,
+              '    "use-cases-clients": {\n        "application-ports",\n        "client-domain",\n        "identity-access-domain",\n        "profile-platform-primitives",\n        "zeroize",\n    },\n',
+              '    "use-cases-clients": {\n        "application-ports",\n        "client-domain",\n        "identity-access-domain",\n        "profile-platform-primitives",\n        "zeroize",\n    },\n    "use-cases-devices": {\n        "application-ports",\n        "device-domain",\n        "profile-platform-primitives",\n    },\n',
+          )
+          PY
+
+      - name: Materialize generated consistency
+        run: |
+          cargo generate-lockfile
+          cargo fmt --all
+          python scripts/generate-architecture-inventory.py --write
+
+      - name: Verify inward device application slice
+        run: |
+          python scripts/check-architecture.py
+          cargo clippy --locked -p device-domain -p application-ports -p use-cases-devices --all-targets -- -D warnings
+          cargo test --locked -p device-domain -p application-ports -p use-cases-devices
+          cargo check --locked -p device-domain -p application-ports -p use-cases-devices --target wasm32-unknown-unknown
+          python scripts/generate-architecture-inventory.py --check
+
+      - name: Commit verified slice and self-clean
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/phase2f-device-usecases-materializer.yml
+          git add Cargo.toml Cargo.lock architecture/inventory.json scripts/check-architecture.py crates/application-ports crates/use-cases-devices crates/device-domain
+          git diff --cached --check
+          git commit -m "Phase 2F: extract authenticated device job use cases"
+          git push origin HEAD:phase2f-device-browser-mailbox
