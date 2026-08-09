@@ -1,0 +1,32 @@
+name: Phase 2B Inventory Materializer
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2b-client-persistence-contact-crypto
+          persist-credentials: true
+      - name: Materialize deterministic inventory
+        run: python scripts/generate-architecture-inventory.py --write
+      - name: Commit inventory when changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- architecture/inventory.json; then
+            echo 'architecture/inventory.json is already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add architecture/inventory.json
+          git commit -m 'Phase 2B: materialize architecture inventory'
+          git push origin HEAD:phase2b-client-persistence-contact-crypto
