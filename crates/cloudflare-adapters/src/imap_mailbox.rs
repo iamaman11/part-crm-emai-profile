@@ -35,9 +35,7 @@ pub async fn check_imap_mailbox(
         if tagged_status(&response, "a0") != Some("OK") {
             return Err(provider_error(MailboxProviderFailureClass::ProviderPolicy));
         }
-        socket = socket
-            .start_tls()
-            .map_err(|_| provider_error(MailboxProviderFailureClass::TransientDependency))?;
+        socket = socket.start_tls();
     }
 
     if !preauthenticated {
