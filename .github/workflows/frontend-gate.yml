@@ -7,52 +7,13 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: frontend-gate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  phase2f-docs-materialize:
-    name: Phase 2F Runtime Contract Materialization
-    if: github.event_name == 'pull_request' && github.head_ref == 'docs-phase2f-runtime-contract-refinement'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout refinement branch
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: docs-phase2f-runtime-contract-refinement
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Materialize Phase 2F refinement
-        run: python scripts/materialize-phase2f-runtime-refinement.py
-
-      - name: Validate docs and architecture consistency
-        run: |
-          python -m py_compile scripts/generate-architecture-inventory.py
-          python scripts/generate-architecture-inventory.py --check
-          python scripts/generate-architecture-inventory.py --self-test
-          grep -Fq '`BrowserIdentityManifest`' docs/DEVELOPMENT_PLAN.md
-          grep -Fq '`NetworkIdentityPolicy` + `NetworkIdentityObservation`' docs/DEVELOPMENT_PLAN.md
-          grep -Fq 'PID alone is never sufficient ownership proof' docs/DEVELOPMENT_PLAN.md
-          grep -Fq 'blanket `PRAGMA integrity_check`' docs/DEVELOPMENT_PLAN.md
-          grep -Fq '### 11.1 Browser Runtime Identity, Network Policy And Writer Recovery' docs/ARCHITECTURE.md
-          git diff --check
-
-      - name: Restore permanent workflow and commit bounded refinement
-        run: |
-          git checkout origin/main -- .github/workflows/frontend-gate.yml
-          rm -f scripts/materialize-phase2f-runtime-refinement.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git diff --cached --check
-          test "$(git diff --cached origin/main --name-only | sort | tr '\n' ' ')" = "docs/ARCHITECTURE.md docs/DEVELOPMENT_PLAN.md scripts/generate-architecture-inventory.py "
-          git commit -m 'Docs: refine Phase 2F browser runtime contracts'
-          git push origin HEAD:docs-phase2f-runtime-contract-refinement
-
   frontend:
     name: React Operator UI
     runs-on: ubuntu-latest
