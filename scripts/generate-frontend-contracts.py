@@ -18,7 +18,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 OPENAPI_PATH = ROOT / "contracts" / "generated" / "control-plane.openapi.json"
 TYPESCRIPT_PATH = ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "control-plane.ts"
-SOURCE_PATH = "crates/control-plane-contract/src/public_api.rs"
+SOURCE_PATH = "crates/control-plane-contract/src"
 GENERATOR_PATH = "scripts/generate-frontend-contracts.py"
 
 
