@@ -280,11 +280,11 @@ slice remain mandatory expansion work.
 | A5 | Feature-owned SPA route composition | **Accepted in Phase 2C.** Root app routing imports feature-owned public route APIs; direct feature-internal route composition is permanently rejected by positive/negative CI. | Preserve in later route-family growth. |
 | A6 | Architecture consistency gate | **Accepted.** Deterministic architecture inventory/docs checks in CI. | Expand inventory/checks whenever new governed modules/routes/contracts appear. |
 | A7 | Route classifier modularization | **Accepted.** Capability classifiers behind one fail-closed entrypoint. | New route families must add an owning classifier module; no return to monolith. |
-| A8 | Query-side/CQRS read-model boundary | **Open.** No accepted global read/search application context. | Phase 2D, before global search and provider message-body query execution. |
+| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D.** `use-cases-query`, capability-owned read-model ports/projections, bounded typed global search, grant-safe exact-contact lookup and provider-neutral Client Mail sequencing are permanently enforced. | Preserve in Phase 2E/2F provider implementations and later query surfaces; do not move query policy into adapters/UI. |
 | 6.1 | Versioned integration event envelope | **Accepted foundation** in Phase 1A. | Reuse/extend versioned registry for later capabilities; no ad-hoc Queue/WebSocket JSON. |
 | 6.2 | Durable-before-notify | **Accepted through durable delivery in Phase 1B.** Durable mutation/outbox precedes Queue delivery state and notification surfaces. | Preserve; 2E–2G and 2I extend the same failure ordering to new consumers/realtime. |
 | 6.3 | At-least-once consumer idempotency | **Accepted for the current notification consumer through Phase 1B retry/DLQ/replay.** | 2E/2F every new Queue/device consumer must preserve duplicate neutrality. |
-| 6.4 | Authorization-before-projection | **Composed for Phase 1B event catch-up.** Live membership/grants are applied before event projection; broader query/provider coverage remains open. | 2D read/search/provider query; 2G realtime subscriptions. |
+| 6.4 | Authorization-before-projection | **Accepted through Phase 2D query/read-model scope.** Live membership/grants precede list/search/detail projection, exact-contact lookup and mailbox eligibility/provider invocation; grant-sensitive D1 predicates recheck visibility where applicable. | Preserve in 2E/2F real provider lanes; 2G extends the same rule to realtime subscriptions. |
 | 6.5 | PII protection boundary | **Accepted through Phase 2B.** Contact IDs are PII-independent; authoritative D1 contact storage is ciphertext-only; encryption/HMAC key domains and versions are separate; exact lookup is tenant-scoped and index-backed; rotation candidates do not require plaintext scans. | Preserve in every later client/query/mail surface; fuzzy/prefix PII search still requires a separate accepted ADR. |
 | 6.6 | Profile materialization contract | **Library/Synthetic foundation exists.** | 2F real device/browser lane integration; 2I recovery/E2E; 2J physical/external evidence. |
 
@@ -299,13 +299,14 @@ Phase 0 is complete on accepted `main`. Relevant accepted outcomes include:
 - modular fail-closed HTTP route classifiers (A7);
 - deterministic architecture inventory/docs consistency gate (A6).
 
-Phase 0 completion does **not** mean A3, A5 or A8 were implemented. Those obligations are explicitly
-scheduled in Phase 2 at their required growth points.
+Phase 0 completion did **not** by itself satisfy A3, A5 or A8. Their fixed growth-point work is now
+tracked by accepted evidence: the client half of A3 was accepted in 2A, A5 in 2C and A8 in 2D; only
+the mailbox half of A3 remains open and is owned by 2E.
 
 ## 6. Phase 1 — Durable Integration And Delivery Foundation
 
 **Goal:** complete the asynchronous reliability substrate before product expansion depends on it.
-**Status:** ACCEPTED. Phase 1 is complete; Phase 2A, Phase 2B and Phase 2C are accepted; Phase 2D issue #144 is the unique next implementation slice.
+**Status:** ACCEPTED. Phase 1 is complete; Phase 2A, Phase 2B, Phase 2C and Phase 2D are accepted; Phase 2E issue #148 is the unique next implementation slice.
 
 ### Phase 1A — Durable event/outbox foundation — ACCEPTED
 
@@ -646,6 +647,10 @@ contracts, incremental Client -> Mail UI and permanent Phase 2D privacy/authoriz
 - subject/sender/recipient/body content does not enter audit/outbox/realtime/metrics;
 - cloud query implementation conforms to the exact 2D application contract.
 
+Browser/Camoufox execution, device jobs, fingerprint/profile identity, proxy/network runtime policy,
+browser workspace locks and browser-driven generation evolution are explicit Phase 2F concerns and
+must not leak into the 2E cloud lane.
+
 ### Phase 2F — Durable device jobs, browser mailbox lane and materialization integration
 
 **Purpose:** make browser-required providers a first-class durable device execution lane while
@@ -660,9 +665,13 @@ finishing the repository-owned portion of 6.6.
 5. Bind claims to tenant/device/profile/generation and monotonic lease/fencing evidence.
 6. Require current active generation + certification policy before browser execution.
 7. Integrate Profile Bridge materialization freshness check before writer launch.
+   - materialize the exact accepted generation into an isolated clone/workspace; never snapshot a live browser directory;
+   - treat browser identity/fingerprint configuration as versioned generation/profile-lineage metadata: launches reuse the accepted configuration, while changes require an explicit migration/re-certification path rather than implicit regeneration;
+   - pass proxy/network identity as an outer runtime policy with provider-neutral metadata; never encode an assumption that per-session IP rotation is universally safe;
+   - treat browser lock files as evidence of possible writer ownership: never delete `.parentlock`, `lock` or equivalent blindly; prove ownership/recovery state or return `PROFILE_BUSY`.
 8. Implement the exact Phase 2D search/get-message contract through the Bridge/browser adapter.
 9. Reject stale result after claim turnover, generation change or fencing advancement.
-10. Preserve dirty local state on network/R2 failure and route recovery through existing generation rules.
+10. Persist successful dirty browser state only through a new immutable encrypted generation: upload, verify, then fenced/CAS activation of the D1 active-generation pointer; never mutate the active R2 object or depend on cherry-picked provider cookie names. On network/R2 failure preserve dirty local state and route recovery through existing generation rules.
 11. Add multi-device/offline/contention/replay/recovery synthetic E2E evidence.
 
 #### 2F acceptance
@@ -672,6 +681,9 @@ finishing the repository-owned portion of 6.6.
 - stale result cannot overwrite newer claim/generation;
 - browser writer launch cannot use a stale local generation;
 - cloud and browser lanes satisfy one application query/job contract;
+- browser identity/fingerprint configuration cannot change implicitly between launches;
+- browser lock files cannot be blindly deleted to acquire writer ownership;
+- dirty browser mutations are not reported as persisted until immutable generation upload, verification and fenced/CAS activation succeed; failure preserves recoverable dirty state;
 - local materialization remains cache/workspace, not authority.
 
 ### Phase 2G — Durable realtime notification hub

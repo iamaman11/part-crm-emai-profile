@@ -465,6 +465,13 @@
       "openapi": "openapi/v1/fragments/client-registry.json",
       "typescript": "frontend/src/shared/api/generated/client-registry.ts",
       "generator": "scripts/generate-frontend-contracts.py"
+    },
+    {
+      "name": "query-mail-api",
+      "canonical_source": "crates/control-plane-contract/src/bin/export_query_mail.rs",
+      "openapi": "openapi/v1/fragments/query-mail.json",
+      "typescript": "frontend/src/shared/api/generated/query-mail.ts",
+      "generator": "scripts/generate-frontend-contracts.py"
     }
   ],
   "documentation_authority": {

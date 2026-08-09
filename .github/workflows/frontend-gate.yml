@@ -7,50 +7,13 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: frontend-gate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  docs-consistency-materialize:
-    name: Post-Phase 2D Semantic Consistency Materialization
-    if: github.event_name == 'pull_request' && github.head_ref == 'docs-phase2d-semantic-consistency'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout consistency branch
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: docs-phase2d-semantic-consistency
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Materialize accepted Phase 2D semantics
-        run: python scripts/materialize-post-phase2d-consistency.py
-
-      - name: Validate semantic consistency and inventory
-        run: |
-          python -m py_compile scripts/generate-architecture-inventory.py
-          python scripts/generate-architecture-inventory.py --check
-          python scripts/generate-architecture-inventory.py --self-test
-          grep -Fq 'Phase 2E issue #148 is the unique next implementation slice' docs/DEVELOPMENT_PLAN.md
-          grep -Fq '| A8 | CQRS/read-model boundary | **Accepted in Phase 2D**' docs/DEVELOPER_CAPABILITY_MATRIX.md
-          grep -Fq 'query-mail-api' architecture/inventory.json
-          git diff --check
-
-      - name: Restore permanent workflow and commit bounded correction
-        run: |
-          git checkout origin/main -- .github/workflows/frontend-gate.yml
-          rm -f scripts/materialize-post-phase2d-consistency.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git diff --cached --check
-          test "$(git diff --cached origin/main --name-only | sort | tr '\n' ' ')" = "architecture/inventory.json docs/DEVELOPER_CAPABILITY_MATRIX.md docs/DEVELOPMENT_PLAN.md scripts/generate-architecture-inventory.py "
-          git commit -m 'Docs: reconcile accepted Phase 2D semantics and harden consistency'
-          git push origin HEAD:docs-phase2d-semantic-consistency
-
   frontend:
     name: React Operator UI
     runs-on: ubuntu-latest
