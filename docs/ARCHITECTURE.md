@@ -113,6 +113,10 @@ Phase 2B accepts authoritative protected client-contact D1 persistence and a sep
 query port. Exact lookup accepts tenant scope + contact kind + normalization version + versioned HMAC
 token only; D1 lookup adapters do not receive plaintext and do not decrypt/scan all contact rows.
 
+Phase 2C accepts client-merge and Client Registry projection ports. Assignment is business/history
+linkage only and never an authorization source; registry projections apply live membership/client
+grants before construction, and member-visible assignment history additionally requires profile grant.
+
 The current plan may keep `application-ports` as one Cargo crate with capability modules while
 that remains clear. It is not required to split every port into a separate crate.
 
@@ -167,7 +171,8 @@ composition. React owns presentation/navigation/remote-cache behavior only.
 | Tenant/Membership/Grant | Identity & Access | D1 + audit/outbox |
 | ClientRecord | Client Registry | D1 + audit/outbox |
 | ClientContactPoint | Client Registry | D1 ciphertext + nonce/key-version metadata + tenant-first HMAC lookup index; audit/outbox remain metadata-only |
-| Profile/Assignment | Profile Catalog | D1 + audit/outbox |
+| ClientMerge history | Client Registry | immutable governed D1 merge record + audit/outbox; source grants are removed and never transferred to the target |
+| Profile/Assignment | Profile Catalog | D1 + audit/outbox; assignment history is non-authorizing |
 | Active generation pointer | Profile Catalog | D1 fenced/CAS activation after verification |
 | Lease/session/fencing | Runtime Sessions | one Durable Object per profile + `session-domain` |
 | Encrypted generation payload | Profile Storage | immutable R2 object |
@@ -235,7 +240,8 @@ Authorization is applied before:
 - full message-body retrieval.
 
 Frontend filtering is never an authorization mechanism. Foreign/missing resources use the
-accepted neutral-disclosure behavior.
+accepted neutral-disclosure behavior. Phase 2C Client Registry list/history projections enforce this
+before projection construction; profile-client assignment alone cannot make a client or profile visible.
 
 ## 9. Mailbox Message Data Boundary
 
@@ -322,11 +328,13 @@ Frontend rules:
 - TanStack Query owns remote state;
 - business authorization/decisions remain server-side;
 - sibling feature internals are not imported directly;
+- root route composition imports public feature route factories/APIs, never feature workspace internals;
 - cross-feature composition uses shared/entities/app/routes or explicit feature public APIs;
 - high-impact server mutations are not optimistically shown as committed success;
 - mailbox body is not persisted in Web Storage or telemetry.
 
-Generated-contract drift and sibling-feature violations are permanent CI targets in Phase 0.
+Generated-contract drift and sibling-feature violations are permanent CI targets. Phase 2C accepts
+feature-owned route composition and expands canonical generated contracts through the Client Registry surface.
 
 ## 15. Compile-Time And CI Enforcement
 
@@ -341,6 +349,8 @@ Permanent policy should cover:
 - cross-tenant/IDOR negative fixtures;
 - D1 migration/replay invariants;
 - protected client-contact persistence and tenant-scoped exact-HMAC lookup positive/negative fixtures;
+- client merge one-way/non-grant semantics, assignment-as-non-ACL and grant-safe projection fixtures;
+- feature-owned route composition and generated Client Registry contract drift;
 - generation freshness/fencing;
 - secret/PII/content scans;
 - native + WASM + Windows/release composition as applicable;
