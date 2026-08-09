@@ -31,6 +31,7 @@ pub mod d1_profile_coordinator;
 pub mod d1_profile_generation_application;
 pub mod d1_profile_generations;
 pub mod d1_profiles;
+pub mod d1_query;
 pub mod integration_event_queue;
 pub mod mailbox_provider;
 pub mod profile_coordinator;
