@@ -41,6 +41,7 @@ pub enum RouteClass {
     MailboxBindingCollectionApi,
     MailboxBindingResourceApi,
     MailboxBindingRevokeApi,
+    MailboxBrowserExecutionBindApi,
     MailboxJobCollectionApi,
     MailboxJobResourceApi,
     MailboxJobRunApi,
@@ -329,6 +330,11 @@ mod tests {
             ),
             (
                 "POST",
+                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/browser-execution",
+                RouteClass::MailboxBrowserExecutionBindApi,
+            ),
+            (
+                "POST",
                 "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs",
                 RouteClass::MailboxJobCollectionApi,
             ),
@@ -473,6 +479,10 @@ mod tests {
             ),
             ("GET", "/api/v1/tenants/tenant_01/mailboxes"),
             ("DELETE", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01"),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/browser-execution",
+            ),
             (
                 "PUT",
                 "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
