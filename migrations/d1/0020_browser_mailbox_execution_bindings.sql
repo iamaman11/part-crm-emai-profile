@@ -61,6 +61,20 @@ BEGIN
     );
 END;
 
+CREATE TRIGGER browser_mailbox_execution_bind_command_update_forbidden
+BEFORE UPDATE ON browser_mailbox_execution_bind_commands
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'browser_mailbox_execution_bind_command_append_only');
+END;
+
+CREATE TRIGGER browser_mailbox_execution_bind_command_delete_forbidden
+BEFORE DELETE ON browser_mailbox_execution_bind_commands
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'browser_mailbox_execution_bind_command_append_only');
+END;
+
 CREATE TRIGGER browser_mailbox_execution_binding_insert_governed
 BEFORE INSERT ON browser_mailbox_execution_bindings
 FOR EACH ROW
