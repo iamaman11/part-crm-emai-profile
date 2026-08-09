@@ -23,6 +23,7 @@ use-cases-clients.workspace = true
 use-cases-notifications.workspace = true
 wasm-bindgen.workspace = true
 worker.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
