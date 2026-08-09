@@ -75,7 +75,8 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         }
         RouteClass::MailboxBindingCollectionApi
         | RouteClass::MailboxBindingResourceApi
-        | RouteClass::MailboxBindingRevokeApi => {
+        | RouteClass::MailboxBindingRevokeApi
+        | RouteClass::MailboxBrowserExecutionBindApi => {
             mailbox_bindings::dispatch(route, &mut request, &env).await
         }
         RouteClass::MailboxJobCollectionApi
