@@ -3,7 +3,7 @@ use crate::access_session::{
 };
 use crate::command_evidence;
 use crate::composition::mailbox_binding_application;
-use application_ports::mailboxes::{MailboxBindingStatus, MailboxProvider};
+use application_ports::mailboxes::MailboxProvider;
 use control_plane_contract::RouteClass;
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, SecretHandle};
@@ -228,10 +228,7 @@ impl<'a> From<&'a MailboxBindingDetails> for MailboxBindingResponse<'a> {
         Self {
             binding_id: binding.binding_id().as_str(),
             provider: binding.provider().storage_value(),
-            status: match binding.status() {
-                MailboxBindingStatus::Active => "ACTIVE",
-                MailboxBindingStatus::Revoked => "REVOKED",
-            },
+            status: binding.status().storage_value(),
             version: binding.version().value(),
         }
     }
