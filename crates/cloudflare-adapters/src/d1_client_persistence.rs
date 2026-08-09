@@ -1,9 +1,9 @@
 use crate::d1_command_identity::command_journal_id;
 use application_ports::CommandExecutionEvidence;
 use application_ports::clients::{
-    ClientLifecycleApplicationPort, ClientLifecycleWrite, ClientPortError, ClientPortErrorClass,
-    ClientReplayDecision, ClientReplayReceipt, ProtectedClientContactRepositoryPort,
-    ProtectedContactWrite,
+    ArchiveContactWrite, ClientLifecycleApplicationPort, ClientLifecycleWrite, ClientPortError,
+    ClientPortErrorClass, ClientReplayDecision, ClientReplayReceipt,
+    ProtectedClientContactRepositoryPort, ProtectedContactWrite,
 };
 use client_domain::{ClientKind, ClientRecord, ClientStatus};
 use profile_platform_primitives::{
@@ -20,11 +20,18 @@ INSERT INTO client_lifecycle_commands (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 "#;
 
-const CLIENT_CONTACT_COMMAND: &str = r#"
+const CLIENT_CONTACT_UPSERT_COMMAND: &str = r#"
 INSERT INTO client_contact_commands (
     tenant_id, command_id, command_actor_id, client_id, contact_point_id,
     operation, kind, expected_client_version, executed_at_ms
 ) VALUES (?, ?, ?, ?, ?, 'UPSERT', ?, ?, ?)
+"#;
+
+const CLIENT_CONTACT_ARCHIVE_COMMAND: &str = r#"
+INSERT INTO client_contact_commands (
+    tenant_id, command_id, command_actor_id, client_id, contact_point_id,
+    operation, kind, expected_client_version, executed_at_ms
+) VALUES (?, ?, ?, ?, ?, 'ARCHIVE', ?, ?, ?)
 "#;
 
 const CONTACT_UPSERT: &str = r#"
@@ -47,6 +54,18 @@ ON CONFLICT (tenant_id, contact_point_id) DO UPDATE SET
     lookup_key_version = excluded.lookup_key_version,
     updated_by_actor_id = excluded.updated_by_actor_id,
     updated_at_ms = excluded.updated_at_ms
+"#;
+
+const CONTACT_ARCHIVE: &str = r#"
+UPDATE client_contact_points
+SET status = 'ARCHIVED',
+    updated_by_actor_id = ?,
+    updated_at_ms = ?
+WHERE tenant_id = ?
+  AND client_id = ?
+  AND contact_point_id = ?
+  AND kind = ?
+  AND status = 'ACTIVE'
 "#;
 
 const IDEMPOTENCY_CREATE: &str = r#"
@@ -86,7 +105,7 @@ impl D1ClientPersistenceRepository {
         command_name: &str,
         evidence: &CommandExecutionEvidence,
     ) -> Result<ClientReplayDecision, ClientPortError> {
-        let row = query!(
+        let statement = query!(
             &self.database,
             r#"
             SELECT command_name, request_digest, result_code,
@@ -97,10 +116,12 @@ impl D1ClientPersistenceRepository {
             actor.tenant_scope().tenant_id().as_str(),
             actor.actor_id().as_str(),
             evidence.idempotency_key().as_str()
-        )?
-        .first::<IdempotencyRow>(None)
-        .await
+        )
         .map_err(map_dependency_error)?;
+        let row = statement
+            .first::<IdempotencyRow>(None)
+            .await
+            .map_err(map_dependency_error)?;
 
         let Some(row) = row else {
             return Ok(ClientReplayDecision::Miss);
@@ -123,7 +144,7 @@ impl D1ClientPersistenceRepository {
         scope: &TenantScope,
         client_id: &ClientId,
     ) -> Result<Option<ClientRecord>, ClientPortError> {
-        let row = query!(
+        let statement = query!(
             &self.database,
             r#"
             SELECT kind, display_name, status, version
@@ -132,11 +153,14 @@ impl D1ClientPersistenceRepository {
             "#,
             scope.tenant_id().as_str(),
             client_id.as_str()
-        )?
-        .first::<ClientRow>(None)
-        .await
+        )
         .map_err(map_dependency_error)?;
-        row.map(|row| restore_client(scope, client_id, row)).transpose()
+        let row = statement
+            .first::<ClientRow>(None)
+            .await
+            .map_err(map_dependency_error)?;
+        row.map(|value| restore_client(scope, client_id, value))
+            .transpose()
     }
 
     async fn persist_lifecycle_batch(
@@ -238,7 +262,7 @@ impl D1ClientPersistenceRepository {
         let statements = vec![
             query!(
                 &self.database,
-                CLIENT_CONTACT_COMMAND,
+                CLIENT_CONTACT_UPSERT_COMMAND,
                 tenant_id,
                 command_id.as_str(),
                 actor_id,
@@ -301,6 +325,84 @@ impl D1ClientPersistenceRepository {
         ];
         self.database.batch(statements).await.map(|_| ())
     }
+
+    async fn archive_contact_batch(
+        &self,
+        actor: &ActorContext,
+        write: &ArchiveContactWrite,
+    ) -> WorkerResult<()> {
+        let evidence = write.evidence();
+        let command_id = command_journal_id(
+            actor.tenant_scope().tenant_id(),
+            actor.actor_id(),
+            evidence.idempotency_key(),
+        )?;
+        let tenant_id = actor.tenant_scope().tenant_id().as_str();
+        let actor_id = actor.actor_id().as_str();
+        let client_id = write.client_id().as_str();
+        let contact_point_id = write.contact_point_id().as_str();
+        let now = sqlite_integer(evidence.now())?;
+        let expires_at = sqlite_integer(evidence.idempotency_expires_at())?;
+        let expected_version = sqlite_version(write.expected_client_version())?;
+        let aggregate_version = sqlite_next_version(write.expected_client_version())?;
+
+        let statements = vec![
+            query!(
+                &self.database,
+                CLIENT_CONTACT_ARCHIVE_COMMAND,
+                tenant_id,
+                command_id.as_str(),
+                actor_id,
+                client_id,
+                contact_point_id,
+                write.kind().stable_code(),
+                expected_version,
+                now
+            )?,
+            query!(
+                &self.database,
+                CONTACT_ARCHIVE,
+                actor_id,
+                now,
+                tenant_id,
+                client_id,
+                contact_point_id,
+                write.kind().stable_code()
+            )?,
+            idempotency_statement(
+                &self.database,
+                actor,
+                "client.contact_archive",
+                "contact_archived",
+                contact_point_id,
+                evidence,
+                now,
+                expires_at,
+            )?,
+            audit_statement(
+                &self.database,
+                actor,
+                "client.contact_archive",
+                "client_contact",
+                contact_point_id,
+                "contact_archived",
+                evidence,
+                now,
+            )?,
+            outbox_statement(
+                &self.database,
+                tenant_id,
+                "client",
+                client_id,
+                aggregate_version,
+                "client.contact_archived.v1",
+                write.event_payload_json(),
+                evidence,
+                now,
+            )?,
+        ];
+        self.database.batch(statements).await.map(|_| ())
+    }
 }
 
 impl ClientLifecycleApplicationPort for D1ClientPersistenceRepository {
@@ -335,12 +437,39 @@ impl ClientLifecycleApplicationPort for D1ClientPersistenceRepository {
 impl ProtectedClientContactRepositoryPort for D1ClientPersistenceRepository {
     type Error = ClientPortError;
 
+    async fn load_client_for_contact_mutation(
+        &self,
+        scope: &TenantScope,
+        client_id: &ClientId,
+    ) -> Result<Option<ClientRecord>, Self::Error> {
+        self.load_client(scope, client_id).await
+    }
+
+    async fn decide_client_contact_replay(
+        &self,
+        actor: &ActorContext,
+        command_name: &str,
+        evidence: &CommandExecutionEvidence,
+    ) -> Result<ClientReplayDecision, Self::Error> {
+        self.decide_replay(actor, command_name, evidence).await
+    }
+
     async fn persist_protected_contact(
         &self,
         actor: &ActorContext,
         write: &ProtectedContactWrite,
     ) -> Result<(), Self::Error> {
         self.persist_contact_batch(actor, write)
+            .await
+            .map_err(map_write_error)
+    }
+
+    async fn archive_contact(
+        &self,
+        actor: &ActorContext,
+        write: &ArchiveContactWrite,
+    ) -> Result<(), Self::Error> {
+        self.archive_contact_batch(actor, write)
             .await
             .map_err(map_write_error)
     }
@@ -525,8 +654,10 @@ const fn integrity_failure() -> ClientPortError {
 }
 
 fn classify_write_failure(message: &str) -> ClientPortErrorClass {
+    if message.contains("version_mismatch") {
+        return ClientPortErrorClass::VersionConflict;
+    }
     if message.contains("owner_required")
-        || message.contains("version_mismatch")
         || message.contains("time_regression")
         || message.contains("archived_immutable")
         || message.contains("contact_missing")
@@ -559,7 +690,7 @@ mod tests {
     fn protected_client_write_failures_are_sanitized_and_stable() {
         assert_eq!(
             classify_write_failure("client_contact_client_version_mismatch"),
-            ClientPortErrorClass::Conflict
+            ClientPortErrorClass::VersionConflict
         );
         assert_eq!(
             classify_write_failure("client_contact_archived_immutable"),
