@@ -125,6 +125,112 @@ BEGIN
     );
 END;
 
+-- Replace the accepted Phase 0 mailbox guards with Phase 2E-aware guards. Direct
+-- writes remain rejected; only the canonical v2 command journal may drive the new
+-- lifecycle and operational binding transitions.
+DROP TRIGGER mailbox_jobs_update_governed;
+
+CREATE TRIGGER mailbox_jobs_update_governed
+BEFORE UPDATE ON mailbox_jobs
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'mailbox_job_identity_immutable')
+    WHERE NEW.tenant_id <> OLD.tenant_id
+       OR NEW.binding_id <> OLD.binding_id
+       OR NEW.job_id <> OLD.job_id
+       OR NEW.max_attempts <> OLD.max_attempts
+       OR NEW.created_by_actor_id <> OLD.created_by_actor_id
+       OR NEW.created_at_ms <> OLD.created_at_ms;
+
+    SELECT RAISE(ABORT, 'mailbox_job_update_not_governed')
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM mailbox_job_run_commands_v2 AS command
+        WHERE command.tenant_id = OLD.tenant_id
+          AND command.binding_id = OLD.binding_id
+          AND command.job_id = OLD.job_id
+          AND command.expected_job_version = OLD.version
+          AND command.outcome_status = NEW.lifecycle_status
+          AND NEW.status = CASE command.outcome_status
+              WHEN 'RETRY_PENDING' THEN 'RETRY_PENDING'
+              WHEN 'SUCCEEDED' THEN 'SUCCEEDED'
+              WHEN 'FAILED' THEN 'FAILED'
+              ELSE 'PENDING'
+          END
+          AND command.provider_status = NEW.provider_status
+          AND command.bounded_item_count = NEW.bounded_item_count
+          AND command.command_actor_id = NEW.updated_by_actor_id
+          AND command.executed_at_ms = NEW.updated_at_ms
+          AND (
+              (command.outcome_status = 'SUCCEEDED' AND command.next_cursor IS NEW.cursor)
+              OR (command.outcome_status <> 'SUCCEEDED' AND NEW.cursor IS OLD.cursor)
+          )
+          AND (
+              (command.outcome_status = 'RETRY_PENDING' AND command.retry_at_ms = NEW.next_run_at_ms)
+              OR (command.outcome_status <> 'RETRY_PENDING' AND NEW.next_run_at_ms = OLD.next_run_at_ms)
+          )
+    );
+
+    SELECT RAISE(ABORT, 'mailbox_job_update_invalid_transition')
+    WHERE OLD.lifecycle_status NOT IN ('SCHEDULED', 'RETRY_PENDING')
+       OR NEW.lifecycle_status NOT IN (
+           'SUCCEEDED', 'RETRY_PENDING', 'AUTH_REQUIRED', 'SUSPENDED', 'FAILED'
+       )
+       OR NEW.attempt <> OLD.attempt + 1
+       OR NEW.version <> OLD.version + 3;
+END;
+
+DROP TRIGGER mailbox_bindings_update_governed;
+
+CREATE TRIGGER mailbox_bindings_update_governed
+BEFORE UPDATE ON mailbox_bindings
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'mailbox_binding_identity_immutable')
+    WHERE NEW.tenant_id <> OLD.tenant_id
+       OR NEW.binding_id <> OLD.binding_id
+       OR NEW.provider <> OLD.provider
+       OR NEW.secret_handle <> OLD.secret_handle
+       OR NEW.created_by_actor_id <> OLD.created_by_actor_id
+       OR NEW.created_at_ms <> OLD.created_at_ms;
+
+    SELECT RAISE(ABORT, 'mailbox_binding_update_not_governed')
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM mailbox_binding_revoke_commands AS command
+        WHERE command.tenant_id = OLD.tenant_id
+          AND command.binding_id = OLD.binding_id
+          AND command.expected_binding_version = OLD.version
+          AND command.command_actor_id = NEW.updated_by_actor_id
+          AND command.executed_at_ms = NEW.updated_at_ms
+    )
+    AND NOT EXISTS (
+        SELECT 1
+        FROM mailbox_job_run_commands_v2 AS command
+        WHERE command.tenant_id = OLD.tenant_id
+          AND command.binding_id = OLD.binding_id
+          AND command.outcome_status IN ('AUTH_REQUIRED', 'SUSPENDED')
+          AND command.outcome_status = NEW.execution_status
+          AND command.command_actor_id = NEW.updated_by_actor_id
+          AND command.executed_at_ms = NEW.updated_at_ms
+    );
+
+    SELECT RAISE(ABORT, 'mailbox_binding_update_invalid_transition')
+    WHERE NOT (
+        OLD.status = 'ACTIVE'
+        AND NEW.status = 'REVOKED'
+        AND NEW.execution_status = OLD.execution_status
+        AND NEW.version = OLD.version + 1
+    )
+    AND NOT (
+        OLD.status = 'ACTIVE'
+        AND NEW.status = 'ACTIVE'
+        AND OLD.execution_status = 'ACTIVE'
+        AND NEW.execution_status IN ('AUTH_REQUIRED', 'SUSPENDED')
+        AND NEW.version = OLD.version + 1
+    );
+END;
+
 CREATE TRIGGER mailbox_job_run_v2_command_apply
 AFTER INSERT ON mailbox_job_run_commands_v2
 FOR EACH ROW
@@ -153,22 +259,15 @@ BEGIN
       AND job_id = NEW.job_id;
 
     UPDATE mailbox_bindings
-    SET execution_status = CASE NEW.outcome_status
-            WHEN 'AUTH_REQUIRED' THEN 'AUTH_REQUIRED'
-            WHEN 'SUSPENDED' THEN 'SUSPENDED'
-            ELSE execution_status
-        END,
-        updated_by_actor_id = CASE
-            WHEN NEW.outcome_status IN ('AUTH_REQUIRED', 'SUSPENDED') THEN NEW.command_actor_id
-            ELSE updated_by_actor_id
-        END,
-        updated_at_ms = CASE
-            WHEN NEW.outcome_status IN ('AUTH_REQUIRED', 'SUSPENDED') THEN NEW.executed_at_ms
-            ELSE updated_at_ms
-        END
+    SET execution_status = NEW.outcome_status,
+        version = version + 1,
+        updated_by_actor_id = NEW.command_actor_id,
+        updated_at_ms = NEW.executed_at_ms
     WHERE tenant_id = NEW.tenant_id
       AND binding_id = NEW.binding_id
-      AND status = 'ACTIVE';
+      AND status = 'ACTIVE'
+      AND execution_status = 'ACTIVE'
+      AND NEW.outcome_status IN ('AUTH_REQUIRED', 'SUSPENDED');
 END;
 
 -- Fail closed for binaries that still try to use the pre-Phase-2E run command.
