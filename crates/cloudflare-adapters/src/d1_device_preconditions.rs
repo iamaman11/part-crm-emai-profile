@@ -65,7 +65,7 @@ impl DeviceExecutionPreconditionPort for D1DeviceExecutionPreconditions {
     ) -> Result<DeviceExecutionReadiness, DeviceJobPortError> {
         if actor.tenant_scope().tenant_id() != target.tenant_id() {
             return Ok(DeviceExecutionReadiness::Blocked(
-                DeviceExecutionBlocker::DeviceNotAuthorized,
+                DeviceExecutionBlocker::DeviceUnauthorized,
             ));
         }
 
@@ -95,12 +95,12 @@ impl DeviceExecutionPreconditionPort for D1DeviceExecutionPreconditions {
 
         if !device_authorized {
             return Ok(DeviceExecutionReadiness::Blocked(
-                DeviceExecutionBlocker::DeviceNotAuthorized,
+                DeviceExecutionBlocker::DeviceUnauthorized,
             ));
         }
         if !generation_active {
             return Ok(DeviceExecutionReadiness::Blocked(
-                DeviceExecutionBlocker::GenerationNotActive,
+                DeviceExecutionBlocker::GenerationInactive,
             ));
         }
         if !generation_verified {
