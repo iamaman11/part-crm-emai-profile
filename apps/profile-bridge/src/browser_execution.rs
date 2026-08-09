@@ -1,7 +1,8 @@
 use crate::local_profile::{GenerationWorkspace, LocalProfileError};
 use browser_execution_domain::{
-    BrowserExecutionError, BrowserIdentityManifest, BrowserWriterDecision, BrowserWriterObservation,
-    MaterializationBinding, NetworkIdentityDecision, NetworkIdentityObservation, NetworkIdentityPolicy,
+    BrowserExecutionError, BrowserIdentityManifest, BrowserWriterDecision,
+    BrowserWriterObservation, MaterializationBinding, NetworkIdentityDecision,
+    NetworkIdentityObservation, NetworkIdentityPolicy,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
 use std::collections::BTreeMap;
@@ -251,9 +252,7 @@ fn map_execution_error(_error: BrowserExecutionError) -> BrowserLaunchBlocker {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BrowserLaunchBlocker, evaluate_browser_launch, persist_materialization_binding,
-    };
+    use super::{BrowserLaunchBlocker, evaluate_browser_launch, persist_materialization_binding};
     use crate::local_profile::MaterializationRoot;
     use browser_execution_domain::{
         BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
@@ -381,8 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn network_route_churn_is_retryable_before_launch()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn network_route_churn_is_retryable_before_launch() -> Result<(), Box<dyn std::error::Error>> {
         let root_path = root_path("network")?;
         let root = MaterializationRoot::open_or_create(&root_path)?;
         let tenant = TenantId::parse("tenant_01JNETWORK")?;

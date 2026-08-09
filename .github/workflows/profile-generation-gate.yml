@@ -7,55 +7,13 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: profile-generation-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  phase2f-browser-freshness-materialize:
-    if: github.event_name == 'pull_request' && github.head_ref == 'phase2f-device-browser-mailbox'
-    name: Phase 2F Browser Freshness Materialize And Verify
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout Phase 2F source branch
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: phase2f-device-browser-mailbox
-          fetch-depth: 0
-
-      - name: Materialize formatting and generated consistency
-        run: |
-          cargo fmt --all
-          cargo generate-lockfile
-          python scripts/generate-architecture-inventory.py --write
-          rustup target add wasm32-unknown-unknown
-
-      - name: Verify browser freshness slice before commit
-        run: |
-          set -euo pipefail
-          python scripts/check-architecture.py
-          python scripts/test-device-job-d1.py
-          cargo clippy --locked -p browser-execution-domain -p profile-bridge -p device-domain -p application-ports -p use-cases-devices --all-targets -- -D warnings
-          cargo test --locked -p browser-execution-domain -p profile-bridge -p device-domain -p application-ports -p use-cases-devices
-          cargo test --locked -p cloudflare-adapters --lib
-          cargo check --locked -p cloudflare-adapters --target wasm32-unknown-unknown
-          python scripts/generate-architecture-inventory.py --check
-          git diff --check
-
-      - name: Commit verified slice and restore permanent workflow
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main --depth=1
-          git checkout origin/main -- .github/workflows/profile-generation-gate.yml
-          git add -A
-          git diff --cached --check
-          git commit -m "Phase 2F: verify browser materialization freshness guards"
-          git push origin HEAD:phase2f-device-browser-mailbox
-
   profile-generation:
     name: Registry Domain D1 Adapter Worker And Contract
     runs-on: ubuntu-latest

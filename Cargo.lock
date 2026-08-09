@@ -61,6 +61,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "browser-execution-domain"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
+]
+
+[[package]]
 name = "browser-profile-control-plane-worker"
 version = "0.1.0"
 dependencies = [
@@ -649,6 +656,7 @@ version = "0.1.0"
 dependencies = [
  "application-ports",
  "bridge-domain",
+ "browser-execution-domain",
  "profile-platform-primitives",
  "runtime-bundle-domain",
  "session-domain",

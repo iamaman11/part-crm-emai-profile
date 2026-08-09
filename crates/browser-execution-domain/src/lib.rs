@@ -203,8 +203,12 @@ impl NetworkIdentityPolicy {
         allowed_asns: impl IntoIterator<Item = u32>,
         required_route_identity: Option<String>,
     ) -> Result<Self, BrowserExecutionError> {
-        if country.as_deref().is_some_and(|value| !valid_location(value))
-            || region.as_deref().is_some_and(|value| !valid_location(value))
+        if country
+            .as_deref()
+            .is_some_and(|value| !valid_location(value))
+            || region
+                .as_deref()
+                .is_some_and(|value| !valid_location(value))
             || timezone
                 .as_deref()
                 .is_some_and(|value| !valid_timezone(value))
@@ -368,10 +372,14 @@ pub enum BrowserExecutionError {
 impl fmt::Display for BrowserExecutionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidCompatibilityVersion => "browser identity compatibility version is invalid",
+            Self::InvalidCompatibilityVersion => {
+                "browser identity compatibility version is invalid"
+            }
             Self::InvalidIdentityToken => "browser identity token is invalid",
             Self::InvalidDigest => "browser identity digest must be lowercase SHA-256 hex",
-            Self::InvalidMaterializationInventory => "materialized inventory digest must be non-zero",
+            Self::InvalidMaterializationInventory => {
+                "materialized inventory digest must be non-zero"
+            }
             Self::InvalidNetworkPolicy => "network identity policy is invalid",
             Self::InvalidNetworkObservation => "network identity observation is invalid",
         })
@@ -403,9 +411,9 @@ fn valid_location(value: &str) -> bool {
 
 fn valid_timezone(value: &str) -> bool {
     (3..=MAX_TIMEZONE_BYTES).contains(&value.len())
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'_' | b'-' | b'+')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'_' | b'-' | b'+'))
 }
 
 fn valid_route_identity(value: &str) -> bool {
@@ -518,7 +526,10 @@ mod tests {
             5617,
             "route-a",
         )?;
-        assert_eq!(policy.evaluate(&accepted), NetworkIdentityDecision::Accepted);
+        assert_eq!(
+            policy.evaluate(&accepted),
+            NetworkIdentityDecision::Accepted
+        );
 
         let churn = NetworkIdentityObservation::new(
             "PL",

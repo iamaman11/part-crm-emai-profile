@@ -6,6 +6,7 @@
     "apps/profile-bridge",
     "crates/application-ports",
     "crates/bridge-domain",
+    "crates/browser-execution-domain",
     "crates/certification-domain",
     "crates/client-domain",
     "crates/device-domain",
