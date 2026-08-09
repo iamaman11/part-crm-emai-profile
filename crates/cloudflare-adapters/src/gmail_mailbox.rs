@@ -3,6 +3,7 @@ use application_ports::mailboxes::MailboxProviderPortError;
 use mailbox_domain::{MailboxBinding, MailboxJob, MailboxObservation, MailboxProviderFailureClass};
 use serde::Deserialize;
 use worker::{Fetch, Headers, Method, Request, RequestInit};
+use zeroize::Zeroize;
 
 const GMAIL_MESSAGES_ENDPOINT: &str = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
 const MAX_GMAIL_RESPONSE_BYTES: usize = 256 * 1024;
@@ -43,7 +44,7 @@ pub async fn check_gmail_mailbox(
     headers
         .set("authorization", &authorization)
         .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    authorization.clear();
+    authorization.zeroize();
     headers
         .set("accept", "application/json")
         .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
