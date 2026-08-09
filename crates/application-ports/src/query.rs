@@ -125,6 +125,7 @@ impl std::error::Error for QueryInputError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QueryPortErrorClass {
+    InvalidCursor,
     IntegrityFailure,
     DependencyUnavailable,
 }
@@ -149,6 +150,7 @@ impl QueryPortError {
 impl fmt::Display for QueryPortError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self.class {
+            QueryPortErrorClass::InvalidCursor => "query cursor is invalid for this projection",
             QueryPortErrorClass::IntegrityFailure => "query projection integrity failure",
             QueryPortErrorClass::DependencyUnavailable => "query projection dependency unavailable",
         })
