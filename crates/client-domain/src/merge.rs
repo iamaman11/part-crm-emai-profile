@@ -240,8 +240,8 @@ mod tests {
     }
 
     #[test]
-    fn tenant_or_self_merge_failure_never_mutates_source()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn tenant_or_self_merge_failure_never_mutates_source() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut source = client(
             "tenant_01JMERGE",
             "client_01JMERGE",
@@ -403,8 +403,8 @@ mod tests {
     }
 
     #[test]
-    fn version_overflow_does_not_partially_merge_source()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn version_overflow_does_not_partially_merge_source() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut source = client(
             "tenant_01JMERGE",
             "client_01JMERGE",
