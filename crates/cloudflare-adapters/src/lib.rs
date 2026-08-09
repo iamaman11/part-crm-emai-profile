@@ -2,6 +2,8 @@
 
 pub mod access_identity;
 pub mod access_webcrypto;
+pub mod cloud_mailbox_provider;
+mod cloud_mailbox_secrets;
 pub mod contact_keyring;
 pub mod contact_lookup;
 pub mod contact_protection;
@@ -35,6 +37,8 @@ pub mod d1_profile_generations;
 pub mod d1_profiles;
 pub mod d1_query;
 pub mod fake_mail_query;
+pub mod gmail_mailbox;
+pub mod imap_mailbox;
 pub mod integration_event_queue;
 pub mod mailbox_provider;
 pub mod profile_coordinator;
