@@ -6,12 +6,24 @@ pub use mailbox_domain::{
 };
 use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, TenantScope};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MailboxProviderPortError {
+    Failure(MailboxProviderFailure),
+    IntegrityFailure,
+}
+
+impl From<MailboxProviderFailure> for MailboxProviderPortError {
+    fn from(value: MailboxProviderFailure) -> Self {
+        Self::Failure(value)
+    }
+}
+
 pub trait MailboxProviderPort {
     fn check_mailbox(
         &mut self,
         binding: &MailboxBinding,
         job: &MailboxJob,
-    ) -> impl Future<Output = Result<MailboxObservation, MailboxProviderFailure>>;
+    ) -> impl Future<Output = Result<MailboxObservation, MailboxProviderPortError>>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
