@@ -525,7 +525,13 @@ fn restore_client(
 
 fn lifecycle_metadata(
     client: &ClientRecord,
-) -> WorkerResult<(&'static str, &'static str, &'static str, &'static str, Option<&str>)> {
+) -> WorkerResult<(
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    Option<&str>,
+)> {
     match client.status() {
         ClientStatus::Active => Ok((
             "UPDATE",
