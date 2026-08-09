@@ -14,6 +14,7 @@ pub mod identity_ceremonies;
 pub mod identity_governance;
 pub mod integration_events;
 pub mod mailbox_jobs;
+pub mod mailbox_scheduling;
 pub mod mailboxes;
 pub mod notifications;
 pub mod profile_assignment_context;
