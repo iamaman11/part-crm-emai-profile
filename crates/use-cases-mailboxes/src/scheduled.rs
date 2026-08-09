@@ -56,17 +56,19 @@ where
     Ok(published)
 }
 
-pub async fn process_scheduled_mailbox_job<R, P>(
+pub async fn process_scheduled_mailbox_job<A, S, P>(
     actor: &ActorContext,
     role: MembershipRole,
-    repository: &R,
+    application: &A,
+    scheduling: &S,
     provider: &mut P,
     dispatch: &MailboxJobDispatch,
     evidence: CommandExecutionEvidence,
     now: UnixMillis,
 ) -> Result<ScheduledMailboxProcessingOutcome, MailboxJobOperationError>
 where
-    R: MailboxJobApplicationPort + MailboxSchedulingRepositoryPort,
+    A: MailboxJobApplicationPort,
+    S: MailboxSchedulingRepositoryPort,
     P: MailboxProviderPort,
 {
     authorize_mailbox_job(role)?;
@@ -78,7 +80,7 @@ where
     }
 
     let lease_expires_at = execution_lease_expires_at(now)?;
-    let claim = repository
+    let claim = scheduling
         .acquire_execution(
             dispatch,
             MailboxExecutionClaimWrite::new(now, lease_expires_at),
@@ -98,7 +100,7 @@ where
     let run = execute_run_mailbox_job(
         actor,
         role,
-        repository,
+        application,
         provider,
         ExecuteRunMailboxJobCommand::new(
             dispatch.binding_id().clone(),
@@ -110,7 +112,7 @@ where
     .await;
 
     match run {
-        Ok(_) => match repository
+        Ok(_) => match scheduling
             .complete_execution(dispatch, lease.fence(), now)
             .await
             .map_err(map_scheduling_port_error)?
