@@ -1,3 +1,4 @@
+use application_ports::browser_mail_execution::BrowserMailboxExecutionBinding;
 use application_ports::device_jobs::{DeviceClaimId, DeviceJobId};
 use application_ports::query_mail_provider::{
     ClientMailProviderQueryPort, MailMessageBody, MailMessageSummary, MailboxMessageReference,
@@ -10,7 +11,7 @@ use session_domain::{LeaseStatus, ProfileLease};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserMailExecutionProof {
-    binding_id: MailboxBindingId,
+    execution_binding: BrowserMailboxExecutionBinding,
     generation_id: GenerationId,
     device_job_id: DeviceJobId,
     device_claim_id: DeviceClaimId,
@@ -20,18 +21,21 @@ pub struct BrowserMailExecutionProof {
 
 impl BrowserMailExecutionProof {
     pub fn new(
-        binding_id: MailboxBindingId,
+        execution_binding: BrowserMailboxExecutionBinding,
         generation_id: GenerationId,
         device_job_id: DeviceJobId,
         device_claim_id: DeviceClaimId,
         device_job_fence: u64,
         coordinator_lease: ProfileLease,
     ) -> Result<Self, BrowserMailExecutionProofError> {
-        if device_job_fence == 0 || coordinator_lease.status() != LeaseStatus::Active {
+        if device_job_fence == 0
+            || coordinator_lease.status() != LeaseStatus::Active
+            || coordinator_lease.profile_id() != execution_binding.profile_id()
+        {
             return Err(BrowserMailExecutionProofError::InvalidExecutionProof);
         }
         Ok(Self {
-            binding_id,
+            execution_binding,
             generation_id,
             device_job_id,
             device_claim_id,
@@ -41,8 +45,13 @@ impl BrowserMailExecutionProof {
     }
 
     #[must_use]
+    pub const fn execution_binding(&self) -> &BrowserMailboxExecutionBinding {
+        &self.execution_binding
+    }
+
+    #[must_use]
     pub const fn binding_id(&self) -> &MailboxBindingId {
-        &self.binding_id
+        self.execution_binding.binding_id()
     }
 
     #[must_use]
@@ -215,8 +224,9 @@ const fn integrity_failure() -> QueryPortError {
 mod tests {
     use super::{
         BrowserClientMailQueryAdapter, BrowserMailExecutionFencePort, BrowserMailExecutionProof,
-        BrowserMailRuntimePort,
+        BrowserMailExecutionProofError, BrowserMailRuntimePort,
     };
+    use application_ports::browser_mail_execution::BrowserMailboxExecutionBinding;
     use application_ports::device_jobs::{DeviceClaimId, DeviceJobId};
     use application_ports::query_mail_provider::{
         ClientMailProviderQueryPort, MailMessageBody, MailMessageSummary, MailSearchTerm,
@@ -247,15 +257,19 @@ mod tests {
     }
 
     fn proof() -> Result<BrowserMailExecutionProof, Box<dyn std::error::Error>> {
+        let profile_id = ProfileId::parse("profile_01JBRMAIL")?;
         Ok(BrowserMailExecutionProof::new(
-            MailboxBindingId::parse("binding_01JBRMAIL")?,
+            BrowserMailboxExecutionBinding::new(
+                MailboxBindingId::parse("binding_01JBRMAIL")?,
+                profile_id.clone(),
+            ),
             GenerationId::parse("generation_01JBRMAIL")?,
             DeviceJobId::parse("devjob_01JBRMAIL")?,
             DeviceClaimId::parse("devclaim_01JBRMAIL")?,
             7,
             ProfileLease::issue(
                 TenantId::parse("tenant_01JBRMAIL")?,
-                ProfileId::parse("profile_01JBRMAIL")?,
+                profile_id,
                 SessionId::parse("session_01JBRMAIL")?,
                 DeviceId::parse("device_01JBRMAIL")?,
                 4,
@@ -352,6 +366,34 @@ mod tests {
             body_calls: Cell::new(0),
             returned_binding: binding_id,
         }
+    }
+
+    #[test]
+    fn execution_binding_profile_must_match_coordinator_lease()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let result = BrowserMailExecutionProof::new(
+            BrowserMailboxExecutionBinding::new(
+                MailboxBindingId::parse("binding_01JBRMAIL")?,
+                ProfileId::parse("profile_02JBRMAIL")?,
+            ),
+            GenerationId::parse("generation_01JBRMAIL")?,
+            DeviceJobId::parse("devjob_01JBRMAIL")?,
+            DeviceClaimId::parse("devclaim_01JBRMAIL")?,
+            7,
+            ProfileLease::issue(
+                TenantId::parse("tenant_01JBRMAIL")?,
+                ProfileId::parse("profile_01JBRMAIL")?,
+                SessionId::parse("session_01JBRMAIL")?,
+                DeviceId::parse("device_01JBRMAIL")?,
+                4,
+                FencingToken::parse("fence_01JBRMAIL")?,
+            )?,
+        );
+        assert_eq!(
+            result.map(|_| ()),
+            Err(BrowserMailExecutionProofError::InvalidExecutionProof)
+        );
+        Ok(())
     }
 
     #[test]
