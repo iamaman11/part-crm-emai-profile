@@ -6,6 +6,9 @@ pub mod local_profile;
 pub mod operator_flow;
 pub mod runtime_bundle;
 
+#[cfg(test)]
+mod test_support;
+
 #[cfg(windows)]
 pub mod windows_native;
 
