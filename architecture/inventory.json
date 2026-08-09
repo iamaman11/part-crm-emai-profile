@@ -50,7 +50,8 @@
       "migrations/d1/0016_mailbox_cloud_lane.sql",
       "migrations/d1/0017_mailbox_queue_coordination.sql",
       "migrations/d1/0018_device_authorizations_and_jobs.sql",
-      "migrations/d1/0019_device_actor_bindings.sql"
+      "migrations/d1/0019_device_actor_bindings.sql",
+      "migrations/d1/0020_browser_mailbox_execution_bindings.sql"
     ]
   },
   "routing": {
@@ -389,6 +390,16 @@
         ],
         "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/revoke",
         "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/revoke",
+        "authenticated": true
+      },
+      {
+        "route_class": "MailboxBrowserExecutionBindApi",
+        "capability": "mailboxes",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/browser-execution",
+        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/browser-execution",
         "authenticated": true
       },
       {
