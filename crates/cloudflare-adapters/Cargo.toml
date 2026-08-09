@@ -7,8 +7,10 @@ publish = false
 
 [dependencies]
 application-ports.workspace = true
+chacha20poly1305.workspace = true
 client-domain.workspace = true
 contracts.workspace = true
+hmac.workspace = true
 identity-access-domain.workspace = true
 mailbox-domain.workspace = true
 notification-domain.workspace = true
@@ -16,8 +18,10 @@ profile-platform-primitives.workspace = true
 serde = "=1.0.229"
 serde_json = "=1.0.151"
 session-domain.workspace = true
+sha2.workspace = true
 web-sys = { version = "=0.3.103", features = ["Crypto", "CryptoKey", "SubtleCrypto", "WorkerGlobalScope"] }
 worker.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

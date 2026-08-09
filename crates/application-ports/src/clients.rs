@@ -422,7 +422,6 @@ impl<'a> ContactEncryptionRequest<'a> {
 
 pub struct ContactExactLookupRequest<'a> {
     tenant_id: &'a TenantId,
-    contact_point_id: &'a ContactPointId,
     kind: ContactKind,
     normalization_version: ContactNormalizationVersion,
     hmac_input: &'a ExactLookupHmacInput,
@@ -432,14 +431,12 @@ impl<'a> ContactExactLookupRequest<'a> {
     #[must_use]
     pub const fn new(
         tenant_id: &'a TenantId,
-        contact_point_id: &'a ContactPointId,
         kind: ContactKind,
         normalization_version: ContactNormalizationVersion,
         hmac_input: &'a ExactLookupHmacInput,
     ) -> Self {
         Self {
             tenant_id,
-            contact_point_id,
             kind,
             normalization_version,
             hmac_input,
@@ -452,13 +449,8 @@ impl<'a> ContactExactLookupRequest<'a> {
     }
 
     #[must_use]
-    pub const fn tenant_id(&self) -> &TenantId {
+    pub const fn tenant_id(&self) -> &'a TenantId {
         self.tenant_id
-    }
-
-    #[must_use]
-    pub const fn contact_point_id(&self) -> &ContactPointId {
-        self.contact_point_id
     }
 
     #[must_use]
@@ -472,7 +464,7 @@ impl<'a> ContactExactLookupRequest<'a> {
     }
 
     #[must_use]
-    pub const fn hmac_input(&self) -> &ExactLookupHmacInput {
+    pub const fn hmac_input(&self) -> &'a ExactLookupHmacInput {
         self.hmac_input
     }
 }
@@ -651,13 +643,93 @@ pub trait ContactProtectionPort {
     ) -> Result<ExactLookupToken, ContactProtectionPortError>;
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArchiveContactWrite {
+    client_id: ClientId,
+    contact_point_id: ContactPointId,
+    kind: ContactKind,
+    expected_client_version: AggregateVersion,
+    evidence: CommandExecutionEvidence,
+    event_payload_json: &'static str,
+}
+
+impl ArchiveContactWrite {
+    #[must_use]
+    pub const fn new(
+        client_id: ClientId,
+        contact_point_id: ContactPointId,
+        kind: ContactKind,
+        expected_client_version: AggregateVersion,
+        evidence: CommandExecutionEvidence,
+        event_payload_json: &'static str,
+    ) -> Self {
+        Self {
+            client_id,
+            contact_point_id,
+            kind,
+            expected_client_version,
+            evidence,
+            event_payload_json,
+        }
+    }
+
+    #[must_use]
+    pub const fn client_id(&self) -> &ClientId {
+        &self.client_id
+    }
+
+    #[must_use]
+    pub const fn contact_point_id(&self) -> &ContactPointId {
+        &self.contact_point_id
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> ContactKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn expected_client_version(&self) -> AggregateVersion {
+        self.expected_client_version
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub const fn event_payload_json(&self) -> &'static str {
+        self.event_payload_json
+    }
+}
+
 #[allow(async_fn_in_trait)]
 pub trait ProtectedClientContactRepositoryPort {
     type Error;
+
+    async fn load_client_for_contact_mutation(
+        &self,
+        scope: &TenantScope,
+        client_id: &ClientId,
+    ) -> Result<Option<ClientRecord>, Self::Error>;
+
+    async fn decide_client_contact_replay(
+        &self,
+        actor: &ActorContext,
+        command_name: &str,
+        evidence: &CommandExecutionEvidence,
+    ) -> Result<ClientReplayDecision, Self::Error>;
 
     async fn persist_protected_contact(
         &self,
         actor: &ActorContext,
         write: &ProtectedContactWrite,
+    ) -> Result<(), Self::Error>;
+
+    async fn archive_contact(
+        &self,
+        actor: &ActorContext,
+        write: &ArchiveContactWrite,
     ) -> Result<(), Self::Error>;
 }

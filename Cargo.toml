@@ -38,6 +38,7 @@ client-domain = { path = "crates/client-domain" }
 cloudflare-adapters = { path = "crates/cloudflare-adapters" }
 contracts = { path = "crates/contracts" }
 encrypted-generation-domain = { path = "crates/encrypted-generation-domain" }
+hmac = { version = "=0.13.0", default-features = false }
 identity-access-domain = { path = "crates/identity-access-domain" }
 mailbox-domain = { path = "crates/mailbox-domain" }
 notification-domain = { path = "crates/notification-domain" }

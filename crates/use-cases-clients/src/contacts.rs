@@ -1,17 +1,21 @@
 use application_ports::CommandExecutionEvidence;
 use application_ports::clients::{
-    ContactEncryptionRequest, ContactExactLookupRequest, ContactProtectionPort,
-    ContactProtectionPortError, ContactProtectionPortErrorClass, ProtectedContactWrite,
+    ArchiveContactWrite, ClientPortError, ClientPortErrorClass, ClientReplayDecision,
+    ClientReplayReceipt, ContactEncryptionRequest, ContactExactLookupRequest,
+    ContactProtectionPort, ContactProtectionPortError, ContactProtectionPortErrorClass,
+    ProtectedClientContactRepositoryPort, ProtectedContactWrite,
 };
 use client_domain::{
-    ContactKind, ContactNormalizationVersion, ContactProtectionVersion, ContactStatus,
-    ProtectedContactPoint, exact_lookup_hmac_input, normalize_contact_value,
+    ClientStatus, ContactKind, ContactNormalizationVersion, ContactProtectionVersion,
+    ContactStatus, ProtectedContactPoint, exact_lookup_hmac_input, normalize_contact_value,
 };
 use core::fmt;
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, AggregateVersion, ClientId, ContactPointId};
 use zeroize::Zeroize;
 
+const CLIENT_CONTACT_UPSERT_COMMAND: &str = "client.contact_upsert";
+const CLIENT_CONTACT_ARCHIVE_COMMAND: &str = "client.contact_archive";
 const EVENT_PAYLOAD: &str = "{}";
 
 pub struct TransientContactValue {
@@ -72,6 +76,31 @@ impl PrepareProtectedContactCommand {
             evidence,
         }
     }
+
+    #[must_use]
+    pub const fn client_id(&self) -> &ClientId {
+        &self.client_id
+    }
+
+    #[must_use]
+    pub const fn contact_point_id(&self) -> &ContactPointId {
+        &self.contact_point_id
+    }
+
+    #[must_use]
+    pub const fn expected_client_version(&self) -> AggregateVersion {
+        self.expected_client_version
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> ContactKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
 }
 
 impl fmt::Debug for PrepareProtectedContactCommand {
@@ -88,12 +117,79 @@ impl fmt::Debug for PrepareProtectedContactCommand {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArchiveContactCommand {
+    client_id: ClientId,
+    contact_point_id: ContactPointId,
+    expected_client_version: AggregateVersion,
+    kind: ContactKind,
+    evidence: CommandExecutionEvidence,
+}
+
+impl ArchiveContactCommand {
+    #[must_use]
+    pub const fn new(
+        client_id: ClientId,
+        contact_point_id: ContactPointId,
+        expected_client_version: AggregateVersion,
+        kind: ContactKind,
+        evidence: CommandExecutionEvidence,
+    ) -> Self {
+        Self {
+            client_id,
+            contact_point_id,
+            expected_client_version,
+            kind,
+            evidence,
+        }
+    }
+
+    #[must_use]
+    pub const fn client_id(&self) -> &ClientId {
+        &self.client_id
+    }
+
+    #[must_use]
+    pub const fn contact_point_id(&self) -> &ContactPointId {
+        &self.contact_point_id
+    }
+
+    #[must_use]
+    pub const fn expected_client_version(&self) -> AggregateVersion {
+        self.expected_client_version
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> ContactKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn evidence(&self) -> &CommandExecutionEvidence {
+        &self.evidence
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ContactMutationOutcome {
+    Applied {
+        client_id: ClientId,
+        contact_point_id: ContactPointId,
+        client_version: AggregateVersion,
+    },
+    Replayed(ClientReplayReceipt),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContactApplicationError {
     NotFound,
     InvalidRequest,
+    VersionConflict,
+    InvalidState,
+    Conflict,
     KeyUnavailable,
     IntegrityFailure,
+    DependencyUnavailable,
     InternalFailure,
 }
 
@@ -102,8 +198,12 @@ impl fmt::Display for ContactApplicationError {
         formatter.write_str(match self {
             Self::NotFound => "client contact not found",
             Self::InvalidRequest => "client contact request is invalid",
+            Self::VersionConflict => "client contact version conflict",
+            Self::InvalidState => "client contact invalid state",
+            Self::Conflict => "client contact conflict",
             Self::KeyUnavailable => "client contact protection key unavailable",
             Self::IntegrityFailure => "client contact protection integrity failure",
+            Self::DependencyUnavailable => "client contact dependency unavailable",
             Self::InternalFailure => "client contact application internal failure",
         })
     }
@@ -117,6 +217,141 @@ pub fn authorize_contact_mutation(role: MembershipRole) -> Result<(), ContactApp
     } else {
         Err(ContactApplicationError::NotFound)
     }
+}
+
+pub async fn execute_upsert_contact<P, R>(
+    actor: &ActorContext,
+    role: MembershipRole,
+    protector: &P,
+    repository: &R,
+    command: PrepareProtectedContactCommand,
+) -> Result<ContactMutationOutcome, ContactApplicationError>
+where
+    P: ContactProtectionPort,
+    R: ProtectedClientContactRepositoryPort<Error = ClientPortError>,
+{
+    authorize_contact_mutation(role)?;
+    match repository
+        .decide_client_contact_replay(actor, CLIENT_CONTACT_UPSERT_COMMAND, command.evidence())
+        .await
+        .map_err(map_repository_error)?
+    {
+        ClientReplayDecision::Replay(receipt) => {
+            return Ok(ContactMutationOutcome::Replayed(receipt));
+        }
+        ClientReplayDecision::Conflict => return Err(ContactApplicationError::Conflict),
+        ClientReplayDecision::Miss => {}
+    }
+
+    let current = repository
+        .load_client_for_contact_mutation(actor.tenant_scope(), command.client_id())
+        .await
+        .map_err(map_repository_error)?
+        .ok_or(ContactApplicationError::NotFound)?;
+    validate_client_for_contact(&current, command.expected_client_version())?;
+
+    let client_id = command.client_id().clone();
+    let contact_point_id = command.contact_point_id().clone();
+    let expected_version = command.expected_client_version();
+    let write = prepare_protected_contact(actor, role, protector, command).await?;
+
+    if let Err(error) = repository.persist_protected_contact(actor, &write).await {
+        if error.class() == ClientPortErrorClass::Conflict {
+            match repository
+                .decide_client_contact_replay(
+                    actor,
+                    CLIENT_CONTACT_UPSERT_COMMAND,
+                    write.evidence(),
+                )
+                .await
+                .map_err(map_repository_error)?
+            {
+                ClientReplayDecision::Replay(receipt) => {
+                    return Ok(ContactMutationOutcome::Replayed(receipt));
+                }
+                ClientReplayDecision::Conflict | ClientReplayDecision::Miss => {}
+            }
+        }
+        return Err(map_repository_error(error));
+    }
+
+    Ok(ContactMutationOutcome::Applied {
+        client_id,
+        contact_point_id,
+        client_version: expected_version
+            .next()
+            .map_err(|_| ContactApplicationError::InternalFailure)?,
+    })
+}
+
+pub async fn execute_archive_contact<R>(
+    actor: &ActorContext,
+    role: MembershipRole,
+    repository: &R,
+    command: ArchiveContactCommand,
+) -> Result<ContactMutationOutcome, ContactApplicationError>
+where
+    R: ProtectedClientContactRepositoryPort<Error = ClientPortError>,
+{
+    authorize_contact_mutation(role)?;
+    match repository
+        .decide_client_contact_replay(actor, CLIENT_CONTACT_ARCHIVE_COMMAND, command.evidence())
+        .await
+        .map_err(map_repository_error)?
+    {
+        ClientReplayDecision::Replay(receipt) => {
+            return Ok(ContactMutationOutcome::Replayed(receipt));
+        }
+        ClientReplayDecision::Conflict => return Err(ContactApplicationError::Conflict),
+        ClientReplayDecision::Miss => {}
+    }
+
+    let current = repository
+        .load_client_for_contact_mutation(actor.tenant_scope(), command.client_id())
+        .await
+        .map_err(map_repository_error)?
+        .ok_or(ContactApplicationError::NotFound)?;
+    validate_client_for_contact(&current, command.expected_client_version())?;
+
+    let client_id = command.client_id().clone();
+    let contact_point_id = command.contact_point_id().clone();
+    let expected_version = command.expected_client_version();
+    let write = ArchiveContactWrite::new(
+        client_id.clone(),
+        contact_point_id.clone(),
+        command.kind(),
+        expected_version,
+        command.evidence().clone(),
+        EVENT_PAYLOAD,
+    );
+
+    if let Err(error) = repository.archive_contact(actor, &write).await {
+        if error.class() == ClientPortErrorClass::Conflict {
+            match repository
+                .decide_client_contact_replay(
+                    actor,
+                    CLIENT_CONTACT_ARCHIVE_COMMAND,
+                    write.evidence(),
+                )
+                .await
+                .map_err(map_repository_error)?
+            {
+                ClientReplayDecision::Replay(receipt) => {
+                    return Ok(ContactMutationOutcome::Replayed(receipt));
+                }
+                ClientReplayDecision::Conflict | ClientReplayDecision::Miss => {}
+            }
+        }
+        return Err(map_repository_error(error));
+    }
+
+    Ok(ContactMutationOutcome::Applied {
+        client_id,
+        contact_point_id,
+        client_version: expected_version
+            .next()
+            .map_err(|_| ContactApplicationError::InternalFailure)?,
+    })
 }
 
 pub async fn prepare_protected_contact<P: ContactProtectionPort>(
@@ -158,7 +393,6 @@ pub async fn prepare_protected_contact<P: ContactProtectionPort>(
     let exact_lookup = protector
         .derive_exact_lookup_token(ContactExactLookupRequest::new(
             actor.tenant_scope().tenant_id(),
-            &contact_point_id,
             kind,
             normalization_version,
             &hmac_input,
@@ -184,6 +418,19 @@ pub async fn prepare_protected_contact<P: ContactProtectionPort>(
     ))
 }
 
+fn validate_client_for_contact(
+    client: &client_domain::ClientRecord,
+    expected_version: AggregateVersion,
+) -> Result<(), ContactApplicationError> {
+    if client.version() != expected_version {
+        return Err(ContactApplicationError::VersionConflict);
+    }
+    if client.status() != ClientStatus::Active {
+        return Err(ContactApplicationError::InvalidState);
+    }
+    Ok(())
+}
+
 fn map_protection_error(error: ContactProtectionPortError) -> ContactApplicationError {
     match error.class() {
         ContactProtectionPortErrorClass::KeyUnavailable => ContactApplicationError::KeyUnavailable,
@@ -196,20 +443,34 @@ fn map_protection_error(error: ContactProtectionPortError) -> ContactApplication
     }
 }
 
+fn map_repository_error(error: ClientPortError) -> ContactApplicationError {
+    match error.class() {
+        ClientPortErrorClass::Conflict => ContactApplicationError::Conflict,
+        ClientPortErrorClass::IntegrityFailure => ContactApplicationError::IntegrityFailure,
+        ClientPortErrorClass::InternalFailure => ContactApplicationError::InternalFailure,
+        ClientPortErrorClass::DependencyUnavailable => {
+            ContactApplicationError::DependencyUnavailable
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ContactApplicationError, PrepareProtectedContactCommand, TransientContactValue,
-        prepare_protected_contact,
+        ArchiveContactCommand, ContactApplicationError, ContactMutationOutcome,
+        PrepareProtectedContactCommand, TransientContactValue, execute_archive_contact,
+        execute_upsert_contact, prepare_protected_contact,
     };
     use application_ports::CommandExecutionEvidence;
     use application_ports::clients::{
-        ContactEncryptionKeyDomain, ContactEncryptionRequest, ContactExactLookupRequest,
-        ContactLookupKeyDomain, ContactProtectionPort, ContactProtectionPortError,
+        ArchiveContactWrite, ClientPortError, ClientPortErrorClass, ClientReplayDecision,
+        ClientReplayReceipt, ContactEncryptionKeyDomain, ContactEncryptionRequest,
+        ContactExactLookupRequest, ContactLookupKeyDomain, ContactProtectionPort,
+        ContactProtectionPortError, ProtectedClientContactRepositoryPort, ProtectedContactWrite,
     };
     use client_domain::{
-        ContactKind, EncryptedContactValue, EncryptionKeyVersion, ExactLookupToken,
-        LookupKeyVersion,
+        ClientKind, ClientRecord, ClientStatus, ContactKind, EncryptedContactValue,
+        EncryptionKeyVersion, ExactLookupToken, LookupKeyVersion,
     };
     use identity_access_domain::MembershipRole;
     use profile_platform_primitives::{
@@ -298,6 +559,84 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FakeRepository {
+        replay: RefCell<Vec<ClientReplayDecision>>,
+        load_calls: Cell<u32>,
+        persist_calls: Cell<u32>,
+        archive_calls: Cell<u32>,
+        current: RefCell<Option<ClientRecord>>,
+        persist_error: Cell<Option<ClientPortErrorClass>>,
+        archive_error: Cell<Option<ClientPortErrorClass>>,
+    }
+
+    impl FakeRepository {
+        fn with_current(current: ClientRecord) -> Self {
+            Self {
+                current: RefCell::new(Some(current)),
+                ..Self::default()
+            }
+        }
+
+        fn push_replay(&self, decision: ClientReplayDecision) {
+            self.replay.borrow_mut().push(decision);
+        }
+
+        fn next_replay(&self) -> ClientReplayDecision {
+            if self.replay.borrow().is_empty() {
+                ClientReplayDecision::Miss
+            } else {
+                self.replay.borrow_mut().remove(0)
+            }
+        }
+    }
+
+    impl ProtectedClientContactRepositoryPort for FakeRepository {
+        type Error = ClientPortError;
+
+        async fn load_client_for_contact_mutation(
+            &self,
+            _scope: &TenantScope,
+            _client_id: &ClientId,
+        ) -> Result<Option<ClientRecord>, Self::Error> {
+            self.load_calls.set(self.load_calls.get() + 1);
+            Ok(self.current.borrow().clone())
+        }
+
+        async fn decide_client_contact_replay(
+            &self,
+            _actor: &ActorContext,
+            _command_name: &str,
+            _evidence: &CommandExecutionEvidence,
+        ) -> Result<ClientReplayDecision, Self::Error> {
+            Ok(self.next_replay())
+        }
+
+        async fn persist_protected_contact(
+            &self,
+            _actor: &ActorContext,
+            _write: &ProtectedContactWrite,
+        ) -> Result<(), Self::Error> {
+            self.persist_calls.set(self.persist_calls.get() + 1);
+            match self.persist_error.get() {
+                Some(class) => Err(ClientPortError::new(class)),
+                None => Ok(()),
+            }
+        }
+
+        async fn archive_contact(
+            &self,
+            _actor: &ActorContext,
+            _write: &ArchiveContactWrite,
+        ) -> Result<(), Self::Error> {
+            self.archive_calls.set(self.archive_calls.get() + 1);
+            match self.archive_error.get() {
+                Some(class) => Err(ClientPortError::new(class)),
+                None => Ok(()),
+            }
+        }
+    }
+
     fn actor() -> Result<ActorContext, Box<dyn std::error::Error>> {
         Ok(ActorContext::new(
             TenantScope::new(TenantId::parse("tenant_01JCONTACT")?),
@@ -326,6 +665,31 @@ mod tests {
             TransientContactValue::new(value),
             evidence()?,
         ))
+    }
+
+    fn archive_command() -> Result<ArchiveContactCommand, Box<dyn std::error::Error>> {
+        Ok(ArchiveContactCommand::new(
+            ClientId::parse("client_01JCONTACT")?,
+            ContactPointId::parse("contact_01JCONTACT")?,
+            AggregateVersion::INITIAL,
+            ContactKind::Email,
+            evidence()?,
+        ))
+    }
+
+    fn active_client() -> Result<ClientRecord, Box<dyn std::error::Error>> {
+        Ok(ClientRecord::restore(
+            TenantId::parse("tenant_01JCONTACT")?,
+            ClientId::parse("client_01JCONTACT")?,
+            AggregateVersion::INITIAL,
+            ClientKind::Person,
+            "Person",
+            ClientStatus::Active,
+        )?)
+    }
+
+    fn replay_receipt() -> ClientReplayReceipt {
+        ClientReplayReceipt::new("contact_saved", Some("contact_01JCONTACT".to_owned()))
     }
 
     #[test]
@@ -382,6 +746,103 @@ mod tests {
             seen.windows(b"tenant_01JCONTACT".len())
                 .any(|window| window == b"tenant_01JCONTACT")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn exact_replay_short_circuits_before_load_and_crypto() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let protector = FakeProtector::new();
+        let repository = FakeRepository::with_current(active_client()?);
+        repository.push_replay(ClientReplayDecision::Replay(replay_receipt()));
+        let outcome = block_on(execute_upsert_contact(
+            &actor()?,
+            MembershipRole::TenantOwner,
+            &protector,
+            &repository,
+            command("person@example.com")?,
+        ))?;
+        assert!(matches!(outcome, ContactMutationOutcome::Replayed(_)));
+        assert_eq!(repository.load_calls.get(), 0);
+        assert_eq!(repository.persist_calls.get(), 0);
+        assert_eq!(protector.encrypt_calls.get(), 0);
+        assert_eq!(protector.lookup_calls.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn version_conflict_stops_before_crypto_and_persist() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let protector = FakeProtector::new();
+        let mut current = active_client()?;
+        current.rename("Renamed")?;
+        let repository = FakeRepository::with_current(current);
+        let result = block_on(execute_upsert_contact(
+            &actor()?,
+            MembershipRole::TenantOwner,
+            &protector,
+            &repository,
+            command("person@example.com")?,
+        ));
+        assert!(matches!(
+            result,
+            Err(ContactApplicationError::VersionConflict)
+        ));
+        assert_eq!(repository.persist_calls.get(), 0);
+        assert_eq!(protector.encrypt_calls.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn post_write_conflict_resolves_exact_replay_without_second_write()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let protector = FakeProtector::new();
+        let repository = FakeRepository::with_current(active_client()?);
+        repository
+            .persist_error
+            .set(Some(ClientPortErrorClass::Conflict));
+        repository.push_replay(ClientReplayDecision::Miss);
+        repository.push_replay(ClientReplayDecision::Replay(replay_receipt()));
+        let outcome = block_on(execute_upsert_contact(
+            &actor()?,
+            MembershipRole::TenantOwner,
+            &protector,
+            &repository,
+            command("person@example.com")?,
+        ))?;
+        assert!(matches!(outcome, ContactMutationOutcome::Replayed(_)));
+        assert_eq!(repository.persist_calls.get(), 1);
+        assert_eq!(protector.encrypt_calls.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn archive_is_application_owned_and_replay_neutral() -> Result<(), Box<dyn std::error::Error>> {
+        let repository = FakeRepository::with_current(active_client()?);
+        repository.push_replay(ClientReplayDecision::Miss);
+        let outcome = block_on(execute_archive_contact(
+            &actor()?,
+            MembershipRole::TenantOwner,
+            &repository,
+            archive_command()?,
+        ))?;
+        assert!(matches!(outcome, ContactMutationOutcome::Applied { .. }));
+        assert_eq!(repository.archive_calls.get(), 1);
+
+        let replay_repository = FakeRepository::with_current(active_client()?);
+        replay_repository.push_replay(ClientReplayDecision::Replay(ClientReplayReceipt::new(
+            "contact_archived",
+            Some("contact_01JCONTACT".to_owned()),
+        )));
+        let replay = block_on(execute_archive_contact(
+            &actor()?,
+            MembershipRole::TenantOwner,
+            &replay_repository,
+            archive_command()?,
+        ))?;
+        assert!(matches!(replay, ContactMutationOutcome::Replayed(_)));
+        assert_eq!(replay_repository.load_calls.get(), 0);
+        assert_eq!(replay_repository.archive_calls.get(), 0);
         Ok(())
     }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed if Phase 2A client ownership or contact-protection boundaries regress."""
+"""Fail closed if accepted Phase 2A client ownership/protection boundaries regress."""
 
 from __future__ import annotations
 
@@ -183,11 +183,7 @@ def validate(root: Path) -> list[str]:
             errors.append(f"contact application boundary missing `{marker}`")
     authorization_index = contacts.find("authorize_contact_mutation(role)?")
     normalization_index = contacts.find("let normalized = normalize_contact_value")
-    if (
-        authorization_index < 0
-        or normalization_index < 0
-        or authorization_index > normalization_index
-    ):
+    if authorization_index < 0 or normalization_index < 0 or authorization_index > normalization_index:
         errors.append("contact authorization must precede plaintext normalization/protection")
 
     lifecycle = read(root / "crates/use-cases-clients/src/lifecycle.rs")
@@ -206,10 +202,7 @@ def validate(root: Path) -> list[str]:
     shared_grants = read(root / "crates/use-cases/src/client_grants.rs")
     if "pub use use_cases_clients::clients::*;" not in shared_clients or "pub async fn" in shared_clients:
         errors.append("shared use-cases must be compatibility-only for client create/query")
-    if (
-        "pub use use_cases_clients::client_grants::*;" not in shared_grants
-        or "pub async fn" in shared_grants
-    ):
+    if "pub use use_cases_clients::client_grants::*;" not in shared_grants or "pub async fn" in shared_grants:
         errors.append("shared use-cases must be compatibility-only for client grants")
 
     worker = read(root / "apps/control-plane-worker/src/clients.rs")
@@ -222,19 +215,6 @@ def validate(root: Path) -> list[str]:
     worker_manifest = deps(root / "apps/control-plane-worker/Cargo.toml")
     if "use-cases-clients" not in worker_manifest:
         errors.append("Worker manifest must depend on use-cases-clients")
-
-    adapters = root / "crates/cloudflare-adapters/src"
-    if adapters.is_dir():
-        adapter_source = "\n".join(read(path) for path in adapters.rglob("*.rs"))
-        if "impl ProtectedClientContactRepositoryPort" in adapter_source:
-            errors.append("Phase 2A must not implement D1 protected-contact persistence before Phase 2B")
-
-    migrations = root / "migrations/d1"
-    if migrations.is_dir():
-        migration_source = "\n".join(read(path).lower() for path in migrations.rglob("*.sql"))
-        for marker in ("contact_point", "contact_points", "contact_ciphertext", "lookup_hmac"):
-            if marker in migration_source:
-                errors.append(f"Phase 2A must not add D1 contact persistence marker `{marker}`")
 
     return errors
 
@@ -351,14 +331,6 @@ def self_test() -> int:
         shared.write_text(read(shared) + "\npub async fn execute_create_client() {}\n", encoding="utf-8")
         if not any("compatibility-only" in error for error in validate(root)):
             print("duplicate shared ownership fixture unexpectedly passed")
-            return 1
-
-        write_fixture(root)
-        adapter = root / "crates/cloudflare-adapters/src/d1_clients.rs"
-        adapter.parent.mkdir(parents=True, exist_ok=True)
-        adapter.write_text("impl ProtectedClientContactRepositoryPort for D1Contacts {}\n", encoding="utf-8")
-        if not any("before Phase 2B" in error for error in validate(root)):
-            print("premature D1 contact persistence fixture unexpectedly passed")
             return 1
 
     print("Phase 2A negative ownership/protection fixtures rejected as expected.")
