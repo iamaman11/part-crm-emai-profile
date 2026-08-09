@@ -147,6 +147,10 @@ impl DeviceJobRepositoryPort for D1DeviceJobRepository {
             return Err(integrity_failure());
         }
         let stored = stored_values(&snapshot)?;
+        let aggregate_version = u64_to_i64(snapshot.aggregate_version)?;
+        let last_fence = u64_to_i64(snapshot.last_fence)?;
+        let retry_at_ms = optional_unix_to_i64(snapshot.retry_at)?;
+        let updated_at_ms = unix_to_i64(snapshot.updated_at)?;
         let target = &snapshot.target;
         let returned = query!(
             &self.database,
@@ -156,18 +160,18 @@ impl DeviceJobRepositoryPort for D1DeviceJobRepository {
             target.device_id().as_str(),
             target.profile_id().as_str(),
             target.generation_id().as_str(),
-            u64_to_i64(snapshot.aggregate_version)?,
+            aggregate_version,
             status_to_storage(snapshot.status),
             i64::from(snapshot.attempt),
             i64::from(snapshot.max_attempts),
-            u64_to_i64(snapshot.last_fence)?,
+            last_fence,
             stored.claim_id.as_str(),
             stored.fence,
             stored.claimed_at_ms,
             stored.heartbeat_at_ms,
             stored.lease_expires_at_ms,
-            optional_unix_to_i64(snapshot.retry_at)?,
-            unix_to_i64(snapshot.updated_at)?,
+            retry_at_ms,
+            updated_at_ms,
             tenant_id.as_str(),
             snapshot.job_id.as_str()
         )
@@ -218,28 +222,33 @@ impl DeviceJobRepositoryPort for D1DeviceJobRepository {
 
         let snapshot = job.snapshot();
         let stored = stored_values(&snapshot)?;
+        let aggregate_version = u64_to_i64(snapshot.aggregate_version)?;
+        let last_fence = u64_to_i64(snapshot.last_fence)?;
+        let retry_at_ms = optional_unix_to_i64(snapshot.retry_at)?;
+        let updated_at_ms = unix_to_i64(snapshot.updated_at)?;
+        let expected_aggregate_version = u64_to_i64(expected_version.value())?;
         let target = &snapshot.target;
         let returned = query!(
             &self.database,
             CAS_DEVICE_JOB,
-            u64_to_i64(snapshot.aggregate_version)?,
+            aggregate_version,
             status_to_storage(snapshot.status),
             i64::from(snapshot.attempt),
             i64::from(snapshot.max_attempts),
-            u64_to_i64(snapshot.last_fence)?,
+            last_fence,
             stored.claim_id.as_str(),
             stored.fence,
             stored.claimed_at_ms,
             stored.heartbeat_at_ms,
             stored.lease_expires_at_ms,
-            optional_unix_to_i64(snapshot.retry_at)?,
-            unix_to_i64(snapshot.updated_at)?,
+            retry_at_ms,
+            updated_at_ms,
             tenant_id.as_str(),
             snapshot.job_id.as_str(),
             target.device_id().as_str(),
             target.profile_id().as_str(),
             target.generation_id().as_str(),
-            u64_to_i64(expected_version.value())?
+            expected_aggregate_version
         )
         .map_err(map_worker_error)?
         .first::<String>(Some("job_id"))
@@ -278,16 +287,16 @@ fn restore_row(
     requested_job: &DeviceJobId,
     row: DeviceJobRow,
 ) -> Result<DeviceJob, DeviceJobPortError> {
-    let tenant_id = TenantId::parse(row.tenant_id).map_err(|_| integrity_failure())?;
-    let job_id = DeviceJobId::parse(row.job_id).map_err(|_| integrity_failure())?;
+    let tenant_id = TenantId::parse(row.tenant_id.as_str()).map_err(|_| integrity_failure())?;
+    let job_id = DeviceJobId::parse(row.job_id.as_str()).map_err(|_| integrity_failure())?;
     if &tenant_id != requested_tenant || &job_id != requested_job {
         return Err(integrity_failure());
     }
     let target = DeviceJobTarget::new(
         tenant_id,
-        DeviceId::parse(row.device_id).map_err(|_| integrity_failure())?,
-        ProfileId::parse(row.profile_id).map_err(|_| integrity_failure())?,
-        GenerationId::parse(row.generation_id).map_err(|_| integrity_failure())?,
+        DeviceId::parse(row.device_id.as_str()).map_err(|_| integrity_failure())?,
+        ProfileId::parse(row.profile_id.as_str()).map_err(|_| integrity_failure())?,
+        GenerationId::parse(row.generation_id.as_str()).map_err(|_| integrity_failure())?,
     );
     let active_claim = restore_claim(&job_id, &target, &row)?;
     let snapshot = DeviceJobSnapshot {
@@ -374,7 +383,10 @@ fn status_from_storage(value: &str) -> Result<DeviceJobStatus, DeviceJobPortErro
 }
 
 fn optional_unix_to_i64(value: Option<UnixMillis>) -> Result<i64, DeviceJobPortError> {
-    value.map(unix_to_i64).transpose().map(|value| value.unwrap_or(-1))
+    value
+        .map(unix_to_i64)
+        .transpose()
+        .map(|value| value.unwrap_or(-1))
 }
 
 fn unix_to_i64(value: UnixMillis) -> Result<i64, DeviceJobPortError> {
