@@ -227,19 +227,19 @@ mod tests {
 
     #[test]
     fn transient_mail_inputs_are_bounded() -> Result<(), Box<dyn std::error::Error>> {
-        assert_eq!(
+        assert!(matches!(
             MailSearchTerm::parse("bad\nterm"),
             Err(MailQueryInputError::InvalidSearchTerm)
-        );
+        ));
         let reference = MailboxMessageReference::new(
             MailboxBindingId::parse("binding_01JMAILQUERY")?,
             "provider-message-1",
         )?;
         let summary = MailMessageSummary::new(reference, None, None, UnixMillis::new(1));
-        assert_eq!(
+        assert!(matches!(
             MailMessageBody::new(summary, Some("x".repeat(MAX_MAIL_BODY_BYTES + 1)), None),
             Err(MailQueryInputError::MessageBodyTooLarge)
-        );
+        ));
         Ok(())
     }
 }
