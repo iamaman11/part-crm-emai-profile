@@ -25,7 +25,6 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          from textwrap import dedent
 
           source = Path('.github/workflows/phase2e-docs-closeout-materializer.yml').read_text(encoding='utf-8')
           marker = "          python - <<'PY'\n"
@@ -37,7 +36,11 @@ jobs:
           end = source.find(end_marker, start)
           if end < 0:
               raise SystemExit('canonical closeout Python end marker not found')
-          script = dedent(source[start:end])
+          lines = source[start:end].splitlines()
+          script = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in lines
+          ) + "\n"
           exec(compile(script, 'phase2e-docs-closeout', 'exec'), {})
           PY
 
