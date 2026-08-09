@@ -110,6 +110,7 @@ impl<T> QueryPage<T> {
 pub enum QueryInputError {
     InvalidPageSize,
     InvalidCursor,
+    InvalidSearchKey,
 }
 
 impl fmt::Display for QueryInputError {
@@ -117,6 +118,7 @@ impl fmt::Display for QueryInputError {
         formatter.write_str(match self {
             Self::InvalidPageSize => "query page size is outside the accepted bound",
             Self::InvalidCursor => "query cursor is invalid",
+            Self::InvalidSearchKey => "global search accepts only typed opaque identifiers",
         })
     }
 }
