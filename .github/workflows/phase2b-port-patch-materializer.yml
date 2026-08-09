@@ -1,0 +1,161 @@
+name: Phase 2B Port Patch Materializer
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2b-client-persistence-contact-crypto
+          persist-credentials: true
+      - name: Patch contact application ports
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('crates/application-ports/src/clients.rs')
+          text = path.read_text(encoding='utf-8')
+
+          start = text.index("pub struct ContactExactLookupRequest<'a> {")
+          end = text.index("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ContactProtectionPortErrorClass", start)
+          replacement = '''pub struct ContactExactLookupRequest<'a> {
+              tenant_id: &'a TenantId,
+              kind: ContactKind,
+              normalization_version: ContactNormalizationVersion,
+              hmac_input: &'a ExactLookupHmacInput,
+          }
+
+          impl<'a> ContactExactLookupRequest<'a> {
+              #[must_use]
+              pub const fn new(
+                  tenant_id: &'a TenantId,
+                  kind: ContactKind,
+                  normalization_version: ContactNormalizationVersion,
+                  hmac_input: &'a ExactLookupHmacInput,
+              ) -> Self {
+                  Self {
+                      tenant_id,
+                      kind,
+                      normalization_version,
+                      hmac_input,
+                  }
+              }
+
+              #[must_use]
+              pub const fn tenant_id(&self) -> &'a TenantId {
+                  self.tenant_id
+              }
+
+              #[must_use]
+              pub const fn kind(&self) -> ContactKind {
+                  self.kind
+              }
+
+              #[must_use]
+              pub const fn normalization_version(&self) -> ContactNormalizationVersion {
+                  self.normalization_version
+              }
+
+              #[must_use]
+              pub const fn hmac_input(&self) -> &'a ExactLookupHmacInput {
+                  self.hmac_input
+              }
+          }
+
+          '''
+          text = text[:start] + replacement + text[end:]
+
+          trait_start = text.index('pub trait ProtectedClientContactRepositoryPort {')
+          trait_end = text.index('\n}\n', trait_start) + 3
+          trait_replacement = '''#[derive(Clone, Debug, Eq, PartialEq)]
+          pub struct ArchiveContactWrite {
+              client_id: ClientId,
+              contact_point_id: ContactPointId,
+              kind: ContactKind,
+              expected_client_version: AggregateVersion,
+              evidence: CommandExecutionEvidence,
+              event_payload_json: &'static str,
+          }
+
+          impl ArchiveContactWrite {
+              #[must_use]
+              pub const fn new(
+                  client_id: ClientId,
+                  contact_point_id: ContactPointId,
+                  kind: ContactKind,
+                  expected_client_version: AggregateVersion,
+                  evidence: CommandExecutionEvidence,
+                  event_payload_json: &'static str,
+              ) -> Self {
+                  Self {
+                      client_id,
+                      contact_point_id,
+                      kind,
+                      expected_client_version,
+                      evidence,
+                      event_payload_json,
+                  }
+              }
+
+              #[must_use]
+              pub const fn client_id(&self) -> &ClientId { &self.client_id }
+              #[must_use]
+              pub const fn contact_point_id(&self) -> &ContactPointId { &self.contact_point_id }
+              #[must_use]
+              pub const fn kind(&self) -> ContactKind { self.kind }
+              #[must_use]
+              pub const fn expected_client_version(&self) -> AggregateVersion { self.expected_client_version }
+              #[must_use]
+              pub const fn evidence(&self) -> &CommandExecutionEvidence { &self.evidence }
+              #[must_use]
+              pub const fn event_payload_json(&self) -> &'static str { self.event_payload_json }
+          }
+
+          pub trait ProtectedClientContactRepositoryPort {
+              type Error;
+
+              async fn load_client_for_contact_mutation(
+                  &self,
+                  scope: &TenantScope,
+                  client_id: &ClientId,
+              ) -> Result<Option<ClientRecord>, Self::Error>;
+
+              async fn decide_client_contact_replay(
+                  &self,
+                  actor: &ActorContext,
+                  command_name: &str,
+                  evidence: &CommandExecutionEvidence,
+              ) -> Result<ClientReplayDecision, Self::Error>;
+
+              async fn persist_protected_contact(
+                  &self,
+                  actor: &ActorContext,
+                  write: &ProtectedContactWrite,
+              ) -> Result<(), Self::Error>;
+
+              async fn archive_contact(
+                  &self,
+                  actor: &ActorContext,
+                  write: &ArchiveContactWrite,
+              ) -> Result<(), Self::Error>;
+          }
+          '''
+          text = text[:trait_start] + trait_replacement + text[trait_end:]
+          path.write_text(text, encoding='utf-8')
+      - name: Format and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt -- crates/application-ports/src/clients.rs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/application-ports/src/clients.rs
+          git commit -m 'Phase 2B: evolve client contact application ports'
+          git push origin HEAD:phase2b-client-persistence-contact-crypto
