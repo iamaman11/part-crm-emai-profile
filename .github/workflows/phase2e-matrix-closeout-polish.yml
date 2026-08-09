@@ -1,0 +1,60 @@
+name: Phase 2E Matrix Closeout Polish
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/phase2e-matrix-closeout-polish.yml
+
+permissions:
+  contents: write
+
+jobs:
+  polish:
+    if: github.head_ref == 'docs-phase2e-closeout'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout closeout branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: docs-phase2e-closeout
+
+      - name: Align cross-cutting Phase 2E status
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('docs/DEVELOPER_CAPABILITY_MATRIX.md')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              'New mailbox/device consumers remain Phase 2E/2F; realtime UserNotificationHub remains Phase 2G.':
+                  'The Phase 2E mailbox consumer is accepted; the new device consumer remains Phase 2F and realtime UserNotificationHub remains Phase 2G.',
+              'Preserve in 2E/2F real provider lanes and later query surfaces.':
+                  'Preserve in the accepted Phase 2E cloud lane, the Phase 2F browser lane and later query surfaces.',
+              'Preserve; 2E–2G/2I extend the same ordering.':
+                  'Phase 2E extends this ordering for mailbox execution; preserve/extend it through 2F–2G and 2I.',
+              '2E/2F new consumers must preserve it.':
+                  'The Phase 2E mailbox consumer preserves it; the Phase 2F device consumer must preserve it.',
+              'Preserve in 2E/2F real lanes; 2G extends the rule to realtime.':
+                  'Preserve in the accepted Phase 2E cloud lane and Phase 2F browser lane; 2G extends the rule to realtime.',
+          }
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one matrix marker, found {count}: {old!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          grep -F 'The Phase 2E mailbox consumer is accepted' docs/DEVELOPER_CAPABILITY_MATRIX.md
+          grep -F 'accepted Phase 2E cloud lane' docs/DEVELOPER_CAPABILITY_MATRIX.md
+
+      - name: Commit matrix polish and self-clean
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/phase2e-matrix-closeout-polish.yml
+          git add docs/DEVELOPER_CAPABILITY_MATRIX.md
+          git diff --cached --check
+          git commit -m "Docs: align Phase 2E cross-cutting capability status"
+          git push origin HEAD:docs-phase2e-closeout
