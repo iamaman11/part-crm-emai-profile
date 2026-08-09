@@ -19,7 +19,7 @@ macro_rules! define_device_id {
 
         impl fmt::Display for $name {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                self.0.fmt(formatter)
+                formatter.write_str(self.0.as_str())
             }
         }
     };
@@ -33,7 +33,8 @@ mod tests {
     use super::{DeviceClaimId, DeviceJobId};
 
     #[test]
-    fn device_job_and_claim_ids_are_opaque_and_path_safe() -> Result<(), Box<dyn std::error::Error>> {
+    fn device_job_and_claim_ids_are_opaque_and_path_safe() -> Result<(), Box<dyn std::error::Error>>
+    {
         assert_eq!(
             DeviceJobId::parse("devjob_01JDEVICE")?.as_str(),
             "devjob_01JDEVICE"

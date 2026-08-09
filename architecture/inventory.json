@@ -8,6 +8,7 @@
     "crates/bridge-domain",
     "crates/certification-domain",
     "crates/client-domain",
+    "crates/device-domain",
     "crates/cloudflare-adapters",
     "crates/contracts",
     "crates/control-plane-contract",

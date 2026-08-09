@@ -234,6 +234,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "device-domain"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
+]
+
+[[package]]
 name = "digest"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

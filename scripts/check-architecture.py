@@ -14,6 +14,7 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
     "control-plane-contract": {"serde", "serde_json"},
     "identity-access-domain": {"profile-platform-primitives", "contracts"},
     "client-domain": {"profile-platform-primitives", "contracts", "zeroize"},
+    "device-domain": {"profile-platform-primitives"},
     "profile-domain": {"profile-platform-primitives", "contracts"},
     "session-domain": {"profile-platform-primitives", "contracts"},
     "mailbox-domain": {"profile-platform-primitives", "contracts"},

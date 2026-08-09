@@ -7,6 +7,7 @@ members = [
     "crates/bridge-domain",
     "crates/certification-domain",
     "crates/client-domain",
+    "crates/device-domain",
     "crates/cloudflare-adapters",
     "crates/contracts",
     "crates/control-plane-contract",
@@ -37,6 +38,7 @@ bridge-domain = { path = "crates/bridge-domain" }
 certification-domain = { path = "crates/certification-domain" }
 chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "zeroize"] }
 client-domain = { path = "crates/client-domain" }
+device-domain = { path = "crates/device-domain" }
 cloudflare-adapters = { path = "crates/cloudflare-adapters" }
 contracts = { path = "crates/contracts" }
 encrypted-generation-domain = { path = "crates/encrypted-generation-domain" }

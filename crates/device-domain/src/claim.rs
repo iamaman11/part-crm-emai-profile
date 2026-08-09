@@ -128,9 +128,7 @@ mod tests {
         id::{DeviceClaimId, DeviceJobId},
         target::DeviceJobTarget,
     };
-    use profile_platform_primitives::{
-        DeviceId, GenerationId, ProfileId, TenantId, UnixMillis,
-    };
+    use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId, UnixMillis};
 
     fn target() -> Result<DeviceJobTarget, Box<dyn std::error::Error>> {
         Ok(DeviceJobTarget::new(
@@ -142,7 +140,8 @@ mod tests {
     }
 
     #[test]
-    fn claim_binds_job_target_fence_and_monotonic_lease() -> Result<(), Box<dyn std::error::Error>> {
+    fn claim_binds_job_target_fence_and_monotonic_lease() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut claim = DeviceClaim::issue(
             DeviceClaimId::parse("devclaim_01JDEVICE")?,
             DeviceJobId::parse("devjob_01JDEVICE")?,
