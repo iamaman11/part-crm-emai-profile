@@ -1,0 +1,63 @@
+name: Phase 2C OpenAPI Fallible Fix Run 2
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Execute corrected atomic OpenAPI patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/phase2c-openapi-fallible-fix.yml').read_text(encoding='utf-8')
+          workflow = workflow.replace(
+              'const CLIENT_REGISTRY_SCHEMA_NAMES: [&str; 10] = [\\n',
+              'const CLIENT_REGISTRY_SCHEMA_NAMES: [&str; 13] = [\\n',
+          )
+          workflow = workflow.replace(
+              '    "ClientContactProjection",\\n];\\n\\n#[derive',
+              '    "ClientContactProjection",\\n    "ClientAssignmentProjection",\\n    "ClientActivityProjection",\\n    "ClientHistoryProjection",\\n];\\n\\n#[derive',
+          )
+          workflow = workflow.replace("''', 5)", "''', 6)")
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Validate fallible OpenAPI extension"
+          start = workflow.index(start_marker) + len(start_marker)
+          end = workflow.index(end_marker, start)
+          script = textwrap.dedent(workflow[start:end])
+          exec(compile(script, '<phase2c-openapi-patch>', 'exec'), {'__name__': '__main__'})
+          PY
+
+      - name: Validate atomic OpenAPI extension and full strict Clippy
+        run: |
+          cargo fmt --all
+          cargo test --locked -p control-plane-contract --all-targets
+          cargo clippy --locked -p control-plane-contract --all-targets -- -D warnings
+          cargo clippy --locked --workspace --all-targets --exclude browser-profile-control-plane-worker --exclude cloudflare-adapters -- -D warnings
+          python scripts/generate-frontend-contracts.py
+          python scripts/generate-frontend-contracts.py --check
+          python scripts/check-contract-compatibility.py
+          python scripts/test-openapi-fragments.py
+
+      - name: Commit validated source and generated contracts
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/control-plane-contract frontend/src/shared/api/generated openapi/v1/fragments
+          git diff --cached --check
+          git commit -m "Phase 2C: make OpenAPI extension fallible and atomic"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
