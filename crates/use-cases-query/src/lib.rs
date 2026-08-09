@@ -14,6 +14,7 @@ use profile_platform_primitives::{ActorContext, ClientId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QueryApplicationError {
+    InvalidInput,
     IntegrityFailure,
     DependencyUnavailable,
 }
@@ -21,6 +22,7 @@ pub enum QueryApplicationError {
 impl fmt::Display for QueryApplicationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::InvalidInput => "query application input is invalid",
             Self::IntegrityFailure => "query application integrity failure",
             Self::DependencyUnavailable => "query application dependency unavailable",
         })
@@ -138,6 +140,7 @@ async fn authorize<A: QueryAuthorizationPort>(
 
 fn map_port_error(error: QueryPortError) -> QueryApplicationError {
     match error.class() {
+        QueryPortErrorClass::InvalidCursor => QueryApplicationError::InvalidInput,
         QueryPortErrorClass::IntegrityFailure => QueryApplicationError::IntegrityFailure,
         QueryPortErrorClass::DependencyUnavailable => QueryApplicationError::DependencyUnavailable,
     }
@@ -194,6 +197,7 @@ mod tests {
 
     struct FakeClients {
         calls: Cell<u32>,
+        failure: Option<QueryPortErrorClass>,
     }
 
     impl ClientReadModelPort for FakeClients {
@@ -203,6 +207,9 @@ mod tests {
             _page: &QueryPageRequest,
         ) -> Result<QueryPage<ClientReadProjection>, QueryPortError> {
             self.calls.set(self.calls.get() + 1);
+            if let Some(class) = self.failure {
+                return Err(QueryPortError::new(class));
+            }
             let client_id = ClientId::parse("client_01JQUERY")
                 .map_err(|_| QueryPortError::new(QueryPortErrorClass::IntegrityFailure))?;
             Ok(QueryPage::new(
@@ -240,6 +247,7 @@ mod tests {
         };
         let projection = FakeClients {
             calls: Cell::new(0),
+            failure: None,
         };
         let result = block_on(list_clients(
             &actor()?,
@@ -262,6 +270,7 @@ mod tests {
         };
         let projection = FakeClients {
             calls: Cell::new(0),
+            failure: None,
         };
         let result = block_on(list_clients(
             &actor()?,
@@ -284,6 +293,7 @@ mod tests {
         };
         let projection = FakeClients {
             calls: Cell::new(0),
+            failure: None,
         };
         assert_eq!(
             block_on(list_clients(
@@ -295,6 +305,31 @@ mod tests {
             Err(QueryApplicationError::DependencyUnavailable)
         );
         assert_eq!(projection.calls.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_projection_cursor_is_stable_invalid_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let authorization = FakeAuthorization {
+            allowed: true,
+            calls: Cell::new(0),
+            failure: None,
+        };
+        let projection = FakeClients {
+            calls: Cell::new(0),
+            failure: Some(QueryPortErrorClass::InvalidCursor),
+        };
+        assert_eq!(
+            block_on(list_clients(
+                &actor()?,
+                &authorization,
+                &projection,
+                &page()?
+            )),
+            Err(QueryApplicationError::InvalidInput)
+        );
+        assert_eq!(projection.calls.get(), 1);
         Ok(())
     }
 }
