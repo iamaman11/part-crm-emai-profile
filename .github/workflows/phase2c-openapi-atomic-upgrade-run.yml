@@ -1,0 +1,62 @@
+name: Phase 2C OpenAPI Atomic Upgrade Run
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  upgrade:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Execute corrected atomic upgrade script
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/phase2c-openapi-atomic-upgrade.yml').read_text(encoding='utf-8')
+          workflow = workflow.replace(
+              "assert before.endswith('\\n}')",
+              "assert before.endswith('}\\n')",
+          )
+          workflow = workflow.replace(
+              "before = before[:-2] + '\\n    Ok(())\\n}'",
+              "before = before[:-2] + '    Ok(())\\n}\\n'",
+          )
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "\n          PY\n\n      - name: Validate atomic contract path under strict repository Clippy"
+          start = workflow.index(start_marker) + len(start_marker)
+          end = workflow.index(end_marker, start)
+          script = textwrap.dedent(workflow[start:end])
+          exec(compile(script, '<phase2c-openapi-atomic-upgrade>', 'exec'), {'__name__': '__main__'})
+          PY
+
+      - name: Validate atomic contract path under strict repository Clippy
+        run: |
+          cargo fmt --all
+          cargo test --locked -p control-plane-contract --all-targets
+          cargo clippy --locked -p control-plane-contract --all-targets -- -D warnings
+          cargo clippy --locked --workspace --all-targets --exclude browser-profile-control-plane-worker --exclude cloudflare-adapters -- -D warnings
+          python scripts/generate-frontend-contracts.py
+          python scripts/generate-frontend-contracts.py --check
+          python scripts/check-contract-compatibility.py
+          python scripts/test-openapi-fragments.py
+
+      - name: Commit validated atomic contract implementation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/control-plane-contract frontend/src/shared/api/generated openapi/v1/fragments
+          git diff --cached --check
+          git commit -m "Phase 2C: make Client Registry OpenAPI atomic and fallible"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
