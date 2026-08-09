@@ -5,7 +5,7 @@ use application_ports::mailbox_jobs::{
     MailboxJobStatus,
 };
 use application_ports::mailboxes::{
-    MailboxProviderPort, MailboxReplayDecision, MailboxReplayReceipt,
+    MailboxProviderPort, MailboxProviderPortError, MailboxReplayDecision, MailboxReplayReceipt,
 };
 use core::fmt;
 use identity_access_domain::MembershipRole;
@@ -425,7 +425,7 @@ fn apply_provider_result(
     binding: &mailbox_domain::MailboxBinding,
     job: &mut mailbox_domain::MailboxJob,
     now: UnixMillis,
-    provider_result: Result<MailboxObservation, MailboxProviderFailure>,
+    provider_result: Result<MailboxObservation, MailboxProviderPortError>,
 ) -> Result<MailboxJobPreparedRun, MailboxJobOperationError> {
     match provider_result {
         Ok(observation) => {
@@ -440,7 +440,12 @@ fn apply_provider_result(
                 observation.bounded_item_count(),
             ))
         }
-        Err(failure) => apply_provider_failure(job, now, failure),
+        Err(MailboxProviderPortError::Failure(failure)) => {
+            apply_provider_failure(job, now, failure)
+        }
+        Err(MailboxProviderPortError::IntegrityFailure) => {
+            Err(MailboxJobOperationError::IntegrityFailure)
+        }
     }
 }
 
