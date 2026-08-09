@@ -1,0 +1,40 @@
+name: Phase 2C Maintenance
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2c-client-merge-assignment-ui
+          persist-credentials: true
+      - name: Materialize architecture inventory
+        run: python scripts/generate-architecture-inventory.py --write
+      - name: Format Rust
+        run: cargo fmt --all
+      - name: Prove Phase 2C D1 semantics
+        run: python scripts/test-phase2c-client-merge-assignment.py
+      - name: Check Phase 2C native ownership layers
+        run: cargo check --locked -p client-domain -p use-cases -p use-cases-clients -p cloudflare-adapters
+      - name: Test Phase 2C native ownership layers
+        run: cargo test --locked -p client-domain -p use-cases -p use-cases-clients -p cloudflare-adapters
+      - name: Commit validated deterministic fixups
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add architecture/inventory.json crates/client-domain/src crates/use-cases/src/identity_acl.rs
+          if git diff --cached --quiet; then
+            echo "No deterministic Phase 2C fixups remain to commit."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Phase 2C: validate merge and assignment foundations'
+          git push origin HEAD:phase2c-client-merge-assignment-ui
