@@ -2,7 +2,7 @@ use core::fmt;
 use profile_platform_primitives::{AggregateVersion, UnixMillis, VersionOverflow};
 
 use crate::{
-    claim::DeviceClaim,
+    claim::{DeviceClaim, DeviceClaimSnapshot},
     id::{DeviceClaimId, DeviceJobId},
     target::DeviceJobTarget,
 };
@@ -43,7 +43,123 @@ pub struct DeviceJob {
     updated_at: UnixMillis,
 }
 
+/// Bounded metadata persisted by outer adapters. It may represent corrupted
+/// storage and only becomes a trusted aggregate through [`DeviceJob::restore`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceJobSnapshot {
+    pub job_id: DeviceJobId,
+    pub target: DeviceJobTarget,
+    pub aggregate_version: u64,
+    pub status: DeviceJobStatus,
+    pub attempt: u32,
+    pub max_attempts: u32,
+    pub last_fence: u64,
+    pub active_claim: Option<DeviceClaimSnapshot>,
+    pub retry_at: Option<UnixMillis>,
+    pub updated_at: UnixMillis,
+}
+
 impl DeviceJob {
+    #[must_use]
+    pub fn snapshot(&self) -> DeviceJobSnapshot {
+        DeviceJobSnapshot {
+            job_id: self.job_id.clone(),
+            target: self.target.clone(),
+            aggregate_version: self.version.value(),
+            status: self.status,
+            attempt: self.attempt,
+            max_attempts: self.max_attempts,
+            last_fence: self.last_fence,
+            active_claim: self.active_claim.as_ref().map(DeviceClaim::snapshot),
+            retry_at: self.retry_at,
+            updated_at: self.updated_at,
+        }
+    }
+
+    pub fn restore(snapshot: DeviceJobSnapshot) -> Result<Self, DeviceJobError> {
+        let DeviceJobSnapshot {
+            job_id,
+            target,
+            aggregate_version,
+            status,
+            attempt,
+            max_attempts,
+            last_fence,
+            active_claim,
+            retry_at,
+            updated_at,
+        } = snapshot;
+
+        if max_attempts == 0
+            || max_attempts > MAX_DEVICE_JOB_ATTEMPTS
+            || attempt > max_attempts
+            || last_fence != u64::from(attempt)
+            || aggregate_version <= u64::from(attempt)
+        {
+            return Err(DeviceJobError::InvalidSnapshot);
+        }
+
+        let requires_attempt = matches!(
+            status,
+            DeviceJobStatus::ProfileBusy
+                | DeviceJobStatus::Running
+                | DeviceJobStatus::RetryScheduled
+                | DeviceJobStatus::AuthRequired
+                | DeviceJobStatus::RecoveryRequired
+                | DeviceJobStatus::Succeeded
+                | DeviceJobStatus::Failed
+        );
+        if requires_attempt && attempt == 0 {
+            return Err(DeviceJobError::InvalidSnapshot);
+        }
+
+        if (status == DeviceJobStatus::Running) != active_claim.is_some() {
+            return Err(DeviceJobError::InvalidSnapshot);
+        }
+
+        let requires_retry = matches!(
+            status,
+            DeviceJobStatus::ProfileBusy | DeviceJobStatus::RetryScheduled
+        );
+        if requires_retry != retry_at.is_some()
+            || retry_at.is_some_and(|retry_at| retry_at <= updated_at)
+        {
+            return Err(DeviceJobError::InvalidSnapshot);
+        }
+
+        let active_claim = match active_claim {
+            Some(snapshot) => {
+                let claim = DeviceClaim::restore(snapshot)
+                    .map_err(|_| DeviceJobError::InvalidSnapshot)?;
+                if claim.job_id() != &job_id
+                    || claim.target() != &target
+                    || claim.fence() != last_fence
+                    || claim.last_heartbeat_at() != updated_at
+                    || updated_at >= claim.lease_expires_at()
+                {
+                    return Err(DeviceJobError::InvalidSnapshot);
+                }
+                Some(claim)
+            }
+            None => None,
+        };
+
+        let version = AggregateVersion::new(aggregate_version)
+            .map_err(|_| DeviceJobError::InvalidSnapshot)?;
+        Ok(Self {
+            job_id,
+            target,
+            version,
+            status,
+            attempt,
+            max_attempts,
+            last_fence,
+            active_claim,
+            retry_at,
+            updated_at,
+        })
+    }
+
     pub fn issue(
         job_id: DeviceJobId,
         target: DeviceJobTarget,
@@ -383,6 +499,7 @@ fn map_version_overflow(_: VersionOverflow) -> DeviceJobError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceJobError {
+    InvalidSnapshot,
     InvalidMaxAttempts,
     InvalidState,
     InvalidLease,
@@ -404,6 +521,7 @@ pub enum DeviceJobError {
 impl fmt::Display for DeviceJobError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::InvalidSnapshot => "device job persisted snapshot is invalid",
             Self::InvalidMaxAttempts => "device job max attempts are outside the bounded range",
             Self::InvalidState => "device job transition is invalid for the current state",
             Self::InvalidLease => "device job claim lease is invalid",
@@ -591,6 +709,121 @@ mod tests {
         assert_eq!(
             job.cancel(UnixMillis::new(120)),
             Err(DeviceJobError::InvalidState)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_round_trip_preserves_running_claim_binding()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut original = job(3)?;
+        original.claim(
+            DeviceClaimId::parse("devclaim_01JRESTORE")?,
+            UnixMillis::new(110),
+            UnixMillis::new(200),
+        )?;
+        let restored = DeviceJob::restore(original.snapshot())?;
+        assert_eq!(restored, original);
+        Ok(())
+    }
+
+    #[test]
+    fn restore_rejects_impossible_status_claim_retry_and_version_combinations()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut running = job(3)?;
+        running.claim(
+            DeviceClaimId::parse("devclaim_01JRESTORE")?,
+            UnixMillis::new(110),
+            UnixMillis::new(200),
+        )?;
+        let valid = running.snapshot();
+
+        let mut missing_claim = valid.clone();
+        missing_claim.active_claim = None;
+        assert_eq!(
+            DeviceJob::restore(missing_claim),
+            Err(DeviceJobError::InvalidSnapshot)
+        );
+
+        let mut stale_fence = valid.clone();
+        stale_fence.last_fence = stale_fence.last_fence.saturating_add(1);
+        assert_eq!(
+            DeviceJob::restore(stale_fence),
+            Err(DeviceJobError::InvalidSnapshot)
+        );
+
+        let mut zero_version = valid.clone();
+        zero_version.aggregate_version = 0;
+        assert_eq!(
+            DeviceJob::restore(zero_version),
+            Err(DeviceJobError::InvalidSnapshot)
+        );
+
+        let mut impossible_version = valid.clone();
+        impossible_version.aggregate_version = u64::from(impossible_version.attempt);
+        assert_eq!(
+            DeviceJob::restore(impossible_version),
+            Err(DeviceJobError::InvalidSnapshot)
+        );
+
+        let mut too_many_attempts = valid.clone();
+        too_many_attempts.attempt = too_many_attempts.max_attempts.saturating_add(1);
+        too_many_attempts.last_fence = u64::from(too_many_attempts.attempt);
+        assert_eq!(
+            DeviceJob::restore(too_many_attempts),
+            Err(DeviceJobError::InvalidSnapshot)
+        );
+
+        let mut retry_without_time = valid;
+        retry_without_time.status = DeviceJobStatus::RetryScheduled;
+        retry_without_time.active_claim = None;
+        retry_without_time.retry_at = None;
+        assert_eq!(
+            DeviceJob::restore(retry_without_time),
+            Err(DeviceJobError::InvalidSnapshot)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restore_rejects_claim_binding_and_timeline_corruption()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut running = job(3)?;
+        running.claim(
+            DeviceClaimId::parse("devclaim_01JRESTORE")?,
+            UnixMillis::new(110),
+            UnixMillis::new(200),
+        )?;
+        let valid = running.snapshot();
+
+        let mut wrong_target = valid.clone();
+        if let Some(claim) = wrong_target.active_claim.as_mut() {
+            claim.target = DeviceJobTarget::new(
+                TenantId::parse("tenant_01JOTHER")?,
+                DeviceId::parse("device_01JOTHER")?,
+                ProfileId::parse("profile_01JOTHER")?,
+                GenerationId::parse("generation_01JOTHER")?,
+            );
+        }
+        assert_eq!(
+            DeviceJob::restore(wrong_target),
+            Err(DeviceJobError::InvalidSnapshot)
+        );
+
+        let mut future_heartbeat = valid.clone();
+        if let Some(claim) = future_heartbeat.active_claim.as_mut() {
+            claim.last_heartbeat_at = UnixMillis::new(111);
+        }
+        assert_eq!(
+            DeviceJob::restore(future_heartbeat),
+            Err(DeviceJobError::InvalidSnapshot)
+        );
+
+        let mut expired_at_update = valid;
+        expired_at_update.updated_at = UnixMillis::new(200);
+        assert_eq!(
+            DeviceJob::restore(expired_at_update),
+            Err(DeviceJobError::InvalidSnapshot)
         );
         Ok(())
     }
