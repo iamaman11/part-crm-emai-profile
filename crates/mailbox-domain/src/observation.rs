@@ -57,7 +57,8 @@ pub enum MailboxProviderFailureClass {
     Authentication,
     RateLimited,
     TransientDependency,
-    PermanentPolicy,
+    Permanent,
+    ProviderPolicy,
     Backpressure,
 }
 
@@ -68,7 +69,8 @@ impl MailboxProviderFailureClass {
             Self::Authentication => "AUTH",
             Self::RateLimited => "RATE_LIMIT",
             Self::TransientDependency => "TRANSIENT_DEPENDENCY",
-            Self::PermanentPolicy => "PERMANENT_POLICY",
+            Self::Permanent => "PERMANENT",
+            Self::ProviderPolicy => "PROVIDER_POLICY",
             Self::Backpressure => "BACKPRESSURE",
         }
     }
@@ -80,7 +82,8 @@ impl MailboxProviderFailureClass {
             Self::RateLimited | Self::TransientDependency | Self::Backpressure => {
                 MailboxFailureDisposition::Retryable
             }
-            Self::PermanentPolicy => MailboxFailureDisposition::Terminal,
+            Self::ProviderPolicy => MailboxFailureDisposition::Suspended,
+            Self::Permanent => MailboxFailureDisposition::Terminal,
         }
     }
 }
@@ -89,6 +92,7 @@ impl MailboxProviderFailureClass {
 pub enum MailboxFailureDisposition {
     Retryable,
     AuthRequired,
+    Suspended,
     Terminal,
 }
 
@@ -177,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn failure_taxonomy_has_explicit_remediation_semantics()
+    fn failure_taxonomy_has_explicit_retry_remediation_and_terminal_semantics()
     -> Result<(), Box<dyn std::error::Error>> {
         let auth = MailboxProviderFailure::new(MailboxProviderFailureClass::Authentication, None)?;
         assert_eq!(auth.disposition(), MailboxFailureDisposition::AuthRequired);
@@ -188,8 +192,16 @@ mod tests {
         assert_eq!(limited.disposition(), MailboxFailureDisposition::Retryable);
         assert_eq!(limited.retry_at(), Some(UnixMillis::new(20)));
         assert_eq!(
+            MailboxProviderFailureClass::ProviderPolicy.disposition(),
+            MailboxFailureDisposition::Suspended
+        );
+        assert_eq!(
+            MailboxProviderFailureClass::Permanent.disposition(),
+            MailboxFailureDisposition::Terminal
+        );
+        assert_eq!(
             MailboxProviderFailure::new(
-                MailboxProviderFailureClass::PermanentPolicy,
+                MailboxProviderFailureClass::ProviderPolicy,
                 Some(UnixMillis::new(20)),
             ),
             Err(MailboxError::InvalidFailureRetryHint)
