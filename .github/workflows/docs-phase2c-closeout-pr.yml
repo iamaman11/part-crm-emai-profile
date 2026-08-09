@@ -24,6 +24,7 @@ jobs:
         run: |
           python scripts/phase2c-docs-closeout.py
           python scripts/phase2c-docs-closeout-next.py
+          python scripts/phase2c-docs-closeout-whitespace.py
 
       - name: Validate docs closeout
         run: |
