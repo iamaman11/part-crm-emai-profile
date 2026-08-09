@@ -102,8 +102,13 @@ mod tests {
                 return Err(ClientRegistryProjectionError::new(class));
             }
             Ok(if self.visible {
+                let Ok(client_id) = ClientId::parse("client_01JREGISTRY") else {
+                    return Err(ClientRegistryProjectionError::new(
+                        ClientRegistryProjectionErrorClass::IntegrityFailure,
+                    ));
+                };
                 vec![ClientRegistryListItem::new(
-                    ClientId::parse("client_01JREGISTRY").expect("valid test client identifier"),
+                    client_id,
                     ClientKind::Person,
                     "Registry Client",
                     ClientStatus::Active,

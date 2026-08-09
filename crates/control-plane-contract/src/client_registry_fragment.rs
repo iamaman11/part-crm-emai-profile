@@ -17,14 +17,12 @@ pub fn compatibility_fragment() -> Value {
 }
 
 fn diff_fragment(base: &Value, extended: &Value) -> Value {
-    let base_paths = base
-        .get("paths")
-        .and_then(Value::as_object)
-        .expect("canonical base paths");
-    let extended_paths = extended
-        .get("paths")
-        .and_then(Value::as_object)
-        .expect("canonical extended paths");
+    let Some(base_paths) = base.get("paths").and_then(Value::as_object) else {
+        return empty_fragment();
+    };
+    let Some(extended_paths) = extended.get("paths").and_then(Value::as_object) else {
+        return empty_fragment();
+    };
     let mut paths = Map::new();
     for (route, extended_item) in extended_paths {
         let Some(extended_item) = extended_item.as_object() else {
@@ -42,14 +40,18 @@ fn diff_fragment(base: &Value, extended: &Value) -> Value {
         }
     }
 
-    let base_schemas = base
+    let Some(base_schemas) = base
         .pointer("/components/schemas")
         .and_then(Value::as_object)
-        .expect("canonical base schemas");
-    let extended_schemas = extended
+    else {
+        return empty_fragment();
+    };
+    let Some(extended_schemas) = extended
         .pointer("/components/schemas")
         .and_then(Value::as_object)
-        .expect("canonical extended schemas");
+    else {
+        return empty_fragment();
+    };
     let mut schemas = Map::new();
     for (name, value) in extended_schemas {
         if !base_schemas.contains_key(name) {
@@ -63,6 +65,10 @@ fn diff_fragment(base: &Value, extended: &Value) -> Value {
             "schemas": Value::Object(schemas)
         }
     })
+}
+
+fn empty_fragment() -> Value {
+    json!({"paths": {}, "components": {"schemas": {}}})
 }
 
 fn remap_legacy_refs(value: &mut Value) {
@@ -89,10 +95,12 @@ fn remap_legacy_refs(value: &mut Value) {
 }
 
 fn inject_client_registry_problem(fragment: &mut Value) {
-    let schemas = fragment
+    let Some(schemas) = fragment
         .pointer_mut("/components/schemas")
         .and_then(Value::as_object_mut)
-        .expect("client registry fragment schemas");
+    else {
+        return;
+    };
     assert!(
         schemas
             .insert(
@@ -141,6 +149,7 @@ fn decorate_legacy_transport_contract(fragment: &mut Value) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::{canonical_fragment, compatibility_fragment};
 
     #[test]

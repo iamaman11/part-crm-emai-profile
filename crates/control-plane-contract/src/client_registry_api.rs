@@ -93,10 +93,9 @@ pub struct ClientHistoryProjection {
 }
 
 pub fn extend_openapi(document: &mut Value) {
-    let paths = document
-        .get_mut("paths")
-        .and_then(Value::as_object_mut)
-        .expect("canonical OpenAPI paths object");
+    let Some(paths) = document.get_mut("paths").and_then(Value::as_object_mut) else {
+        return;
+    };
     insert_operation(
         paths,
         "/api/v1/tenants/{tenantId}/clients",
@@ -191,11 +190,13 @@ pub fn extend_openapi(document: &mut Value) {
         }),
     );
 
-    let schemas = document
+    let Some(schemas) = document
         .get_mut("components")
         .and_then(|value| value.get_mut("schemas"))
         .and_then(Value::as_object_mut)
-        .expect("canonical OpenAPI schemas object");
+    else {
+        return;
+    };
     schemas.insert(
         "ClientContactKind".to_owned(),
         string_enum(&CLIENT_CONTACT_KINDS),
@@ -354,9 +355,9 @@ fn insert_operation(paths: &mut Map<String, Value>, path: &str, method: &str, op
     let path_item = paths
         .entry(path.to_owned())
         .or_insert_with(|| Value::Object(Map::new()));
-    let path_item = path_item
-        .as_object_mut()
-        .expect("canonical OpenAPI path item object");
+    let Some(path_item) = path_item.as_object_mut() else {
+        return;
+    };
     assert!(
         path_item.insert(method.to_owned(), operation).is_none(),
         "duplicate OpenAPI operation {method} {path}"
