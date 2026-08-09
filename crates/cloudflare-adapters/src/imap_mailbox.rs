@@ -1,6 +1,6 @@
 use crate::cloud_mailbox_secrets::{ImapCredential, ImapTlsMode, provider_error};
 use application_ports::mailboxes::MailboxProviderPortError;
-use mailbox_domain::{MailboxBinding, MailboxJob, MailboxObservation, MailboxProviderFailureClass};
+use mailbox_domain::{MailboxBinding, MailboxObservation, MailboxProviderFailureClass};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use worker::{SecureTransport, Socket};
 use zeroize::Zeroize;
@@ -14,7 +14,7 @@ pub async fn check_imap_mailbox(
 ) -> Result<MailboxObservation, MailboxProviderPortError> {
     let transport = match credential.tls() {
         ImapTlsMode::Implicit => SecureTransport::On,
-        ImapTlsMode::StartTls => SecureTransport::Off,
+        ImapTlsMode::StartTls => SecureTransport::StartTls,
     };
     let mut socket = Socket::builder()
         .secure_transport(transport)
@@ -22,7 +22,8 @@ pub async fn check_imap_mailbox(
         .map_err(|_| provider_error(MailboxProviderFailureClass::TransientDependency))?;
 
     let greeting = read_until_line(&mut socket).await?;
-    if !greeting.starts_with("* OK") && !greeting.starts_with("* PREAUTH") {
+    let preauthenticated = greeting.starts_with("* PREAUTH");
+    if !greeting.starts_with("* OK") && !preauthenticated {
         return Err(provider_error(MailboxProviderFailureClass::TransientDependency));
     }
 
@@ -32,27 +33,28 @@ pub async fn check_imap_mailbox(
         if tagged_status(&response, "a0") != Some("OK") {
             return Err(provider_error(MailboxProviderFailureClass::ProviderPolicy));
         }
-        socket
+        socket = socket
             .start_tls()
-            .await
             .map_err(|_| provider_error(MailboxProviderFailureClass::TransientDependency))?;
     }
 
-    let mut login = String::from("a1 LOGIN ");
-    push_imap_quoted(&mut login, credential.username());
-    login.push(' ');
-    push_imap_quoted(&mut login, credential.password());
-    login.push_str("\r\n");
-    let write_result = write_command(&mut socket, &login).await;
-    login.zeroize();
-    write_result?;
-    let login_response = read_until_tag(&mut socket, "a1").await?;
-    match tagged_status(&login_response, "a1") {
-        Some("OK") => {}
-        Some("NO" | "BAD") => {
-            return Err(provider_error(MailboxProviderFailureClass::Authentication));
+    if !preauthenticated {
+        let mut login = String::from("a1 LOGIN ");
+        push_imap_quoted(&mut login, credential.username());
+        login.push(' ');
+        push_imap_quoted(&mut login, credential.password());
+        login.push_str("\r\n");
+        let write_result = write_command(&mut socket, &login).await;
+        login.zeroize();
+        write_result?;
+        let login_response = read_until_tag(&mut socket, "a1").await?;
+        match tagged_status(&login_response, "a1") {
+            Some("OK") => {}
+            Some("NO" | "BAD") => {
+                return Err(provider_error(MailboxProviderFailureClass::Authentication));
+            }
+            _ => return Err(provider_error(MailboxProviderFailureClass::TransientDependency)),
         }
-        _ => return Err(provider_error(MailboxProviderFailureClass::TransientDependency)),
     }
 
     write_command(&mut socket, "a2 STATUS INBOX (MESSAGES UIDNEXT)\r\n").await?;
@@ -119,14 +121,13 @@ async fn read_bounded(
             return Err(provider_error(MailboxProviderFailureClass::ProviderPolicy));
         }
         output.extend_from_slice(&buffer[..read]);
-        let text = std::str::from_utf8(&output)
-            .map_err(|_| provider_error(MailboxProviderFailureClass::ProviderPolicy))?;
+        let text = String::from_utf8_lossy(&output);
         let complete = match tag {
-            Some(tag) => response_has_tagged_line(text, tag),
+            Some(tag) => response_has_tagged_line(&text, tag),
             None => text.contains("\r\n"),
         };
         if complete {
-            return Ok(text.to_owned());
+            return Ok(text.into_owned());
         }
     }
 }
