@@ -51,7 +51,7 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git diff --cached --check
-          test "$(git diff --cached --name-only | sort | tr '\n' ' ')" = "docs/ARCHITECTURE.md docs/DEVELOPMENT_PLAN.md "
+          test "$(git diff --cached --name-only origin/main | sort | tr '\n' ' ')" = "docs/ARCHITECTURE.md docs/DEVELOPMENT_PLAN.md "
           git commit -m 'Docs: accept Phase 2D and mark Phase 2E next'
           git push origin HEAD:docs-phase2d-closeout
 
