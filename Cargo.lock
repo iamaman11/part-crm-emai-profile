@@ -18,6 +18,7 @@ version = "0.1.0"
 dependencies = [
  "client-domain",
  "contracts",
+ "device-domain",
  "identity-access-domain",
  "mailbox-domain",
  "notification-domain",
@@ -122,7 +123,7 @@ dependencies = [
 name = "chacha20poly1305"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b89e1c441e926b9c82a8d023f6e1b7ae0adcfaa7d621814e4d60789bac751cb"
+checksum = "9b89e1c441e926b9c82a8d023f6e1b7ae0adcfaa81e3e83050991eeb56863f"
 dependencies = [
  "aead",
  "chacha20",
@@ -927,6 +928,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "use-cases-devices"
+version = "0.1.0"
+dependencies = [
+ "application-ports",
+ "device-domain",
+ "profile-platform-primitives",
+]
+
+[[package]]
 name = "use-cases-identity"
 version = "0.1.0"
 dependencies = [
@@ -1161,7 +1171,7 @@ dependencies = [
 name = "zeroize"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64"
 
 [[package]]
 name = "zerotrie"
