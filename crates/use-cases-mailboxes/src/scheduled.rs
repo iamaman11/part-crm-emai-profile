@@ -22,6 +22,33 @@ pub enum ScheduledMailboxProcessingOutcome {
     RetryAt(UnixMillis),
 }
 
+pub struct ProcessScheduledMailboxJobRequest<'a> {
+    actor: &'a ActorContext,
+    role: MembershipRole,
+    dispatch: &'a MailboxJobDispatch,
+    evidence: CommandExecutionEvidence,
+    now: UnixMillis,
+}
+
+impl<'a> ProcessScheduledMailboxJobRequest<'a> {
+    #[must_use]
+    pub const fn new(
+        actor: &'a ActorContext,
+        role: MembershipRole,
+        dispatch: &'a MailboxJobDispatch,
+        evidence: CommandExecutionEvidence,
+        now: UnixMillis,
+    ) -> Self {
+        Self {
+            actor,
+            role,
+            dispatch,
+            evidence,
+            now,
+        }
+    }
+}
+
 pub async fn dispatch_due_mailbox_jobs<R, P>(
     repository: &R,
     publisher: &P,
@@ -57,20 +84,24 @@ where
 }
 
 pub async fn process_scheduled_mailbox_job<A, S, P>(
-    actor: &ActorContext,
-    role: MembershipRole,
     application: &A,
     scheduling: &S,
     provider: &mut P,
-    dispatch: &MailboxJobDispatch,
-    evidence: CommandExecutionEvidence,
-    now: UnixMillis,
+    request: ProcessScheduledMailboxJobRequest<'_>,
 ) -> Result<ScheduledMailboxProcessingOutcome, MailboxJobOperationError>
 where
     A: MailboxJobApplicationPort,
     S: MailboxSchedulingRepositoryPort,
     P: MailboxProviderPort,
 {
+    let ProcessScheduledMailboxJobRequest {
+        actor,
+        role,
+        dispatch,
+        evidence,
+        now,
+    } = request;
+
     authorize_mailbox_job(role)?;
     if actor.tenant_scope().tenant_id() != dispatch.tenant_id()
         || actor.actor_id() != dispatch.actor_id()
