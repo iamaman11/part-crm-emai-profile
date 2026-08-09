@@ -31,6 +31,22 @@ impl From<LocalProfileError> for BrowserLaunchBlocker {
     }
 }
 
+impl core::fmt::Display for BrowserLaunchBlocker {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::MaterializationStale => "browser materialization evidence is stale",
+            Self::ProfileBusy => "browser profile writer is currently active",
+            Self::RecoveryRequired => "browser profile writer state requires explicit recovery",
+            Self::RetryableNetworkRouteChurn => "browser network route identity changed retryably",
+            Self::NetworkPolicyMismatch => "browser network identity violates policy",
+            Self::InvalidMaterializationEvidence => "browser materialization evidence is invalid",
+            Self::LocalProfile(_) => "browser local profile operation failed",
+        })
+    }
+}
+
+impl std::error::Error for BrowserLaunchBlocker {}
+
 pub fn persist_materialization_binding(
     workspace: &GenerationWorkspace,
     binding: &MaterializationBinding,
@@ -170,7 +186,10 @@ fn parse_binding(
         .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
     let generation = GenerationId::parse(required(&values, "generation_id")?)
         .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    if &tenant != expected_tenant || &profile != expected_profile || &generation != expected_generation {
+    if &tenant != expected_tenant
+        || &profile != expected_profile
+        || &generation != expected_generation
+    {
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
     let compatibility_version = required(&values, "identity_compatibility_version")?
