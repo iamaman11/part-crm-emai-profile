@@ -1,0 +1,175 @@
+name: Phase 2E IMAP Literal Materializer
+
+on:
+  push:
+    branches:
+      - phase2e-mailbox-cloud-lane
+    paths:
+      - .github/workflows/phase2e-imap-literal-materializer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2e-mailbox-cloud-lane
+
+      - name: Add synchronizing UTF-8 IMAP literal support
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          session = Path("crates/cloudflare-adapters/src/imap_session.rs")
+          text = session.read_text(encoding="utf-8")
+          marker = "    fn next_command_tag(&mut self) -> Result<String, ImapTransportError> {\n"
+          if marker not in text:
+              raise SystemExit("imap session insertion marker not found")
+          method = r'''    pub(crate) async fn execute_with_literal(
+              &mut self,
+              command: &str,
+              literal: &[u8],
+              maximum_response_bytes: usize,
+          ) -> Result<ImapCommandResponse, ImapTransportError> {
+              const MAX_COMMAND_LITERAL_BYTES: usize = 4 * 1024;
+              if command.is_empty()
+                  || command.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
+                  || literal.is_empty()
+                  || literal.len() > MAX_COMMAND_LITERAL_BYTES
+                  || literal.contains(&b'\0')
+                  || maximum_response_bytes == 0
+              {
+                  return Err(ImapTransportError::IntegrityFailure);
+              }
+              let tag = self.next_command_tag()?;
+              let mut wire = String::with_capacity(tag.len() + command.len() + 32);
+              wire.push_str(&tag);
+              wire.push(' ');
+              wire.push_str(command);
+              wire.push_str(" {");
+              wire.push_str(&literal.len().to_string());
+              wire.push_str("}\r\n");
+              self.socket
+                  .write_all(wire.as_bytes())
+                  .await
+                  .map_err(|_| ImapTransportError::DependencyUnavailable)?;
+              self.socket
+                  .flush()
+                  .await
+                  .map_err(|_| ImapTransportError::DependencyUnavailable)?;
+
+              let continuation = read_until_line(&mut self.socket, MAX_GREETING_BYTES).await?;
+              if !continuation.starts_with(b"+") {
+                  return Err(ImapTransportError::ProviderPolicy);
+              }
+              self.socket
+                  .write_all(literal)
+                  .await
+                  .map_err(|_| ImapTransportError::DependencyUnavailable)?;
+              self.socket
+                  .write_all(b"\r\n")
+                  .await
+                  .map_err(|_| ImapTransportError::DependencyUnavailable)?;
+              self.socket
+                  .flush()
+                  .await
+                  .map_err(|_| ImapTransportError::DependencyUnavailable)?;
+
+              let bytes = read_until_tag(&mut self.socket, &tag, maximum_response_bytes).await?;
+              let status =
+                  tagged_status(&bytes, &tag).ok_or(ImapTransportError::IntegrityFailure)?;
+              Ok(ImapCommandResponse { bytes, status })
+          }
+
+'''
+          text = text.replace(marker, method + marker, 1)
+          session.write_text(text, encoding="utf-8")
+
+          query = Path("crates/cloudflare-adapters/src/imap_query.rs")
+          text = query.read_text(encoding="utf-8")
+          old = r'''    let mut command = String::from("UID SEARCH ");
+              if request
+                  .term()
+                  .is_some_and(|term| !term.as_str().is_ascii())
+              {
+                  command.push_str("CHARSET UTF-8 ");
+              }
+              command.push_str("UID ");
+              command.push_str(&start.to_string());
+              command.push(':');
+              command.push_str(&end.to_string());
+              if let Some(term) = request.term() {
+                  command.push_str(" TEXT ");
+                  push_imap_quoted(&mut command, term.as_str());
+              }
+              let response = session
+                  .execute(&command, MAX_IMAP_CONTROL_RESPONSE_BYTES)
+                  .await
+                  .map_err(map_transport_error)?;
+'''
+          new = r'''    let mut command = String::from("UID SEARCH ");
+              let non_ascii_term = request
+                  .term()
+                  .filter(|term| !term.as_str().is_ascii());
+              if non_ascii_term.is_some() {
+                  command.push_str("CHARSET UTF-8 ");
+              }
+              command.push_str("UID ");
+              command.push_str(&start.to_string());
+              command.push(':');
+              command.push_str(&end.to_string());
+              let response = if let Some(term) = request.term() {
+                  command.push_str(" TEXT");
+                  if non_ascii_term.is_some() {
+                      session
+                          .execute_with_literal(
+                              &command,
+                              term.as_str().as_bytes(),
+                              MAX_IMAP_CONTROL_RESPONSE_BYTES,
+                          )
+                          .await
+                          .map_err(map_transport_error)?
+                  } else {
+                      command.push(' ');
+                      push_imap_quoted(&mut command, term.as_str());
+                      session
+                          .execute(&command, MAX_IMAP_CONTROL_RESPONSE_BYTES)
+                          .await
+                          .map_err(map_transport_error)?
+                  }
+              } else {
+                  session
+                      .execute(&command, MAX_IMAP_CONTROL_RESPONSE_BYTES)
+                      .await
+                      .map_err(map_transport_error)?
+              };
+'''
+          if old not in text:
+              raise SystemExit("imap query replacement marker not found")
+          text = text.replace(old, new, 1)
+          query.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Format and verify adapter tests
+        run: |
+          cargo fmt --all
+          cargo test --locked -p cloudflare-adapters --lib
+
+      - name: Verify Worker WASM composition
+        run: >-
+          cargo check --locked -p browser-profile-control-plane-worker
+          --target wasm32-unknown-unknown
+
+      - name: Commit verified change and remove this workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/phase2e-imap-literal-materializer.yml
+          git add crates/cloudflare-adapters/src/imap_session.rs crates/cloudflare-adapters/src/imap_query.rs
+          git diff --cached --check
+          git commit -m "Phase 2E: support UTF-8 IMAP search literals"
+          git push origin HEAD:phase2e-mailbox-cloud-lane
