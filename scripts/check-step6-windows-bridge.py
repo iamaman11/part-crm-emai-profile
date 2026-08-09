@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce permanent Repository Step 6 Windows Bridge feasibility boundaries."""
+"""Enforce permanent Repository Step 6 and Phase 2F Bridge/device boundaries."""
 
 from __future__ import annotations
 
@@ -35,6 +35,49 @@ REPOSITORY_REQUIRED = {
         "pub struct FakeProcessControl",
         "ProcessAction::ForceTerminate",
         "requires_version_negotiation",
+    ),
+    "apps/profile-bridge/src/browser_execution.rs": (
+        "BRIDGE_LOCK_SCHEMA",
+        "expected_workspace_epoch",
+        "verify_bridge_lock",
+        "NetworkIdentityDecision::Accepted",
+        "BrowserWriterDecision::RecoveryRequired",
+    ),
+    "apps/profile-bridge/src/browser_preflight.rs": (
+        "pub struct BoundBrowserLaunchPreflight",
+        "BrowserRuntimeObservationPort",
+        "runtime_inventory_sha256()",
+        ".observe(workspace, device_id)",
+        "evaluate_browser_launch(",
+    ),
+    "apps/profile-bridge/src/operator_flow.rs": (
+        "pub trait BrowserLaunchPreflightPort",
+        "browser_preflight: B",
+        ".evaluate_before_launch(",
+        "OperatorFailureStage::BrowserPreflight",
+        "RuntimeSessionOrchestrator::launch(",
+        "browser_preflight_failure_prevents_runtime_spawn_and_releases_ownership",
+    ),
+    "apps/profile-bridge/src/bin/profile-bridge-synthetic.rs": (
+        "BoundBrowserLaunchPreflight",
+        "persist_materialization_binding",
+        "synthetic_browser_preflight",
+    ),
+    "crates/application-ports/src/device_jobs.rs": (
+        "pub trait AuthenticatedDevicePort",
+        "authenticated_device_id",
+    ),
+    "crates/use-cases-devices/src/jobs.rs": (
+        "execute_claim_device_job",
+        "execute_heartbeat_device_job",
+        "execute_apply_device_job_outcome",
+        "ensure_authenticated_device",
+    ),
+    "crates/use-cases-devices/tests/job_orchestration.rs": (
+        "foreign_authenticated_device_cannot_claim_target",
+        "assert_eq!(authorization.calls.get(), 0)",
+        "assert_eq!(repository.loads.get(), 0)",
+        "assert_eq!(repository.writes.get(), 0)",
     ),
     "apps/profile-bridge/src/windows_native.rs": (
         "std::os::windows::ffi::OsStrExt",
@@ -78,6 +121,10 @@ BROWSER_LOCK_MARKERS = (
     "SingletonLock",
 )
 
+FORBIDDEN_PHASE2F_PATHS = (
+    "scripts/phase2f-materialize-lease.py",
+)
+
 FIXTURE_PREFIX = "tests/windows-bridge/fixtures/"
 POLICY_PATH = "scripts/check-step6-windows-bridge.py"
 BRIDGE_SOURCE_ROOTS = (
@@ -106,6 +153,94 @@ def source_files(root: Path, repository_root: bool):
                 yield path
 
 
+def function_body(source: str, function_name: str) -> str:
+    marker = f"pub async fn {function_name}"
+    start = source.find(marker)
+    if start < 0:
+        return ""
+    next_start = source.find("\npub async fn ", start + len(marker))
+    return source[start : next_start if next_start >= 0 else len(source)]
+
+
+def require_order(
+    errors: list[str],
+    source: str,
+    earlier: str,
+    later: str,
+    label: str,
+) -> None:
+    earlier_at = source.find(earlier)
+    later_at = source.find(later)
+    if earlier_at < 0 or later_at < 0 or earlier_at >= later_at:
+        errors.append(f"Phase 2F ordering violated for {label}: {earlier} must precede {later}")
+
+
+def enforce_phase2f_ordering(root: Path, errors: list[str]) -> None:
+    operator = (root / "apps/profile-bridge/src/operator_flow.rs").read_text(encoding="utf-8")
+    require_order(
+        errors,
+        operator,
+        ".evaluate_before_launch(",
+        "RuntimeSessionOrchestrator::launch(",
+        "browser preflight before runtime launch",
+    )
+
+    device_jobs = (root / "crates/use-cases-devices/src/jobs.rs").read_text(encoding="utf-8")
+    for function_name in (
+        "execute_claim_device_job",
+        "execute_heartbeat_device_job",
+        "execute_apply_device_job_outcome",
+    ):
+        body = function_body(device_jobs, function_name)
+        if not body:
+            errors.append(f"missing Phase 2F device operation: {function_name}")
+            continue
+        require_order(
+            errors,
+            body,
+            "ensure_authenticated_device(",
+            "authorize(",
+            f"{function_name} authenticated device before authorization",
+        )
+        require_order(
+            errors,
+            body,
+            "ensure_authenticated_device(",
+            "load_exact_job(",
+            f"{function_name} authenticated device before repository access",
+        )
+
+    synthetic = (root / "apps/profile-bridge/src/bin/profile-bridge-synthetic.rs").read_text(
+        encoding="utf-8"
+    )
+    if "AllowBrowserPreflight" in synthetic:
+        errors.append("synthetic executable must use the bound browser preflight, not an allow stub")
+
+
+def phase2f_ordering_self_test(errors: list[str]) -> None:
+    probe: list[str] = []
+    require_order(
+        probe,
+        "RuntimeSessionOrchestrator::launch(); .evaluate_before_launch();",
+        ".evaluate_before_launch(",
+        "RuntimeSessionOrchestrator::launch(",
+        "negative preflight bypass fixture",
+    )
+    if not probe:
+        errors.append("Phase 2F negative preflight-order fixture unexpectedly passed")
+
+    probe = []
+    require_order(
+        probe,
+        "authorize(); ensure_authenticated_device(); load_exact_job();",
+        "ensure_authenticated_device(",
+        "authorize(",
+        "negative device-auth ordering fixture",
+    )
+    if not probe:
+        errors.append("Phase 2F negative device-auth-order fixture unexpectedly passed")
+
+
 def main() -> int:
     root = parse_args().root.resolve()
     repository_root = (root / "Cargo.toml").exists()
@@ -129,27 +264,39 @@ def main() -> int:
             errors.append(f"automatic browser runtime lock deletion is forbidden: {rel}")
 
     if repository_root:
+        for forbidden in FORBIDDEN_PHASE2F_PATHS:
+            if (root / forbidden).exists():
+                errors.append(f"temporary Phase 2F materializer artifact remains: {forbidden}")
+
         for rel, markers in REPOSITORY_REQUIRED.items():
             path = root / rel
             if not path.exists():
-                errors.append(f"missing Step 6 boundary: {rel}")
+                errors.append(f"missing Step 6 / Phase 2F boundary: {rel}")
                 continue
             text = path.read_text(encoding="utf-8")
             for marker in markers:
                 if marker not in text:
-                    errors.append(f"missing Step 6 invariant in {rel}: {marker}")
+                    errors.append(f"missing Step 6 / Phase 2F invariant in {rel}: {marker}")
+
+        enforce_phase2f_ordering(root, errors)
+        phase2f_ordering_self_test(errors)
 
         cargo = (root / "Cargo.toml").read_text(encoding="utf-8")
-        for member in ('"apps/profile-bridge"', '"crates/bridge-domain"'):
+        for member in (
+            '"apps/profile-bridge"',
+            '"crates/bridge-domain"',
+            '"crates/device-domain"',
+            '"crates/use-cases-devices"',
+        ):
             if member not in cargo:
-                errors.append(f"Step 6 workspace member missing: {member}")
+                errors.append(f"Step 6 / Phase 2F workspace member missing: {member}")
 
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
         return 1
 
-    print("Repository Step 6 Windows Bridge boundaries are enforced.")
+    print("Repository Step 6 and Phase 2F Bridge/device boundaries are enforced.")
     return 0
 
 
