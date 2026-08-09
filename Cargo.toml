@@ -21,6 +21,7 @@ members = [
     "crates/use-cases",
     "crates/use-cases-clients",
     "crates/use-cases-identity",
+    "crates/use-cases-mailboxes",
     "crates/use-cases-notifications",
     "crates/use-cases-query",
 ]
@@ -51,6 +52,7 @@ sha2 = { version = "=0.11.0", default-features = false }
 use-cases = { path = "crates/use-cases" }
 use-cases-clients = { path = "crates/use-cases-clients" }
 use-cases-identity = { path = "crates/use-cases-identity" }
+use-cases-mailboxes = { path = "crates/use-cases-mailboxes" }
 use-cases-notifications = { path = "crates/use-cases-notifications" }
 use-cases-query = { path = "crates/use-cases-query" }
 wasm-bindgen = "=0.2.126"
