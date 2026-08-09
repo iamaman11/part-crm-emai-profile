@@ -10,6 +10,7 @@ pub mod contact_lookup;
 pub mod contact_protection;
 pub mod control_plane_queue;
 pub mod coordinator_ingress;
+pub mod d1_authenticated_device;
 pub mod d1_catalog;
 pub mod d1_client_merge;
 pub mod d1_client_persistence;
