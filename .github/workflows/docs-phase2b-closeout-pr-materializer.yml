@@ -1,0 +1,32 @@
+name: Phase 2B Docs Closeout PR Materializer
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout closeout branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: docs-phase2b-closeout
+          persist-credentials: true
+      - name: Apply bounded closeout
+        run: python scripts/_docs_phase2b_closeout_materialize.py
+      - name: Commit normative docs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add docs/DEVELOPMENT_PLAN.md docs/ARCHITECTURE.md
+          if git diff --cached --quiet; then
+            echo "Phase 2B docs closeout already materialized."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'docs: close Phase 2B and advance Phase 2C'
+          git push origin HEAD:docs-phase2b-closeout
