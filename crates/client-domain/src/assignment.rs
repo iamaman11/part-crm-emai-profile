@@ -354,7 +354,10 @@ mod tests {
         assert_eq!(closed.client_id(), old_client.client_id());
         assert_eq!(transition.next().status(), AssignmentStatus::Active);
         assert_eq!(transition.next().role(), AssignmentRole::Primary);
-        assert_eq!(transition.next().assignment_id().as_str(), "assignment_02JCLIENT");
+        assert_eq!(
+            transition.next().assignment_id().as_str(),
+            "assignment_02JCLIENT"
+        );
         assert_eq!(transition.next().client_id(), new_client.client_id());
         assert_eq!(transition.next().profile_id(), &profile_id);
         assert_eq!(current.status(), AssignmentStatus::Active);

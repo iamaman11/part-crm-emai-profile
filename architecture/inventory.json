@@ -40,7 +40,8 @@
       "migrations/d1/0011_mailbox_governed_guards.sql",
       "migrations/d1/0012_integration_event_foundation.sql",
       "migrations/d1/0013_notification_delivery_hardening.sql",
-      "migrations/d1/0014_client_contact_protection.sql"
+      "migrations/d1/0014_client_contact_protection.sql",
+      "migrations/d1/0015_client_merge_assignment_history.sql"
     ]
   },
   "routing": {

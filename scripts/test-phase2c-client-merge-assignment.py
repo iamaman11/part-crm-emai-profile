@@ -406,7 +406,7 @@ def test_merge_version_failure_and_downstream_failure_roll_back_everything() -> 
         INSERT INTO idempotency_records (
             tenant_id, actor_id, idempotency_key, command_name, request_digest,
             result_code, result_reference, created_at_ms, expires_at_ms
-        ) VALUES (?, ?, 'idem_phase2c_duplicate', 'synthetic.existing', 'digest-existing',
+        ) VALUES (?, ?, 'idem_phase2c_duplicate', 'synthetic.existing', 'digest-existing-phase2c',
                   'existing', NULL, 20, 1000)
         """,
         (TENANT_A, OWNER_A),
@@ -430,7 +430,7 @@ def test_merge_version_failure_and_downstream_failure_roll_back_everything() -> 
             INSERT INTO idempotency_records (
                 tenant_id, actor_id, idempotency_key, command_name, request_digest,
                 result_code, result_reference, created_at_ms, expires_at_ms
-            ) VALUES (?, ?, 'idem_phase2c_duplicate', 'client.merge', 'digest-merge',
+            ) VALUES (?, ?, 'idem_phase2c_duplicate', 'client.merge', 'digest-merge-phase2c',
                       'merged', ?, 60, 1000)
             """,
             (TENANT_A, OWNER_A, CLIENT_A),
