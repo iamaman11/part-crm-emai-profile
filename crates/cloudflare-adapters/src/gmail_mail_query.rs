@@ -237,10 +237,12 @@ fn bounded_header(headers: &[GmailHeader], name: &str) -> Result<Option<String>,
         .iter()
         .find(|header| header.name.eq_ignore_ascii_case(name))
         .map(|header| header.value.trim().to_owned());
-    if value
-        .as_ref()
-        .is_some_and(|value| value.len() > MAX_HEADER_VALUE_BYTES || value.chars().any(char::is_control))
-    {
+    if value.as_ref().is_some_and(|value| {
+        value.len() > MAX_HEADER_VALUE_BYTES
+            || value
+                .chars()
+                .any(|character| character.is_control() && character != '\t')
+    }) {
         return Err(integrity_failure());
     }
     Ok(value.filter(|value| !value.is_empty()))
@@ -308,8 +310,15 @@ fn decode_base64url(value: &str, maximum_bytes: usize) -> Result<Vec<u8>, QueryP
     if value.bytes().any(|byte| byte.is_ascii_whitespace()) {
         return Err(integrity_failure());
     }
+    let padding = value.len().saturating_sub(value.trim_end_matches('=').len());
+    if padding > 2 {
+        return Err(integrity_failure());
+    }
     let unpadded = value.trim_end_matches('=');
-    if unpadded.len() % 4 == 1 || value[..unpadded.len()].contains('=') {
+    if unpadded.len() % 4 == 1 || unpadded.contains('=') {
+        return Err(integrity_failure());
+    }
+    if padding > 0 && value.len() % 4 != 0 {
         return Err(integrity_failure());
     }
     let maximum_decoded = unpadded
@@ -328,15 +337,20 @@ fn decode_base64url(value: &str, maximum_bytes: usize) -> Result<Vec<u8>, QueryP
         let value = base64url_value(byte).ok_or_else(integrity_failure)?;
         accumulator = (accumulator << 6) | u32::from(value);
         bits += 6;
-        if bits >= 8 {
+        while bits >= 8 {
             bits -= 8;
             if output.len() == maximum_bytes {
                 return Err(integrity_failure());
             }
             output.push(((accumulator >> bits) & 0xff) as u8);
         }
+        if bits == 0 {
+            accumulator = 0;
+        } else {
+            accumulator &= (1_u32 << bits) - 1;
+        }
     }
-    if bits > 0 && (accumulator & ((1_u32 << bits) - 1)) != 0 {
+    if bits > 0 && accumulator != 0 {
         return Err(integrity_failure());
     }
     Ok(output)
@@ -379,7 +393,9 @@ fn parse_gmail_reference(reference: &str) -> Result<&str, QueryPortError> {
 fn validate_gmail_token(value: &str) -> Result<(), QueryPortError> {
     if value.is_empty()
         || value.len() > 500
-        || value.chars().any(|character| character.is_control() || character.is_whitespace())
+        || value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
     {
         return Err(integrity_failure());
     }
@@ -456,6 +472,7 @@ mod tests {
         assert_eq!(decode_base64url("SGVsbG8=", 64)?, b"Hello");
         assert!(decode_base64url("A", 64).is_err());
         assert!(decode_base64url("SGVsbG8=", 4).is_err());
+        assert!(decode_base64url("SGVsbG8===", 64).is_err());
         Ok(())
     }
 
