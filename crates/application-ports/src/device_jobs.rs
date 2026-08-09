@@ -39,6 +39,7 @@ pub enum DeviceJobWriteOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceJobPortErrorClass {
+    AuthenticationFailed,
     IntegrityFailure,
     DependencyUnavailable,
 }
@@ -63,6 +64,9 @@ impl DeviceJobPortError {
 impl fmt::Display for DeviceJobPortError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self.class {
+            DeviceJobPortErrorClass::AuthenticationFailed => {
+                "device identity authentication failed"
+            }
             DeviceJobPortErrorClass::IntegrityFailure => "device job port integrity failure",
             DeviceJobPortErrorClass::DependencyUnavailable => "device job dependency unavailable",
         })
