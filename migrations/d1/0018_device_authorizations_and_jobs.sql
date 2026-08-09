@@ -140,6 +140,11 @@ CREATE TABLE device_jobs (
 CREATE INDEX device_jobs_due_lookup
     ON device_jobs(tenant_id, status, retry_at_ms, updated_at_ms, job_id);
 
+CREATE INDEX device_jobs_claimable_device_lookup
+    ON device_jobs(
+        tenant_id, device_id, status, retry_at_ms, updated_at_ms, job_id
+    );
+
 CREATE INDEX device_jobs_target_lookup
     ON device_jobs(
         tenant_id, device_id, profile_id, generation_id, status, updated_at_ms, job_id
