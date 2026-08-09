@@ -56,3 +56,14 @@ pub use query::{
     QueryPageRequest, QueryPageSize, QueryPortError, QueryPortErrorClass,
 };
 pub use sessions::ProfileCoordinatorPort;
+
+impl core::fmt::Display for mailboxes::MailboxProviderPortError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Failure(_) => "mailbox provider failure",
+            Self::IntegrityFailure => "mailbox provider integrity failure",
+        })
+    }
+}
+
+impl std::error::Error for mailboxes::MailboxProviderPortError {}
