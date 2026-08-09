@@ -173,7 +173,10 @@ impl ContactProtectionKeyring {
 
     #[must_use]
     pub fn lookup_versions(&self) -> Vec<LookupKeyVersion> {
-        self.lookup_keys.iter().map(ContactLookupRootKey::version).collect()
+        self.lookup_keys
+            .iter()
+            .map(ContactLookupRootKey::version)
+            .collect()
     }
 }
 
@@ -282,7 +285,7 @@ impl<N> RustCryptoContactProtection<N> {
             protection_version,
             root.version(),
         );
-        let mut plaintext = cipher
+        let plaintext = cipher
             .decrypt(
                 XNonce::from_slice(&nonce_bytes),
                 Payload {
@@ -291,11 +294,11 @@ impl<N> RustCryptoContactProtection<N> {
                 },
             )
             .map_err(|_| ContactCryptoError::AuthenticationFailed)?;
-        let decoded = String::from_utf8(plaintext.clone()).map_err(|_| {
-            plaintext.zeroize();
+        let decoded = String::from_utf8(plaintext).map_err(|error| {
+            let mut bytes = error.into_bytes();
+            bytes.zeroize();
             ContactCryptoError::InvalidUtf8
         })?;
-        plaintext.zeroize();
         Ok(Zeroizing::new(decoded))
     }
 }
@@ -313,7 +316,8 @@ impl<N: ContactNonceSource> ContactProtectionPort for RustCryptoContactProtectio
         request: ContactExactLookupRequest<'_>,
     ) -> Result<ExactLookupToken, ContactProtectionPortError> {
         let root = self.keyring.current_lookup().map_err(map_crypto_error)?;
-        derive_lookup_token(root, request.tenant_id(), request.hmac_input()).map_err(map_crypto_error)
+        derive_lookup_token(root, request.tenant_id(), request.hmac_input())
+            .map_err(map_crypto_error)
     }
 }
 
@@ -375,8 +379,11 @@ fn derive_tenant_key(
     key_version: u32,
 ) -> Result<Zeroizing<[u8; 32]>, ContactCryptoError> {
     let version = key_version.to_be_bytes();
-    hmac_sha256(root, &[domain, &version, b"\0", tenant_id.as_str().as_bytes()])
-        .map(Zeroizing::new)
+    hmac_sha256(
+        root,
+        &[domain, &version, b"\0", tenant_id.as_str().as_bytes()],
+    )
+    .map(Zeroizing::new)
 }
 
 fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> Result<[u8; 32], ContactCryptoError> {
@@ -464,14 +471,10 @@ mod tests {
     }
 
     fn protection() -> Result<RustCryptoContactProtection<FixedNonce>, Box<dyn std::error::Error>> {
-        let encryption_current = ContactEncryptionRootKey::new(
-            EncryptionKeyVersion::new(2)?,
-            [0x11; 32],
-        );
-        let encryption_legacy = ContactEncryptionRootKey::new(
-            EncryptionKeyVersion::new(1)?,
-            [0x22; 32],
-        );
+        let encryption_current =
+            ContactEncryptionRootKey::new(EncryptionKeyVersion::new(2)?, [0x11; 32]);
+        let encryption_legacy =
+            ContactEncryptionRootKey::new(EncryptionKeyVersion::new(1)?, [0x22; 32]);
         let lookup_current = ContactLookupRootKey::new(LookupKeyVersion::new(3)?, [0x33; 32]);
         let lookup_legacy = ContactLookupRootKey::new(LookupKeyVersion::new(2)?, [0x44; 32]);
         let keyring = ContactProtectionKeyring::new(
@@ -495,18 +498,22 @@ mod tests {
             ContactNormalizationVersion::V1,
             "Person@Example.COM",
         )?;
-        let encrypted = block_on(protection.encrypt_contact_display(ContactEncryptionRequest::new(
-            &tenant,
-            &contact_id,
-            ContactProtectionVersion::V1,
-            &normalized,
-        )))?;
+        let encrypted = block_on(protection.encrypt_contact_display(
+            ContactEncryptionRequest::new(
+                &tenant,
+                &contact_id,
+                ContactProtectionVersion::V1,
+                &normalized,
+            ),
+        ))?;
         assert_eq!(encrypted.key_version().value(), 2);
         assert_eq!(encrypted.nonce(), &[0x55; 24]);
-        assert!(!encrypted
-            .ciphertext()
-            .windows(normalized.expose().len())
-            .any(|window| window == normalized.expose().as_bytes()));
+        assert!(
+            !encrypted
+                .ciphertext()
+                .windows(normalized.expose().len())
+                .any(|window| window == normalized.expose().as_bytes())
+        );
         let opened = protection.decrypt_contact_display(
             &tenant,
             &contact_id,
@@ -529,12 +536,14 @@ mod tests {
             ContactNormalizationVersion::V1,
             "+48 123 456 789",
         )?;
-        let encrypted = block_on(protection.encrypt_contact_display(ContactEncryptionRequest::new(
-            &tenant,
-            &contact_id,
-            ContactProtectionVersion::V1,
-            &normalized,
-        )))?;
+        let encrypted = block_on(protection.encrypt_contact_display(
+            ContactEncryptionRequest::new(
+                &tenant,
+                &contact_id,
+                ContactProtectionVersion::V1,
+                &normalized,
+            ),
+        ))?;
         assert!(matches!(
             protection.decrypt_contact_display(
                 &other_tenant,
@@ -553,7 +562,6 @@ mod tests {
         let protection = protection()?;
         let tenant_a = TenantId::parse("tenant_01JCRYPTOA")?;
         let tenant_b = TenantId::parse("tenant_01JCRYPTOB")?;
-        let contact_id = ContactPointId::parse("contact_01JCRYPTOA")?;
         let normalized = normalize_contact_value(
             ContactKind::Email,
             ContactNormalizationVersion::V1,
@@ -571,20 +579,22 @@ mod tests {
             ContactNormalizationVersion::V1,
             &normalized,
         );
-        let token_a = block_on(protection.derive_exact_lookup_token(ContactExactLookupRequest::new(
-            &tenant_a,
-            &contact_id,
-            ContactKind::Email,
-            ContactNormalizationVersion::V1,
-            &input_a,
-        )))?;
-        let token_b = block_on(protection.derive_exact_lookup_token(ContactExactLookupRequest::new(
-            &tenant_b,
-            &contact_id,
-            ContactKind::Email,
-            ContactNormalizationVersion::V1,
-            &input_b,
-        )))?;
+        let token_a = block_on(protection.derive_exact_lookup_token(
+            ContactExactLookupRequest::new(
+                &tenant_a,
+                ContactKind::Email,
+                ContactNormalizationVersion::V1,
+                &input_a,
+            ),
+        ))?;
+        let token_b = block_on(protection.derive_exact_lookup_token(
+            ContactExactLookupRequest::new(
+                &tenant_b,
+                ContactKind::Email,
+                ContactNormalizationVersion::V1,
+                &input_b,
+            ),
+        ))?;
         assert_eq!(token_a.key_version().value(), 3);
         assert_ne!(token_a.bytes(), token_b.bytes());
 
