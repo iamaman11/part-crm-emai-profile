@@ -13,7 +13,7 @@ use use_cases_notifications::integration_events::{
 use use_cases_notifications::replay::dispatch_pending_replays;
 use use_cases_notifications::retention::{NotificationRetentionPolicy, compact_notification_state};
 use use_cases_notifications::retry::RetryPolicy;
-use worker::{Date, Env, Error, MessageBatch, MessageExt, QueueRetryOptionsBuilder, Result};
+use worker::{Date, Env, Error, MessageExt, QueueRetryOptionsBuilder, Result};
 
 pub const INTEGRATION_EVENTS_QUEUE_BINDING: &str = "INTEGRATION_EVENTS";
 const FOUNDATION_CONSUMER_ID: &str = "consumer_foundation_v1";
@@ -66,44 +66,42 @@ pub async fn dispatch_pending(env: &Env) -> Result<()> {
     Ok(())
 }
 
-pub async fn consume(
-    message_batch: MessageBatch<IntegrationEventQueueMessage>,
+pub async fn consume_one<T>(
+    message: &worker::Message<T>,
+    queued: IntegrationEventQueueMessage,
     env: &Env,
 ) -> Result<()> {
+    let event = match queued.into_event() {
+        Ok(event) => event,
+        Err(_) => {
+            retry_after_seconds(message, TRANSPORT_FAILURE_RETRY_SECONDS);
+            return Ok(());
+        }
+    };
     let consumer_database = env.d1(control_plane_contract::D1_CATALOG_BINDING)?;
     let delivery_database = env.d1(control_plane_contract::D1_CATALOG_BINDING)?;
     let consumer = D1IntegrationEventRepository::new(consumer_database);
     let deliveries = D1NotificationRepository::new(delivery_database);
     let consumer_id = OpaqueId::parse(FOUNDATION_CONSUMER_ID).map_err(identifier_error)?;
     let retry_policy = delivery_retry_policy()?;
-
-    for message in message_batch.messages()? {
-        let event = match message.body().clone().into_event() {
-            Ok(event) => event,
-            Err(_) => {
-                retry_after_seconds(&message, TRANSPORT_FAILURE_RETRY_SECONDS);
-                continue;
-            }
-        };
-        let now = UnixMillis::new(Date::now().as_millis());
-        match process_foundation_delivery(
-            &deliveries,
-            &consumer,
-            &consumer_id,
-            &event,
-            now,
-            retry_policy,
-        )
-        .await
-        {
-            Ok(
-                DeliveryProcessingOutcome::Delivered { .. } | DeliveryProcessingOutcome::DeadLetter,
-            ) => message.ack(),
-            Ok(DeliveryProcessingOutcome::RetryScheduled { retry_at }) => {
-                retry_after_seconds(&message, queue_delay_seconds(now, retry_at)?);
-            }
-            Err(_) => retry_after_seconds(&message, TRANSPORT_FAILURE_RETRY_SECONDS),
+    let now = UnixMillis::new(Date::now().as_millis());
+    match process_foundation_delivery(
+        &deliveries,
+        &consumer,
+        &consumer_id,
+        &event,
+        now,
+        retry_policy,
+    )
+    .await
+    {
+        Ok(DeliveryProcessingOutcome::Delivered { .. } | DeliveryProcessingOutcome::DeadLetter) => {
+            message.ack();
         }
+        Ok(DeliveryProcessingOutcome::RetryScheduled { retry_at }) => {
+            retry_after_seconds(message, queue_delay_seconds(now, retry_at)?);
+        }
+        Err(_) => retry_after_seconds(message, TRANSPORT_FAILURE_RETRY_SECONDS),
     }
     Ok(())
 }
