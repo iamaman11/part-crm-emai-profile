@@ -655,7 +655,7 @@ const fn integrity_failure() -> ClientPortError {
 
 fn classify_write_failure(message: &str) -> ClientPortErrorClass {
     if message.contains("version_mismatch") {
-        return ClientPortErrorClass::VersionConflict;
+        return ClientPortErrorClass::Conflict;
     }
     if message.contains("owner_required")
         || message.contains("time_regression")
@@ -690,7 +690,7 @@ mod tests {
     fn protected_client_write_failures_are_sanitized_and_stable() {
         assert_eq!(
             classify_write_failure("client_contact_client_version_mismatch"),
-            ClientPortErrorClass::VersionConflict
+            ClientPortErrorClass::Conflict
         );
         assert_eq!(
             classify_write_failure("client_contact_archived_immutable"),
