@@ -218,16 +218,14 @@ impl DeviceJobQueryPort for D1DeviceJobRepository {
         .all()
         .await
         .map_err(map_worker_error)?;
-        let rows = result
-            .results::<DeviceJobRow>()
-            .map_err(map_worker_error)?;
+        let rows = result.results::<DeviceJobRow>().map_err(map_worker_error)?;
         if rows.len() > usize::from(limit) {
             return Err(integrity_failure());
         }
         rows.into_iter()
             .map(|row| {
-                let job_id = DeviceJobId::parse(row.job_id.as_str())
-                    .map_err(|_| integrity_failure())?;
+                let job_id =
+                    DeviceJobId::parse(row.job_id.as_str()).map_err(|_| integrity_failure())?;
                 restore_row(tenant_id, &job_id, row)
             })
             .collect()
