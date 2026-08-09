@@ -24,18 +24,21 @@ jobs:
         run: |
           cargo generate-lockfile
           cargo fmt --all
+          python scripts/generate-frontend-contracts.py
           python scripts/generate-architecture-inventory.py --write
 
       - name: Prove Phase 2D query boundaries and plans
         run: |
-          python -m py_compile scripts/check-phase2d-query-boundaries.py scripts/test-phase2d-query-projections.py
+          python -m py_compile scripts/check-phase2d-query-boundaries.py scripts/test-phase2d-query-projections.py scripts/generate-frontend-contracts.py
           python scripts/check-phase2d-query-boundaries.py
           python scripts/check-phase2d-query-boundaries.py --self-test
           python scripts/test-phase2d-query-projections.py
+          python scripts/generate-frontend-contracts.py --check
           python scripts/generate-architecture-inventory.py --check
           cargo test --locked -p application-ports -p use-cases-query
           cargo clippy --locked -p application-ports -p use-cases-query --all-targets -- -D warnings
           cargo test --locked -p cloudflare-adapters --lib
+          cargo test --locked -p profile-bridge fake_mail_query
           cargo check --locked -p application-ports -p use-cases-query -p cloudflare-adapters --target wasm32-unknown-unknown
           git diff --check
 
@@ -46,5 +49,5 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git diff --cached --check
-          git commit -m 'Phase 2D: materialize query and exact-contact state'
+          git commit -m 'Phase 2D: materialize query contracts and synthetic adapters'
           git push origin HEAD:phase2d-query-cqrs
