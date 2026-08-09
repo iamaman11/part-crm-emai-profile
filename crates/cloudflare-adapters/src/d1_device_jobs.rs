@@ -205,13 +205,14 @@ impl DeviceJobQueryPort for D1DeviceJobRepository {
             return Err(integrity_failure());
         }
         let tenant_id = actor.tenant_scope().tenant_id();
+        let now_ms = unix_to_i64(now)?;
         let result = query!(
             &self.database,
             LIST_CLAIMABLE_DEVICE_JOBS,
             tenant_id.as_str(),
             device_id.as_str(),
             actor.actor_id().as_str(),
-            unix_to_i64(now)?,
+            now_ms,
             i64::from(limit),
         )
         .map_err(map_worker_error)?
