@@ -3,6 +3,7 @@ use crate::access_session::{
 };
 use crate::command_evidence;
 use crate::composition::mailbox_job_application;
+use cloudflare_adapters::cloud_mailbox_provider::CloudMailboxProviderRouter;
 use control_plane_contract::RouteClass;
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, MailboxJobId};
@@ -154,11 +155,13 @@ async fn run_job(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let mut application = mailbox_job_application(env)?;
+    let application = mailbox_job_application(env)?;
+    let mut provider = CloudMailboxProviderRouter::new(env);
     match execute_run_mailbox_job(
         actor,
         role,
-        &mut application,
+        &application,
+        &mut provider,
         ExecuteRunMailboxJobCommand::new(binding_id, job_id, expected_version, evidence),
     )
     .await
@@ -277,8 +280,8 @@ mod tests {
     use super::{CreateMailboxJobRequest, MailboxJobResponse, MutationReceipt, valid_digest};
 
     #[test]
-    fn mailbox_job_transport_preserves_legacy_shape_and_privacy()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn mailbox_job_transport_preserves_shape_and_privacy() -> Result<(), Box<dyn std::error::Error>>
+    {
         let digest = "a".repeat(64);
         let valid = format!(
             r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"{digest}"}}"#
@@ -303,7 +306,7 @@ mod tests {
 
         let response = serde_json::to_value(MailboxJobResponse {
             job_id: "mailjob_01JTEST",
-            status: "PENDING",
+            status: "SCHEDULED",
             attempt: 0,
             max_attempts: 3,
             next_run_at_ms: 0,

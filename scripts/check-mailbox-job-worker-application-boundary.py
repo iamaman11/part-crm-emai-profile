@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Fail closed if mailbox job transport regains D1, idempotency or provider orchestration."""
+"""Fail closed if mailbox job transport regains D1 or application-owned provider decisions."""
 
 from __future__ import annotations
 
 import argparse
 import tempfile
 from pathlib import Path
-
 
 FORBIDDEN_JOB_TRANSPORT_TOKENS = (
     "cloudflare_adapters::d1_",
@@ -27,6 +26,7 @@ REQUIRED_JOB_TRANSPORT_TOKENS = (
     "mailbox_job_application(env)",
     "validate_create_mailbox_job_request",
     "validate_mailbox_job_run_version",
+    "CloudMailboxProviderRouter::new(env)",
 )
 
 REQUIRED_USE_CASE_TOKENS = (
@@ -39,11 +39,14 @@ REQUIRED_USE_CASE_TOKENS = (
 
 REQUIRED_ADAPTER_TOKENS = (
     "impl MailboxJobApplicationPort for D1MailboxJobApplicationRepository",
-    "MetadataMailboxProviderAdapter",
-    "decide_mailbox_run",
     "CreateMailboxJobMutation",
     "RunMailboxJobMutation",
-    "type RunDecision = MailboxRunDecision",
+)
+
+FORBIDDEN_ADAPTER_TOKENS = (
+    "MetadataMailboxProviderAdapter",
+    "decide_mailbox_run",
+    "type RunDecision",
 )
 
 
@@ -61,7 +64,7 @@ def validate(root: Path) -> list[str]:
     composition_path = worker / "composition.rs"
     lib_path = worker / "lib.rs"
     ports_path = root / "crates/application-ports/src/mailbox_jobs.rs"
-    use_cases_path = root / "crates/use-cases/src/mailbox_jobs.rs"
+    use_cases_path = root / "crates/use-cases-mailboxes/src/mailbox_jobs.rs"
     adapter_path = root / "crates/cloudflare-adapters/src/d1_mailbox_jobs.rs"
 
     for path in (job_path, composition_path, lib_path, ports_path, use_cases_path, adapter_path):
@@ -90,7 +93,10 @@ def validate(root: Path) -> list[str]:
         "        | RouteClass::MailboxJobResourceApi\n"
         "        | RouteClass::MailboxJobRunApi"
     )
-    if route_fragment not in worker_lib or "mailbox_jobs::dispatch(route, &mut request, &env).await" not in worker_lib:
+    if (
+        route_fragment not in worker_lib
+        or "mailbox_jobs::dispatch(route, &mut request, &env).await" not in worker_lib
+    ):
         errors.append("Worker root must route mailbox job APIs to mailbox_jobs::dispatch")
 
     if (
@@ -102,16 +108,23 @@ def validate(root: Path) -> list[str]:
 
     if "pub trait MailboxJobApplicationPort" not in ports:
         errors.append("application ports must own MailboxJobApplicationPort")
-    if "type RunDecision;" not in ports or "MailboxJobPreparedRun" not in ports:
-        errors.append("mailbox job application port must keep provider run decisions opaque")
+    if "MailboxJobPreparedRun" not in ports:
+        errors.append("mailbox job application port must expose only the prepared canonical run write")
+    if "type RunDecision" in ports:
+        errors.append("provider run decisions must not be owned by the persistence application port")
 
     for token in REQUIRED_USE_CASE_TOKENS:
         if token not in use_cases:
-            errors.append(f"mailbox job use cases missing `{token}`")
+            errors.append(f"extracted mailbox job use cases missing `{token}`")
 
     for token in REQUIRED_ADAPTER_TOKENS:
         if token not in adapter:
-            errors.append(f"Cloudflare mailbox job adapter missing `{token}`")
+            errors.append(f"Cloudflare mailbox job persistence adapter missing `{token}`")
+    for token in FORBIDDEN_ADAPTER_TOKENS:
+        if token in adapter:
+            errors.append(
+                f"Cloudflare mailbox job persistence adapter must not decide provider outcome `{token}`"
+            )
 
     return errors
 
@@ -119,7 +132,7 @@ def validate(root: Path) -> list[str]:
 def write_self_test_fixture(root: Path) -> None:
     worker = root / "apps/control-plane-worker/src"
     ports = root / "crates/application-ports/src"
-    use_cases = root / "crates/use-cases/src"
+    use_cases = root / "crates/use-cases-mailboxes/src"
     adapters = root / "crates/cloudflare-adapters/src"
     for path in (worker, ports, use_cases, adapters):
         path.mkdir(parents=True, exist_ok=True)
@@ -129,7 +142,7 @@ def write_self_test_fixture(root: Path) -> None:
         "MetadataMailboxProviderAdapter decide_mailbox_run\n"
         "fn route() { execute_create_mailbox_job(); get_mailbox_job(); execute_run_mailbox_job(); "
         "mailbox_job_application(env); validate_create_mailbox_job_request(); "
-        "validate_mailbox_job_run_version(); }\n",
+        "validate_mailbox_job_run_version(); CloudMailboxProviderRouter::new(env); }\n",
         encoding="utf-8",
     )
     (worker / "composition.rs").write_text(
@@ -144,8 +157,8 @@ def write_self_test_fixture(root: Path) -> None:
         encoding="utf-8",
     )
     (ports / "mailbox_jobs.rs").write_text(
-        "pub struct MailboxJobPreparedRun<D>(D);\n"
-        "pub trait MailboxJobApplicationPort { type RunDecision; }\n",
+        "pub struct MailboxJobPreparedRun;\n"
+        "pub trait MailboxJobApplicationPort {}\n",
         encoding="utf-8",
     )
     (use_cases / "mailbox_jobs.rs").write_text(
@@ -157,9 +170,8 @@ def write_self_test_fixture(root: Path) -> None:
         encoding="utf-8",
     )
     (adapters / "d1_mailbox_jobs.rs").write_text(
-        "impl MailboxJobApplicationPort for D1MailboxJobApplicationRepository { "
-        "type RunDecision = MailboxRunDecision; }\n"
-        "MetadataMailboxProviderAdapter decide_mailbox_run CreateMailboxJobMutation RunMailboxJobMutation\n",
+        "impl MailboxJobApplicationPort for D1MailboxJobApplicationRepository {}\n"
+        "CreateMailboxJobMutation RunMailboxJobMutation\n",
         encoding="utf-8",
     )
 

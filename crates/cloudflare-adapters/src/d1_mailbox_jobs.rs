@@ -1,20 +1,13 @@
 use crate::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use crate::d1_identity_acl::MutationEnvelope;
 use crate::d1_mailboxes::{CreateMailboxJobMutation, D1MailboxRepository, RunMailboxJobMutation};
-use crate::mailbox_provider::{
-    MailboxProviderAdapterError, MailboxRunDecision, MetadataMailboxProviderAdapter,
-    decide_mailbox_run,
-};
 use application_ports::CommandExecutionEvidence;
 use application_ports::mailbox_jobs::{
-    MailboxBinding, MailboxJob, MailboxJobApplicationPort, MailboxJobCreateWrite,
-    MailboxJobPortError, MailboxJobPortErrorClass, MailboxJobPreparedRun, MailboxJobReadModel,
-    MailboxJobRunWrite,
+    MailboxBinding, MailboxJobApplicationPort, MailboxJobCreateWrite, MailboxJobPortError,
+    MailboxJobPortErrorClass, MailboxJobReadModel, MailboxJobRunWrite,
 };
 use application_ports::mailboxes::{MailboxReplayDecision, MailboxReplayReceipt};
-use profile_platform_primitives::{
-    ActorContext, MailboxBindingId, MailboxJobId, TenantScope, UnixMillis,
-};
+use profile_platform_primitives::{ActorContext, MailboxBindingId, MailboxJobId, TenantScope};
 use worker::Error;
 use worker::d1::D1Database;
 
@@ -34,8 +27,6 @@ impl D1MailboxJobApplicationRepository {
 }
 
 impl MailboxJobApplicationPort for D1MailboxJobApplicationRepository {
-    type RunDecision = MailboxRunDecision;
-
     async fn decide_replay(
         &self,
         actor: &ActorContext,
@@ -88,14 +79,14 @@ impl MailboxJobApplicationPort for D1MailboxJobApplicationRepository {
     async fn run_job(
         &self,
         actor: &ActorContext,
-        write: &MailboxJobRunWrite<Self::RunDecision>,
+        write: &MailboxJobRunWrite,
     ) -> Result<(), MailboxJobPortError> {
         let evidence = write.evidence();
         let mutation = RunMailboxJobMutation {
             binding_id: write.binding_id(),
             job_id: write.job_id(),
             expected_job_version: write.expected_version(),
-            decision: write.prepared().decision(),
+            prepared: write.prepared(),
             envelope: MutationEnvelope {
                 idempotency_key: evidence.idempotency_key(),
                 request_digest: evidence.request_digest(),
@@ -144,45 +135,6 @@ impl MailboxJobApplicationPort for D1MailboxJobApplicationRepository {
                 })
             })
     }
-
-    fn prepare_run(
-        &mut self,
-        binding: &MailboxBinding,
-        job: &MailboxJob,
-        now: UnixMillis,
-    ) -> Result<MailboxJobPreparedRun<Self::RunDecision>, MailboxJobPortError> {
-        let next_attempt = job
-            .attempt()
-            .checked_add(1)
-            .ok_or_else(|| MailboxJobPortError::new(MailboxJobPortErrorClass::InternalFailure))?;
-        let next_cursor = format!("meta_{}_{}", job.job_id().as_str(), next_attempt);
-        let mut provider = MetadataMailboxProviderAdapter::new(
-            binding.provider(),
-            "SYNTHETIC_OK",
-            0,
-            Some(next_cursor),
-        )
-        .map_err(|_| MailboxJobPortError::new(MailboxJobPortErrorClass::InternalFailure))?;
-        let decision =
-            decide_mailbox_run(binding, job, now, &mut provider).map_err(map_provider_error)?;
-        let status = decision.status();
-        let attempt = decision.attempt();
-        let version = decision.version();
-        let cursor = decision.cursor().map(str::to_owned);
-        let provider_status = decision.provider_status().to_owned();
-        let bounded_item_count = decision.bounded_item_count();
-        let retry_at = decision.retry_at();
-        Ok(MailboxJobPreparedRun::new(
-            decision,
-            status,
-            attempt,
-            version,
-            cursor,
-            provider_status,
-            bounded_item_count,
-            retry_at,
-        ))
-    }
 }
 
 fn map_replay_decision(decision: IdempotencyDecision) -> MailboxReplayDecision {
@@ -196,15 +148,6 @@ fn map_replay_decision(decision: IdempotencyDecision) -> MailboxReplayDecision {
         }
         IdempotencyDecision::Conflict => MailboxReplayDecision::Conflict,
     }
-}
-
-fn map_provider_error(error: MailboxProviderAdapterError) -> MailboxJobPortError {
-    let class = if error == MailboxProviderAdapterError::InvalidJobState {
-        MailboxJobPortErrorClass::InvalidState
-    } else {
-        MailboxJobPortErrorClass::DependencyUnavailable
-    };
-    MailboxJobPortError::new(class)
 }
 
 fn map_write_error(error: Error) -> MailboxJobPortError {
@@ -223,6 +166,7 @@ fn classify_write_failure(message: &str) -> MailboxJobPortErrorClass {
         return MailboxJobPortErrorClass::VersionConflict;
     }
     if message.contains("mailbox_binding_revoked")
+        || message.contains("mailbox_binding_not_executable")
         || message.contains("mailbox_job_not_due")
         || message.contains("mailbox_job_attempts_exhausted")
         || message.contains("mailbox_retry_time_invalid")
@@ -237,6 +181,7 @@ fn classify_write_failure(message: &str) -> MailboxJobPortErrorClass {
         || message.contains("not_governed")
         || message.contains("mailbox_cursor_too_long")
         || message.contains("mailbox_provider_status_invalid")
+        || message.contains("mailbox_run_outcome_invalid")
     {
         return MailboxJobPortErrorClass::IntegrityFailure;
     }
@@ -252,8 +197,7 @@ fn classify_write_failure(message: &str) -> MailboxJobPortErrorClass {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_write_failure, map_provider_error};
-    use crate::mailbox_provider::MailboxProviderAdapterError;
+    use super::classify_write_failure;
     use application_ports::mailbox_jobs::MailboxJobPortErrorClass;
 
     #[test]
@@ -284,22 +228,6 @@ mod tests {
         );
         assert_eq!(
             classify_write_failure("network request failed"),
-            MailboxJobPortErrorClass::DependencyUnavailable
-        );
-    }
-
-    #[test]
-    fn provider_failure_mapping_matches_legacy_worker_contract() {
-        assert_eq!(
-            map_provider_error(MailboxProviderAdapterError::InvalidJobState).class(),
-            MailboxJobPortErrorClass::InvalidState
-        );
-        assert_eq!(
-            map_provider_error(MailboxProviderAdapterError::RetryableFailure).class(),
-            MailboxJobPortErrorClass::DependencyUnavailable
-        );
-        assert_eq!(
-            map_provider_error(MailboxProviderAdapterError::BindingRevoked).class(),
             MailboxJobPortErrorClass::DependencyUnavailable
         );
     }

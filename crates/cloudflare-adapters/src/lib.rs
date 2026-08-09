@@ -2,9 +2,13 @@
 
 pub mod access_identity;
 pub mod access_webcrypto;
+pub mod cloud_mail_query;
+pub mod cloud_mailbox_provider;
+mod cloud_mailbox_secrets;
 pub mod contact_keyring;
 pub mod contact_lookup;
 pub mod contact_protection;
+pub mod control_plane_queue;
 pub mod coordinator_ingress;
 pub mod d1_catalog;
 pub mod d1_client_merge;
@@ -25,6 +29,7 @@ pub mod d1_integration_events;
 pub mod d1_invitation_acceptance;
 pub mod d1_mailbox_bindings;
 pub mod d1_mailbox_jobs;
+pub mod d1_mailbox_scheduling;
 pub mod d1_mailboxes;
 pub mod d1_notification_operations;
 pub mod d1_notifications;
@@ -35,8 +40,27 @@ pub mod d1_profile_generations;
 pub mod d1_profiles;
 pub mod d1_query;
 pub mod fake_mail_query;
+mod gmail_mail_query;
+pub mod gmail_mailbox;
+pub mod imap_mailbox;
+mod imap_query;
+mod imap_session;
 pub mod integration_event_queue;
+pub mod mailbox_job_queue;
 pub mod mailbox_provider;
 pub mod profile_coordinator;
 
 pub use mailbox_domain::MailboxProvider;
+
+impl core::fmt::Display for imap_session::ImapTransportError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Authentication => "IMAP authentication failed",
+            Self::ProviderPolicy => "IMAP provider policy rejected the operation",
+            Self::DependencyUnavailable => "IMAP dependency is unavailable",
+            Self::IntegrityFailure => "IMAP protocol integrity failure",
+        })
+    }
+}
+
+impl std::error::Error for imap_session::ImapTransportError {}

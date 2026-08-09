@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove mailbox catalog privacy, lifecycle, replay and atomicity invariants."""
+"""Prove mailbox catalog privacy, lifecycle, replay, Queue and atomicity invariants."""
 
 from __future__ import annotations
 
@@ -66,7 +66,12 @@ def expect_abort(operation, fragment: str) -> None:
 
 
 def assert_metadata_only_schema(connection: sqlite3.Connection) -> None:
-    for table in ("mailbox_bindings", "mailbox_jobs"):
+    for table in (
+        "mailbox_bindings",
+        "mailbox_jobs",
+        "mailbox_job_queue_dispatches",
+        "mailbox_job_execution_leases",
+    ):
         columns = {
             row["name"].lower()
             for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
@@ -81,6 +86,9 @@ def assert_metadata_only_schema(connection: sqlite3.Connection) -> None:
             "body_html",
             "body_text",
             "raw_message",
+            "subject",
+            "sender",
+            "recipient",
         )
         for fragment in forbidden_fragments:
             assert all(fragment not in column for column in columns), (table, fragment, columns)
@@ -185,7 +193,7 @@ def create_binding(connection: sqlite3.Connection) -> None:
         )
     row = connection.execute(
         """
-        SELECT provider, secret_handle, status, version
+        SELECT provider, secret_handle, status, execution_status, version
         FROM mailbox_bindings WHERE tenant_id = ? AND binding_id = ?
         """,
         (TENANT, BINDING),
@@ -195,6 +203,7 @@ def create_binding(connection: sqlite3.Connection) -> None:
         "provider": "IMAP",
         "secret_handle": "secret_handle_mailbox_slice",
         "status": "ACTIVE",
+        "execution_status": "ACTIVE",
         "version": 1,
     }
 
@@ -226,7 +235,7 @@ def create_binding(connection: sqlite3.Connection) -> None:
     assert not exact_live("mailbox.binding_create", DIGEST, 1000)
 
 
-def create_and_run_job(connection: sqlite3.Connection) -> None:
+def create_job(connection: sqlite3.Connection) -> None:
     with connection:
         connection.execute(
             """
@@ -249,15 +258,126 @@ def create_and_run_job(connection: sqlite3.Connection) -> None:
             now_ms=30,
         )
 
+
+def prove_queue_duplicate_and_fencing(connection: sqlite3.Connection) -> None:
     with connection:
         connection.execute(
             """
-            INSERT INTO mailbox_job_run_commands (
+            INSERT INTO mailbox_job_queue_dispatches (
+                tenant_id, binding_id, job_id, expected_job_version, published_at_ms
+            ) VALUES (?, ?, ?, 1, 31)
+            """,
+            (TENANT, BINDING, JOB),
+        )
+    expect_abort(
+        lambda: connection.execute(
+            """
+            INSERT INTO mailbox_job_queue_dispatches (
+                tenant_id, binding_id, job_id, expected_job_version, published_at_ms
+            ) VALUES (?, ?, ?, 1, 32)
+            """,
+            (TENANT, BINDING, JOB),
+        ),
+        "UNIQUE constraint failed",
+    )
+    connection.rollback()
+
+    with connection:
+        connection.execute(
+            """
+            INSERT INTO mailbox_job_execution_leases (
+                tenant_id, binding_id, job_id, expected_job_version, fence,
+                lease_state, claimed_at_ms, lease_expires_at_ms, completed_at_ms
+            ) VALUES (?, ?, ?, 1, 1, 'ACTIVE', 32, 40, NULL)
+            """,
+            (TENANT, BINDING, JOB),
+        )
+    expect_abort(
+        lambda: connection.execute(
+            """
+            INSERT INTO mailbox_job_execution_leases (
+                tenant_id, binding_id, job_id, expected_job_version, fence,
+                lease_state, claimed_at_ms, lease_expires_at_ms, completed_at_ms
+            ) VALUES (?, ?, ?, 1, 1, 'ACTIVE', 33, 41, NULL)
+            """,
+            (TENANT, BINDING, JOB),
+        ),
+        "UNIQUE constraint failed",
+    )
+    connection.rollback()
+
+    active = connection.execute(
+        """
+        SELECT fence, lease_state, lease_expires_at_ms
+        FROM mailbox_job_execution_leases
+        WHERE tenant_id = ? AND binding_id = ? AND job_id = ? AND expected_job_version = 1
+        """,
+        (TENANT, BINDING, JOB),
+    ).fetchone()
+    assert active is not None
+    assert dict(active) == {"fence": 1, "lease_state": "ACTIVE", "lease_expires_at_ms": 40}
+
+    with connection:
+        reclaimed = connection.execute(
+            """
+            UPDATE mailbox_job_execution_leases
+            SET fence = fence + 1,
+                claimed_at_ms = 40,
+                lease_expires_at_ms = 50
+            WHERE tenant_id = ? AND binding_id = ? AND job_id = ?
+              AND expected_job_version = 1
+              AND lease_state = 'ACTIVE'
+              AND lease_expires_at_ms <= 40
+              AND fence = 1
+            """,
+            (TENANT, BINDING, JOB),
+        )
+        assert reclaimed.rowcount == 1
+
+    with connection:
+        stale_completion = connection.execute(
+            """
+            UPDATE mailbox_job_execution_leases
+            SET lease_state = 'COMPLETED', completed_at_ms = 45
+            WHERE tenant_id = ? AND binding_id = ? AND job_id = ?
+              AND expected_job_version = 1 AND fence = 1 AND lease_state = 'ACTIVE'
+            """,
+            (TENANT, BINDING, JOB),
+        )
+        assert stale_completion.rowcount == 0
+        current_completion = connection.execute(
+            """
+            UPDATE mailbox_job_execution_leases
+            SET lease_state = 'COMPLETED', completed_at_ms = 45
+            WHERE tenant_id = ? AND binding_id = ? AND job_id = ?
+              AND expected_job_version = 1 AND fence = 2 AND lease_state = 'ACTIVE'
+            """,
+            (TENANT, BINDING, JOB),
+        )
+        assert current_completion.rowcount == 1
+
+    completed = connection.execute(
+        """
+        SELECT fence, lease_state, completed_at_ms
+        FROM mailbox_job_execution_leases
+        WHERE tenant_id = ? AND binding_id = ? AND job_id = ? AND expected_job_version = 1
+        """,
+        (TENANT, BINDING, JOB),
+    ).fetchone()
+    assert completed is not None
+    assert dict(completed) == {"fence": 2, "lease_state": "COMPLETED", "completed_at_ms": 45}
+
+
+def run_job(connection: sqlite3.Connection) -> None:
+    with connection:
+        connection.execute(
+            """
+            INSERT INTO mailbox_job_run_commands_v2 (
                 tenant_id, command_id, command_actor_id, binding_id, job_id,
                 expected_job_version, outcome_status, next_cursor, provider_status,
                 bounded_item_count, retry_at_ms, executed_at_ms
             ) VALUES (?, 'command_mailbox_job_run', ?, ?, ?, 1, 'SUCCEEDED',
-                      'cursor-2', 'SYNTHETIC_OK', 2, NULL, 40)
+                      'cursor-2', 'SYNTHETIC_OK', 2, NULL, 46)
             """,
             (TENANT, OWNER, BINDING, JOB),
         )
@@ -268,14 +388,15 @@ def create_and_run_job(connection: sqlite3.Connection) -> None:
             result_code="succeeded",
             resource_id=JOB,
             aggregate_type="mailbox_job",
-            aggregate_version=3,
+            aggregate_version=4,
             event_type="mailbox.job_succeeded.v1",
-            now_ms=40,
+            now_ms=46,
         )
 
     row = connection.execute(
         """
-        SELECT status, attempt, cursor, provider_status, bounded_item_count, version
+        SELECT status, lifecycle_status, attempt, cursor, provider_status,
+               bounded_item_count, version
         FROM mailbox_jobs
         WHERE tenant_id = ? AND binding_id = ? AND job_id = ?
         """,
@@ -284,22 +405,23 @@ def create_and_run_job(connection: sqlite3.Connection) -> None:
     assert row is not None
     assert dict(row) == {
         "status": "SUCCEEDED",
+        "lifecycle_status": "SUCCEEDED",
         "attempt": 1,
         "cursor": "cursor-2",
         "provider_status": "SYNTHETIC_OK",
         "bounded_item_count": 2,
-        "version": 3,
+        "version": 4,
     }
 
     expect_abort(
         lambda: connection.execute(
             """
-            INSERT INTO mailbox_job_run_commands (
+            INSERT INTO mailbox_job_run_commands_v2 (
                 tenant_id, command_id, command_actor_id, binding_id, job_id,
                 expected_job_version, outcome_status, next_cursor, provider_status,
                 bounded_item_count, retry_at_ms, executed_at_ms
-            ) VALUES (?, 'command_mailbox_job_run_again', ?, ?, ?, 3, 'FAILED',
-                      NULL, 'TERMINAL_FAILURE', 0, NULL, 41)
+            ) VALUES (?, 'command_mailbox_job_run_again', ?, ?, ?, 4, 'FAILED',
+                      NULL, 'TERMINAL_FAILURE', 0, NULL, 47)
             """,
             (TENANT, OWNER, BINDING, JOB),
         ),
@@ -420,11 +542,13 @@ def main() -> int:
         assert_metadata_only_schema(connection)
         late_evidence_failure_rolls_back_complete_envelope(connection)
         create_binding(connection)
-        create_and_run_job(connection)
+        create_job(connection)
+        prove_queue_duplicate_and_fencing(connection)
+        run_job(connection)
         revoke_blocks_new_work(connection)
     finally:
         connection.close()
-    print("mailbox vertical-slice SQLite/privacy checks: OK")
+    print("mailbox vertical-slice SQLite/privacy/Queue checks: OK")
     return 0
 
 

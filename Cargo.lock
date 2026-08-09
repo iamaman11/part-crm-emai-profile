@@ -72,6 +72,7 @@ dependencies = [
  "serde",
  "serde_json",
  "session-domain",
+ "sha2",
  "use-cases",
  "use-cases-clients",
  "use-cases-notifications",
@@ -178,6 +179,7 @@ dependencies = [
  "serde_json",
  "session-domain",
  "sha2",
+ "tokio",
  "web-sys",
  "worker",
  "zeroize",
@@ -851,6 +853,7 @@ version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
 dependencies = [
+ "bytes",
  "pin-project-lite",
 ]
 
@@ -901,6 +904,7 @@ dependencies = [
  "session-domain",
  "use-cases-clients",
  "use-cases-identity",
+ "use-cases-mailboxes",
 ]
 
 [[package]]
@@ -921,6 +925,16 @@ version = "0.1.0"
 dependencies = [
  "application-ports",
  "identity-access-domain",
+ "profile-platform-primitives",
+]
+
+[[package]]
+name = "use-cases-mailboxes"
+version = "0.1.0"
+dependencies = [
+ "application-ports",
+ "identity-access-domain",
+ "mailbox-domain",
  "profile-platform-primitives",
 ]
 

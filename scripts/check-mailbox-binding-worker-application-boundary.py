@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Fail closed if migrated mailbox binding transport regains provider/D1 orchestration."""
+"""Fail closed if mailbox binding transport regains provider/D1 orchestration."""
 
 from __future__ import annotations
 
 import argparse
 import tempfile
 from pathlib import Path
-
 
 FORBIDDEN_BINDING_TRANSPORT_TOKENS = (
     "cloudflare_adapters::d1_",
@@ -23,6 +22,13 @@ REQUIRED_BINDING_TRANSPORT_TOKENS = (
     "execute_revoke_mailbox_binding",
     "get_mailbox_binding",
     "mailbox_binding_application(env)",
+)
+
+REQUIRED_BINDING_USE_CASE_TOKENS = (
+    "pub async fn execute_create_mailbox_binding",
+    "pub async fn execute_revoke_mailbox_binding",
+    "pub async fn get_mailbox_binding",
+    "pub fn authorize_mailbox_binding",
 )
 
 
@@ -42,7 +48,7 @@ def validate(root: Path) -> list[str]:
     composition_path = worker / "composition.rs"
     lib_path = worker / "lib.rs"
     ports_path = root / "crates/application-ports/src/mailboxes.rs"
-    use_cases_path = root / "crates/use-cases/src/mailboxes.rs"
+    use_cases_path = root / "crates/use-cases-mailboxes/src/mailboxes.rs"
     adapter_path = root / "crates/cloudflare-adapters/src/d1_mailbox_bindings.rs"
 
     for path in (
@@ -75,11 +81,15 @@ def validate(root: Path) -> list[str]:
 
     for token in FORBIDDEN_BINDING_TRANSPORT_TOKENS:
         if token in binding:
-            errors.append(f"mailbox binding Worker transport must not contain provider token `{token}`")
+            errors.append(
+                f"mailbox binding Worker transport must not contain provider token `{token}`"
+            )
 
     for token in REQUIRED_BINDING_TRANSPORT_TOKENS:
         if token not in binding:
-            errors.append(f"mailbox binding Worker transport missing application call token `{token}`")
+            errors.append(
+                f"mailbox binding Worker transport missing application call token `{token}`"
+            )
 
     binding_route_fragment = (
         "RouteClass::MailboxBindingCollectionApi\n"
@@ -110,22 +120,24 @@ def validate(root: Path) -> list[str]:
         "D1MailboxBindingApplicationRepository" not in composition
         or "env.d1(D1_CATALOG_BINDING)?" not in composition
     ):
-        errors.append("Worker composition root must construct the D1 mailbox binding application adapter")
+        errors.append(
+            "Worker composition root must construct the D1 mailbox binding application adapter"
+        )
 
     if "pub trait MailboxBindingApplicationPort" not in ports:
         errors.append("application ports must own MailboxBindingApplicationPort")
-    for symbol in (
-        "pub async fn execute_create_mailbox_binding",
-        "pub async fn execute_revoke_mailbox_binding",
-        "pub async fn get_mailbox_binding",
+
+    for token in REQUIRED_BINDING_USE_CASE_TOKENS:
+        if token not in use_cases:
+            errors.append(f"extracted mailbox binding use cases missing `{token}`")
+
+    if (
+        "impl MailboxBindingApplicationPort for D1MailboxBindingApplicationRepository"
+        not in adapter
     ):
-        if symbol not in use_cases:
-            errors.append(f"mailbox binding use cases missing `{symbol}`")
-    if "impl MailboxBindingApplicationPort for D1MailboxBindingApplicationRepository" not in adapter:
         errors.append("Cloudflare adapter must implement the inward mailbox binding application port")
 
-    # Binding enforcement only proves that the split job transport remains routed and callable.
-    # Dedicated Phase 0E policy owns the stronger no-D1/no-provider job assertions.
+    # This checker only proves the split job transport remains routed through its application API.
     for token in (
         "execute_create_mailbox_job",
         "get_mailbox_job",
@@ -141,7 +153,7 @@ def validate(root: Path) -> list[str]:
 def write_self_test_fixture(root: Path) -> None:
     worker = root / "apps/control-plane-worker/src"
     ports = root / "crates/application-ports/src"
-    use_cases = root / "crates/use-cases/src"
+    use_cases = root / "crates/use-cases-mailboxes/src"
     adapters = root / "crates/cloudflare-adapters/src"
     for path in (worker, ports, use_cases, adapters):
         path.mkdir(parents=True, exist_ok=True)
@@ -174,11 +186,14 @@ def write_self_test_fixture(root: Path) -> None:
         "mailbox_jobs::dispatch(route, &mut request, &env).await\n",
         encoding="utf-8",
     )
-    (ports / "mailboxes.rs").write_text("pub trait MailboxBindingApplicationPort {}\n", encoding="utf-8")
+    (ports / "mailboxes.rs").write_text(
+        "pub trait MailboxBindingApplicationPort {}\n", encoding="utf-8"
+    )
     (use_cases / "mailboxes.rs").write_text(
         "pub async fn execute_create_mailbox_binding() {}\n"
         "pub async fn execute_revoke_mailbox_binding() {}\n"
-        "pub async fn get_mailbox_binding() {}\n",
+        "pub async fn get_mailbox_binding() {}\n"
+        "pub fn authorize_mailbox_binding() {}\n",
         encoding="utf-8",
     )
     (adapters / "d1_mailbox_bindings.rs").write_text(
