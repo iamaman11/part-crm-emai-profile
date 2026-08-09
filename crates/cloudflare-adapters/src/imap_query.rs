@@ -175,17 +175,40 @@ async fn search_uid_window(
         return Err(integrity_failure());
     }
     let mut command = String::from("UID SEARCH ");
-    if request.term().is_some_and(|term| !term.as_str().is_ascii()) {
-        command.push_str("CHARSET UTF-8 ");
+    if let Some(term) = request.term() {
+        if !term.as_str().is_ascii() {
+            command.push_str("CHARSET UTF-8 ");
+        }
+        command.push_str("UID ");
+        command.push_str(&start.to_string());
+        command.push(':');
+        command.push_str(&end.to_string());
+        command.push_str(" TEXT");
+        let response = if term.as_str().is_ascii() {
+            command.push(' ');
+            push_imap_quoted(&mut command, term.as_str());
+            session
+                .execute(&command, MAX_IMAP_CONTROL_RESPONSE_BYTES)
+                .await
+                .map_err(map_transport_error)?
+        } else {
+            session
+                .execute_with_literal(
+                    &command,
+                    term.as_str().as_bytes(),
+                    MAX_IMAP_CONTROL_RESPONSE_BYTES,
+                )
+                .await
+                .map_err(map_transport_error)?
+        };
+        require_ok(&response)?;
+        return parse_search_uids(&response.text_lossy());
     }
+
     command.push_str("UID ");
     command.push_str(&start.to_string());
     command.push(':');
     command.push_str(&end.to_string());
-    if let Some(term) = request.term() {
-        command.push_str(" TEXT ");
-        push_imap_quoted(&mut command, term.as_str());
-    }
     let response = session
         .execute(&command, MAX_IMAP_CONTROL_RESPONSE_BYTES)
         .await

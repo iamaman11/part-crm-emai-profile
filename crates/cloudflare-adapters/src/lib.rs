@@ -51,3 +51,16 @@ pub mod mailbox_provider;
 pub mod profile_coordinator;
 
 pub use mailbox_domain::MailboxProvider;
+
+impl core::fmt::Display for imap_session::ImapTransportError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Authentication => "IMAP authentication failed",
+            Self::ProviderPolicy => "IMAP provider policy rejected the operation",
+            Self::DependencyUnavailable => "IMAP dependency is unavailable",
+            Self::IntegrityFailure => "IMAP protocol integrity failure",
+        })
+    }
+}
+
+impl std::error::Error for imap_session::ImapTransportError {}
