@@ -1,5 +1,15 @@
 import { newIdempotencyKey, requestJson, sha256Hex } from './client';
-import type { ClientCreateRequest, ClientGrantRequest } from './generated/control-plane';
+import type {
+  ClientArchiveRequest,
+  ClientContactArchiveRequest,
+  ClientContactUpsertRequest,
+  ClientCreateRequest,
+  ClientGrantRequest,
+  ClientHistoryProjection,
+  ClientListProjection,
+  ClientMergeRequest,
+  ClientUpdateRequest,
+} from './generated/control-plane';
 import type {
   ActorSession,
   ClientProjection,
@@ -13,6 +23,11 @@ import type {
 
 export type CreateClientInput = Omit<ClientCreateRequest, 'requestDigest'>;
 export type SetClientGrantInput = Omit<ClientGrantRequest, 'requestDigest'>;
+export type UpdateClientInput = Omit<ClientUpdateRequest, 'requestDigest'>;
+export type ArchiveClientInput = Omit<ClientArchiveRequest, 'requestDigest'>;
+export type UpsertClientContactInput = Omit<ClientContactUpsertRequest, 'requestDigest'>;
+export type ArchiveClientContactInput = Omit<ClientContactArchiveRequest, 'requestDigest'>;
+export type MergeClientInput = Omit<ClientMergeRequest, 'requestDigest'>;
 
 function segment(value: string): string {
   if (!value || value.includes('/') || value.includes('\\')) {
@@ -28,7 +43,7 @@ async function mutationBody<T extends Record<string, unknown>>(body: T): Promise
 async function mutate(
   path: string,
   tenantId: string,
-  method: 'POST' | 'PUT' | 'DELETE',
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   body: Record<string, unknown>,
 ): Promise<MutationReceipt | undefined> {
   return requestJson<MutationReceipt>(path, {
@@ -80,8 +95,23 @@ export function updateMembershipStatus(
   return mutate(`/api/v1/tenants/${segment(tenantId)}/members/${segment(actorId)}/status`, tenantId, 'PUT', input);
 }
 
+export function listClients(tenantId: string, signal?: AbortSignal): Promise<ClientListProjection | undefined> {
+  return requestJson<ClientListProjection>(`/api/v1/tenants/${segment(tenantId)}/clients`, { tenantId, signal });
+}
+
 export function getClient(tenantId: string, clientId: string): Promise<ClientProjection | undefined> {
   return requestJson<ClientProjection>(`/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}`, { tenantId });
+}
+
+export function getClientHistory(
+  tenantId: string,
+  clientId: string,
+  signal?: AbortSignal,
+): Promise<ClientHistoryProjection | undefined> {
+  return requestJson<ClientHistoryProjection>(
+    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/history`,
+    { tenantId, signal },
+  );
 }
 
 export function createClient(
@@ -89,6 +119,63 @@ export function createClient(
   input: CreateClientInput,
 ): Promise<MutationReceipt | undefined> {
   return mutate(`/api/v1/tenants/${segment(tenantId)}/clients`, tenantId, 'POST', input);
+}
+
+export function updateClient(
+  tenantId: string,
+  clientId: string,
+  input: UpdateClientInput,
+): Promise<MutationReceipt | undefined> {
+  return mutate(`/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}`, tenantId, 'PATCH', input);
+}
+
+export function archiveClient(
+  tenantId: string,
+  clientId: string,
+  input: ArchiveClientInput,
+): Promise<MutationReceipt | undefined> {
+  return mutate(`/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/archive`, tenantId, 'POST', input);
+}
+
+export function upsertClientContact(
+  tenantId: string,
+  clientId: string,
+  contactPointId: string,
+  input: UpsertClientContactInput,
+): Promise<MutationReceipt | undefined> {
+  return mutate(
+    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/contacts/${segment(contactPointId)}`,
+    tenantId,
+    'PUT',
+    input,
+  );
+}
+
+export function archiveClientContact(
+  tenantId: string,
+  clientId: string,
+  contactPointId: string,
+  input: ArchiveClientContactInput,
+): Promise<MutationReceipt | undefined> {
+  return mutate(
+    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/contacts/${segment(contactPointId)}`,
+    tenantId,
+    'DELETE',
+    input,
+  );
+}
+
+export function mergeClient(
+  tenantId: string,
+  sourceClientId: string,
+  input: MergeClientInput,
+): Promise<MutationReceipt | undefined> {
+  return mutate(
+    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(sourceClientId)}/merge`,
+    tenantId,
+    'POST',
+    input,
+  );
 }
 
 export function setClientGrant(
