@@ -214,8 +214,12 @@ impl fmt::Display for AssignmentError {
             Self::AlreadyClosed => "assignment is already closed",
             Self::InvalidCloseTime => "assignment close time precedes assignment time",
             Self::CurrentScopeMismatch => "current assignment belongs to another profile scope",
-            Self::CurrentNotActivePrimary => "current assignment is not an active primary assignment",
-            Self::AlreadyPrimaryClient => "profile is already assigned to the requested primary client",
+            Self::CurrentNotActivePrimary => {
+                "current assignment is not an active primary assignment"
+            }
+            Self::AlreadyPrimaryClient => {
+                "profile is already assigned to the requested primary client"
+            }
         })
     }
 }
@@ -322,7 +326,9 @@ mod tests {
             "reassigned by operator",
         )?;
 
-        let closed = transition.closed_previous().ok_or("missing closed history")?;
+        let closed = transition
+            .closed_previous()
+            .ok_or("missing closed history")?;
         assert_eq!(closed.status(), AssignmentStatus::Closed);
         assert_eq!(closed.closed_at(), Some(UnixMillis::new(20)));
         assert_eq!(closed.client_id(), old_client.client_id());
