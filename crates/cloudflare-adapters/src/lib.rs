@@ -41,6 +41,7 @@ pub mod d1_query;
 pub mod fake_mail_query;
 pub mod gmail_mailbox;
 pub mod imap_mailbox;
+mod imap_session;
 pub mod integration_event_queue;
 pub mod mailbox_job_queue;
 pub mod mailbox_provider;
