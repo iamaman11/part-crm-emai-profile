@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 application-ports.workspace = true
 identity-access-domain.workspace = true
+mailbox-domain.workspace = true
 profile-platform-primitives.workspace = true
 
 [lints]
