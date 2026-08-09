@@ -18,6 +18,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
       - name: Materialize deterministic state
         run: |
           python scripts/generate-architecture-inventory.py --write
@@ -36,9 +42,10 @@ jobs:
           cargo test --locked -p cloudflare-adapters --lib
           cargo check --locked -p browser-profile-control-plane-worker --target wasm32-unknown-unknown
           cd frontend
+          npm install --global npm@11.17.0
           npm ci
-          npm run lint
-          npm test -- --run
+          npm run typecheck
+          npm test
           npm run build
 
       - name: Commit validated materialized state and self-delete
