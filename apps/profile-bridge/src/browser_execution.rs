@@ -4,7 +4,7 @@ use browser_execution_domain::{
     BrowserWriterObservation, MaterializationBinding, NetworkIdentityDecision,
     NetworkIdentityObservation, NetworkIdentityPolicy,
 };
-use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 const MATERIALIZATION_SCHEMA: &str = "profile-platform-materialization-v1";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
+const BRIDGE_LOCK_SCHEMA: &str = "profile-platform-bridge-lock-v1";
 const FIREFOX_PARENT_LOCK_FILE: &str = ".parentlock";
 const FIREFOX_LOCK_FILE: &str = "lock";
 
@@ -90,11 +91,15 @@ pub fn load_materialization_binding(
 
 pub fn evaluate_browser_launch(
     workspace: &GenerationWorkspace,
+    expected_device_id: &DeviceId,
+    expected_workspace_epoch: u64,
     expected: &MaterializationBinding,
     network_policy: &NetworkIdentityPolicy,
     network_observation: &NetworkIdentityObservation,
     supervised_writer_active: bool,
 ) -> Result<(), BrowserLaunchBlocker> {
+    verify_bridge_lock(workspace, expected_device_id, expected_workspace_epoch)?;
+
     let actual = load_materialization_binding(
         workspace,
         expected.tenant_id(),
@@ -106,7 +111,7 @@ pub fn evaluate_browser_launch(
     }
 
     let writer = BrowserWriterObservation::new(
-        path_present(&workspace.path().join(BRIDGE_LOCK_FILE))?,
+        false,
         path_present(&workspace.path().join(FIREFOX_PARENT_LOCK_FILE))?,
         path_present(&workspace.path().join(FIREFOX_LOCK_FILE))?,
         supervised_writer_active,
@@ -124,7 +129,10 @@ pub fn evaluate_browser_launch(
     }
 
     match network_policy.evaluate(network_observation) {
-        NetworkIdentityDecision::Accepted => Ok(()),
+        NetworkIdentityDecision::Accepted => {
+            verify_bridge_lock(workspace, expected_device_id, expected_workspace_epoch)?;
+            Ok(())
+        }
         NetworkIdentityDecision::RetryableRouteChurn => {
             Err(BrowserLaunchBlocker::RetryableNetworkRouteChurn)
         }
@@ -132,6 +140,27 @@ pub fn evaluate_browser_launch(
             Err(BrowserLaunchBlocker::NetworkPolicyMismatch)
         }
     }
+}
+
+fn verify_bridge_lock(
+    workspace: &GenerationWorkspace,
+    expected_device_id: &DeviceId,
+    expected_workspace_epoch: u64,
+) -> Result<(), BrowserLaunchBlocker> {
+    if expected_workspace_epoch == 0 {
+        return Err(BrowserLaunchBlocker::RecoveryRequired);
+    }
+    let lock_path = workspace.path().join(BRIDGE_LOCK_FILE);
+    let actual = read_regular_file(&lock_path)
+        .map_err(|_| BrowserLaunchBlocker::RecoveryRequired)?;
+    let expected = format!(
+        "{BRIDGE_LOCK_SCHEMA}\n{}\n{expected_workspace_epoch}\n",
+        expected_device_id.as_str()
+    );
+    if actual != expected {
+        return Err(BrowserLaunchBlocker::RecoveryRequired);
+    }
+    Ok(())
 }
 
 fn materialization_sidecar(
@@ -253,12 +282,13 @@ fn map_execution_error(_error: BrowserExecutionError) -> BrowserLaunchBlocker {
 #[cfg(test)]
 mod tests {
     use super::{BrowserLaunchBlocker, evaluate_browser_launch, persist_materialization_binding};
-    use crate::local_profile::MaterializationRoot;
+    use crate::local_profile::{BridgeWorkspaceLock, MaterializationRoot};
+    use crate::test_support::remove_test_root;
     use browser_execution_domain::{
         BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
         NetworkIdentityPolicy,
     };
-    use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
+    use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -311,7 +341,9 @@ mod tests {
         let tenant = TenantId::parse("tenant_01JLAUNCH")?;
         let profile = ProfileId::parse("profile_01JLAUNCH")?;
         let generation = GenerationId::parse("generation_01JLAUNCH")?;
+        let device = DeviceId::parse("device_01JLAUNCH")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let bridge_lock = BridgeWorkspaceLock::acquire(&workspace, &device, 1)?;
         fs::write(workspace.path().join("prefs.js"), b"accepted")?;
         let binding = MaterializationBinding::new(
             tenant,
@@ -324,6 +356,8 @@ mod tests {
         persist_materialization_binding(&workspace, &binding)?;
         evaluate_browser_launch(
             &workspace,
+            &device,
+            1,
             &binding,
             &policy("route-a")?,
             &observation("route-a")?,
@@ -334,6 +368,8 @@ mod tests {
         assert_eq!(
             evaluate_browser_launch(
                 &workspace,
+                &device,
+                1,
                 &binding,
                 &policy("route-a")?,
                 &observation("route-a")?,
@@ -341,7 +377,8 @@ mod tests {
             ),
             Err(BrowserLaunchBlocker::MaterializationStale)
         );
-        fs::remove_dir_all(root_path)?;
+        bridge_lock.release()?;
+        remove_test_root(&root_path)?;
         Ok(())
     }
 
@@ -353,7 +390,9 @@ mod tests {
         let tenant = TenantId::parse("tenant_01JLOCK")?;
         let profile = ProfileId::parse("profile_01JLOCK")?;
         let generation = GenerationId::parse("generation_01JLOCK")?;
+        let device = DeviceId::parse("device_01JLOCK")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let bridge_lock = BridgeWorkspaceLock::acquire(&workspace, &device, 1)?;
         let binding = MaterializationBinding::new(
             tenant,
             profile,
@@ -367,6 +406,8 @@ mod tests {
         assert_eq!(
             evaluate_browser_launch(
                 &workspace,
+                &device,
+                1,
                 &binding,
                 &policy("route-a")?,
                 &observation("route-a")?,
@@ -375,7 +416,8 @@ mod tests {
             Err(BrowserLaunchBlocker::RecoveryRequired)
         );
         assert!(workspace.path().join(".parentlock").exists());
-        fs::remove_dir_all(root_path)?;
+        bridge_lock.release()?;
+        remove_test_root(&root_path)?;
         Ok(())
     }
 
@@ -386,7 +428,9 @@ mod tests {
         let tenant = TenantId::parse("tenant_01JNETWORK")?;
         let profile = ProfileId::parse("profile_01JNETWORK")?;
         let generation = GenerationId::parse("generation_01JNETWORK")?;
+        let device = DeviceId::parse("device_01JNETWORK")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let bridge_lock = BridgeWorkspaceLock::acquire(&workspace, &device, 1)?;
         let binding = MaterializationBinding::new(
             tenant,
             profile,
@@ -399,6 +443,8 @@ mod tests {
         assert_eq!(
             evaluate_browser_launch(
                 &workspace,
+                &device,
+                1,
                 &binding,
                 &policy("route-a")?,
                 &observation("route-b")?,
@@ -406,7 +452,60 @@ mod tests {
             ),
             Err(BrowserLaunchBlocker::RetryableNetworkRouteChurn)
         );
-        fs::remove_dir_all(root_path)?;
+        bridge_lock.release()?;
+        remove_test_root(&root_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn stale_workspace_epoch_or_foreign_device_fails_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root_path = root_path("stale-ownership")?;
+        let root = MaterializationRoot::open_or_create(&root_path)?;
+        let tenant = TenantId::parse("tenant_01JSTALE")?;
+        let profile = ProfileId::parse("profile_01JSTALE")?;
+        let generation = GenerationId::parse("generation_01JSTALE")?;
+        let device = DeviceId::parse("device_01JSTALE")?;
+        let foreign_device = DeviceId::parse("device_02JSTALE")?;
+        let workspace = root.create_generation(&tenant, &profile, &generation)?;
+        let bridge_lock = BridgeWorkspaceLock::acquire(&workspace, &device, 7)?;
+        let binding = MaterializationBinding::new(
+            tenant,
+            profile,
+            generation,
+            "c".repeat(64),
+            workspace.inventory()?.inventory_digest(),
+            identity()?,
+        )?;
+        persist_materialization_binding(&workspace, &binding)?;
+
+        assert_eq!(
+            evaluate_browser_launch(
+                &workspace,
+                &device,
+                8,
+                &binding,
+                &policy("route-a")?,
+                &observation("route-a")?,
+                false,
+            ),
+            Err(BrowserLaunchBlocker::RecoveryRequired)
+        );
+        assert_eq!(
+            evaluate_browser_launch(
+                &workspace,
+                &foreign_device,
+                7,
+                &binding,
+                &policy("route-a")?,
+                &observation("route-a")?,
+                false,
+            ),
+            Err(BrowserLaunchBlocker::RecoveryRequired)
+        );
+        assert!(workspace.path().join(BRIDGE_LOCK_FILE).exists());
+        bridge_lock.release()?;
+        remove_test_root(&root_path)?;
         Ok(())
     }
 }
