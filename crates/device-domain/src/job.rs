@@ -129,8 +129,8 @@ impl DeviceJob {
 
         let active_claim = match active_claim {
             Some(snapshot) => {
-                let claim = DeviceClaim::restore(snapshot)
-                    .map_err(|_| DeviceJobError::InvalidSnapshot)?;
+                let claim =
+                    DeviceClaim::restore(snapshot).map_err(|_| DeviceJobError::InvalidSnapshot)?;
                 if claim.job_id() != &job_id
                     || claim.target() != &target
                     || claim.fence() != last_fence

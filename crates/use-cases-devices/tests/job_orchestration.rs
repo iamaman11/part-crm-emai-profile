@@ -289,7 +289,9 @@ fn completion_rechecks_preconditions_before_accepting_result()
         ),
     ))?;
     let blocked = FakePreconditions {
-        readiness: DeviceExecutionReadiness::Blocked(DeviceExecutionBlocker::CertificationIncomplete),
+        readiness: DeviceExecutionReadiness::Blocked(
+            DeviceExecutionBlocker::CertificationIncomplete,
+        ),
         calls: Cell::new(0),
     };
     let writes_before = repository.writes.get();

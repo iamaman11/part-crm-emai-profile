@@ -382,9 +382,7 @@ where
         DeviceJobOutcome::RecoveryRequired => {
             job.require_recovery(&command.claim_id, command.fence, command.observed_at)
         }
-        DeviceJobOutcome::Failed => {
-            job.fail(&command.claim_id, command.fence, command.observed_at)
-        }
+        DeviceJobOutcome::Failed => job.fail(&command.claim_id, command.fence, command.observed_at),
     }
     .map_err(DeviceJobOperationError::Domain)?;
     persist(repository, actor, command.expected_version, &job).await?;
@@ -607,7 +605,10 @@ impl core::fmt::Display for DeviceJobOperationError {
             Self::Conflict => formatter.write_str("device job already exists"),
             Self::VersionConflict => formatter.write_str("device job version conflict"),
             Self::PreconditionFailed(blocker) => {
-                write!(formatter, "device execution precondition failed: {blocker:?}")
+                write!(
+                    formatter,
+                    "device execution precondition failed: {blocker:?}"
+                )
             }
             Self::Domain(error) => error.fmt(formatter),
             Self::IntegrityFailure => formatter.write_str("device job integrity failure"),

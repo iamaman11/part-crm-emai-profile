@@ -203,7 +203,8 @@ impl DeviceJobRepositoryPort for D1DeviceJobRepository {
         .await
         .map_err(map_worker_error)?;
 
-        row.map(|row| restore_row(tenant_id, job_id, row)).transpose()
+        row.map(|row| restore_row(tenant_id, job_id, row))
+            .transpose()
     }
 
     async fn compare_and_swap_device_job(
@@ -213,9 +214,7 @@ impl DeviceJobRepositoryPort for D1DeviceJobRepository {
         job: &DeviceJob,
     ) -> Result<DeviceJobWriteOutcome, DeviceJobPortError> {
         require_tenant_binding(tenant_id, job.target())?;
-        let required_version = expected_version
-            .next()
-            .map_err(|_| integrity_failure())?;
+        let required_version = expected_version.next().map_err(|_| integrity_failure())?;
         if job.version() != required_version {
             return Err(integrity_failure());
         }
