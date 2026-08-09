@@ -1,4 +1,5 @@
 use crate::query::{QueryPage, QueryPageRequest, QueryPortError};
+use core::future::Future;
 use mailbox_domain::{MailboxBindingStatus, MailboxProvider};
 use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId};
 
@@ -18,23 +19,39 @@ impl MailboxReadProjection {
         status: MailboxBindingStatus,
         version: AggregateVersion,
     ) -> Self {
-        Self { binding_id, provider, status, version }
+        Self {
+            binding_id,
+            provider,
+            status,
+            version,
+        }
     }
 
     #[must_use]
-    pub const fn binding_id(&self) -> &MailboxBindingId { &self.binding_id }
+    pub const fn binding_id(&self) -> &MailboxBindingId {
+        &self.binding_id
+    }
+
     #[must_use]
-    pub const fn provider(&self) -> MailboxProvider { self.provider }
+    pub const fn provider(&self) -> MailboxProvider {
+        self.provider
+    }
+
     #[must_use]
-    pub const fn status(&self) -> MailboxBindingStatus { self.status }
+    pub const fn status(&self) -> MailboxBindingStatus {
+        self.status
+    }
+
     #[must_use]
-    pub const fn version(&self) -> AggregateVersion { self.version }
+    pub const fn version(&self) -> AggregateVersion {
+        self.version
+    }
 }
 
 pub trait MailboxReadModelPort {
-    async fn list_mailboxes(
+    fn list_mailboxes(
         &self,
         actor: &ActorContext,
         page: &QueryPageRequest,
-    ) -> Result<QueryPage<MailboxReadProjection>, QueryPortError>;
+    ) -> impl Future<Output = Result<QueryPage<MailboxReadProjection>, QueryPortError>>;
 }
