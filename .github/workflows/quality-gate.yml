@@ -40,6 +40,7 @@ jobs:
           scripts/check-phase2c-client-boundaries.py
           scripts/test-phase2c-client-merge-assignment.py
           scripts/check-phase2d-query-boundaries.py
+          scripts/check-phase2e-mailbox-boundaries.py
           scripts/test-phase2d-query-projections.py
           scripts/generate-frontend-contracts.py
           scripts/generate-architecture-inventory.py
@@ -171,6 +172,12 @@ jobs:
         run: |
           cargo test --locked -p application-ports -p use-cases-query
           cargo test --locked -p profile-bridge fake_mail_query
+
+      - name: Enforce Phase 2E cloud mailbox runtime and privacy boundaries
+        run: python scripts/check-phase2e-mailbox-boundaries.py
+
+      - name: Prove Phase 2E negative mailbox fixture is rejected
+        run: python scripts/check-phase2e-mailbox-boundaries.py --self-test
 
       - name: Format
         run: cargo fmt --all -- --check
