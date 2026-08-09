@@ -1,9 +1,11 @@
 use application_ports::ProfileCoordinatorPort;
 use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort, ClaimUri, EnrollmentClaim};
-use profile_bridge::local_profile::{LocalGenerationState, MaterializationRoot};
+use profile_bridge::local_profile::{
+    GenerationWorkspace, LocalGenerationState, MaterializationRoot,
+};
 use profile_bridge::operator_flow::{
-    DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment, OperatorFailureStage,
-    OperatorFlowError, ProfileBridgeOperator, RuntimeBundleSelectionPort,
+    BrowserLaunchPreflightPort, DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment,
+    OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator, RuntimeBundleSelectionPort,
 };
 use profile_bridge::runtime_bundle::ApprovedRuntimeBundle;
 use profile_bridge::{
@@ -34,6 +36,23 @@ impl DeviceAuthenticationPort for AllowAuthentication {
         &mut self,
         _device_id: &DeviceId,
         _key_handle: &str,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct AllowBrowserPreflight;
+
+impl BrowserLaunchPreflightPort for AllowBrowserPreflight {
+    type Error = BridgePortError;
+
+    fn evaluate_before_launch(
+        &mut self,
+        _workspace: &GenerationWorkspace,
+        _device_id: &DeviceId,
+        _workspace_epoch: u64,
+        _runtime_bundle: &ApprovedRuntimeBundle,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -127,6 +146,7 @@ type TestOperator<H> = ProfileBridgeOperator<
     TestEnrollment,
     TestCoordinator,
     TestRuntimeBundles,
+    AllowBrowserPreflight,
     FakeProcessControl,
     H,
 >;
@@ -272,6 +292,7 @@ fn operator<H: CamouhostPort>(
             bundle: approved_bundle()?,
             allow: true,
         },
+        AllowBrowserPreflight,
         FakeProcessControl::default(),
         camouhost,
     ))
@@ -318,6 +339,7 @@ fn runtime_bundle_rejection_prevents_lease_and_runtime_mutation()
             bundle: approved_bundle()?,
             allow: false,
         },
+        AllowBrowserPreflight,
         FakeProcessControl::default(),
         FakeCamouhost::default(),
     );
