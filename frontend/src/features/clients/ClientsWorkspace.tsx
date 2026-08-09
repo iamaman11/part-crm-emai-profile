@@ -5,6 +5,7 @@ import { createClient, getClient, getClientHistory, listClients } from '../../sh
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { ClientGrantPanel } from './ClientGrantPanel';
 import { ClientHistoryPanel } from './ClientHistoryPanel';
+import { ClientMailPanel } from './ClientMailPanel';
 import { ClientMutationPanels } from './ClientMutationPanels';
 import { ClientRegistryList } from './ClientRegistryList';
 
@@ -133,6 +134,7 @@ export function ClientsWorkspace() {
             client={selectedClient}
             onMutated={refreshSelected}
           />
+          <ClientMailPanel clientId={selectedClient.clientId} />
         </>
       )}
 

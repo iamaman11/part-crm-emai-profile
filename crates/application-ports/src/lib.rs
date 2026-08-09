@@ -18,6 +18,14 @@ pub mod mailboxes;
 pub mod notifications;
 pub mod profile_assignment_context;
 pub mod profiles;
+pub mod query;
+pub mod query_clients;
+pub mod query_global;
+pub mod query_mail;
+pub mod query_mail_provider;
+pub mod query_mailboxes;
+pub mod query_members;
+pub mod query_profiles;
 pub mod sessions;
 
 pub use audit::{AuditPort, AuditRecord, AuditResult};
@@ -42,4 +50,8 @@ pub use notifications::{
     ReplayPreparationOutcome, ReplayReasonClass,
 };
 pub use profiles::ProfileRepository;
+pub use query::{
+    QueryAuthorizationPort, QueryCapability, QueryCursor, QueryInputError, QueryPage,
+    QueryPageRequest, QueryPageSize, QueryPortError, QueryPortErrorClass,
+};
 pub use sessions::ProfileCoordinatorPort;

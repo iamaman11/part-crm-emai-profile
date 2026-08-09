@@ -172,6 +172,7 @@ dependencies = [
  "identity-access-domain",
  "mailbox-domain",
  "notification-domain",
+ "profile-domain",
  "profile-platform-primitives",
  "serde",
  "serde_json",
@@ -930,6 +931,15 @@ dependencies = [
  "application-ports",
  "contracts",
  "notification-domain",
+ "profile-platform-primitives",
+]
+
+[[package]]
+name = "use-cases-query"
+version = "0.1.0"
+dependencies = [
+ "application-ports",
+ "client-domain",
  "profile-platform-primitives",
 ]
 

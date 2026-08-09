@@ -23,8 +23,13 @@ CLIENT_REGISTRY_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "client-r
 CLIENT_REGISTRY_TYPESCRIPT_PATH = (
     ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "client-registry.ts"
 )
+QUERY_MAIL_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "query-mail.json"
+QUERY_MAIL_TYPESCRIPT_PATH = (
+    ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "query-mail.ts"
+)
 SOURCE_PATH = "crates/control-plane-contract/src/public_api.rs"
 CLIENT_REGISTRY_SOURCE_PATH = "crates/control-plane-contract/src/client_registry_api.rs"
+QUERY_MAIL_SOURCE_PATH = "crates/control-plane-contract/src/bin/export_query_mail.rs"
 GENERATOR_PATH = "scripts/generate-frontend-contracts.py"
 
 
@@ -219,6 +224,15 @@ def check_or_write(path: Path, expected: str, check: bool) -> bool:
     return True
 
 
+def compact_json(document: dict[str, Any]) -> str:
+    return json.dumps(
+        document,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ) + "\n"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="fail if committed generated files differ")
@@ -228,19 +242,18 @@ def main() -> int:
     base_typescript = render_typescript(base_document, source_path=SOURCE_PATH)
     canonical_registry, _ = run_export("export_client_registry", "canonical")
     compatibility_registry, _ = run_export("export_client_registry", "compatibility")
-    compatibility_registry_openapi = (
-        json.dumps(
-            compatibility_registry,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-        + "\n"
-    )
+    compatibility_registry_openapi = compact_json(compatibility_registry)
     registry_typescript = render_typescript(
         canonical_registry,
         source_path=CLIENT_REGISTRY_SOURCE_PATH,
         imports=("import type { ClientProjection } from './control-plane';",),
+        support_nullable=True,
+    )
+    query_mail, _ = run_export("export_query_mail")
+    query_mail_openapi = compact_json(query_mail)
+    query_mail_typescript = render_typescript(
+        query_mail,
+        source_path=QUERY_MAIL_SOURCE_PATH,
         support_nullable=True,
     )
 
@@ -257,6 +270,8 @@ def main() -> int:
             registry_typescript,
             args.check,
         ),
+        check_or_write(QUERY_MAIL_OPENAPI_PATH, query_mail_openapi, args.check),
+        check_or_write(QUERY_MAIL_TYPESCRIPT_PATH, query_mail_typescript, args.check),
     ]
     if not all(results):
         return 1
