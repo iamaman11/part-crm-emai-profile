@@ -2,7 +2,7 @@
 
 **Status:** normative post-composition execution plan  
 **Date:** 2026-08-09  
-**Tracking:** Phase 1 complete; Phase 2A and Phase 2B accepted via #118/#137 and #138/#140; Phase 2C is the unique NEXT; expert-plan refinement #133; external CRM is future development only  
+**Tracking:** Phase 1 complete; Phase 2A/2B/2C accepted via #118/#137, #138/#140 and #142/#143; Phase 2D issue #144 is the unique NEXT; expert-plan refinement #133; external CRM is future development only
 **Production readiness:** unchanged; `production_ready=false` until Phase 2J accepts all mandatory real external evidence
 
 ## 1. Authority And Scope
@@ -88,8 +88,8 @@ Phase 2A
   -> only then future CRM planning
 ```
 
-Exactly one implementation slice is active at a time. Phase 2C is the unique NEXT after
-the accepted Phase 2B closeout; later Phase 2 slices remain blocked by the same linear rule.
+Exactly one implementation slice is active at a time. Phase 2D issue #144 is the unique NEXT after
+the accepted Phase 2C closeout; later Phase 2 slices remain blocked by the same linear rule.
 
 ### 2.1 Critical-path rules
 
@@ -264,7 +264,7 @@ slice remain mandatory expansion work.
 | A2 | `application-ports` capability split | **Accepted.** Capability modules + thin facade implemented in Phase 0A/PR #79. | Add new modules only with owning capabilities; keep one crate. |
 | A3 | Domain aggregate decomposition | **Client half accepted in Phase 2A.** `client-domain` is decomposed behind a thin facade; `mailbox-domain` remains monolithic. | Mailbox split first in 2E. |
 | A4 | Rust/OpenAPI/TypeScript generation | **Foundation accepted, coverage incomplete.** Migrated public slice is generated and CI-enforced; Phase 2B added no public transport DTO. | Every new 2C–2H public DTO/event expands canonical generated coverage before UI use. |
-| A5 | Feature-owned SPA route composition | **Open.** Current root router still owns direct feature imports/routes. | Mandatory first frontend architecture step in 2C before route-family growth. |
+| A5 | Feature-owned SPA route composition | **Accepted in Phase 2C.** Root app routing imports feature-owned public route APIs; direct feature-internal route composition is permanently rejected by positive/negative CI. | Preserve in later route-family growth. |
 | A6 | Architecture consistency gate | **Accepted.** Deterministic architecture inventory/docs checks in CI. | Expand inventory/checks whenever new governed modules/routes/contracts appear. |
 | A7 | Route classifier modularization | **Accepted.** Capability classifiers behind one fail-closed entrypoint. | New route families must add an owning classifier module; no return to monolith. |
 | A8 | Query-side/CQRS read-model boundary | **Open.** No accepted global read/search application context. | Phase 2D, before global search and provider message-body query execution. |
@@ -292,7 +292,7 @@ scheduled in Phase 2 at their required growth points.
 ## 6. Phase 1 — Durable Integration And Delivery Foundation
 
 **Goal:** complete the asynchronous reliability substrate before product expansion depends on it.
-**Status:** ACCEPTED. Phase 1 is complete; Phase 2A and Phase 2B are accepted; Phase 2C is the unique next implementation slice.
+**Status:** ACCEPTED. Phase 1 is complete; Phase 2A, Phase 2B and Phase 2C are accepted; Phase 2D issue #144 is the unique next implementation slice.
 
 ### Phase 1A — Durable event/outbox foundation — ACCEPTED
 
@@ -499,7 +499,7 @@ source head; `behind_by=0`; reviews=0; unresolved threads=0. `production_ready=f
 - key-version changes do not require plaintext database scans;
 - logs/audit/events never contain plaintext, lookup tokens or cryptographic keys.
 
-### Phase 2C — Client merge, assignment, grant-safe projections and modular Client Registry UI — NEXT
+### Phase 2C — Client merge, assignment, grant-safe projections and modular Client Registry UI — ACCEPTED
 
 **Purpose:** finish Client Registry business semantics and establish scalable frontend route
 composition before the SPA grows further.
@@ -538,7 +538,19 @@ composition before the SPA grows further.
 - public client DTOs are generated rather than duplicated in handwritten `types.ts`;
 - ordinary Client Registry workflows require no CLI.
 
-### Phase 2D — CQRS read models, global search and client-mail query contract
+#### Phase 2C acceptance evidence
+
+Phase 2C was accepted through issue #142 / implementation PR #143 from exact proven source head
+`d3ad2e774a98ad5fed2565ba410ba9923062d170` and guarded squash merge
+`042d0dc72fa37e99f971d61d21544609a69c6e31`. The unchanged source head passed exactly 12/12
+permanent workflows with `behind_by=0`, reviews=0 and unresolved review threads=0. Accepted scope
+includes deterministic one-way client merge, historical primary assignment semantics, application-owned
+merge/reassignment, governed atomic D1 merge/history, grant-safe Client Registry projections, A5
+feature-owned route composition, generated Client Registry contracts, modular Client Registry UI and
+permanent Phase 2C positive/negative/SQLite enforcement in both Quality and Repository Audit gates.
+`production_ready=false` remains intentional.
+
+### Phase 2D — CQRS read models, global search and client-mail query contract — NEXT
 
 **Purpose:** resolve A8 with a dedicated query architecture before broad discovery/provider reads.
 
@@ -1020,26 +1032,24 @@ Definition of done:
 
 ## 19. Immediate Next Action
 
-Start **Phase 2B — Client persistence, contact crypto adapter and lifecycle commands** under issue #138
-from accepted Phase 2A `main`.
+Start **Phase 2D — CQRS read models, global search and client-mail query contract** under issue #144
+from accepted Phase 2C `main` at `042d0dc72fa37e99f971d61d21544609a69c6e31`.
 
-Execute Phase 2B inward-first in this exact order:
+Execute Phase 2D inward-first in this exact order:
 
 ```text
-forward-only D1 client/contact migration
-  -> encrypted contact display + tenant-scoped exact-lookup token persistence
-  -> separate outer encryption/HMAC key domains + key-version aware protection
-  -> application-owned create/update/archive/contact mutations
-  -> atomic canonical mutation + idempotency + audit + outbox
-  -> indexed tenant-scoped exact-contact lookup
-  -> migration/replay/failure-order/wrong-tenant/raw-PII negative proof
-  -> generated public contracts only for accepted surfaces
-  -> permanent Phase 2B positive/negative architecture/security gates
-  -> native + Workers-WASM + release composition proof
-  -> exact-head 12/12 acceptance
-  -> guarded merge + docs closeout
-  -> only then Phase 2C
+use-cases-query independent application context
+  -> capability-owned query/read-model ports
+  -> stable read projections distinct from mutation aggregates
+  -> D1 read projections/indexes for supported predicates
+  -> authorization/live revocation before projection or provider fetch
+  -> bounded global metadata search
+  -> exact contact lookup via Phase 2B HMAC indexes only
+  -> provider-neutral client-mail search/body query contracts
+  -> deterministic fake cloud/Bridge query adapters
+  -> stable cursor/cost/query-plan evidence
+  -> generated public contracts + incremental Client -> Mail UI
 ```
 
-Do not advance Phase 2C or later slices while Phase 2B is unaccepted. External CRM remains
-future-only after the standalone completion gate.
+No Phase 2E+ implementation starts before Phase 2D is accepted and closed out. Fuzzy/prefix PII
+search remains prohibited without a separate accepted ADR. `production_ready=false` remains unchanged.
