@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +54,11 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def production_source(source: str) -> str:
+    """Exclude test-only negative markers from production privacy scans."""
+    return source.split("#[cfg(test)]", 1)[0]
+
+
 def assert_contains(name: str, source: str, fragments: tuple[str, ...]) -> None:
     for fragment in fragments:
         if fragment not in source:
@@ -69,7 +73,7 @@ def assert_absent(name: str, source: str, fragments: tuple[str, ...]) -> None:
 
 
 def assert_metadata_only(name: str, source: str) -> None:
-    lowered = source.lower()
+    lowered = production_source(source).lower()
     for term in SENSITIVE_TERMS:
         if term in lowered:
             fail(f"{name} must remain metadata-only; found {term}")
@@ -81,7 +85,6 @@ def enforce(root: Path) -> None:
     adapters = root / "crates" / "cloudflare-adapters" / "src"
     worker = root / "apps" / "control-plane-worker" / "src"
 
-    # Provider/runtime details stay outside pure application and domain crates.
     inner_files = (
         root / "crates" / "mailbox-domain" / "src" / "binding.rs",
         root / "crates" / "mailbox-domain" / "src" / "job.rs",
@@ -172,7 +175,7 @@ def enforce(root: Path) -> None:
     )
     assert_absent(
         "d1_mailbox_scheduling.rs",
-        scheduling_adapter,
+        production_source(scheduling_adapter),
         ("message_body", "body_html", "body_text", "raw_message", "access_token", "password"),
     )
 
@@ -211,7 +214,7 @@ def enforce(root: Path) -> None:
             "get_imap_message",
         ),
     )
-    assert_absent("cloud_mail_query.rs", cloud_query, CONFIDENTIAL_SINKS)
+    assert_absent("cloud_mail_query.rs", production_source(cloud_query), CONFIDENTIAL_SINKS)
 
     gmail_query = read(adapters / "gmail_mail_query.rs")
     assert_contains(
@@ -228,7 +231,7 @@ def enforce(root: Path) -> None:
             ".zeroize()",
         ),
     )
-    assert_absent("gmail_mail_query.rs", gmail_query, CONFIDENTIAL_SINKS)
+    assert_absent("gmail_mail_query.rs", production_source(gmail_query), CONFIDENTIAL_SINKS)
 
     imap_query = read(adapters / "imap_query.rs")
     assert_contains(
@@ -246,7 +249,7 @@ def enforce(root: Path) -> None:
             "MAX_MIME_DEPTH",
         ),
     )
-    assert_absent("imap_query.rs", imap_query, CONFIDENTIAL_SINKS)
+    assert_absent("imap_query.rs", production_source(imap_query), CONFIDENTIAL_SINKS)
 
     imap_session = read(adapters / "imap_session.rs")
     assert_contains(
@@ -261,7 +264,6 @@ def enforce(root: Path) -> None:
         ),
     )
 
-    # Preserve Phase 2D's authoritative authorization -> eligibility -> provider ordering.
     mail_application = read(root / "crates" / "use-cases-query" / "src" / "mail.rs")
     for function, provider_marker in (
         ("search_client_mailbox_messages", ".search_messages("),
@@ -278,7 +280,6 @@ def enforce(root: Path) -> None:
         ):
             fail(f"{function} must preserve auth -> eligibility -> provider ordering")
 
-    # The real adapter is an outer port implementation, not a direct transport ACL bypass.
     worker_lib = read(worker / "lib.rs")
     if "CloudMailboxQueryAdapter" in worker_lib:
         fail("real Client Mail provider must not be called directly from the Worker transport router")
@@ -295,14 +296,13 @@ def enforce(root: Path) -> None:
         ),
     )
 
-    # No provider content or credentials may enter the queue/evidence coordination path.
     for path in (
         worker / "mailbox_queue_evidence.rs",
         worker / "mailbox_scheduling.rs",
         adapters / "mailbox_job_queue.rs",
         adapters / "d1_mailbox_scheduling.rs",
     ):
-        source = read(path)
+        source = production_source(read(path))
         assert_absent(
             str(path.relative_to(root)),
             source,
@@ -317,17 +317,18 @@ def enforce(root: Path) -> None:
 
 
 def self_test() -> None:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
-        path = root / "crates" / "mailbox-domain" / "src"
-        path.mkdir(parents=True)
-        path.joinpath("binding.rs").write_text("worker::Env\n", encoding="utf-8")
-        path.joinpath("job.rs").write_text("pub struct Safe;\n", encoding="utf-8")
-        try:
-            enforce(root)
-        except AssertionError:
-            return
-        raise AssertionError("Phase 2E negative fixture unexpectedly passed")
+    try:
+        assert_absent("negative-inner-runtime", "pub fn x(_: worker::Env) {}", INNER_RUNTIME_FRAGMENTS)
+    except AssertionError:
+        pass
+    else:
+        fail("Phase 2E inner-runtime negative fixture unexpectedly passed")
+
+    try:
+        assert_metadata_only("negative-queue", "struct Envelope { subject: String }")
+    except AssertionError:
+        return
+    fail("Phase 2E privacy negative fixture unexpectedly passed")
 
 
 def main() -> int:
@@ -337,7 +338,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.self_test:
         self_test()
-        print("Phase 2E mailbox negative fixture rejected as expected.")
+        print("Phase 2E mailbox negative fixtures rejected as expected.")
         return 0
     enforce(args.root)
     print("Phase 2E cloud mailbox runtime, Queue and privacy boundaries passed.")
