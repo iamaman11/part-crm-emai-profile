@@ -139,8 +139,6 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _verification_queue = env.queue(VERIFICATION_QUEUE_BINDING)?;
     let coordinator = env.durable_object(PROFILE_COORDINATOR_BINDING)?;
     let coordinator_id = coordinator.id_from_name(&coordinator_object_name(
-        &profile_platform_primitives::TenantId::parse("tenant_binding_probe")
-            .map_err(|error| worker::Error::RustError(error.to_string()))?,
         &ProfileId::parse("profile_binding_probe")
             .map_err(|error| worker::Error::RustError(error.to_string()))?,
     ))?;
