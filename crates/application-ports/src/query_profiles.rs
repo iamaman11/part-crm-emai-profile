@@ -1,4 +1,5 @@
 use crate::query::{QueryPage, QueryPageRequest, QueryPortError};
+use core::future::Future;
 use profile_domain::ProfileStatus;
 use profile_platform_primitives::{ActorContext, AggregateVersion, ClientId, GenerationId, ProfileId};
 
@@ -20,25 +21,45 @@ impl ProfileReadProjection {
         linked_client_id: Option<ClientId>,
         active_generation_id: Option<GenerationId>,
     ) -> Self {
-        Self { profile_id, status, version, linked_client_id, active_generation_id }
+        Self {
+            profile_id,
+            status,
+            version,
+            linked_client_id,
+            active_generation_id,
+        }
     }
 
     #[must_use]
-    pub const fn profile_id(&self) -> &ProfileId { &self.profile_id }
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
     #[must_use]
-    pub const fn status(&self) -> ProfileStatus { self.status }
+    pub const fn status(&self) -> ProfileStatus {
+        self.status
+    }
+
     #[must_use]
-    pub const fn version(&self) -> AggregateVersion { self.version }
+    pub const fn version(&self) -> AggregateVersion {
+        self.version
+    }
+
     #[must_use]
-    pub const fn linked_client_id(&self) -> Option<&ClientId> { self.linked_client_id.as_ref() }
+    pub const fn linked_client_id(&self) -> Option<&ClientId> {
+        self.linked_client_id.as_ref()
+    }
+
     #[must_use]
-    pub const fn active_generation_id(&self) -> Option<&GenerationId> { self.active_generation_id.as_ref() }
+    pub const fn active_generation_id(&self) -> Option<&GenerationId> {
+        self.active_generation_id.as_ref()
+    }
 }
 
 pub trait ProfileReadModelPort {
-    async fn list_profiles(
+    fn list_profiles(
         &self,
         actor: &ActorContext,
         page: &QueryPageRequest,
-    ) -> Result<QueryPage<ProfileReadProjection>, QueryPortError>;
+    ) -> impl Future<Output = Result<QueryPage<ProfileReadProjection>, QueryPortError>>;
 }
