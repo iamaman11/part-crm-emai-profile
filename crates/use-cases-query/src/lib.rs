@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+pub mod global;
+pub mod mail;
+
+pub use global::search_global_exact;
+pub use mail::{get_client_mailbox_message, search_client_mailbox_messages};
+
 use application_ports::query::{
     QueryAuthorizationPort, QueryCapability, QueryPage, QueryPageRequest, QueryPortError,
     QueryPortErrorClass,
@@ -127,7 +133,7 @@ where
         .map_err(map_port_error)
 }
 
-async fn authorize<A: QueryAuthorizationPort>(
+pub(crate) async fn authorize<A: QueryAuthorizationPort>(
     actor: &ActorContext,
     authorization: &A,
     capability: QueryCapability,
@@ -138,7 +144,7 @@ async fn authorize<A: QueryAuthorizationPort>(
         .map_err(map_port_error)
 }
 
-fn map_port_error(error: QueryPortError) -> QueryApplicationError {
+pub(crate) fn map_port_error(error: QueryPortError) -> QueryApplicationError {
     match error.class() {
         QueryPortErrorClass::InvalidCursor => QueryApplicationError::InvalidInput,
         QueryPortErrorClass::IntegrityFailure => QueryApplicationError::IntegrityFailure,
