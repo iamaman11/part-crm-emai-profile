@@ -4,9 +4,14 @@ use application_ports::mailbox_jobs::{
     MailboxJobPortErrorClass, MailboxJobPreparedRun, MailboxJobReadModel, MailboxJobRunWrite,
     MailboxJobStatus,
 };
-use application_ports::mailboxes::{MailboxReplayDecision, MailboxReplayReceipt};
+use application_ports::mailboxes::{
+    MailboxProviderPort, MailboxReplayDecision, MailboxReplayReceipt,
+};
 use core::fmt;
 use identity_access_domain::MembershipRole;
+use mailbox_domain::{
+    MailboxError, MailboxFailureDisposition, MailboxObservation, MailboxProviderFailure,
+};
 use profile_platform_primitives::{
     ActorContext, AggregateVersion, MailboxBindingId, MailboxJobId, UnixMillis,
 };
@@ -17,6 +22,8 @@ const MAILBOX_JOB_EVENT_PAYLOAD: &str = "{}";
 const MAX_JOB_DELAY_MS: u64 = 604_800_000;
 const MAX_CURSOR_LENGTH: usize = 512;
 const MAX_JOB_ATTEMPTS: u32 = 10;
+const RETRY_BASE_DELAY_MS: u64 = 30_000;
+const RETRY_MAX_DELAY_MS: u64 = 900_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecuteCreateMailboxJobCommand {
@@ -231,6 +238,7 @@ pub fn validate_mailbox_job_run_version(
     expected_version
         .next()
         .and_then(AggregateVersion::next)
+        .and_then(AggregateVersion::next)
         .map_err(|_| MailboxJobOperationError::InternalFailure)
 }
 
@@ -316,16 +324,21 @@ pub async fn get_mailbox_job<P: MailboxJobApplicationPort>(
         .ok_or(MailboxJobOperationError::NotFound)
 }
 
-pub async fn execute_run_mailbox_job<P: MailboxJobApplicationPort>(
+pub async fn execute_run_mailbox_job<R, P>(
     actor: &ActorContext,
     role: MembershipRole,
-    port: &mut P,
+    repository: &R,
+    provider: &mut P,
     command: ExecuteRunMailboxJobCommand,
-) -> Result<MailboxJobMutationOutcome, MailboxJobOperationError> {
+) -> Result<MailboxJobMutationOutcome, MailboxJobOperationError>
+where
+    R: MailboxJobApplicationPort,
+    P: MailboxProviderPort,
+{
     authorize_mailbox_job(role)?;
     let response_version = validate_mailbox_job_run_version(command.expected_version)?;
 
-    match port
+    match repository
         .decide_replay(actor, MAILBOX_JOB_RUN_COMMAND, &command.evidence)
         .await
         .map_err(map_port_error)?
@@ -341,12 +354,12 @@ pub async fn execute_run_mailbox_job<P: MailboxJobApplicationPort>(
         MailboxReplayDecision::Conflict => return Err(MailboxJobOperationError::Conflict),
     }
 
-    let binding = port
+    let binding = repository
         .find_binding(actor.tenant_scope(), &command.binding_id)
         .await
         .map_err(map_port_error)?
         .ok_or(MailboxJobOperationError::NotFound)?;
-    let job = port
+    let job = repository
         .find_job(actor.tenant_scope(), &command.binding_id, &command.job_id)
         .await
         .map_err(map_port_error)?
@@ -355,9 +368,7 @@ pub async fn execute_run_mailbox_job<P: MailboxJobApplicationPort>(
         return Err(MailboxJobOperationError::VersionConflict);
     }
 
-    let prepared = port
-        .prepare_run(&binding, job.job(), command.evidence.now())
-        .map_err(map_port_error)?;
+    let prepared = prepare_mailbox_run(&binding, job.job(), command.evidence.now(), provider).await?;
     if prepared.version() != response_version {
         return Err(MailboxJobOperationError::IntegrityFailure);
     }
@@ -370,7 +381,7 @@ pub async fn execute_run_mailbox_job<P: MailboxJobApplicationPort>(
         command.evidence,
         MAILBOX_JOB_EVENT_PAYLOAD,
     );
-    match port.run_job(actor, &write).await {
+    match repository.run_job(actor, &write).await {
         Ok(()) => Ok(MailboxJobMutationOutcome {
             result_code: result_code.to_owned(),
             resource_id: write.job_id().as_str().to_owned(),
@@ -378,7 +389,7 @@ pub async fn execute_run_mailbox_job<P: MailboxJobApplicationPort>(
             replayed: false,
         }),
         Err(error) if error.class() == MailboxJobPortErrorClass::Conflict => {
-            match port
+            match repository
                 .decide_replay(actor, MAILBOX_JOB_RUN_COMMAND, write.evidence())
                 .await
                 .map_err(map_port_error)?
@@ -397,18 +408,108 @@ pub async fn execute_run_mailbox_job<P: MailboxJobApplicationPort>(
     }
 }
 
-fn result_code<D>(
-    prepared: &MailboxJobPreparedRun<D>,
+async fn prepare_mailbox_run<P: MailboxProviderPort>(
+    binding: &mailbox_domain::MailboxBinding,
+    job: &mailbox_domain::MailboxJob,
+    now: UnixMillis,
+    provider: &mut P,
+) -> Result<MailboxJobPreparedRun, MailboxJobOperationError> {
+    let mut next = job.clone();
+    next.queue(now).map_err(map_domain_error)?;
+    next.start(binding).map_err(map_domain_error)?;
+    let provider_result = provider.check_mailbox(binding, &next).await;
+    apply_provider_result(binding, &mut next, now, provider_result)
+}
+
+fn apply_provider_result(
+    binding: &mailbox_domain::MailboxBinding,
+    job: &mut mailbox_domain::MailboxJob,
+    now: UnixMillis,
+    provider_result: Result<MailboxObservation, MailboxProviderFailure>,
+) -> Result<MailboxJobPreparedRun, MailboxJobOperationError> {
+    match provider_result {
+        Ok(observation) => {
+            if observation.binding_id() != binding.binding_id() {
+                return Err(MailboxJobOperationError::IntegrityFailure);
+            }
+            job.succeed(observation.next_cursor().map(str::to_owned))
+                .map_err(map_domain_error)?;
+            Ok(MailboxJobPreparedRun::from_job(
+                job,
+                observation.provider_status(),
+                observation.bounded_item_count(),
+            ))
+        }
+        Err(failure) => apply_provider_failure(job, now, failure),
+    }
+}
+
+fn apply_provider_failure(
+    job: &mut mailbox_domain::MailboxJob,
+    now: UnixMillis,
+    failure: MailboxProviderFailure,
+) -> Result<MailboxJobPreparedRun, MailboxJobOperationError> {
+    let provider_status = failure.class().storage_value();
+    match failure.disposition() {
+        MailboxFailureDisposition::Retryable => {
+            if job.attempt() >= job.max_attempts() {
+                job.fail().map_err(map_domain_error)?;
+                return Ok(MailboxJobPreparedRun::from_job(job, "RETRY_EXHAUSTED", 0));
+            }
+            let retry_at = bounded_retry_at(now, job.attempt(), failure.retry_at())?;
+            job.retry(now, retry_at).map_err(map_domain_error)?;
+        }
+        MailboxFailureDisposition::AuthRequired => {
+            job.require_auth().map_err(map_domain_error)?;
+        }
+        MailboxFailureDisposition::Suspended => {
+            job.suspend().map_err(map_domain_error)?;
+        }
+        MailboxFailureDisposition::Terminal => {
+            job.fail().map_err(map_domain_error)?;
+        }
+    }
+    Ok(MailboxJobPreparedRun::from_job(job, provider_status, 0))
+}
+
+fn bounded_retry_at(
+    now: UnixMillis,
+    attempt: u32,
+    provider_hint: Option<UnixMillis>,
+) -> Result<UnixMillis, MailboxJobOperationError> {
+    let exponent = attempt.saturating_sub(1).min(5);
+    let factor = 1_u64 << exponent;
+    let policy_delay = RETRY_BASE_DELAY_MS
+        .checked_mul(factor)
+        .unwrap_or(RETRY_MAX_DELAY_MS)
+        .min(RETRY_MAX_DELAY_MS);
+    let policy_at = UnixMillis::new(
+        now.value()
+            .checked_add(policy_delay)
+            .ok_or(MailboxJobOperationError::InternalFailure)?,
+    );
+    let max_at = UnixMillis::new(
+        now.value()
+            .checked_add(RETRY_MAX_DELAY_MS)
+            .ok_or(MailboxJobOperationError::InternalFailure)?,
+    );
+    Ok(provider_hint
+        .filter(|hint| *hint > now)
+        .map_or(policy_at, |hint| hint.max(policy_at).min(max_at)))
+}
+
+fn result_code(
+    prepared: &MailboxJobPreparedRun,
 ) -> Result<&'static str, MailboxJobOperationError> {
     match prepared.status() {
         MailboxJobStatus::Succeeded => Ok("succeeded"),
         MailboxJobStatus::RetryPending => Ok("retry_pending"),
+        MailboxJobStatus::AuthRequired => Ok("auth_required"),
+        MailboxJobStatus::Suspended => Ok("suspended"),
         MailboxJobStatus::Failed => Ok("failed"),
-        MailboxJobStatus::Scheduled
-        | MailboxJobStatus::Queued
-        | MailboxJobStatus::Running
-        | MailboxJobStatus::AuthRequired
-        | MailboxJobStatus::Suspended => Err(MailboxJobOperationError::IntegrityFailure),
+        MailboxJobStatus::Scheduled | MailboxJobStatus::Queued | MailboxJobStatus::Running => {
+            Err(MailboxJobOperationError::IntegrityFailure)
+        }
     }
 }
 
@@ -443,6 +544,14 @@ fn run_replay_outcome(
     }
 }
 
+fn map_domain_error(error: MailboxError) -> MailboxJobOperationError {
+    if error == MailboxError::VersionOverflow {
+        MailboxJobOperationError::InternalFailure
+    } else {
+        MailboxJobOperationError::InvalidState
+    }
+}
+
 fn map_port_error(error: MailboxJobPortError) -> MailboxJobOperationError {
     match error.class() {
         MailboxJobPortErrorClass::NotFound => MailboxJobOperationError::NotFound,
@@ -460,11 +569,42 @@ fn map_port_error(error: MailboxJobPortError) -> MailboxJobOperationError {
 #[cfg(test)]
 mod tests {
     use super::{
-        MailboxJobOperationError, authorize_mailbox_job, validate_create_mailbox_job_request,
-        validate_mailbox_job_run_version,
+        MailboxJobOperationError, apply_provider_failure, authorize_mailbox_job,
+        bounded_retry_at, validate_create_mailbox_job_request, validate_mailbox_job_run_version,
     };
     use identity_access_domain::MembershipRole;
-    use profile_platform_primitives::AggregateVersion;
+    use mailbox_domain::{
+        MailboxBinding, MailboxJob, MailboxJobStatus, MailboxProvider, MailboxProviderFailure,
+        MailboxProviderFailureClass,
+    };
+    use profile_platform_primitives::{
+        AggregateVersion, MailboxBindingId, MailboxJobId, SecretHandle, TenantId, UnixMillis,
+    };
+
+    fn binding() -> Result<MailboxBinding, Box<dyn std::error::Error>> {
+        Ok(MailboxBinding::create(
+            TenantId::parse("tenant_01JMAILAPP")?,
+            MailboxBindingId::parse("mailbox_01JMAILAPP")?,
+            MailboxProvider::Imap,
+            SecretHandle::parse("secret_01JMAILAPP")?,
+        ))
+    }
+
+    fn running_job(
+        binding: &MailboxBinding,
+        max_attempts: u32,
+    ) -> Result<MailboxJob, Box<dyn std::error::Error>> {
+        let mut job = MailboxJob::create(
+            binding,
+            MailboxJobId::parse("mailjob_01JMAILAPP")?,
+            None,
+            UnixMillis::new(1),
+            max_attempts,
+        )?;
+        job.queue(UnixMillis::new(1))?;
+        job.start(binding)?;
+        Ok(job)
+    }
 
     #[test]
     fn owner_only_authorization_is_disclosure_neutral() {
@@ -476,7 +616,8 @@ mod tests {
     }
 
     #[test]
-    fn request_validation_is_bounded_and_fail_closed() -> Result<(), Box<dyn std::error::Error>> {
+    fn request_validation_and_run_version_are_fail_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(validate_create_mailbox_job_request(0, 3, None), Ok(()));
         assert_eq!(
             validate_create_mailbox_job_request(0, 3, Some(&"x".repeat(513))),
@@ -484,8 +625,69 @@ mod tests {
         );
         assert_eq!(
             validate_mailbox_job_run_version(AggregateVersion::INITIAL)?.value(),
-            3
+            4
         );
+        Ok(())
+    }
+
+    #[test]
+    fn retry_policy_is_bounded_and_provider_hint_cannot_escape_bound()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            bounded_retry_at(UnixMillis::new(10), 1, None)?.value(),
+            30_010
+        );
+        assert_eq!(
+            bounded_retry_at(
+                UnixMillis::new(10),
+                1,
+                Some(UnixMillis::new(99_999_999)),
+            )?
+            .value(),
+            900_010
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn provider_failures_drive_canonical_job_states_in_application()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let binding = binding()?;
+
+        let mut retry = running_job(&binding, 3)?;
+        let retry_failure = MailboxProviderFailure::new(
+            MailboxProviderFailureClass::RateLimited,
+            Some(UnixMillis::new(40_000)),
+        )?;
+        let retry_prepared =
+            apply_provider_failure(&mut retry, UnixMillis::new(10), retry_failure)?;
+        assert_eq!(retry_prepared.status(), MailboxJobStatus::RetryPending);
+        assert_eq!(retry_prepared.version().value(), 4);
+        assert_eq!(retry_prepared.retry_at(), Some(UnixMillis::new(40_000)));
+
+        let mut auth = running_job(&binding, 3)?;
+        let auth_prepared = apply_provider_failure(
+            &mut auth,
+            UnixMillis::new(10),
+            MailboxProviderFailure::new(MailboxProviderFailureClass::Authentication, None)?,
+        )?;
+        assert_eq!(auth_prepared.status(), MailboxJobStatus::AuthRequired);
+
+        let mut suspended = running_job(&binding, 3)?;
+        let suspended_prepared = apply_provider_failure(
+            &mut suspended,
+            UnixMillis::new(10),
+            MailboxProviderFailure::new(MailboxProviderFailureClass::ProviderPolicy, None)?,
+        )?;
+        assert_eq!(suspended_prepared.status(), MailboxJobStatus::Suspended);
+
+        let mut terminal = running_job(&binding, 3)?;
+        let terminal_prepared = apply_provider_failure(
+            &mut terminal,
+            UnixMillis::new(10),
+            MailboxProviderFailure::new(MailboxProviderFailureClass::Permanent, None)?,
+        )?;
+        assert_eq!(terminal_prepared.status(), MailboxJobStatus::Failed);
         Ok(())
     }
 }
