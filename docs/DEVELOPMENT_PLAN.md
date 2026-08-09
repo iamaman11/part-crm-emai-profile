@@ -2,7 +2,7 @@
 
 **Status:** normative post-composition execution plan  
 **Date:** 2026-08-09  
-**Tracking:** Phase 1 complete; Phase 2A/2B/2C accepted via #118/#137, #138/#140 and #142/#143; Phase 2D issue #144 is the unique NEXT; expert-plan refinement #133; external CRM is future development only
+**Tracking:** Phase 1 complete; Phase 2A/2B/2C/2D accepted via #118/#137, #138/#140, #142/#143 and #144/#147; Phase 2E issue #148 is the unique NEXT; expert-plan refinement #133; external CRM is future development only
 **Production readiness:** unchanged; `production_ready=false` until Phase 2J accepts all mandatory real external evidence
 
 ## 1. Authority And Scope
@@ -53,7 +53,12 @@ Accepted `main` already provides strong repository-local foundations:
   client application ownership in `use-cases-clients`.
 - Phase 2B authoritative protected client/contact persistence in D1, separate versioned
   encryption and exact-lookup key domains, application-owned checked-version lifecycle/contact
-  commands, atomic mutation + idempotency + audit + outbox, and tenant-first indexed HMAC lookup.
+  commands, atomic mutation + idempotency + audit + outbox, and tenant-first indexed HMAC lookup;
+- Phase 2C deterministic client merge, historical non-authorizing primary assignment, grant-safe
+  Client Registry projections, feature-owned route composition and generated Client Registry contracts;
+- Phase 2D independent `use-cases-query`, capability-owned read projections, bounded typed global
+  search, grant-safe exact-contact HMAC lookup, provider-neutral Client Mail query contracts,
+  deterministic cloud/Bridge query adapters and permanent query/privacy enforcement.
 
 Phase 1A was accepted through issue #114 / PR #115 from exact proven source head
 `21b4bc65cd1bb117504c0a0cfe18c8c11e411f25` and guarded squash merge
@@ -70,6 +75,14 @@ Phase 2A was accepted through issue #118 / PR #137 from exact proven source head
 Phase 2B was accepted through issue #138 / PR #140 from exact proven source head
 `895594e35b77ddd86395300b1644e9df6a712123` and guarded squash merge
 `298062ea443c31c69212cb03b3988265b6bbcd48`.
+
+Phase 2C was accepted through issue #142 / PR #143 from exact proven source head
+`d3ad2e774a98ad5fed2565ba410ba9923062d170` and guarded squash merge
+`042d0dc72fa37e99f971d61d21544609a69c6e31`.
+
+Phase 2D was accepted through issue #144 / PR #147 from exact proven source head
+`ad491e2f0c9ba9f79130923fdde6fe1407af4dc5` and guarded squash merge
+`26f8fa82bdad02a5a0867b0d36748b915579ef1c`.
 
 The critical path is deliberately linear:
 
@@ -88,8 +101,8 @@ Phase 2A
   -> only then future CRM planning
 ```
 
-Exactly one implementation slice is active at a time. Phase 2D issue #144 is the unique NEXT after
-the accepted Phase 2C closeout; later Phase 2 slices remain blocked by the same linear rule.
+Exactly one implementation slice is active at a time. Phase 2E issue #148 is the unique NEXT after
+the accepted Phase 2D closeout; later Phase 2 slices remain blocked by the same linear rule.
 
 ### 2.1 Critical-path rules
 
@@ -550,7 +563,7 @@ feature-owned route composition, generated Client Registry contracts, modular Cl
 permanent Phase 2C positive/negative/SQLite enforcement in both Quality and Repository Audit gates.
 `production_ready=false` remains intentional.
 
-### Phase 2D — CQRS read models, global search and client-mail query contract — NEXT
+### Phase 2D — CQRS read models, global search and client-mail query contract — ACCEPTED
 
 **Purpose:** resolve A8 with a dedicated query architecture before broad discovery/provider reads.
 
@@ -588,7 +601,20 @@ authenticate actor
 - synthetic full message body never enters logs/audit/events/telemetry/Web Storage;
 - fuzzy/prefix PII search remains absent unless a separate ADR is accepted.
 
-### Phase 2E — Mailbox domain decomposition and real cloud mailbox lane
+#### Phase 2D acceptance evidence
+
+Phase 2D was accepted through issue #144 / implementation PR #147 from exact proven source head
+`ad491e2f0c9ba9f79130923fdde6fe1407af4dc5` and guarded squash merge
+`26f8fa82bdad02a5a0867b0d36748b915579ef1c`. The unchanged source head passed exactly 12/12
+permanent workflows with `behind_by=0`, reviews=0 and unresolved review threads=0. Accepted scope
+includes independent `use-cases-query`, capability-owned grant-safe read projections, bounded typed
+opaque-ID global search, Phase 2B HMAC-index exact-contact lookup with live grants, provider-neutral
+Client Mail search/body contracts, authorization-before-eligibility/provider sequencing, deterministic
+fake cloud/Bridge full-body adapters, indexed query-plan evidence, Rust-derived generated mail
+contracts, incremental Client -> Mail UI and permanent Phase 2D privacy/authorization enforcement.
+`production_ready=false` remains intentional.
+
+### Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — NEXT
 
 **Purpose:** resolve the mailbox half of A3 before adding real provider complexity.
 
@@ -986,10 +1012,10 @@ Phase 0 architecture convergence                              ACCEPTED
 Phase 1A durable event/outbox foundation                      ACCEPTED
 Phase 1B notification domain + retry/DLQ/catch-up/operations  ACCEPTED
 Phase 2A client-domain split + use-cases-clients + contact protection foundation  ACCEPTED
-Phase 2B encrypted contact persistence + client lifecycle commands                 NEXT
-Phase 2C merge/assignment/projections + feature-owned routes + Client Registry UI
-Phase 2D use-cases-query + CQRS read models + global/client-mail query contracts
-Phase 2E mailbox-domain split + use-cases-mailboxes + cloud provider lane
+Phase 2B encrypted contact persistence + client lifecycle commands                 ACCEPTED
+Phase 2C merge/assignment/projections + feature-owned routes + Client Registry UI                   ACCEPTED
+Phase 2D use-cases-query + CQRS read models + global/client-mail query contracts                     ACCEPTED
+Phase 2E mailbox-domain split + use-cases-mailboxes + cloud provider lane                            NEXT
 Phase 2F device-domain + use-cases-devices + browser/Bridge mailbox lane
 Phase 2G durable realtime notification hub
 Phase 2H complete standalone UI/admin UX
@@ -1032,24 +1058,25 @@ Definition of done:
 
 ## 19. Immediate Next Action
 
-Start **Phase 2D — CQRS read models, global search and client-mail query contract** under issue #144
-from accepted Phase 2C `main` at `042d0dc72fa37e99f971d61d21544609a69c6e31`.
+Start **Phase 2E — mailbox domain decomposition and real cloud mailbox lane** under issue #148
+from the accepted Phase 2D implementation merge `26f8fa82bdad02a5a0867b0d36748b915579ef1c` only after
+this docs-only closeout is accepted on `main`.
 
-Execute Phase 2D inward-first in this exact order:
+Execute Phase 2E inward-first in this exact order:
 
 ```text
-use-cases-query independent application context
-  -> capability-owned query/read-model ports
-  -> stable read projections distinct from mutation aggregates
-  -> D1 read projections/indexes for supported predicates
-  -> authorization/live revocation before projection or provider fetch
-  -> bounded global metadata search
-  -> exact contact lookup via Phase 2B HMAC indexes only
-  -> provider-neutral client-mail search/body query contracts
-  -> deterministic fake cloud/Bridge query adapters
-  -> stable cursor/cost/query-plan evidence
-  -> generated public contracts + incremental Client -> Mail UI
+mailbox-domain decomposition (binding/job/runtime_lane/observation)
+  -> independent use-cases-mailboxes
+  -> provider-neutral cloud job state extensions
+  -> real approved Gmail API/IMAP outer adapters
+  -> Phase 1B retry/DLQ/idempotency scheduling
+  -> metadata-only provider observations + canonical mutation/audit/outbox
+  -> accepted Phase 2D search/get-message contract on the cloud lane
+  -> credential-handle auth-required/suspended lifecycle
+  -> provider failure/rate-limit/backpressure taxonomy + bounded metrics
+  -> deterministic repository evidence separated from real External evidence
 ```
 
-No Phase 2E+ implementation starts before Phase 2D is accepted and closed out. Fuzzy/prefix PII
-search remains prohibited without a separate accepted ADR. `production_ready=false` remains unchanged.
+No Phase 2F+ implementation starts before Phase 2E is accepted and closed out. Mailbox content remains
+excluded from audit/outbox/realtime/metrics, fuzzy/prefix PII search remains prohibited without a
+separate accepted ADR, and `production_ready=false` remains unchanged.

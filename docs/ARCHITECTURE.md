@@ -118,6 +118,14 @@ application-owned merge/reassignment sequencing, governed atomic D1 merge/histor
 Client Registry read projections. Assignment remains explicitly non-authorizing; source grants are
 removed rather than transferred on merge; revoked access disappears before projection construction.
 
+Phase 2D accepts capability-owned client/profile/member/mailbox/mail read-model ports, stable read
+projections, typed opaque-ID global search, grant-safe exact-contact lookup through the existing Phase
+2B HMAC index, and provider-neutral Client Mail search/body contracts. Live membership/grants are
+checked before projection construction and again in grant-sensitive D1 predicates where applicable;
+mail provider/body access is sequenced only after authorization and mailbox eligibility. Fuzzy/prefix
+PII discovery, result-count leakage, secret-handle projection and assignment-derived authorization
+remain prohibited.
+
 The current plan may keep `application-ports` as one Cargo crate with capability modules while
 that remains clear. It is not required to split every port into a separate crate.
 
@@ -139,11 +147,13 @@ should become separate Cargo crates when that improves compile-time dependency i
 crate splitting is not an excuse for one-crate-per-function fragmentation.
 
 Accepted independent application ownership includes `use-cases-identity`,
-`use-cases-notifications` and `use-cases-clients`; shared `use-cases` compatibility re-exports do
-not regain canonical ownership of those capabilities.
+`use-cases-notifications`, `use-cases-clients` and `use-cases-query`; shared `use-cases` compatibility
+re-exports do not regain canonical ownership of those capabilities.
 
-Phase 2D adds `use-cases-query` as the independent cross-capability read/search application context;
-mutation aggregates remain owned by their existing capability use cases.
+Phase 2D accepts `use-cases-query` as the independent cross-capability read/search application context;
+mutation aggregates remain owned by their existing capability use cases. Query orchestration owns
+authorization-before-projection, bounded exact-contact HMAC derivation/lookup, and authorization ->
+mailbox eligibility -> provider/body sequencing without importing provider/runtime implementations.
 
 ### Adapters
 
@@ -351,6 +361,8 @@ Permanent policy should cover:
 - D1 migration/replay invariants;
 - protected client-contact persistence and tenant-scoped exact-HMAC lookup positive/negative fixtures;
 - Phase 2C client merge/assignment-as-non-ACL/grant-safe projection and feature-route positive/negative fixtures;
+- Phase 2D query ownership/privacy, exact-HMAC contact/grant safety, bounded/index-backed query-plan,
+  synthetic cloud/Bridge Client Mail and native/WASM positive/negative fixtures;
 - generation freshness/fencing;
 - secret/PII/content scans;
 - native + WASM + Windows/release composition as applicable;
@@ -385,9 +397,10 @@ crates/
   application-ports/
   use-cases-identity/
   use-cases-clients/
+  use-cases-query/
   use-cases-profiles/
   use-cases-mailboxes/
-  # later: notifications/search/devices/crm projection as justified
+  # later: devices/crm projection as justified
   cloudflare-adapters/
   windows-adapters/
 
