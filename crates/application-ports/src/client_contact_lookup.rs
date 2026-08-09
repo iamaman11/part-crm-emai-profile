@@ -1,7 +1,5 @@
 use crate::clients::{ContactExactLookupRequest, ContactProtectionPortError};
-use client_domain::{
-    ContactKind, ContactNormalizationVersion, ExactLookupToken,
-};
+use client_domain::{ContactKind, ContactNormalizationVersion, ExactLookupToken};
 use profile_platform_primitives::{ClientId, ContactPointId, TenantScope};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
