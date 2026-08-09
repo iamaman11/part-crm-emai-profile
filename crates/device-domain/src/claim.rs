@@ -230,8 +230,8 @@ mod tests {
     }
 
     #[test]
-    fn restore_rejects_corrupt_persisted_claim_metadata()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn restore_rejects_corrupt_persisted_claim_metadata() -> Result<(), Box<dyn std::error::Error>>
+    {
         let base = DeviceClaimSnapshot {
             claim_id: DeviceClaimId::parse("devclaim_01JRESTORE")?,
             job_id: DeviceJobId::parse("devjob_01JRESTORE")?,
