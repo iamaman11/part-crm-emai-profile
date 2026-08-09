@@ -4,8 +4,8 @@ use cloudflare_adapters::d1_identity_ceremonies::D1IdentityCeremonyApplicationRe
 use cloudflare_adapters::d1_identity_governance::D1IdentityGovernanceApplicationRepository;
 use cloudflare_adapters::d1_mailbox_bindings::D1MailboxBindingApplicationRepository;
 use cloudflare_adapters::d1_mailbox_jobs::D1MailboxJobApplicationRepository;
+use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
 use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
-use cloudflare_adapters::d1_profiles::D1ProfileApplicationRepository;
 use control_plane_contract::D1_CATALOG_BINDING;
 use worker::{Env, Result};
 
@@ -39,8 +39,9 @@ pub fn identity_ceremony_application(
     ))
 }
 
-pub fn profile_application(env: &Env) -> Result<D1ProfileApplicationRepository> {
-    Ok(D1ProfileApplicationRepository::new(
+pub fn profile_application(env: &Env) -> Result<D1ProfileApplicationBundle> {
+    Ok(D1ProfileApplicationBundle::new(
+        env.d1(D1_CATALOG_BINDING)?,
         env.d1(D1_CATALOG_BINDING)?,
         env.d1(D1_CATALOG_BINDING)?,
         env.d1(D1_CATALOG_BINDING)?,
