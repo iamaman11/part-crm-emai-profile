@@ -20,6 +20,7 @@
     "crates/runtime-bundle-domain",
     "crates/session-domain",
     "crates/use-cases",
+    "crates/use-cases-clients",
     "crates/use-cases-identity",
     "crates/use-cases-notifications"
   ],

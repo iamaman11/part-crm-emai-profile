@@ -34,6 +34,8 @@ FORBIDDEN_IDENTITY_TRANSPORT_TOKENS = (
 )
 
 REQUIRED_CLIENT_TRANSPORT_TOKENS = (
+    "use use_cases_clients::client_grants",
+    "use use_cases_clients::clients",
     "execute_create_client",
     "get_visible_client",
     "execute_client_grant",
@@ -81,8 +83,10 @@ def validate(root: Path) -> list[str]:
     lib_path = worker / "lib.rs"
     legacy_api_path = worker / "api.rs"
     client_ports_path = root / "crates/application-ports/src/clients.rs"
-    client_use_cases_path = root / "crates/use-cases/src/clients.rs"
-    client_grant_use_cases_path = root / "crates/use-cases/src/client_grants.rs"
+    client_use_cases_path = root / "crates/use-cases-clients/src/clients.rs"
+    client_grant_use_cases_path = root / "crates/use-cases-clients/src/client_grants.rs"
+    shared_client_facade_path = root / "crates/use-cases/src/clients.rs"
+    shared_grant_facade_path = root / "crates/use-cases/src/client_grants.rs"
     client_adapter_path = root / "crates/cloudflare-adapters/src/d1_clients.rs"
     identity_governance_ports_path = root / "crates/application-ports/src/identity_governance.rs"
     identity_ceremony_ports_path = root / "crates/application-ports/src/identity_ceremonies.rs"
@@ -99,6 +103,8 @@ def validate(root: Path) -> list[str]:
         client_ports_path,
         client_use_cases_path,
         client_grant_use_cases_path,
+        shared_client_facade_path,
+        shared_grant_facade_path,
         client_adapter_path,
         identity_governance_ports_path,
         identity_ceremony_ports_path,
@@ -123,6 +129,8 @@ def validate(root: Path) -> list[str]:
     client_ports = read(client_ports_path)
     client_use_cases = read(client_use_cases_path)
     client_grant_use_cases = read(client_grant_use_cases_path)
+    shared_client_facade = read(shared_client_facade_path)
+    shared_grant_facade = read(shared_grant_facade_path)
     client_adapter = read(client_adapter_path)
     identity_governance_ports = read(identity_governance_ports_path)
     identity_ceremony_ports = read(identity_ceremony_ports_path)
@@ -183,7 +191,7 @@ def validate(root: Path) -> list[str]:
     require_tokens(
         client_use_cases,
         ("pub async fn execute_create_client", "pub async fn get_visible_client"),
-        "client use cases",
+        "extracted client use cases",
         errors,
     )
     require_tokens(
@@ -194,7 +202,19 @@ def validate(root: Path) -> list[str]:
             "pub fn next_client_grant_version",
             "decide_client_grant_replay",
         ),
-        "client grant use cases",
+        "extracted client grant use cases",
+        errors,
+    )
+    require_tokens(
+        shared_client_facade,
+        ("pub use use_cases_clients::clients::*;",),
+        "shared client compatibility facade",
+        errors,
+    )
+    require_tokens(
+        shared_grant_facade,
+        ("pub use use_cases_clients::client_grants::*;",),
+        "shared client grant compatibility facade",
         errors,
     )
     require_tokens(
@@ -286,13 +306,15 @@ def write_self_test_fixture(root: Path) -> None:
     worker = root / "apps/control-plane-worker/src"
     ports = root / "crates/application-ports/src"
     use_cases = root / "crates/use-cases/src"
+    client_use_cases = root / "crates/use-cases-clients/src"
     identity_use_cases = root / "crates/use-cases-identity/src"
     adapters = root / "crates/cloudflare-adapters/src"
-    for path in (worker, ports, use_cases, identity_use_cases, adapters):
+    for path in (worker, ports, use_cases, client_use_cases, identity_use_cases, adapters):
         path.mkdir(parents=True, exist_ok=True)
 
     (worker / "clients.rs").write_text(
         "use cloudflare_adapters::d1_catalog::D1CatalogRepository;\n"
+        "use use_cases_clients::client_grants; use use_cases_clients::clients;\n"
         "fn route() { execute_create_client(); get_visible_client(); execute_client_grant(); "
         "authorize_client_grant(); RouteClass::ClientGrantApi; client_application(env); }\n",
         encoding="utf-8",
@@ -327,14 +349,20 @@ def write_self_test_fixture(root: Path) -> None:
         "pub struct ClientGrantWrite;\n",
         encoding="utf-8",
     )
-    (use_cases / "clients.rs").write_text(
+    (client_use_cases / "clients.rs").write_text(
         "pub async fn execute_create_client() {}\npub async fn get_visible_client() {}\n",
         encoding="utf-8",
     )
-    (use_cases / "client_grants.rs").write_text(
+    (client_use_cases / "client_grants.rs").write_text(
         "pub async fn execute_client_grant() {}\npub fn authorize_client_grant() {}\n"
         "pub fn next_client_grant_version() {}\nfn replay() { decide_client_grant_replay(); }\n",
         encoding="utf-8",
+    )
+    (use_cases / "clients.rs").write_text(
+        "pub use use_cases_clients::clients::*;\n", encoding="utf-8"
+    )
+    (use_cases / "client_grants.rs").write_text(
+        "pub use use_cases_clients::client_grants::*;\n", encoding="utf-8"
     )
     (adapters / "d1_clients.rs").write_text(
         "impl ClientApplicationPort for D1ClientApplicationRepository {}\n"

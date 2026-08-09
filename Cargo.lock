@@ -73,6 +73,7 @@ dependencies = [
  "serde_json",
  "session-domain",
  "use-cases",
+ "use-cases-clients",
  "use-cases-notifications",
  "wasm-bindgen",
  "worker",
@@ -156,6 +157,7 @@ name = "client-domain"
 version = "0.1.0"
 dependencies = [
  "profile-platform-primitives",
+ "zeroize",
 ]
 
 [[package]]
@@ -882,7 +884,20 @@ dependencies = [
  "profile-domain",
  "profile-platform-primitives",
  "session-domain",
+ "use-cases-clients",
  "use-cases-identity",
+]
+
+[[package]]
+name = "use-cases-clients"
+version = "0.1.0"
+dependencies = [
+ "application-ports",
+ "client-domain",
+ "contracts",
+ "identity-access-domain",
+ "profile-platform-primitives",
+ "zeroize",
 ]
 
 [[package]]

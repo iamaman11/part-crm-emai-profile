@@ -19,6 +19,7 @@ members = [
     "crates/runtime-bundle-domain",
     "crates/session-domain",
     "crates/use-cases",
+    "crates/use-cases-clients",
     "crates/use-cases-identity",
     "crates/use-cases-notifications",
 ]
@@ -46,6 +47,7 @@ runtime-bundle-domain = { path = "crates/runtime-bundle-domain" }
 session-domain = { path = "crates/session-domain" }
 sha2 = { version = "=0.11.0", default-features = false }
 use-cases = { path = "crates/use-cases" }
+use-cases-clients = { path = "crates/use-cases-clients" }
 use-cases-identity = { path = "crates/use-cases-identity" }
 use-cases-notifications = { path = "crates/use-cases-notifications" }
 wasm-bindgen = "=0.2.126"

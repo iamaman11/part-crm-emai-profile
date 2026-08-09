@@ -314,13 +314,13 @@ def validate_composition_surfaces() -> None:
         ],
         "client Worker application transport",
     )
-    client_use_cases = read("crates/use-cases/src/clients.rs")
+    client_use_cases = read("crates/use-cases-clients/src/clients.rs")
     require_all(
         client_use_cases,
         ["pub async fn execute_create_client", "pub async fn get_visible_client"],
         "client create/query application use cases",
     )
-    client_grant_use_cases = read("crates/use-cases/src/client_grants.rs")
+    client_grant_use_cases = read("crates/use-cases-clients/src/client_grants.rs")
     require_all(
         client_grant_use_cases,
         [
