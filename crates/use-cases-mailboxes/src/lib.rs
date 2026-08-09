@@ -2,3 +2,4 @@
 
 pub mod mailbox_jobs;
 pub mod mailboxes;
+pub mod scheduled;
