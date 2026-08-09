@@ -746,7 +746,10 @@ mod tests {
         );
 
         let mut stale_fence = valid.clone();
-        stale_fence.last_fence = stale_fence.last_fence.saturating_add(1);
+        stale_fence.last_fence = stale_fence
+            .last_fence
+            .checked_add(1)
+            .ok_or(DeviceJobError::FenceOverflow)?;
         assert_eq!(
             DeviceJob::restore(stale_fence),
             Err(DeviceJobError::InvalidSnapshot)
@@ -767,7 +770,10 @@ mod tests {
         );
 
         let mut too_many_attempts = valid.clone();
-        too_many_attempts.attempt = too_many_attempts.max_attempts.saturating_add(1);
+        too_many_attempts.attempt = too_many_attempts
+            .max_attempts
+            .checked_add(1)
+            .ok_or(DeviceJobError::AttemptOverflow)?;
         too_many_attempts.last_fence = u64::from(too_many_attempts.attempt);
         assert_eq!(
             DeviceJob::restore(too_many_attempts),
