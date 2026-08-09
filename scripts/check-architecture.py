@@ -56,6 +56,7 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
     "use-cases-mailboxes": {
         "profile-platform-primitives",
         "identity-access-domain",
+        "mailbox-domain",
         "application-ports",
     },
     "use-cases-notifications": {
