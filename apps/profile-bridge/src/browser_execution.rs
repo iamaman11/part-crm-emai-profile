@@ -151,8 +151,8 @@ fn verify_bridge_lock(
         return Err(BrowserLaunchBlocker::RecoveryRequired);
     }
     let lock_path = workspace.path().join(BRIDGE_LOCK_FILE);
-    let actual = read_regular_file(&lock_path)
-        .map_err(|_| BrowserLaunchBlocker::RecoveryRequired)?;
+    let actual =
+        read_regular_file(&lock_path).map_err(|_| BrowserLaunchBlocker::RecoveryRequired)?;
     let expected = format!(
         "{BRIDGE_LOCK_SCHEMA}\n{}\n{expected_workspace_epoch}\n",
         expected_device_id.as_str()
@@ -503,7 +503,12 @@ mod tests {
             ),
             Err(BrowserLaunchBlocker::RecoveryRequired)
         );
-        assert!(workspace.path().join(BRIDGE_LOCK_FILE).exists());
+        assert!(
+            workspace
+                .path()
+                .join(super::BRIDGE_LOCK_FILE)
+                .exists()
+        );
         bridge_lock.release()?;
         remove_test_root(&root_path)?;
         Ok(())
