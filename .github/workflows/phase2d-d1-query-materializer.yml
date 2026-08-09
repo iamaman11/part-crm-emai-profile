@@ -1,0 +1,44 @@
+name: Phase 2D D1 Query Materializer
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  prove:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'phase2d-query-cqrs'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Phase 2D head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2d-query-cqrs
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Materialize deterministic state
+        run: |
+          cargo fmt --all
+          python scripts/generate-architecture-inventory.py --write
+
+      - name: Validate query application and D1 adapter
+        run: |
+          python scripts/check-capability-module-layout.py
+          python scripts/generate-architecture-inventory.py --check
+          cargo test --locked -p application-ports -p use-cases-query
+          cargo clippy --locked -p application-ports -p use-cases-query --all-targets -- -D warnings
+          cargo test --locked -p cloudflare-adapters --lib
+          cargo check --locked -p application-ports -p use-cases-query -p cloudflare-adapters --target wasm32-unknown-unknown
+          git diff --check
+
+      - name: Commit materialized state and self-delete
+        run: |
+          rm .github/workflows/phase2d-d1-query-materializer.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m 'Phase 2D: materialize D1 query projection state'
+          git push origin HEAD:phase2d-query-cqrs
