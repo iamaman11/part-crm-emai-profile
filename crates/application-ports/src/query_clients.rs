@@ -1,7 +1,11 @@
-use crate::query::{QueryPage, QueryPageRequest, QueryPortError};
-use client_domain::{ClientKind, ClientStatus};
+use crate::query::{QueryPage, QueryPageRequest, QueryPageSize, QueryPortError};
+use client_domain::{
+    ClientKind, ClientStatus, ContactKind, ContactNormalizationVersion, ExactLookupToken,
+};
 use core::future::Future;
-use profile_platform_primitives::{ActorContext, AggregateVersion, ClientId};
+use profile_platform_primitives::{
+    ActorContext, AggregateVersion, ClientId, ContactPointId,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClientReadProjection {
@@ -56,10 +60,47 @@ impl ClientReadProjection {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientContactExactMatchProjection {
+    client_id: ClientId,
+    contact_point_id: ContactPointId,
+}
+
+impl ClientContactExactMatchProjection {
+    #[must_use]
+    pub const fn new(client_id: ClientId, contact_point_id: ContactPointId) -> Self {
+        Self {
+            client_id,
+            contact_point_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn client_id(&self) -> &ClientId {
+        &self.client_id
+    }
+
+    #[must_use]
+    pub const fn contact_point_id(&self) -> &ContactPointId {
+        &self.contact_point_id
+    }
+}
+
 pub trait ClientReadModelPort {
     fn list_clients(
         &self,
         actor: &ActorContext,
         page: &QueryPageRequest,
     ) -> impl Future<Output = Result<QueryPage<ClientReadProjection>, QueryPortError>>;
+}
+
+pub trait ClientExactContactQueryPort {
+    fn find_visible_clients_by_exact_contact(
+        &self,
+        actor: &ActorContext,
+        kind: ContactKind,
+        normalization_version: ContactNormalizationVersion,
+        token: &ExactLookupToken,
+        limit: QueryPageSize,
+    ) -> impl Future<Output = Result<Vec<ClientContactExactMatchProjection>, QueryPortError>>;
 }
