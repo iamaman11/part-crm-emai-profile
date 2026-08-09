@@ -247,6 +247,9 @@ def enforce(root: Path) -> None:
             "MAX_MAIL_BODY_BYTES",
             "MAX_MIME_PARTS",
             "MAX_MIME_DEPTH",
+            'command.push_str("CHARSET UTF-8 ")',
+            "term.as_str().is_ascii()",
+            ".execute_with_literal(",
         ),
     )
     assert_absent("imap_query.rs", production_source(imap_query), CONFIDENTIAL_SINKS)
@@ -261,6 +264,10 @@ def enforce(root: Path) -> None:
             "session.socket = session.socket.start_tls();",
             "login.zeroize();",
             "maximum_response_bytes",
+            "MAX_COMMAND_LITERAL_BYTES",
+            "execute_with_literal(",
+            "literal_command_prefix(",
+            "continuation_requested(",
         ),
     )
 
