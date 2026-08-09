@@ -1,9 +1,9 @@
 name: Phase 2F Device Restore Boundary Materializer
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - phase2f-device-browser-mailbox
     paths:
       - .github/workflows/phase2f-device-usecases-materializer.yml
 
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   materialize:
-    if: github.head_ref == 'phase2f-device-browser-mailbox'
+    if: github.ref == 'refs/heads/phase2f-device-browser-mailbox'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Phase 2F branch
@@ -34,34 +34,14 @@ jobs:
               path.write_text(text.replace(marker, marker + addition, 1), encoding='utf-8')
 
           root = Path('Cargo.toml')
-          insert_after(
-              root,
-              '    "crates/use-cases-clients",\n',
-              '    "crates/use-cases-devices",\n',
-              '    "crates/use-cases-devices",\n',
-          )
-          insert_after(
-              root,
-              'use-cases-clients = { path = "crates/use-cases-clients" }\n',
-              'use-cases-devices = { path = "crates/use-cases-devices" }\n',
-              'use-cases-devices = { path = "crates/use-cases-devices" }\n',
-          )
+          insert_after(root, '    "crates/use-cases-clients",\n', '    "crates/use-cases-devices",\n', '    "crates/use-cases-devices",\n')
+          insert_after(root, 'use-cases-clients = { path = "crates/use-cases-clients" }\n', 'use-cases-devices = { path = "crates/use-cases-devices" }\n', 'use-cases-devices = { path = "crates/use-cases-devices" }\n')
 
           ports_cargo = Path('crates/application-ports/Cargo.toml')
-          insert_after(
-              ports_cargo,
-              'client-domain.workspace = true\n',
-              'device-domain.workspace = true\n',
-              'device-domain.workspace = true\n',
-          )
+          insert_after(ports_cargo, 'client-domain.workspace = true\n', 'device-domain.workspace = true\n', 'device-domain.workspace = true\n')
 
           ports_lib = Path('crates/application-ports/src/lib.rs')
-          insert_after(
-              ports_lib,
-              'pub mod commands;\n',
-              'pub mod device_jobs;\n',
-              'pub mod device_jobs;\n',
-          )
+          insert_after(ports_lib, 'pub mod commands;\n', 'pub mod device_jobs;\n', 'pub mod device_jobs;\n')
 
           architecture = Path('scripts/check-architecture.py')
           text = architecture.read_text(encoding='utf-8')
@@ -69,11 +49,7 @@ jobs:
               marker = '        "client-domain",\n        "profile-domain",'
               if text.count(marker) != 1:
                   raise SystemExit('architecture application-ports marker changed')
-              text = text.replace(
-                  marker,
-                  '        "client-domain",\n        "device-domain",\n        "profile-domain",',
-                  1,
-              )
+              text = text.replace(marker, '        "client-domain",\n        "device-domain",\n        "profile-domain",', 1)
           if '    "use-cases-devices": {' not in text:
               marker = '    "use-cases-identity": {'
               if text.count(marker) != 1:
@@ -111,7 +87,6 @@ pub struct DeviceClaimSnapshot {
 
 impl DeviceClaim {'''
               text = text.replace(marker, snapshot, 1)
-
               marker = 'impl DeviceClaim {\n    pub fn issue('
               if text.count(marker) != 1:
                   raise SystemExit('claim restore method marker changed')
@@ -151,23 +126,9 @@ impl DeviceClaim {'''
 
     pub fn issue('''
               text = text.replace(marker, methods, 1)
-
-              text = text.replace(
-                  '    InvalidLease,\n    InvalidLeaseExtension,',
-                  '    InvalidLease,\n    InvalidTimeline,\n    InvalidLeaseExtension,',
-                  1,
-              )
-              text = text.replace(
-                  '            Self::InvalidLease => "device claim fence and lease must be strictly valid",\n',
-                  '            Self::InvalidLease => "device claim fence and lease must be strictly valid",\n'
-                  '            Self::InvalidTimeline => "device claim persisted timeline is invalid",\n',
-                  1,
-              )
-              text = text.replace(
-                  '    use super::{DeviceClaim, DeviceClaimError};',
-                  '    use super::{DeviceClaim, DeviceClaimError, DeviceClaimSnapshot};',
-                  1,
-              )
+              text = text.replace('    InvalidLease,\n    InvalidLeaseExtension,', '    InvalidLease,\n    InvalidTimeline,\n    InvalidLeaseExtension,', 1)
+              text = text.replace('            Self::InvalidLease => "device claim fence and lease must be strictly valid",\n', '            Self::InvalidLease => "device claim fence and lease must be strictly valid",\n            Self::InvalidTimeline => "device claim persisted timeline is invalid",\n', 1)
+              text = text.replace('    use super::{DeviceClaim, DeviceClaimError};', '    use super::{DeviceClaim, DeviceClaimError, DeviceClaimSnapshot};', 1)
               before, closing = text.rsplit('\n}', 1)
               tests = '''
 
@@ -184,27 +145,15 @@ impl DeviceClaim {'''
             lease_expires_at: UnixMillis::new(200),
         };
         assert!(DeviceClaim::restore(base.clone()).is_ok());
-
         let mut heartbeat_before_claim = base.clone();
         heartbeat_before_claim.last_heartbeat_at = UnixMillis::new(99);
-        assert_eq!(
-            DeviceClaim::restore(heartbeat_before_claim),
-            Err(DeviceClaimError::InvalidTimeline)
-        );
-
+        assert_eq!(DeviceClaim::restore(heartbeat_before_claim), Err(DeviceClaimError::InvalidTimeline));
         let mut heartbeat_at_expiry = base.clone();
         heartbeat_at_expiry.last_heartbeat_at = UnixMillis::new(200);
-        assert_eq!(
-            DeviceClaim::restore(heartbeat_at_expiry),
-            Err(DeviceClaimError::InvalidTimeline)
-        );
-
+        assert_eq!(DeviceClaim::restore(heartbeat_at_expiry), Err(DeviceClaimError::InvalidTimeline));
         let mut zero_fence = base;
         zero_fence.fence = 0;
-        assert_eq!(
-            DeviceClaim::restore(zero_fence),
-            Err(DeviceClaimError::InvalidLease)
-        );
+        assert_eq!(DeviceClaim::restore(zero_fence), Err(DeviceClaimError::InvalidLease));
         Ok(())
     }
 '''
@@ -214,11 +163,7 @@ impl DeviceClaim {'''
           job = Path('crates/device-domain/src/job.rs')
           text = job.read_text(encoding='utf-8')
           if 'pub struct DeviceJobSnapshot' not in text:
-              text = text.replace(
-                  '    claim::DeviceClaim,',
-                  '    claim::{DeviceClaim, DeviceClaimSnapshot},',
-                  1,
-              )
+              text = text.replace('    claim::DeviceClaim,', '    claim::{DeviceClaim, DeviceClaimSnapshot},', 1)
               marker = '}\n\nimpl DeviceJob {'
               if text.count(marker) != 1:
                   raise SystemExit('job snapshot insertion marker changed')
@@ -242,7 +187,6 @@ pub struct DeviceJobSnapshot {
 
 impl DeviceJob {'''
               text = text.replace(marker, snapshot, 1)
-
               marker = 'impl DeviceJob {\n    pub fn issue('
               if text.count(marker) != 1:
                   raise SystemExit('job restore method marker changed')
@@ -264,109 +208,40 @@ impl DeviceJob {'''
     }
 
     pub fn restore(snapshot: DeviceJobSnapshot) -> Result<Self, DeviceJobError> {
-        let DeviceJobSnapshot {
-            job_id,
-            target,
-            aggregate_version,
-            status,
-            attempt,
-            max_attempts,
-            last_fence,
-            active_claim,
-            retry_at,
-            updated_at,
-        } = snapshot;
-
-        if max_attempts == 0
-            || max_attempts > MAX_DEVICE_JOB_ATTEMPTS
-            || attempt > max_attempts
-            || (attempt == 0 && last_fence != 0)
-            || (attempt > 0 && last_fence < u64::from(attempt))
-        {
+        let DeviceJobSnapshot { job_id, target, aggregate_version, status, attempt, max_attempts, last_fence, active_claim, retry_at, updated_at } = snapshot;
+        if max_attempts == 0 || max_attempts > MAX_DEVICE_JOB_ATTEMPTS || attempt > max_attempts || (attempt == 0 && last_fence != 0) || (attempt > 0 && last_fence < u64::from(attempt)) {
             return Err(DeviceJobError::InvalidSnapshot);
         }
-
-        let requires_attempt = matches!(
-            status,
-            DeviceJobStatus::ProfileBusy
-                | DeviceJobStatus::Running
-                | DeviceJobStatus::RetryScheduled
-                | DeviceJobStatus::AuthRequired
-                | DeviceJobStatus::RecoveryRequired
-                | DeviceJobStatus::Succeeded
-                | DeviceJobStatus::Failed
-        );
+        let requires_attempt = matches!(status, DeviceJobStatus::ProfileBusy | DeviceJobStatus::Running | DeviceJobStatus::RetryScheduled | DeviceJobStatus::AuthRequired | DeviceJobStatus::RecoveryRequired | DeviceJobStatus::Succeeded | DeviceJobStatus::Failed);
         if requires_attempt && attempt == 0 {
             return Err(DeviceJobError::InvalidSnapshot);
         }
-
         let requires_claim = status == DeviceJobStatus::Running;
         if requires_claim != active_claim.is_some() {
             return Err(DeviceJobError::InvalidSnapshot);
         }
-
-        let requires_retry = matches!(
-            status,
-            DeviceJobStatus::ProfileBusy | DeviceJobStatus::RetryScheduled
-        );
-        if requires_retry != retry_at.is_some()
-            || retry_at.is_some_and(|retry_at| retry_at <= updated_at)
-        {
+        let requires_retry = matches!(status, DeviceJobStatus::ProfileBusy | DeviceJobStatus::RetryScheduled);
+        if requires_retry != retry_at.is_some() || retry_at.is_some_and(|retry_at| retry_at <= updated_at) {
             return Err(DeviceJobError::InvalidSnapshot);
         }
-
         let active_claim = match active_claim {
             Some(snapshot) => {
-                let claim = DeviceClaim::restore(snapshot)
-                    .map_err(|_| DeviceJobError::InvalidSnapshot)?;
-                if claim.job_id() != &job_id
-                    || claim.target() != &target
-                    || claim.fence() != last_fence
-                    || claim.last_heartbeat_at() > updated_at
-                    || updated_at >= claim.lease_expires_at()
-                {
+                let claim = DeviceClaim::restore(snapshot).map_err(|_| DeviceJobError::InvalidSnapshot)?;
+                if claim.job_id() != &job_id || claim.target() != &target || claim.fence() != last_fence || claim.last_heartbeat_at() > updated_at || updated_at >= claim.lease_expires_at() {
                     return Err(DeviceJobError::InvalidSnapshot);
                 }
                 Some(claim)
             }
             None => None,
         };
-
-        let version = AggregateVersion::new(aggregate_version)
-            .map_err(|_| DeviceJobError::InvalidSnapshot)?;
-        Ok(Self {
-            job_id,
-            target,
-            version,
-            status,
-            attempt,
-            max_attempts,
-            last_fence,
-            active_claim,
-            retry_at,
-            updated_at,
-        })
+        let version = AggregateVersion::new(aggregate_version).map_err(|_| DeviceJobError::InvalidSnapshot)?;
+        Ok(Self { job_id, target, version, status, attempt, max_attempts, last_fence, active_claim, retry_at, updated_at })
     }
 
     pub fn issue('''
               text = text.replace(marker, methods, 1)
-              text = text.replace(
-                  'pub enum DeviceJobError {\n    InvalidMaxAttempts,',
-                  'pub enum DeviceJobError {\n    InvalidSnapshot,\n    InvalidMaxAttempts,',
-                  1,
-              )
-              text = text.replace(
-                  '        formatter.write_str(match self {\n            Self::InvalidMaxAttempts =>',
-                  '        formatter.write_str(match self {\n'
-                  '            Self::InvalidSnapshot => "device job persisted snapshot is invalid",\n'
-                  '            Self::InvalidMaxAttempts =>',
-                  1,
-              )
-              text = text.replace(
-                  '    use super::{DeviceJob, DeviceJobError, DeviceJobStatus};',
-                  '    use super::{DeviceJob, DeviceJobError, DeviceJobStatus};',
-                  1,
-              )
+              text = text.replace('pub enum DeviceJobError {\n    InvalidMaxAttempts,', 'pub enum DeviceJobError {\n    InvalidSnapshot,\n    InvalidMaxAttempts,', 1)
+              text = text.replace('        formatter.write_str(match self {\n            Self::InvalidMaxAttempts =>', '        formatter.write_str(match self {\n            Self::InvalidSnapshot => "device job persisted snapshot is invalid",\n            Self::InvalidMaxAttempts =>', 1)
               before, closing = text.rsplit('\n}', 1)
               tests = '''
 
@@ -374,12 +249,7 @@ impl DeviceJob {'''
     fn snapshot_round_trip_preserves_running_claim_binding()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut original = job(3)?;
-        let claim_id = DeviceClaimId::parse("devclaim_01JRESTORE")?;
-        original.claim(
-            claim_id,
-            UnixMillis::new(110),
-            UnixMillis::new(200),
-        )?;
+        original.claim(DeviceClaimId::parse("devclaim_01JRESTORE")?, UnixMillis::new(110), UnixMillis::new(200))?;
         let restored = DeviceJob::restore(original.snapshot())?;
         assert_eq!(restored, original);
         Ok(())
@@ -389,49 +259,25 @@ impl DeviceJob {'''
     fn restore_rejects_impossible_status_claim_retry_and_version_combinations()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut running = job(3)?;
-        running.claim(
-            DeviceClaimId::parse("devclaim_01JRESTORE")?,
-            UnixMillis::new(110),
-            UnixMillis::new(200),
-        )?;
+        running.claim(DeviceClaimId::parse("devclaim_01JRESTORE")?, UnixMillis::new(110), UnixMillis::new(200))?;
         let valid = running.snapshot();
-
         let mut missing_claim = valid.clone();
         missing_claim.active_claim = None;
-        assert_eq!(
-            DeviceJob::restore(missing_claim),
-            Err(DeviceJobError::InvalidSnapshot)
-        );
-
+        assert_eq!(DeviceJob::restore(missing_claim), Err(DeviceJobError::InvalidSnapshot));
         let mut stale_fence = valid.clone();
         stale_fence.last_fence = stale_fence.last_fence.saturating_add(1);
-        assert_eq!(
-            DeviceJob::restore(stale_fence),
-            Err(DeviceJobError::InvalidSnapshot)
-        );
-
+        assert_eq!(DeviceJob::restore(stale_fence), Err(DeviceJobError::InvalidSnapshot));
         let mut zero_version = valid.clone();
         zero_version.aggregate_version = 0;
-        assert_eq!(
-            DeviceJob::restore(zero_version),
-            Err(DeviceJobError::InvalidSnapshot)
-        );
-
+        assert_eq!(DeviceJob::restore(zero_version), Err(DeviceJobError::InvalidSnapshot));
         let mut too_many_attempts = valid.clone();
         too_many_attempts.attempt = too_many_attempts.max_attempts.saturating_add(1);
-        assert_eq!(
-            DeviceJob::restore(too_many_attempts),
-            Err(DeviceJobError::InvalidSnapshot)
-        );
-
-        let mut retry_without_time = valid.clone();
+        assert_eq!(DeviceJob::restore(too_many_attempts), Err(DeviceJobError::InvalidSnapshot));
+        let mut retry_without_time = valid;
         retry_without_time.status = DeviceJobStatus::RetryScheduled;
         retry_without_time.active_claim = None;
         retry_without_time.retry_at = None;
-        assert_eq!(
-            DeviceJob::restore(retry_without_time),
-            Err(DeviceJobError::InvalidSnapshot)
-        );
+        assert_eq!(DeviceJob::restore(retry_without_time), Err(DeviceJobError::InvalidSnapshot));
         Ok(())
     }
 
@@ -439,42 +285,21 @@ impl DeviceJob {'''
     fn restore_rejects_claim_target_and_timeline_corruption()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut running = job(3)?;
-        running.claim(
-            DeviceClaimId::parse("devclaim_01JRESTORE")?,
-            UnixMillis::new(110),
-            UnixMillis::new(200),
-        )?;
+        running.claim(DeviceClaimId::parse("devclaim_01JRESTORE")?, UnixMillis::new(110), UnixMillis::new(200))?;
         let valid = running.snapshot();
-
         let mut wrong_target = valid.clone();
         if let Some(claim) = wrong_target.active_claim.as_mut() {
-            claim.target = DeviceJobTarget::new(
-                TenantId::parse("tenant_01JOTHER")?,
-                DeviceId::parse("device_01JOTHER")?,
-                ProfileId::parse("profile_01JOTHER")?,
-                GenerationId::parse("generation_01JOTHER")?,
-            );
+            claim.target = DeviceJobTarget::new(TenantId::parse("tenant_01JOTHER")?, DeviceId::parse("device_01JOTHER")?, ProfileId::parse("profile_01JOTHER")?, GenerationId::parse("generation_01JOTHER")?);
         }
-        assert_eq!(
-            DeviceJob::restore(wrong_target),
-            Err(DeviceJobError::InvalidSnapshot)
-        );
-
+        assert_eq!(DeviceJob::restore(wrong_target), Err(DeviceJobError::InvalidSnapshot));
         let mut future_heartbeat = valid.clone();
         if let Some(claim) = future_heartbeat.active_claim.as_mut() {
             claim.last_heartbeat_at = UnixMillis::new(111);
         }
-        assert_eq!(
-            DeviceJob::restore(future_heartbeat),
-            Err(DeviceJobError::InvalidSnapshot)
-        );
-
+        assert_eq!(DeviceJob::restore(future_heartbeat), Err(DeviceJobError::InvalidSnapshot));
         let mut expired_at_update = valid;
         expired_at_update.updated_at = UnixMillis::new(200);
-        assert_eq!(
-            DeviceJob::restore(expired_at_update),
-            Err(DeviceJobError::InvalidSnapshot)
-        );
+        assert_eq!(DeviceJob::restore(expired_at_update), Err(DeviceJobError::InvalidSnapshot));
         Ok(())
     }
 '''
@@ -483,14 +308,8 @@ impl DeviceJob {'''
 
           lib = Path('crates/device-domain/src/lib.rs')
           text = lib.read_text(encoding='utf-8')
-          text = text.replace(
-              'pub use claim::{DeviceClaim, DeviceClaimError};',
-              'pub use claim::{DeviceClaim, DeviceClaimError, DeviceClaimSnapshot};',
-          )
-          text = text.replace(
-              'pub use job::{DeviceJob, DeviceJobError, DeviceJobStatus};',
-              'pub use job::{DeviceJob, DeviceJobError, DeviceJobSnapshot, DeviceJobStatus};',
-          )
+          text = text.replace('pub use claim::{DeviceClaim, DeviceClaimError};', 'pub use claim::{DeviceClaim, DeviceClaimError, DeviceClaimSnapshot};')
+          text = text.replace('pub use job::{DeviceJob, DeviceJobError, DeviceJobStatus};', 'pub use job::{DeviceJob, DeviceJobError, DeviceJobSnapshot, DeviceJobStatus};')
           lib.write_text(text, encoding='utf-8')
           PY
 
