@@ -5,9 +5,7 @@ use crate::composition::{
     authenticated_device, device_execution_preconditions, device_job_authorization,
     device_job_repository,
 };
-use application_ports::{
-    AuthenticatedDevicePort, DeviceJobPortError, DeviceJobPortErrorClass,
-};
+use application_ports::{AuthenticatedDevicePort, DeviceJobPortError, DeviceJobPortErrorClass};
 use control_plane_contract::RouteClass;
 use device_domain::{
     DeviceClaimId, DeviceJob, DeviceJobError, DeviceJobId, DeviceJobStatus, DeviceJobTarget,
@@ -269,7 +267,9 @@ async fn apply_outcome(
         DeviceJobOutcomeRequest::RecoveryRequired if body.retry_delay_ms.is_none() => {
             DeviceJobOutcome::RecoveryRequired
         }
-        DeviceJobOutcomeRequest::Failed if body.retry_delay_ms.is_none() => DeviceJobOutcome::Failed,
+        DeviceJobOutcomeRequest::Failed if body.retry_delay_ms.is_none() => {
+            DeviceJobOutcome::Failed
+        }
         DeviceJobOutcomeRequest::RetryScheduled | DeviceJobOutcomeRequest::ProfileBusy => {
             let Some(delay) = body.retry_delay_ms else {
                 return invalid_request(actor.correlation_id().as_str());
@@ -375,7 +375,9 @@ fn query_failure(correlation_id: &str, error: DeviceJobQueryError) -> Result<Res
 fn operation_failure(correlation_id: &str, error: DeviceJobOperationError) -> Result<Response> {
     match error {
         DeviceJobOperationError::InvalidRequest => invalid_request(correlation_id),
-        DeviceJobOperationError::Forbidden => problem(correlation_id, 403, "forbidden", "Forbidden"),
+        DeviceJobOperationError::Forbidden => {
+            problem(correlation_id, 403, "forbidden", "Forbidden")
+        }
         DeviceJobOperationError::NotFound => neutral_not_found(correlation_id),
         DeviceJobOperationError::Conflict => problem(correlation_id, 409, "conflict", "Conflict"),
         DeviceJobOperationError::VersionConflict => {
@@ -404,7 +406,9 @@ fn domain_failure(correlation_id: &str, error: DeviceJobError) -> Result<Respons
         DeviceJobError::InvalidMaxAttempts
         | DeviceJobError::InvalidLease
         | DeviceJobError::InvalidRetryAt => invalid_request(correlation_id),
-        DeviceJobError::StaleClaim | DeviceJobError::LeaseExpired | DeviceJobError::LeaseStillActive => {
+        DeviceJobError::StaleClaim
+        | DeviceJobError::LeaseExpired
+        | DeviceJobError::LeaseStillActive => {
             problem(correlation_id, 409, "lease_conflict", "Lease Conflict")
         }
         DeviceJobError::InvalidState
@@ -424,7 +428,12 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
 }
 
 fn integrity_failure(correlation_id: &str) -> Result<Response> {
-    problem(correlation_id, 500, "integrity_failure", "Integrity Failure")
+    problem(
+        correlation_id,
+        500,
+        "integrity_failure",
+        "Integrity Failure",
+    )
 }
 
 #[derive(Clone)]
@@ -570,12 +579,7 @@ mod tests {
     fn transport_rejects_device_time_and_lease_substitution_fields() {
         let base = r#"{"profileId":"profile_01JDEVICE","generationId":"generation_01JDEVICE","expectedJobVersion":1,"claimId":"devclaim_01JDEVICE"}"#;
         assert!(serde_json::from_str::<ClaimDeviceJobRequest>(base).is_ok());
-        for forbidden in [
-            "deviceId",
-            "observedAtMs",
-            "leaseExpiresAtMs",
-            "tenantId",
-        ] {
+        for forbidden in ["deviceId", "observedAtMs", "leaseExpiresAtMs", "tenantId"] {
             let tampered = base.replacen('}', &format!(r#","{forbidden}":1}}"#), 1);
             assert!(
                 serde_json::from_str::<ClaimDeviceJobRequest>(&tampered).is_err(),
