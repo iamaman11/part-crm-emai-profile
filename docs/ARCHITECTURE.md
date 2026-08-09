@@ -113,6 +113,11 @@ Phase 2B accepts authoritative protected client-contact D1 persistence and a sep
 query port. Exact lookup accepts tenant scope + contact kind + normalization version + versioned HMAC
 token only; D1 lookup adapters do not receive plaintext and do not decrypt/scan all contact rows.
 
+Phase 2C accepts deterministic one-way client merge and historical primary assignment semantics,
+application-owned merge/reassignment sequencing, governed atomic D1 merge/history, and grant-safe
+Client Registry read projections. Assignment remains explicitly non-authorizing; source grants are
+removed rather than transferred on merge; revoked access disappears before projection construction.
+
 The current plan may keep `application-ports` as one Cargo crate with capability modules while
 that remains clear. It is not required to split every port into a separate crate.
 
@@ -136,6 +141,9 @@ crate splitting is not an excuse for one-crate-per-function fragmentation.
 Accepted independent application ownership includes `use-cases-identity`,
 `use-cases-notifications` and `use-cases-clients`; shared `use-cases` compatibility re-exports do
 not regain canonical ownership of those capabilities.
+
+Phase 2D adds `use-cases-query` as the independent cross-capability read/search application context;
+mutation aggregates remain owned by their existing capability use cases.
 
 ### Adapters
 
@@ -318,6 +326,7 @@ is never canonical business state and never carries prohibited secrets/PII/mail 
 
 Frontend rules:
 
+- feature routes are composed through feature-owned public route APIs; root app routing does not import feature-internal workspace components;
 - generated public API/event DTOs/enums are authoritative;
 - TanStack Query owns remote state;
 - business authorization/decisions remain server-side;
@@ -341,6 +350,7 @@ Permanent policy should cover:
 - cross-tenant/IDOR negative fixtures;
 - D1 migration/replay invariants;
 - protected client-contact persistence and tenant-scoped exact-HMAC lookup positive/negative fixtures;
+- Phase 2C client merge/assignment-as-non-ACL/grant-safe projection and feature-route positive/negative fixtures;
 - generation freshness/fencing;
 - secret/PII/content scans;
 - native + WASM + Windows/release composition as applicable;
