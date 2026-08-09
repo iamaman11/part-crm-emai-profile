@@ -1,0 +1,210 @@
+name: Phase 2E Docs Closeout Materializer
+
+on:
+  push:
+    branches:
+      - docs-phase2e-closeout
+    paths:
+      - .github/workflows/phase2e-docs-closeout-materializer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  closeout:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout closeout branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: docs-phase2e-closeout
+
+      - name: Advance normative Phase 2 marker
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one marker, found {count}: {old[:100]!r}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          plan = Path('docs/DEVELOPMENT_PLAN.md')
+          replace_once(
+              plan,
+              '**Tracking:** Phase 1 complete; Phase 2A/2B/2C/2D accepted via #118/#137, #138/#140, #142/#143 and #144/#147; Phase 2E issue #148 is the unique NEXT; expert-plan refinement #133; external CRM is future development only',
+              '**Tracking:** Phase 1 complete; Phase 2A/2B/2C/2D/2E accepted via #118/#137, #138/#140, #142/#143, #144/#147 and #148/#152; Phase 2F is the unique NEXT after this docs closeout; expert-plan refinement #133; external CRM is future development only',
+          )
+          replace_once(
+              plan,
+              '  `use-cases-identity`, `use-cases-notifications` and `use-cases-clients`;',
+              '  `use-cases-identity`, `use-cases-notifications`, `use-cases-clients`, `use-cases-query` and\n  `use-cases-mailboxes`;',
+          )
+          replace_once(
+              plan,
+              '- Phase 2D independent `use-cases-query`, capability-owned read projections, bounded typed global\n  search, grant-safe exact-contact HMAC lookup, provider-neutral Client Mail query contracts,\n  deterministic cloud/Bridge query adapters and permanent query/privacy enforcement.',
+              '- Phase 2D independent `use-cases-query`, capability-owned read projections, bounded typed global\n  search, grant-safe exact-contact HMAC lookup, provider-neutral Client Mail query contracts,\n  deterministic cloud/Bridge query adapters and permanent query/privacy enforcement;\n- Phase 2E decomposed `mailbox-domain`, independent `use-cases-mailboxes`, real Gmail API/IMAP outer\n  adapters, durable Queue retry/DLQ/idempotency/fencing, opaque secret-resolution, the accepted Phase\n  2D Client Mail contract on the cloud adapter, and permanent mailbox privacy/runtime enforcement.',
+          )
+          replace_once(
+              plan,
+              'Phase 2D was accepted through issue #144 / PR #147 from exact proven source head\n`ad491e2f0c9ba9f79130923fdde6fe1407af4dc5` and guarded squash merge\n`26f8fa82bdad02a5a0867b0d36748b915579ef1c`.',
+              'Phase 2D was accepted through issue #144 / PR #147 from exact proven source head\n`ad491e2f0c9ba9f79130923fdde6fe1407af4dc5` and guarded squash merge\n`26f8fa82bdad02a5a0867b0d36748b915579ef1c`.\n\nPhase 2E was accepted through issue #148 / PR #152 from exact proven source head\n`0cefa67abe810db079102462f33ec28fcfc73f69` and guarded squash merge\n`6c6ba4564de88b40d282081e701a2d24f1611cc2`.',
+          )
+          replace_once(
+              plan,
+              'Exactly one implementation slice is active at a time. Phase 2E issue #148 is the unique NEXT after\nthe accepted Phase 2D closeout; later Phase 2 slices remain blocked by the same linear rule.',
+              'Exactly one implementation slice is active at a time. Phase 2F is the unique NEXT only after this\nPhase 2E docs closeout is accepted on `main`; later Phase 2 slices remain blocked by the same linear rule.',
+          )
+          replace_once(
+              plan,
+              '### Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — NEXT',
+              '### Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — ACCEPTED',
+          )
+          replace_once(
+              plan,
+              'Browser/Camoufox execution, device jobs, fingerprint/profile identity, proxy/network runtime policy,\nbrowser workspace locks and browser-driven generation evolution are explicit Phase 2F concerns and\nmust not leak into the 2E cloud lane.\n\n### Phase 2F — Durable device jobs, browser mailbox lane and materialization integration',
+              'Browser/Camoufox execution, device jobs, fingerprint/profile identity, proxy/network runtime policy,\nbrowser workspace locks and browser-driven generation evolution are explicit Phase 2F concerns and\nmust not leak into the 2E cloud lane.\n\n#### Phase 2E acceptance evidence\n\nPhase 2E was accepted through issue #148 / implementation PR #152 from exact proven source head\n`0cefa67abe810db079102462f33ec28fcfc73f69` and guarded squash merge\n`6c6ba4564de88b40d282081e701a2d24f1611cc2`. The unchanged source head passed exactly 12/12\npermanent workflows with `behind_by=0`, reviews=0 and unresolved review threads=0. Accepted scope\nincludes decomposed `mailbox-domain`, independent `use-cases-mailboxes`, provider-neutral cloud job\nlifecycle, real Gmail API/IMAP outer adapters, durable Queue retry/DLQ/idempotency/fencing, metadata-only\nprovider observations, fixed opaque-handle secret resolution through `MAILBOX_SECRET_RESOLVER`, the\naccepted Phase 2D authorization -> eligibility -> provider query contract on the cloud adapter, bounded\nUTF-8 IMAP literal search, and permanent positive/negative privacy/runtime enforcement. Real Gmail/IMAP\nprovider execution remains External evidence rather than a repository-local production claim.\n`production_ready=false` remains intentional.\n\n### Phase 2F — Durable device jobs, browser mailbox lane and materialization integration — NEXT',
+          )
+          replace_once(
+              plan,
+              'Phase 2E mailbox-domain split + use-cases-mailboxes + cloud provider lane                            NEXT\nPhase 2F device-domain + use-cases-devices + browser/Bridge mailbox lane',
+              'Phase 2E mailbox-domain split + use-cases-mailboxes + cloud provider lane                            ACCEPTED\nPhase 2F device-domain + use-cases-devices + browser/Bridge mailbox lane                            NEXT',
+          )
+          old_next = '''## 19. Immediate Next Action
+
+Start **Phase 2E — mailbox domain decomposition and real cloud mailbox lane** under issue #148
+from the accepted Phase 2D implementation merge `26f8fa82bdad02a5a0867b0d36748b915579ef1c` only after
+this docs-only closeout is accepted on `main`.
+
+Execute Phase 2E inward-first in this exact order:
+
+```text
+mailbox-domain decomposition (binding/job/runtime_lane/observation)
+  -> independent use-cases-mailboxes
+  -> provider-neutral cloud job state extensions
+  -> real approved Gmail API/IMAP outer adapters
+  -> Phase 1B retry/DLQ/idempotency scheduling
+  -> metadata-only provider observations + canonical mutation/audit/outbox
+  -> accepted Phase 2D search/get-message contract on the cloud lane
+  -> credential-handle auth-required/suspended lifecycle
+  -> provider failure/rate-limit/backpressure taxonomy + bounded metrics
+  -> deterministic repository evidence separated from real External evidence
+```
+
+No Phase 2F+ implementation starts before Phase 2E is accepted and closed out. Mailbox content remains
+excluded from audit/outbox/realtime/metrics, fuzzy/prefix PII search remains prohibited without a
+separate accepted ADR, and `production_ready=false` remains unchanged.'''
+          new_next = '''## 19. Immediate Next Action
+
+After this docs-only closeout is accepted on `main`, open the bounded implementation issue and start
+**Phase 2F — durable device jobs, browser mailbox lane and materialization integration** from the
+accepted Phase 2E merge `6c6ba4564de88b40d282081e701a2d24f1611cc2`.
+
+Execute Phase 2F inward-first in this exact order:
+
+```text
+provider-independent device-job domain + opaque claim identities
+  -> independent use-cases-devices
+  -> authenticated device-job ports + D1 persistence
+  -> pending/profile-busy/running/retry/auth/terminal lifecycle
+  -> tenant/device/profile/generation claim binding + monotonic lease/fencing
+  -> active-generation + certification preconditions
+  -> Bridge materialization freshness + BrowserIdentityManifest + NetworkIdentityPolicy preflight
+  -> fail-closed writer ownership/recovery without blind browser-lock deletion
+  -> accepted Phase 2D search/get-message contract on the browser/Bridge lane
+  -> stale claim/generation/fencing result rejection
+  -> dirty state -> immutable encrypted generation -> verify -> fenced/CAS activation
+  -> multi-device/offline/contention/replay/recovery synthetic evidence
+```
+
+No Phase 2G+ implementation starts before Phase 2F is accepted and closed out. Real Gmail/IMAP provider
+execution remains External evidence, browser/device real-world evidence remains later External scope,
+and `production_ready=false` remains unchanged.'''
+          replace_once(plan, old_next, new_next)
+
+          architecture = Path('docs/ARCHITECTURE.md')
+          replace_once(
+              architecture,
+              'Accepted independent application ownership includes `use-cases-identity`,\n`use-cases-notifications`, `use-cases-clients` and `use-cases-query`; shared `use-cases` compatibility\nre-exports do not regain canonical ownership of those capabilities.',
+              'Accepted independent application ownership includes `use-cases-identity`,\n`use-cases-notifications`, `use-cases-clients`, `use-cases-query` and `use-cases-mailboxes`; shared\n`use-cases` compatibility re-exports do not regain canonical ownership of those capabilities.',
+          )
+          replace_once(
+              architecture,
+              'Phase 2D accepts `use-cases-query` as the independent cross-capability read/search application context;\nmutation aggregates remain owned by their existing capability use cases. Query orchestration owns\nauthorization-before-projection, bounded exact-contact HMAC derivation/lookup, and authorization ->\nmailbox eligibility -> provider/body sequencing without importing provider/runtime implementations.\n\n### Adapters',
+              'Phase 2D accepts `use-cases-query` as the independent cross-capability read/search application context;\nmutation aggregates remain owned by their existing capability use cases. Query orchestration owns\nauthorization-before-projection, bounded exact-contact HMAC derivation/lookup, and authorization ->\nmailbox eligibility -> provider/body sequencing without importing provider/runtime implementations.\n\nPhase 2E accepts `use-cases-mailboxes` as the independent mailbox command/scheduling application\ncontext. Provider-neutral lifecycle/retry decisions remain inward; Cloudflare adapters own Gmail API,\nIMAP, D1 and Queue translation. Dynamic mailbox credentials remain behind opaque `SecretHandle` values\nand one fixed outer `MAILBOX_SECRET_RESOLVER` service binding. Scheduled execution uses durable\nmetadata-only dispatch/lease/fencing state before provider I/O; duplicate Queue delivery cannot create\na second canonical provider-result mutation. Browser/device execution remains Phase 2F ownership.\n\n### Adapters',
+          )
+          replace_once(
+              architecture,
+              '- mailbox providers: Gmail/API/IMAP/browser-backed providers;',
+              '- mailbox providers: Phase 2E accepted Gmail API/IMAP cloud adapters; browser-backed execution remains Phase 2F;',
+          )
+          replace_once(
+              architecture,
+              '- HTML mail is sanitized/sandboxed; tracking images/active content disabled by default.\n\nAny later central encrypted/full-text/blind index requires a separate threat/storage/retention\ndecision.',
+              '- HTML mail is sanitized/sandboxed; tracking images/active content disabled by default.\n\nPhase 2E accepts the real cloud adapter implementation behind this boundary: authorization and mailbox\neligibility still precede provider access, Gmail/IMAP cursors/references and response sizes are bounded,\nUnicode IMAP search uses bounded synchronizing literals, and credentials/content remain absent from\nD1 coordination, Queue envelopes, audit/outbox and operational telemetry. Real provider execution is\nstill External evidence rather than a repository-local production claim.\n\nAny later central encrypted/full-text/blind index requires a separate threat/storage/retention\ndecision.',
+          )
+          replace_once(
+              architecture,
+              '- Phase 2D query ownership/privacy, exact-HMAC contact/grant safety, bounded/index-backed query-plan,\n  synthetic cloud/Bridge Client Mail and native/WASM positive/negative fixtures;\n- generation freshness/fencing;',
+              '- Phase 2D query ownership/privacy, exact-HMAC contact/grant safety, bounded/index-backed query-plan,\n  synthetic cloud/Bridge Client Mail and native/WASM positive/negative fixtures;\n- Phase 2E mailbox ownership, Queue lease/fencing/idempotency, opaque secret resolution, real cloud\n  adapter bounds and mailbox-content privacy positive/negative fixtures;\n- generation freshness/fencing;',
+          )
+
+          matrix = Path('docs/DEVELOPER_CAPABILITY_MATRIX.md')
+          replace_once(
+              matrix,
+              '| Mailbox operations baseline | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, secret-handle-only DTOs, idempotency/audit/outbox and Worker metadata/job paths are composed. Phase 2D adds the accepted provider-neutral Client Mail search/body application contract with synthetic cloud/Bridge adapters. | Mailbox-domain decomposition + real cloud lane are Phase 2E; durable browser/device lane is Phase 2F; real provider evidence remains External. |',
+              '| Mailbox operations baseline | Composed / Synthetic | Phase 2E accepts decomposed `mailbox-domain`, independent `use-cases-mailboxes`, real Gmail API/IMAP outer adapters, durable Queue retry/DLQ/idempotency/fencing, opaque fixed-service secret resolution, auth/suspended lifecycle and metadata-only provider observations while preserving Phase 2D query ordering. | Durable browser/device lane is Phase 2F; real Gmail/IMAP provider execution remains External evidence. |',
+          )
+          replace_once(
+              matrix,
+              '| Read models/global search | Library / Synthetic | Phase 2D accepted independent `use-cases-query`, capability-owned read-model ports/projections, bounded opaque-ID global search, grant-safe D1 predicates, cursor/cost bounds and query-plan evidence with permanent native/WASM CI. | Real provider-backed mailbox reads arrive through Phase 2E/2F; broader UX is Phase 2H. |',
+              '| Read models/global search | Library / Synthetic | Phase 2D accepted independent `use-cases-query`, capability-owned read-model ports/projections, bounded opaque-ID global search, grant-safe D1 predicates, cursor/cost bounds and query-plan evidence with permanent native/WASM CI. Phase 2E adds the real cloud mailbox query adapter behind the same authorization/eligibility contract. | Browser/Bridge mailbox reads remain Phase 2F; broader UX is Phase 2H; real provider evidence remains External. |',
+          )
+          replace_once(
+              matrix,
+              '| Client-scoped mailbox message search/body | Library / Synthetic | Phase 2D accepted provider-neutral search/get-message contracts, authorization -> mailbox eligibility -> provider sequencing, foreign-reference protection, deterministic fake cloud/Bridge full-body adapters, generated DTOs and incremental UI. | Phase 2E implements the real cloud lane; Phase 2F implements the real browser/Bridge lane; provider/physical evidence remains External. |',
+              '| Client-scoped mailbox message search/body | Library / Synthetic | Phase 2D accepted provider-neutral search/get-message contracts and authorization -> mailbox eligibility -> provider sequencing; Phase 2E accepts the bounded real Gmail API/IMAP cloud adapter, provider-scoped cursors/references and transient body parsing under the same application contract. | Phase 2F implements the browser/Bridge lane; real provider/physical evidence remains External. |',
+          )
+          replace_once(
+              matrix,
+              '| A3 | Domain aggregate splitting | **Client half accepted in Phase 2A** — `client-domain` is decomposed behind a thin facade; `mailbox-domain` remains the open half. | Mailbox half is Phase 2E. |',
+              '| A3 | Domain aggregate splitting | **Accepted** — Phase 2A decomposed `client-domain`; Phase 2E decomposed `mailbox-domain` into binding/job/runtime-lane/observation ownership behind a thin compatibility facade. | Preserve continuously; new device state is owned separately by Phase 2F. |',
+          )
+          replace_once(
+              matrix,
+              'crates/use-cases-query\n  independent cross-capability read/search application context accepted in Phase 2D\n\ncrates/use-cases\n  remaining shared application contexts; notification/client/query ownership does not return to this compatibility surface',
+              'crates/use-cases-query\n  independent cross-capability read/search application context accepted in Phase 2D\n\ncrates/use-cases-mailboxes\n  independent mailbox binding/job/scheduled application context accepted in Phase 2E\n\ncrates/use-cases\n  remaining shared application contexts; notification/client/query/mailbox ownership does not return to this compatibility surface',
+          )
+          replace_once(
+              matrix,
+              'The notification, client and query extraction points were accepted in Phase 1B, Phase 2A and Phase 2D.\nRemaining fixed extraction points are normative in `DEVELOPMENT_PLAN.md`: mailboxes in 2E and devices\nin 2F.',
+              'The notification, client, query and mailbox extraction points were accepted in Phase 1B, Phase 2A,\nPhase 2D and Phase 2E. The remaining fixed extraction point in active Phase 2 is devices in Phase 2F.',
+          )
+          replace_once(
+              matrix,
+              'Current accepted mailbox capability combines composed metadata/job paths with the Phase 2D Library/Synthetic\nclient-scoped message search/body contract. Authorization and mailbox eligibility precede provider/body\ninvocation; message content is permitted only in the authorized response/UI and prohibited from ordinary\ntechnical channels. Real cloud execution remains Phase 2E and real browser/Bridge execution Phase 2F.',
+              'Current accepted mailbox capability combines Phase 2E composed metadata/job scheduling with the Phase 2D\nclient-scoped message query contract and a bounded real Gmail API/IMAP cloud adapter. Authorization and\nmailbox eligibility precede provider/body invocation; Queue/D1 coordination remains metadata-only and\nmessage content is permitted only in the authorized transient response/UI. Real provider execution evidence\nremains External; durable browser/Bridge execution is Phase 2F.',
+          )
+          PY
+
+      - name: Validate docs-only closeout shape
+        run: |
+          grep -F 'Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — ACCEPTED' docs/DEVELOPMENT_PLAN.md
+          grep -F 'Phase 2F — Durable device jobs, browser mailbox lane and materialization integration — NEXT' docs/DEVELOPMENT_PLAN.md
+          grep -F '0cefa67abe810db079102462f33ec28fcfc73f69' docs/DEVELOPMENT_PLAN.md
+          grep -F '6c6ba4564de88b40d282081e701a2d24f1611cc2' docs/DEVELOPMENT_PLAN.md
+          grep -F 'use-cases-mailboxes' docs/ARCHITECTURE.md
+          grep -F 'Phase 2E accepts decomposed `mailbox-domain`' docs/DEVELOPER_CAPABILITY_MATRIX.md
+
+      - name: Commit closeout and remove materializer
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/phase2e-docs-closeout-materializer.yml
+          git add docs/ARCHITECTURE.md docs/DEVELOPMENT_PLAN.md docs/DEVELOPER_CAPABILITY_MATRIX.md
+          git diff --cached --check
+          test "$(git diff --cached --name-only | sort | tr '\n' ' ')" = "docs/ARCHITECTURE.md docs/DEVELOPER_CAPABILITY_MATRIX.md docs/DEVELOPMENT_PLAN.md "
+          git commit -m "Docs: accept Phase 2E and mark Phase 2F next"
+          git push origin HEAD:docs-phase2e-closeout
