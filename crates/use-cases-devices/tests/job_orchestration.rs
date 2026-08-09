@@ -1,7 +1,7 @@
 use application_ports::device_jobs::{
-    DeviceExecutionBlocker, DeviceExecutionPreconditionPort, DeviceExecutionReadiness,
-    DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobInsertOutcome, DeviceJobPortError,
-    DeviceJobRepositoryPort, DeviceJobWriteOutcome,
+    AuthenticatedDevicePort, DeviceExecutionBlocker, DeviceExecutionPreconditionPort,
+    DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobInsertOutcome,
+    DeviceJobPortError, DeviceJobRepositoryPort, DeviceJobWriteOutcome,
 };
 use device_domain::{DeviceClaimId, DeviceJob, DeviceJobId, DeviceJobTarget};
 use profile_platform_primitives::{
@@ -26,6 +26,21 @@ fn block_on<F: Future>(future: F) -> F::Output {
             Poll::Ready(value) => return value,
             Poll::Pending => std::hint::spin_loop(),
         }
+    }
+}
+
+struct FakeAuthenticatedDevice {
+    device_id: DeviceId,
+    calls: Cell<u32>,
+}
+
+impl AuthenticatedDevicePort for FakeAuthenticatedDevice {
+    async fn authenticated_device_id(
+        &self,
+        _actor: &ActorContext,
+    ) -> Result<DeviceId, DeviceJobPortError> {
+        self.calls.set(self.calls.get() + 1);
+        Ok(self.device_id.clone())
     }
 }
 
@@ -155,6 +170,13 @@ fn target() -> Result<DeviceJobTarget, Box<dyn std::error::Error>> {
     ))
 }
 
+fn authenticated_device() -> Result<FakeAuthenticatedDevice, Box<dyn std::error::Error>> {
+    Ok(FakeAuthenticatedDevice {
+        device_id: DeviceId::parse("device_01JDEVICE")?,
+        calls: Cell::new(0),
+    })
+}
+
 fn initial_job() -> Result<DeviceJob, Box<dyn std::error::Error>> {
     Ok(DeviceJob::issue(
         DeviceJobId::parse("devjob_01JDEVICE")?,
@@ -191,8 +213,49 @@ fn unauthorized_issue_never_touches_repository() -> Result<(), Box<dyn std::erro
 }
 
 #[test]
+fn foreign_authenticated_device_cannot_claim_target() -> Result<(), Box<dyn std::error::Error>> {
+    let actor = actor()?;
+    let device_identity = FakeAuthenticatedDevice {
+        device_id: DeviceId::parse("device_02JDEVICE")?,
+        calls: Cell::new(0),
+    };
+    let authorization = FakeAuthorization {
+        allowed: true,
+        calls: Cell::new(0),
+    };
+    let preconditions = FakePreconditions {
+        readiness: DeviceExecutionReadiness::Ready,
+        calls: Cell::new(0),
+    };
+    let repository = FakeRepository::with_job(initial_job()?);
+    let result = block_on(execute_claim_device_job(
+        &actor,
+        &device_identity,
+        &authorization,
+        &preconditions,
+        &repository,
+        ClaimDeviceJobCommand::new(
+            DeviceJobId::parse("devjob_01JDEVICE")?,
+            target()?,
+            AggregateVersion::INITIAL,
+            DeviceClaimId::parse("devclaim_01JDEVICE")?,
+            UnixMillis::new(110),
+            UnixMillis::new(200),
+        ),
+    ));
+    assert_eq!(result, Err(DeviceJobOperationError::Forbidden));
+    assert_eq!(device_identity.calls.get(), 1);
+    assert_eq!(authorization.calls.get(), 0);
+    assert_eq!(preconditions.calls.get(), 0);
+    assert_eq!(repository.loads.get(), 0);
+    assert_eq!(repository.writes.get(), 0);
+    Ok(())
+}
+
+#[test]
 fn blocked_claim_never_loads_or_mutates_job() -> Result<(), Box<dyn std::error::Error>> {
     let actor = actor()?;
+    let device_identity = authenticated_device()?;
     let authorization = FakeAuthorization {
         allowed: true,
         calls: Cell::new(0),
@@ -204,6 +267,7 @@ fn blocked_claim_never_loads_or_mutates_job() -> Result<(), Box<dyn std::error::
     let repository = FakeRepository::with_job(initial_job()?);
     let result = block_on(execute_claim_device_job(
         &actor,
+        &device_identity,
         &authorization,
         &preconditions,
         &repository,
@@ -222,6 +286,7 @@ fn blocked_claim_never_loads_or_mutates_job() -> Result<(), Box<dyn std::error::
             DeviceExecutionBlocker::GenerationInactive
         ))
     );
+    assert_eq!(device_identity.calls.get(), 1);
     assert_eq!(authorization.calls.get(), 1);
     assert_eq!(preconditions.calls.get(), 1);
     assert_eq!(repository.loads.get(), 0);
@@ -232,6 +297,7 @@ fn blocked_claim_never_loads_or_mutates_job() -> Result<(), Box<dyn std::error::
 #[test]
 fn successful_claim_is_cas_persisted_after_checks() -> Result<(), Box<dyn std::error::Error>> {
     let actor = actor()?;
+    let device_identity = authenticated_device()?;
     let authorization = FakeAuthorization {
         allowed: true,
         calls: Cell::new(0),
@@ -243,6 +309,7 @@ fn successful_claim_is_cas_persisted_after_checks() -> Result<(), Box<dyn std::e
     let repository = FakeRepository::with_job(initial_job()?);
     let job = block_on(execute_claim_device_job(
         &actor,
+        &device_identity,
         &authorization,
         &preconditions,
         &repository,
@@ -256,6 +323,7 @@ fn successful_claim_is_cas_persisted_after_checks() -> Result<(), Box<dyn std::e
         ),
     ))?;
     assert_eq!(job.last_fence(), 1);
+    assert_eq!(device_identity.calls.get(), 1);
     assert_eq!(repository.loads.get(), 1);
     assert_eq!(repository.writes.get(), 1);
     Ok(())
@@ -265,6 +333,7 @@ fn successful_claim_is_cas_persisted_after_checks() -> Result<(), Box<dyn std::e
 fn completion_rechecks_preconditions_before_accepting_result()
 -> Result<(), Box<dyn std::error::Error>> {
     let actor = actor()?;
+    let device_identity = authenticated_device()?;
     let authorization = FakeAuthorization {
         allowed: true,
         calls: Cell::new(0),
@@ -276,6 +345,7 @@ fn completion_rechecks_preconditions_before_accepting_result()
     let repository = FakeRepository::with_job(initial_job()?);
     let running = block_on(execute_claim_device_job(
         &actor,
+        &device_identity,
         &authorization,
         &ready,
         &repository,
@@ -297,6 +367,7 @@ fn completion_rechecks_preconditions_before_accepting_result()
     let writes_before = repository.writes.get();
     let result = block_on(execute_apply_device_job_outcome(
         &actor,
+        &device_identity,
         &authorization,
         &blocked,
         &repository,
