@@ -75,9 +75,11 @@ impl ClientMailProviderQueryPort for FakeProvider {
     ) -> Result<QueryPage<MailMessageSummary>, QueryPortError> {
         self.search_calls.set(self.search_calls.get() + 1);
         let reference = MailboxMessageReference::new(binding_id.clone(), "provider-message-1")
-            .map_err(|_| application_ports::query::QueryPortError::new(
-                application_ports::query::QueryPortErrorClass::IntegrityFailure,
-            ))?;
+            .map_err(|_| {
+                application_ports::query::QueryPortError::new(
+                    application_ports::query::QueryPortErrorClass::IntegrityFailure,
+                )
+            })?;
         Ok(QueryPage::new(
             vec![MailMessageSummary::new(
                 reference,
@@ -107,9 +109,11 @@ impl ClientMailProviderQueryPort for FakeProvider {
             Some("<p>Synthetic confidential body</p>".to_owned()),
         )
         .map(Some)
-        .map_err(|_| application_ports::query::QueryPortError::new(
-            application_ports::query::QueryPortErrorClass::IntegrityFailure,
-        ))
+        .map_err(|_| {
+            application_ports::query::QueryPortError::new(
+                application_ports::query::QueryPortErrorClass::IntegrityFailure,
+            )
+        })
     }
 }
 
@@ -200,8 +204,7 @@ fn ineligible_mailbox_never_reaches_provider() -> Result<(), Box<dyn std::error:
 }
 
 #[test]
-fn eligible_search_and_body_fetch_are_provider_bounded()
--> Result<(), Box<dyn std::error::Error>> {
+fn eligible_search_and_body_fetch_are_provider_bounded() -> Result<(), Box<dyn std::error::Error>> {
     let allowed = binding("binding_01JMAILQUERY")?;
     let authorization = FakeAuthorization {
         allowed: true,

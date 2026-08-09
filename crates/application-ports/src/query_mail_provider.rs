@@ -123,8 +123,8 @@ impl MailMessageBody {
         text_body: Option<String>,
         html_body: Option<String>,
     ) -> Result<Self, MailQueryInputError> {
-        let total = text_body.as_ref().map_or(0, String::len)
-            + html_body.as_ref().map_or(0, String::len);
+        let total =
+            text_body.as_ref().map_or(0, String::len) + html_body.as_ref().map_or(0, String::len);
         if total > MAX_MAIL_BODY_BYTES {
             return Err(MailQueryInputError::MessageBodyTooLarge);
         }

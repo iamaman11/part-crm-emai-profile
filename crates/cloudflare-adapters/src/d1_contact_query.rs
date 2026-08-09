@@ -123,10 +123,7 @@ mod tests {
             contact_point_id: "contact_01JQUERYCONTACT".to_owned(),
         })?;
         assert_eq!(item.client_id().as_str(), "client_01JQUERYCONTACT");
-        assert_eq!(
-            item.contact_point_id().as_str(),
-            "contact_01JQUERYCONTACT"
-        );
+        assert_eq!(item.contact_point_id().as_str(), "contact_01JQUERYCONTACT");
         Ok(())
     }
 }

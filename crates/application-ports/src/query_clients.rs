@@ -3,9 +3,7 @@ use client_domain::{
     ClientKind, ClientStatus, ContactKind, ContactNormalizationVersion, ExactLookupToken,
 };
 use core::future::Future;
-use profile_platform_primitives::{
-    ActorContext, AggregateVersion, ClientId, ContactPointId,
-};
+use profile_platform_primitives::{ActorContext, AggregateVersion, ClientId, ContactPointId};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClientReadProjection {

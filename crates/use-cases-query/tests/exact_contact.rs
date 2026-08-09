@@ -1,16 +1,12 @@
 use application_ports::client_contact_lookup::ContactLookupProtectionPort;
-use application_ports::clients::{
-    ContactExactLookupRequest, ContactProtectionPortError,
-};
+use application_ports::clients::{ContactExactLookupRequest, ContactProtectionPortError};
 use application_ports::query::{
     QueryAuthorizationPort, QueryCapability, QueryPageSize, QueryPortError,
 };
 use application_ports::query_clients::{
     ClientContactExactMatchProjection, ClientExactContactQueryPort,
 };
-use client_domain::{
-    ContactKind, ContactNormalizationVersion, ExactLookupToken, LookupKeyVersion,
-};
+use client_domain::{ContactKind, ContactNormalizationVersion, ExactLookupToken, LookupKeyVersion};
 use profile_platform_primitives::{
     ActorContext, ActorId, ClientId, ContactPointId, CorrelationId, TenantId, TenantScope,
 };
@@ -113,8 +109,12 @@ fn denied_exact_contact_lookup_never_derives_hmac_or_queries_d1()
         allowed: false,
         calls: Cell::new(0),
     };
-    let protector = FakeProtector { calls: Cell::new(0) };
-    let projection = FakeProjection { calls: Cell::new(0) };
+    let protector = FakeProtector {
+        calls: Cell::new(0),
+    };
+    let projection = FakeProjection {
+        calls: Cell::new(0),
+    };
     let result = block_on(lookup_clients_by_exact_contact(
         &actor()?,
         &authorization,
@@ -137,8 +137,12 @@ fn authorized_exact_contact_lookup_reuses_hmac_pipeline_and_is_bounded()
         allowed: true,
         calls: Cell::new(0),
     };
-    let protector = FakeProtector { calls: Cell::new(0) };
-    let projection = FakeProjection { calls: Cell::new(0) };
+    let protector = FakeProtector {
+        calls: Cell::new(0),
+    };
+    let projection = FakeProjection {
+        calls: Cell::new(0),
+    };
     let result = block_on(lookup_clients_by_exact_contact(
         &actor()?,
         &authorization,
@@ -160,8 +164,12 @@ fn malformed_contact_is_stable_invalid_input_before_hmac_or_projection()
         allowed: true,
         calls: Cell::new(0),
     };
-    let protector = FakeProtector { calls: Cell::new(0) };
-    let projection = FakeProjection { calls: Cell::new(0) };
+    let protector = FakeProtector {
+        calls: Cell::new(0),
+    };
+    let projection = FakeProjection {
+        calls: Cell::new(0),
+    };
     assert_eq!(
         block_on(lookup_clients_by_exact_contact(
             &actor()?,

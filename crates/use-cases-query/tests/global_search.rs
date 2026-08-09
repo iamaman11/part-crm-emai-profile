@@ -79,7 +79,9 @@ fn denied_global_search_is_neutral_and_never_projects() -> Result<(), Box<dyn st
         calls: Cell::new(0),
         failure: None,
     };
-    let projection = FakeGlobalSearch { calls: Cell::new(0) };
+    let projection = FakeGlobalSearch {
+        calls: Cell::new(0),
+    };
     let result = block_on(search_global_exact(
         &actor()?,
         &authorization,
@@ -99,7 +101,9 @@ fn authorized_global_search_projects_once() -> Result<(), Box<dyn std::error::Er
         calls: Cell::new(0),
         failure: None,
     };
-    let projection = FakeGlobalSearch { calls: Cell::new(0) };
+    let projection = FakeGlobalSearch {
+        calls: Cell::new(0),
+    };
     let result = block_on(search_global_exact(
         &actor()?,
         &authorization,
@@ -119,7 +123,9 @@ fn global_authorization_failure_never_projects() -> Result<(), Box<dyn std::erro
         calls: Cell::new(0),
         failure: Some(QueryPortErrorClass::DependencyUnavailable),
     };
-    let projection = FakeGlobalSearch { calls: Cell::new(0) };
+    let projection = FakeGlobalSearch {
+        calls: Cell::new(0),
+    };
     assert_eq!(
         block_on(search_global_exact(
             &actor()?,

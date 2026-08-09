@@ -59,23 +59,20 @@ where
     let mut matches = Vec::new();
     for token in &candidates {
         let projected = projection
-            .find_visible_clients_by_exact_contact(
-                actor,
-                kind,
-                normalization_version,
-                token,
-                limit,
-            )
+            .find_visible_clients_by_exact_contact(actor, kind, normalization_version, token, limit)
             .await
             .map_err(map_port_error)?;
         for item in projected {
             if matches.len() >= usize::from(MAX_EXACT_CONTACT_MATCHES) {
                 return Ok(matches);
             }
-            if !matches.iter().any(|existing: &ClientContactExactMatchProjection| {
-                existing.client_id() == item.client_id()
-                    && existing.contact_point_id() == item.contact_point_id()
-            }) {
+            if !matches
+                .iter()
+                .any(|existing: &ClientContactExactMatchProjection| {
+                    existing.client_id() == item.client_id()
+                        && existing.contact_point_id() == item.contact_point_id()
+                })
+            {
                 matches.push(item);
             }
         }
