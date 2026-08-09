@@ -1,3 +1,4 @@
+# Temporary branch-only validator; delete after validated test commit lands.
 name: Phase 2C Shared D1 Regression Fix
 
 on:
@@ -15,40 +16,149 @@ jobs:
         with:
           ref: phase2c-client-merge-assignment-ui
           persist-credentials: true
-      - name: Patch legacy direct assignment-history fixtures
+      - name: Replace legacy direct assignment-history fixture
         shell: python
         run: |
           from pathlib import Path
 
           path = Path('scripts/test-d1-schema.py')
           text = path.read_text(encoding='utf-8')
+          start = text.index('def test_foreign_keys_status_and_uniqueness_are_enforced(')
+          end = text.index('\ndef test_cross_tenant_commands_are_rejected', start)
+          replacement = '''def test_foreign_keys_status_and_uniqueness_are_enforced(
+              connection: sqlite3.Connection,
+          ) -> None:
+              expect_integrity_error(
+                  lambda: connection.execute(
+                      """
+                      INSERT INTO browser_profiles (
+                          tenant_id, profile_id, status, version,
+                          created_by_actor_id, updated_by_actor_id, created_at_ms, updated_at_ms
+                      ) VALUES (?, 'profile_missing_owner', 'DRAFT', 1, 'actor_missing', 'actor_missing', 40, 40)
+                      """,
+                      (TENANT_A,),
+                  )
+              )
+              connection.rollback()
 
-          def replace_block(start_marker: str, end_marker: str, replacement: str) -> None:
-              global text
-              start = text.index(start_marker)
-              end = text.index(end_marker, start)
-              text = text[:start] + replacement + text[end:]
+              expect_integrity_error(
+                  lambda: connection.execute(
+                      """
+                      INSERT INTO profile_assignment_commands (
+                          tenant_id, command_id, command_actor_id, assignment_id,
+                          profile_id, client_id, expected_profile_version, reason, executed_at_ms
+                      ) VALUES (?, 'cmd_assignment_cross_tenant', ?, 'assignment_cross_tenant',
+                                ?, ?, 1, 'invalid tenant link', 50)
+                      """,
+                      (TENANT_A, OWNER_A, PROFILE_A, CLIENT_B),
+                  ),
+                  "assignment_client_not_active",
+              )
+              connection.rollback()
 
-          replace_block(
-              '''        expect_integrity_error(\n            lambda: connection.execute(\n                """\n                INSERT INTO profile_client_assignments (\n                    tenant_id, assignment_id, profile_id, client_id,\n                    assigned_by_actor_id, assigned_at_ms, reason\n                ) VALUES (?, 'assignment_cross_tenant', ?, ?, ?, 50, 'invalid tenant link')\n                """,\n                (TENANT_A, PROFILE_A, CLIENT_B, OWNER_A),\n            ),\n            "assignment_client_not_active",\n        )\n        connection.rollback()\n''',
-              '''\n        connection.execute(\n            "UPDATE clients SET status = 'ARCHIVED', version = 2 WHERE tenant_id = ? AND client_id = ?",''',
-              '''        expect_integrity_error(\n            lambda: connection.execute(\n                """\n                INSERT INTO profile_assignment_commands (\n                    tenant_id, command_id, command_actor_id, assignment_id,\n                    profile_id, client_id, expected_profile_version, reason, executed_at_ms\n                ) VALUES (?, 'cmd_assignment_cross_tenant', ?, 'assignment_cross_tenant',\n                          ?, ?, 1, 'invalid tenant link', 50)\n                """,\n                (TENANT_A, OWNER_A, PROFILE_A, CLIENT_B),\n            ),\n            "assignment_client_not_active",\n        )\n        connection.rollback()\n''',
-          )
+              connection.execute(
+                  "UPDATE clients SET status = 'ARCHIVED', version = 2 WHERE tenant_id = ? AND client_id = ?",
+                  (TENANT_A, CLIENT_A),
+              )
+              expect_integrity_error(
+                  lambda: connection.execute(
+                      """
+                      INSERT INTO profile_assignment_commands (
+                          tenant_id, command_id, command_actor_id, assignment_id,
+                          profile_id, client_id, expected_profile_version, reason, executed_at_ms
+                      ) VALUES (?, 'cmd_assignment_archived', ?, 'assignment_archived',
+                                ?, ?, 1, 'archived client', 60)
+                      """,
+                      (TENANT_A, OWNER_A, PROFILE_A, CLIENT_A),
+                  ),
+                  "assignment_client_not_active",
+              )
+              connection.rollback()
+              connection.execute(
+                  "UPDATE clients SET status = 'ACTIVE' WHERE tenant_id = ? AND client_id = ?",
+                  (TENANT_A, CLIENT_A),
+              )
+              connection.commit()
 
-          replace_block(
-              '''        expect_integrity_error(\n            lambda: connection.execute(\n                """\n                INSERT INTO profile_client_assignments (\n                    tenant_id, assignment_id, profile_id, client_id,\n                    assigned_by_actor_id, assigned_at_ms, reason\n                ) VALUES (?, 'assignment_archived', ?, ?, ?, 60, 'archived client')\n                """,\n                (TENANT_A, PROFILE_A, CLIENT_A, OWNER_A),\n            ),\n            "assignment_client_not_active",\n        )\n        connection.rollback()\n''',
-              '''\n        connection.execute(\n            "UPDATE clients SET status = 'ACTIVE' WHERE tenant_id = ? AND client_id = ?",''',
-              '''        expect_integrity_error(\n            lambda: connection.execute(\n                """\n                INSERT INTO profile_assignment_commands (\n                    tenant_id, command_id, command_actor_id, assignment_id,\n                    profile_id, client_id, expected_profile_version, reason, executed_at_ms\n                ) VALUES (?, 'cmd_assignment_archived', ?, 'assignment_archived',\n                          ?, ?, 1, 'archived client', 60)\n                """,\n                (TENANT_A, OWNER_A, PROFILE_A, CLIENT_A),\n            ),\n            "assignment_client_not_active",\n        )\n        connection.rollback()\n''',
-          )
+              expect_integrity_error(
+                  lambda: connection.execute(
+                      """
+                      INSERT INTO client_contact_points (
+                          tenant_id, client_id, contact_point_id, kind, status,
+                          normalization_version, protection_version,
+                          ciphertext, nonce, encryption_key_version,
+                          exact_lookup_token, lookup_key_version,
+                          created_by_actor_id, updated_by_actor_id,
+                          created_at_ms, updated_at_ms
+                      ) VALUES (
+                          ?, ?, 'contact_cross_tenant', 'EMAIL', 'ACTIVE',
+                          1, 1, ?, ?, 1, ?, 1, ?, ?, 65, 65
+                      )
+                      """,
+                      (
+                          TENANT_A,
+                          CLIENT_B,
+                          bytes([0xA5]) * 48,
+                          bytes([0x5A]) * 24,
+                          bytes(range(32)),
+                          OWNER_A,
+                          OWNER_A,
+                      ),
+                  ),
+                  "client_contact_client_not_active",
+              )
+              connection.rollback()
 
-          start = text.index("        connection.execute(\n            \"\"\"\n            INSERT INTO profile_client_assignments (\n", text.index("assignment_primary_one")) if False else -1
-          marker = "        connection.execute(\n            \"\"\"\n            INSERT INTO profile_client_assignments (\n"
-          search_from = text.index("connection.commit()", text.index("UPDATE clients SET status = 'ACTIVE'"))
-          start = text.index(marker, search_from)
-          end = text.index("\n        assert (\n            connection.execute(\n                \"SELECT COUNT(*) FROM profile_grants", start)
-          replacement = '''        connection.execute(\n            """\n            INSERT INTO profile_assignment_commands (\n                tenant_id, command_id, command_actor_id, assignment_id,\n                profile_id, client_id, expected_profile_version, reason, executed_at_ms\n            ) VALUES (?, 'cmd_assignment_primary_one', ?, 'assignment_primary_one',\n                      ?, ?, 1, 'primary assignment', 70)\n            """,\n            (TENANT_A, OWNER_A, PROFILE_A, CLIENT_A),\n        )\n        connection.commit()\n        expect_integrity_error(\n            lambda: connection.execute(\n                """\n                INSERT INTO profile_assignment_commands (\n                    tenant_id, command_id, command_actor_id, assignment_id,\n                    profile_id, client_id, expected_profile_version, reason, executed_at_ms\n                ) VALUES (?, 'cmd_assignment_primary_two', ?, 'assignment_primary_two',\n                          ?, ?, 2, 'duplicate active assignment', 71)\n                """,\n                (TENANT_A, OWNER_A, PROFILE_A, CLIENT_A),\n            ),\n            "profile_assignment_same_client",\n        )\n        connection.rollback()\n        active_assignments = connection.execute(\n            """\n            SELECT COUNT(*) AS value\n            FROM profile_client_assignments\n            WHERE tenant_id = ? AND profile_id = ? AND closed_at_ms IS NULL\n            """,\n            (TENANT_A, PROFILE_A),\n        ).fetchone()["value"]\n        assert active_assignments == 1\n'''
-          text = text[:start] + replacement + text[end:]
-          path.write_text(text, encoding='utf-8')
+              connection.execute(
+                  """
+                  INSERT INTO profile_assignment_commands (
+                      tenant_id, command_id, command_actor_id, assignment_id,
+                      profile_id, client_id, expected_profile_version, reason, executed_at_ms
+                  ) VALUES (?, 'cmd_assignment_primary_one', ?, 'assignment_primary_one',
+                            ?, ?, 1, 'primary assignment', 70)
+                  """,
+                  (TENANT_A, OWNER_A, PROFILE_A, CLIENT_A),
+              )
+              connection.commit()
+              expect_integrity_error(
+                  lambda: connection.execute(
+                      """
+                      INSERT INTO profile_assignment_commands (
+                          tenant_id, command_id, command_actor_id, assignment_id,
+                          profile_id, client_id, expected_profile_version, reason, executed_at_ms
+                      ) VALUES (?, 'cmd_assignment_primary_two', ?, 'assignment_primary_two',
+                                ?, ?, 2, 'duplicate active assignment', 71)
+                      """,
+                      (TENANT_A, OWNER_A, PROFILE_A, CLIENT_A),
+                  ),
+                  "profile_assignment_same_client",
+              )
+              connection.rollback()
+              active_assignments = connection.execute(
+                  """
+                  SELECT COUNT(*) AS value
+                  FROM profile_client_assignments
+                  WHERE tenant_id = ? AND profile_id = ? AND closed_at_ms IS NULL
+                  """,
+                  (TENANT_A, PROFILE_A),
+              ).fetchone()["value"]
+              assert active_assignments == 1
+              assert (
+                  connection.execute(
+                      "SELECT COUNT(*) FROM profile_grants WHERE tenant_id = ? AND profile_id = ?",
+                      (TENANT_A, PROFILE_A),
+                  ).fetchone()[0]
+                  == 0
+              )
+              assert (
+                  connection.execute(
+                      "SELECT COUNT(*) FROM client_grants WHERE tenant_id = ? AND client_id = ?",
+                      (TENANT_A, CLIENT_A),
+                  ).fetchone()[0]
+                  == 0
+              )
+          '''
+          path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
       - name: Run shared D1 invariant suite
         run: python scripts/test-d1-schema.py
       - name: Run Phase 2C D1 proof
