@@ -1,6 +1,6 @@
 use crate::query::{QueryPage, QueryPageRequest, QueryPortError};
 use core::future::Future;
-use profile_domain::ProfileStatus;
+pub use profile_domain::ProfileStatus;
 use profile_platform_primitives::{
     ActorContext, AggregateVersion, ClientId, GenerationId, ProfileId,
 };
