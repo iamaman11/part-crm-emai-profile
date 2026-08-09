@@ -1,9 +1,7 @@
 #![forbid(unsafe_code)]
 
-pub mod global;
 pub mod mail;
 
-pub use global::search_global_exact;
 pub use mail::{get_client_mailbox_message, search_client_mailbox_messages};
 
 use application_ports::query::{
@@ -11,6 +9,9 @@ use application_ports::query::{
     QueryPortErrorClass,
 };
 use application_ports::query_clients::{ClientReadModelPort, ClientReadProjection};
+use application_ports::query_global::{
+    GlobalSearchKey, GlobalSearchProjection, GlobalSearchReadModelPort,
+};
 use application_ports::query_mail::{ClientMailEligibilityProjection, MailReadModelPort};
 use application_ports::query_mailboxes::{MailboxReadModelPort, MailboxReadProjection};
 use application_ports::query_members::{MemberReadModelPort, MemberReadProjection};
@@ -109,6 +110,25 @@ where
     }
     projection
         .list_mailboxes(actor, page)
+        .await
+        .map_err(map_port_error)
+}
+
+pub async fn search_global_exact<A, P>(
+    actor: &ActorContext,
+    authorization: &A,
+    projection: &P,
+    key: &GlobalSearchKey,
+) -> Result<Option<GlobalSearchProjection>, QueryApplicationError>
+where
+    A: QueryAuthorizationPort,
+    P: GlobalSearchReadModelPort,
+{
+    if !authorize(actor, authorization, QueryCapability::GlobalSearch).await? {
+        return Ok(None);
+    }
+    projection
+        .search_exact(actor, key)
         .await
         .map_err(map_port_error)
 }
