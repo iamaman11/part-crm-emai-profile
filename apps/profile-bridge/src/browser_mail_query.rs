@@ -1,7 +1,7 @@
+use application_ports::device_jobs::{DeviceClaimId, DeviceJobId};
 use application_ports::{
-    ClientMailProviderQueryPort, DeviceClaimId, DeviceJobId, MailMessageBody, MailMessageSummary,
-    MailboxMessageReference, QueryPage, QueryPortError, QueryPortErrorClass,
-    SearchClientMailboxMessagesRequest,
+    ClientMailProviderQueryPort, MailMessageBody, MailMessageSummary, MailboxMessageReference,
+    QueryPage, QueryPortError, QueryPortErrorClass, SearchClientMailboxMessagesRequest,
 };
 use core::future::Future;
 use profile_platform_primitives::{GenerationId, MailboxBindingId, TenantScope};
@@ -216,10 +216,11 @@ mod tests {
         BrowserClientMailQueryAdapter, BrowserMailExecutionFencePort, BrowserMailExecutionProof,
         BrowserMailRuntimePort,
     };
+    use application_ports::device_jobs::{DeviceClaimId, DeviceJobId};
     use application_ports::{
-        ClientMailProviderQueryPort, DeviceClaimId, DeviceJobId, MailMessageBody,
-        MailMessageSummary, MailSearchTerm, MailboxMessageReference, QueryPage, QueryPageRequest,
-        QueryPageSize, QueryPortError, QueryPortErrorClass, SearchClientMailboxMessagesRequest,
+        ClientMailProviderQueryPort, MailMessageBody, MailMessageSummary, MailSearchTerm,
+        MailboxMessageReference, QueryPage, QueryPageRequest, QueryPageSize, QueryPortError,
+        QueryPortErrorClass, SearchClientMailboxMessagesRequest,
     };
     use profile_platform_primitives::{
         DeviceId, FencingToken, GenerationId, MailboxBindingId, ProfileId, SessionId, TenantId,
