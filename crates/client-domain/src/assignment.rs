@@ -1,6 +1,8 @@
 use crate::{ClientRecord, ClientStatus};
 use core::fmt;
-use profile_platform_primitives::{ActorId, ClientId, ProfileId, TenantId, UnixMillis};
+use profile_platform_primitives::{
+    ActorId, AssignmentId, ClientId, ProfileId, TenantId, UnixMillis,
+};
 
 const MAX_REASON_LENGTH: usize = 500;
 
@@ -27,6 +29,7 @@ pub enum AssignmentStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileClientAssignment {
     tenant_id: TenantId,
+    assignment_id: AssignmentId,
     profile_id: ProfileId,
     client_id: ClientId,
     role: AssignmentRole,
@@ -40,6 +43,7 @@ pub struct ProfileClientAssignment {
 impl ProfileClientAssignment {
     pub fn assign(
         profile_tenant_id: &TenantId,
+        assignment_id: AssignmentId,
         profile_id: ProfileId,
         client: &ClientRecord,
         assigned_by: ActorId,
@@ -61,6 +65,7 @@ impl ProfileClientAssignment {
 
         Ok(Self {
             tenant_id: profile_tenant_id.clone(),
+            assignment_id,
             profile_id,
             client_id: client.client_id().clone(),
             role: AssignmentRole::Primary,
@@ -87,6 +92,11 @@ impl ProfileClientAssignment {
     #[must_use]
     pub const fn tenant_id(&self) -> &TenantId {
         &self.tenant_id
+    }
+
+    #[must_use]
+    pub const fn assignment_id(&self) -> &AssignmentId {
+        &self.assignment_id
     }
 
     #[must_use]
@@ -152,6 +162,7 @@ pub fn plan_primary_reassignment(
     profile_tenant_id: &TenantId,
     profile_id: &ProfileId,
     current: Option<&ProfileClientAssignment>,
+    next_assignment_id: AssignmentId,
     next_client: &ClientRecord,
     assigned_by: ActorId,
     assigned_at: UnixMillis,
@@ -159,6 +170,7 @@ pub fn plan_primary_reassignment(
 ) -> Result<PrimaryAssignmentTransition, AssignmentError> {
     let next = ProfileClientAssignment::assign(
         profile_tenant_id,
+        next_assignment_id,
         profile_id.clone(),
         next_client,
         assigned_by,
@@ -233,7 +245,9 @@ mod tests {
         plan_primary_reassignment,
     };
     use crate::{ClientKind, ClientRecord, ClientStatus};
-    use profile_platform_primitives::{ActorId, ClientId, ProfileId, TenantId, UnixMillis};
+    use profile_platform_primitives::{
+        ActorId, AssignmentId, ClientId, ProfileId, TenantId, UnixMillis,
+    };
 
     fn active_client(client_id: &str) -> Result<ClientRecord, Box<dyn std::error::Error>> {
         Ok(ClientRecord::create(
@@ -249,6 +263,7 @@ mod tests {
     ) -> Result<ProfileClientAssignment, Box<dyn std::error::Error>> {
         Ok(ProfileClientAssignment::assign(
             client.tenant_id(),
+            AssignmentId::parse("assignment_01JCLIENT")?,
             ProfileId::parse("profile_01JCLIENT")?,
             client,
             ActorId::parse("actor_01JCLIENT")?,
@@ -262,6 +277,7 @@ mod tests {
         let client = active_client("client_01JCLIENT")?;
         let result = ProfileClientAssignment::assign(
             &TenantId::parse("tenant_02JCLIENT")?,
+            AssignmentId::parse("assignment_01JCLIENT")?,
             ProfileId::parse("profile_01JCLIENT")?,
             &client,
             ActorId::parse("actor_01JCLIENT")?,
@@ -279,6 +295,7 @@ mod tests {
         assert_eq!(client.status(), ClientStatus::Archived);
         let result = ProfileClientAssignment::assign(
             client.tenant_id(),
+            AssignmentId::parse("assignment_01JCLIENT")?,
             ProfileId::parse("profile_01JCLIENT")?,
             &client,
             ActorId::parse("actor_01JCLIENT")?,
@@ -294,6 +311,7 @@ mod tests {
         let client = active_client("client_01JCLIENT")?;
         let mut assignment = ProfileClientAssignment::assign(
             client.tenant_id(),
+            AssignmentId::parse("assignment_01JCLIENT")?,
             ProfileId::parse("profile_01JCLIENT")?,
             &client,
             ActorId::parse("actor_01JCLIENT")?,
@@ -301,6 +319,7 @@ mod tests {
             "  initial assignment  ",
         )?;
         assignment.close(UnixMillis::new(20))?;
+        assert_eq!(assignment.assignment_id().as_str(), "assignment_01JCLIENT");
         assert_eq!(assignment.role(), AssignmentRole::Primary);
         assert_eq!(assignment.status(), AssignmentStatus::Closed);
         assert_eq!(assignment.closed_at(), Some(UnixMillis::new(20)));
@@ -320,6 +339,7 @@ mod tests {
             current.tenant_id(),
             &profile_id,
             Some(&current),
+            AssignmentId::parse("assignment_02JCLIENT")?,
             &new_client,
             ActorId::parse("actor_02JCLIENT")?,
             UnixMillis::new(20),
@@ -334,6 +354,7 @@ mod tests {
         assert_eq!(closed.client_id(), old_client.client_id());
         assert_eq!(transition.next().status(), AssignmentStatus::Active);
         assert_eq!(transition.next().role(), AssignmentRole::Primary);
+        assert_eq!(transition.next().assignment_id().as_str(), "assignment_02JCLIENT");
         assert_eq!(transition.next().client_id(), new_client.client_id());
         assert_eq!(transition.next().profile_id(), &profile_id);
         assert_eq!(current.status(), AssignmentStatus::Active);
@@ -354,6 +375,7 @@ mod tests {
                 current.tenant_id(),
                 &profile_id,
                 Some(&current),
+                AssignmentId::parse("assignment_02JCLIENT")?,
                 &old_client,
                 ActorId::parse("actor_02JCLIENT")?,
                 UnixMillis::new(20),
@@ -369,6 +391,7 @@ mod tests {
                 current.tenant_id(),
                 &ProfileId::parse("profile_02JCLIENT")?,
                 Some(&current),
+                AssignmentId::parse("assignment_03JCLIENT")?,
                 &new_client,
                 ActorId::parse("actor_02JCLIENT")?,
                 UnixMillis::new(20),
@@ -393,6 +416,7 @@ mod tests {
                 current.tenant_id(),
                 &profile_id,
                 Some(&current),
+                AssignmentId::parse("assignment_02JCLIENT")?,
                 &new_client,
                 ActorId::parse("actor_02JCLIENT")?,
                 UnixMillis::new(20),
@@ -408,6 +432,7 @@ mod tests {
         let client = active_client("client_01JCLIENT")?;
         let first = ProfileClientAssignment::assign(
             client.tenant_id(),
+            AssignmentId::parse("assignment_01JCLIENT")?,
             ProfileId::parse("profile_01JCLIENT")?,
             &client,
             ActorId::parse("actor_01JCLIENT")?,
@@ -416,6 +441,7 @@ mod tests {
         )?;
         let second = ProfileClientAssignment::assign(
             client.tenant_id(),
+            AssignmentId::parse("assignment_02JCLIENT")?,
             ProfileId::parse("profile_02JCLIENT")?,
             &client,
             ActorId::parse("actor_01JCLIENT")?,
