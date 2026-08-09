@@ -33,7 +33,7 @@ INSERT INTO mailbox_job_create_commands (
 "#;
 
 const JOB_RUN_COMMAND: &str = r#"
-INSERT INTO mailbox_job_run_commands (
+INSERT INTO mailbox_job_run_commands_v2 (
     tenant_id, command_id, command_actor_id, binding_id, job_id,
     expected_job_version, outcome_status, next_cursor, provider_status,
     bounded_item_count, retry_at_ms, executed_at_ms
@@ -356,7 +356,7 @@ impl D1MailboxRepository {
         query!(
             &self.database,
             r#"
-            SELECT binding_id, provider, secret_handle, status, version
+            SELECT binding_id, provider, secret_handle, status, execution_status, version
             FROM mailbox_bindings
             WHERE tenant_id = ? AND binding_id = ?
             "#,
@@ -379,7 +379,7 @@ impl D1MailboxRepository {
             &self.database,
             r#"
             SELECT
-                job_id, cursor, status, attempt, max_attempts, next_run_at_ms,
+                job_id, cursor, lifecycle_status AS status, attempt, max_attempts, next_run_at_ms,
                 provider_status, bounded_item_count, version
             FROM mailbox_jobs
             WHERE tenant_id = ? AND binding_id = ? AND job_id = ?
@@ -462,6 +462,7 @@ struct MailboxBindingRow {
     provider: String,
     secret_handle: String,
     status: String,
+    execution_status: String,
     version: i64,
 }
 
@@ -479,12 +480,21 @@ struct MailboxJobRow {
 }
 
 fn binding_from_row(scope: &TenantScope, row: MailboxBindingRow) -> Result<MailboxBinding> {
+    let status = if row.status == "REVOKED" {
+        MailboxBindingStatus::Revoked
+    } else if row.status == "ACTIVE" {
+        MailboxBindingStatus::parse_storage(&row.execution_status).map_err(domain_error)?
+    } else {
+        return Err(Error::RustError(
+            "invalid mailbox binding status".to_owned(),
+        ));
+    };
     Ok(MailboxBinding::restore(
         scope.tenant_id().clone(),
         MailboxBindingId::parse(row.binding_id).map_err(identifier_error)?,
         MailboxProvider::parse_storage(&row.provider).map_err(domain_error)?,
         SecretHandle::parse(row.secret_handle).map_err(identifier_error)?,
-        MailboxBindingStatus::parse_storage(&row.status).map_err(domain_error)?,
+        status,
         AggregateVersion::new(positive_u64(row.version)?)
             .map_err(|error| Error::RustError(error.to_string()))?,
     ))
