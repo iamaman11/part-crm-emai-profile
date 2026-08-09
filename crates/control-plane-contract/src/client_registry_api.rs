@@ -1,10 +1,50 @@
 use crate::public_api::ClientProjection;
+use core::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 pub const CLIENT_CONTACT_KINDS: [&str; 3] = ["EMAIL", "PHONE", "URL"];
 pub const CLIENT_CONTACT_STATUSES: [&str; 2] = ["ACTIVE", "ARCHIVED"];
 pub const CLIENT_ASSIGNMENT_STATUSES: [&str; 2] = ["ACTIVE", "CLOSED"];
+
+const CLIENT_REGISTRY_SCHEMA_NAMES: [&str; 13] = [
+    "ClientContactKind",
+    "ClientContactStatus",
+    "ClientAssignmentStatus",
+    "ClientListProjection",
+    "ClientUpdateRequest",
+    "ClientArchiveRequest",
+    "ClientContactUpsertRequest",
+    "ClientContactArchiveRequest",
+    "ClientMergeRequest",
+    "ClientContactProjection",
+    "ClientAssignmentProjection",
+    "ClientActivityProjection",
+    "ClientHistoryProjection",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClientRegistryOpenApiError {
+    MissingPathsObject,
+    MissingSchemasObject,
+    InvalidPathItem,
+    DuplicateOperation,
+    DuplicateSchema,
+}
+
+impl fmt::Display for ClientRegistryOpenApiError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::MissingPathsObject => "client registry OpenAPI paths object is missing",
+            Self::MissingSchemasObject => "client registry OpenAPI schemas object is missing",
+            Self::InvalidPathItem => "client registry OpenAPI path item is invalid",
+            Self::DuplicateOperation => "client registry OpenAPI operation already exists",
+            Self::DuplicateSchema => "client registry OpenAPI schema already exists",
+        })
+    }
+}
+
+impl std::error::Error for ClientRegistryOpenApiError {}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -92,10 +132,18 @@ pub struct ClientHistoryProjection {
     pub activity: Vec<ClientActivityProjection>,
 }
 
-pub fn extend_openapi(document: &mut Value) {
-    let Some(paths) = document.get_mut("paths").and_then(Value::as_object_mut) else {
-        return;
-    };
+pub fn extend_openapi(document: &mut Value) -> Result<(), ClientRegistryOpenApiError> {
+    let mut candidate = document.clone();
+    extend_openapi_in_place(&mut candidate)?;
+    *document = candidate;
+    Ok(())
+}
+
+fn extend_openapi_in_place(document: &mut Value) -> Result<(), ClientRegistryOpenApiError> {
+    let paths = document
+        .get_mut("paths")
+        .and_then(Value::as_object_mut)
+        .ok_or(ClientRegistryOpenApiError::MissingPathsObject)?;
     insert_operation(
         paths,
         "/api/v1/tenants/{tenantId}/clients",
@@ -110,7 +158,7 @@ pub fn extend_openapi(document: &mut Value) {
                 "503": problem_response()
             }
         }),
-    );
+    )?;
     insert_operation(
         paths,
         "/api/v1/tenants/{tenantId}/clients/{clientId}",
@@ -121,7 +169,7 @@ pub fn extend_openapi(document: &mut Value) {
             "requestBody": json_request("ClientUpdateRequest"),
             "responses": mutation_responses()
         }),
-    );
+    )?;
     insert_operation(
         paths,
         "/api/v1/tenants/{tenantId}/clients/{clientId}/archive",
@@ -132,7 +180,7 @@ pub fn extend_openapi(document: &mut Value) {
             "requestBody": json_request("ClientArchiveRequest"),
             "responses": mutation_responses()
         }),
-    );
+    )?;
     insert_operation(
         paths,
         "/api/v1/tenants/{tenantId}/clients/{clientId}/contacts/{contactPointId}",
@@ -147,7 +195,7 @@ pub fn extend_openapi(document: &mut Value) {
             "requestBody": json_request("ClientContactUpsertRequest"),
             "responses": mutation_responses()
         }),
-    );
+    )?;
     insert_operation(
         paths,
         "/api/v1/tenants/{tenantId}/clients/{clientId}/contacts/{contactPointId}",
@@ -162,7 +210,7 @@ pub fn extend_openapi(document: &mut Value) {
             "requestBody": json_request("ClientContactArchiveRequest"),
             "responses": mutation_responses()
         }),
-    );
+    )?;
     insert_operation(
         paths,
         "/api/v1/tenants/{tenantId}/clients/{clientId}/merge",
@@ -173,7 +221,7 @@ pub fn extend_openapi(document: &mut Value) {
             "requestBody": json_request("ClientMergeRequest"),
             "responses": mutation_responses()
         }),
-    );
+    )?;
     insert_operation(
         paths,
         "/api/v1/tenants/{tenantId}/clients/{clientId}/history",
@@ -188,15 +236,19 @@ pub fn extend_openapi(document: &mut Value) {
                 "503": problem_response()
             }
         }),
-    );
+    )?;
 
-    let Some(schemas) = document
+    let schemas = document
         .get_mut("components")
         .and_then(|value| value.get_mut("schemas"))
         .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
+        .ok_or(ClientRegistryOpenApiError::MissingSchemasObject)?;
+    if CLIENT_REGISTRY_SCHEMA_NAMES
+        .iter()
+        .any(|name| schemas.contains_key(*name))
+    {
+        return Err(ClientRegistryOpenApiError::DuplicateSchema);
+    }
     schemas.insert(
         "ClientContactKind".to_owned(),
         string_enum(&CLIENT_CONTACT_KINDS),
@@ -349,19 +401,26 @@ pub fn extend_openapi(document: &mut Value) {
             }),
         ),
     );
+    Ok(())
 }
 
-fn insert_operation(paths: &mut Map<String, Value>, path: &str, method: &str, operation: Value) {
+fn insert_operation(
+    paths: &mut Map<String, Value>,
+    path: &str,
+    method: &str,
+    operation: Value,
+) -> Result<(), ClientRegistryOpenApiError> {
     let path_item = paths
         .entry(path.to_owned())
         .or_insert_with(|| Value::Object(Map::new()));
-    let Some(path_item) = path_item.as_object_mut() else {
-        return;
-    };
-    assert!(
-        path_item.insert(method.to_owned(), operation).is_none(),
-        "duplicate OpenAPI operation {method} {path}"
-    );
+    let path_item = path_item
+        .as_object_mut()
+        .ok_or(ClientRegistryOpenApiError::InvalidPathItem)?;
+    if path_item.contains_key(method) {
+        return Err(ClientRegistryOpenApiError::DuplicateOperation);
+    }
+    path_item.insert(method.to_owned(), operation);
+    Ok(())
 }
 
 fn mutation_responses() -> Value {
@@ -446,6 +505,7 @@ mod tests {
         ClientListProjection, ClientMergeRequest, ClientUpdateRequest, extend_openapi,
     };
     use crate::public_api::{ClientProjection, openapi_document};
+    use serde_json::json;
 
     #[test]
     fn client_registry_models_keep_camel_case_wire_names() -> Result<(), Box<dyn std::error::Error>>
@@ -481,9 +541,10 @@ mod tests {
     }
 
     #[test]
-    fn client_registry_openapi_extension_is_additive_and_complete() {
+    fn client_registry_openapi_extension_is_additive_and_complete()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut document = openapi_document();
-        extend_openapi(&mut document);
+        extend_openapi(&mut document)?;
         let paths = &document["paths"];
         assert!(paths["/api/v1/tenants/{tenantId}/clients"]["post"].is_object());
         assert!(paths["/api/v1/tenants/{tenantId}/clients"]["get"].is_object());
@@ -506,6 +567,27 @@ mod tests {
         ] {
             assert!(schemas.get(name).is_some(), "missing schema {name}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_and_duplicate_openapi_extensions_fail_atomically() {
+        let mut missing_paths = json!({"components": {"schemas": {}}});
+        let original = missing_paths.clone();
+        assert_eq!(
+            extend_openapi(&mut missing_paths),
+            Err(super::ClientRegistryOpenApiError::MissingPathsObject)
+        );
+        assert_eq!(missing_paths, original);
+
+        let mut duplicate = openapi_document();
+        duplicate["paths"]["/api/v1/tenants/{tenantId}/clients"]["get"] = json!({});
+        let original = duplicate.clone();
+        assert_eq!(
+            extend_openapi(&mut duplicate),
+            Err(super::ClientRegistryOpenApiError::DuplicateOperation)
+        );
+        assert_eq!(duplicate, original);
     }
 
     #[test]

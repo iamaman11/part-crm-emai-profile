@@ -8,8 +8,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nth(1)
         .unwrap_or_else(|| "canonical".to_owned());
     let document = match mode.as_str() {
-        "canonical" => client_registry_fragment::canonical_fragment(),
-        "compatibility" => client_registry_fragment::compatibility_fragment(),
+        "canonical" => client_registry_fragment::canonical_fragment()?,
+        "compatibility" => client_registry_fragment::compatibility_fragment()?,
         _ => return Err(format!("unknown client registry export mode: {mode}").into()),
     };
     let mut rendered = serde_json::to_string_pretty(&document)?;

@@ -1,34 +1,43 @@
 use crate::{client_registry_api, public_api};
+use client_registry_api::ClientRegistryOpenApiError;
 use serde_json::{Map, Value, json};
 
-pub fn canonical_fragment() -> Value {
+pub fn canonical_fragment() -> Result<Value, ClientRegistryOpenApiError> {
     let base = public_api::openapi_document();
     let mut extended = base.clone();
-    client_registry_api::extend_openapi(&mut extended);
+    client_registry_api::extend_openapi(&mut extended)?;
     diff_fragment(&base, &extended)
 }
 
-pub fn compatibility_fragment() -> Value {
-    let mut fragment = canonical_fragment();
+pub fn compatibility_fragment() -> Result<Value, ClientRegistryOpenApiError> {
+    let mut fragment = canonical_fragment()?;
     remap_legacy_refs(&mut fragment);
-    inject_client_registry_problem(&mut fragment);
+    inject_client_registry_problem(&mut fragment)?;
     decorate_legacy_transport_contract(&mut fragment);
-    fragment
+    Ok(fragment)
 }
 
-fn diff_fragment(base: &Value, extended: &Value) -> Value {
-    let Some(base_paths) = base.get("paths").and_then(Value::as_object) else {
-        return empty_fragment();
-    };
-    let Some(extended_paths) = extended.get("paths").and_then(Value::as_object) else {
-        return empty_fragment();
-    };
+fn diff_fragment(base: &Value, extended: &Value) -> Result<Value, ClientRegistryOpenApiError> {
+    let base_paths = base
+        .get("paths")
+        .and_then(Value::as_object)
+        .ok_or(ClientRegistryOpenApiError::MissingPathsObject)?;
+    let extended_paths = extended
+        .get("paths")
+        .and_then(Value::as_object)
+        .ok_or(ClientRegistryOpenApiError::MissingPathsObject)?;
     let mut paths = Map::new();
     for (route, extended_item) in extended_paths {
-        let Some(extended_item) = extended_item.as_object() else {
-            continue;
+        let extended_item = extended_item
+            .as_object()
+            .ok_or(ClientRegistryOpenApiError::InvalidPathItem)?;
+        let base_item = match base_paths.get(route) {
+            Some(item) => Some(
+                item.as_object()
+                    .ok_or(ClientRegistryOpenApiError::InvalidPathItem)?,
+            ),
+            None => None,
         };
-        let base_item = base_paths.get(route).and_then(Value::as_object);
         let mut additions = Map::new();
         for (name, value) in extended_item {
             if base_item.is_none_or(|item| !item.contains_key(name)) {
@@ -40,18 +49,14 @@ fn diff_fragment(base: &Value, extended: &Value) -> Value {
         }
     }
 
-    let Some(base_schemas) = base
+    let base_schemas = base
         .pointer("/components/schemas")
         .and_then(Value::as_object)
-    else {
-        return empty_fragment();
-    };
-    let Some(extended_schemas) = extended
+        .ok_or(ClientRegistryOpenApiError::MissingSchemasObject)?;
+    let extended_schemas = extended
         .pointer("/components/schemas")
         .and_then(Value::as_object)
-    else {
-        return empty_fragment();
-    };
+        .ok_or(ClientRegistryOpenApiError::MissingSchemasObject)?;
     let mut schemas = Map::new();
     for (name, value) in extended_schemas {
         if !base_schemas.contains_key(name) {
@@ -59,16 +64,12 @@ fn diff_fragment(base: &Value, extended: &Value) -> Value {
         }
     }
 
-    json!({
+    Ok(json!({
         "paths": Value::Object(paths),
         "components": {
             "schemas": Value::Object(schemas)
         }
-    })
-}
-
-fn empty_fragment() -> Value {
-    json!({"paths": {}, "components": {"schemas": {}}})
+    }))
 }
 
 fn remap_legacy_refs(value: &mut Value) {
@@ -94,33 +95,30 @@ fn remap_legacy_refs(value: &mut Value) {
     }
 }
 
-fn inject_client_registry_problem(fragment: &mut Value) {
-    let Some(schemas) = fragment
+fn inject_client_registry_problem(fragment: &mut Value) -> Result<(), ClientRegistryOpenApiError> {
+    let schemas = fragment
         .pointer_mut("/components/schemas")
         .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
-    assert!(
-        schemas
-            .insert(
-                "ClientRegistryProblem".to_owned(),
-                json!({
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["type", "title", "status", "code", "correlation_id"],
-                    "properties": {
-                        "type": {"type": "string", "format": "uri"},
-                        "title": {"type": "string"},
-                        "status": {"type": "integer", "minimum": 400, "maximum": 599},
-                        "code": {"type": "string", "enum": public_api::PROBLEM_CODES},
-                        "correlation_id": {"type": "string", "minLength": 1}
-                    }
-                }),
-            )
-            .is_none(),
-        "ClientRegistryProblem schema must remain additive"
+        .ok_or(ClientRegistryOpenApiError::MissingSchemasObject)?;
+    if schemas.contains_key("ClientRegistryProblem") {
+        return Err(ClientRegistryOpenApiError::DuplicateSchema);
+    }
+    schemas.insert(
+        "ClientRegistryProblem".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "title", "status", "code", "correlation_id"],
+            "properties": {
+                "type": {"type": "string", "format": "uri"},
+                "title": {"type": "string"},
+                "status": {"type": "integer", "minimum": 400, "maximum": 599},
+                "code": {"type": "string", "enum": public_api::PROBLEM_CODES},
+                "correlation_id": {"type": "string", "minLength": 1}
+            }
+        }),
     );
+    Ok(())
 }
 
 fn decorate_legacy_transport_contract(fragment: &mut Value) {
@@ -149,13 +147,15 @@ fn decorate_legacy_transport_contract(fragment: &mut Value) {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
     use super::{canonical_fragment, compatibility_fragment};
 
     #[test]
-    fn fragment_contains_only_additive_client_registry_surface() {
-        let fragment = canonical_fragment();
-        let paths = fragment["paths"].as_object().expect("fragment paths");
+    fn fragment_contains_only_additive_client_registry_surface()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fragment = canonical_fragment()?;
+        let paths = fragment["paths"]
+            .as_object()
+            .ok_or("fragment paths must be an object")?;
         assert!(
             paths["/api/v1/tenants/{tenantId}/clients"]
                 .get("get")
@@ -181,12 +181,14 @@ mod tests {
                 .get("post")
                 .is_some()
         );
+        Ok(())
     }
 
     #[test]
-    fn compatibility_fragment_uses_legacy_client_view_and_full_problem_schema() {
-        let fragment = compatibility_fragment();
-        let rendered = serde_json::to_string(&fragment).expect("serialize fragment");
+    fn compatibility_fragment_uses_legacy_client_view_and_full_problem_schema()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fragment = compatibility_fragment()?;
+        let rendered = serde_json::to_string(&fragment)?;
         assert!(!rendered.contains("#/components/schemas/ClientProjection"));
         assert!(!rendered.contains("#/components/schemas/ProblemPayload"));
         assert!(rendered.contains("#/components/schemas/ClientView"));
@@ -194,11 +196,12 @@ mod tests {
         let codes = fragment["components"]["schemas"]["ClientRegistryProblem"]["properties"]
             ["code"]["enum"]
             .as_array()
-            .expect("problem code enum");
+            .ok_or("problem code enum must be an array")?;
         assert!(codes.iter().any(|value| value == "version_conflict"));
         assert!(codes.iter().any(|value| value == "integrity_failure"));
         assert!(codes.iter().any(|value| value == "dependency_unavailable"));
         assert!(rendered.contains("#/components/parameters/CorrelationHeader"));
         assert!(rendered.contains("#/components/parameters/IdempotencyHeader"));
+        Ok(())
     }
 }
