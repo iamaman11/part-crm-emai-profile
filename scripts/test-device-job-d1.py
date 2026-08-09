@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove Phase 2F device authorization/job D1 invariants with SQLite."""
+"""Prove Phase 2F device identity/authorization/job D1 invariants with SQLite."""
 
 from __future__ import annotations
 
@@ -21,9 +21,24 @@ PROFILE_B = "profile_device_jobs_b"
 GENERATION_A = "generation_device_jobs_a"
 GENERATION_B = "generation_device_jobs_b"
 DEVICE_A = "device_device_jobs_a"
+DEVICE_A_REBOUND = "device_device_jobs_a_rebound"
 DEVICE_B = "device_device_jobs_b"
 JOB_A = "devjob_device_jobs_a"
 JOB_RETRY = "devjob_device_jobs_retry"
+
+AUTHENTICATED_DEVICE_QUERY = """
+SELECT binding.device_id, binding.version
+FROM device_actor_bindings AS binding
+JOIN memberships AS membership
+  ON membership.tenant_id = binding.tenant_id
+ AND membership.actor_id = binding.actor_id
+ AND membership.status = 'ACTIVE'
+WHERE binding.tenant_id = ?
+  AND binding.actor_id = ?
+  AND binding.status = 'ACTIVE'
+ORDER BY binding.version DESC
+LIMIT 2
+"""
 
 CLAIMABLE_QUERY = """
 SELECT job.job_id
@@ -79,7 +94,7 @@ def migration_files() -> list[Path]:
     expected = list(range(1, len(files) + 1))
     if not files or versions != expected:
         raise AssertionError(f"D1 migrations must be contiguous: {versions}; expected {expected}")
-    if files[-1].name != "0018_device_authorizations_and_jobs.sql":
+    if files[-1].name != "0019_device_actor_bindings.sql":
         raise AssertionError(f"unexpected Phase 2F migration tail: {files[-1].name}")
     return files
 
@@ -194,6 +209,15 @@ def seed_tenant(
             owner,
         ),
     )
+    connection.execute(
+        """
+        INSERT INTO device_actor_bindings (
+            tenant_id, actor_id, device_id, version, status, evidence_reference,
+            bound_at_ms, updated_at_ms, revoked_at_ms
+        ) VALUES (?, ?, ?, 1, 'ACTIVE', ?, 55, 55, NULL)
+        """,
+        (tenant, owner, device, f"binding_{device}"),
+    )
 
 
 def insert_pending_job(connection: sqlite3.Connection, *, tenant: str = TENANT_A) -> None:
@@ -224,6 +248,11 @@ def insert_future_retry_job(connection: sqlite3.Connection) -> None:
         """,
         (TENANT_A, JOB_RETRY, DEVICE_A, PROFILE_A, GENERATION_A),
     )
+
+
+def authenticated_device_rows(connection: sqlite3.Connection) -> list[tuple[str, int]]:
+    rows = connection.execute(AUTHENTICATED_DEVICE_QUERY, (TENANT_A, OWNER_A)).fetchall()
+    return [(str(row[0]), int(row[1])) for row in rows]
 
 
 def claimable_ids(connection: sqlite3.Connection, now: int) -> list[str]:
@@ -276,6 +305,79 @@ def test_schema_and_tenant_binding(connection: sqlite3.Connection) -> None:
     connection.rollback()
 
 
+def test_actor_device_binding_is_unique_revocable_and_membership_scoped(
+    connection: sqlite3.Connection,
+) -> None:
+    assert authenticated_device_rows(connection) == [(DEVICE_A, 1)]
+
+    expect_integrity_error(
+        lambda: connection.execute(
+            """
+            INSERT INTO device_actor_bindings (
+                tenant_id, actor_id, device_id, version, status, evidence_reference,
+                bound_at_ms, updated_at_ms, revoked_at_ms
+            ) VALUES (?, ?, ?, 2, 'ACTIVE', 'binding_conflict', 70, 70, NULL)
+            """,
+            (TENANT_A, OWNER_A, DEVICE_A_REBOUND),
+        )
+    )
+    connection.rollback()
+    assert authenticated_device_rows(connection) == [(DEVICE_A, 1)]
+
+    revoked = connection.execute(
+        """
+        UPDATE device_actor_bindings
+        SET status = 'REVOKED', updated_at_ms = 80, revoked_at_ms = 80
+        WHERE tenant_id = ? AND actor_id = ? AND version = 1 AND status = 'ACTIVE'
+        """,
+        (TENANT_A, OWNER_A),
+    )
+    assert revoked.rowcount == 1
+    connection.execute(
+        """
+        INSERT INTO device_actor_bindings (
+            tenant_id, actor_id, device_id, version, status, evidence_reference,
+            bound_at_ms, updated_at_ms, revoked_at_ms
+        ) VALUES (?, ?, ?, 2, 'ACTIVE', 'binding_rebound', 90, 90, NULL)
+        """,
+        (TENANT_A, OWNER_A, DEVICE_A_REBOUND),
+    )
+    connection.commit()
+    assert authenticated_device_rows(connection) == [(DEVICE_A_REBOUND, 2)]
+
+    connection.execute(
+        """
+        UPDATE memberships
+        SET status = 'SUSPENDED', version = version + 1, updated_at_ms = 100
+        WHERE tenant_id = ? AND actor_id = ?
+        """,
+        (TENANT_A, OWNER_A),
+    )
+    assert authenticated_device_rows(connection) == []
+    connection.rollback()
+    assert authenticated_device_rows(connection) == [(DEVICE_A_REBOUND, 2)]
+
+    connection.execute(
+        """
+        UPDATE device_actor_bindings
+        SET status = 'REVOKED', updated_at_ms = 110, revoked_at_ms = 110
+        WHERE tenant_id = ? AND actor_id = ? AND version = 2 AND status = 'ACTIVE'
+        """,
+        (TENANT_A, OWNER_A),
+    )
+    connection.execute(
+        """
+        INSERT INTO device_actor_bindings (
+            tenant_id, actor_id, device_id, version, status, evidence_reference,
+            bound_at_ms, updated_at_ms, revoked_at_ms
+        ) VALUES (?, ?, ?, 3, 'ACTIVE', 'binding_restored', 120, 120, NULL)
+        """,
+        (TENANT_A, OWNER_A, DEVICE_A),
+    )
+    connection.commit()
+    assert authenticated_device_rows(connection) == [(DEVICE_A, 3)]
+
+
 def test_claimable_due_query_and_index(connection: sqlite3.Connection) -> None:
     insert_future_retry_job(connection)
     connection.commit()
@@ -289,6 +391,13 @@ def test_claimable_due_query_and_index(connection: sqlite3.Connection) -> None:
     ).fetchall()
     plan_text = "\n".join(str(row[3]) for row in plan)
     assert "device_jobs_claimable_device_lookup" in plan_text, plan_text
+
+    identity_plan = connection.execute(
+        "EXPLAIN QUERY PLAN " + AUTHENTICATED_DEVICE_QUERY,
+        (TENANT_A, OWNER_A),
+    ).fetchall()
+    identity_plan_text = "\n".join(str(row[3]) for row in identity_plan)
+    assert "device_actor_bindings_one_active_actor" in identity_plan_text, identity_plan_text
 
 
 def test_claim_shape_and_stale_cas(connection: sqlite3.Connection) -> None:
@@ -425,12 +534,13 @@ def main() -> int:
     connection = database()
     try:
         test_schema_and_tenant_binding(connection)
+        test_actor_device_binding_is_unique_revocable_and_membership_scoped(connection)
         test_claimable_due_query_and_index(connection)
         test_claim_shape_and_stale_cas(connection)
         test_authorization_version_and_revocation_shape(connection)
     finally:
         connection.close()
-    print("Phase 2F device authorization/job D1 invariants are valid.")
+    print("Phase 2F device identity/authorization/job D1 invariants are valid.")
     return 0
 
 
