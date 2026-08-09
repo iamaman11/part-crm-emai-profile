@@ -28,7 +28,7 @@ impl MailboxProviderPort for CloudMailboxProviderRouter<'_> {
             if !binding.provider().is_phase2e_cloud_supported() {
                 return Err(MailboxProviderPortError::IntegrityFailure);
             }
-            let credential = resolve_mailbox_credential(self.env, binding.secret_handle()).await?;
+            let credential = resolve_mailbox_credential(self.env, binding).await?;
             if credential.provider() != binding.provider() {
                 return Err(MailboxProviderPortError::IntegrityFailure);
             }
