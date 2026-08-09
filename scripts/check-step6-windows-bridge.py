@@ -52,17 +52,20 @@ REPOSITORY_REQUIRED = {
     ),
     "apps/profile-bridge/src/browser_mail_query.rs": (
         "pub struct BrowserMailExecutionProof",
+        "execution_binding: BrowserMailboxExecutionBinding",
         "generation_id: GenerationId",
         "device_job_id: DeviceJobId",
         "device_claim_id: DeviceClaimId",
         "device_job_fence: u64",
         "coordinator_lease: ProfileLease",
+        "coordinator_lease.profile_id() != execution_binding.profile_id()",
         "pub trait BrowserMailExecutionFencePort",
         "pub trait BrowserMailRuntimePort",
         "impl<F, R> ClientMailProviderQueryPort for BrowserClientMailQueryAdapter",
         "self.require_current_execution().await?;",
         ".search_messages(&self.proof",
         ".get_message(&self.proof",
+        "execution_binding_profile_must_match_coordinator_lease",
         "stale_post_runtime_fence_discards_search_result",
         "stale_post_runtime_fence_discards_message_body",
         "binding_substitution_is_rejected_before_runtime",
@@ -81,6 +84,14 @@ REPOSITORY_REQUIRED = {
         "persist_materialization_binding",
         "synthetic_browser_preflight",
     ),
+    "crates/application-ports/src/browser_mail_execution.rs": (
+        "pub struct BrowserMailboxExecutionBinding",
+        "pub struct BrowserMailboxExecutionBindWrite",
+        "pub trait BrowserMailboxExecutionBindingApplicationPort",
+        "bind_browser_mailbox_execution",
+        "pub trait BrowserMailboxExecutionBindingPort",
+        "resolve_browser_mailbox_execution_binding",
+    ),
     "crates/application-ports/src/device_jobs.rs": (
         "pub trait AuthenticatedDevicePort",
         "authenticated_device_id",
@@ -89,8 +100,17 @@ REPOSITORY_REQUIRED = {
         "list_claimable_device_jobs",
     ),
     "crates/application-ports/src/lib.rs": (
+        "pub mod browser_mail_execution;",
         "AuthenticatedDevicePort",
         "DeviceJobQueryPort",
+    ),
+    "crates/use-cases-mailboxes/src/browser_execution.rs": (
+        "BindBrowserMailboxExecutionCommand",
+        "BrowserMailboxExecutionBindingOutcome",
+        "execute_bind_browser_mailbox_execution",
+        "authorize_mailbox_binding(role)?",
+        '"mailbox.browser_execution_bind"',
+        "BrowserMailboxExecutionBindWrite::new",
     ),
     "crates/use-cases-devices/src/jobs.rs": (
         "execute_claim_device_job",
@@ -126,6 +146,18 @@ REPOSITORY_REQUIRED = {
         "Err(integrity_failure())",
         'assert!(!LOAD_ACTIVE_DEVICE_BINDING.contains("X-Device-Id"))',
     ),
+    "crates/cloudflare-adapters/src/d1_browser_mail_execution.rs": (
+        "D1BrowserMailboxExecutionBinding",
+        "browser_mailbox_execution_bind_commands",
+        "browser_mailbox_execution_bindings",
+        "binding.provider = 'BROWSER_FALLBACK'",
+        "binding.status = 'ACTIVE'",
+        "binding.execution_status = 'ACTIVE'",
+        "database.batch(vec![command, idempotency, audit, outbox])",
+        "impl BrowserMailboxExecutionBindingPort for D1BrowserMailboxExecutionBinding",
+        "resolver_is_browser_only_active_and_assignment_independent",
+        'assert!(!RESOLVE_BINDING.contains("profile_client_assignments"))',
+    ),
     "crates/cloudflare-adapters/src/d1_device_jobs.rs": (
         "LIST_CLAIMABLE_DEVICE_JOBS",
         "job.tenant_id = ?",
@@ -151,6 +183,16 @@ REPOSITORY_REQUIRED = {
         "WHERE status = 'ACTIVE'",
         "REFERENCES memberships(tenant_id, actor_id) ON DELETE RESTRICT",
     ),
+    "migrations/d1/0020_browser_mailbox_execution_bindings.sql": (
+        "CREATE TABLE browser_mailbox_execution_bind_commands",
+        "CREATE TABLE browser_mailbox_execution_bindings",
+        "provider = 'BROWSER_FALLBACK'",
+        "execution_status = 'ACTIVE'",
+        "browser_mailbox_execution_bind_command_append_only",
+        "browser_mailbox_execution_binding_immutable",
+        "browser_mailbox_execution_binding_insert_governed",
+        "browser_mailbox_execution_profile_lookup",
+    ),
     "scripts/test-device-job-d1.py": (
         "AUTHENTICATED_DEVICE_QUERY",
         "test_actor_device_binding_is_unique_revocable_and_membership_scoped",
@@ -161,17 +203,30 @@ REPOSITORY_REQUIRED = {
         "EXPLAIN QUERY PLAN",
         "assert claimable_ids(connection, 500) == []",
     ),
+    "scripts/test-browser-mail-execution-d1.py": (
+        "RESOLVE_ACTIVE_BINDING",
+        "test_governed_binding_and_immutability",
+        "test_provider_profile_owner_and_uniqueness_fail_closed",
+        "test_revocation_hides_historical_binding_and_index_is_used",
+        "browser_mailbox_execution_profile_lookup",
+        "EXPLAIN QUERY PLAN",
+    ),
     "crates/control-plane-contract/src/routes/devices.rs": (
         "DeviceJobClaimableApi",
         "DeviceJobClaimApi",
         "DeviceJobHeartbeatApi",
         "DeviceJobOutcomeApi",
     ),
+    "crates/control-plane-contract/src/routes/mailboxes.rs": (
+        "MailboxBrowserExecutionBindApi",
+        '"browser-execution"',
+    ),
     "apps/control-plane-worker/src/composition.rs": (
         "pub fn authenticated_device",
         "pub fn device_job_authorization",
         "pub fn device_execution_preconditions",
         "pub fn device_job_repository",
+        "pub fn browser_mailbox_execution_application",
     ),
     "apps/control-plane-worker/src/device_jobs.rs": (
         "resolve_active_request_actor",
@@ -190,6 +245,15 @@ REPOSITORY_REQUIRED = {
         "transport_rejects_device_time_and_lease_substitution_fields",
         "heartbeat_and_outcome_are_strict_and_retry_is_relative_only",
     ),
+    "apps/control-plane-worker/src/mailbox_bindings.rs": (
+        "MailboxBrowserExecutionBindApi",
+        "bind_browser_execution",
+        "BindBrowserMailboxExecutionRequest",
+        "profile_id: String",
+        "request_digest: String",
+        "deny_unknown_fields",
+        "browser_execution_binding_transport_is_metadata_only_and_strict",
+    ),
     "apps/control-plane-worker/src/lib.rs": (
         "mod device_jobs;",
         "RouteClass::DeviceJobClaimableApi",
@@ -197,6 +261,8 @@ REPOSITORY_REQUIRED = {
         "RouteClass::DeviceJobHeartbeatApi",
         "RouteClass::DeviceJobOutcomeApi",
         "device_jobs::dispatch(route, &mut request, &env).await",
+        "RouteClass::MailboxBrowserExecutionBindApi",
+        "mailbox_bindings::dispatch(route, &mut request, &env).await",
     ),
     "apps/profile-bridge/src/windows_native.rs": (
         "std::os::windows::ffi::OsStrExt",
@@ -429,6 +495,35 @@ def enforce_phase2f_ordering(root: Path, errors: list[str]) -> None:
             if forbidden in body:
                 errors.append(
                     f"{request_struct} must not accept trusted/server-owned field: {forbidden}"
+                )
+
+    browser_binding_adapter = (
+        root / "crates/cloudflare-adapters/src/d1_browser_mail_execution.rs"
+    ).read_text(encoding="utf-8")
+    browser_binding_production = browser_binding_adapter.split("#[cfg(test)]", 1)[0]
+    if "profile_client_assignments" in browser_binding_production:
+        errors.append(
+            "browser mailbox execution binding must be explicit and must not derive from client assignment"
+        )
+
+    mailbox_ingress = (root / "apps/control-plane-worker/src/mailbox_bindings.rs").read_text(
+        encoding="utf-8"
+    )
+    mailbox_production = mailbox_ingress.split("#[cfg(test)]", 1)[0]
+    browser_bind_request = struct_body(mailbox_production, "BindBrowserMailboxExecutionRequest")
+    if not browser_bind_request:
+        errors.append("missing strict browser mailbox execution binding DTO")
+    else:
+        for forbidden in (
+            "device_id",
+            "generation_id",
+            "query",
+            "message_body",
+            "secret_handle",
+        ):
+            if forbidden in browser_bind_request:
+                errors.append(
+                    f"browser execution binding DTO must remain metadata-only: {forbidden}"
                 )
 
     browser_mail = (root / "apps/profile-bridge/src/browser_mail_query.rs").read_text(
