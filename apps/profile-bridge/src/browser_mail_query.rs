@@ -1,9 +1,9 @@
 use application_ports::{
-    ClientMailProviderQueryPort, MailMessageBody, MailMessageSummary, MailboxMessageReference,
-    QueryPage, QueryPortError, QueryPortErrorClass, SearchClientMailboxMessagesRequest,
+    ClientMailProviderQueryPort, DeviceClaimId, DeviceJobId, MailMessageBody, MailMessageSummary,
+    MailboxMessageReference, QueryPage, QueryPortError, QueryPortErrorClass,
+    SearchClientMailboxMessagesRequest,
 };
 use core::future::Future;
-use device_domain::{DeviceClaimId, DeviceJobId};
 use profile_platform_primitives::{GenerationId, MailboxBindingId, TenantScope};
 use session_domain::{LeaseStatus, ProfileLease};
 
@@ -217,11 +217,10 @@ mod tests {
         BrowserMailRuntimePort,
     };
     use application_ports::{
-        ClientMailProviderQueryPort, MailMessageBody, MailMessageSummary, MailSearchTerm,
-        MailboxMessageReference, QueryPage, QueryPageRequest, QueryPageSize, QueryPortError,
-        QueryPortErrorClass, SearchClientMailboxMessagesRequest,
+        ClientMailProviderQueryPort, DeviceClaimId, DeviceJobId, MailMessageBody,
+        MailMessageSummary, MailSearchTerm, MailboxMessageReference, QueryPage, QueryPageRequest,
+        QueryPageSize, QueryPortError, QueryPortErrorClass, SearchClientMailboxMessagesRequest,
     };
-    use device_domain::{DeviceClaimId, DeviceJobId};
     use profile_platform_primitives::{
         DeviceId, FencingToken, GenerationId, MailboxBindingId, ProfileId, SessionId, TenantId,
         TenantScope, UnixMillis,
@@ -384,9 +383,11 @@ mod tests {
             },
             runtime(binding_id.clone()),
         );
-        let error = block_on(adapter.search_messages(&scope()?, &binding_id, &search_request()?))
-            .expect_err("stale post-runtime fence must reject the result");
-        assert_eq!(error.class(), QueryPortErrorClass::IntegrityFailure);
+        let result = block_on(adapter.search_messages(&scope()?, &binding_id, &search_request()?));
+        assert_eq!(
+            result.map(|_| ()),
+            Err(QueryPortError::new(QueryPortErrorClass::IntegrityFailure))
+        );
         assert_eq!(adapter.runtime.search_calls.get(), 1);
         assert_eq!(adapter.fence.calls.get(), 2);
         Ok(())
@@ -406,9 +407,11 @@ mod tests {
             },
             runtime(binding_id),
         );
-        let error = block_on(adapter.get_message(&scope()?, &reference))
-            .expect_err("stale post-runtime fence must reject the body");
-        assert_eq!(error.class(), QueryPortErrorClass::IntegrityFailure);
+        let result = block_on(adapter.get_message(&scope()?, &reference));
+        match result {
+            Err(error) => assert_eq!(error.class(), QueryPortErrorClass::IntegrityFailure),
+            Ok(_) => panic!("stale post-runtime fence returned a message body"),
+        }
         assert_eq!(adapter.runtime.body_calls.get(), 1);
         assert_eq!(adapter.fence.calls.get(), 2);
         Ok(())
@@ -428,9 +431,11 @@ mod tests {
             runtime(correct_binding),
         );
         let foreign = MailboxBindingId::parse("binding_02JBRMAIL")?;
-        let error = block_on(adapter.search_messages(&scope()?, &foreign, &search_request()?))
-            .expect_err("foreign binding must be rejected");
-        assert_eq!(error.class(), QueryPortErrorClass::IntegrityFailure);
+        let result = block_on(adapter.search_messages(&scope()?, &foreign, &search_request()?));
+        assert_eq!(
+            result.map(|_| ()),
+            Err(QueryPortError::new(QueryPortErrorClass::IntegrityFailure))
+        );
         assert_eq!(adapter.runtime.search_calls.get(), 0);
         assert_eq!(adapter.fence.calls.get(), 0);
         Ok(())
@@ -449,9 +454,11 @@ mod tests {
             },
             runtime(MailboxBindingId::parse("binding_02JBRMAIL")?),
         );
-        let error = block_on(adapter.search_messages(&scope()?, &binding_id, &search_request()?))
-            .expect_err("provider substitution must be rejected");
-        assert_eq!(error.class(), QueryPortErrorClass::IntegrityFailure);
+        let result = block_on(adapter.search_messages(&scope()?, &binding_id, &search_request()?));
+        assert_eq!(
+            result.map(|_| ()),
+            Err(QueryPortError::new(QueryPortErrorClass::IntegrityFailure))
+        );
         assert_eq!(adapter.runtime.search_calls.get(), 1);
         assert_eq!(adapter.fence.calls.get(), 1);
         Ok(())
