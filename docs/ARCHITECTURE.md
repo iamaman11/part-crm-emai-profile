@@ -147,13 +147,20 @@ should become separate Cargo crates when that improves compile-time dependency i
 crate splitting is not an excuse for one-crate-per-function fragmentation.
 
 Accepted independent application ownership includes `use-cases-identity`,
-`use-cases-notifications`, `use-cases-clients` and `use-cases-query`; shared `use-cases` compatibility
-re-exports do not regain canonical ownership of those capabilities.
+`use-cases-notifications`, `use-cases-clients`, `use-cases-query` and `use-cases-mailboxes`; shared
+`use-cases` compatibility re-exports do not regain canonical ownership of those capabilities.
 
 Phase 2D accepts `use-cases-query` as the independent cross-capability read/search application context;
 mutation aggregates remain owned by their existing capability use cases. Query orchestration owns
 authorization-before-projection, bounded exact-contact HMAC derivation/lookup, and authorization ->
 mailbox eligibility -> provider/body sequencing without importing provider/runtime implementations.
+
+Phase 2E accepts `use-cases-mailboxes` as the independent mailbox command/scheduling application
+context. Provider-neutral lifecycle/retry decisions remain inward; Cloudflare adapters own Gmail API,
+IMAP, D1 and Queue translation. Dynamic mailbox credentials remain behind opaque `SecretHandle` values
+and one fixed outer `MAILBOX_SECRET_RESOLVER` service binding. Scheduled execution uses durable
+metadata-only dispatch/lease/fencing state before provider I/O; duplicate Queue delivery cannot create
+a second canonical provider-result mutation. Browser/device execution remains Phase 2F ownership.
 
 ### Adapters
 
@@ -162,7 +169,7 @@ Adapters implement ports and map provider/storage/runtime behavior:
 - Cloudflare: Access, D1, R2, Queues, Durable Objects, secrets;
 - Windows: CNG/DPAPI, filesystem, process tree, custom protocol, updater;
 - Camouhost: typed IPC to Python/Camoufox;
-- mailbox providers: Gmail/API/IMAP/browser-backed providers;
+- mailbox providers: Phase 2E accepted Gmail API/IMAP cloud adapters; browser-backed execution remains Phase 2F;
 - CRM: future Party/OIDC/PostgreSQL integration adapters.
 
 Adapters may depend inward on domain/application types. They may not redefine domain policy
@@ -269,6 +276,12 @@ The default design is simple:
 - no canonical D1/R2 body copy by default;
 - message body/subject/addresses do not enter ordinary logs/audit/realtime/events/support;
 - HTML mail is sanitized/sandboxed; tracking images/active content disabled by default.
+
+Phase 2E accepts the real cloud adapter implementation behind this boundary: authorization and mailbox
+eligibility still precede provider access, Gmail/IMAP cursors/references and response sizes are bounded,
+Unicode IMAP search uses bounded synchronizing literals, and credentials/content remain absent from
+D1 coordination, Queue envelopes, audit/outbox and operational telemetry. Real provider execution is
+still External evidence rather than a repository-local production claim.
 
 Any later central encrypted/full-text/blind index requires a separate threat/storage/retention
 decision.
@@ -388,6 +401,8 @@ Permanent policy should cover:
 - Phase 2C client merge/assignment-as-non-ACL/grant-safe projection and feature-route positive/negative fixtures;
 - Phase 2D query ownership/privacy, exact-HMAC contact/grant safety, bounded/index-backed query-plan,
   synthetic cloud/Bridge Client Mail and native/WASM positive/negative fixtures;
+- Phase 2E mailbox ownership, Queue lease/fencing/idempotency, opaque secret resolution, real cloud
+  adapter bounds and mailbox-content privacy positive/negative fixtures;
 - generation freshness/fencing;
 - secret/PII/content scans;
 - native + WASM + Windows/release composition as applicable;

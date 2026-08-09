@@ -37,15 +37,15 @@ No level by itself means production readiness.
 | Full Profile Bridge operator flow | Composed / Synthetic | Synthetic executable composes claim, fake device identity, coordinator lease, generation ownership, writer lock, local lifecycle and fake Camouhost failure ordering. | Real Camoufox, production keys, remote enrollment/coordinator and real R2 lifecycle are External. |
 | Local profile lifecycle / materialization | Library / Synthetic | Workspace marking, inventory, lock ownership, clone-only recovery, quota/support policy and synthetic operator composition. | Real browser/kernel-lock, multi-device and production R2 evidence remains Phase 2F/2I/2J Target/External. |
 | Encrypted cloud generations | Synthetic | XChaCha20-Poly1305 container, immutable lifecycle, pointer/rollback/quarantine/orphan policy. | Production R2/device unwrap/remote recovery atomicity evidence is External. |
-| Mailbox operations baseline | Composed / Synthetic | Provider-neutral binding/job domain, D1 persistence, secret-handle-only DTOs, idempotency/audit/outbox and Worker metadata/job paths are composed. Phase 2D adds the accepted provider-neutral Client Mail search/body application contract with synthetic cloud/Bridge adapters. | Mailbox-domain decomposition + real cloud lane are Phase 2E; durable browser/device lane is Phase 2F; real provider evidence remains External. |
+| Mailbox operations baseline | Composed / Synthetic | Phase 2E accepts decomposed `mailbox-domain`, independent `use-cases-mailboxes`, real Gmail API/IMAP outer adapters, durable Queue retry/DLQ/idempotency/fencing, opaque fixed-service secret resolution, auth/suspended lifecycle and metadata-only provider observations while preserving Phase 2D query ordering. | Durable browser/device lane is Phase 2F; real Gmail/IMAP provider execution remains External evidence. |
 | React web UI baseline | Composed / Synthetic | React/Vite/TS shell, Phase 2C feature-owned route composition and modular Client Registry UI are accepted; migrated public DTOs are generated, and Phase 2D adds generated Client Mail contracts plus incremental Client -> Mail UI. Sibling-feature internal/alias imports are fail-closed. | Phase 2H completes routes, full operator/admin UX, safe full-body mail rendering and remaining generated public coverage. |
 | Cross-component standalone acceptance | Composed / Synthetic | Deterministic metadata-only manifest covering governed D1, generation integrity, Worker/adapters native+WASM, synthetic Bridge and frontend build/tests. | Real deployment/provider/device evidence is External. |
 | Integration event envelope/outbox | Composed / Synthetic | Phase 1A versioned envelope, event registry, evolved D1 outbox, metadata-only notification events, Queue dispatch, source guards and durable consumer idempotency; Phase 1B preserves the canonical event source for replay. | Future capability event types/consumers must extend the same registry and durable-source rules. |
 | Notification delivery/catch-up operations | Composed / Synthetic | Phase 1B `notification-domain` + `use-cases-notifications`, deterministic bounded retry/DLQ, authorized immutable-audit replay, grant-aware durable catch-up/cursors, bounded compaction, sanitizer-safe owner operations, generated notification HTTP contracts and thin Worker Queue/Scheduled/API composition. | New mailbox/device consumers remain Phase 2E/2F; realtime UserNotificationHub remains Phase 2G. |
 | Client contact protection | Composed | Phase 2A/2B accepted versioned normalization, separate encryption/HMAC key domains, ciphertext-only authoritative D1 persistence, key-version-aware protection and tenant-first indexed exact lookup; Phase 2D reuses the HMAC index behind live authorization/grants. | Production key operations/restore remain External; fuzzy/prefix PII search remains prohibited without a separate ADR. |
 | Client Registry 2.0 | Composed | Phase 2A–2C accepted client-domain split, `use-cases-clients`, protected contacts, lifecycle/merge, grant-safe projections, historical assignment and ordinary Registry UI workflows. | Phase 2H completes cross-capability operator/admin polish; future CRM cutover remains outside active Phase 2. |
-| Read models/global search | Library / Synthetic | Phase 2D accepted independent `use-cases-query`, capability-owned read-model ports/projections, bounded opaque-ID global search, grant-safe D1 predicates, cursor/cost bounds and query-plan evidence with permanent native/WASM CI. | Real provider-backed mailbox reads arrive through Phase 2E/2F; broader UX is Phase 2H. |
-| Client-scoped mailbox message search/body | Library / Synthetic | Phase 2D accepted provider-neutral search/get-message contracts, authorization -> mailbox eligibility -> provider sequencing, foreign-reference protection, deterministic fake cloud/Bridge full-body adapters, generated DTOs and incremental UI. | Phase 2E implements the real cloud lane; Phase 2F implements the real browser/Bridge lane; provider/physical evidence remains External. |
+| Read models/global search | Library / Synthetic | Phase 2D accepted independent `use-cases-query`, capability-owned read-model ports/projections, bounded opaque-ID global search, grant-safe D1 predicates, cursor/cost bounds and query-plan evidence with permanent native/WASM CI. Phase 2E adds the real cloud mailbox query adapter behind the same authorization/eligibility contract. | Browser/Bridge mailbox reads remain Phase 2F; broader UX is Phase 2H; real provider evidence remains External. |
+| Client-scoped mailbox message search/body | Library / Synthetic | Phase 2D accepted provider-neutral search/get-message contracts and authorization -> mailbox eligibility -> provider sequencing; Phase 2E accepts the bounded real Gmail API/IMAP cloud adapter, provider-scoped cursors/references and transient body parsing under the same application contract. | Phase 2F implements the browser/Bridge lane; real provider/physical evidence remains External. |
 | Device job/browser mailbox execution | Target / Synthetic foundation | Bridge/session/materialization primitives exist synthetically. | Durable server device-job domain/application path and real browser lane are Phase 2F. |
 | Realtime UserNotificationHub | Target | Durable-event-backed topology is normative. | Phase 2G implementation is not accepted. |
 | Complete standalone UI/E2E | Target | Product target is normative. | Phase 2H–2I implementation is not accepted; Phase 2J closes real rollout evidence. |
@@ -61,7 +61,7 @@ because phase numbering changed.
 |---|---|---|---|
 | A1 | Adapter dependency boundary | **Accepted** — corrected inward dependency rule + executable allowlists. | Preserve continuously. |
 | A2 | `application-ports` splitting | **Accepted** — Phase 0A/PR #79 split capability modules with thin facade. | Preserve; add modules with owning capabilities. |
-| A3 | Domain aggregate splitting | **Client half accepted in Phase 2A** — `client-domain` is decomposed behind a thin facade; `mailbox-domain` remains the open half. | Mailbox half is Phase 2E. |
+| A3 | Domain aggregate splitting | **Accepted** — Phase 2A decomposed `client-domain`; Phase 2E decomposed `mailbox-domain` into binding/job/runtime-lane/observation ownership behind a thin compatibility facade. | Preserve continuously; new device state is owned separately by Phase 2F. |
 | A4 | OpenAPI -> TypeScript generation | **Partially accepted** — generator/CI and migrated slice exist, but handwritten Profile/Mailbox/Generation/Coordinator projections still exist. | Expand generated coverage with every new 2A–2H public surface. |
 | A5 | Feature-sliced SPA route composition | **Accepted in Phase 2C** — feature-owned public route APIs compose into the root router and sibling internals are permanently rejected. | Preserve during later route-family expansion. |
 | A6 | Architecture consistency gate | **Accepted** — deterministic inventory/docs consistency in CI. | Expand coverage with new modules/routes/contracts. |
@@ -104,8 +104,11 @@ crates/use-cases-clients
 crates/use-cases-query
   independent cross-capability read/search application context accepted in Phase 2D
 
+crates/use-cases-mailboxes
+  independent mailbox binding/job/scheduled application context accepted in Phase 2E
+
 crates/use-cases
-  remaining shared application contexts; notification/client/query ownership does not return to this compatibility surface
+  remaining shared application contexts; notification/client/query/mailbox ownership does not return to this compatibility surface
 
 crates/cloudflare-adapters
   D1/Access/DO/R2/Queue/provider implementations depending inward
@@ -120,9 +123,8 @@ frontend
   React presentation/navigation/query cache; migrated public API types consume generated TypeScript
 ```
 
-The notification, client and query extraction points were accepted in Phase 1B, Phase 2A and Phase 2D.
-Remaining fixed extraction points are normative in `DEVELOPMENT_PLAN.md`: mailboxes in 2E and devices
-in 2F.
+The notification, client, query and mailbox extraction points were accepted in Phase 1B, Phase 2A,
+Phase 2D and Phase 2E. The remaining fixed extraction point in active Phase 2 is devices in Phase 2F.
 
 ## 6. Current End-To-End Boundaries
 
@@ -148,10 +150,11 @@ Real R2/device/Camoufox behavior remains External until proven.
 
 ### Mailbox path
 
-Current accepted mailbox capability combines composed metadata/job paths with the Phase 2D Library/Synthetic
-client-scoped message search/body contract. Authorization and mailbox eligibility precede provider/body
-invocation; message content is permitted only in the authorized response/UI and prohibited from ordinary
-technical channels. Real cloud execution remains Phase 2E and real browser/Bridge execution Phase 2F.
+Current accepted mailbox capability combines Phase 2E composed metadata/job scheduling with the Phase 2D
+client-scoped message query contract and a bounded real Gmail API/IMAP cloud adapter. Authorization and
+mailbox eligibility precede provider/body invocation; Queue/D1 coordination remains metadata-only and
+message content is permitted only in the authorized transient response/UI. Real provider execution evidence
+remains External; durable browser/Bridge execution is Phase 2F.
 
 ## 7. Definition Of A Complete New Capability
 
