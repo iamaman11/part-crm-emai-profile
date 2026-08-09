@@ -1,0 +1,23 @@
+name: Phase 2B Lock Materializer
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          persist-credentials: false
+      - name: Generate exact lockfile
+        run: cargo generate-lockfile
+      - name: Emit lockfile base64
+        run: |
+          printf 'LOCKFILE_BASE64_BEGIN\n'
+          base64 -w0 Cargo.lock
+          printf '\nLOCKFILE_BASE64_END\n'
