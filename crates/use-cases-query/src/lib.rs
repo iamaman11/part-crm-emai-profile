@@ -231,10 +231,22 @@ mod tests {
     }
 
     #[test]
-    fn denied_query_is_neutral_and_never_touches_projection() -> Result<(), Box<dyn std::error::Error>> {
-        let authorization = FakeAuthorization { allowed: false, calls: Cell::new(0), failure: None };
-        let projection = FakeClients { calls: Cell::new(0) };
-        let result = block_on(list_clients(&actor()?, &authorization, &projection, &page()?))?;
+    fn denied_query_is_neutral_and_never_touches_projection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let authorization = FakeAuthorization {
+            allowed: false,
+            calls: Cell::new(0),
+            failure: None,
+        };
+        let projection = FakeClients {
+            calls: Cell::new(0),
+        };
+        let result = block_on(list_clients(
+            &actor()?,
+            &authorization,
+            &projection,
+            &page()?,
+        ))?;
         assert!(result.items().is_empty());
         assert_eq!(authorization.calls.get(), 1);
         assert_eq!(projection.calls.get(), 0);
@@ -243,9 +255,20 @@ mod tests {
 
     #[test]
     fn authorized_query_projects_only_after_live_check() -> Result<(), Box<dyn std::error::Error>> {
-        let authorization = FakeAuthorization { allowed: true, calls: Cell::new(0), failure: None };
-        let projection = FakeClients { calls: Cell::new(0) };
-        let result = block_on(list_clients(&actor()?, &authorization, &projection, &page()?))?;
+        let authorization = FakeAuthorization {
+            allowed: true,
+            calls: Cell::new(0),
+            failure: None,
+        };
+        let projection = FakeClients {
+            calls: Cell::new(0),
+        };
+        let result = block_on(list_clients(
+            &actor()?,
+            &authorization,
+            &projection,
+            &page()?,
+        ))?;
         assert_eq!(result.items().len(), 1);
         assert_eq!(authorization.calls.get(), 1);
         assert_eq!(projection.calls.get(), 1);
@@ -259,9 +282,16 @@ mod tests {
             calls: Cell::new(0),
             failure: Some(QueryPortErrorClass::DependencyUnavailable),
         };
-        let projection = FakeClients { calls: Cell::new(0) };
+        let projection = FakeClients {
+            calls: Cell::new(0),
+        };
         assert_eq!(
-            block_on(list_clients(&actor()?, &authorization, &projection, &page()?)),
+            block_on(list_clients(
+                &actor()?,
+                &authorization,
+                &projection,
+                &page()?
+            )),
             Err(QueryApplicationError::DependencyUnavailable)
         );
         assert_eq!(projection.calls.get(), 0);

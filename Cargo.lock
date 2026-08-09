@@ -934,6 +934,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "use-cases-query"
+version = "0.1.0"
+dependencies = [
+ "application-ports",
+ "client-domain",
+ "profile-platform-primitives",
+]
+
+[[package]]
 name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

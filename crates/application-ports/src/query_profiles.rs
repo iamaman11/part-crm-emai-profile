@@ -1,7 +1,9 @@
 use crate::query::{QueryPage, QueryPageRequest, QueryPortError};
 use core::future::Future;
 use profile_domain::ProfileStatus;
-use profile_platform_primitives::{ActorContext, AggregateVersion, ClientId, GenerationId, ProfileId};
+use profile_platform_primitives::{
+    ActorContext, AggregateVersion, ClientId, GenerationId, ProfileId,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileReadProjection {
