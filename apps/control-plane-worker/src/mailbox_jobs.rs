@@ -3,9 +3,7 @@ use crate::access_session::{
 };
 use crate::command_evidence;
 use crate::composition::mailbox_job_application;
-use cloudflare_adapters::mailbox_provider::{
-    DeterministicFakeMailboxProvider, DeterministicMailboxOutcome,
-};
+use cloudflare_adapters::cloud_mailbox_provider::CloudMailboxProviderRouter;
 use control_plane_contract::RouteClass;
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, MailboxJobId};
@@ -158,13 +156,7 @@ async fn run_job(
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let application = mailbox_job_application(env)?;
-    let mut provider = DeterministicFakeMailboxProvider::new(
-        DeterministicMailboxOutcome::Success {
-            provider_status: "SYNTHETIC_OK".to_owned(),
-            bounded_item_count: 0,
-            next_cursor: None,
-        },
-    );
+    let mut provider = CloudMailboxProviderRouter::new(env);
     match execute_run_mailbox_job(
         actor,
         role,
