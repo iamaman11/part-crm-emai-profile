@@ -1,7 +1,7 @@
 # Architecture Map
 
 **Status:** normative target architecture  
-**Date:** 2026-08-08  
+**Date:** 2026-08-09  
 **For:** developers, reviewers, operators and future CRM integration work
 
 This document defines stable architecture boundaries and invariants. It does **not** define
@@ -87,12 +87,13 @@ code may not depend on concrete Cloudflare/Windows/React/provider implementation
 ### `primitives`
 
 Opaque IDs, tenant scope, safe path segments, digests, time/value types and provider-neutral
-validation primitives. No storage/runtime/business workflow.
+validation primitives. No storage/runtime/business workflow. `ContactPointId` is opaque and
+PII-independent; email/phone/name/URL values are never technical resource identities.
 
 ### Domain crates
 
 - `identity-access-domain`: tenant owner, memberships, grants and authorization decisions;
-- `client-domain`: client/contact/assignment rules;
+- `client-domain`: decomposed client/contact/assignment/merge rules behind a thin facade;
 - `profile-domain`: profile/generation lifecycle policy;
 - `session-domain`: launch intent, lease epoch, fencing, session and recovery states;
 - `mailbox-domain`: provider-neutral mailbox binding/job/runtime-lane rules.
@@ -104,6 +105,9 @@ Domains contain pure decisions/state machines and compile without D1/Workers/Win
 Ports are owned by application needs and grouped by capability: identity, clients, profiles,
 generations, sessions, mailboxes, notifications/search/devices/CRM as those capabilities are
 introduced. Read and write capabilities are separated where useful.
+
+Client contact persistence ports accept protected representations only; transient contact plaintext
+may enter only the application/protection boundary and cannot cross the persistence interface by type.
 
 The current plan may keep `application-ports` as one Cargo crate with capability modules while
 that remains clear. It is not required to split every port into a separate crate.
@@ -124,6 +128,10 @@ One application command/query owns one workflow. A use case:
 Use cases never call concrete Cloudflare SDKs. High-growth independent application contexts
 should become separate Cargo crates when that improves compile-time dependency isolation;
 crate splitting is not an excuse for one-crate-per-function fragmentation.
+
+Accepted independent application ownership includes `use-cases-identity`,
+`use-cases-notifications` and `use-cases-clients`; shared `use-cases` compatibility re-exports do
+not regain canonical ownership of those capabilities.
 
 ### Adapters
 
@@ -277,8 +285,14 @@ Cloudflare secret root wrapping key (versioned)
         -> AEAD encrypted immutable generation in R2
 ```
 
-Plain root/KEK/DEK material never belongs in Git, D1, R2, logs or client bundles. Production
-promotion requires explicit rotation, recovery/escrow, restore and operator-separation policy.
+Client contact protection is a separate application/adaptor key domain from generation storage:
+contact display encryption keys and exact-lookup HMAC keys are distinct, versioned domains. The
+Phase 2A inner contract fixes separation, domain-separated lookup input and normalization metadata;
+Phase 2B owns authoritative outer key-provider, ciphertext/HMAC persistence and rotation behavior.
+
+Plain root/KEK/DEK/contact-encryption/HMAC key material never belongs in Git, D1, R2, logs, audit,
+events or client bundles. Production promotion requires explicit rotation, recovery/escrow, restore
+and operator-separation policy.
 
 ## 13. Events, Queues And Realtime
 
