@@ -7,9 +7,7 @@ use application_ports::mailboxes::{
 };
 use core::fmt;
 use identity_access_domain::MembershipRole;
-use profile_platform_primitives::{
-    ActorContext, AggregateVersion, MailboxBindingId, ProfileId, SecretHandle,
-};
+use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, SecretHandle};
 
 const MAILBOX_BINDING_CREATE_COMMAND: &str = "mailbox.binding_create";
 const MAILBOX_BINDING_REVOKE_COMMAND: &str = "mailbox.binding_revoke";
@@ -20,7 +18,6 @@ pub struct ExecuteCreateMailboxBindingCommand {
     binding_id: MailboxBindingId,
     provider: MailboxProvider,
     secret_handle: SecretHandle,
-    browser_profile_id: Option<ProfileId>,
     evidence: CommandExecutionEvidence,
 }
 
@@ -36,15 +33,8 @@ impl ExecuteCreateMailboxBindingCommand {
             binding_id,
             provider,
             secret_handle,
-            browser_profile_id: None,
             evidence,
         }
-    }
-
-    #[must_use]
-    pub fn with_browser_profile_id(mut self, profile_id: ProfileId) -> Self {
-        self.browser_profile_id = Some(profile_id);
-        self
     }
 }
 
@@ -183,9 +173,7 @@ pub async fn execute_create_mailbox_binding<P: MailboxBindingApplicationPort>(
     command: ExecuteCreateMailboxBindingCommand,
 ) -> Result<MailboxBindingMutationOutcome, MailboxBindingOperationError> {
     authorize_mailbox_binding(role)?;
-    validate_browser_profile_binding(command.provider, command.browser_profile_id.as_ref())?;
 
-    let browser_profile_id = command.browser_profile_id;
     let binding = MailboxBinding::create(
         actor.tenant_scope().tenant_id().clone(),
         command.binding_id,
@@ -205,11 +193,8 @@ pub async fn execute_create_mailbox_binding<P: MailboxBindingApplicationPort>(
         MailboxReplayDecision::Conflict => return Err(MailboxBindingOperationError::Conflict),
     }
 
-    let mut write =
+    let write =
         MailboxBindingCreateWrite::new(binding, command.evidence, MAILBOX_BINDING_EVENT_PAYLOAD);
-    if let Some(profile_id) = browser_profile_id {
-        write = write.with_browser_profile_id(profile_id);
-    }
     match port.create_binding(actor, &write).await {
         Ok(()) => Ok(MailboxBindingMutationOutcome {
             result_code: "created".to_owned(),
@@ -310,20 +295,6 @@ pub async fn get_mailbox_binding<P: MailboxBindingApplicationPort>(
         .ok_or(MailboxBindingOperationError::NotFound)
 }
 
-fn validate_browser_profile_binding(
-    provider: MailboxProvider,
-    profile_id: Option<&ProfileId>,
-) -> Result<(), MailboxBindingOperationError> {
-    match (provider, profile_id) {
-        (MailboxProvider::BrowserFallback, Some(_))
-        | (MailboxProvider::GmailApi | MailboxProvider::Imap, None) => Ok(()),
-        (MailboxProvider::BrowserFallback, None)
-        | (MailboxProvider::GmailApi | MailboxProvider::Imap, Some(_)) => {
-            Err(MailboxBindingOperationError::InvalidState)
-        }
-    }
-}
-
 fn create_replay_outcome(
     binding: &MailboxBinding,
     receipt: &MailboxReplayReceipt,
@@ -377,12 +348,8 @@ fn map_port_error(error: MailboxBindingPortError) -> MailboxBindingOperationErro
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MailboxBindingOperationError, authorize_mailbox_binding, validate_browser_profile_binding,
-    };
-    use application_ports::mailboxes::MailboxProvider;
+    use super::{MailboxBindingOperationError, authorize_mailbox_binding};
     use identity_access_domain::MembershipRole;
-    use profile_platform_primitives::ProfileId;
 
     #[test]
     fn owner_only_authorization_is_disclosure_neutral() {
@@ -394,28 +361,5 @@ mod tests {
             authorize_mailbox_binding(MembershipRole::Member),
             Err(MailboxBindingOperationError::NotFound)
         );
-    }
-
-    #[test]
-    fn browser_fallback_requires_exact_execution_profile()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let profile_id = ProfileId::parse("profile_01JBRMAIL")?;
-        assert_eq!(
-            validate_browser_profile_binding(MailboxProvider::BrowserFallback, Some(&profile_id)),
-            Ok(())
-        );
-        assert_eq!(
-            validate_browser_profile_binding(MailboxProvider::BrowserFallback, None),
-            Err(MailboxBindingOperationError::InvalidState)
-        );
-        assert_eq!(
-            validate_browser_profile_binding(MailboxProvider::Imap, Some(&profile_id)),
-            Err(MailboxBindingOperationError::InvalidState)
-        );
-        assert_eq!(
-            validate_browser_profile_binding(MailboxProvider::Imap, None),
-            Ok(())
-        );
-        Ok(())
     }
 }
