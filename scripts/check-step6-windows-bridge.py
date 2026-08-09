@@ -66,6 +66,7 @@ REPOSITORY_REQUIRED = {
     "crates/application-ports/src/device_jobs.rs": (
         "pub trait AuthenticatedDevicePort",
         "authenticated_device_id",
+        "DeviceJobPortErrorClass::AuthenticationFailed",
         "pub trait DeviceJobQueryPort",
         "list_claimable_device_jobs",
     ),
@@ -78,6 +79,7 @@ REPOSITORY_REQUIRED = {
         "execute_heartbeat_device_job",
         "execute_apply_device_job_outcome",
         "ensure_authenticated_device",
+        "DeviceJobPortErrorClass::AuthenticationFailed => DeviceJobOperationError::Forbidden",
     ),
     "crates/use-cases-devices/src/queries.rs": (
         "MAX_CLAIMABLE_DEVICE_JOBS",
@@ -86,6 +88,7 @@ REPOSITORY_REQUIRED = {
         ".list_claimable_device_jobs(actor, &device_id",
         "DeviceJobCapability::Claim",
         "DeviceExecutionReadiness::Ready",
+        "DeviceJobPortErrorClass::AuthenticationFailed => DeviceJobQueryError::Forbidden",
         "DeviceJobQueryError::IntegrityFailure",
         "foreign_device_row_is_integrity_failure_before_projection",
     ),
@@ -94,6 +97,15 @@ REPOSITORY_REQUIRED = {
         "assert_eq!(authorization.calls.get(), 0)",
         "assert_eq!(repository.loads.get(), 0)",
         "assert_eq!(repository.writes.get(), 0)",
+    ),
+    "crates/cloudflare-adapters/src/d1_authenticated_device.rs": (
+        "impl AuthenticatedDevicePort for D1AuthenticatedDevice",
+        "FROM device_actor_bindings AS binding",
+        "membership.status = 'ACTIVE'",
+        "binding.status = 'ACTIVE'",
+        "LIMIT 2",
+        "Err(authentication_failed())",
+        "Err(integrity_failure())",
     ),
     "crates/cloudflare-adapters/src/d1_device_jobs.rs": (
         "LIST_CLAIMABLE_DEVICE_JOBS",
@@ -113,7 +125,17 @@ REPOSITORY_REQUIRED = {
         "CREATE INDEX device_jobs_claimable_device_lookup",
         "tenant_id, device_id, status, retry_at_ms, updated_at_ms, job_id",
     ),
+    "migrations/d1/0019_device_actor_bindings.sql": (
+        "CREATE TABLE device_actor_bindings",
+        "PRIMARY KEY (tenant_id, actor_id, version)",
+        "CREATE UNIQUE INDEX device_actor_bindings_one_active_actor",
+        "WHERE status = 'ACTIVE'",
+        "REFERENCES memberships(tenant_id, actor_id) ON DELETE RESTRICT",
+    ),
     "scripts/test-device-job-d1.py": (
+        "AUTHENTICATED_DEVICE_QUERY",
+        "test_actor_device_binding_is_unique_revocable_and_membership_scoped",
+        "device_actor_bindings_one_active_actor",
         "CLAIMABLE_QUERY",
         "test_claimable_due_query_and_index",
         "device_jobs_claimable_device_lookup",
@@ -270,6 +292,15 @@ def enforce_phase2f_ordering(root: Path, errors: list[str]) -> None:
             ".evaluate_device_execution(actor, target)",
             "claimable query authorization before execution precondition projection",
         )
+
+    identity_adapter = (
+        root / "crates/cloudflare-adapters/src/d1_authenticated_device.rs"
+    ).read_text(encoding="utf-8")
+    for forbidden in ("X-Device-Id", "X-Device-ID", "x-device-id"):
+        if forbidden in identity_adapter:
+            errors.append(
+                "trusted device identity must come from verified actor binding, not a request header"
+            )
 
     synthetic = (root / "apps/profile-bridge/src/bin/profile-bridge-synthetic.rs").read_text(
         encoding="utf-8"
