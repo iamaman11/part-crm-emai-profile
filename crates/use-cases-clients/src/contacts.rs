@@ -437,9 +437,6 @@ fn map_protection_error(error: ContactProtectionPortError) -> ContactApplication
 
 fn map_repository_error(error: ClientPortError) -> ContactApplicationError {
     match error.class() {
-        ClientPortErrorClass::NotFound => ContactApplicationError::NotFound,
-        ClientPortErrorClass::VersionConflict => ContactApplicationError::VersionConflict,
-        ClientPortErrorClass::InvalidState => ContactApplicationError::InvalidState,
         ClientPortErrorClass::Conflict => ContactApplicationError::Conflict,
         ClientPortErrorClass::IntegrityFailure => ContactApplicationError::IntegrityFailure,
         ClientPortErrorClass::InternalFailure => ContactApplicationError::InternalFailure,
