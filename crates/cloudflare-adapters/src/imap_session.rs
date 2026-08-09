@@ -329,11 +329,7 @@ mod tests {
     fn synchronizing_literal_prefix_is_ascii_bounded_and_counted()
     -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(
-            literal_command_prefix(
-                "p000001",
-                "UID SEARCH CHARSET UTF-8 UID 1:500 TEXT",
-                6,
-            )?,
+            literal_command_prefix("p000001", "UID SEARCH CHARSET UTF-8 UID 1:500 TEXT", 6,)?,
             "p000001 UID SEARCH CHARSET UTF-8 UID 1:500 TEXT {6}\r\n"
         );
         assert!(literal_command_prefix("p000001", "UID SEARCH TEXT", 0).is_err());
@@ -344,6 +340,8 @@ mod tests {
     #[test]
     fn continuation_detection_is_line_scoped() {
         assert!(continuation_requested(b"+ Ready for literal\r\n"));
-        assert!(!continuation_requested(b"p000001 NO [BADCHARSET] unsupported\r\n"));
+        assert!(!continuation_requested(
+            b"p000001 NO [BADCHARSET] unsupported\r\n"
+        ));
     }
 }

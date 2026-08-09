@@ -84,13 +84,8 @@ async fn search_imap(
         let window_start = window_end
             .saturating_sub(MAX_IMAP_UID_WINDOW.saturating_sub(1))
             .max(1);
-        let mut matches = search_uid_window(
-            &mut session,
-            window_start,
-            window_end,
-            request,
-        )
-        .await?;
+        let mut matches =
+            search_uid_window(&mut session, window_start, window_end, request).await?;
         matches.retain(|uid| *uid >= window_start && *uid <= window_end);
         matches.sort_unstable_by(|left, right| right.cmp(left));
         for uid in matches {
@@ -172,7 +167,9 @@ async fn get_imap_body(
         return Err(integrity_failure());
     }
     let content = extract_mime_text(raw_message, 1024 * 1024)?;
-    MailMessageBody::new(reference.clone(), content).map(Some).map_err(|_| integrity_failure())
+    MailMessageBody::new(reference.clone(), content)
+        .map(Some)
+        .map_err(|_| integrity_failure())
 }
 
 struct ImapMailboxSnapshot {
@@ -333,10 +330,16 @@ fn summary_from_imap(
 fn parse_search_uids(text: &str) -> Result<Vec<u64>, QueryPortError> {
     let line = text
         .lines()
-        .find(|line| line.strip_suffix('\r').unwrap_or(line).starts_with("* SEARCH"))
+        .find(|line| {
+            line.strip_suffix('\r')
+                .unwrap_or(line)
+                .starts_with("* SEARCH")
+        })
         .ok_or_else(integrity_failure)?;
     let line = line.strip_suffix('\r').unwrap_or(line);
-    let suffix = line.strip_prefix("* SEARCH").ok_or_else(integrity_failure)?;
+    let suffix = line
+        .strip_prefix("* SEARCH")
+        .ok_or_else(integrity_failure)?;
     let mut uids = Vec::new();
     for token in suffix.split_ascii_whitespace() {
         let uid = token.parse::<u64>().map_err(|_| integrity_failure())?;
@@ -381,12 +384,9 @@ fn extract_first_literal(bytes: &[u8]) -> Result<Option<&[u8]>, QueryPortError> 
         let close = open
             .checked_add(close_offset)
             .ok_or_else(integrity_failure)?;
-        let length_text = std::str::from_utf8(
-            bytes
-                .get(open + 1..close)
-                .ok_or_else(integrity_failure)?,
-        )
-        .map_err(|_| integrity_failure())?;
+        let length_text =
+            std::str::from_utf8(bytes.get(open + 1..close).ok_or_else(integrity_failure)?)
+                .map_err(|_| integrity_failure())?;
         if !length_text.bytes().all(|byte| byte.is_ascii_digit()) || length_text.is_empty() {
             cursor = close.checked_add(1).ok_or_else(integrity_failure)?;
             continue;
@@ -480,8 +480,8 @@ fn decode_mime_entity(
         .map(String::as_str)
         .unwrap_or("text/plain");
     if content_type.to_ascii_lowercase().starts_with("multipart/") {
-        let boundary = content_type_parameter(content_type, "boundary")?
-            .ok_or_else(integrity_failure)?;
+        let boundary =
+            content_type_parameter(content_type, "boundary")?.ok_or_else(integrity_failure)?;
         let mut output = Vec::new();
         for section in multipart_sections(body, boundary.as_bytes())? {
             let decoded = decode_mime_entity(section, depth + 1, budget)?;
@@ -489,7 +489,10 @@ fn decode_mime_entity(
         }
         return Ok(output);
     }
-    if content_type.to_ascii_lowercase().starts_with("message/rfc822") {
+    if content_type
+        .to_ascii_lowercase()
+        .starts_with("message/rfc822")
+    {
         return decode_mime_entity(body, depth + 1, budget);
     }
     if !content_type.to_ascii_lowercase().starts_with("text/") {
@@ -522,7 +525,10 @@ fn split_headers_body(entity: &[u8]) -> Result<(&[u8], &[u8]), QueryPortError> {
     Ok((&[][..], entity))
 }
 
-fn content_type_parameter(content_type: &str, name: &str) -> Result<Option<String>, QueryPortError> {
+fn content_type_parameter(
+    content_type: &str,
+    name: &str,
+) -> Result<Option<String>, QueryPortError> {
     let mut parts = content_type.split(';');
     let _ = parts.next();
     for part in parts {
@@ -597,7 +603,11 @@ fn multipart_sections<'a>(
     Ok(sections)
 }
 
-fn append_bounded(output: &mut Vec<u8>, value: &[u8], maximum_bytes: usize) -> Result<(), QueryPortError> {
+fn append_bounded(
+    output: &mut Vec<u8>,
+    value: &[u8],
+    maximum_bytes: usize,
+) -> Result<(), QueryPortError> {
     if output.len().saturating_add(value.len()) > maximum_bytes {
         return Err(integrity_failure());
     }
@@ -729,8 +739,14 @@ fn parse_imap_internal_date(value: &str) -> Option<UnixMillis> {
     if zone_bytes.len() != 5 || !matches!(zone_bytes[0], b'+' | b'-') {
         return None;
     }
-    let zone_hour = std::str::from_utf8(&zone_bytes[1..3]).ok()?.parse::<i64>().ok()?;
-    let zone_minute = std::str::from_utf8(&zone_bytes[3..5]).ok()?.parse::<i64>().ok()?;
+    let zone_hour = std::str::from_utf8(&zone_bytes[1..3])
+        .ok()?
+        .parse::<i64>()
+        .ok()?;
+    let zone_minute = std::str::from_utf8(&zone_bytes[3..5])
+        .ok()?
+        .parse::<i64>()
+        .ok()?;
     if zone_hour > 23 || zone_minute > 59 {
         return None;
     }
@@ -910,7 +926,10 @@ mod tests {
     #[test]
     fn transfer_decoders_are_bounded() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(decode_base64(b"SGVsbG8=", 16)?, b"Hello");
-        assert_eq!(decode_quoted_printable(b"hello=20world", 16)?, b"hello world");
+        assert_eq!(
+            decode_quoted_printable(b"hello=20world", 16)?,
+            b"hello world"
+        );
         assert!(decode_base64(b"SGVsbG8=", 4).is_err());
         assert!(decode_quoted_printable(b"hello", 4).is_err());
         Ok(())
