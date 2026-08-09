@@ -1,0 +1,512 @@
+use core::fmt;
+use profile_platform_primitives::{
+    AggregateVersion, DeviceClaimId, DeviceJobId, UnixMillis, VersionOverflow,
+};
+
+use crate::{claim::DeviceClaim, target::DeviceJobTarget};
+
+const MAX_DEVICE_JOB_ATTEMPTS: u32 = 100;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceJobStatus {
+    PendingDevice,
+    ProfileBusy,
+    Running,
+    RetryScheduled,
+    AuthRequired,
+    RecoveryRequired,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+impl DeviceJobStatus {
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(Self::Succeeded | Self::Failed | Self::Cancelled, self)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceJob {
+    job_id: DeviceJobId,
+    target: DeviceJobTarget,
+    version: AggregateVersion,
+    status: DeviceJobStatus,
+    attempt: u32,
+    max_attempts: u32,
+    last_fence: u64,
+    active_claim: Option<DeviceClaim>,
+    retry_at: Option<UnixMillis>,
+    updated_at: UnixMillis,
+}
+
+impl DeviceJob {
+    pub fn issue(
+        job_id: DeviceJobId,
+        target: DeviceJobTarget,
+        max_attempts: u32,
+        issued_at: UnixMillis,
+    ) -> Result<Self, DeviceJobError> {
+        if max_attempts == 0 || max_attempts > MAX_DEVICE_JOB_ATTEMPTS {
+            return Err(DeviceJobError::InvalidMaxAttempts);
+        }
+        Ok(Self {
+            job_id,
+            target,
+            version: AggregateVersion::INITIAL,
+            status: DeviceJobStatus::PendingDevice,
+            attempt: 0,
+            max_attempts,
+            last_fence: 0,
+            active_claim: None,
+            retry_at: None,
+            updated_at: issued_at,
+        })
+    }
+
+    #[must_use]
+    pub const fn job_id(&self) -> &DeviceJobId {
+        &self.job_id
+    }
+
+    #[must_use]
+    pub const fn target(&self) -> &DeviceJobTarget {
+        &self.target
+    }
+
+    #[must_use]
+    pub const fn version(&self) -> AggregateVersion {
+        self.version
+    }
+
+    #[must_use]
+    pub const fn status(&self) -> DeviceJobStatus {
+        self.status
+    }
+
+    #[must_use]
+    pub const fn attempt(&self) -> u32 {
+        self.attempt
+    }
+
+    #[must_use]
+    pub const fn max_attempts(&self) -> u32 {
+        self.max_attempts
+    }
+
+    #[must_use]
+    pub const fn last_fence(&self) -> u64 {
+        self.last_fence
+    }
+
+    #[must_use]
+    pub const fn active_claim(&self) -> Option<&DeviceClaim> {
+        self.active_claim.as_ref()
+    }
+
+    #[must_use]
+    pub const fn retry_at(&self) -> Option<UnixMillis> {
+        self.retry_at
+    }
+
+    #[must_use]
+    pub const fn updated_at(&self) -> UnixMillis {
+        self.updated_at
+    }
+
+    pub fn claim(
+        &mut self,
+        claim_id: DeviceClaimId,
+        observed_at: UnixMillis,
+        lease_expires_at: UnixMillis,
+    ) -> Result<DeviceClaim, DeviceJobError> {
+        self.ensure_time(observed_at)?;
+        if self.status.is_terminal()
+            || matches!(
+                self.status,
+                DeviceJobStatus::Running | DeviceJobStatus::AuthRequired
+            )
+        {
+            return Err(DeviceJobError::InvalidState);
+        }
+        if self.status == DeviceJobStatus::RecoveryRequired {
+            return Err(DeviceJobError::RecoveryRequired);
+        }
+        if self
+            .retry_at
+            .is_some_and(|retry_at| observed_at < retry_at)
+        {
+            return Err(DeviceJobError::NotDue);
+        }
+        if self.active_claim.is_some() {
+            return Err(DeviceJobError::ClaimAlreadyActive);
+        }
+        if self.attempt >= self.max_attempts {
+            return Err(DeviceJobError::AttemptsExhausted);
+        }
+
+        let fence = self
+            .last_fence
+            .checked_add(1)
+            .ok_or(DeviceJobError::FenceOverflow)?;
+        let claim = DeviceClaim::issue(
+            claim_id,
+            self.job_id.clone(),
+            self.target.clone(),
+            fence,
+            observed_at,
+            lease_expires_at,
+        )
+        .map_err(|_| DeviceJobError::InvalidLease)?;
+        self.attempt = self
+            .attempt
+            .checked_add(1)
+            .ok_or(DeviceJobError::AttemptOverflow)?;
+        self.last_fence = fence;
+        self.active_claim = Some(claim.clone());
+        self.retry_at = None;
+        self.status = DeviceJobStatus::Running;
+        self.advance(observed_at)?;
+        Ok(claim)
+    }
+
+    pub fn heartbeat(
+        &mut self,
+        claim_id: &DeviceClaimId,
+        fence: u64,
+        observed_at: UnixMillis,
+        lease_expires_at: UnixMillis,
+    ) -> Result<(), DeviceJobError> {
+        self.ensure_time(observed_at)?;
+        let claim = self.current_claim_mut(claim_id, fence, observed_at)?;
+        claim
+            .heartbeat(observed_at, lease_expires_at)
+            .map_err(|_| DeviceJobError::InvalidLease)?;
+        self.advance(observed_at)
+    }
+
+    pub fn mark_profile_busy(
+        &mut self,
+        claim_id: &DeviceClaimId,
+        fence: u64,
+        observed_at: UnixMillis,
+        retry_at: UnixMillis,
+    ) -> Result<(), DeviceJobError> {
+        self.release_running_claim(claim_id, fence, observed_at)?;
+        if retry_at <= observed_at {
+            return Err(DeviceJobError::InvalidRetryAt);
+        }
+        self.status = DeviceJobStatus::ProfileBusy;
+        self.retry_at = Some(retry_at);
+        self.advance(observed_at)
+    }
+
+    pub fn schedule_retry(
+        &mut self,
+        claim_id: &DeviceClaimId,
+        fence: u64,
+        observed_at: UnixMillis,
+        retry_at: UnixMillis,
+    ) -> Result<(), DeviceJobError> {
+        self.release_running_claim(claim_id, fence, observed_at)?;
+        if self.attempt >= self.max_attempts {
+            return Err(DeviceJobError::AttemptsExhausted);
+        }
+        if retry_at <= observed_at {
+            return Err(DeviceJobError::InvalidRetryAt);
+        }
+        self.status = DeviceJobStatus::RetryScheduled;
+        self.retry_at = Some(retry_at);
+        self.advance(observed_at)
+    }
+
+    pub fn require_auth(
+        &mut self,
+        claim_id: &DeviceClaimId,
+        fence: u64,
+        observed_at: UnixMillis,
+    ) -> Result<(), DeviceJobError> {
+        self.release_running_claim(claim_id, fence, observed_at)?;
+        self.status = DeviceJobStatus::AuthRequired;
+        self.retry_at = None;
+        self.advance(observed_at)
+    }
+
+    pub fn resume_after_auth(&mut self, observed_at: UnixMillis) -> Result<(), DeviceJobError> {
+        self.ensure_time(observed_at)?;
+        if self.status != DeviceJobStatus::AuthRequired || self.active_claim.is_some() {
+            return Err(DeviceJobError::InvalidState);
+        }
+        self.status = DeviceJobStatus::PendingDevice;
+        self.advance(observed_at)
+    }
+
+    pub fn require_recovery(
+        &mut self,
+        claim_id: &DeviceClaimId,
+        fence: u64,
+        observed_at: UnixMillis,
+    ) -> Result<(), DeviceJobError> {
+        self.release_running_claim(claim_id, fence, observed_at)?;
+        self.status = DeviceJobStatus::RecoveryRequired;
+        self.retry_at = None;
+        self.advance(observed_at)
+    }
+
+    pub fn resume_after_recovery(
+        &mut self,
+        observed_at: UnixMillis,
+    ) -> Result<(), DeviceJobError> {
+        self.ensure_time(observed_at)?;
+        if self.status != DeviceJobStatus::RecoveryRequired || self.active_claim.is_some() {
+            return Err(DeviceJobError::InvalidState);
+        }
+        self.status = DeviceJobStatus::PendingDevice;
+        self.advance(observed_at)
+    }
+
+    pub fn succeed(
+        &mut self,
+        claim_id: &DeviceClaimId,
+        fence: u64,
+        observed_at: UnixMillis,
+    ) -> Result<(), DeviceJobError> {
+        self.release_running_claim(claim_id, fence, observed_at)?;
+        self.status = DeviceJobStatus::Succeeded;
+        self.retry_at = None;
+        self.advance(observed_at)
+    }
+
+    pub fn fail(
+        &mut self,
+        claim_id: &DeviceClaimId,
+        fence: u64,
+        observed_at: UnixMillis,
+    ) -> Result<(), DeviceJobError> {
+        self.release_running_claim(claim_id, fence, observed_at)?;
+        self.status = DeviceJobStatus::Failed;
+        self.retry_at = None;
+        self.advance(observed_at)
+    }
+
+    pub fn cancel(&mut self, observed_at: UnixMillis) -> Result<(), DeviceJobError> {
+        self.ensure_time(observed_at)?;
+        if self.status.is_terminal() {
+            return Err(DeviceJobError::InvalidState);
+        }
+        self.active_claim = None;
+        self.retry_at = None;
+        self.status = DeviceJobStatus::Cancelled;
+        self.advance(observed_at)
+    }
+
+    fn current_claim_mut(
+        &mut self,
+        claim_id: &DeviceClaimId,
+        fence: u64,
+        observed_at: UnixMillis,
+    ) -> Result<&mut DeviceClaim, DeviceJobError> {
+        if self.status != DeviceJobStatus::Running {
+            return Err(DeviceJobError::InvalidState);
+        }
+        let claim = self
+            .active_claim
+            .as_mut()
+            .ok_or(DeviceJobError::MissingActiveClaim)?;
+        if claim.claim_id() != claim_id || claim.fence() != fence {
+            return Err(DeviceJobError::StaleClaim);
+        }
+        if claim.is_expired(observed_at) {
+            return Err(DeviceJobError::LeaseExpired);
+        }
+        Ok(claim)
+    }
+
+    fn release_running_claim(
+        &mut self,
+        claim_id: &DeviceClaimId,
+        fence: u64,
+        observed_at: UnixMillis,
+    ) -> Result<(), DeviceJobError> {
+        self.ensure_time(observed_at)?;
+        self.current_claim_mut(claim_id, fence, observed_at)?;
+        self.active_claim = None;
+        Ok(())
+    }
+
+    fn ensure_time(&self, observed_at: UnixMillis) -> Result<(), DeviceJobError> {
+        if observed_at < self.updated_at {
+            Err(DeviceJobError::TimeRegression)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn advance(&mut self, observed_at: UnixMillis) -> Result<(), DeviceJobError> {
+        self.version = self.version.next().map_err(map_version_overflow)?;
+        self.updated_at = observed_at;
+        Ok(())
+    }
+}
+
+fn map_version_overflow(_: VersionOverflow) -> DeviceJobError {
+    DeviceJobError::VersionOverflow
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceJobError {
+    InvalidMaxAttempts,
+    InvalidState,
+    InvalidLease,
+    InvalidRetryAt,
+    NotDue,
+    RecoveryRequired,
+    ClaimAlreadyActive,
+    MissingActiveClaim,
+    StaleClaim,
+    LeaseExpired,
+    AttemptsExhausted,
+    AttemptOverflow,
+    FenceOverflow,
+    VersionOverflow,
+    TimeRegression,
+}
+
+impl fmt::Display for DeviceJobError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidMaxAttempts => "device job max attempts are outside the bounded range",
+            Self::InvalidState => "device job transition is invalid for the current state",
+            Self::InvalidLease => "device job claim lease is invalid",
+            Self::InvalidRetryAt => "device job retry time must be in the future",
+            Self::NotDue => "device job retry is not due yet",
+            Self::RecoveryRequired => "device job requires explicit recovery before another claim",
+            Self::ClaimAlreadyActive => "device job already has an active claim",
+            Self::MissingActiveClaim => "device job has no active claim",
+            Self::StaleClaim => "device job claim or fencing evidence is stale",
+            Self::LeaseExpired => "device job claim lease expired",
+            Self::AttemptsExhausted => "device job attempts are exhausted",
+            Self::AttemptOverflow => "device job attempt counter overflow",
+            Self::FenceOverflow => "device job fencing counter overflow",
+            Self::VersionOverflow => "device job aggregate version overflow",
+            Self::TimeRegression => "device job transition time regressed",
+        })
+    }
+}
+
+impl std::error::Error for DeviceJobError {}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeviceJob, DeviceJobError, DeviceJobStatus};
+    use crate::target::DeviceJobTarget;
+    use profile_platform_primitives::{
+        DeviceClaimId, DeviceId, DeviceJobId, GenerationId, ProfileId, TenantId, UnixMillis,
+    };
+
+    fn target() -> Result<DeviceJobTarget, Box<dyn std::error::Error>> {
+        Ok(DeviceJobTarget::new(
+            TenantId::parse("tenant_01JDEVICE")?,
+            DeviceId::parse("device_01JDEVICE")?,
+            ProfileId::parse("profile_01JDEVICE")?,
+            GenerationId::parse("generation_01JDEVICE")?,
+        ))
+    }
+
+    fn job(max_attempts: u32) -> Result<DeviceJob, Box<dyn std::error::Error>> {
+        Ok(DeviceJob::issue(
+            DeviceJobId::parse("devjob_01JDEVICE")?,
+            target()?,
+            max_attempts,
+            UnixMillis::new(100),
+        )?)
+    }
+
+    #[test]
+    fn claim_turnover_advances_fence_and_rejects_stale_result()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut job = job(3)?;
+        let first_id = DeviceClaimId::parse("devclaim_01JDEVICE1")?;
+        let first = job.claim(first_id.clone(), UnixMillis::new(110), UnixMillis::new(200))?;
+        job.mark_profile_busy(
+            &first_id,
+            first.fence(),
+            UnixMillis::new(120),
+            UnixMillis::new(130),
+        )?;
+        let second_id = DeviceClaimId::parse("devclaim_01JDEVICE2")?;
+        let second = job.claim(second_id, UnixMillis::new(130), UnixMillis::new(220))?;
+        assert!(second.fence() > first.fence());
+        assert_eq!(
+            job.succeed(&first_id, first.fence(), UnixMillis::new(140)),
+            Err(DeviceJobError::StaleClaim)
+        );
+        assert_eq!(job.status(), DeviceJobStatus::Running);
+        Ok(())
+    }
+
+    #[test]
+    fn expired_claim_cannot_commit_success() -> Result<(), Box<dyn std::error::Error>> {
+        let mut job = job(2)?;
+        let claim_id = DeviceClaimId::parse("devclaim_01JDEVICE")?;
+        let claim = job.claim(claim_id.clone(), UnixMillis::new(110), UnixMillis::new(120))?;
+        assert_eq!(
+            job.succeed(&claim_id, claim.fence(), UnixMillis::new(120)),
+            Err(DeviceJobError::LeaseExpired)
+        );
+        assert_eq!(job.status(), DeviceJobStatus::Running);
+        Ok(())
+    }
+
+    #[test]
+    fn retry_auth_and_recovery_states_never_become_false_success()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut job = job(3)?;
+        let claim_id = DeviceClaimId::parse("devclaim_01JDEVICE1")?;
+        let claim = job.claim(claim_id.clone(), UnixMillis::new(110), UnixMillis::new(200))?;
+        job.schedule_retry(
+            &claim_id,
+            claim.fence(),
+            UnixMillis::new(120),
+            UnixMillis::new(150),
+        )?;
+        assert_eq!(job.status(), DeviceJobStatus::RetryScheduled);
+        assert_eq!(
+            job.claim(
+                DeviceClaimId::parse("devclaim_01JDEVICE2")?,
+                UnixMillis::new(149),
+                UnixMillis::new(240),
+            ),
+            Err(DeviceJobError::NotDue)
+        );
+        let second_id = DeviceClaimId::parse("devclaim_01JDEVICE2")?;
+        let second = job.claim(second_id.clone(), UnixMillis::new(150), UnixMillis::new(240))?;
+        job.require_auth(&second_id, second.fence(), UnixMillis::new(160))?;
+        assert_eq!(job.status(), DeviceJobStatus::AuthRequired);
+        job.resume_after_auth(UnixMillis::new(170))?;
+        let third_id = DeviceClaimId::parse("devclaim_01JDEVICE3")?;
+        let third = job.claim(third_id.clone(), UnixMillis::new(180), UnixMillis::new(260))?;
+        job.require_recovery(&third_id, third.fence(), UnixMillis::new(190))?;
+        assert_eq!(job.status(), DeviceJobStatus::RecoveryRequired);
+        assert!(job.claim(
+            DeviceClaimId::parse("devclaim_01JDEVICE4")?,
+            UnixMillis::new(200),
+            UnixMillis::new(280),
+        ).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_state_is_sticky() -> Result<(), Box<dyn std::error::Error>> {
+        let mut job = job(1)?;
+        job.cancel(UnixMillis::new(110))?;
+        assert_eq!(job.status(), DeviceJobStatus::Cancelled);
+        assert!(job.status().is_terminal());
+        assert_eq!(
+            job.cancel(UnixMillis::new(120)),
+            Err(DeviceJobError::InvalidState)
+        );
+        Ok(())
+    }
+}
