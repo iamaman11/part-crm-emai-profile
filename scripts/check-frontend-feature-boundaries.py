@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Enforce frontend sibling-feature boundaries without resolver-alias escape hatches.
+"""Enforce frontend feature and root-route composition boundaries.
 
 Feature modules may import shared/entities/app composition through normal relative imports and may
 import declared npm packages. A feature may import a sibling feature only through that sibling's
 explicit root public API (`index.ts` / `index.tsx` or the feature directory itself).
 
-Unknown non-relative imports from feature source are rejected. TypeScript `paths` and custom Vite
-`resolve` configuration are also rejected until this checker explicitly understands their resolved
-targets, so a future alias cannot silently create a second route into sibling internals.
+The root app router may compose feature routes only through those same public feature APIs; it may
+not import feature-internal workspaces/components. Unknown non-relative imports from feature source
+are rejected. TypeScript `paths` and custom Vite `resolve` configuration are also rejected until
+this checker explicitly understands their resolved targets, so aliases cannot become bypasses.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -199,6 +201,32 @@ def inspect_feature_source(
     return violations
 
 
+def app_route_composition_violations(
+    frontend_root: Path,
+    feature_names: set[str],
+) -> list[Violation]:
+    router_path = frontend_root / "src" / "app" / "router.tsx"
+    if not router_path.is_file():
+        return [Violation(router_path, "", "root app router is missing")]
+
+    violations: list[Violation] = []
+    text = router_path.read_text(encoding="utf-8")
+    for specifier in sorted(import_specifiers(text)):
+        target = lexical_feature_target(specifier, feature_names)
+        if target is None:
+            continue
+        feature, remainder = target
+        if not is_public_feature_api(remainder):
+            violations.append(
+                Violation(
+                    router_path,
+                    specifier,
+                    f"root app router imports feature '{feature}' internals; compose routes through the feature root public API",
+                )
+            )
+    return violations
+
+
 def scan(root: Path) -> list[Violation]:
     frontend_root = root / "frontend"
     features_root = frontend_root / "src" / "features"
@@ -208,6 +236,7 @@ def scan(root: Path) -> list[Violation]:
     feature_names = {entry.name for entry in features_root.iterdir() if entry.is_dir()}
     packages = declared_packages(frontend_root)
     violations = resolver_configuration_violations(frontend_root)
+    violations.extend(app_route_composition_violations(frontend_root, feature_names))
 
     for source_path in sorted(features_root.rglob("*")):
         if not source_path.is_file() or source_path.suffix not in SOURCE_SUFFIXES:
@@ -247,6 +276,38 @@ def require_fixture_rejection(
     return False
 
 
+def root_route_negative_self_test() -> bool:
+    with tempfile.TemporaryDirectory(prefix="frontend-root-route-boundary-") as directory:
+        root = Path(directory)
+        frontend = root / "frontend"
+        features = frontend / "src" / "features"
+        clients = features / "clients"
+        app = frontend / "src" / "app"
+        clients.mkdir(parents=True)
+        app.mkdir(parents=True)
+        (frontend / "package.json").write_text("{}\n", encoding="utf-8")
+        (clients / "ClientsWorkspace.tsx").write_text(
+            "export function ClientsWorkspace() { return null; }\n",
+            encoding="utf-8",
+        )
+        (clients / "index.ts").write_text(
+            "export const createClientsRoute = () => null;\n",
+            encoding="utf-8",
+        )
+        (app / "router.tsx").write_text(
+            "import { ClientsWorkspace } from '../features/clients/ClientsWorkspace';\n"
+            "void ClientsWorkspace;\n",
+            encoding="utf-8",
+        )
+        violations = scan(root)
+        if any("root app router imports feature 'clients' internals" in item.reason for item in violations):
+            print("root-route feature-internal import negative fixture rejected as expected")
+            return True
+        print("root-route feature-internal import negative fixture was not rejected", file=sys.stderr)
+        print_violations(root, violations)
+        return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=REPO_ROOT)
@@ -271,6 +332,7 @@ def main() -> int:
                 "custom Vite resolve configuration is forbidden",
                 "Vite alias bypass",
             ),
+            root_route_negative_self_test(),
         ]
         return 0 if all(results) else 1
 
@@ -279,7 +341,7 @@ def main() -> int:
     if violations:
         print_violations(root, violations)
         return 1
-    print("frontend feature boundaries passed")
+    print("frontend feature and root-route boundaries passed")
     return 0
 
 
