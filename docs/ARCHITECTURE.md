@@ -109,6 +109,10 @@ introduced. Read and write capabilities are separated where useful.
 Client contact persistence ports accept protected representations only; transient contact plaintext
 may enter only the application/protection boundary and cannot cross the persistence interface by type.
 
+Phase 2B accepts authoritative protected client-contact D1 persistence and a separate exact-lookup
+query port. Exact lookup accepts tenant scope + contact kind + normalization version + versioned HMAC
+token only; D1 lookup adapters do not receive plaintext and do not decrypt/scan all contact rows.
+
 The current plan may keep `application-ports` as one Cargo crate with capability modules while
 that remains clear. It is not required to split every port into a separate crate.
 
@@ -162,6 +166,7 @@ composition. React owns presentation/navigation/remote-cache behavior only.
 |---|---|---|
 | Tenant/Membership/Grant | Identity & Access | D1 + audit/outbox |
 | ClientRecord | Client Registry | D1 + audit/outbox |
+| ClientContactPoint | Client Registry | D1 ciphertext + nonce/key-version metadata + tenant-first HMAC lookup index; audit/outbox remain metadata-only |
 | Profile/Assignment | Profile Catalog | D1 + audit/outbox |
 | Active generation pointer | Profile Catalog | D1 fenced/CAS activation after verification |
 | Lease/session/fencing | Runtime Sessions | one Durable Object per profile + `session-domain` |
@@ -258,6 +263,8 @@ Standalone isolation is explicit because D1 has no PostgreSQL RLS:
 - tenant-owned keys/uniqueness include `tenant_id`;
 - normal repository/application APIs require typed tenant scope;
 - raw unscoped D1 access is restricted to approved migration/reconciliation adapters;
+- client exact-contact lookup is tenant-first and equality/index-backed on kind + normalization
+  version + lookup-key version + HMAC token; plaintext/decrypt-all search paths are prohibited;
 - UI/Bridge never receives D1 binding/direct storage URL;
 - cross-tenant/IDOR negative tests cover every public capability;
 - multi-tenant expansion beyond the accepted deployment model requires an explicit ADR or
@@ -287,8 +294,10 @@ Cloudflare secret root wrapping key (versioned)
 
 Client contact protection is a separate application/adaptor key domain from generation storage:
 contact display encryption keys and exact-lookup HMAC keys are distinct, versioned domains. The
-Phase 2A inner contract fixes separation, domain-separated lookup input and normalization metadata;
-Phase 2B owns authoritative outer key-provider, ciphertext/HMAC persistence and rotation behavior.
+Phase 2A inner contract fixes separation, domain-separated lookup input and normalization metadata.
+Phase 2B accepts authoritative protected client-contact D1 persistence, current+legacy versioned
+keyring behavior, current-key writes, version-selected decrypt and lookup candidates across active
+lookup-key versions so planned rotation/backfill does not require plaintext database scans.
 
 Plain root/KEK/DEK/contact-encryption/HMAC key material never belongs in Git, D1, R2, logs, audit,
 events or client bundles. Production promotion requires explicit rotation, recovery/escrow, restore
@@ -331,6 +340,7 @@ Permanent policy should cover:
 - frontend feature-boundary imports;
 - cross-tenant/IDOR negative fixtures;
 - D1 migration/replay invariants;
+- protected client-contact persistence and tenant-scoped exact-HMAC lookup positive/negative fixtures;
 - generation freshness/fencing;
 - secret/PII/content scans;
 - native + WASM + Windows/release composition as applicable;
