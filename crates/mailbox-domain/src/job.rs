@@ -386,7 +386,10 @@ mod tests {
         job.start(&binding)?;
         job.require_auth()?;
         assert_eq!(job.status(), MailboxJobStatus::AuthRequired);
-        assert_eq!(job.queue(UnixMillis::new(10)), Err(MailboxError::InvalidJobTransition));
+        assert_eq!(
+            job.queue(UnixMillis::new(10)),
+            Err(MailboxError::InvalidJobTransition)
+        );
         job.resume(UnixMillis::new(30))?;
         assert_eq!(job.status(), MailboxJobStatus::Scheduled);
         assert!(!job.is_due(UnixMillis::new(29)));

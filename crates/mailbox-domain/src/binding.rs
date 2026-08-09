@@ -1,7 +1,5 @@
 use crate::{MailboxError, MailboxProvider};
-use profile_platform_primitives::{
-    AggregateVersion, MailboxBindingId, SecretHandle, TenantId,
-};
+use profile_platform_primitives::{AggregateVersion, MailboxBindingId, SecretHandle, TenantId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MailboxBindingStatus {

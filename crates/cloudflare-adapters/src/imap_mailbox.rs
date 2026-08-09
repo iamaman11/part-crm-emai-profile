@@ -24,7 +24,9 @@ pub async fn check_imap_mailbox(
     let greeting = read_until_line(&mut socket).await?;
     let preauthenticated = greeting.starts_with("* PREAUTH");
     if !greeting.starts_with("* OK") && !preauthenticated {
-        return Err(provider_error(MailboxProviderFailureClass::TransientDependency));
+        return Err(provider_error(
+            MailboxProviderFailureClass::TransientDependency,
+        ));
     }
 
     if credential.tls() == ImapTlsMode::StartTls {
@@ -53,7 +55,11 @@ pub async fn check_imap_mailbox(
             Some("NO" | "BAD") => {
                 return Err(provider_error(MailboxProviderFailureClass::Authentication));
             }
-            _ => return Err(provider_error(MailboxProviderFailureClass::TransientDependency)),
+            _ => {
+                return Err(provider_error(
+                    MailboxProviderFailureClass::TransientDependency,
+                ));
+            }
         }
     }
 
@@ -64,7 +70,11 @@ pub async fn check_imap_mailbox(
         Some("NO" | "BAD") => {
             return Err(provider_error(MailboxProviderFailureClass::ProviderPolicy));
         }
-        _ => return Err(provider_error(MailboxProviderFailureClass::TransientDependency)),
+        _ => {
+            return Err(provider_error(
+                MailboxProviderFailureClass::TransientDependency,
+            ));
+        }
     }
     let (messages, uid_next) = parse_status_observation(&status_response)
         .ok_or_else(|| provider_error(MailboxProviderFailureClass::ProviderPolicy))?;
@@ -78,10 +88,7 @@ pub async fn check_imap_mailbox(
     .map_err(|_| MailboxProviderPortError::IntegrityFailure)
 }
 
-async fn write_command(
-    socket: &mut Socket,
-    command: &str,
-) -> Result<(), MailboxProviderPortError> {
+async fn write_command(socket: &mut Socket, command: &str) -> Result<(), MailboxProviderPortError> {
     socket
         .write_all(command.as_bytes())
         .await
@@ -115,7 +122,9 @@ async fn read_bounded(
             .await
             .map_err(|_| provider_error(MailboxProviderFailureClass::TransientDependency))?;
         if read == 0 {
-            return Err(provider_error(MailboxProviderFailureClass::TransientDependency));
+            return Err(provider_error(
+                MailboxProviderFailureClass::TransientDependency,
+            ));
         }
         if output.len().saturating_add(read) > MAX_IMAP_RESPONSE_BYTES {
             return Err(provider_error(MailboxProviderFailureClass::ProviderPolicy));
@@ -147,7 +156,9 @@ fn tagged_status<'a>(response: &'a str, tag: &str) -> Option<&'a str> {
 }
 
 fn parse_status_observation(response: &str) -> Option<(u32, u64)> {
-    let status_line = response.lines().find(|line| line.starts_with("* STATUS "))?;
+    let status_line = response
+        .lines()
+        .find(|line| line.starts_with("* STATUS "))?;
     let start = status_line.find('(')?;
     let end = status_line.rfind(')')?;
     if end <= start {

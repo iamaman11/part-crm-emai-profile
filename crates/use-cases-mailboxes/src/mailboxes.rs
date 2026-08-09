@@ -353,7 +353,10 @@ mod tests {
 
     #[test]
     fn owner_only_authorization_is_disclosure_neutral() {
-        assert_eq!(authorize_mailbox_binding(MembershipRole::TenantOwner), Ok(()));
+        assert_eq!(
+            authorize_mailbox_binding(MembershipRole::TenantOwner),
+            Ok(())
+        );
         assert_eq!(
             authorize_mailbox_binding(MembershipRole::Member),
             Err(MailboxBindingOperationError::NotFound)

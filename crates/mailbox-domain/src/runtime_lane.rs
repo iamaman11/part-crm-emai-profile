@@ -52,8 +52,14 @@ mod tests {
 
     #[test]
     fn only_approved_phase2e_providers_are_cloud_lane() {
-        assert_eq!(MailboxProvider::GmailApi.runtime_lane(), MailboxRuntimeLane::Cloud);
-        assert_eq!(MailboxProvider::Imap.runtime_lane(), MailboxRuntimeLane::Cloud);
+        assert_eq!(
+            MailboxProvider::GmailApi.runtime_lane(),
+            MailboxRuntimeLane::Cloud
+        );
+        assert_eq!(
+            MailboxProvider::Imap.runtime_lane(),
+            MailboxRuntimeLane::Cloud
+        );
         assert_eq!(
             MailboxProvider::BrowserFallback.runtime_lane(),
             MailboxRuntimeLane::Browser

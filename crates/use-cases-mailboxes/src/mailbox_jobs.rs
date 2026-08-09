@@ -368,7 +368,8 @@ where
         return Err(MailboxJobOperationError::VersionConflict);
     }
 
-    let prepared = prepare_mailbox_run(&binding, job.job(), command.evidence.now(), provider).await?;
+    let prepared =
+        prepare_mailbox_run(&binding, job.job(), command.evidence.now(), provider).await?;
     if prepared.version() != response_version {
         return Err(MailboxJobOperationError::IntegrityFailure);
     }
@@ -503,9 +504,7 @@ fn bounded_retry_at(
         .map_or(policy_at, |hint| hint.max(policy_at).min(max_at)))
 }
 
-fn result_code(
-    prepared: &MailboxJobPreparedRun,
-) -> Result<&'static str, MailboxJobOperationError> {
+fn result_code(prepared: &MailboxJobPreparedRun) -> Result<&'static str, MailboxJobOperationError> {
     match prepared.status() {
         MailboxJobStatus::Succeeded => Ok("succeeded"),
         MailboxJobStatus::RetryPending => Ok("retry_pending"),
@@ -574,8 +573,8 @@ fn map_port_error(error: MailboxJobPortError) -> MailboxJobOperationError {
 #[cfg(test)]
 mod tests {
     use super::{
-        MailboxJobOperationError, apply_provider_failure, authorize_mailbox_job,
-        bounded_retry_at, validate_create_mailbox_job_request, validate_mailbox_job_run_version,
+        MailboxJobOperationError, apply_provider_failure, authorize_mailbox_job, bounded_retry_at,
+        validate_create_mailbox_job_request, validate_mailbox_job_run_version,
     };
     use identity_access_domain::MembershipRole;
     use mailbox_domain::{
@@ -621,8 +620,8 @@ mod tests {
     }
 
     #[test]
-    fn request_validation_and_run_version_are_fail_closed()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn request_validation_and_run_version_are_fail_closed() -> Result<(), Box<dyn std::error::Error>>
+    {
         assert_eq!(validate_create_mailbox_job_request(0, 3, None), Ok(()));
         assert_eq!(
             validate_create_mailbox_job_request(0, 3, Some(&"x".repeat(513))),
@@ -643,12 +642,7 @@ mod tests {
             30_010
         );
         assert_eq!(
-            bounded_retry_at(
-                UnixMillis::new(10),
-                1,
-                Some(UnixMillis::new(99_999_999)),
-            )?
-            .value(),
+            bounded_retry_at(UnixMillis::new(10), 1, Some(UnixMillis::new(99_999_999)),)?.value(),
             900_010
         );
         Ok(())

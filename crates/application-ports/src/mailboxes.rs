@@ -2,7 +2,8 @@ use crate::commands::CommandExecutionEvidence;
 use core::{fmt, future::Future};
 use mailbox_domain::MailboxJob;
 pub use mailbox_domain::{
-    MailboxBinding, MailboxBindingStatus, MailboxObservation, MailboxProvider, MailboxProviderFailure,
+    MailboxBinding, MailboxBindingStatus, MailboxObservation, MailboxProvider,
+    MailboxProviderFailure,
 };
 use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, TenantScope};
 

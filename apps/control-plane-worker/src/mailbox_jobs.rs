@@ -280,8 +280,8 @@ mod tests {
     use super::{CreateMailboxJobRequest, MailboxJobResponse, MutationReceipt, valid_digest};
 
     #[test]
-    fn mailbox_job_transport_preserves_shape_and_privacy()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn mailbox_job_transport_preserves_shape_and_privacy() -> Result<(), Box<dyn std::error::Error>>
+    {
         let digest = "a".repeat(64);
         let valid = format!(
             r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"{digest}"}}"#

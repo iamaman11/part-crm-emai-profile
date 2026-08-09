@@ -95,7 +95,10 @@ impl ImapCredential {
 
     fn validate(&self) -> bool {
         valid_imap_host(&self.host)
-            && matches!((self.tls, self.port), (ImapTlsMode::Implicit, 993) | (ImapTlsMode::StartTls, 143))
+            && matches!(
+                (self.tls, self.port),
+                (ImapTlsMode::Implicit, 993) | (ImapTlsMode::StartTls, 143)
+            )
             && !self.username.is_empty()
             && self.username.len() <= MAX_IMAP_USERNAME_LENGTH
             && !self.password.is_empty()
@@ -130,7 +133,8 @@ pub async fn resolve_mailbox_credential(
     }
     let parsed = serde_json::from_str::<MailboxCredential>(&document);
     document.zeroize();
-    let credential = parsed.map_err(|_| provider_error(MailboxProviderFailureClass::ProviderPolicy))?;
+    let credential =
+        parsed.map_err(|_| provider_error(MailboxProviderFailureClass::ProviderPolicy))?;
     let valid = match &credential {
         MailboxCredential::GmailApi(value) => value.validate(),
         MailboxCredential::Imap(value) => value.validate(),
@@ -175,7 +179,9 @@ fn valid_dns_label(value: &str) -> bool {
 }
 
 fn contains_imap_line_break(value: &str) -> bool {
-    value.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
+    value
+        .bytes()
+        .any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
 }
 
 #[cfg(test)]
@@ -184,7 +190,14 @@ mod tests {
 
     #[test]
     fn imap_host_validation_rejects_local_and_literal_targets() {
-        for forbidden in ["", "localhost", "mail.local", "127.0.0.1", "::1", "-bad.example"] {
+        for forbidden in [
+            "",
+            "localhost",
+            "mail.local",
+            "127.0.0.1",
+            "::1",
+            "-bad.example",
+        ] {
             assert!(!valid_imap_host(forbidden), "accepted {forbidden}");
         }
         assert!(valid_imap_host("imap.example.com"));

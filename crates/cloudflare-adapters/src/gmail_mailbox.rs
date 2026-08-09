@@ -63,7 +63,9 @@ pub async fn check_gmail_mailbox(
         401 => return Err(provider_error(MailboxProviderFailureClass::Authentication)),
         403 => return Err(provider_error(MailboxProviderFailureClass::ProviderPolicy)),
         408 | 425 | 500..=599 => {
-            return Err(provider_error(MailboxProviderFailureClass::TransientDependency));
+            return Err(provider_error(
+                MailboxProviderFailureClass::TransientDependency,
+            ));
         }
         429 => return Err(provider_error(MailboxProviderFailureClass::RateLimited)),
         _ => return Err(provider_error(MailboxProviderFailureClass::Permanent)),

@@ -286,12 +286,8 @@ impl D1MailboxRepository {
         }
         let (result_code, event_type) = match mutation.prepared.status() {
             MailboxJobStatus::Succeeded => ("succeeded", "mailbox.job_succeeded.v1"),
-            MailboxJobStatus::RetryPending => {
-                ("retry_pending", "mailbox.job_retry_scheduled.v1")
-            }
-            MailboxJobStatus::AuthRequired => {
-                ("auth_required", "mailbox.job_auth_required.v1")
-            }
+            MailboxJobStatus::RetryPending => ("retry_pending", "mailbox.job_retry_scheduled.v1"),
+            MailboxJobStatus::AuthRequired => ("auth_required", "mailbox.job_auth_required.v1"),
             MailboxJobStatus::Suspended => ("suspended", "mailbox.job_suspended.v1"),
             MailboxJobStatus::Failed => ("failed", "mailbox.job_failed.v1"),
             MailboxJobStatus::Scheduled | MailboxJobStatus::Queued | MailboxJobStatus::Running => {

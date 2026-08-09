@@ -204,9 +204,8 @@ mod tests {
         let binding = binding()?;
         let job = running_job(&binding)?;
         let failure = MailboxProviderFailure::new(MailboxProviderFailureClass::RateLimited, None)?;
-        let mut adapter = DeterministicFakeMailboxProvider::new(
-            DeterministicMailboxOutcome::Failure(failure),
-        );
+        let mut adapter =
+            DeterministicFakeMailboxProvider::new(DeterministicMailboxOutcome::Failure(failure));
         assert_eq!(
             adapter.check_now(&binding, &job),
             Err(MailboxProviderPortError::Failure(failure))
