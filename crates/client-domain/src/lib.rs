@@ -13,4 +13,6 @@ pub use contact_point::{
     ExactLookupHmacInput, ExactLookupToken, LookupKeyVersion, NormalizedContactValue,
     ProtectedContactPoint, exact_lookup_hmac_input, normalize_contact_value,
 };
-pub use merge::{ClientMergeError, ClientMergeState};
+pub use merge::{
+    ClientMergeError, ClientMergePlan, ClientMergeState, merge_clients,
+};
