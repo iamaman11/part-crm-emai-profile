@@ -1,0 +1,49 @@
+name: Phase 2E Consistency Materializer
+
+on:
+  push:
+    branches:
+      - phase2e-mailbox-cloud-lane
+    paths:
+      - .github/workflows/phase2e-consistency-materializer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2e-mailbox-cloud-lane
+      - name: Materialize current application and inventory consistency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/use-cases-mailboxes/src/mailbox_jobs.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '''        MailboxJobStatus::Pending | MailboxJobStatus::Running => {
+              Err(MailboxJobOperationError::IntegrityFailure)
+          }
+'''
+          new = '''        MailboxJobStatus::Scheduled
+          | MailboxJobStatus::Queued
+          | MailboxJobStatus::Running
+          | MailboxJobStatus::AuthRequired
+          | MailboxJobStatus::Suspended => Err(MailboxJobOperationError::IntegrityFailure),
+'''
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one legacy mailbox run-result match')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          python scripts/generate-architecture-inventory.py --write
+          cargo fmt --all -- --check || cargo fmt --all
+          git rm .github/workflows/phase2e-consistency-materializer.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/use-cases-mailboxes/src/mailbox_jobs.rs architecture/inventory.json
+          git commit -m "Phase 2E: materialize application consistency"
+          git push origin HEAD:phase2e-mailbox-cloud-lane
