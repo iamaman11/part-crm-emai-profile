@@ -35,9 +35,10 @@ pub use clients::ClientRepository;
 pub use clock::ClockPort;
 pub use commands::CommandExecutionEvidence;
 pub use device_jobs::{
-    DeviceExecutionBlocker, DeviceExecutionPreconditionPort, DeviceExecutionReadiness,
-    DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobInsertOutcome, DeviceJobPortError,
-    DeviceJobPortErrorClass, DeviceJobRepositoryPort, DeviceJobWriteOutcome,
+    AuthenticatedDevicePort, DeviceExecutionBlocker, DeviceExecutionPreconditionPort,
+    DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobInsertOutcome,
+    DeviceJobPortError, DeviceJobPortErrorClass, DeviceJobQueryPort, DeviceJobRepositoryPort,
+    DeviceJobWriteOutcome,
 };
 pub use generations::{GenerationObjectReference, GenerationObjectStorePort};
 pub use identity::MembershipRepository;
