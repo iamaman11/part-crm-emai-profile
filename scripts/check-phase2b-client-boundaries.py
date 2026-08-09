@@ -10,6 +10,8 @@ from pathlib import Path
 
 MIGRATION = Path("migrations/d1/0014_client_contact_protection.sql")
 D1_TEST = Path("scripts/test-phase2b-client-contacts.py")
+LOOKUP_PORT = Path("crates/application-ports/src/client_contact_lookup.rs")
+LOOKUP_ADAPTER = Path("crates/cloudflare-adapters/src/contact_lookup.rs")
 
 REQUIRED_TABLE_MARKERS = (
     "CREATE TABLE client_contact_points",
@@ -33,6 +35,35 @@ REQUIRED_GUARDS = (
     "client_contact_updated_at_rewind",
     "client_contact_delete_guard",
     "client_contact_delete_forbidden",
+)
+REQUIRED_LOOKUP_PORT_MARKERS = (
+    "pub trait ContactLookupProtectionPort",
+    "derive_exact_lookup_candidates",
+    "pub trait ContactExactLookupRepositoryPort",
+    "find_active_contacts_by_exact_lookup",
+    "token: &ExactLookupToken",
+)
+REQUIRED_LOOKUP_ADAPTER_MARKERS = (
+    "impl ContactExactLookupRepositoryPort for D1ContactExactLookupRepository",
+    "WHERE tenant_id = ?",
+    "AND kind = ?",
+    "AND normalization_version = ?",
+    "AND lookup_key_version = ?",
+    "AND exact_lookup_token = ?",
+    "AND status = 'ACTIVE'",
+    "token.key_version().value()",
+    "token.bytes().as_slice()",
+    ".all()",
+    ".results::<ExactLookupRow>()",
+    "impl<N: ContactNonceSource> ContactLookupProtectionPort",
+    "derive_lookup_candidates(request.tenant_id(), request.hmac_input())",
+)
+FORBIDDEN_LOOKUP_ADAPTER_MARKERS = (
+    "decrypt_contact_display(",
+    "normalize_contact_value(",
+    "SELECT ciphertext",
+    "SELECT nonce",
+    "SELECT exact_lookup_token",
 )
 FORBIDDEN_COLUMNS = {
     "value",
@@ -86,10 +117,16 @@ def validate(root: Path) -> list[str]:
     errors: list[str] = []
     migration = root / MIGRATION
     d1_test = root / D1_TEST
+    lookup_port = root / LOOKUP_PORT
+    lookup_adapter = root / LOOKUP_ADAPTER
     if not migration.is_file():
         return [f"missing Phase 2B migration: {MIGRATION}"]
     if not d1_test.is_file() or not read(d1_test).strip():
         errors.append(f"missing Phase 2B D1 invariant proof: {D1_TEST}")
+    if not lookup_port.is_file() or not read(lookup_port).strip():
+        errors.append(f"missing Phase 2B exact lookup port: {LOOKUP_PORT}")
+    if not lookup_adapter.is_file() or not read(lookup_adapter).strip():
+        errors.append(f"missing Phase 2B exact lookup adapter: {LOOKUP_ADAPTER}")
 
     source = read(migration)
     for marker in REQUIRED_TABLE_MARKERS + REQUIRED_GUARDS:
@@ -170,6 +207,19 @@ def validate(root: Path) -> list[str]:
         if marker not in test_source:
             errors.append(f"Phase 2B D1 proof missing `{marker}`")
 
+    lookup_port_source = read(lookup_port) if lookup_port.is_file() else ""
+    for marker in REQUIRED_LOOKUP_PORT_MARKERS:
+        if marker not in lookup_port_source:
+            errors.append(f"Phase 2B exact lookup port missing `{marker}`")
+
+    lookup_source = read(lookup_adapter) if lookup_adapter.is_file() else ""
+    for marker in REQUIRED_LOOKUP_ADAPTER_MARKERS:
+        if marker not in lookup_source:
+            errors.append(f"Phase 2B exact lookup adapter missing `{marker}`")
+    for marker in FORBIDDEN_LOOKUP_ADAPTER_MARKERS:
+        if marker in lookup_source:
+            errors.append(f"Phase 2B exact lookup adapter must not use `{marker}`")
+
     return errors
 
 
@@ -223,6 +273,32 @@ END;
         "test_active_contact_requires_active_client\n",
         encoding="utf-8",
     )
+    lookup_port = root / LOOKUP_PORT
+    lookup_port.parent.mkdir(parents=True, exist_ok=True)
+    lookup_port.write_text(
+        "pub trait ContactLookupProtectionPort { derive_exact_lookup_candidates token: &ExactLookupToken }\n"
+        "pub trait ContactExactLookupRepositoryPort { find_active_contacts_by_exact_lookup token: &ExactLookupToken }\n",
+        encoding="utf-8",
+    )
+    lookup_adapter = root / LOOKUP_ADAPTER
+    lookup_adapter.parent.mkdir(parents=True, exist_ok=True)
+    lookup_adapter.write_text(
+        """impl ContactExactLookupRepositoryPort for D1ContactExactLookupRepository
+WHERE tenant_id = ?
+AND kind = ?
+AND normalization_version = ?
+AND lookup_key_version = ?
+AND exact_lookup_token = ?
+AND status = 'ACTIVE'
+token.key_version().value()
+token.bytes().as_slice()
+.all()
+.results::<ExactLookupRow>()
+impl<N: ContactNonceSource> ContactLookupProtectionPort
+derive_lookup_candidates(request.tenant_id(), request.hmac_input())
+""",
+        encoding="utf-8",
+    )
 
 
 def self_test() -> int:
@@ -256,7 +332,21 @@ def self_test() -> int:
         )
         migration.write_text(source, encoding="utf-8")
         if not any("lead with tenant_id" in error for error in validate(root)):
-            print("unscoped exact lookup fixture unexpectedly passed")
+            print("unscoped exact lookup index fixture unexpectedly passed")
+            return 1
+
+        write_fixture(root)
+        adapter = root / LOOKUP_ADAPTER
+        adapter.write_text(read(adapter).replace("WHERE tenant_id = ?\n", "", 1), encoding="utf-8")
+        if not any("WHERE tenant_id = ?" in error for error in validate(root)):
+            print("unscoped exact lookup repository fixture unexpectedly passed")
+            return 1
+
+        write_fixture(root)
+        adapter = root / LOOKUP_ADAPTER
+        adapter.write_text(read(adapter) + "\ndecrypt_contact_display(\n", encoding="utf-8")
+        if not any("must not use `decrypt_contact_display(`" in error for error in validate(root)):
+            print("decrypting exact lookup fixture unexpectedly passed")
             return 1
 
     print("Phase 2B protected-D1 negative fixtures rejected as expected.")
