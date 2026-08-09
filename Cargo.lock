@@ -931,6 +931,7 @@ version = "0.1.0"
 dependencies = [
  "application-ports",
  "identity-access-domain",
+ "mailbox-domain",
  "profile-platform-primitives",
 ]
 
