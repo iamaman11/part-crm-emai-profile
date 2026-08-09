@@ -1,9 +1,9 @@
 use crate::d1_command_identity::command_journal_id;
 use crate::d1_identity_acl::MutationEnvelope;
-use crate::mailbox_provider::MailboxRunDecision;
+use application_ports::mailbox_jobs::MailboxJobPreparedRun;
 use mailbox_domain::{
-    MailboxBinding, MailboxBindingStatus, MailboxJob, MailboxJobStatus, MailboxProvider,
-    validate_cursor, validate_provider_status,
+    MailboxBinding, MailboxBindingStatus, MailboxJob, MailboxJobRestore, MailboxJobStatus,
+    MailboxProvider, validate_cursor, validate_provider_status,
 };
 use profile_platform_primitives::{
     ActorContext, AggregateVersion, MailboxBindingId, MailboxJobId, SecretHandle, TenantScope,
@@ -87,7 +87,7 @@ pub struct RunMailboxJobMutation<'a> {
     pub binding_id: &'a MailboxBindingId,
     pub job_id: &'a MailboxJobId,
     pub expected_job_version: AggregateVersion,
-    pub decision: &'a MailboxRunDecision,
+    pub prepared: &'a MailboxJobPreparedRun,
     pub envelope: MutationEnvelope<'a>,
 }
 
@@ -271,24 +271,31 @@ impl D1MailboxRepository {
         actor: &ActorContext,
         mutation: RunMailboxJobMutation<'_>,
     ) -> Result<Vec<D1Result>> {
-        validate_provider_status(mutation.decision.provider_status()).map_err(domain_error)?;
-        validate_cursor(mutation.decision.cursor()).map_err(domain_error)?;
+        validate_provider_status(mutation.prepared.provider_status()).map_err(domain_error)?;
+        validate_cursor(mutation.prepared.cursor()).map_err(domain_error)?;
         let expected_result_version = mutation
             .expected_job_version
             .next()
             .and_then(AggregateVersion::next)
+            .and_then(AggregateVersion::next)
             .map_err(|error| Error::RustError(error.to_string()))?;
-        if expected_result_version != mutation.decision.version() {
+        if expected_result_version != mutation.prepared.version() {
             return Err(Error::RustError(
-                "mailbox run decision version does not match expected version".to_owned(),
+                "mailbox run outcome version does not match expected version".to_owned(),
             ));
         }
-        let (result_code, event_type) = match mutation.decision.status() {
+        let (result_code, event_type) = match mutation.prepared.status() {
             MailboxJobStatus::Succeeded => ("succeeded", "mailbox.job_succeeded.v1"),
-            MailboxJobStatus::RetryPending => ("retry_pending", "mailbox.job_retry_scheduled.v1"),
+            MailboxJobStatus::RetryPending => {
+                ("retry_pending", "mailbox.job_retry_scheduled.v1")
+            }
+            MailboxJobStatus::AuthRequired => {
+                ("auth_required", "mailbox.job_auth_required.v1")
+            }
+            MailboxJobStatus::Suspended => ("suspended", "mailbox.job_suspended.v1"),
             MailboxJobStatus::Failed => ("failed", "mailbox.job_failed.v1"),
-            MailboxJobStatus::Pending | MailboxJobStatus::Running => {
-                return Err(Error::RustError("invalid mailbox run outcome".to_owned()));
+            MailboxJobStatus::Scheduled | MailboxJobStatus::Queued | MailboxJobStatus::Running => {
+                return Err(Error::RustError("mailbox_run_outcome_invalid".to_owned()));
             }
         };
         let tenant_id = actor.tenant_scope().tenant_id().as_str();
@@ -301,7 +308,7 @@ impl D1MailboxRepository {
         let now = sqlite_integer(mutation.envelope.now.value())?;
         let expires_at = sqlite_integer(mutation.envelope.idempotency_expires_at.value())?;
         let retry_at = mutation
-            .decision
+            .prepared
             .retry_at()
             .map(|value| sqlite_integer(value.value()))
             .transpose()?;
@@ -314,10 +321,10 @@ impl D1MailboxRepository {
             mutation.binding_id.as_str(),
             mutation.job_id.as_str(),
             sqlite_version(mutation.expected_job_version)?,
-            mutation.decision.status().storage_value(),
-            mutation.decision.cursor(),
-            mutation.decision.provider_status(),
-            i64::from(mutation.decision.bounded_item_count()),
+            mutation.prepared.status().storage_value(),
+            mutation.prepared.cursor(),
+            mutation.prepared.provider_status(),
+            i64::from(mutation.prepared.bounded_item_count()),
             retry_at,
             now
         )?;
@@ -472,21 +479,12 @@ struct MailboxJobRow {
 }
 
 fn binding_from_row(scope: &TenantScope, row: MailboxBindingRow) -> Result<MailboxBinding> {
-    let status = match row.status.as_str() {
-        "ACTIVE" => MailboxBindingStatus::Active,
-        "REVOKED" => MailboxBindingStatus::Revoked,
-        _ => {
-            return Err(Error::RustError(
-                "invalid mailbox binding status".to_owned(),
-            ));
-        }
-    };
     Ok(MailboxBinding::restore(
         scope.tenant_id().clone(),
         MailboxBindingId::parse(row.binding_id).map_err(identifier_error)?,
         MailboxProvider::parse_storage(&row.provider).map_err(domain_error)?,
         SecretHandle::parse(row.secret_handle).map_err(identifier_error)?,
-        status,
+        MailboxBindingStatus::parse_storage(&row.status).map_err(domain_error)?,
         AggregateVersion::new(positive_u64(row.version)?)
             .map_err(|error| Error::RustError(error.to_string()))?,
     ))
@@ -501,18 +499,18 @@ fn job_from_row(
     if let Some(status) = row.provider_status.as_deref() {
         validate_provider_status(status).map_err(domain_error)?;
     }
-    let job = MailboxJob::restore(
-        scope.tenant_id().clone(),
-        binding_id.clone(),
-        MailboxJobId::parse(row.job_id).map_err(identifier_error)?,
-        row.cursor,
-        MailboxJobStatus::parse_storage(&row.status).map_err(domain_error)?,
-        bounded_u32(row.attempt, 10)?,
-        bounded_u32(row.max_attempts, 10)?,
-        UnixMillis::new(non_negative_u64(row.next_run_at_ms)?),
-        AggregateVersion::new(positive_u64(row.version)?)
+    let job = MailboxJob::restore(MailboxJobRestore {
+        tenant_id: scope.tenant_id().clone(),
+        binding_id: binding_id.clone(),
+        job_id: MailboxJobId::parse(row.job_id).map_err(identifier_error)?,
+        cursor: row.cursor,
+        status: MailboxJobStatus::parse_storage(&row.status).map_err(domain_error)?,
+        attempt: bounded_u32(row.attempt, 10)?,
+        max_attempts: bounded_u32(row.max_attempts, 10)?,
+        next_run_at: UnixMillis::new(non_negative_u64(row.next_run_at_ms)?),
+        version: AggregateVersion::new(positive_u64(row.version)?)
             .map_err(|error| Error::RustError(error.to_string()))?,
-    )
+    })
     .map_err(domain_error)?;
     Ok(MailboxJobProjection {
         job,
