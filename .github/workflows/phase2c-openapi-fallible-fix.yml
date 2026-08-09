@@ -1,0 +1,156 @@
+name: Phase 2C OpenAPI Fallible Fix
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Make Client Registry OpenAPI extension fallible and atomic
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          api = Path('crates/control-plane-contract/src/client_registry_api.rs')
+          text = api.read_text(encoding='utf-8')
+
+          marker = 'use crate::public_api::ClientProjection;\n'
+          replacement = 'use crate::public_api::ClientProjection;\nuse core::fmt;\n'
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+
+          marker = '''pub const CLIENT_ASSIGNMENT_STATUSES: [&str; 2] = ["ACTIVE", "CLOSED"];\n\n'''
+          replacement = '''pub const CLIENT_ASSIGNMENT_STATUSES: [&str; 2] = ["ACTIVE", "CLOSED"];\n\nconst CLIENT_REGISTRY_SCHEMA_NAMES: [&str; 10] = [\n    "ClientContactKind",\n    "ClientContactStatus",\n    "ClientAssignmentStatus",\n    "ClientListProjection",\n    "ClientUpdateRequest",\n    "ClientArchiveRequest",\n    "ClientContactUpsertRequest",\n    "ClientContactArchiveRequest",\n    "ClientMergeRequest",\n    "ClientContactProjection",\n];\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ClientRegistryOpenApiError {\n    MissingPathsObject,\n    MissingSchemasObject,\n    InvalidPathItem,\n    DuplicateOperation,\n    DuplicateSchema,\n}\n\nimpl fmt::Display for ClientRegistryOpenApiError {\n    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {\n        formatter.write_str(match self {\n            Self::MissingPathsObject => "client registry OpenAPI paths object is missing",\n            Self::MissingSchemasObject => "client registry OpenAPI schemas object is missing",\n            Self::InvalidPathItem => "client registry OpenAPI path item is invalid",\n            Self::DuplicateOperation => "client registry OpenAPI operation already exists",\n            Self::DuplicateSchema => "client registry OpenAPI schema already exists",\n        })\n    }\n}\n\nimpl std::error::Error for ClientRegistryOpenApiError {}\n\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+
+          marker = '''pub fn extend_openapi(document: &mut Value) {\n    let paths = document\n        .get_mut("paths")\n        .and_then(Value::as_object_mut)\n        .expect("canonical OpenAPI paths object");\n'''
+          replacement = '''pub fn extend_openapi(document: &mut Value) -> Result<(), ClientRegistryOpenApiError> {\n    let mut candidate = document.clone();\n    extend_openapi_in_place(&mut candidate)?;\n    *document = candidate;\n    Ok(())\n}\n\nfn extend_openapi_in_place(document: &mut Value) -> Result<(), ClientRegistryOpenApiError> {\n    let paths = document\n        .get_mut("paths")\n        .and_then(Value::as_object_mut)\n        .ok_or(ClientRegistryOpenApiError::MissingPathsObject)?;\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+
+          # Every top-level insert_operation call in this function must propagate failure.
+          text = text.replace('''        }),\n    );\n    insert_operation(''', '''        }),\n    )?;\n    insert_operation(''', 5)
+          marker = '''        }),\n    );\n\n    let schemas = document\n        .get_mut("components")\n        .and_then(|value| value.get_mut("schemas"))\n        .and_then(Value::as_object_mut)\n        .expect("canonical OpenAPI schemas object");\n'''
+          replacement = '''        }),\n    )?;\n\n    let schemas = document\n        .get_mut("components")\n        .and_then(|value| value.get_mut("schemas"))\n        .and_then(Value::as_object_mut)\n        .ok_or(ClientRegistryOpenApiError::MissingSchemasObject)?;\n    if CLIENT_REGISTRY_SCHEMA_NAMES\n        .iter()\n        .any(|name| schemas.contains_key(*name))\n    {\n        return Err(ClientRegistryOpenApiError::DuplicateSchema);\n    }\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+
+          marker = '''    schemas.insert(\n        "ClientHistoryProjection".to_owned(),\n        object_schema(\n            &["contacts", "assignments", "activity"],\n            json!({\n                "contacts": {"type": "array", "maxItems": 500, "items": schema_ref("ClientContactProjection")},\n                "assignments": {"type": "array", "maxItems": 500, "items": schema_ref("ClientAssignmentProjection")},\n                "activity": {"type": "array", "maxItems": 100, "items": schema_ref("ClientActivityProjection")}\n            }),\n        ),\n    );\n}\n\nfn insert_operation(paths: &mut Map<String, Value>, path: &str, method: &str, operation: Value) {\n    let path_item = paths\n        .entry(path.to_owned())\n        .or_insert_with(|| Value::Object(Map::new()));\n    let path_item = path_item\n        .as_object_mut()\n        .expect("canonical OpenAPI path item object");\n    assert!(\n        path_item.insert(method.to_owned(), operation).is_none(),\n        "duplicate OpenAPI operation {method} {path}"\n    );\n}\n'''
+          replacement = '''    schemas.insert(\n        "ClientHistoryProjection".to_owned(),\n        object_schema(\n            &["contacts", "assignments", "activity"],\n            json!({\n                "contacts": {"type": "array", "maxItems": 500, "items": schema_ref("ClientContactProjection")},\n                "assignments": {"type": "array", "maxItems": 500, "items": schema_ref("ClientAssignmentProjection")},\n                "activity": {"type": "array", "maxItems": 100, "items": schema_ref("ClientActivityProjection")}\n            }),\n        ),\n    );\n    Ok(())\n}\n\nfn insert_operation(\n    paths: &mut Map<String, Value>,\n    path: &str,\n    method: &str,\n    operation: Value,\n) -> Result<(), ClientRegistryOpenApiError> {\n    let path_item = paths\n        .entry(path.to_owned())\n        .or_insert_with(|| Value::Object(Map::new()));\n    let path_item = path_item\n        .as_object_mut()\n        .ok_or(ClientRegistryOpenApiError::InvalidPathItem)?;\n    if path_item.contains_key(method) {\n        return Err(ClientRegistryOpenApiError::DuplicateOperation);\n    }\n    path_item.insert(method.to_owned(), operation);\n    Ok(())\n}\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+
+          marker = '''    fn client_registry_openapi_extension_is_additive_and_complete() {\n        let mut document = openapi_document();\n        extend_openapi(&mut document);\n'''
+          replacement = '''    fn client_registry_openapi_extension_is_additive_and_complete()\n    -> Result<(), Box<dyn std::error::Error>> {\n        let mut document = openapi_document();\n        extend_openapi(&mut document)?;\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+
+          marker = '''        for name in [\n            "ClientListProjection",\n            "ClientUpdateRequest",\n            "ClientArchiveRequest",\n            "ClientContactUpsertRequest",\n            "ClientContactArchiveRequest",\n            "ClientMergeRequest",\n            "ClientContactProjection",\n            "ClientAssignmentProjection",\n            "ClientActivityProjection",\n            "ClientHistoryProjection",\n        ] {\n            assert!(schemas.get(name).is_some(), "missing schema {name}");\n        }\n    }\n\n    #[test]\n    fn request_models_reject_unknown_fields() {\n'''
+          replacement = '''        for name in [\n            "ClientListProjection",\n            "ClientUpdateRequest",\n            "ClientArchiveRequest",\n            "ClientContactUpsertRequest",\n            "ClientContactArchiveRequest",\n            "ClientMergeRequest",\n            "ClientContactProjection",\n            "ClientAssignmentProjection",\n            "ClientActivityProjection",\n            "ClientHistoryProjection",\n        ] {\n            assert!(schemas.get(name).is_some(), "missing schema {name}");\n        }\n        Ok(())\n    }\n\n    #[test]\n    fn malformed_or_duplicate_openapi_extension_fails_atomically() {\n        let mut missing_paths = json!({"components": {"schemas": {}}});\n        let before = missing_paths.clone();\n        assert_eq!(\n            extend_openapi(&mut missing_paths),\n            Err(super::ClientRegistryOpenApiError::MissingPathsObject)\n        );\n        assert_eq!(missing_paths, before);\n\n        let mut duplicate = openapi_document();\n        duplicate["paths"]["/api/v1/tenants/{tenantId}/clients"]["get"] = json!({});\n        let before = duplicate.clone();\n        assert_eq!(\n            extend_openapi(&mut duplicate),\n            Err(super::ClientRegistryOpenApiError::DuplicateOperation)\n        );\n        assert_eq!(duplicate, before);\n    }\n\n    #[test]\n    fn request_models_reject_unknown_fields() {\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+
+          # Tests now use json! for malformed fixtures.
+          marker = '    use crate::public_api::{ClientProjection, openapi_document};\n'
+          replacement = '    use crate::public_api::{ClientProjection, openapi_document};\n    use serde_json::json;\n'
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+
+          api.write_text(text, encoding='utf-8')
+
+          fragment = Path('crates/control-plane-contract/src/client_registry_fragment.rs')
+          text = fragment.read_text(encoding='utf-8')
+          text = text.replace(
+              'use crate::{client_registry_api, public_api};\n',
+              'use crate::{client_registry_api, public_api};\nuse client_registry_api::ClientRegistryOpenApiError;\n',
+              1,
+          )
+          marker = '''pub fn canonical_fragment() -> Value {\n    let base = public_api::openapi_document();\n    let mut extended = base.clone();\n    client_registry_api::extend_openapi(&mut extended);\n    diff_fragment(&base, &extended)\n}\n\npub fn compatibility_fragment() -> Value {\n    let mut fragment = canonical_fragment();\n    remap_legacy_refs(&mut fragment);\n    inject_client_registry_problem(&mut fragment);\n    decorate_legacy_transport_contract(&mut fragment);\n    fragment\n}\n\nfn diff_fragment(base: &Value, extended: &Value) -> Value {\n    let base_paths = base\n        .get("paths")\n        .and_then(Value::as_object)\n        .expect("canonical base paths");\n    let extended_paths = extended\n        .get("paths")\n        .and_then(Value::as_object)\n        .expect("canonical extended paths");\n'''
+          replacement = '''pub fn canonical_fragment() -> Result<Value, ClientRegistryOpenApiError> {\n    let base = public_api::openapi_document();\n    let mut extended = base.clone();\n    client_registry_api::extend_openapi(&mut extended)?;\n    diff_fragment(&base, &extended)\n}\n\npub fn compatibility_fragment() -> Result<Value, ClientRegistryOpenApiError> {\n    let mut fragment = canonical_fragment()?;\n    remap_legacy_refs(&mut fragment);\n    inject_client_registry_problem(&mut fragment)?;\n    decorate_legacy_transport_contract(&mut fragment);\n    Ok(fragment)\n}\n\nfn diff_fragment(base: &Value, extended: &Value) -> Result<Value, ClientRegistryOpenApiError> {\n    let base_paths = base\n        .get("paths")\n        .and_then(Value::as_object)\n        .ok_or(ClientRegistryOpenApiError::MissingPathsObject)?;\n    let extended_paths = extended\n        .get("paths")\n        .and_then(Value::as_object)\n        .ok_or(ClientRegistryOpenApiError::MissingPathsObject)?;\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+          text = text.replace(
+              '''        .pointer("/components/schemas")\n        .and_then(Value::as_object)\n        .expect("canonical base schemas");''',
+              '''        .pointer("/components/schemas")\n        .and_then(Value::as_object)\n        .ok_or(ClientRegistryOpenApiError::MissingSchemasObject)?;''',
+              1,
+          )
+          text = text.replace(
+              '''        .pointer("/components/schemas")\n        .and_then(Value::as_object)\n        .expect("canonical extended schemas");''',
+              '''        .pointer("/components/schemas")\n        .and_then(Value::as_object)\n        .ok_or(ClientRegistryOpenApiError::MissingSchemasObject)?;''',
+              1,
+          )
+          marker = '''    json!({\n        "paths": Value::Object(paths),\n        "components": {\n            "schemas": Value::Object(schemas)\n        }\n    })\n}\n'''
+          replacement = '''    Ok(json!({\n        "paths": Value::Object(paths),\n        "components": {\n            "schemas": Value::Object(schemas)\n        }\n    }))\n}\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+          marker = '''fn inject_client_registry_problem(fragment: &mut Value) {\n    let schemas = fragment\n        .pointer_mut("/components/schemas")\n        .and_then(Value::as_object_mut)\n        .expect("client registry fragment schemas");\n    assert!(\n        schemas\n            .insert(\n'''
+          replacement = '''fn inject_client_registry_problem(\n    fragment: &mut Value,\n) -> Result<(), ClientRegistryOpenApiError> {\n    let schemas = fragment\n        .pointer_mut("/components/schemas")\n        .and_then(Value::as_object_mut)\n        .ok_or(ClientRegistryOpenApiError::MissingSchemasObject)?;\n    if schemas.contains_key("ClientRegistryProblem") {\n        return Err(ClientRegistryOpenApiError::DuplicateSchema);\n    }\n    schemas.insert(\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+          marker = '''            )\n            .is_none(),\n        "ClientRegistryProblem schema must remain additive"\n    );\n}\n'''
+          replacement = '''            );\n    Ok(())\n}\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+
+          # Tests become fallible rather than unwrapping production fragment builders.
+          text = text.replace(
+              '''    fn fragment_contains_only_additive_client_registry_surface() {\n        let fragment = canonical_fragment();\n''',
+              '''    fn fragment_contains_only_additive_client_registry_surface()\n    -> Result<(), Box<dyn std::error::Error>> {\n        let fragment = canonical_fragment()?;\n''',
+              1,
+          )
+          marker = '''        assert!(\n            paths["/api/v1/tenants/{tenantId}/clients/{clientId}/merge"]\n                .get("post")\n                .is_some()\n        );\n    }\n'''
+          replacement = '''        assert!(\n            paths["/api/v1/tenants/{tenantId}/clients/{clientId}/merge"]\n                .get("post")\n                .is_some()\n        );\n        Ok(())\n    }\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+          text = text.replace(
+              '''    fn compatibility_fragment_uses_legacy_client_view_and_full_problem_schema() {\n        let fragment = compatibility_fragment();\n''',
+              '''    fn compatibility_fragment_uses_legacy_client_view_and_full_problem_schema()\n    -> Result<(), Box<dyn std::error::Error>> {\n        let fragment = compatibility_fragment()?;\n''',
+              1,
+          )
+          marker = '''        assert!(rendered.contains("#/components/parameters/CorrelationHeader"));\n        assert!(rendered.contains("#/components/parameters/IdempotencyHeader"));\n    }\n}\n'''
+          replacement = '''        assert!(rendered.contains("#/components/parameters/CorrelationHeader"));\n        assert!(rendered.contains("#/components/parameters/IdempotencyHeader"));\n        Ok(())\n    }\n}\n'''
+          assert text.count(marker) == 1
+          text = text.replace(marker, replacement, 1)
+          fragment.write_text(text, encoding='utf-8')
+
+          exporter = Path('crates/control-plane-contract/src/bin/export_client_registry.rs')
+          text = exporter.read_text(encoding='utf-8')
+          text = text.replace(
+              '''        "canonical" => client_registry_fragment::canonical_fragment(),\n        "compatibility" => client_registry_fragment::compatibility_fragment(),\n''',
+              '''        "canonical" => client_registry_fragment::canonical_fragment()?,\n        "compatibility" => client_registry_fragment::compatibility_fragment()?,\n''',
+              1,
+          )
+          exporter.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Validate fallible OpenAPI extension
+        run: |
+          cargo fmt --all
+          cargo test --locked -p control-plane-contract --all-targets
+          cargo clippy --locked -p control-plane-contract --all-targets -- -D warnings
+          python scripts/generate-frontend-contracts.py
+          python scripts/generate-frontend-contracts.py --check
+          python scripts/check-contract-compatibility.py
+          python scripts/test-openapi-fragments.py
+
+      - name: Commit validated source and generated contracts
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/control-plane-contract frontend/src/shared/api/generated openapi/v1/fragments
+          git diff --cached --check
+          git commit -m "Phase 2C: make OpenAPI extension fallible and atomic"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
