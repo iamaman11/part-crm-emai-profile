@@ -1,6 +1,16 @@
 use application_ports::ProfileCoordinatorPort;
 use bridge_domain::{BridgePortError, ClaimUri, EnrollmentClaim};
-use profile_bridge::local_profile::{LocalGenerationState, MaterializationRoot};
+use browser_execution_domain::{
+    BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
+    NetworkIdentityPolicy,
+};
+use profile_bridge::browser_execution::persist_materialization_binding;
+use profile_bridge::browser_preflight::{
+    BoundBrowserLaunchPreflight, BrowserRuntimeObservation, BrowserRuntimeObservationPort,
+};
+use profile_bridge::local_profile::{
+    GenerationWorkspace, LocalGenerationState, MaterializationRoot,
+};
 use profile_bridge::operator_flow::{
     DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment, ProfileBridgeOperator,
     RuntimeBundleSelectionPort,
@@ -24,6 +34,7 @@ use std::process::ExitCode;
 const SYNTHETIC_NOW: UnixMillis = UnixMillis::new(10);
 const SYNTHETIC_CLOSE_AT: UnixMillis = UnixMillis::new(20);
 const SYNTHETIC_CLAIM_EXPIRY: UnixMillis = UnixMillis::new(1_000);
+const SYNTHETIC_RUNTIME_VERSION: &str = "0.1.0";
 
 fn main() -> ExitCode {
     match run(env::args().skip(1)) {
@@ -45,20 +56,24 @@ where
     let root = MaterializationRoot::open_or_create(arguments.materialization_root)
         .map_err(|_| SyntheticOperatorError::MaterializationRoot)?;
     let fixture = SyntheticFixture::new(&claim)?;
-    root.create_generation(
-        fixture.actor.tenant_scope().tenant_id(),
-        &fixture.profile_id,
-        &fixture.generation_id,
-    )
-    .map_err(|_| SyntheticOperatorError::MaterializationGeneration)?;
+    let workspace = root
+        .create_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )
+        .map_err(|_| SyntheticOperatorError::MaterializationGeneration)?;
 
+    let runtime_bundles = SyntheticRuntimeBundles::new()?;
+    let browser_preflight = synthetic_browser_preflight(&workspace, &fixture, &runtime_bundles)?;
     let mut operator = ProfileBridgeOperator::new(
         FakeDeviceIdentity::new(fixture.device_id.clone()),
         FakeDeviceKeyStore::default(),
         SyntheticDeviceAuthentication,
         SyntheticEnrollment::new(&claim, &fixture)?,
         SyntheticCoordinator::new(&fixture)?,
-        SyntheticRuntimeBundles::new()?,
+        runtime_bundles,
+        browser_preflight,
         FakeProcessControl::default(),
         FakeCamouhost::default(),
     );
@@ -76,6 +91,78 @@ where
     }
     println!("synthetic-operator-complete state=DIRTY_LOCAL");
     Ok(())
+}
+
+fn synthetic_browser_preflight(
+    workspace: &GenerationWorkspace,
+    fixture: &SyntheticFixture,
+    runtime_bundles: &SyntheticRuntimeBundles,
+) -> Result<BoundBrowserLaunchPreflight<SyntheticRuntimeObservation>, SyntheticOperatorError> {
+    let manifest = runtime_bundles.bundle.manifest();
+    let browser_identity = BrowserIdentityManifest::new(
+        1,
+        manifest.runtime_version(),
+        manifest.inventory_sha256().as_str(),
+        "synthetic-camoufox-v1",
+        "b".repeat(64),
+    )
+    .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
+    let binding = MaterializationBinding::new(
+        fixture.actor.tenant_scope().tenant_id().clone(),
+        fixture.profile_id.clone(),
+        fixture.generation_id.clone(),
+        "c".repeat(64),
+        workspace
+            .inventory()
+            .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?
+            .inventory_digest(),
+        browser_identity,
+    )
+    .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
+    persist_materialization_binding(workspace, &binding)
+        .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
+    let policy = NetworkIdentityPolicy::new(
+        Some("PL".to_owned()),
+        Some("Mazowieckie".to_owned()),
+        Some("Europe/Warsaw".to_owned()),
+        [NetworkClass::Mobile],
+        [5617],
+        Some("synthetic-route".to_owned()),
+    )
+    .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
+    let observation = NetworkIdentityObservation::new(
+        "PL",
+        "Mazowieckie",
+        "Europe/Warsaw",
+        NetworkClass::Mobile,
+        5617,
+        "synthetic-route",
+    )
+    .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
+    Ok(BoundBrowserLaunchPreflight::new(
+        binding,
+        policy,
+        SyntheticRuntimeObservation { observation },
+    ))
+}
+
+struct SyntheticRuntimeObservation {
+    observation: NetworkIdentityObservation,
+}
+
+impl BrowserRuntimeObservationPort for SyntheticRuntimeObservation {
+    type Error = BridgePortError;
+
+    fn observe(
+        &mut self,
+        _workspace: &GenerationWorkspace,
+        _device_id: &DeviceId,
+    ) -> Result<BrowserRuntimeObservation, Self::Error> {
+        Ok(BrowserRuntimeObservation::new(
+            self.observation.clone(),
+            false,
+        ))
+    }
 }
 
 struct SyntheticArguments {
@@ -255,7 +342,7 @@ impl SyntheticRuntimeBundles {
         let entrypoint = BundleRelativePath::parse("camouhost/main.py")
             .map_err(|_| SyntheticOperatorError::RuntimeBundleFixture)?;
         let manifest = RuntimeManifest::new(
-            "0.1.0",
+            SYNTHETIC_RUNTIME_VERSION,
             "3.12",
             RuntimePlatform::WindowsX86_64,
             entrypoint.clone(),
@@ -297,6 +384,7 @@ enum SyntheticOperatorError {
     MaterializationRootMustBeAbsolute,
     MaterializationRoot,
     MaterializationGeneration,
+    BrowserPreflightFixture,
     FixtureIdentity,
     EnrollmentFixture,
     CoordinatorFixture,
@@ -316,6 +404,7 @@ impl fmt::Display for SyntheticOperatorError {
             Self::MaterializationRootMustBeAbsolute => "materialization root must be absolute",
             Self::MaterializationRoot => "could not prepare materialization root",
             Self::MaterializationGeneration => "could not create synthetic generation",
+            Self::BrowserPreflightFixture => "synthetic browser preflight fixture is invalid",
             Self::FixtureIdentity => "synthetic identity fixture is invalid",
             Self::EnrollmentFixture => "synthetic enrollment fixture is invalid",
             Self::CoordinatorFixture => "synthetic coordinator fixture is invalid",
