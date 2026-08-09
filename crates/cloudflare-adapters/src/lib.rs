@@ -24,6 +24,7 @@ pub mod d1_mailbox_jobs;
 pub mod d1_mailboxes;
 pub mod d1_notification_operations;
 pub mod d1_notifications;
+pub mod d1_profile_application;
 pub mod d1_profile_coordinator;
 pub mod d1_profile_generation_application;
 pub mod d1_profile_generations;
