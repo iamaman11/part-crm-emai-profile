@@ -23,6 +23,54 @@ GENERATION_B = "generation_device_jobs_b"
 DEVICE_A = "device_device_jobs_a"
 DEVICE_B = "device_device_jobs_b"
 JOB_A = "devjob_device_jobs_a"
+JOB_RETRY = "devjob_device_jobs_retry"
+
+CLAIMABLE_QUERY = """
+SELECT job.job_id
+FROM device_jobs AS job
+WHERE job.tenant_id = ?
+  AND job.device_id = ?
+  AND EXISTS (
+      SELECT 1
+      FROM device_authorizations AS authorization
+      WHERE authorization.tenant_id = job.tenant_id
+        AND authorization.device_id = job.device_id
+        AND authorization.profile_id = job.profile_id
+        AND authorization.generation_id = job.generation_id
+        AND authorization.status = 'ACTIVE'
+        AND authorization.version >= 1
+  )
+  AND EXISTS (
+      SELECT 1
+      FROM memberships AS membership
+      WHERE membership.tenant_id = job.tenant_id
+        AND membership.actor_id = ?
+        AND membership.status = 'ACTIVE'
+        AND (
+            membership.role = 'TENANT_OWNER'
+            OR (
+                membership.role = 'MEMBER'
+                AND EXISTS (
+                    SELECT 1
+                    FROM profile_grants AS grant_row
+                    WHERE grant_row.tenant_id = job.tenant_id
+                      AND grant_row.profile_id = job.profile_id
+                      AND grant_row.actor_id = membership.actor_id
+                )
+            )
+        )
+  )
+  AND (
+      job.status = 'PENDING_DEVICE'
+      OR (
+          job.status IN ('PROFILE_BUSY', 'RETRY_SCHEDULED')
+          AND job.retry_at_ms IS NOT NULL
+          AND job.retry_at_ms <= ?
+      )
+  )
+ORDER BY COALESCE(job.retry_at_ms, job.updated_at_ms), job.updated_at_ms, job.job_id
+LIMIT ?
+"""
 
 
 def migration_files() -> list[Path]:
@@ -163,6 +211,29 @@ def insert_pending_job(connection: sqlite3.Connection, *, tenant: str = TENANT_A
     )
 
 
+def insert_future_retry_job(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        INSERT INTO device_jobs (
+            tenant_id, job_id, device_id, profile_id, generation_id,
+            aggregate_version, status, attempt, max_attempts, last_fence,
+            current_claim_id, claim_fence, claimed_at_ms, claim_heartbeat_at_ms,
+            claim_lease_expires_at_ms, retry_at_ms, updated_at_ms
+        ) VALUES (?, ?, ?, ?, ?, 2, 'RETRY_SCHEDULED', 1, 3, 1,
+                  NULL, NULL, NULL, NULL, NULL, 200, 100)
+        """,
+        (TENANT_A, JOB_RETRY, DEVICE_A, PROFILE_A, GENERATION_A),
+    )
+
+
+def claimable_ids(connection: sqlite3.Connection, now: int) -> list[str]:
+    rows = connection.execute(
+        CLAIMABLE_QUERY,
+        (TENANT_A, DEVICE_A, OWNER_A, now, 20),
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
 def test_schema_and_tenant_binding(connection: sqlite3.Connection) -> None:
     seed_tenant(
         connection,
@@ -203,6 +274,21 @@ def test_schema_and_tenant_binding(connection: sqlite3.Connection) -> None:
         )
     )
     connection.rollback()
+
+
+def test_claimable_due_query_and_index(connection: sqlite3.Connection) -> None:
+    insert_future_retry_job(connection)
+    connection.commit()
+
+    assert claimable_ids(connection, 150) == [JOB_A]
+    assert claimable_ids(connection, 200) == [JOB_A, JOB_RETRY]
+
+    plan = connection.execute(
+        "EXPLAIN QUERY PLAN " + CLAIMABLE_QUERY,
+        (TENANT_A, DEVICE_A, OWNER_A, 200, 20),
+    ).fetchall()
+    plan_text = "\n".join(str(row[3]) for row in plan)
+    assert "device_jobs_claimable_device_lookup" in plan_text, plan_text
 
 
 def test_claim_shape_and_stale_cas(connection: sqlite3.Connection) -> None:
@@ -332,12 +418,14 @@ def test_authorization_version_and_revocation_shape(connection: sqlite3.Connecti
         (TENANT_A, DEVICE_A, PROFILE_A, GENERATION_A),
     ).fetchone()
     assert tuple(row) == (2, "REVOKED", 140)
+    assert claimable_ids(connection, 500) == []
 
 
 def main() -> int:
     connection = database()
     try:
         test_schema_and_tenant_binding(connection)
+        test_claimable_due_query_and_index(connection)
         test_claim_shape_and_stale_cas(connection)
         test_authorization_version_and_revocation_shape(connection)
     finally:
