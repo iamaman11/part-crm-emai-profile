@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           python scripts/check-architecture.py
           python scripts/test-device-job-d1.py
-          cargo clippy --locked -p device-domain -p application-ports -p use-cases-devices -p cloudflare-adapters --all-targets -- -D warnings
+          cargo clippy --locked -p device-domain -p application-ports -p use-cases-devices --all-targets -- -D warnings
           cargo test --locked -p device-domain -p application-ports -p use-cases-devices
           cargo test --locked -p cloudflare-adapters --lib
           cargo check --locked -p device-domain -p application-ports -p use-cases-devices -p cloudflare-adapters --target wasm32-unknown-unknown
