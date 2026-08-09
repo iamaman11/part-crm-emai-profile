@@ -227,8 +227,15 @@ def main() -> int:
     base_document, base_openapi = run_export("export_openapi")
     base_typescript = render_typescript(base_document, source_path=SOURCE_PATH)
     canonical_registry, _ = run_export("export_client_registry", "canonical")
-    _, compatibility_registry_openapi = run_export(
-        "export_client_registry", "compatibility"
+    compatibility_registry, _ = run_export("export_client_registry", "compatibility")
+    compatibility_registry_openapi = (
+        json.dumps(
+            compatibility_registry,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        + "\n"
     )
     registry_typescript = render_typescript(
         canonical_registry,
