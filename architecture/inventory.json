@@ -52,369 +52,56 @@
       "/bridge"
     ],
     "classifiers": [
-      {
-        "capability": "foundation",
-        "module": "crates/control-plane-contract/src/routes/foundation.rs"
-      },
-      {
-        "capability": "identity",
-        "module": "crates/control-plane-contract/src/routes/identity.rs"
-      },
-      {
-        "capability": "clients",
-        "module": "crates/control-plane-contract/src/routes/clients.rs"
-      },
-      {
-        "capability": "profiles",
-        "module": "crates/control-plane-contract/src/routes/profiles.rs"
-      },
-      {
-        "capability": "generations",
-        "module": "crates/control-plane-contract/src/routes/generations.rs"
-      },
-      {
-        "capability": "mailboxes",
-        "module": "crates/control-plane-contract/src/routes/mailboxes.rs"
-      },
-      {
-        "capability": "notifications",
-        "module": "crates/control-plane-contract/src/routes/notifications.rs"
-      }
+      {"capability": "foundation", "module": "crates/control-plane-contract/src/routes/foundation.rs"},
+      {"capability": "identity", "module": "crates/control-plane-contract/src/routes/identity.rs"},
+      {"capability": "clients", "module": "crates/control-plane-contract/src/routes/clients.rs"},
+      {"capability": "profiles", "module": "crates/control-plane-contract/src/routes/profiles.rs"},
+      {"capability": "generations", "module": "crates/control-plane-contract/src/routes/generations.rs"},
+      {"capability": "mailboxes", "module": "crates/control-plane-contract/src/routes/mailboxes.rs"},
+      {"capability": "notifications", "module": "crates/control-plane-contract/src/routes/notifications.rs"}
     ],
     "public_routes": [
-      {
-        "route_class": "HealthApi",
-        "capability": "foundation",
-        "methods": [
-          "GET"
-        ],
-        "path_template": "/api/v1/health",
-        "example_path": "/api/v1/health",
-        "authenticated": false
-      },
-      {
-        "route_class": "BindingProbeApi",
-        "capability": "foundation",
-        "methods": [
-          "GET"
-        ],
-        "path_template": "/api/v1/bindings",
-        "example_path": "/api/v1/bindings",
-        "authenticated": false
-      },
-      {
-        "route_class": "AuthenticatedSessionApi",
-        "capability": "foundation",
-        "methods": [
-          "GET"
-        ],
-        "path_template": "/api/v1/session",
-        "example_path": "/api/v1/session",
-        "authenticated": true
-      },
-      {
-        "route_class": "OwnerBootstrapApi",
-        "capability": "identity",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/owner/bootstrap",
-        "example_path": "/api/v1/tenants/tenant_01/owner/bootstrap",
-        "authenticated": true
-      },
-      {
-        "route_class": "OwnerTransferApi",
-        "capability": "identity",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/owner/transfer",
-        "example_path": "/api/v1/tenants/tenant_01/owner/transfer",
-        "authenticated": true
-      },
-      {
-        "route_class": "InvitationCollectionApi",
-        "capability": "identity",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/invitations",
-        "example_path": "/api/v1/tenants/tenant_01/invitations",
-        "authenticated": true
-      },
-      {
-        "route_class": "InvitationAcceptApi",
-        "capability": "identity",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/invitations/{invitation_id}/accept",
-        "example_path": "/api/v1/tenants/tenant_01/invitations/invitation_01/accept",
-        "authenticated": true
-      },
-      {
-        "route_class": "MembershipStatusApi",
-        "capability": "identity",
-        "methods": [
-          "PUT"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/members/{actor_id}/status",
-        "example_path": "/api/v1/tenants/tenant_01/members/actor_01/status",
-        "authenticated": true
-      },
-      {
-        "route_class": "ClientCollectionApi",
-        "capability": "clients",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/clients",
-        "example_path": "/api/v1/tenants/tenant_01/clients",
-        "authenticated": true
-      },
-      {
-        "route_class": "ClientResourceApi",
-        "capability": "clients",
-        "methods": [
-          "GET"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}",
-        "example_path": "/api/v1/tenants/tenant_01/clients/client_01",
-        "authenticated": true
-      },
-      {
-        "route_class": "ClientGrantApi",
-        "capability": "clients",
-        "methods": [
-          "DELETE",
-          "PUT"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/grants/{actor_id}",
-        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/grants/actor_01",
-        "authenticated": true
-      },
-      {
-        "route_class": "ProfileCollectionApi",
-        "capability": "profiles",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/profiles",
-        "example_path": "/api/v1/tenants/tenant_01/profiles",
-        "authenticated": true
-      },
-      {
-        "route_class": "ProfileResourceApi",
-        "capability": "profiles",
-        "methods": [
-          "GET"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}",
-        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01",
-        "authenticated": true
-      },
-      {
-        "route_class": "ProfileAssignmentApi",
-        "capability": "profiles",
-        "methods": [
-          "PUT"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/assignment",
-        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/assignment",
-        "authenticated": true
-      },
-      {
-        "route_class": "ProfileGrantApi",
-        "capability": "profiles",
-        "methods": [
-          "DELETE",
-          "PUT"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/grants/{actor_id}",
-        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/grants/actor_01",
-        "authenticated": true
-      },
-      {
-        "route_class": "ProfileCoordinatorApi",
-        "capability": "profiles",
-        "methods": [
-          "GET",
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/coordinator",
-        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/coordinator",
-        "authenticated": true
-      },
-      {
-        "route_class": "ProfileGenerationCollectionApi",
-        "capability": "generations",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations",
-        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations",
-        "authenticated": true
-      },
-      {
-        "route_class": "ProfileGenerationResourceApi",
-        "capability": "generations",
-        "methods": [
-          "GET"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}",
-        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01",
-        "authenticated": true
-      },
-      {
-        "route_class": "ProfileGenerationVerifyApi",
-        "capability": "generations",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/verify",
-        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/verify",
-        "authenticated": true
-      },
-      {
-        "route_class": "ProfileGenerationActivateApi",
-        "capability": "generations",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/activate",
-        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/activate",
-        "authenticated": true
-      },
-      {
-        "route_class": "ProfileGenerationDeactivateApi",
-        "capability": "generations",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/deactivate",
-        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate",
-        "authenticated": true
-      },
-      {
-        "route_class": "ProfileGenerationQuarantineApi",
-        "capability": "generations",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/quarantine",
-        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/quarantine",
-        "authenticated": true
-      },
-      {
-        "route_class": "MailboxBindingCollectionApi",
-        "capability": "mailboxes",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes",
-        "example_path": "/api/v1/tenants/tenant_01/mailboxes",
-        "authenticated": true
-      },
-      {
-        "route_class": "MailboxBindingResourceApi",
-        "capability": "mailboxes",
-        "methods": [
-          "GET"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}",
-        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01",
-        "authenticated": true
-      },
-      {
-        "route_class": "MailboxBindingRevokeApi",
-        "capability": "mailboxes",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/revoke",
-        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/revoke",
-        "authenticated": true
-      },
-      {
-        "route_class": "MailboxJobCollectionApi",
-        "capability": "mailboxes",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs",
-        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs",
-        "authenticated": true
-      },
-      {
-        "route_class": "MailboxJobResourceApi",
-        "capability": "mailboxes",
-        "methods": [
-          "GET"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}",
-        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01",
-        "authenticated": true
-      },
-      {
-        "route_class": "MailboxJobRunApi",
-        "capability": "mailboxes",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}/run",
-        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
-        "authenticated": true
-      },
-      {
-        "route_class": "NotificationEventCollectionApi",
-        "capability": "notifications",
-        "methods": [
-          "GET"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/notifications/events",
-        "example_path": "/api/v1/tenants/tenant_01/notifications/events",
-        "authenticated": true
-      },
-      {
-        "route_class": "NotificationEventAckApi",
-        "capability": "notifications",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/notifications/events/ack",
-        "example_path": "/api/v1/tenants/tenant_01/notifications/events/ack",
-        "authenticated": true
-      },
-      {
-        "route_class": "NotificationReplayCollectionApi",
-        "capability": "notifications",
-        "methods": [
-          "POST"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/notifications/replays",
-        "example_path": "/api/v1/tenants/tenant_01/notifications/replays",
-        "authenticated": true
-      },
-      {
-        "route_class": "NotificationOperationsApi",
-        "capability": "notifications",
-        "methods": [
-          "GET"
-        ],
-        "path_template": "/api/v1/tenants/{tenant_id}/notifications/operations",
-        "example_path": "/api/v1/tenants/tenant_01/notifications/operations",
-        "authenticated": true
-      }
+      {"route_class":"HealthApi","capability":"foundation","methods":["GET"],"path_template":"/api/v1/health","example_path":"/api/v1/health","authenticated":false},
+      {"route_class":"BindingProbeApi","capability":"foundation","methods":["GET"],"path_template":"/api/v1/bindings","example_path":"/api/v1/bindings","authenticated":false},
+      {"route_class":"AuthenticatedSessionApi","capability":"foundation","methods":["GET"],"path_template":"/api/v1/session","example_path":"/api/v1/session","authenticated":true},
+      {"route_class":"OwnerBootstrapApi","capability":"identity","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/owner/bootstrap","example_path":"/api/v1/tenants/tenant_01/owner/bootstrap","authenticated":true},
+      {"route_class":"OwnerTransferApi","capability":"identity","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/owner/transfer","example_path":"/api/v1/tenants/tenant_01/owner/transfer","authenticated":true},
+      {"route_class":"InvitationCollectionApi","capability":"identity","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/invitations","example_path":"/api/v1/tenants/tenant_01/invitations","authenticated":true},
+      {"route_class":"InvitationAcceptApi","capability":"identity","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/invitations/{invitation_id}/accept","example_path":"/api/v1/tenants/tenant_01/invitations/invitation_01/accept","authenticated":true},
+      {"route_class":"MembershipStatusApi","capability":"identity","methods":["PUT"],"path_template":"/api/v1/tenants/{tenant_id}/members/{actor_id}/status","example_path":"/api/v1/tenants/tenant_01/members/actor_01/status","authenticated":true},
+      {"route_class":"ClientCollectionApi","capability":"clients","methods":["GET","POST"],"path_template":"/api/v1/tenants/{tenant_id}/clients","example_path":"/api/v1/tenants/tenant_01/clients","authenticated":true},
+      {"route_class":"ClientResourceApi","capability":"clients","methods":["GET","PATCH"],"path_template":"/api/v1/tenants/{tenant_id}/clients/{client_id}","example_path":"/api/v1/tenants/tenant_01/clients/client_01","authenticated":true},
+      {"route_class":"ClientArchiveApi","capability":"clients","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/clients/{client_id}/archive","example_path":"/api/v1/tenants/tenant_01/clients/client_01/archive","authenticated":true},
+      {"route_class":"ClientContactApi","capability":"clients","methods":["DELETE","PUT"],"path_template":"/api/v1/tenants/{tenant_id}/clients/{client_id}/contacts/{contact_point_id}","example_path":"/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01","authenticated":true},
+      {"route_class":"ClientMergeApi","capability":"clients","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/clients/{client_id}/merge","example_path":"/api/v1/tenants/tenant_01/clients/client_01/merge","authenticated":true},
+      {"route_class":"ClientHistoryApi","capability":"clients","methods":["GET"],"path_template":"/api/v1/tenants/{tenant_id}/clients/{client_id}/history","example_path":"/api/v1/tenants/tenant_01/clients/client_01/history","authenticated":true},
+      {"route_class":"ClientGrantApi","capability":"clients","methods":["DELETE","PUT"],"path_template":"/api/v1/tenants/{tenant_id}/clients/{client_id}/grants/{actor_id}","example_path":"/api/v1/tenants/tenant_01/clients/client_01/grants/actor_01","authenticated":true},
+      {"route_class":"ProfileCollectionApi","capability":"profiles","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/profiles","example_path":"/api/v1/tenants/tenant_01/profiles","authenticated":true},
+      {"route_class":"ProfileResourceApi","capability":"profiles","methods":["GET"],"path_template":"/api/v1/tenants/{tenant_id}/profiles/{profile_id}","example_path":"/api/v1/tenants/tenant_01/profiles/profile_01","authenticated":true},
+      {"route_class":"ProfileAssignmentApi","capability":"profiles","methods":["PUT"],"path_template":"/api/v1/tenants/{tenant_id}/profiles/{profile_id}/assignment","example_path":"/api/v1/tenants/tenant_01/profiles/profile_01/assignment","authenticated":true},
+      {"route_class":"ProfileGrantApi","capability":"profiles","methods":["DELETE","PUT"],"path_template":"/api/v1/tenants/{tenant_id}/profiles/{profile_id}/grants/{actor_id}","example_path":"/api/v1/tenants/tenant_01/profiles/profile_01/grants/actor_01","authenticated":true},
+      {"route_class":"ProfileCoordinatorApi","capability":"profiles","methods":["GET","POST"],"path_template":"/api/v1/tenants/{tenant_id}/profiles/{profile_id}/coordinator","example_path":"/api/v1/tenants/tenant_01/profiles/profile_01/coordinator","authenticated":true},
+      {"route_class":"ProfileGenerationCollectionApi","capability":"generations","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations","example_path":"/api/v1/tenants/tenant_01/profiles/profile_01/generations","authenticated":true},
+      {"route_class":"ProfileGenerationResourceApi","capability":"generations","methods":["GET"],"path_template":"/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}","example_path":"/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01","authenticated":true},
+      {"route_class":"ProfileGenerationVerifyApi","capability":"generations","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/verify","example_path":"/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/verify","authenticated":true},
+      {"route_class":"ProfileGenerationActivateApi","capability":"generations","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/activate","example_path":"/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/activate","authenticated":true},
+      {"route_class":"ProfileGenerationDeactivateApi","capability":"generations","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/deactivate","example_path":"/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate","authenticated":true},
+      {"route_class":"ProfileGenerationQuarantineApi","capability":"generations","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/quarantine","example_path":"/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/quarantine","authenticated":true},
+      {"route_class":"MailboxBindingCollectionApi","capability":"mailboxes","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/mailboxes","example_path":"/api/v1/tenants/tenant_01/mailboxes","authenticated":true},
+      {"route_class":"MailboxBindingResourceApi","capability":"mailboxes","methods":["GET"],"path_template":"/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}","example_path":"/api/v1/tenants/tenant_01/mailboxes/mailbox_01","authenticated":true},
+      {"route_class":"MailboxBindingRevokeApi","capability":"mailboxes","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/revoke","example_path":"/api/v1/tenants/tenant_01/mailboxes/mailbox_01/revoke","authenticated":true},
+      {"route_class":"MailboxJobCollectionApi","capability":"mailboxes","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs","example_path":"/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs","authenticated":true},
+      {"route_class":"MailboxJobResourceApi","capability":"mailboxes","methods":["GET"],"path_template":"/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}","example_path":"/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01","authenticated":true},
+      {"route_class":"MailboxJobRunApi","capability":"mailboxes","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}/run","example_path":"/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run","authenticated":true},
+      {"route_class":"NotificationEventCollectionApi","capability":"notifications","methods":["GET"],"path_template":"/api/v1/tenants/{tenant_id}/notifications/events","example_path":"/api/v1/tenants/tenant_01/notifications/events","authenticated":true},
+      {"route_class":"NotificationEventAckApi","capability":"notifications","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/notifications/events/ack","example_path":"/api/v1/tenants/tenant_01/notifications/events/ack","authenticated":true},
+      {"route_class":"NotificationReplayCollectionApi","capability":"notifications","methods":["POST"],"path_template":"/api/v1/tenants/{tenant_id}/notifications/replays","example_path":"/api/v1/tenants/tenant_01/notifications/replays","authenticated":true},
+      {"route_class":"NotificationOperationsApi","capability":"notifications","methods":["GET"],"path_template":"/api/v1/tenants/{tenant_id}/notifications/operations","example_path":"/api/v1/tenants/tenant_01/notifications/operations","authenticated":true}
     ]
   },
   "generated_contracts": [
-    {
-      "name": "control-plane-public-api",
-      "canonical_source": "crates/control-plane-contract/src/public_api.rs",
-      "openapi": "contracts/generated/control-plane.openapi.json",
-      "typescript": "frontend/src/shared/api/generated/control-plane.ts",
-      "generator": "scripts/generate-frontend-contracts.py"
-    }
+    {"name":"control-plane-public-api","canonical_source":"crates/control-plane-contract/src/public_api.rs","openapi":"contracts/generated/control-plane.openapi.json","typescript":"frontend/src/shared/api/generated/control-plane.ts","generator":"scripts/generate-frontend-contracts.py"},
+    {"name":"client-registry-api","canonical_source":"crates/control-plane-contract/src/client_registry_api.rs","openapi":"openapi/v1/fragments/client-registry.json","typescript":"frontend/src/shared/api/generated/client-registry.ts","generator":"scripts/generate-frontend-contracts.py"}
   ],
   "documentation_authority": {
     "execution_order": "docs/DEVELOPMENT_PLAN.md",
