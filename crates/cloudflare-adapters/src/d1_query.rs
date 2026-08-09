@@ -317,36 +317,51 @@ fn fetch_limit(page: &QueryPageRequest) -> i64 {
 }
 
 fn client_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    typed_cursor(page, CLIENT_CURSOR_PREFIX, ClientId::parse)
+    let value = cursor_value(page, CLIENT_CURSOR_PREFIX)?;
+    if value.is_empty() {
+        return Ok(value);
+    }
+    ClientId::parse(&value).map_err(|_| invalid_cursor())?;
+    Ok(value)
 }
 
 fn profile_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    typed_cursor(page, PROFILE_CURSOR_PREFIX, ProfileId::parse)
+    let value = cursor_value(page, PROFILE_CURSOR_PREFIX)?;
+    if value.is_empty() {
+        return Ok(value);
+    }
+    ProfileId::parse(&value).map_err(|_| invalid_cursor())?;
+    Ok(value)
 }
 
 fn member_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    typed_cursor(page, MEMBER_CURSOR_PREFIX, ActorId::parse)
+    let value = cursor_value(page, MEMBER_CURSOR_PREFIX)?;
+    if value.is_empty() {
+        return Ok(value);
+    }
+    ActorId::parse(&value).map_err(|_| invalid_cursor())?;
+    Ok(value)
 }
 
 fn mailbox_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    typed_cursor(page, MAILBOX_CURSOR_PREFIX, MailboxBindingId::parse)
+    let value = cursor_value(page, MAILBOX_CURSOR_PREFIX)?;
+    if value.is_empty() {
+        return Ok(value);
+    }
+    MailboxBindingId::parse(&value).map_err(|_| invalid_cursor())?;
+    Ok(value)
 }
 
-fn typed_cursor<T, E>(
-    page: &QueryPageRequest,
-    prefix: &str,
-    parse: impl Fn(&str) -> Result<T, E>,
-) -> Result<String, QueryPortError> {
+fn cursor_value(page: &QueryPageRequest, prefix: &str) -> Result<String, QueryPortError> {
     let Some(cursor) = page.cursor() else {
         return Ok(String::new());
     };
-    let value = cursor
+    cursor
         .as_str()
         .strip_prefix(prefix)
         .filter(|value| !value.is_empty())
-        .ok_or_else(invalid_cursor)?;
-    parse(value).map_err(|_| invalid_cursor())?;
-    Ok(value.to_owned())
+        .map(str::to_owned)
+        .ok_or_else(invalid_cursor)
 }
 
 fn client_page(
@@ -355,7 +370,7 @@ fn client_page(
 ) -> Result<QueryPage<ClientReadProjection>, QueryPortError> {
     let limit = usize::from(page.limit().value());
     let has_more = rows.len() > limit;
-    let mut items = rows
+    let items = rows
         .into_iter()
         .take(limit)
         .map(map_client_row)
@@ -368,7 +383,7 @@ fn client_page(
     } else {
         None
     };
-    Ok(QueryPage::new(core::mem::take(&mut items), next_cursor))
+    Ok(QueryPage::new(items, next_cursor))
 }
 
 fn profile_page(
@@ -570,7 +585,8 @@ mod tests {
     };
 
     #[test]
-    fn domain_scoped_cursors_reject_cross_projection_reuse() -> Result<(), Box<dyn std::error::Error>> {
+    fn domain_scoped_cursors_reject_cross_projection_reuse()
+    -> Result<(), Box<dyn std::error::Error>> {
         let page = QueryPageRequest::new(
             QueryPageSize::new(25)?,
             Some(QueryCursor::parse("mailboxes:binding_01JQUERY")?),
