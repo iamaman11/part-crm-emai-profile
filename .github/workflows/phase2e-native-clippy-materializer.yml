@@ -1,0 +1,45 @@
+name: Phase 2E Native Clippy Materializer
+
+on:
+  push:
+    branches:
+      - phase2e-mailbox-cloud-lane
+    paths:
+      - .github/workflows/phase2e-native-clippy-materializer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2e-mailbox-cloud-lane
+
+      - name: Apply only machine-applicable native Clippy fixes
+        run: >-
+          cargo clippy --fix --locked
+          -p application-ports -p use-cases-mailboxes --all-targets
+          --allow-dirty --allow-staged -- -D warnings
+
+      - name: Verify targeted crates are warning-free
+        run: >-
+          cargo clippy --locked
+          -p application-ports -p use-cases-mailboxes --all-targets
+          -- -D warnings
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Commit verified fixes and remove this workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/phase2e-native-clippy-materializer.yml
+          git add crates/application-ports crates/use-cases-mailboxes
+          git diff --cached --check
+          git commit -m "Phase 2E: materialize native Clippy fixes"
+          git push origin HEAD:phase2e-mailbox-cloud-lane
