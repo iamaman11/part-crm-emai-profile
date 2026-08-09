@@ -1,7 +1,9 @@
 use crate::contact_protection::{
     ContactEncryptionRootKey, ContactLookupRootKey, ContactProtectionKeyring,
-    RustCryptoContactProtection, WorkerCryptoNonceSource,
+    RustCryptoContactProtection,
 };
+#[cfg(target_arch = "wasm32")]
+use crate::contact_protection::WorkerCryptoNonceSource;
 use client_domain::{EncryptionKeyVersion, LookupKeyVersion};
 use serde::Deserialize;
 use zeroize::{Zeroize, Zeroizing};
@@ -9,9 +11,19 @@ use zeroize::{Zeroize, Zeroizing};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContactKeyringConfigError;
 
+#[cfg(target_arch = "wasm32")]
 pub fn contact_protection_from_serialized_keyring(
     serialized: String,
 ) -> Result<RustCryptoContactProtection<WorkerCryptoNonceSource>, ContactKeyringConfigError> {
+    Ok(RustCryptoContactProtection::new(
+        parse_contact_protection_keyring(serialized)?,
+        WorkerCryptoNonceSource,
+    ))
+}
+
+fn parse_contact_protection_keyring(
+    serialized: String,
+) -> Result<ContactProtectionKeyring, ContactKeyringConfigError> {
     let serialized = Zeroizing::new(serialized);
     let keyring: ContactProtectionKeyringSecret =
         serde_json::from_str(serialized.as_str()).map_err(|_| ContactKeyringConfigError)?;
@@ -35,12 +47,7 @@ pub fn contact_protection_from_serialized_keyring(
             ))
         })
         .collect::<Result<Vec<_>, ContactKeyringConfigError>>()?;
-    let keyring = ContactProtectionKeyring::new(encryption_keys, lookup_keys)
-        .map_err(|_| ContactKeyringConfigError)?;
-    Ok(RustCryptoContactProtection::new(
-        keyring,
-        WorkerCryptoNonceSource,
-    ))
+    ContactProtectionKeyring::new(encryption_keys, lookup_keys).map_err(|_| ContactKeyringConfigError)
 }
 
 #[derive(Deserialize)]
@@ -88,7 +95,7 @@ const fn hex_nibble(value: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::contact_protection_from_serialized_keyring;
+    use super::parse_contact_protection_keyring;
 
     #[test]
     fn versioned_keyring_requires_valid_nonempty_32_byte_entries() {
@@ -99,15 +106,13 @@ mod tests {
             "ef".repeat(32),
             "12".repeat(32),
         );
-        assert!(contact_protection_from_serialized_keyring(valid).is_ok());
+        assert!(parse_contact_protection_keyring(valid).is_ok());
         assert!(
-            contact_protection_from_serialized_keyring(
-                "{\"encryption\":[],\"lookup\":[]}".to_owned()
-            )
-            .is_err()
+            parse_contact_protection_keyring("{\"encryption\":[],\"lookup\":[]}".to_owned())
+                .is_err()
         );
         assert!(
-            contact_protection_from_serialized_keyring(
+            parse_contact_protection_keyring(
                 "{\"encryption\":[{\"version\":0,\"keyHex\":\"00\"}],\"lookup\":[]}".to_owned()
             )
             .is_err()
