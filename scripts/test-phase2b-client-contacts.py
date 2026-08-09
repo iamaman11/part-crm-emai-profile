@@ -174,7 +174,7 @@ def test_tenant_and_client_scope_are_structural() -> None:
             contact_point_id=CONTACT_B,
             actor_id=OWNER_B,
         ),
-        "FOREIGN KEY constraint failed",
+        "client_contact_client_not_active",
     )
 
     # The same opaque token may exist in different tenants because cryptographic tenant
