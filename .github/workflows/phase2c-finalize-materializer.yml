@@ -50,3 +50,5 @@ jobs:
           git diff --cached --check
           git commit -m "Phase 2C: materialize formatted acceptance state"
           git push origin HEAD:phase2c-client-merge-assignment-ui
+
+# synchronize trigger
