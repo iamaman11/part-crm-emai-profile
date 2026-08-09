@@ -61,6 +61,7 @@ ROUTE_SPECS = [
     ("MailboxBindingCollectionApi", "mailboxes", ["POST"], "/api/v1/tenants/{tenant_id}/mailboxes", "/api/v1/tenants/tenant_01/mailboxes", True),
     ("MailboxBindingResourceApi", "mailboxes", ["GET"], "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01", True),
     ("MailboxBindingRevokeApi", "mailboxes", ["POST"], "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/revoke", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/revoke", True),
+    ("MailboxBrowserExecutionBindApi", "mailboxes", ["POST"], "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/browser-execution", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/browser-execution", True),
     ("MailboxJobCollectionApi", "mailboxes", ["POST"], "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs", True),
     ("MailboxJobResourceApi", "mailboxes", ["GET"], "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01", True),
     ("MailboxJobRunApi", "mailboxes", ["POST"], "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}/run", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run", True),
