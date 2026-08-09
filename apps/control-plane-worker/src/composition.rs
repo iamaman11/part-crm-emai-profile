@@ -12,10 +12,14 @@ use cloudflare_adapters::contact_keyring::contact_protection_from_serialized_key
 use cloudflare_adapters::contact_protection::{
     RustCryptoContactProtection, WorkerCryptoNonceSource,
 };
+use cloudflare_adapters::d1_authenticated_device::D1AuthenticatedDevice;
 use cloudflare_adapters::d1_client_merge::D1ClientMergeRepository;
 use cloudflare_adapters::d1_client_persistence::D1ClientPersistenceRepository;
 use cloudflare_adapters::d1_client_registry::D1ClientRegistryProjectionRepository;
 use cloudflare_adapters::d1_clients::D1ClientApplicationRepository;
+use cloudflare_adapters::d1_device_authorization::D1DeviceJobAuthorization;
+use cloudflare_adapters::d1_device_jobs::D1DeviceJobRepository;
+use cloudflare_adapters::d1_device_preconditions::D1DeviceExecutionPreconditions;
 use cloudflare_adapters::d1_identity_ceremonies::D1IdentityCeremonyApplicationRepository;
 use cloudflare_adapters::d1_identity_governance::D1IdentityGovernanceApplicationRepository;
 use cloudflare_adapters::d1_mailbox_bindings::D1MailboxBindingApplicationRepository;
@@ -147,4 +151,20 @@ pub fn mailbox_job_application(env: &Env) -> Result<D1MailboxJobApplicationRepos
         env.d1(D1_CATALOG_BINDING)?,
         env.d1(D1_CATALOG_BINDING)?,
     ))
+}
+
+pub fn authenticated_device(env: &Env) -> Result<D1AuthenticatedDevice> {
+    Ok(D1AuthenticatedDevice::new(env.d1(D1_CATALOG_BINDING)?))
+}
+
+pub fn device_job_authorization(env: &Env) -> Result<D1DeviceJobAuthorization> {
+    Ok(D1DeviceJobAuthorization::new(env.d1(D1_CATALOG_BINDING)?))
+}
+
+pub fn device_execution_preconditions(env: &Env) -> Result<D1DeviceExecutionPreconditions> {
+    Ok(D1DeviceExecutionPreconditions::new(env.d1(D1_CATALOG_BINDING)?))
+}
+
+pub fn device_job_repository(env: &Env) -> Result<D1DeviceJobRepository> {
+    Ok(D1DeviceJobRepository::new(env.d1(D1_CATALOG_BINDING)?))
 }
