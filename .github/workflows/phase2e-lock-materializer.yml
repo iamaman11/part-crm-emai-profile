@@ -1,0 +1,30 @@
+name: Phase 2E Lock Materializer
+
+on:
+  push:
+    branches:
+      - phase2e-mailbox-cloud-lane
+    paths:
+      - .github/workflows/phase2e-lock-materializer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2e-mailbox-cloud-lane
+      - name: Materialize lockfile and self-remove
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+          git rm .github/workflows/phase2e-lock-materializer.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock
+          git commit -m "Phase 2E: materialize workspace lockfile"
+          git push origin HEAD:phase2e-mailbox-cloud-lane
