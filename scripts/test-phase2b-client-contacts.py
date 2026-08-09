@@ -9,6 +9,7 @@ from test_d1_schema import (
     CLIENT_A,
     CLIENT_B,
     OWNER_A,
+    OWNER_B,
     TENANT_A,
     TENANT_B,
     apply_migrations,
@@ -41,6 +42,7 @@ def insert_contact(
     tenant_id: str = TENANT_A,
     client_id: str = CLIENT_A,
     contact_point_id: str = CONTACT_A,
+    actor_id: str = OWNER_A,
     status: str = "ACTIVE",
     token: bytes = TOKEN,
     encryption_key_version: int = 1,
@@ -67,8 +69,8 @@ def insert_contact(
             encryption_key_version,
             token,
             lookup_key_version,
-            OWNER_A,
-            OWNER_A,
+            actor_id,
+            actor_id,
         ),
     )
 
@@ -136,6 +138,7 @@ def test_tenant_and_client_scope_are_structural(connection: sqlite3.Connection) 
             tenant_id=TENANT_B,
             client_id=CLIENT_A,
             contact_point_id=CONTACT_B,
+            actor_id=OWNER_B,
         ),
         "FOREIGN KEY constraint failed",
     )
@@ -148,6 +151,7 @@ def test_tenant_and_client_scope_are_structural(connection: sqlite3.Connection) 
         tenant_id=TENANT_B,
         client_id=CLIENT_B,
         contact_point_id=CONTACT_B,
+        actor_id=OWNER_B,
         token=TOKEN,
     )
     rows = connection.execute(
