@@ -602,6 +602,7 @@ async fn persist<R: DeviceJobRepositoryPort>(
 
 fn map_port_error(error: DeviceJobPortError) -> DeviceJobOperationError {
     match error.class() {
+        DeviceJobPortErrorClass::AuthenticationFailed => DeviceJobOperationError::Forbidden,
         DeviceJobPortErrorClass::IntegrityFailure => DeviceJobOperationError::IntegrityFailure,
         DeviceJobPortErrorClass::DependencyUnavailable => {
             DeviceJobOperationError::DependencyUnavailable
