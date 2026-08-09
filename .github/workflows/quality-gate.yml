@@ -39,6 +39,8 @@ jobs:
           scripts/check-frontend-feature-boundaries.py
           scripts/check-phase2c-client-boundaries.py
           scripts/test-phase2c-client-merge-assignment.py
+          scripts/check-phase2d-query-boundaries.py
+          scripts/test-phase2d-query-projections.py
           scripts/generate-frontend-contracts.py
           scripts/generate-architecture-inventory.py
           scripts/test-d1-schema.py
@@ -156,6 +158,20 @@ jobs:
       - name: Prove Phase 2C client merge and assignment D1 invariants
         run: python scripts/test-phase2c-client-merge-assignment.py
 
+      - name: Enforce Phase 2D query and privacy boundaries
+        run: python scripts/check-phase2d-query-boundaries.py
+
+      - name: Prove Phase 2D negative query fixtures are rejected
+        run: python scripts/check-phase2d-query-boundaries.py --self-test
+
+      - name: Prove Phase 2D grant-safe projections and query plans
+        run: python scripts/test-phase2d-query-projections.py
+
+      - name: Test Phase 2D query application and synthetic Bridge adapter
+        run: |
+          cargo test --locked -p application-ports -p use-cases-query
+          cargo test --locked -p profile-bridge fake_mail_query
+
       - name: Format
         run: cargo fmt --all -- --check
 
@@ -193,6 +209,7 @@ jobs:
           -p bridge-domain
           -p application-ports
           -p use-cases
+          -p use-cases-query
 
       - name: Validate delivery status
         run: |
