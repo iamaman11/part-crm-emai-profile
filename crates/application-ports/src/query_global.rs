@@ -59,7 +59,7 @@ pub trait GlobalSearchReadModelPort {
 #[cfg(test)]
 mod tests {
     use super::GlobalSearchKey;
-    use crate::query::{QueryInputError, QueryPortErrorClass};
+    use crate::query::QueryInputError;
 
     #[test]
     fn global_search_accepts_only_typed_opaque_identifiers() -> Result<(), QueryInputError> {
@@ -75,7 +75,6 @@ mod tests {
             GlobalSearchKey::parse("alice@example.com"),
             Err(QueryInputError::InvalidSearchKey)
         );
-        let _ = QueryPortErrorClass::IntegrityFailure;
         Ok(())
     }
 }
