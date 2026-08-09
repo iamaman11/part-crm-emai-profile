@@ -141,6 +141,31 @@ impl ProfileClientAssignment {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrimaryReassignmentIntent {
+    assignment_id: AssignmentId,
+    assigned_by: ActorId,
+    assigned_at: UnixMillis,
+    reason: String,
+}
+
+impl PrimaryReassignmentIntent {
+    #[must_use]
+    pub fn new(
+        assignment_id: AssignmentId,
+        assigned_by: ActorId,
+        assigned_at: UnixMillis,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            assignment_id,
+            assigned_by,
+            assigned_at,
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrimaryAssignmentTransition {
     closed_previous: Option<ProfileClientAssignment>,
     next: ProfileClientAssignment,
@@ -162,20 +187,17 @@ pub fn plan_primary_reassignment(
     profile_tenant_id: &TenantId,
     profile_id: &ProfileId,
     current: Option<&ProfileClientAssignment>,
-    next_assignment_id: AssignmentId,
     next_client: &ClientRecord,
-    assigned_by: ActorId,
-    assigned_at: UnixMillis,
-    reason: impl Into<String>,
+    intent: PrimaryReassignmentIntent,
 ) -> Result<PrimaryAssignmentTransition, AssignmentError> {
     let next = ProfileClientAssignment::assign(
         profile_tenant_id,
-        next_assignment_id,
+        intent.assignment_id,
         profile_id.clone(),
         next_client,
-        assigned_by,
-        assigned_at,
-        reason,
+        intent.assigned_by,
+        intent.assigned_at,
+        intent.reason,
     )?;
 
     let closed_previous = match current {
@@ -194,7 +216,7 @@ pub fn plan_primary_reassignment(
             }
 
             let mut closed = previous.clone();
-            closed.close(assigned_at)?;
+            closed.close(next.assigned_at())?;
             Some(closed)
         }
     };
@@ -241,8 +263,8 @@ impl std::error::Error for AssignmentError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        AssignmentError, AssignmentRole, AssignmentStatus, ProfileClientAssignment,
-        plan_primary_reassignment,
+        AssignmentError, AssignmentRole, AssignmentStatus, PrimaryReassignmentIntent,
+        ProfileClientAssignment, plan_primary_reassignment,
     };
     use crate::{ClientKind, ClientRecord, ClientStatus};
     use profile_platform_primitives::{
@@ -270,6 +292,19 @@ mod tests {
             UnixMillis::new(10),
             "initial assignment",
         )?)
+    }
+
+    fn reassignment_intent(
+        assignment_id: &str,
+        assigned_at: u64,
+        reason: &str,
+    ) -> Result<PrimaryReassignmentIntent, Box<dyn std::error::Error>> {
+        Ok(PrimaryReassignmentIntent::new(
+            AssignmentId::parse(assignment_id)?,
+            ActorId::parse("actor_02JCLIENT")?,
+            UnixMillis::new(assigned_at),
+            reason,
+        ))
     }
 
     #[test]
@@ -339,11 +374,8 @@ mod tests {
             current.tenant_id(),
             &profile_id,
             Some(&current),
-            AssignmentId::parse("assignment_02JCLIENT")?,
             &new_client,
-            ActorId::parse("actor_02JCLIENT")?,
-            UnixMillis::new(20),
-            "reassigned by operator",
+            reassignment_intent("assignment_02JCLIENT", 20, "reassigned by operator")?,
         )?;
 
         let closed = transition
@@ -378,11 +410,8 @@ mod tests {
                 current.tenant_id(),
                 &profile_id,
                 Some(&current),
-                AssignmentId::parse("assignment_02JCLIENT")?,
                 &old_client,
-                ActorId::parse("actor_02JCLIENT")?,
-                UnixMillis::new(20),
-                "same client",
+                reassignment_intent("assignment_02JCLIENT", 20, "same client")?,
             ),
             Err(AssignmentError::AlreadyPrimaryClient)
         );
@@ -394,11 +423,8 @@ mod tests {
                 current.tenant_id(),
                 &ProfileId::parse("profile_02JCLIENT")?,
                 Some(&current),
-                AssignmentId::parse("assignment_03JCLIENT")?,
                 &new_client,
-                ActorId::parse("actor_02JCLIENT")?,
-                UnixMillis::new(20),
-                "wrong scope",
+                reassignment_intent("assignment_03JCLIENT", 20, "wrong scope")?,
             ),
             Err(AssignmentError::CurrentScopeMismatch)
         );
@@ -419,11 +445,8 @@ mod tests {
                 current.tenant_id(),
                 &profile_id,
                 Some(&current),
-                AssignmentId::parse("assignment_02JCLIENT")?,
                 &new_client,
-                ActorId::parse("actor_02JCLIENT")?,
-                UnixMillis::new(20),
-                "reassign from closed",
+                reassignment_intent("assignment_02JCLIENT", 20, "reassign from closed")?,
             ),
             Err(AssignmentError::CurrentNotActivePrimary)
         );
