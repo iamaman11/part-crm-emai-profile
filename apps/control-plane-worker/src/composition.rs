@@ -13,6 +13,7 @@ use cloudflare_adapters::contact_protection::{
     RustCryptoContactProtection, WorkerCryptoNonceSource,
 };
 use cloudflare_adapters::d1_authenticated_device::D1AuthenticatedDevice;
+use cloudflare_adapters::d1_browser_mail_execution::D1BrowserMailboxExecutionBinding;
 use cloudflare_adapters::d1_client_merge::D1ClientMergeRepository;
 use cloudflare_adapters::d1_client_persistence::D1ClientPersistenceRepository;
 use cloudflare_adapters::d1_client_registry::D1ClientRegistryProjectionRepository;
@@ -141,6 +142,15 @@ pub fn profile_generation_application(
 
 pub fn mailbox_binding_application(env: &Env) -> Result<D1MailboxBindingApplicationRepository> {
     Ok(D1MailboxBindingApplicationRepository::new(
+        env.d1(D1_CATALOG_BINDING)?,
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
+}
+
+pub fn browser_mailbox_execution_application(
+    env: &Env,
+) -> Result<D1BrowserMailboxExecutionBinding> {
+    Ok(D1BrowserMailboxExecutionBinding::new(
         env.d1(D1_CATALOG_BINDING)?,
         env.d1(D1_CATALOG_BINDING)?,
     ))
