@@ -168,6 +168,7 @@ def validate_docs() -> None:
         raise SystemExit(f"docs/INDEX.md is missing authority links: {missing_links}")
 
     plan = (ROOT / "docs" / "DEVELOPMENT_PLAN.md").read_text(encoding="utf-8")
+    architecture = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     matrix = (ROOT / "docs" / "DEVELOPER_CAPABILITY_MATRIX.md").read_text(encoding="utf-8")
     next_sections = re.findall(r"^### (Phase [^\n]+?) — NEXT\s*$", plan, re.MULTILINE)
     if len(next_sections) != 1:
@@ -182,6 +183,17 @@ def validate_docs() -> None:
         "Phase 2E issue #148 is the unique NEXT",
         "| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D.**",
         "| 6.4 | Authorization-before-projection | **Accepted through Phase 2D query/read-model scope.**",
+        "`BrowserIdentityManifest`",
+        "`NetworkIdentityPolicy` + `NetworkIdentityObservation`",
+        "PID alone is never sufficient ownership proof",
+        "blanket `PRAGMA integrity_check`",
+    )
+    required_architecture_markers = (
+        "### 11.1 Browser Runtime Identity, Network Policy And Writer Recovery",
+        "`BrowserIdentityManifest`",
+        "`NetworkIdentityPolicy`",
+        "PID alone is not ownership proof",
+        "blanket Firefox SQLite `PRAGMA integrity_check` is not canonical profile-health authority",
     )
     stale_plan_markers = (
         "Phase 2D issue #144 is the unique next implementation slice",
@@ -213,6 +225,9 @@ def validate_docs() -> None:
     for marker in stale_plan_markers:
         if marker in plan:
             raise SystemExit(f"DEVELOPMENT_PLAN.md contains stale accepted-phase marker: {marker}")
+    for marker in required_architecture_markers:
+        if marker not in architecture:
+            raise SystemExit(f"ARCHITECTURE.md is missing browser-runtime safety marker: {marker}")
     for marker in required_matrix_markers:
         if marker not in matrix:
             raise SystemExit(f"DEVELOPER_CAPABILITY_MATRIX.md is missing accepted capability marker: {marker}")

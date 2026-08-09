@@ -664,14 +664,17 @@ finishing the repository-owned portion of 6.6.
 4. Define explicit `PENDING_DEVICE`, `PROFILE_BUSY`, running, retry, auth and terminal semantics.
 5. Bind claims to tenant/device/profile/generation and monotonic lease/fencing evidence.
 6. Require current active generation + certification policy before browser execution.
-7. Integrate Profile Bridge materialization freshness check before writer launch.
+7. Integrate Profile Bridge materialization freshness and runtime-identity preflight before writer launch.
    - materialize the exact accepted generation into an isolated clone/workspace; never snapshot a live browser directory;
-   - treat browser identity/fingerprint configuration as versioned generation/profile-lineage metadata: launches reuse the accepted configuration, while changes require an explicit migration/re-certification path rather than implicit regeneration;
-   - pass proxy/network identity as an outer runtime policy with provider-neutral metadata; never encode an assumption that per-session IP rotation is universally safe;
-   - treat browser lock files as evidence of possible writer ownership: never delete `.parentlock`, `lock` or equivalent blindly; prove ownership/recovery state or return `PROFILE_BUSY`.
+   - define a provider-neutral `BrowserIdentityManifest` that binds the accepted runtime bundle version/digest to the fingerprint source/configuration and compatibility policy; launches reuse that accepted manifest, while runtime/fingerprint changes require an explicit candidate-generation migration and re-certification path rather than implicit regeneration;
+   - do not freeze individual low-level signals such as User-Agent or transport/header details across an incompatible browser-runtime upgrade; compatibility is proven for the manifest/runtime pair, not assumed from copied values;
+   - define `NetworkIdentityPolicy` + `NetworkIdentityObservation` around the actual proxy egress used for the browser job: bounded country/region and timezone compatibility, required network class where applicable, optional allowlisted ASN/carrier constraints, and session stickiness only when the selected policy requires it; never assume per-session IP rotation is universally safe;
+   - classify network mismatch explicitly (for example retryable route churn versus operator-remediated policy mismatch) and fail closed before Camoufox launch when the observation does not satisfy the accepted policy;
+   - treat browser/workspace lock evidence through a fail-closed writer-recovery decision: combine the local workspace lease token/epoch, supervised native process identity and current coordinator lease/fencing evidence; PID alone is never sufficient ownership proof; any active or uncertain writer state returns `PROFILE_BUSY` or `RECOVERY_REQUIRED`;
+   - only after all ownership evidence is proven stale may recovery materialize a fresh isolated clone; never mutate the source generation or blindly delete `.parentlock`, `lock` or equivalent runtime lock files.
 8. Implement the exact Phase 2D search/get-message contract through the Bridge/browser adapter.
 9. Reject stale result after claim turnover, generation change or fencing advancement.
-10. Persist successful dirty browser state only through a new immutable encrypted generation: upload, verify, then fenced/CAS activation of the D1 active-generation pointer; never mutate the active R2 object or depend on cherry-picked provider cookie names. On network/R2 failure preserve dirty local state and route recovery through existing generation rules.
+10. Persist successful dirty browser state only through a new immutable encrypted generation: fully stop/supervise the writer, validate the candidate with bounded restore/inventory and policy-selected read-only store probes where useful, upload, verify, then fenced/CAS activation of the D1 active-generation pointer. A blanket `PRAGMA integrity_check` over every Firefox SQLite file is not a universal health/authority signal. Never mutate the active R2 object or depend on cherry-picked provider cookie names. On corruption or failed validation quarantine the candidate; rollback may target only a previously verified/policy-compatible generation. On network/R2 failure preserve dirty local state and route recovery through existing generation rules.
 11. Add multi-device/offline/contention/replay/recovery synthetic E2E evidence.
 
 #### 2F acceptance
@@ -681,8 +684,10 @@ finishing the repository-owned portion of 6.6.
 - stale result cannot overwrite newer claim/generation;
 - browser writer launch cannot use a stale local generation;
 - cloud and browser lanes satisfy one application query/job contract;
-- browser identity/fingerprint configuration cannot change implicitly between launches;
-- browser lock files cannot be blindly deleted to acquire writer ownership;
+- browser identity/fingerprint configuration cannot change implicitly between launches; runtime upgrades use an explicit `BrowserIdentityManifest` compatibility/migration + re-certification path;
+- browser launch is blocked when `NetworkIdentityObservation` does not satisfy the accepted `NetworkIdentityPolicy`; policy may require bounded geo/timezone/network-class/ASN constraints without assuming universal mobile-IP rotation behavior;
+- writer recovery is fail closed: local lease token/epoch + supervised native process identity + coordinator fencing are reconciled, PID alone is insufficient, uncertain ownership is `PROFILE_BUSY`/`RECOVERY_REQUIRED`, and browser lock files are never blindly deleted;
+- recovery validation is bounded and policy-driven rather than treating blanket Firefox SQLite `PRAGMA integrity_check` as canonical health proof; invalid candidates are quarantined and rollback uses only verified compatible generations;
 - dirty browser mutations are not reported as persisted until immutable generation upload, verification and fenced/CAS activation succeed; failure preserves recoverable dirty state;
 - local materialization remains cache/workspace, not authority.
 

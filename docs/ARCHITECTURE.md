@@ -301,6 +301,31 @@ contracts.
 - Bridge gets short-lived app authorization after proof-of-possession;
 - long-lived bearer R2/device bucket credentials are forbidden.
 
+### 11.1 Browser Runtime Identity, Network Policy And Writer Recovery
+
+Browser execution is a Phase 2F outer/runtime concern, but its safety invariants are stable:
+
+- an accepted browser launch uses a versioned `BrowserIdentityManifest` binding the runtime bundle
+  version/digest to fingerprint source/configuration and compatibility policy; identity never changes
+  implicitly between launches, while runtime upgrades use an explicit candidate-generation migration
+  and re-certification path rather than blindly preserving or regenerating individual low-level values;
+- proxy/network behavior is represented by provider-neutral `NetworkIdentityPolicy` and observed through
+  the actual egress route used for the browser job. Policy may constrain country/region, timezone
+  compatibility, network class and optional ASN/carrier allowlists, and may require session stickiness;
+  no architecture rule assumes that per-session mobile-IP rotation is universally safe;
+- a browser writer is considered unavailable whenever local workspace lease/token/epoch, supervised
+  native process identity or coordinator lease/fencing evidence proves an active writer, or when those
+  signals cannot be reconciled confidently. PID alone is not ownership proof. Ambiguity fails closed as
+  `PROFILE_BUSY`/`RECOVERY_REQUIRED`; runtime lock files are never deleted merely to acquire ownership;
+- stale-writer recovery never mutates the source generation. It materializes a fresh isolated clone and
+  applies bounded restore/inventory checks plus policy-selected read-only store probes where useful. A
+  blanket Firefox SQLite `PRAGMA integrity_check` is not canonical profile-health authority; invalid
+  candidates are quarantined and rollback may target only a previously verified compatible generation.
+
+These rules complement the immutable-generation saga: dirty browser state becomes durable only after
+writer shutdown, candidate validation, immutable encrypted upload, verification and fenced/CAS
+activation of the D1 active-generation pointer.
+
 ## 12. Key Hierarchy
 
 ```text
