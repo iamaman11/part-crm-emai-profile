@@ -5,7 +5,9 @@ pub use mailbox_domain::{
     MailboxBinding, MailboxBindingStatus, MailboxObservation, MailboxProvider,
     MailboxProviderFailure,
 };
-use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, TenantScope};
+use profile_platform_primitives::{
+    ActorContext, AggregateVersion, MailboxBindingId, ProfileId, TenantScope,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MailboxProviderPortError {
@@ -30,6 +32,7 @@ pub trait MailboxProviderPort {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MailboxBindingCreateWrite {
     binding: MailboxBinding,
+    browser_profile_id: Option<ProfileId>,
     evidence: CommandExecutionEvidence,
     event_payload_json: String,
 }
@@ -43,14 +46,26 @@ impl MailboxBindingCreateWrite {
     ) -> Self {
         Self {
             binding,
+            browser_profile_id: None,
             evidence,
             event_payload_json: event_payload_json.into(),
         }
     }
 
     #[must_use]
+    pub fn with_browser_profile_id(mut self, profile_id: ProfileId) -> Self {
+        self.browser_profile_id = Some(profile_id);
+        self
+    }
+
+    #[must_use]
     pub const fn binding(&self) -> &MailboxBinding {
         &self.binding
+    }
+
+    #[must_use]
+    pub const fn browser_profile_id(&self) -> Option<&ProfileId> {
+        self.browser_profile_id.as_ref()
     }
 
     #[must_use]
