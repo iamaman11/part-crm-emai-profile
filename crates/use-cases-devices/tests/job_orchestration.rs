@@ -1,7 +1,7 @@
 use application_ports::device_jobs::{
     AuthenticatedDevicePort, DeviceExecutionBlocker, DeviceExecutionPreconditionPort,
-    DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobInsertOutcome,
-    DeviceJobPortError, DeviceJobRepositoryPort, DeviceJobWriteOutcome,
+    DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability,
+    DeviceJobInsertOutcome, DeviceJobPortError, DeviceJobRepositoryPort, DeviceJobWriteOutcome,
 };
 use device_domain::{DeviceClaimId, DeviceJob, DeviceJobId, DeviceJobTarget};
 use profile_platform_primitives::{
