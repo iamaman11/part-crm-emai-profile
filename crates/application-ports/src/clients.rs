@@ -444,6 +444,11 @@ impl<'a> ContactExactLookupRequest<'a> {
     }
 
     #[must_use]
+    pub const fn key_domain(&self) -> ContactLookupKeyDomain {
+        ContactLookupKeyDomain::TenantExactLookup
+    }
+
+    #[must_use]
     pub const fn tenant_id(&self) -> &'a TenantId {
         self.tenant_id
     }
@@ -638,7 +643,6 @@ pub trait ContactProtectionPort {
     ) -> Result<ExactLookupToken, ContactProtectionPortError>;
 }
 
-#[allow(async_fn_in_trait)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArchiveContactWrite {
     client_id: ClientId,
@@ -673,28 +677,34 @@ impl ArchiveContactWrite {
     pub const fn client_id(&self) -> &ClientId {
         &self.client_id
     }
+
     #[must_use]
     pub const fn contact_point_id(&self) -> &ContactPointId {
         &self.contact_point_id
     }
+
     #[must_use]
     pub const fn kind(&self) -> ContactKind {
         self.kind
     }
+
     #[must_use]
     pub const fn expected_client_version(&self) -> AggregateVersion {
         self.expected_client_version
     }
+
     #[must_use]
     pub const fn evidence(&self) -> &CommandExecutionEvidence {
         &self.evidence
     }
+
     #[must_use]
     pub const fn event_payload_json(&self) -> &'static str {
         self.event_payload_json
     }
 }
 
+#[allow(async_fn_in_trait)]
 pub trait ProtectedClientContactRepositoryPort {
     type Error;
 
