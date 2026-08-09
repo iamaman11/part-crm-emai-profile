@@ -1,7 +1,7 @@
 use application_ports::device_jobs::{
-    DeviceExecutionBlocker, DeviceExecutionPreconditionPort, DeviceExecutionReadiness,
-    DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobInsertOutcome, DeviceJobPortError,
-    DeviceJobPortErrorClass, DeviceJobRepositoryPort, DeviceJobWriteOutcome,
+    AuthenticatedDevicePort, DeviceExecutionBlocker, DeviceExecutionPreconditionPort,
+    DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobInsertOutcome,
+    DeviceJobPortError, DeviceJobPortErrorClass, DeviceJobRepositoryPort, DeviceJobWriteOutcome,
 };
 use device_domain::{
     DeviceClaimId, DeviceJob, DeviceJobError, DeviceJobId, DeviceJobStatus, DeviceJobTarget,
@@ -255,19 +255,22 @@ where
     }
 }
 
-pub async fn execute_claim_device_job<A, P, R>(
+pub async fn execute_claim_device_job<D, A, P, R>(
     actor: &ActorContext,
+    device_identity: &D,
     authorization: &A,
     preconditions: &P,
     repository: &R,
     command: ClaimDeviceJobCommand,
 ) -> Result<DeviceJob, DeviceJobOperationError>
 where
+    D: AuthenticatedDevicePort,
     A: DeviceJobAuthorizationPort,
     P: DeviceExecutionPreconditionPort,
     R: DeviceJobRepositoryPort,
 {
     ensure_tenant(actor, &command.target)?;
+    ensure_authenticated_device(device_identity, actor, &command.target).await?;
     authorize(
         authorization,
         actor,
@@ -294,17 +297,20 @@ where
     Ok(job)
 }
 
-pub async fn execute_heartbeat_device_job<A, R>(
+pub async fn execute_heartbeat_device_job<D, A, R>(
     actor: &ActorContext,
+    device_identity: &D,
     authorization: &A,
     repository: &R,
     command: HeartbeatDeviceJobCommand,
 ) -> Result<DeviceJob, DeviceJobOperationError>
 where
+    D: AuthenticatedDevicePort,
     A: DeviceJobAuthorizationPort,
     R: DeviceJobRepositoryPort,
 {
     ensure_tenant(actor, &command.target)?;
+    ensure_authenticated_device(device_identity, actor, &command.target).await?;
     authorize(
         authorization,
         actor,
@@ -331,19 +337,22 @@ where
     Ok(job)
 }
 
-pub async fn execute_apply_device_job_outcome<A, P, R>(
+pub async fn execute_apply_device_job_outcome<D, A, P, R>(
     actor: &ActorContext,
+    device_identity: &D,
     authorization: &A,
     preconditions: &P,
     repository: &R,
     command: ApplyDeviceJobOutcomeCommand,
 ) -> Result<DeviceJob, DeviceJobOperationError>
 where
+    D: AuthenticatedDevicePort,
     A: DeviceJobAuthorizationPort,
     P: DeviceExecutionPreconditionPort,
     R: DeviceJobRepositoryPort,
 {
     ensure_tenant(actor, &command.target)?;
+    ensure_authenticated_device(device_identity, actor, &command.target).await?;
     authorize(
         authorization,
         actor,
@@ -500,6 +509,22 @@ fn ensure_tenant(
         Ok(())
     } else {
         Err(DeviceJobOperationError::InvalidRequest)
+    }
+}
+
+async fn ensure_authenticated_device<D: AuthenticatedDevicePort>(
+    device_identity: &D,
+    actor: &ActorContext,
+    target: &DeviceJobTarget,
+) -> Result<(), DeviceJobOperationError> {
+    let authenticated = device_identity
+        .authenticated_device_id(actor)
+        .await
+        .map_err(map_port_error)?;
+    if &authenticated == target.device_id() {
+        Ok(())
+    } else {
+        Err(DeviceJobOperationError::Forbidden)
     }
 }
 
