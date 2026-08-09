@@ -3,6 +3,7 @@
 pub mod audit;
 pub mod client_contact_lookup;
 pub mod client_merge;
+pub mod client_registry;
 pub mod clients;
 pub mod clock;
 pub mod commands;
