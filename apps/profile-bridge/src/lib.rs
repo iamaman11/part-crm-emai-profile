@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod fake_mail_query;
 pub mod local_profile;
 pub mod operator_flow;
 pub mod runtime_bundle;
