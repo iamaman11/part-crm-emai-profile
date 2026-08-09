@@ -5,6 +5,7 @@ pub mod access_webcrypto;
 pub mod contact_protection;
 pub mod coordinator_ingress;
 pub mod d1_catalog;
+pub mod d1_client_persistence;
 pub mod d1_clients;
 mod d1_command_identity;
 pub mod d1_governed_commands;
