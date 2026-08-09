@@ -4,20 +4,29 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   materialize:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout implementation branch
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          persist-credentials: false
+          ref: phase2b-client-persistence-contact-crypto
+          persist-credentials: true
       - name: Generate exact lockfile
         run: cargo generate-lockfile
-      - name: Emit lockfile base64
+      - name: Commit exact lockfile when changed
+        shell: bash
         run: |
-          printf 'LOCKFILE_BASE64_BEGIN\n'
-          base64 -w0 Cargo.lock
-          printf '\nLOCKFILE_BASE64_END\n'
+          set -euo pipefail
+          if git diff --quiet -- Cargo.lock; then
+            echo 'Cargo.lock is already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.lock
+          git commit -m 'Phase 2B: materialize exact Cargo lockfile'
+          git push origin HEAD:phase2b-client-persistence-contact-crypto
