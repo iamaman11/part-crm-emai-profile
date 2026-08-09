@@ -1,6 +1,6 @@
 use core::{fmt, future::Future};
 use device_domain::{DeviceJob, DeviceJobId, DeviceJobTarget};
-use profile_platform_primitives::{ActorContext, AggregateVersion, TenantId};
+use profile_platform_primitives::{ActorContext, AggregateVersion, DeviceId, TenantId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceJobCapability {
@@ -70,6 +70,13 @@ impl fmt::Display for DeviceJobPortError {
 }
 
 impl std::error::Error for DeviceJobPortError {}
+
+pub trait AuthenticatedDevicePort {
+    fn authenticated_device_id(
+        &self,
+        actor: &ActorContext,
+    ) -> impl Future<Output = Result<DeviceId, DeviceJobPortError>>;
+}
 
 pub trait DeviceJobAuthorizationPort {
     fn is_device_job_authorized(
