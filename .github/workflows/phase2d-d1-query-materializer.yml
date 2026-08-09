@@ -1,14 +1,15 @@
 name: Phase 2D D1 Query Materializer
 
 on:
-  pull_request:
+  push:
+    branches:
+      - phase2d-query-cqrs
 
 permissions:
   contents: write
 
 jobs:
   prove:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'phase2d-query-cqrs'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Phase 2D head
@@ -17,118 +18,6 @@ jobs:
           ref: phase2d-query-cqrs
           fetch-depth: 0
           persist-credentials: true
-
-      - name: Simplify domain-scoped cursor parsing
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('crates/cloudflare-adapters/src/d1_query.rs')
-          text = path.read_text(encoding='utf-8')
-          old = '''fn client_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    typed_cursor(page, CLIENT_CURSOR_PREFIX, ClientId::parse)
-}
-
-fn profile_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    typed_cursor(page, PROFILE_CURSOR_PREFIX, ProfileId::parse)
-}
-
-fn member_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    typed_cursor(page, MEMBER_CURSOR_PREFIX, ActorId::parse)
-}
-
-fn mailbox_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    typed_cursor(page, MAILBOX_CURSOR_PREFIX, MailboxBindingId::parse)
-}
-
-fn typed_cursor<T, E>(
-    page: &QueryPageRequest,
-    prefix: &str,
-    parse: impl Fn(&str) -> Result<T, E>,
-) -> Result<String, QueryPortError> {
-    let Some(cursor) = page.cursor() else {
-        return Ok(String::new());
-    };
-    let value = cursor
-        .as_str()
-        .strip_prefix(prefix)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(invalid_cursor)?;
-    parse(value).map_err(|_| invalid_cursor())?;
-    Ok(value.to_owned())
-}
-'''
-          new = '''fn client_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    let value = cursor_value(page, CLIENT_CURSOR_PREFIX)?;
-    if value.is_empty() {
-        return Ok(value);
-    }
-    ClientId::parse(&value).map_err(|_| invalid_cursor())?;
-    Ok(value)
-}
-
-fn profile_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    let value = cursor_value(page, PROFILE_CURSOR_PREFIX)?;
-    if value.is_empty() {
-        return Ok(value);
-    }
-    ProfileId::parse(&value).map_err(|_| invalid_cursor())?;
-    Ok(value)
-}
-
-fn member_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    let value = cursor_value(page, MEMBER_CURSOR_PREFIX)?;
-    if value.is_empty() {
-        return Ok(value);
-    }
-    ActorId::parse(&value).map_err(|_| invalid_cursor())?;
-    Ok(value)
-}
-
-fn mailbox_cursor(page: &QueryPageRequest) -> Result<String, QueryPortError> {
-    let value = cursor_value(page, MAILBOX_CURSOR_PREFIX)?;
-    if value.is_empty() {
-        return Ok(value);
-    }
-    MailboxBindingId::parse(&value).map_err(|_| invalid_cursor())?;
-    Ok(value)
-}
-
-fn cursor_value(page: &QueryPageRequest, prefix: &str) -> Result<String, QueryPortError> {
-    let Some(cursor) = page.cursor() else {
-        return Ok(String::new());
-    };
-    cursor
-        .as_str()
-        .strip_prefix(prefix)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(invalid_cursor)
-}
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'cursor block expected once, found {text.count(old)}')
-          text = text.replace(old, new, 1)
-          text = text.replace(
-              '''    let mut items = rows
-        .into_iter()
-        .take(limit)
-        .map(map_client_row)
-        .collect::<Result<Vec<_>, _>>()?;''',
-              '''    let items = rows
-        .into_iter()
-        .take(limit)
-        .map(map_client_row)
-        .collect::<Result<Vec<_>, _>>()?;''',
-              1,
-          )
-          text = text.replace(
-              'Ok(QueryPage::new(core::mem::take(&mut items), next_cursor))',
-              'Ok(QueryPage::new(items, next_cursor))',
-              1,
-          )
-          path.write_text(text, encoding='utf-8')
-          PY
 
       - name: Materialize deterministic state
         run: |
