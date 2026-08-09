@@ -15,6 +15,14 @@ function field(form: FormData, name: string): string {
   return String(form.get(name) ?? '').trim();
 }
 
+type ContactKind = 'EMAIL' | 'PHONE' | 'URL';
+
+type MergeInput = {
+  targetClientId: string;
+  targetVersion: number;
+  reason: string;
+};
+
 export function ClientMutationPanels({
   tenantId,
   client,
@@ -24,7 +32,12 @@ export function ClientMutationPanels({
   client: ClientProjection;
   onMutated: () => Promise<void>;
 }) {
-  const [contactKind, setContactKind] = useState<'EMAIL' | 'PHONE' | 'URL'>('EMAIL');
+  const [contactKind, setContactKind] = useState<ContactKind>('EMAIL');
+  const [mergeInput, setMergeInput] = useState<MergeInput>({
+    targetClientId: '',
+    targetVersion: 1,
+    reason: '',
+  });
   const update = useMutation({
     mutationFn: (displayName: string) => updateClient(tenantId, client.clientId, {
       displayName,
@@ -39,7 +52,7 @@ export function ClientMutationPanels({
     onSuccess: onMutated,
   });
   const contact = useMutation({
-    mutationFn: (input: { contactPointId: string; kind: 'EMAIL' | 'PHONE' | 'URL'; value: string }) =>
+    mutationFn: (input: { contactPointId: string; kind: ContactKind; value: string }) =>
       upsertClientContact(tenantId, client.clientId, input.contactPointId, {
         kind: input.kind,
         value: input.value,
@@ -48,7 +61,7 @@ export function ClientMutationPanels({
     onSuccess: onMutated,
   });
   const contactArchive = useMutation({
-    mutationFn: (input: { contactPointId: string; kind: 'EMAIL' | 'PHONE' | 'URL' }) =>
+    mutationFn: (input: { contactPointId: string; kind: ContactKind }) =>
       archiveClientContact(tenantId, client.clientId, input.contactPointId, {
         kind: input.kind,
         expectedClientVersion: client.version,
@@ -56,13 +69,12 @@ export function ClientMutationPanels({
     onSuccess: onMutated,
   });
   const merge = useMutation({
-    mutationFn: (input: { targetClientId: string; targetVersion: number; reason: string }) =>
-      mergeClient(tenantId, client.clientId, {
-        targetClientId: input.targetClientId,
-        expectedSourceVersion: client.version,
-        expectedTargetVersion: input.targetVersion,
-        reason: input.reason,
-      }),
+    mutationFn: (input: MergeInput) => mergeClient(tenantId, client.clientId, {
+      targetClientId: input.targetClientId,
+      expectedSourceVersion: client.version,
+      expectedTargetVersion: input.targetVersion,
+      reason: input.reason,
+    }),
     onSuccess: onMutated,
   });
 
@@ -109,7 +121,7 @@ export function ClientMutationPanels({
             const data = new FormData(event.currentTarget);
             contact.mutate({
               contactPointId: field(data, 'contactPointId'),
-              kind: field(data, 'kind') as 'EMAIL' | 'PHONE' | 'URL',
+              kind: field(data, 'kind') as ContactKind,
               value: field(data, 'value'),
             });
           }}
@@ -121,7 +133,7 @@ export function ClientMutationPanels({
             id="client-contact-kind"
             name="kind"
             value={contactKind}
-            onChange={(event) => setContactKind(event.currentTarget.value as 'EMAIL' | 'PHONE' | 'URL')}
+            onChange={(event) => setContactKind(event.currentTarget.value as ContactKind)}
             disabled={ownerMutationDisabled}
           >
             <option value="EMAIL">Email</option>
@@ -143,35 +155,49 @@ export function ClientMutationPanels({
       <section className="panel">
         <span className="eyebrow">One-way merge; no grant transfer</span>
         <h2>Merge client</h2>
-        <form
-          className="stack-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const data = new FormData(event.currentTarget);
-            merge.mutate({
-              targetClientId: field(data, 'targetClientId'),
-              targetVersion: Number(field(data, 'targetVersion')),
-              reason: field(data, 'reason'),
-            });
-          }}
-        >
+        <div className="stack-form">
           <label htmlFor="client-merge-target">Target client ID</label>
-          <input id="client-merge-target" name="targetClientId" placeholder="client_..." required disabled={ownerMutationDisabled} />
+          <input
+            id="client-merge-target"
+            value={mergeInput.targetClientId}
+            onChange={(event) => setMergeInput({ ...mergeInput, targetClientId: event.currentTarget.value })}
+            placeholder="client_..."
+            disabled={ownerMutationDisabled || merge.isPending}
+          />
           <label htmlFor="client-merge-version">Target expected version</label>
-          <input id="client-merge-version" name="targetVersion" type="number" min="1" defaultValue="1" required disabled={ownerMutationDisabled} />
+          <input
+            id="client-merge-version"
+            type="number"
+            min="1"
+            value={mergeInput.targetVersion}
+            onChange={(event) => setMergeInput({ ...mergeInput, targetVersion: Number(event.currentTarget.value) })}
+            disabled={ownerMutationDisabled || merge.isPending}
+          />
           <label htmlFor="client-merge-reason">Reason</label>
-          <input id="client-merge-reason" name="reason" maxLength={500} required disabled={ownerMutationDisabled} />
+          <input
+            id="client-merge-reason"
+            value={mergeInput.reason}
+            onChange={(event) => setMergeInput({ ...mergeInput, reason: event.currentTarget.value })}
+            maxLength={500}
+            disabled={ownerMutationDisabled || merge.isPending}
+          />
           <ConfirmAction
             label="merge source client"
             consequence="The source becomes permanently MERGED. Active profile assignments must be reassigned first. Source grants are removed and never transferred to the target."
-            disabled={ownerMutationDisabled || merge.isPending}
-            onConfirm={() => {
-              const form = document.getElementById('client-merge-target')?.closest('form');
-              form?.requestSubmit();
-              return Promise.resolve();
-            }}
+            disabled={
+              ownerMutationDisabled
+              || merge.isPending
+              || !mergeInput.targetClientId.trim()
+              || !mergeInput.reason.trim()
+              || mergeInput.targetVersion < 1
+            }
+            onConfirm={() => merge.mutateAsync({
+              ...mergeInput,
+              targetClientId: mergeInput.targetClientId.trim(),
+              reason: mergeInput.reason.trim(),
+            }).then(() => undefined)}
           />
-        </form>
+        </div>
         <StatusMessage state={merge.error ?? merge.data?.resultCode ?? null} />
       </section>
     </>
@@ -184,8 +210,8 @@ function ContactArchiveAction({
   onArchive,
 }: {
   disabled: boolean;
-  defaultKind: 'EMAIL' | 'PHONE' | 'URL';
-  onArchive: (contactPointId: string, kind: 'EMAIL' | 'PHONE' | 'URL') => Promise<void>;
+  defaultKind: ContactKind;
+  onArchive: (contactPointId: string, kind: ContactKind) => Promise<void>;
 }) {
   const [contactPointId, setContactPointId] = useState('');
   const [kind, setKind] = useState(defaultKind);
@@ -197,7 +223,7 @@ function ContactArchiveAction({
       </label>
       <label>
         Kind
-        <select value={kind} onChange={(event) => setKind(event.currentTarget.value as typeof kind)} disabled={disabled}>
+        <select value={kind} onChange={(event) => setKind(event.currentTarget.value as ContactKind)} disabled={disabled}>
           <option value="EMAIL">Email</option>
           <option value="PHONE">Phone</option>
           <option value="URL">URL</option>
