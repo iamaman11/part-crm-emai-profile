@@ -254,9 +254,7 @@ mod tests {
             [
                 ProcessAction::Spawn(session_id.clone()),
                 ProcessAction::GracefulClose(session_id),
-                ProcessAction::ForceTerminate(
-                    SessionId::parse("session_01JPROCESS")?
-                )
+                ProcessAction::ForceTerminate(SessionId::parse("session_01JPROCESS")?)
             ]
         );
         Ok(())
