@@ -103,14 +103,14 @@ mod tests {
     #[test]
     fn duplicate_delivery_reuses_exact_execution_identity() -> Result<(), Box<dyn std::error::Error>>
     {
-        let dispatch = dispatch(4)?;
-        let first = actor_and_evidence(&dispatch, UnixMillis::new(100))?;
-        let second = actor_and_evidence(&dispatch, UnixMillis::new(200))?;
+        let version_four = dispatch(4)?;
+        let first = actor_and_evidence(&version_four, UnixMillis::new(100))?;
+        let second = actor_and_evidence(&version_four, UnixMillis::new(200))?;
         assert_eq!(first.0, second.0);
         assert_eq!(first.1.idempotency_key(), second.1.idempotency_key());
         assert_eq!(first.1.request_digest(), second.1.request_digest());
         assert_ne!(
-            execution_digest(&dispatch)?,
+            execution_digest(&version_four)?,
             execution_digest(&dispatch(5)?)?
         );
         Ok(())
