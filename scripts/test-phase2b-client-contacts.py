@@ -3,19 +3,20 @@
 
 from __future__ import annotations
 
+import runpy
 import sqlite3
+from pathlib import Path
 
-from test_d1_schema import (
-    CLIENT_A,
-    CLIENT_B,
-    OWNER_A,
-    OWNER_B,
-    TENANT_A,
-    TENANT_B,
-    apply_migrations,
-    open_database,
-    seed_catalog,
-)
+_SCHEMA = runpy.run_path(str(Path(__file__).with_name("test-d1-schema.py")))
+CLIENT_A = _SCHEMA["CLIENT_A"]
+CLIENT_B = _SCHEMA["CLIENT_B"]
+OWNER_A = _SCHEMA["OWNER_A"]
+OWNER_B = _SCHEMA["OWNER_B"]
+TENANT_A = _SCHEMA["TENANT_A"]
+TENANT_B = _SCHEMA["TENANT_B"]
+apply_migrations = _SCHEMA["apply_migrations"]
+open_database = _SCHEMA["open_database"]
+seed_catalog = _SCHEMA["seed_catalog"]
 
 CONTACT_A = "contact_01_phase2b_a"
 CONTACT_B = "contact_01_phase2b_b"
