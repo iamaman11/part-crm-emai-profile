@@ -14,4 +14,4 @@ pub use clients::{CreateClientCommand, decide_create_client};
 pub use error::ApplicationError;
 pub use profiles::{OpenProfileCommand, OpenProfileDecision, decide_open_profile};
 pub use use_cases_identity::{identity_ceremonies, identity_governance};
-pub use use_cases_mailboxes::{mailbox_jobs, mailboxes};
+pub use use_cases_mailboxes::{mailbox_jobs, mailboxes, scheduled};
