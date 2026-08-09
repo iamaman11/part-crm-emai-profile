@@ -40,6 +40,7 @@ jobs:
           python scripts/test-phase2c-client-merge-assignment.py
           cargo test --locked -p client-domain -p use-cases-clients
           cargo test --locked -p cloudflare-adapters --lib
+          cargo test --locked -p browser-profile-control-plane-worker --lib
           cargo check --locked -p browser-profile-control-plane-worker --target wasm32-unknown-unknown
           cd frontend
           npm install --global npm@11.17.0
