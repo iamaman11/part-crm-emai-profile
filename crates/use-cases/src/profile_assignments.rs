@@ -6,7 +6,9 @@ use application_ports::profiles::{
     ProfileAssignmentApplicationPort, ProfileAssignmentPortError, ProfileAssignmentPortErrorClass,
     ProfileAssignmentWrite, ProfileReplayDecision, ProfileReplayReceipt,
 };
-use client_domain::{AssignmentError, ProfileClientAssignment, plan_primary_reassignment};
+use client_domain::{
+    AssignmentError, PrimaryReassignmentIntent, ProfileClientAssignment, plan_primary_reassignment,
+};
 use core::fmt;
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{
@@ -168,11 +170,13 @@ where
         actor.tenant_scope().tenant_id(),
         &command.profile_id,
         current.as_ref(),
-        command.assignment_id,
         context.target_client(),
-        actor.actor_id().clone(),
-        command.evidence.now(),
-        command.reason,
+        PrimaryReassignmentIntent::new(
+            command.assignment_id,
+            actor.actor_id().clone(),
+            command.evidence.now(),
+            command.reason,
+        ),
     )
     .map_err(map_transition_error)?;
     let next = transition.next();
