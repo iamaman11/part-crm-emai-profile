@@ -5,10 +5,12 @@ pub const FOUNDATION_EVENT_TYPES_V1: &[&str] = &[
     "invitation.created.v1",
     "mailbox.binding_created.v1",
     "mailbox.binding_revoked.v1",
+    "mailbox.job_auth_required.v1",
     "mailbox.job_created.v1",
     "mailbox.job_failed.v1",
     "mailbox.job_retry_scheduled.v1",
     "mailbox.job_succeeded.v1",
+    "mailbox.job_suspended.v1",
     "membership.activated.v1",
     "membership.owner_transferred.v1",
     "membership.revoked.v1",
@@ -60,6 +62,8 @@ mod tests {
     fn registry_accepts_known_events_and_rejects_unknown_events() {
         assert!(is_foundation_event_type("client.created.v1"));
         assert!(is_foundation_event_type("profile_coordinator.timed_out.v1"));
+        assert!(is_foundation_event_type("mailbox.job_auth_required.v1"));
+        assert!(is_foundation_event_type("mailbox.job_suspended.v1"));
         assert!(!is_foundation_event_type("client.created.v2"));
         assert!(!is_foundation_event_type("unknown.event.v1"));
     }
