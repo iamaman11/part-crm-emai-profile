@@ -652,8 +652,7 @@ impl From<LocalProfileError> for OperatorFlowError {
 mod tests {
     use super::{
         BrowserLaunchPreflightPort, DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment,
-        OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator,
-        RuntimeBundleSelectionPort,
+        OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator, RuntimeBundleSelectionPort,
     };
     use crate::local_profile::{
         BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationState, MaterializationRoot,
