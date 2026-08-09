@@ -1,5 +1,14 @@
+#[cfg(not(target_arch = "wasm32"))]
+use application_ports::clients::{
+    ContactEncryptionRequest, ContactExactLookupRequest, ContactProtectionPort,
+    ContactProtectionPortError, ContactProtectionPortErrorClass,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use client_domain::{EncryptedContactValue, ExactLookupToken};
 use cloudflare_adapters::access_identity::VerifiedExternalIdentity;
+#[cfg(target_arch = "wasm32")]
 use cloudflare_adapters::contact_keyring::contact_protection_from_serialized_keyring;
+#[cfg(target_arch = "wasm32")]
 use cloudflare_adapters::contact_protection::{
     RustCryptoContactProtection, WorkerCryptoNonceSource,
 };
@@ -14,8 +23,11 @@ use cloudflare_adapters::d1_mailbox_jobs::D1MailboxJobApplicationRepository;
 use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
 use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
 use control_plane_contract::D1_CATALOG_BINDING;
-use worker::{Env, Error, Result};
+#[cfg(target_arch = "wasm32")]
+use worker::Error;
+use worker::{Env, Result};
 
+#[cfg(target_arch = "wasm32")]
 const CLIENT_CONTACT_PROTECTION_KEYRING_BINDING: &str = "CLIENT_CONTACT_PROTECTION_KEYRING";
 
 pub fn client_application(env: &Env) -> Result<D1ClientApplicationRepository> {
@@ -39,6 +51,7 @@ pub fn client_registry_projection(env: &Env) -> Result<D1ClientRegistryProjectio
     Ok(D1ClientRegistryProjectionRepository::new(env.d1(D1_CATALOG_BINDING)?))
 }
 
+#[cfg(target_arch = "wasm32")]
 pub fn client_contact_protection(
     env: &Env,
 ) -> Result<RustCryptoContactProtection<WorkerCryptoNonceSource>> {
@@ -47,6 +60,36 @@ pub fn client_contact_protection(
             .to_string(),
     )
     .map_err(|_| Error::RustError("invalid client contact protection keyring".to_owned()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UnavailableContactProtection;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ContactProtectionPort for UnavailableContactProtection {
+    async fn encrypt_contact_display(
+        &self,
+        _request: ContactEncryptionRequest<'_>,
+    ) -> Result<EncryptedContactValue, ContactProtectionPortError> {
+        Err(ContactProtectionPortError::new(
+            ContactProtectionPortErrorClass::InternalFailure,
+        ))
+    }
+
+    async fn derive_exact_lookup_token(
+        &self,
+        _request: ContactExactLookupRequest<'_>,
+    ) -> Result<ExactLookupToken, ContactProtectionPortError> {
+        Err(ContactProtectionPortError::new(
+            ContactProtectionPortErrorClass::InternalFailure,
+        ))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn client_contact_protection(_env: &Env) -> Result<UnavailableContactProtection> {
+    Ok(UnavailableContactProtection)
 }
 
 pub fn identity_governance_application(
