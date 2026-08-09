@@ -1,12 +1,20 @@
-use crate::access_session::{correlation_hint, neutral_not_found, problem, resolve_active_request_actor};
+use crate::access_session::{
+    correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
+};
 use crate::composition::{
     authenticated_device, device_execution_preconditions, device_job_authorization,
     device_job_repository,
 };
-use application_ports::AuthenticatedDevicePort;
+use application_ports::{
+    AuthenticatedDevicePort, DeviceJobPortError, DeviceJobPortErrorClass,
+};
 use control_plane_contract::RouteClass;
-use device_domain::{DeviceClaimId, DeviceJob, DeviceJobError, DeviceJobId, DeviceJobStatus, DeviceJobTarget};
-use profile_platform_primitives::{AggregateVersion, DeviceId, GenerationId, ProfileId, UnixMillis};
+use device_domain::{
+    DeviceClaimId, DeviceJob, DeviceJobError, DeviceJobId, DeviceJobStatus, DeviceJobTarget,
+};
+use profile_platform_primitives::{
+    ActorContext, AggregateVersion, DeviceId, GenerationId, ProfileId, UnixMillis,
+};
 use serde::{Deserialize, Serialize};
 use use_cases_devices::{
     ApplyDeviceJobOutcomeCommand, ClaimDeviceJobCommand, DeviceJobOperationError, DeviceJobOutcome,
@@ -36,6 +44,10 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
         return neutral_not_found(&correlation_hint(request));
     };
     let actor = resolved.actor();
+    if route != RouteClass::DeviceJobClaimableApi && job_id.is_none() {
+        return neutral_not_found(actor.correlation_id().as_str());
+    }
+
     let trusted_device = authenticated_device(env)?;
     let device_id = match trusted_device.authenticated_device_id(actor).await {
         Ok(value) => value,
@@ -46,22 +58,34 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
     match route {
         RouteClass::DeviceJobClaimableApi => list_claimable(env, actor, &bound_device).await,
         RouteClass::DeviceJobClaimApi => {
-            let Some(job_id) = job_id else {
-                return neutral_not_found(actor.correlation_id().as_str());
-            };
-            claim(request, env, actor, &bound_device, job_id).await
+            claim(
+                request,
+                env,
+                actor,
+                &bound_device,
+                job_id.expect("validated device job route id"),
+            )
+            .await
         }
         RouteClass::DeviceJobHeartbeatApi => {
-            let Some(job_id) = job_id else {
-                return neutral_not_found(actor.correlation_id().as_str());
-            };
-            heartbeat(request, env, actor, &bound_device, job_id).await
+            heartbeat(
+                request,
+                env,
+                actor,
+                &bound_device,
+                job_id.expect("validated device job route id"),
+            )
+            .await
         }
         RouteClass::DeviceJobOutcomeApi => {
-            let Some(job_id) = job_id else {
-                return neutral_not_found(actor.correlation_id().as_str());
-            };
-            apply_outcome(request, env, actor, &bound_device, job_id).await
+            apply_outcome(
+                request,
+                env,
+                actor,
+                &bound_device,
+                job_id.expect("validated device job route id"),
+            )
+            .await
         }
         _ => neutral_not_found(actor.correlation_id().as_str()),
     }
@@ -69,7 +93,7 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
 
 async fn list_claimable(
     env: &Env,
-    actor: &profile_platform_primitives::ActorContext,
+    actor: &ActorContext,
     device_identity: &ResolvedAuthenticatedDevice,
 ) -> Result<Response> {
     let now = server_now();
@@ -100,7 +124,7 @@ async fn list_claimable(
 async fn claim(
     request: &mut Request,
     env: &Env,
-    actor: &profile_platform_primitives::ActorContext,
+    actor: &ActorContext,
     device_identity: &ResolvedAuthenticatedDevice,
     job_id: DeviceJobId,
 ) -> Result<Response> {
@@ -108,8 +132,13 @@ async fn claim(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let Some((target, expected_version)) = parse_target_and_version(actor, device_identity, &body.target)
-    else {
+    let Some((target, expected_version)) = parse_target_and_version(
+        actor,
+        device_identity,
+        &body.profile_id,
+        &body.generation_id,
+        body.expected_job_version,
+    ) else {
         return invalid_request(actor.correlation_id().as_str());
     };
     let claim_id = match DeviceClaimId::parse(body.claim_id) {
@@ -149,7 +178,7 @@ async fn claim(
 async fn heartbeat(
     request: &mut Request,
     env: &Env,
-    actor: &profile_platform_primitives::ActorContext,
+    actor: &ActorContext,
     device_identity: &ResolvedAuthenticatedDevice,
     job_id: DeviceJobId,
 ) -> Result<Response> {
@@ -157,8 +186,13 @@ async fn heartbeat(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let Some((target, expected_version)) = parse_target_and_version(actor, device_identity, &body.target)
-    else {
+    let Some((target, expected_version)) = parse_target_and_version(
+        actor,
+        device_identity,
+        &body.profile_id,
+        &body.generation_id,
+        body.expected_job_version,
+    ) else {
         return invalid_request(actor.correlation_id().as_str());
     };
     let claim_id = match DeviceClaimId::parse(body.claim_id) {
@@ -200,7 +234,7 @@ async fn heartbeat(
 async fn apply_outcome(
     request: &mut Request,
     env: &Env,
-    actor: &profile_platform_primitives::ActorContext,
+    actor: &ActorContext,
     device_identity: &ResolvedAuthenticatedDevice,
     job_id: DeviceJobId,
 ) -> Result<Response> {
@@ -208,8 +242,13 @@ async fn apply_outcome(
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
-    let Some((target, expected_version)) = parse_target_and_version(actor, device_identity, &body.target)
-    else {
+    let Some((target, expected_version)) = parse_target_and_version(
+        actor,
+        device_identity,
+        &body.profile_id,
+        &body.generation_id,
+        body.expected_job_version,
+    ) else {
         return invalid_request(actor.correlation_id().as_str());
     };
     let claim_id = match DeviceClaimId::parse(body.claim_id) {
@@ -221,8 +260,12 @@ async fn apply_outcome(
     }
     let now = server_now();
     let outcome = match body.outcome {
-        DeviceJobOutcomeRequest::Succeeded if body.retry_delay_ms.is_none() => DeviceJobOutcome::Succeeded,
-        DeviceJobOutcomeRequest::AuthRequired if body.retry_delay_ms.is_none() => DeviceJobOutcome::AuthRequired,
+        DeviceJobOutcomeRequest::Succeeded if body.retry_delay_ms.is_none() => {
+            DeviceJobOutcome::Succeeded
+        }
+        DeviceJobOutcomeRequest::AuthRequired if body.retry_delay_ms.is_none() => {
+            DeviceJobOutcome::AuthRequired
+        }
         DeviceJobOutcomeRequest::RecoveryRequired if body.retry_delay_ms.is_none() => {
             DeviceJobOutcome::RecoveryRequired
         }
@@ -272,13 +315,15 @@ async fn apply_outcome(
 }
 
 fn parse_target_and_version(
-    actor: &profile_platform_primitives::ActorContext,
+    actor: &ActorContext,
     device_identity: &ResolvedAuthenticatedDevice,
-    request: &DeviceJobTargetRequest,
+    profile_id: &str,
+    generation_id: &str,
+    expected_job_version: u64,
 ) -> Option<(DeviceJobTarget, AggregateVersion)> {
-    let profile_id = ProfileId::parse(request.profile_id.clone()).ok()?;
-    let generation_id = GenerationId::parse(request.generation_id.clone()).ok()?;
-    let expected_version = AggregateVersion::new(request.expected_job_version).ok()?;
+    let profile_id = ProfileId::parse(profile_id.to_owned()).ok()?;
+    let generation_id = GenerationId::parse(generation_id.to_owned()).ok()?;
+    let expected_version = AggregateVersion::new(expected_job_version).ok()?;
     Some((
         DeviceJobTarget::new(
             actor.tenant_scope().tenant_id().clone(),
@@ -298,16 +343,13 @@ fn checked_future(now: UnixMillis, delta_ms: u64) -> Option<UnixMillis> {
     now.value().checked_add(delta_ms).map(UnixMillis::new)
 }
 
-fn identity_failure(
-    correlation_id: &str,
-    class: application_ports::DeviceJobPortErrorClass,
-) -> Result<Response> {
+fn identity_failure(correlation_id: &str, class: DeviceJobPortErrorClass) -> Result<Response> {
     match class {
-        application_ports::DeviceJobPortErrorClass::AuthenticationFailed => {
+        DeviceJobPortErrorClass::AuthenticationFailed => {
             problem(correlation_id, 403, "forbidden", "Forbidden")
         }
-        application_ports::DeviceJobPortErrorClass::IntegrityFailure => integrity_failure(correlation_id),
-        application_ports::DeviceJobPortErrorClass::DependencyUnavailable => problem(
+        DeviceJobPortErrorClass::IntegrityFailure => integrity_failure(correlation_id),
+        DeviceJobPortErrorClass::DependencyUnavailable => problem(
             correlation_id,
             503,
             "dependency_unavailable",
@@ -403,33 +445,27 @@ impl ResolvedAuthenticatedDevice {
 impl AuthenticatedDevicePort for ResolvedAuthenticatedDevice {
     async fn authenticated_device_id(
         &self,
-        _actor: &profile_platform_primitives::ActorContext,
-    ) -> core::result::Result<DeviceId, application_ports::DeviceJobPortError> {
+        _actor: &ActorContext,
+    ) -> core::result::Result<DeviceId, DeviceJobPortError> {
         Ok(self.device_id.clone())
     }
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DeviceJobTargetRequest {
+struct ClaimDeviceJobRequest {
     profile_id: String,
     generation_id: String,
     expected_job_version: u64,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ClaimDeviceJobRequest {
-    #[serde(flatten)]
-    target: DeviceJobTargetRequest,
     claim_id: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HeartbeatDeviceJobRequest {
-    #[serde(flatten)]
-    target: DeviceJobTargetRequest,
+    profile_id: String,
+    generation_id: String,
+    expected_job_version: u64,
     claim_id: String,
     fence: u64,
 }
@@ -448,8 +484,9 @@ enum DeviceJobOutcomeRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ApplyDeviceJobOutcomeRequest {
-    #[serde(flatten)]
-    target: DeviceJobTargetRequest,
+    profile_id: String,
+    generation_id: String,
+    expected_job_version: u64,
     claim_id: String,
     fence: u64,
     outcome: DeviceJobOutcomeRequest,
@@ -553,8 +590,13 @@ mod tests {
         assert!(serde_json::from_str::<HeartbeatDeviceJobRequest>(heartbeat).is_ok());
         let outcome = r#"{"profileId":"profile_01JDEVICE","generationId":"generation_01JDEVICE","expectedJobVersion":2,"claimId":"devclaim_01JDEVICE","fence":1,"outcome":"RETRY_SCHEDULED","retryDelayMs":1000}"#;
         assert!(serde_json::from_str::<ApplyDeviceJobOutcomeRequest>(outcome).is_ok());
-        let absolute_retry = outcome.replacen('}', r#", "retryAtMs":1234}"#, 1);
-        assert!(serde_json::from_str::<ApplyDeviceJobOutcomeRequest>(&absolute_retry).is_err());
+        for forbidden in ["deviceId", "observedAtMs", "retryAtMs", "leaseExpiresAtMs"] {
+            let tampered = outcome.replacen('}', &format!(r#","{forbidden}":1234}}"#), 1);
+            assert!(
+                serde_json::from_str::<ApplyDeviceJobOutcomeRequest>(&tampered).is_err(),
+                "forbidden outcome field unexpectedly accepted: {forbidden}"
+            );
+        }
     }
 
     #[test]
