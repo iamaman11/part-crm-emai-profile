@@ -34,9 +34,9 @@ jobs:
           python -m py_compile scripts/generate-architecture-inventory.py
           python scripts/generate-architecture-inventory.py --check
           python scripts/generate-architecture-inventory.py --self-test
-          grep -q 'Phase 2E issue #148 is the unique next implementation slice' docs/DEVELOPMENT_PLAN.md
-          grep -q '| A8 | CQRS/read-model boundary | **Accepted in Phase 2D**' docs/DEVELOPER_CAPABILITY_MATRIX.md
-          grep -q 'query-mail-api' architecture/inventory.json
+          grep -Fq 'Phase 2E issue #148 is the unique next implementation slice' docs/DEVELOPMENT_PLAN.md
+          grep -Fq '| A8 | CQRS/read-model boundary | **Accepted in Phase 2D**' docs/DEVELOPER_CAPABILITY_MATRIX.md
+          grep -Fq 'query-mail-api' architecture/inventory.json
           git diff --check
 
       - name: Restore permanent workflow and commit bounded correction
