@@ -86,6 +86,10 @@
         "module": "crates/control-plane-contract/src/routes/mailboxes.rs"
       },
       {
+        "capability": "devices",
+        "module": "crates/control-plane-contract/src/routes/devices.rs"
+      },
+      {
         "capability": "notifications",
         "module": "crates/control-plane-contract/src/routes/notifications.rs"
       }
@@ -415,6 +419,46 @@
         ],
         "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}/run",
         "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobClaimableApi",
+        "capability": "devices",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/claimable",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/claimable",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobClaimApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/claim",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/claim",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobHeartbeatApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/heartbeat",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/heartbeat",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobOutcomeApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/outcome",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/outcome",
         "authenticated": true
       },
       {
