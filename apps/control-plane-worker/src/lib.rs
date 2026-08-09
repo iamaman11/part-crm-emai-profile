@@ -8,6 +8,8 @@ mod identity;
 mod integration_events;
 mod mailbox_bindings;
 mod mailbox_jobs;
+mod mailbox_queue_evidence;
+mod mailbox_scheduling;
 mod mutation_failure;
 mod notifications;
 mod profile_coordinator;
@@ -19,12 +21,12 @@ mod request_evidence;
 pub use profile_coordinator::ProfileCoordinator;
 
 use access_session::session_response;
+use cloudflare_adapters::control_plane_queue::ControlPlaneQueueMessage;
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use cloudflare_adapters::d1_idempotency::D1IdempotencyRepository;
 use cloudflare_adapters::d1_identity_acl::D1IdentityAclRepository;
 use cloudflare_adapters::d1_mailboxes::D1MailboxRepository;
 use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
-use cloudflare_adapters::integration_event_queue::IntegrationEventQueueMessage;
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
     STATIC_ASSETS_BINDING, VERIFICATION_QUEUE_BINDING, classify_route,
@@ -93,22 +95,35 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
 }
 
 #[event(queue)]
-pub async fn integration_event_queue(
-    message_batch: MessageBatch<IntegrationEventQueueMessage>,
+pub async fn control_plane_queue(
+    message_batch: MessageBatch<ControlPlaneQueueMessage>,
     env: Env,
     _context: Context,
 ) -> Result<()> {
-    integration_events::consume(message_batch, &env).await
+    for message in message_batch.messages()? {
+        match message.body().clone() {
+            ControlPlaneQueueMessage::IntegrationEvent(event) => {
+                integration_events::consume_one(&message, event, &env).await?;
+            }
+            ControlPlaneQueueMessage::MailboxJob(job) => {
+                mailbox_scheduling::consume_one(&message, job, &env).await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[event(scheduled)]
-pub async fn integration_event_schedule(
+pub async fn control_plane_schedule(
     _event: ScheduledEvent,
     env: Env,
     _context: ScheduleContext,
 ) {
     if integration_events::dispatch_pending(&env).await.is_err() {
         worker::console_error!("notification scheduled operation failed");
+    }
+    if mailbox_scheduling::dispatch_pending(&env).await.is_err() {
+        worker::console_error!("mailbox scheduled operation failed");
     }
 }
 
@@ -138,6 +153,7 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _idempotency_repository = D1IdempotencyRepository::new(idempotency_catalog);
     let profile_objects = env.bucket(R2_PROFILES_BINDING)?;
     let _verification_queue = env.queue(VERIFICATION_QUEUE_BINDING)?;
+    let _mailbox_jobs_queue = env.queue(mailbox_scheduling::MAILBOX_JOBS_QUEUE_BINDING)?;
     let coordinator = env.durable_object(PROFILE_COORDINATOR_BINDING)?;
     let coordinator_id = coordinator.id_from_name(&coordinator_object_name(
         &ProfileId::parse("profile_binding_probe")
