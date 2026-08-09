@@ -12,6 +12,7 @@ pub mod d1_client_persistence;
 pub mod d1_client_registry;
 pub mod d1_clients;
 mod d1_command_identity;
+pub mod d1_contact_query;
 pub mod d1_global_query;
 pub mod d1_governed_commands;
 pub mod d1_idempotency;
