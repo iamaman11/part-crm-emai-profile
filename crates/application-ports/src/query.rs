@@ -1,4 +1,4 @@
-use core::fmt;
+use core::{fmt, future::Future};
 use profile_platform_primitives::ActorContext;
 
 pub const MAX_QUERY_PAGE_SIZE: u16 = 100;
@@ -158,11 +158,11 @@ impl fmt::Display for QueryPortError {
 impl std::error::Error for QueryPortError {}
 
 pub trait QueryAuthorizationPort {
-    async fn is_query_authorized(
+    fn is_query_authorized(
         &self,
         actor: &ActorContext,
         capability: QueryCapability,
-    ) -> Result<bool, QueryPortError>;
+    ) -> impl Future<Output = Result<bool, QueryPortError>>;
 }
 
 #[cfg(test)]
