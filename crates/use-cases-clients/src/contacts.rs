@@ -1,13 +1,13 @@
 use application_ports::CommandExecutionEvidence;
 use application_ports::clients::{
     ArchiveContactWrite, ClientPortError, ClientPortErrorClass, ClientReplayDecision,
-    ClientReplayReceipt, ContactEncryptionRequest, ContactExactLookupRequest, ContactProtectionPort,
-    ContactProtectionPortError, ContactProtectionPortErrorClass, ProtectedClientContactRepositoryPort,
-    ProtectedContactWrite,
+    ClientReplayReceipt, ContactEncryptionRequest, ContactExactLookupRequest,
+    ContactProtectionPort, ContactProtectionPortError, ContactProtectionPortErrorClass,
+    ProtectedClientContactRepositoryPort, ProtectedContactWrite,
 };
 use client_domain::{
-    ClientStatus, ContactKind, ContactNormalizationVersion, ContactProtectionVersion, ContactStatus,
-    ProtectedContactPoint, exact_lookup_hmac_input, normalize_contact_value,
+    ClientStatus, ContactKind, ContactNormalizationVersion, ContactProtectionVersion,
+    ContactStatus, ProtectedContactPoint, exact_lookup_hmac_input, normalize_contact_value,
 };
 use core::fmt;
 use identity_access_domain::MembershipRole;
@@ -258,7 +258,11 @@ where
     if let Err(error) = repository.persist_protected_contact(actor, &write).await {
         if error.class() == ClientPortErrorClass::Conflict {
             match repository
-                .decide_client_contact_replay(actor, CLIENT_CONTACT_UPSERT_COMMAND, write.evidence())
+                .decide_client_contact_replay(
+                    actor,
+                    CLIENT_CONTACT_UPSERT_COMMAND,
+                    write.evidence(),
+                )
                 .await
                 .map_err(map_repository_error)?
             {
@@ -324,7 +328,11 @@ where
     if let Err(error) = repository.archive_contact(actor, &write).await {
         if error.class() == ClientPortErrorClass::Conflict {
             match repository
-                .decide_client_contact_replay(actor, CLIENT_CONTACT_ARCHIVE_COMMAND, write.evidence())
+                .decide_client_contact_replay(
+                    actor,
+                    CLIENT_CONTACT_ARCHIVE_COMMAND,
+                    write.evidence(),
+                )
                 .await
                 .map_err(map_repository_error)?
             {
@@ -440,7 +448,9 @@ fn map_repository_error(error: ClientPortError) -> ContactApplicationError {
         ClientPortErrorClass::Conflict => ContactApplicationError::Conflict,
         ClientPortErrorClass::IntegrityFailure => ContactApplicationError::IntegrityFailure,
         ClientPortErrorClass::InternalFailure => ContactApplicationError::InternalFailure,
-        ClientPortErrorClass::DependencyUnavailable => ContactApplicationError::DependencyUnavailable,
+        ClientPortErrorClass::DependencyUnavailable => {
+            ContactApplicationError::DependencyUnavailable
+        }
     }
 }
 
@@ -740,8 +750,8 @@ mod tests {
     }
 
     #[test]
-    fn exact_replay_short_circuits_before_load_and_crypto()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn exact_replay_short_circuits_before_load_and_crypto() -> Result<(), Box<dyn std::error::Error>>
+    {
         let protector = FakeProtector::new();
         let repository = FakeRepository::with_current(active_client()?);
         repository.push_replay(ClientReplayDecision::Replay(replay_receipt()));
@@ -761,8 +771,8 @@ mod tests {
     }
 
     #[test]
-    fn version_conflict_stops_before_crypto_and_persist()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn version_conflict_stops_before_crypto_and_persist() -> Result<(), Box<dyn std::error::Error>>
+    {
         let protector = FakeProtector::new();
         let mut current = active_client()?;
         current.rename("Renamed")?;
@@ -774,7 +784,10 @@ mod tests {
             &repository,
             command("person@example.com")?,
         ));
-        assert!(matches!(result, Err(ContactApplicationError::VersionConflict)));
+        assert!(matches!(
+            result,
+            Err(ContactApplicationError::VersionConflict)
+        ));
         assert_eq!(repository.persist_calls.get(), 0);
         assert_eq!(protector.encrypt_calls.get(), 0);
         Ok(())
@@ -785,7 +798,9 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let protector = FakeProtector::new();
         let repository = FakeRepository::with_current(active_client()?);
-        repository.persist_error.set(Some(ClientPortErrorClass::Conflict));
+        repository
+            .persist_error
+            .set(Some(ClientPortErrorClass::Conflict));
         repository.push_replay(ClientReplayDecision::Miss);
         repository.push_replay(ClientReplayDecision::Replay(replay_receipt()));
         let outcome = block_on(execute_upsert_contact(
@@ -802,8 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn archive_is_application_owned_and_replay_neutral()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn archive_is_application_owned_and_replay_neutral() -> Result<(), Box<dyn std::error::Error>> {
         let repository = FakeRepository::with_current(active_client()?);
         repository.push_replay(ClientReplayDecision::Miss);
         let outcome = block_on(execute_archive_contact(
