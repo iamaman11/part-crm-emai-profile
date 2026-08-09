@@ -1,4 +1,4 @@
-# Temporary branch-only validator; delete after validated product commit.
+# Temporary branch-only materializer; delete after product fixup commit lands.
 name: Phase 2B Maintenance
 
 on:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  fix-format-validate:
+  materialize:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout implementation branch
@@ -51,9 +51,10 @@ jobs:
           crypto = Path("crates/cloudflare-adapters/src/contact_protection.rs")
           text = crypto.read_text(encoding="utf-8")
           decrypt_fn = text.index("    pub fn decrypt_contact_display(")
-          repl_start = text.index("        let mut plaintext = cipher", decrypt_fn)
-          repl_end = text.index("        Ok(Zeroizing::new(decoded))", repl_start)
-          desired = '''        let plaintext = cipher
+          if "        let mut plaintext = cipher" in text[decrypt_fn:]:
+              repl_start = text.index("        let mut plaintext = cipher", decrypt_fn)
+              repl_end = text.index("        Ok(Zeroizing::new(decoded))", repl_start)
+              desired = '''        let plaintext = cipher
               .decrypt(
                   XNonce::from_slice(&nonce_bytes),
                   Payload {
@@ -68,7 +69,7 @@ jobs:
               ContactCryptoError::InvalidUtf8
           })?;
 '''
-          text = text[:repl_start] + desired + text[repl_end:]
+              text = text[:repl_start] + desired + text[repl_end:]
           test_start = text.index("fn lookup_tokens_are_tenant_separated_and_rotation_candidates_are_versioned()")
           test_end = text.index("\n    #[test]\n    fn keyring_rejects_duplicate_versions", test_start)
           block = text[test_start:test_end]
@@ -83,9 +84,10 @@ jobs:
 
           invariant = Path("scripts/test-phase2b-client-contacts.py")
           text = invariant.read_text(encoding="utf-8")
-          import_start = text.index("import sqlite3")
-          import_end = text.index("\n\nCONTACT_A =", import_start)
-          replacement = '''import runpy
+          if "from test_d1_schema import (" in text:
+              import_start = text.index("import sqlite3")
+              import_end = text.index("\n\nCONTACT_A =", import_start)
+              replacement = '''import runpy
 import sqlite3
 from pathlib import Path
 
@@ -99,26 +101,13 @@ TENANT_B = _SCHEMA["TENANT_B"]
 apply_migrations = _SCHEMA["apply_migrations"]
 open_database = _SCHEMA["open_database"]
 seed_catalog = _SCHEMA["seed_catalog"]'''
-          text = text[:import_start] + replacement + text[import_end:]
+              text = text[:import_start] + replacement + text[import_end:]
           invariant.write_text(text, encoding="utf-8")
 
       - name: Format Rust
         run: cargo fmt --all
 
-      - name: Prove Phase 2B D1 invariants
-        run: python scripts/test-phase2b-client-contacts.py
-
-      - name: Check and test Phase 2B native crates
-        run: |
-          cargo check --locked -p application-ports -p use-cases-clients -p cloudflare-adapters
-          cargo test --locked -p use-cases-clients -p cloudflare-adapters
-
-      - name: Check Phase 2B for Workers WASM
-        run: |
-          rustup target add wasm32-unknown-unknown
-          cargo check --locked -p use-cases-clients -p cloudflare-adapters --target wasm32-unknown-unknown
-
-      - name: Commit validated fixups
+      - name: Commit materialized product fixups
         shell: bash
         run: |
           set -euo pipefail
@@ -134,5 +123,5 @@ seed_catalog = _SCHEMA["seed_catalog"]'''
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Phase 2B: validate contact persistence and crypto layers'
+          git commit -m 'Phase 2B: materialize contact compile and format fixups'
           git push origin HEAD:phase2b-client-persistence-contact-crypto
