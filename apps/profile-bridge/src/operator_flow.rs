@@ -1,7 +1,7 @@
 use crate::ProcessControlPort;
 use crate::local_profile::{
-    BridgeWorkspaceLock, LocalGenerationRecord, LocalGenerationState, LocalProfileError,
-    MaterializationRoot,
+    BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
+    LocalProfileError, MaterializationRoot,
 };
 use crate::runtime_bundle::{
     ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
@@ -40,6 +40,18 @@ pub trait RuntimeBundleSelectionPort {
         profile_id: &ProfileId,
         generation_id: &GenerationId,
     ) -> Result<ApprovedRuntimeBundle, Self::Error>;
+}
+
+pub trait BrowserLaunchPreflightPort {
+    type Error;
+
+    fn evaluate_before_launch(
+        &mut self,
+        workspace: &GenerationWorkspace,
+        device_id: &DeviceId,
+        workspace_epoch: u64,
+        runtime_bundle: &ApprovedRuntimeBundle,
+    ) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +101,7 @@ pub enum OperatorFailureStage {
     CoordinatorAcquire,
     LeaseValidation,
     LocalWorkspace,
+    BrowserPreflight,
     LocalLifecycle,
     RuntimeLaunch,
     RuntimeClose,
@@ -215,13 +228,14 @@ struct ActiveOperatorSession {
     runtime_bundle: ApprovedRuntimeBundle,
 }
 
-pub struct ProfileBridgeOperator<D, K, A, E, C, R, P, H> {
+pub struct ProfileBridgeOperator<D, K, A, E, C, R, B, P, H> {
     device_identity: D,
     device_keys: K,
     device_authentication: A,
     enrollment: E,
     coordinator: C,
     runtime_bundles: R,
+    browser_preflight: B,
     process: P,
     camouhost: H,
     active: Option<ActiveOperatorSession>,
@@ -229,7 +243,7 @@ pub struct ProfileBridgeOperator<D, K, A, E, C, R, P, H> {
     cleanup_blocked: bool,
 }
 
-impl<D, K, A, E, C, R, P, H> ProfileBridgeOperator<D, K, A, E, C, R, P, H>
+impl<D, K, A, E, C, R, B, P, H> ProfileBridgeOperator<D, K, A, E, C, R, B, P, H>
 where
     D: DeviceIdentityPort,
     K: DeviceKeyPort,
@@ -237,6 +251,7 @@ where
     E: EnrollmentPort,
     C: ProfileCoordinatorPort,
     R: RuntimeBundleSelectionPort,
+    B: BrowserLaunchPreflightPort,
     P: ProcessControlPort,
     H: CamouhostPort,
 {
@@ -249,6 +264,7 @@ where
         enrollment: E,
         coordinator: C,
         runtime_bundles: R,
+        browser_preflight: B,
         process: P,
         camouhost: H,
     ) -> Self {
@@ -259,6 +275,7 @@ where
             enrollment,
             coordinator,
             runtime_bundles,
+            browser_preflight,
             process,
             camouhost,
             active: None,
@@ -335,6 +352,17 @@ where
                     );
                 }
             };
+        if self
+            .browser_preflight
+            .evaluate_before_launch(&workspace, &device_id, lease.epoch(), &runtime_bundle)
+            .is_err()
+        {
+            return Err(self.fail_with_lock_before_use(
+                OperatorFailureStage::BrowserPreflight,
+                lease,
+                workspace_lock,
+            ));
+        }
         let inventory = match workspace.inventory() {
             Ok(value) => value,
             Err(_) => {
@@ -623,10 +651,13 @@ impl From<LocalProfileError> for OperatorFlowError {
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment, OperatorFailureStage,
-        OperatorFlowError, ProfileBridgeOperator, RuntimeBundleSelectionPort,
+        BrowserLaunchPreflightPort, DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment,
+        OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator,
+        RuntimeBundleSelectionPort,
     };
-    use crate::local_profile::{BridgeWorkspaceLock, LocalGenerationState, MaterializationRoot};
+    use crate::local_profile::{
+        BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationState, MaterializationRoot,
+    };
     use crate::runtime_bundle::ApprovedRuntimeBundle;
     use crate::{
         FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl, ProcessAction,
@@ -753,6 +784,31 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug)]
+    struct FakeBrowserPreflight {
+        allow: bool,
+        calls: u64,
+    }
+
+    impl BrowserLaunchPreflightPort for FakeBrowserPreflight {
+        type Error = BridgePortError;
+
+        fn evaluate_before_launch(
+            &mut self,
+            _workspace: &GenerationWorkspace,
+            _device_id: &DeviceId,
+            _workspace_epoch: u64,
+            _runtime_bundle: &ApprovedRuntimeBundle,
+        ) -> Result<(), Self::Error> {
+            self.calls += 1;
+            if self.allow {
+                Ok(())
+            } else {
+                Err(BridgePortError::Unavailable)
+            }
+        }
+    }
+
     type TestOperator<H> = ProfileBridgeOperator<
         FakeDeviceIdentity,
         FakeDeviceKeyStore,
@@ -760,6 +816,7 @@ mod tests {
         FakeEnrollment,
         FakeCoordinator,
         FakeRuntimeBundles,
+        FakeBrowserPreflight,
         FakeProcessControl,
         H,
     >;
@@ -921,6 +978,10 @@ mod tests {
                 bundle: approved_bundle()?,
                 allow: true,
             },
+            FakeBrowserPreflight {
+                allow: true,
+                calls: 0,
+            },
             FakeProcessControl::default(),
             camouhost,
         ))
@@ -984,6 +1045,10 @@ mod tests {
                 bundle: approved_bundle()?,
                 allow: true,
             },
+            FakeBrowserPreflight {
+                allow: true,
+                calls: 0,
+            },
             FakeProcessControl::default(),
             FakeCamouhost::default(),
         );
@@ -1037,6 +1102,10 @@ mod tests {
                 bundle: approved_bundle()?,
                 allow: true,
             },
+            FakeBrowserPreflight {
+                allow: true,
+                calls: 0,
+            },
             FakeProcessControl::default(),
             FakeCamouhost::default(),
         );
@@ -1072,6 +1141,46 @@ mod tests {
         assert_eq!(operator.coordinator().closed, 1);
         assert!(operator.process().actions().is_empty());
         busy_lock.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn browser_preflight_failure_prevents_runtime_spawn_and_releases_ownership()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut operator = ProfileBridgeOperator::new(
+            FakeDeviceIdentity::new(fixture.device_id.clone()),
+            FakeDeviceKeyStore::default(),
+            FakeDeviceAuthentication { allow: true },
+            fixture.enrollment()?,
+            fixture.coordinator(),
+            FakeRuntimeBundles {
+                bundle: approved_bundle()?,
+                allow: true,
+            },
+            FakeBrowserPreflight {
+                allow: false,
+                calls: 0,
+            },
+            FakeProcessControl::default(),
+            FakeCamouhost::default(),
+        );
+        assert_eq!(
+            operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(10)),
+            Err(OperatorFlowError::Stage(
+                OperatorFailureStage::BrowserPreflight
+            ))
+        );
+        assert_eq!(operator.coordinator().closed, 1);
+        assert!(operator.process().actions().is_empty());
+        let workspace = fixture.root.open_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )?;
+        let lock =
+            BridgeWorkspaceLock::acquire(&workspace, &fixture.device_id, fixture.lease.epoch())?;
+        lock.release()?;
         Ok(())
     }
 
