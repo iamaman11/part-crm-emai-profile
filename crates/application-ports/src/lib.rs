@@ -34,6 +34,11 @@ pub use audit::{AuditPort, AuditRecord, AuditResult};
 pub use clients::ClientRepository;
 pub use clock::ClockPort;
 pub use commands::CommandExecutionEvidence;
+pub use device_jobs::{
+    DeviceExecutionBlocker, DeviceExecutionPreconditionPort, DeviceExecutionReadiness,
+    DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobInsertOutcome, DeviceJobPortError,
+    DeviceJobPortErrorClass, DeviceJobRepositoryPort, DeviceJobWriteOutcome,
+};
 pub use generations::{GenerationObjectReference, GenerationObjectStorePort};
 pub use identity::MembershipRepository;
 pub use integration_events::{
