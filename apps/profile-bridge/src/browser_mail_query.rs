@@ -222,7 +222,9 @@ mod tests {
         ClientMailProviderQueryPort, MailMessageBody, MailMessageSummary, MailSearchTerm,
         MailboxMessageReference, SearchClientMailboxMessagesRequest,
     };
-    use application_ports::{QueryPage, QueryPageRequest, QueryPageSize, QueryPortError, QueryPortErrorClass};
+    use application_ports::{
+        QueryPage, QueryPageRequest, QueryPageSize, QueryPortError, QueryPortErrorClass,
+    };
     use profile_platform_primitives::{
         DeviceId, FencingToken, GenerationId, MailboxBindingId, ProfileId, SessionId, TenantId,
         TenantScope, UnixMillis,
