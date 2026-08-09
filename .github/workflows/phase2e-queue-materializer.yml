@@ -1,0 +1,36 @@
+name: Phase 2E Queue Materializer
+
+on:
+  push:
+    branches:
+      - phase2e-mailbox-cloud-lane
+    paths:
+      - .github/workflows/phase2e-queue-materializer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2e-mailbox-cloud-lane
+
+      - name: Materialize deterministic repository consistency
+        run: |
+          cargo generate-lockfile
+          cargo fmt --all
+          python scripts/generate-architecture-inventory.py --write
+
+      - name: Commit generated consistency and remove this workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/phase2e-queue-materializer.yml
+          git add Cargo.lock architecture/inventory.json crates apps
+          git diff --cached --check
+          git commit -m "Phase 2E: materialize Queue consistency"
+          git push origin HEAD:phase2e-mailbox-cloud-lane
