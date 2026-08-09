@@ -261,7 +261,9 @@ impl MailboxSchedulingRepositoryPort for D1MailboxSchedulingRepository {
         .map_err(map_worker_error)?
         .results::<DueDispatchRow>()
         .map_err(map_worker_error)?;
-        rows.into_iter().map(DueDispatchRow::into_dispatch).collect()
+        rows.into_iter()
+            .map(DueDispatchRow::into_dispatch)
+            .collect()
     }
 
     async fn mark_dispatched(

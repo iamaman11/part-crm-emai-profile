@@ -114,11 +114,7 @@ pub async fn control_plane_queue(
 }
 
 #[event(scheduled)]
-pub async fn control_plane_schedule(
-    _event: ScheduledEvent,
-    env: Env,
-    _context: ScheduleContext,
-) {
+pub async fn control_plane_schedule(_event: ScheduledEvent, env: Env, _context: ScheduleContext) {
     if integration_events::dispatch_pending(&env).await.is_err() {
         worker::console_error!("notification scheduled operation failed");
     }

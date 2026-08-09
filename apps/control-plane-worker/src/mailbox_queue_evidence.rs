@@ -15,25 +15,19 @@ pub fn actor_and_evidence(
     now: UnixMillis,
 ) -> Result<(ActorContext, CommandExecutionEvidence)> {
     let digest = execution_digest(dispatch)?;
-    let idempotency_key = IdempotencyKey::parse(format!("mailboxq_{digest}"))
-        .map_err(identifier_error)?;
-    let correlation_id = CorrelationId::parse(format!("corr_{digest}"))
-        .map_err(identifier_error)?;
+    let idempotency_key =
+        IdempotencyKey::parse(format!("mailboxq_{digest}")).map_err(identifier_error)?;
+    let correlation_id =
+        CorrelationId::parse(format!("corr_{digest}")).map_err(identifier_error)?;
     let actor = ActorContext::new(
         TenantScope::new(dispatch.tenant_id().clone()),
         dispatch.actor_id().clone(),
         correlation_id,
     );
-    let audit_event_id = audit_event_id(
-        dispatch.tenant_id(),
-        dispatch.actor_id(),
-        &idempotency_key,
-    )?;
-    let outbox_event_id = outbox_event_id(
-        dispatch.tenant_id(),
-        dispatch.actor_id(),
-        &idempotency_key,
-    )?;
+    let audit_event_id =
+        audit_event_id(dispatch.tenant_id(), dispatch.actor_id(), &idempotency_key)?;
+    let outbox_event_id =
+        outbox_event_id(dispatch.tenant_id(), dispatch.actor_id(), &idempotency_key)?;
     let expires_at = now
         .value()
         .checked_add(IDEMPOTENCY_TTL_MS)
@@ -107,18 +101,18 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_delivery_reuses_exact_execution_identity()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn duplicate_delivery_reuses_exact_execution_identity() -> Result<(), Box<dyn std::error::Error>>
+    {
         let dispatch = dispatch(4)?;
         let first = actor_and_evidence(&dispatch, UnixMillis::new(100))?;
         let second = actor_and_evidence(&dispatch, UnixMillis::new(200))?;
         assert_eq!(first.0, second.0);
-        assert_eq!(
-            first.1.idempotency_key(),
-            second.1.idempotency_key()
-        );
+        assert_eq!(first.1.idempotency_key(), second.1.idempotency_key());
         assert_eq!(first.1.request_digest(), second.1.request_digest());
-        assert_ne!(execution_digest(&dispatch)?, execution_digest(&dispatch(5)?)?);
+        assert_ne!(
+            execution_digest(&dispatch)?,
+            execution_digest(&dispatch(5)?)?
+        );
         Ok(())
     }
 }

@@ -275,7 +275,10 @@ mod tests {
     fn secret_resolver_statuses_fail_closed_into_mailbox_taxonomy() {
         assert!(map_resolver_status(200).is_ok());
         for status in [401, 404, 410, 403, 409, 422, 408, 425, 429, 500, 503, 418] {
-            assert!(map_resolver_status(status).is_err(), "accepted status {status}");
+            assert!(
+                map_resolver_status(status).is_err(),
+                "accepted status {status}"
+            );
         }
     }
 }

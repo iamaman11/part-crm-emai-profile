@@ -17,9 +17,8 @@ const MAX_QUEUE_DELAY_SECONDS: u64 = 86_400;
 
 pub async fn dispatch_pending(env: &Env) -> Result<()> {
     let now = UnixMillis::new(Date::now().as_millis());
-    let repository = D1MailboxSchedulingRepository::new(
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-    );
+    let repository =
+        D1MailboxSchedulingRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
     let publisher = QueueMailboxJobPublisher::new(env.queue(MAILBOX_JOBS_QUEUE_BINDING)?);
     dispatch_due_mailbox_jobs(&repository, &publisher, now, DISPATCH_BATCH_LIMIT)
         .await
@@ -48,9 +47,8 @@ pub async fn consume_one<T>(
         }
     };
     let application = mailbox_job_application(env)?;
-    let scheduling = D1MailboxSchedulingRepository::new(
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-    );
+    let scheduling =
+        D1MailboxSchedulingRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
     let mut provider = CloudMailboxProviderRouter::new(env);
     match process_scheduled_mailbox_job(
         &actor,
@@ -107,8 +105,8 @@ mod tests {
     use profile_platform_primitives::UnixMillis;
 
     #[test]
-    fn mailbox_queue_retry_delay_is_nonzero_and_bounded()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn mailbox_queue_retry_delay_is_nonzero_and_bounded() -> Result<(), Box<dyn std::error::Error>>
+    {
         assert_eq!(
             queue_delay_seconds(UnixMillis::new(1_000), UnixMillis::new(1_000))?,
             1

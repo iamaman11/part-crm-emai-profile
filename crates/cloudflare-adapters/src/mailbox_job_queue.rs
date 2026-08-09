@@ -65,9 +65,7 @@ impl MailboxDispatchPublisherPort for QueueMailboxJobPublisher {
         self.queue
             .send(MailboxJobQueueMessage::from_dispatch(dispatch))
             .await
-            .map_err(|_| {
-                MailboxJobPortError::new(MailboxJobPortErrorClass::DependencyUnavailable)
-            })
+            .map_err(|_| MailboxJobPortError::new(MailboxJobPortErrorClass::DependencyUnavailable))
     }
 }
 
@@ -84,8 +82,8 @@ mod tests {
     };
 
     #[test]
-    fn mailbox_queue_envelope_round_trips_metadata_only()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn mailbox_queue_envelope_round_trips_metadata_only() -> Result<(), Box<dyn std::error::Error>>
+    {
         let dispatch = MailboxJobDispatch::new(
             TenantId::parse("tenant_01JMAILQUEUE")?,
             ActorId::parse("actor_01JMAILQUEUE")?,
