@@ -18,33 +18,11 @@ if text.count(old) != 1:
     raise SystemExit(f"sequential phase block: expected one match, found {text.count(old)}")
 text = text.replace(old, new, 1)
 
-old = """## 19. Immediate Next Action
-
-Start **Phase 2B — Client persistence, contact crypto adapter and lifecycle commands** under issue #138
-from accepted Phase 2A `main`.
-
-Execute Phase 2B inward-first in this exact order:
-
-```text
-forward-only D1 client/contact migration
-  -> encrypted contact display + tenant-scoped exact-lookup token persistence
-  -> separate outer encryption/HMAC key domains + key-version aware protection
-  -> application-owned create/update/archive/contact mutations
-  -> atomic canonical mutation + idempotency + audit + outbox
-  -> indexed tenant-scoped exact-contact lookup
-  -> migration/replay/failure-order/wrong-tenant/raw-PII negative proof
-  -> generated public contracts only for accepted surfaces
-  -> permanent Phase 2B positive/negative architecture/security gates
-  -> native + Workers-WASM + release composition proof
-  -> exact-head 12/12 acceptance
-  -> guarded merge + docs closeout
-  -> only then Phase 2C
-```
-
-Do not advance Phase 2C or later slices while Phase 2B is unaccepted. External CRM remains
-future-only after the standalone completion gate.
-"""
-new = """## 19. Immediate Next Action
+heading = "## 19. Immediate Next Action"
+if text.count(heading) != 1:
+    raise SystemExit(f"Immediate Next Action heading: expected one match, found {text.count(heading)}")
+prefix, _ = text.split(heading, 1)
+section = """## 19. Immediate Next Action
 
 Start **Phase 2D — CQRS read models, global search and client-mail query contract** from the accepted
 Phase 2C closeout. Create the bounded Phase 2D issue/branch/PR before implementation and keep A8 as
@@ -74,8 +52,5 @@ Do not advance Phase 2E or later slices while Phase 2D is unaccepted. Fuzzy/pref
 out of scope without a separate accepted privacy/security ADR. External CRM remains future-only after
 the standalone completion gate.
 """
-if text.count(old) != 1:
-    raise SystemExit(f"Immediate Next Action: expected one match, found {text.count(old)}")
-text = text.replace(old, new, 1)
-
+text = prefix + section
 path.write_text(text, encoding="utf-8")
