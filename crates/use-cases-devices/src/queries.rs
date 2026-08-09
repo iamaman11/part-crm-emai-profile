@@ -88,6 +88,7 @@ where
 
 fn map_port_error(error: DeviceJobPortError) -> DeviceJobQueryError {
     match error.class() {
+        DeviceJobPortErrorClass::AuthenticationFailed => DeviceJobQueryError::Forbidden,
         DeviceJobPortErrorClass::IntegrityFailure => DeviceJobQueryError::IntegrityFailure,
         DeviceJobPortErrorClass::DependencyUnavailable => {
             DeviceJobQueryError::DependencyUnavailable
@@ -98,6 +99,7 @@ fn map_port_error(error: DeviceJobPortError) -> DeviceJobQueryError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceJobQueryError {
     InvalidRequest,
+    Forbidden,
     IntegrityFailure,
     DependencyUnavailable,
 }
@@ -106,6 +108,7 @@ impl core::fmt::Display for DeviceJobQueryError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
             Self::InvalidRequest => "claimable device-job query is outside the bounded contract",
+            Self::Forbidden => "claimable device-job query is forbidden",
             Self::IntegrityFailure => "claimable device-job query failed integrity validation",
             Self::DependencyUnavailable => "claimable device-job query dependency is unavailable",
         })
