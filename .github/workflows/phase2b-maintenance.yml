@@ -2,7 +2,9 @@
 name: Phase 2B Maintenance
 
 on:
-  pull_request:
+  push:
+    branches:
+      - phase2b-client-persistence-contact-crypto
 
 permissions:
   contents: write
