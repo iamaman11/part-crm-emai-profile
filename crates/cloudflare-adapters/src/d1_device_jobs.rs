@@ -1,13 +1,13 @@
 use application_ports::{
-    DeviceJobInsertOutcome, DeviceJobPortError, DeviceJobPortErrorClass, DeviceJobRepositoryPort,
-    DeviceJobWriteOutcome,
+    DeviceJobInsertOutcome, DeviceJobPortError, DeviceJobPortErrorClass, DeviceJobQueryPort,
+    DeviceJobRepositoryPort, DeviceJobWriteOutcome,
 };
 use device_domain::{
     DeviceClaimId, DeviceClaimSnapshot, DeviceJob, DeviceJobId, DeviceJobSnapshot, DeviceJobStatus,
     DeviceJobTarget,
 };
 use profile_platform_primitives::{
-    AggregateVersion, DeviceId, GenerationId, ProfileId, TenantId, UnixMillis,
+    ActorContext, AggregateVersion, DeviceId, GenerationId, ProfileId, TenantId, UnixMillis,
 };
 use serde::Deserialize;
 use worker::d1::D1Database;
@@ -64,6 +64,70 @@ SELECT
     updated_at_ms
 FROM device_jobs
 WHERE tenant_id = ? AND job_id = ?
+"#;
+
+const LIST_CLAIMABLE_DEVICE_JOBS: &str = r#"
+SELECT
+    job.tenant_id,
+    job.job_id,
+    job.device_id,
+    job.profile_id,
+    job.generation_id,
+    job.aggregate_version,
+    job.status,
+    job.attempt,
+    job.max_attempts,
+    job.last_fence,
+    job.current_claim_id,
+    job.claim_fence,
+    job.claimed_at_ms,
+    job.claim_heartbeat_at_ms,
+    job.claim_lease_expires_at_ms,
+    job.retry_at_ms,
+    job.updated_at_ms
+FROM device_jobs AS job
+WHERE job.tenant_id = ?
+  AND job.device_id = ?
+  AND EXISTS (
+      SELECT 1
+      FROM device_authorizations AS authorization
+      WHERE authorization.tenant_id = job.tenant_id
+        AND authorization.device_id = job.device_id
+        AND authorization.profile_id = job.profile_id
+        AND authorization.generation_id = job.generation_id
+        AND authorization.status = 'ACTIVE'
+        AND authorization.version >= 1
+  )
+  AND EXISTS (
+      SELECT 1
+      FROM memberships AS membership
+      WHERE membership.tenant_id = job.tenant_id
+        AND membership.actor_id = ?
+        AND membership.status = 'ACTIVE'
+        AND (
+            membership.role = 'TENANT_OWNER'
+            OR (
+                membership.role = 'MEMBER'
+                AND EXISTS (
+                    SELECT 1
+                    FROM profile_grants AS grant_row
+                    WHERE grant_row.tenant_id = job.tenant_id
+                      AND grant_row.profile_id = job.profile_id
+                      AND grant_row.actor_id = membership.actor_id
+                )
+            )
+        )
+  )
+  AND (
+      job.status = 'PENDING_DEVICE'
+      OR (
+          job.status IN ('PROFILE_BUSY', 'RETRY_SCHEDULED')
+          AND job.retry_at_ms IS NOT NULL
+          AND job.retry_at_ms <= ?
+      )
+  )
+ORDER BY COALESCE(job.retry_at_ms, job.updated_at_ms), job.updated_at_ms, job.job_id
+LIMIT ?
 "#;
 
 const CAS_DEVICE_JOB: &str = r#"
@@ -126,6 +190,47 @@ impl D1DeviceJobRepository {
     #[must_use]
     pub const fn new(database: D1Database) -> Self {
         Self { database }
+    }
+}
+
+impl DeviceJobQueryPort for D1DeviceJobRepository {
+    async fn list_claimable_device_jobs(
+        &self,
+        actor: &ActorContext,
+        device_id: &DeviceId,
+        now: UnixMillis,
+        limit: u16,
+    ) -> Result<Vec<DeviceJob>, DeviceJobPortError> {
+        if limit == 0 {
+            return Err(integrity_failure());
+        }
+        let tenant_id = actor.tenant_scope().tenant_id();
+        let result = query!(
+            &self.database,
+            LIST_CLAIMABLE_DEVICE_JOBS,
+            tenant_id.as_str(),
+            device_id.as_str(),
+            actor.actor_id().as_str(),
+            unix_to_i64(now)?,
+            i64::from(limit),
+        )
+        .map_err(map_worker_error)?
+        .all()
+        .await
+        .map_err(map_worker_error)?;
+        let rows = result
+            .results::<DeviceJobRow>()
+            .map_err(map_worker_error)?;
+        if rows.len() > usize::from(limit) {
+            return Err(integrity_failure());
+        }
+        rows.into_iter()
+            .map(|row| {
+                let job_id = DeviceJobId::parse(row.job_id.as_str())
+                    .map_err(|_| integrity_failure())?;
+                restore_row(tenant_id, &job_id, row)
+            })
+            .collect()
     }
 }
 
@@ -418,7 +523,7 @@ fn map_worker_error(_error: worker::Error) -> DeviceJobPortError {
 
 #[cfg(test)]
 mod tests {
-    use super::{status_from_storage, status_to_storage};
+    use super::{LIST_CLAIMABLE_DEVICE_JOBS, status_from_storage, status_to_storage};
     use device_domain::DeviceJobStatus;
 
     #[test]
@@ -438,5 +543,23 @@ mod tests {
         }
         assert!(status_from_storage("UNKNOWN").is_err());
         Ok(())
+    }
+
+    #[test]
+    fn claimable_query_is_live_grant_device_authorization_and_due_scoped() {
+        for required in [
+            "job.tenant_id = ?",
+            "job.device_id = ?",
+            "authorization.status = 'ACTIVE'",
+            "membership.status = 'ACTIVE'",
+            "profile_grants",
+            "job.status = 'PENDING_DEVICE'",
+            "job.status IN ('PROFILE_BUSY', 'RETRY_SCHEDULED')",
+            "job.retry_at_ms <= ?",
+            "LIMIT ?",
+        ] {
+            assert!(LIST_CLAIMABLE_DEVICE_JOBS.contains(required));
+        }
+        assert!(!LIST_CLAIMABLE_DEVICE_JOBS.contains("profile_assignments"));
     }
 }
