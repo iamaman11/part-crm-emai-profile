@@ -162,7 +162,9 @@ pub fn device_job_authorization(env: &Env) -> Result<D1DeviceJobAuthorization> {
 }
 
 pub fn device_execution_preconditions(env: &Env) -> Result<D1DeviceExecutionPreconditions> {
-    Ok(D1DeviceExecutionPreconditions::new(env.d1(D1_CATALOG_BINDING)?))
+    Ok(D1DeviceExecutionPreconditions::new(
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
 }
 
 pub fn device_job_repository(env: &Env) -> Result<D1DeviceJobRepository> {
