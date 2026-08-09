@@ -210,13 +210,14 @@ impl D1MailboxSchedulingRepository {
         &self,
         dispatch: &MailboxJobDispatch,
     ) -> Result<Option<LeaseRow>, MailboxJobPortError> {
+        let expected_version = sqlite_version(dispatch.expected_version())?;
         query!(
             &self.database,
             LOAD_EXECUTION_LEASE,
             dispatch.tenant_id().as_str(),
             dispatch.binding_id().as_str(),
             dispatch.job_id().as_str(),
-            sqlite_version(dispatch.expected_version())?
+            expected_version
         )
         .map_err(map_worker_error)?
         .first::<LeaseRow>(None)
@@ -249,18 +250,14 @@ impl MailboxSchedulingRepositoryPort for D1MailboxSchedulingRepository {
         now: UnixMillis,
         limit: u32,
     ) -> Result<Vec<MailboxJobDispatch>, MailboxJobPortError> {
-        let rows = query!(
-            &self.database,
-            LOAD_DUE_DISPATCHES,
-            sqlite_unix(now)?,
-            i64::from(limit)
-        )
-        .map_err(map_worker_error)?
-        .all()
-        .await
-        .map_err(map_worker_error)?
-        .results::<DueDispatchRow>()
-        .map_err(map_worker_error)?;
+        let now_ms = sqlite_unix(now)?;
+        let rows = query!(&self.database, LOAD_DUE_DISPATCHES, now_ms, i64::from(limit))
+            .map_err(map_worker_error)?
+            .all()
+            .await
+            .map_err(map_worker_error)?
+            .results::<DueDispatchRow>()
+            .map_err(map_worker_error)?;
         rows.into_iter()
             .map(DueDispatchRow::into_dispatch)
             .collect()
@@ -271,14 +268,16 @@ impl MailboxSchedulingRepositoryPort for D1MailboxSchedulingRepository {
         dispatch: &MailboxJobDispatch,
         published_at: UnixMillis,
     ) -> Result<(), MailboxJobPortError> {
+        let expected_version = sqlite_version(dispatch.expected_version())?;
+        let published_at_ms = sqlite_unix(published_at)?;
         query!(
             &self.database,
             MARK_DISPATCHED,
             dispatch.tenant_id().as_str(),
             dispatch.binding_id().as_str(),
             dispatch.job_id().as_str(),
-            sqlite_version(dispatch.expected_version())?,
-            sqlite_unix(published_at)?
+            expected_version,
+            published_at_ms
         )
         .map_err(map_worker_error)?
         .run()
@@ -377,15 +376,18 @@ impl MailboxSchedulingRepositoryPort for D1MailboxSchedulingRepository {
         fence: u64,
         completed_at: UnixMillis,
     ) -> Result<MailboxExecutionCompletionOutcome, MailboxJobPortError> {
+        let completed_at_ms = sqlite_unix(completed_at)?;
+        let expected_version = sqlite_version(dispatch.expected_version())?;
+        let fence = sqlite_fence(fence)?;
         let row = query!(
             &self.database,
             COMPLETE_EXECUTION_LEASE,
-            sqlite_unix(completed_at)?,
+            completed_at_ms,
             dispatch.tenant_id().as_str(),
             dispatch.binding_id().as_str(),
             dispatch.job_id().as_str(),
-            sqlite_version(dispatch.expected_version())?,
-            sqlite_fence(fence)?
+            expected_version,
+            fence
         )
         .map_err(map_worker_error)?
         .first::<i64>(Some("fence"))
