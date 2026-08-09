@@ -179,8 +179,8 @@ def validate_docs() -> None:
 
     required_plan_markers = (
         "Phase 2D — CQRS read models, global search and client-mail query contract — ACCEPTED",
-        "Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — NEXT",
-        "Phase 2E issue #148 is the unique NEXT",
+        "Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — ACCEPTED",
+        "Phase 2F — Durable device jobs, browser mailbox lane and materialization integration — NEXT",
         "| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D.**",
         "| 6.4 | Authorization-before-projection | **Accepted through Phase 2D query/read-model scope.**",
         "`BrowserIdentityManifest`",
@@ -196,6 +196,8 @@ def validate_docs() -> None:
         "blanket Firefox SQLite `PRAGMA integrity_check` is not canonical profile-health authority",
     )
     stale_plan_markers = (
+        "Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — NEXT",
+        "Phase 2E issue #148 is the unique NEXT",
         "Phase 2D issue #144 is the unique next implementation slice",
         "| A8 | Query-side/CQRS read-model boundary | **Open.**",
         "2D read/search/provider query; 2G realtime subscriptions",
@@ -205,13 +207,15 @@ def validate_docs() -> None:
         "| Client Registry 2.0 | Composed |",
         "| Read models/global search | Library / Synthetic |",
         "| Client-scoped mailbox message search/body | Library / Synthetic |",
-        "| A3 | Domain aggregate splitting | **Client half accepted in Phase 2A**",
+        "| A3 | Domain aggregate splitting | **Accepted** — Phase 2A decomposed `client-domain`; Phase 2E decomposed `mailbox-domain`",
         "| A5 | Feature-sliced SPA route composition | **Accepted in Phase 2C**",
         "| A8 | CQRS/read-model boundary | **Accepted in Phase 2D**",
         "| 6.5 | PII contact protection | **Accepted through Phase 2B/2D**",
         "crates/use-cases-query",
+        "crates/use-cases-mailboxes",
     )
     stale_matrix_markers = (
+        "| A3 | Domain aggregate splitting | **Client half accepted in Phase 2A**",
         "| Client contact protection | Target |",
         "| Client Registry 2.0 | Target |",
         "| Read models/global search | Target |",
