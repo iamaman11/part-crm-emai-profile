@@ -6,9 +6,15 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
         ["api", "v1", "tenants", _, "mailboxes"] if method == "POST" => {
             Some(RouteClass::MailboxBindingCollectionApi)
         }
-        ["api", "v1", "tenants", _, "mailboxes", _, "browser-execution"] if method == "POST" => {
-            Some(RouteClass::MailboxBrowserExecutionBindApi)
-        }
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "mailboxes",
+            _,
+            "browser-execution",
+        ] if method == "POST" => Some(RouteClass::MailboxBrowserExecutionBindApi),
         ["api", "v1", "tenants", _, "mailboxes", _, "revoke"] if method == "POST" => {
             Some(RouteClass::MailboxBindingRevokeApi)
         }
