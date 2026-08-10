@@ -1,7 +1,6 @@
 use application_ports::device_generation_commit::{
     CoordinatorGenerationCommitWitness, DeviceGenerationCommitError,
-    DeviceGenerationCommitErrorClass, DeviceGenerationCommitOutcome, DeviceGenerationCommitPort,
-    DeviceGenerationCommitRequest,
+    DeviceGenerationCommitErrorClass, DeviceGenerationCommitRequest,
 };
 use application_ports::generation_objects::GenerationObjectDescriptor;
 use device_domain::{DeviceClaimId, DeviceJobId};
@@ -10,10 +9,7 @@ use profile_platform_primitives::{
     ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
-use session_domain::coordinator::coordinator_object_name;
 use sha2::{Digest, Sha256};
-use worker::wasm_bindgen::JsValue;
-use worker::{Env, Headers, Method, Request, RequestInit};
 
 pub const DEVICE_GENERATION_COMMIT_PATH: &str = "/generation-commit";
 
@@ -177,100 +173,6 @@ pub struct DeviceGenerationCommitInternalErrorResponse {
     pub class: DeviceGenerationCommitInternalErrorClass,
 }
 
-pub struct CloudflareDeviceGenerationCommitPort<'a> {
-    env: &'a Env,
-    coordinator_binding: &'a str,
-}
-
-impl<'a> CloudflareDeviceGenerationCommitPort<'a> {
-    #[must_use]
-    pub const fn new(env: &'a Env, coordinator_binding: &'a str) -> Self {
-        Self {
-            env,
-            coordinator_binding,
-        }
-    }
-}
-
-impl DeviceGenerationCommitPort for CloudflareDeviceGenerationCommitPort<'_> {
-    async fn commit_device_generation(
-        &self,
-        actor: &ActorContext,
-        request: &DeviceGenerationCommitRequest,
-    ) -> Result<DeviceGenerationCommitOutcome, DeviceGenerationCommitError> {
-        let namespace = self
-            .env
-            .durable_object(self.coordinator_binding)
-            .map_err(|_| dependency_failure())?;
-        let object_id = namespace
-            .id_from_name(&coordinator_object_name(request.profile_id()))
-            .map_err(|_| dependency_failure())?;
-        let stub = object_id.get_stub().map_err(|_| dependency_failure())?;
-        let internal = DeviceGenerationCommitInternalRequest::from_domain(actor, request);
-        let request = internal_request(&internal)?;
-        let mut response = stub
-            .fetch_with_request(request)
-            .await
-            .map_err(|_| dependency_failure())?;
-
-        if response.status_code() == 200 {
-            return response
-                .json::<DeviceGenerationCommitInternalResponse>()
-                .await
-                .map_err(|_| integrity_failure())
-                .map(|body| match body.outcome {
-                    DeviceGenerationCommitInternalOutcome::Activated => {
-                        DeviceGenerationCommitOutcome::Activated
-                    }
-                    DeviceGenerationCommitInternalOutcome::AlreadyActive => {
-                        DeviceGenerationCommitOutcome::AlreadyActive
-                    }
-                });
-        }
-
-        let status = response.status_code();
-        let class = response
-            .json::<DeviceGenerationCommitInternalErrorResponse>()
-            .await
-            .ok()
-            .map(|body| body.class);
-        Err(match (status, class) {
-            (409, Some(DeviceGenerationCommitInternalErrorClass::StaleAuthority)) => {
-                stale_authority()
-            }
-            (409, Some(DeviceGenerationCommitInternalErrorClass::VersionConflict)) => {
-                version_conflict()
-            }
-            (400 | 500, Some(DeviceGenerationCommitInternalErrorClass::IntegrityFailure)) => {
-                integrity_failure()
-            }
-            (503, Some(DeviceGenerationCommitInternalErrorClass::DependencyUnavailable)) => {
-                dependency_failure()
-            }
-            _ => dependency_failure(),
-        })
-    }
-}
-
-fn internal_request(
-    body: &DeviceGenerationCommitInternalRequest,
-) -> Result<Request, DeviceGenerationCommitError> {
-    let payload = serde_json::to_string(body).map_err(|_| integrity_failure())?;
-    let headers = Headers::new();
-    headers
-        .set("content-type", "application/json")
-        .map_err(|_| dependency_failure())?;
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post)
-        .with_headers(headers)
-        .with_body(Some(JsValue::from_str(&payload)));
-    Request::new_with_init(
-        &format!("https://profile-coordinator.internal{DEVICE_GENERATION_COMMIT_PATH}"),
-        &init,
-    )
-    .map_err(|_| dependency_failure())
-}
-
 fn hash_field(hasher: &mut Sha256, value: &[u8]) {
     hasher.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
     hasher.update(value);
@@ -285,20 +187,8 @@ fn hex_digest(bytes: [u8; 32]) -> String {
     output
 }
 
-const fn stale_authority() -> DeviceGenerationCommitError {
-    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::StaleAuthority)
-}
-
-const fn version_conflict() -> DeviceGenerationCommitError {
-    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::VersionConflict)
-}
-
 const fn integrity_failure() -> DeviceGenerationCommitError {
     DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::IntegrityFailure)
-}
-
-const fn dependency_failure() -> DeviceGenerationCommitError {
-    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::DependencyUnavailable)
 }
 
 #[cfg(test)]
@@ -380,9 +270,8 @@ mod tests {
         let (actor, request) = fixture()?;
         let first = DeviceGenerationCommitInternalRequest::from_domain(&actor, &request);
         let mut serialized = serde_json::to_value(&first)?;
-        serialized["coordinator_fencing_token"] = serde_json::Value::String(
-            "fence_runtime_commit_other".to_owned(),
-        );
+        serialized["coordinator_fencing_token"] =
+            serde_json::Value::String("fence_runtime_commit_other".to_owned());
         let second: DeviceGenerationCommitInternalRequest = serde_json::from_value(serialized)?;
         assert_ne!(first.authority_digest(), second.authority_digest());
         Ok(())
