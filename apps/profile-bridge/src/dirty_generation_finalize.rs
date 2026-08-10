@@ -4,11 +4,11 @@ use crate::dirty_generation_publish::{
     DirtyGenerationPublishError, PublishedDirtyGeneration, publish_prepared_dirty_generation,
 };
 use application_ports::device_jobs::{DeviceClaimId, DeviceJobId};
-use application_ports::generation_objects::{GenerationObjectExactVerifyPort, GenerationObjectUploadPort};
-use core::future::Future;
-use profile_platform_primitives::{
-    FencingToken, GenerationId, ProfileId, SessionId, TenantScope,
+use application_ports::generation_objects::{
+    GenerationObjectExactVerifyPort, GenerationObjectUploadPort,
 };
+use core::future::Future;
+use profile_platform_primitives::{FencingToken, GenerationId, ProfileId, SessionId, TenantScope};
 use session_domain::LeaseStatus;
 use std::fmt;
 
@@ -144,9 +144,14 @@ pub enum DirtyGenerationFinalizeError<C> {
 impl<C: fmt::Display> fmt::Display for DirtyGenerationFinalizeError<C> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidExecutionProof => formatter.write_str("dirty generation execution proof is invalid"),
+            Self::InvalidExecutionProof => {
+                formatter.write_str("dirty generation execution proof is invalid")
+            }
             Self::Publish(error) => write!(formatter, "dirty generation publish failed: {error}"),
-            Self::Commit(error) => write!(formatter, "dirty generation metadata commit failed: {error}"),
+            Self::Commit(error) => write!(
+                formatter,
+                "dirty generation metadata commit failed: {error}"
+            ),
         }
     }
 }
@@ -368,15 +373,14 @@ mod tests {
             let root = MaterializationRoot::open_or_create(root_path.clone())?;
             let tenant_id = TenantId::parse(format!("tenant_01JFINALIZE{counter}"))?;
             let profile_id = ProfileId::parse(format!("profile_01JFINALIZE{counter}"))?;
-            let base_generation_id = GenerationId::parse(format!("generation_01JFINALBASE{counter}"))?;
-            let candidate_generation_id = GenerationId::parse(format!("generation_01JFINALCAND{counter}"))?;
+            let base_generation_id =
+                GenerationId::parse(format!("generation_01JFINALBASE{counter}"))?;
+            let candidate_generation_id =
+                GenerationId::parse(format!("generation_01JFINALCAND{counter}"))?;
             let workspace = root.create_generation(&tenant_id, &profile_id, &base_generation_id)?;
             std::fs::write(workspace.path().join("prefs.js"), b"dirty-finalize")?;
-            let mut record = LocalGenerationRecord::new(
-                base_generation_id.clone(),
-                0,
-                UnixMillis::new(10),
-            );
+            let mut record =
+                LocalGenerationRecord::new(base_generation_id.clone(), 0, UnixMillis::new(10));
             record.set_locked(true)?;
             record.begin_use(UnixMillis::new(11))?;
             record.graceful_close(UnixMillis::new(12))?;
@@ -457,8 +461,8 @@ mod tests {
     }
 
     #[test]
-    fn immutable_conflict_never_reaches_metadata_commit()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn immutable_conflict_never_reaches_metadata_commit() -> Result<(), Box<dyn std::error::Error>>
+    {
         let fixture = Fixture::new()?;
         let events = Rc::new(RefCell::new(Vec::new()));
         let commit_calls = Rc::new(Cell::new(0));
@@ -480,7 +484,10 @@ mod tests {
                 fail: false,
             },
         ));
-        assert!(matches!(result, Err(DirtyGenerationFinalizeError::Publish(_))));
+        assert!(matches!(
+            result,
+            Err(DirtyGenerationFinalizeError::Publish(_))
+        ));
         assert_eq!(events.borrow().as_slice(), &["upload"]);
         assert_eq!(commit_calls.get(), 0);
         fixture.cleanup();
@@ -511,7 +518,10 @@ mod tests {
                 fail: false,
             },
         ));
-        assert!(matches!(result, Err(DirtyGenerationFinalizeError::Publish(_))));
+        assert!(matches!(
+            result,
+            Err(DirtyGenerationFinalizeError::Publish(_))
+        ));
         assert_eq!(events.borrow().as_slice(), &["upload", "verify"]);
         assert_eq!(commit_calls.get(), 0);
         fixture.cleanup();
@@ -542,7 +552,10 @@ mod tests {
                 fail: true,
             },
         ));
-        assert_eq!(result, Err(DirtyGenerationFinalizeError::Commit(CommitError)));
+        assert_eq!(
+            result,
+            Err(DirtyGenerationFinalizeError::Commit(CommitError))
+        );
         assert_eq!(events.borrow().as_slice(), &["upload", "verify", "commit"]);
         assert_eq!(commit_calls.get(), 1);
         fixture.cleanup();
@@ -583,7 +596,10 @@ mod tests {
                 fail: false,
             },
         ));
-        assert!(matches!(result, Err(DirtyGenerationFinalizeError::Publish(_))));
+        assert!(matches!(
+            result,
+            Err(DirtyGenerationFinalizeError::Publish(_))
+        ));
         assert_eq!(commit_calls.get(), 0);
         fixture.cleanup();
         Ok(())
