@@ -319,9 +319,11 @@ fn busy_invalid_and_replayed_claims_fail_before_second_ownership()
     operator.close(UnixMillis::new(20))?;
     assert_eq!(
         operator.open(&fixture.claim_uri, &fixture.root, UnixMillis::new(21)),
-        Err(OperatorFlowError::Stage(OperatorFailureStage::Enrollment))
+        Err(OperatorFlowError::Busy)
     );
+    assert!(operator.has_pending_dirty_close());
     assert_eq!(operator.coordinator().acquired, 1);
+    assert_eq!(operator.coordinator().closed, 0);
     Ok(())
 }
 
