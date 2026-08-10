@@ -298,7 +298,12 @@ mod tests {
             assert_eq!(
                 observed.borrow().as_slice(),
                 &[VerifiedObject {
-                    profile_id: prepared.sealed().metadata().profile_id().as_str().to_owned(),
+                    profile_id: prepared
+                        .sealed()
+                        .metadata()
+                        .profile_id()
+                        .as_str()
+                        .to_owned(),
                     generation_id: prepared
                         .sealed()
                         .metadata()
