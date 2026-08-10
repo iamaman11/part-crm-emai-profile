@@ -27,7 +27,6 @@ SELECT
     command.coordinator_epoch,
     command.coordinator_version,
     command.coordinator_sequence,
-    command.executed_at_ms,
     profile.active_generation_id,
     profile.status AS profile_status,
     profile.version AS profile_version,
@@ -104,6 +103,15 @@ impl D1DeviceGenerationCommitJournal {
         }
 
         let object = request.object();
+        let container_bytes = u64_to_i64(object.container_bytes())?;
+        let expected_job_version = u64_to_i64(request.expected_job_version().value())?;
+        let claim_fence = u64_to_i64(request.claim_fence())?;
+        let expected_profile_version = u64_to_i64(request.expected_profile_version().value())?;
+        let coordinator_epoch = u64_to_i64(request.coordinator().epoch())?;
+        let coordinator_version = u64_to_i64(request.coordinator().coordinator_version())?;
+        let coordinator_sequence = u64_to_i64(request.coordinator().coordinator_sequence())?;
+        let executed_at_ms = u64_to_i64(request.observed_at().value())?;
+
         let insert = query!(
             &self.database,
             INSERT_DEVICE_GENERATION_COMMIT,
@@ -117,17 +125,17 @@ impl D1DeviceGenerationCommitJournal {
             object.object_key(),
             object.metadata_digest(),
             object.container_digest(),
-            u64_to_i64(object.container_bytes())?,
-            u64_to_i64(request.expected_job_version().value())?,
+            container_bytes,
+            expected_job_version,
             request.claim_id().as_str(),
-            u64_to_i64(request.claim_fence())?,
-            u64_to_i64(request.expected_profile_version().value())?,
+            claim_fence,
+            expected_profile_version,
             request.coordinator().session_id().as_str(),
             token_digest.as_str(),
-            u64_to_i64(request.coordinator().epoch())?,
-            u64_to_i64(request.coordinator().coordinator_version())?,
-            u64_to_i64(request.coordinator().coordinator_sequence())?,
-            u64_to_i64(request.observed_at().value())?,
+            coordinator_epoch,
+            coordinator_version,
+            coordinator_sequence,
+            executed_at_ms,
         )
         .map_err(|_| dependency_failure())?
         .first::<String>(Some("job_id"))
@@ -135,8 +143,12 @@ impl D1DeviceGenerationCommitJournal {
 
         match insert {
             Ok(Some(_)) => {
-                let row = self.load(actor, request).await?.ok_or_else(integrity_failure)?;
-                if exact_row(&row, actor, request, &token_digest) && catalog_is_exact(&row, request) {
+                let row = self
+                    .load(actor, request)
+                    .await?
+                    .ok_or_else(integrity_failure)?;
+                if exact_row(&row, actor, request, &token_digest) && catalog_is_exact(&row, request)
+                {
                     Ok(DeviceGenerationCommitJournalOutcome::Applied)
                 } else {
                     Err(integrity_failure())
@@ -190,7 +202,6 @@ struct DeviceGenerationCommitRow {
     coordinator_epoch: i64,
     coordinator_version: i64,
     coordinator_sequence: i64,
-    executed_at_ms: i64,
     active_generation_id: Option<String>,
     profile_status: Option<String>,
     profile_version: Option<i64>,
@@ -233,7 +244,10 @@ fn exact_row(
         && row.metadata_digest == object.metadata_digest()
         && row.container_digest == object.container_digest()
         && i64_matches_u64(row.container_bytes, object.container_bytes())
-        && i64_matches_u64(row.expected_job_version, request.expected_job_version().value())
+        && i64_matches_u64(
+            row.expected_job_version,
+            request.expected_job_version().value(),
+        )
         && row.claim_id == request.claim_id().as_str()
         && i64_matches_u64(row.claim_fence, request.claim_fence())
         && i64_matches_u64(
@@ -251,23 +265,30 @@ fn exact_row(
             row.coordinator_sequence,
             request.coordinator().coordinator_sequence(),
         )
-        && i64_matches_u64(row.executed_at_ms, request.observed_at().value())
 }
 
-fn catalog_is_exact(row: &DeviceGenerationCommitRow, request: &DeviceGenerationCommitRequest) -> bool {
+fn catalog_is_exact(
+    row: &DeviceGenerationCommitRow,
+    request: &DeviceGenerationCommitRequest,
+) -> bool {
     let object = request.object();
+    let Some(expected_profile_version) = request.expected_profile_version().value().checked_add(1)
+    else {
+        return false;
+    };
+    let expected_verification = format!("r2sha256:{}", object.container_digest());
+
     row.active_generation_id.as_deref() == Some(object.generation_id().as_str())
         && row.profile_status.as_deref() == Some("READY")
-        && row.profile_version.is_some_and(|version| {
-            i64_matches_u64(version, request.expected_profile_version().value().saturating_add(1))
-        })
+        && row
+            .profile_version
+            .is_some_and(|version| i64_matches_u64(version, expected_profile_version))
         && row.generation_status.as_deref() == Some("VERIFIED")
         && row.generation_version == Some(2)
         && row.generation_object_key.as_deref() == Some(object.object_key())
         && row.generation_metadata_digest.as_deref() == Some(object.metadata_digest())
         && row.generation_container_digest.as_deref() == Some(object.container_digest())
-        && row.verification_reference.as_deref()
-            == Some(format!("r2sha256:{}", object.container_digest()).as_str())
+        && row.verification_reference.as_deref() == Some(expected_verification.as_str())
 }
 
 fn validate_request(
@@ -275,11 +296,14 @@ fn validate_request(
     request: &DeviceGenerationCommitRequest,
 ) -> Result<(), DeviceGenerationCommitError> {
     let object = request.object();
-    let next_profile_version = request
+    if request
         .expected_profile_version()
         .value()
         .checked_add(1)
-        .ok_or_else(integrity_failure)?;
+        .is_none()
+    {
+        return Err(integrity_failure());
+    }
     let expected_coordinator_version = request
         .coordinator()
         .coordinator_sequence()
@@ -291,8 +315,7 @@ fn validate_request(
         request.profile_id().as_str(),
         object.generation_id().as_str(),
     );
-    if next_profile_version == 0
-        || object.profile_id() != request.profile_id()
+    if object.profile_id() != request.profile_id()
         || object.generation_id() == request.base_generation_id()
         || object.object_key() != canonical_key
         || object.container_bytes() == 0
