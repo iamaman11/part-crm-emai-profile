@@ -4,6 +4,7 @@ pub mod browser_execution;
 pub mod browser_mail_query;
 pub mod browser_mail_runtime;
 pub mod browser_preflight;
+pub mod dirty_generation;
 pub mod fake_mail_query;
 pub mod local_profile;
 pub mod operator_flow;
