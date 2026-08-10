@@ -136,7 +136,10 @@ impl R2GenerationUploadCapabilitySigner {
         let host = format!("{}.r2.cloudflarestorage.com", self.account_id);
         let checksum = sha256_hex_to_base64(descriptor.container_digest())?;
         let headers = vec![
-            ("content-type".to_owned(), "application/octet-stream".to_owned()),
+            (
+                "content-type".to_owned(),
+                "application/octet-stream".to_owned(),
+            ),
             ("if-none-match".to_owned(), "*".to_owned()),
             ("x-amz-checksum-sha256".to_owned(), checksum),
             (
@@ -178,10 +181,7 @@ impl R2GenerationUploadCapabilitySigner {
             "{}/{}/{}/{}",
             signing_time.date_stamp, REGION, SERVICE, TERMINATOR
         );
-        let credential = format!(
-            "{}/{}",
-            self.credentials.access_key_id, credential_scope
-        );
+        let credential = format!("{}/{}", self.credentials.access_key_id, credential_scope);
         let canonical_query = format!(
             "X-Amz-Algorithm={}&X-Amz-Credential={}&X-Amz-Date={}&X-Amz-Expires={}&X-Amz-SignedHeaders={}",
             uri_encode(ALGORITHM, false),
@@ -208,9 +208,8 @@ impl R2GenerationUploadCapabilitySigner {
             &signing_time.date_stamp,
         );
         let signature = hex_lower(&hmac_sha256(&signing_key, string_to_sign.as_bytes()));
-        let url = format!(
-            "https://{host}{canonical_uri}?{canonical_query}&X-Amz-Signature={signature}"
-        );
+        let url =
+            format!("https://{host}{canonical_uri}?{canonical_query}&X-Amz-Signature={signature}");
 
         Ok(R2GenerationUploadCapability {
             url,
@@ -328,9 +327,13 @@ fn base64_encode(input: &[u8]) -> String {
         let second = chunk.get(1).copied().unwrap_or(0);
         let third = chunk.get(2).copied().unwrap_or(0);
         output.push(char::from(TABLE[usize::from(first >> 2)]));
-        output.push(char::from(TABLE[usize::from(((first & 0x03) << 4) | (second >> 4))]));
+        output.push(char::from(
+            TABLE[usize::from(((first & 0x03) << 4) | (second >> 4))],
+        ));
         if chunk.len() > 1 {
-            output.push(char::from(TABLE[usize::from(((second & 0x0f) << 2) | (third >> 6))]));
+            output.push(char::from(
+                TABLE[usize::from(((second & 0x0f) << 2) | (third >> 6))],
+            ));
         } else {
             output.push('=');
         }
@@ -464,15 +467,13 @@ mod tests {
         }
         let headers = capability.headers();
         assert!(headers.contains(&("if-none-match".to_owned(), "*".to_owned())));
-        assert!(headers.iter().any(|(name, _)| name == "x-amz-checksum-sha256"));
-        assert!(headers.contains(&(
-            "x-amz-meta-container-digest".to_owned(),
-            "e".repeat(64)
-        )));
-        assert!(headers.contains(&(
-            "x-amz-meta-metadata-digest".to_owned(),
-            "d".repeat(64)
-        )));
+        assert!(
+            headers
+                .iter()
+                .any(|(name, _)| name == "x-amz-checksum-sha256")
+        );
+        assert!(headers.contains(&("x-amz-meta-container-digest".to_owned(), "e".repeat(64))));
+        assert!(headers.contains(&("x-amz-meta-metadata-digest".to_owned(), "d".repeat(64))));
         assert_eq!(capability.expires_seconds(), 300);
         Ok(())
     }
