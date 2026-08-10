@@ -43,8 +43,8 @@ pub use device_jobs::{
     DeviceJobRepositoryPort, DeviceJobWriteOutcome,
 };
 pub use generation_objects::{
-    GenerationObjectExactVerifyPort, GenerationObjectUploadOutcome, GenerationObjectUploadPort,
-    ImmutableGenerationObject,
+    GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort, GenerationObjectExactVerifyPort,
+    GenerationObjectUploadOutcome, GenerationObjectUploadPort, ImmutableGenerationObject,
 };
 pub use generations::{GenerationObjectReference, GenerationObjectStorePort};
 pub use identity::MembershipRepository;
