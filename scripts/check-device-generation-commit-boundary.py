@@ -27,14 +27,29 @@ def read(root: Path, relative: Path) -> str:
     return (root / relative).read_text(encoding="utf-8")
 
 
-def transport_struct(source: str) -> str:
-    marker = "pub struct DeviceGenerationCommitInternalRequest {"
+def struct_body(source: str, marker: str, impl_marker: str) -> str:
     start = source.find(marker)
     if start < 0:
         return ""
     remainder = source[start + len(marker) :]
-    end = remainder.find("\n}\n\nimpl DeviceGenerationCommitInternalRequest")
+    end = remainder.find(impl_marker)
     return remainder if end < 0 else remainder[:end]
+
+
+def transport_struct(source: str) -> str:
+    return struct_body(
+        source,
+        "pub struct DeviceGenerationCommitInternalRequest {",
+        "\n}\n\nimpl DeviceGenerationCommitInternalRequest",
+    )
+
+
+def endpoint_body_struct(source: str) -> str:
+    return struct_body(
+        source,
+        "struct DeviceGenerationCommitBody {",
+        "\n}\n\nimpl DeviceGenerationCommitBody",
+    )
 
 
 def errors(root: Path) -> list[str]:
@@ -81,8 +96,24 @@ def errors(root: Path) -> list[str]:
     if "DeviceGenerationCommitInternalRequest::from_domain" not in ingress:
         result.append("outer DO client must use the strict internal generation commit DTO")
 
+    endpoint_body = endpoint_body_struct(endpoint)
+    if not endpoint_body:
+        result.append("strict metadata-only device generation commit body is missing")
+    for forbidden_field in ["device_id", "tenant_id", "observed_at", "executed_at", "coordinator_version", "coordinator_sequence"]:
+        if forbidden_field in endpoint_body:
+            result.append(
+                f"public generation commit body must not accept server authority field: {forbidden_field}"
+            )
+
     for required in [
         "deny_unknown_fields",
+        "coordinator_ingress_application(env)",
+        ".snapshot(actor.tenant_scope(), &profile_id).await",
+        "projection.active_session_id() != Some(&session_id)",
+        "projection.active_device_id() != Some(&device_id)",
+        "projection.active_epoch() != Some(body.coordinator_epoch)",
+        "snapshot.version().value()",
+        "snapshot.sequence()",
         "execute_commit_dirty_generation",
         "generation_object_verifier(env)",
         "device_generation_commit(env)",
@@ -105,6 +136,8 @@ def errors(root: Path) -> list[str]:
         "pub fn generation_object_verifier",
         "R2GenerationObjects::new",
         "env.bucket(R2_PROFILES_BINDING)?",
+        "pub fn coordinator_ingress_application",
+        "CloudflareCoordinatorIngressApplication::new",
         "pub fn device_generation_commit",
         "CloudflareDeviceGenerationCommitPort::new",
     ]:
