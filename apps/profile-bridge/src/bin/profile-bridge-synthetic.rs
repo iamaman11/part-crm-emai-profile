@@ -80,16 +80,16 @@ where
     operator
         .open(&claim, &root, SYNTHETIC_NOW)
         .map_err(|_| SyntheticOperatorError::OperatorOpen)?;
-    let terminal = operator
+    operator
         .close(SYNTHETIC_CLOSE_AT)
         .map_err(|_| SyntheticOperatorError::OperatorClose)?;
-    if terminal.local_state() != LocalGenerationState::DirtyLocal
-        || terminal.cleanup_failures().any()
+    if operator.pending_dirty_local_state() != Some(LocalGenerationState::DirtyLocal)
+        || !operator.has_pending_dirty_close()
         || operator.cleanup_blocked()
     {
-        return Err(SyntheticOperatorError::UnexpectedTerminalState);
+        return Err(SyntheticOperatorError::UnexpectedPendingState);
     }
-    println!("synthetic-operator-complete state=DIRTY_LOCAL");
+    println!("synthetic-operator-complete state=DIRTY_LOCAL_PENDING_PERSISTENCE");
     Ok(())
 }
 
@@ -391,7 +391,7 @@ enum SyntheticOperatorError {
     RuntimeBundleFixture,
     OperatorOpen,
     OperatorClose,
-    UnexpectedTerminalState,
+    UnexpectedPendingState,
 }
 
 impl fmt::Display for SyntheticOperatorError {
@@ -411,7 +411,7 @@ impl fmt::Display for SyntheticOperatorError {
             Self::RuntimeBundleFixture => "synthetic runtime bundle fixture is invalid",
             Self::OperatorOpen => "synthetic operator open failed",
             Self::OperatorClose => "synthetic operator close failed",
-            Self::UnexpectedTerminalState => "synthetic operator ended in an unexpected state",
+            Self::UnexpectedPendingState => "synthetic operator did not retain dirty persistence",
         };
         formatter.write_str(message)
     }
