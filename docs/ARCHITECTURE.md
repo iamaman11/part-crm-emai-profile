@@ -150,7 +150,7 @@ crate splitting is not an excuse for one-crate-per-function fragmentation.
 Accepted independent application ownership includes `use-cases-identity`,
 `use-cases-notifications`, `use-cases-clients`, `use-cases-query`, `use-cases-mailboxes` and
 `use-cases-devices`; shared `use-cases` compatibility re-exports do not regain canonical ownership
-of those capabilities.
+of those capabilities. `crates/use-cases` remains the canonical application owner for current Profile Catalog and Profile Generation Registry workflows until a future explicitly scoped extraction is accepted.
 
 Phase 2D accepts `use-cases-query` as the independent cross-capability read/search application context;
 mutation aggregates remain owned by their existing capability use cases. Query orchestration owns
@@ -463,8 +463,8 @@ crates/
   application-ports/
   use-cases-identity/
   use-cases-clients/
+  use-cases/             # current Profile Catalog / Generation Registry application owner
   use-cases-query/
-  use-cases-profiles/
   use-cases-mailboxes/
   use-cases-devices/
   # later: crm projection as justified
@@ -481,7 +481,9 @@ frontend/src/
 ```
 
 A temporary compatibility facade is allowed during crate migration but must not become the
-permanent cross-domain orchestration owner.
+permanent cross-domain orchestration owner. The shared `use-cases` crate is not merely such a facade
+for Profile Catalog / Generation Registry today: it remains their explicit canonical application owner
+until a dedicated extraction is separately scoped and accepted.
 
 ## 17. Prohibited Shortcuts
 
