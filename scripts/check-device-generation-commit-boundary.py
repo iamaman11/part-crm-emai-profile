@@ -61,6 +61,14 @@ def generation_commit_gate_release_helper(source: str) -> str:
     return source[start:] if end < 0 else source[start:end]
 
 
+def replay_branch(source: str) -> str:
+    start = source.find("if job.status() == DeviceJobStatus::Succeeded")
+    end = source.find("if job.status() != DeviceJobStatus::Running", start)
+    if start < 0 or end < 0 or end <= start:
+        return ""
+    return source[start:end]
+
+
 def errors(root: Path) -> list[str]:
     result: list[str] = []
     ingress = production(read(root, COORDINATOR_INGRESS))
@@ -78,6 +86,14 @@ def errors(root: Path) -> list[str]:
         result.append("final generation commit port must address the profile Durable Object")
     if "impl DeviceGenerationCommitPort" in journal:
         result.append("raw D1 journal must never implement the final generation commit port")
+    if "impl DeviceGenerationReplayProbePort for D1DeviceGenerationCommitJournal" not in journal:
+        result.append("D1 journal must expose only a typed read-only exact replay proof")
+    if "coordinator_fencing_token_digest" not in journal or "fencing_token_digest(" not in journal:
+        result.append("replay proof must compare the raw fencing token only through its digest")
+    if 'row.job_status.as_deref() == Some("SUCCEEDED")' not in journal:
+        result.append("exact replay must prove the device job is already terminal SUCCEEDED")
+    if "row.job_current_claim_id.is_none()" not in journal or "row.job_claim_fence.is_none()" not in journal:
+        result.append("exact replay must prove terminal claim/fence cleanup")
 
     gate_put = coordinator.find(".put(GENERATION_COMMIT_GATE_KEY, &gate)")
     journal_apply = coordinator.find("journal.apply(&actor, &commit).await")
@@ -113,6 +129,14 @@ def errors(root: Path) -> list[str]:
         result.append("D1 commit journal must persist only the fencing-token digest")
     if "coordinator_fencing_token TEXT" in migration:
         result.append("raw coordinator fencing token must never be persisted in D1")
+    profile_activation = migration.find("UPDATE browser_profiles")
+    job_terminalization = migration.find("UPDATE device_jobs", profile_activation)
+    if profile_activation < 0 or job_terminalization < 0 or job_terminalization <= profile_activation:
+        result.append("device job success must occur atomically after generation activation")
+    if "status = 'SUCCEEDED'" not in migration[job_terminalization:]:
+        result.append("atomic device generation commit must terminalize the job as SUCCEEDED")
+    if "device_generation_commit_job_terminalize_incomplete" not in migration[job_terminalization:]:
+        result.append("atomic device job terminalization must fail closed on lost CAS")
 
     transport = transport_struct(runtime)
     if not transport:
@@ -143,6 +167,7 @@ def errors(root: Path) -> list[str]:
     for required in [
         "deny_unknown_fields",
         "load_device_job(actor.tenant_scope().tenant_id(), &job_id)",
+        "DeviceJobCapability::Complete",
         "job.version()",
         "claim.claim_id() != &claim_id",
         "claim.fence() != body.fence",
@@ -174,10 +199,36 @@ def errors(root: Path) -> list[str]:
         if forbidden in endpoint:
             result.append(f"generation commit endpoint must remain provider-free/metadata-only: {forbidden}")
 
+    replay = replay_branch(endpoint)
+    if not replay:
+        result.append("SUCCEEDED generation jobs must have an explicit lost-response replay branch")
+    else:
+        replay_required = [
+            "device_generation_replay_probe(env)",
+            "probe_committed_generation(actor, &probe)",
+            "DeviceGenerationReplayProbeOutcome::ExactCommitted",
+            "verify_generation_object_descriptor_exact(actor.tenant_scope(), probe.object())",
+            "DeviceGenerationCommitOutcome::AlreadyActive",
+        ]
+        for required in replay_required:
+            if required not in replay:
+                result.append(f"lost-response replay branch missing exact proof step: {required}")
+        if "device_generation_commit(env)" in replay or "execute_commit_dirty_generation" in replay:
+            result.append("read-only lost-response replay must never invoke the mutation authority path")
+        probe_index = replay.find("probe_committed_generation(actor, &probe)")
+        verify_index = replay.find("verify_generation_object_descriptor_exact(actor.tenant_scope(), probe.object())")
+        already_index = replay.find("DeviceGenerationCommitOutcome::AlreadyActive")
+        if min(probe_index, verify_index, already_index) < 0 or not (
+            probe_index < verify_index < already_index
+        ):
+            result.append("AlreadyActive must follow exact journal proof and exact R2 verification")
+
     for required in [
         "pub fn generation_object_verifier",
         "R2GenerationObjects::new",
         "env.bucket(R2_PROFILES_BINDING)?",
+        "pub fn device_generation_replay_probe",
+        "D1DeviceGenerationCommitJournal::new",
         "pub fn coordinator_ingress_application",
         "CloudflareCoordinatorIngressApplication::new",
         "pub fn device_generation_commit",
@@ -210,9 +261,9 @@ def self_test() -> int:
             target.write_text(read(ROOT, relative), encoding="utf-8")
 
         coordinator_path = root / WORKER_COORDINATOR
-        original = coordinator_path.read_text(encoding="utf-8")
+        original_coordinator = coordinator_path.read_text(encoding="utf-8")
         coordinator_path.write_text(
-            original.replace(
+            original_coordinator.replace(
                 ".put(GENERATION_COMMIT_GATE_KEY, &gate)",
                 ".put(\"unsafe-generation-commit-gate\", &gate)",
                 1,
@@ -224,7 +275,7 @@ def self_test() -> int:
             raise AssertionError("missing authority reservation negative fixture unexpectedly passed")
 
         coordinator_path.write_text(
-            original.replace(
+            original_coordinator.replace(
                 "DeviceGenerationCommitErrorClass::VersionConflict\n    )",
                 "DeviceGenerationCommitErrorClass::VersionConflict\n            | DeviceGenerationCommitErrorClass::DependencyUnavailable\n    )",
                 1,
@@ -234,6 +285,20 @@ def self_test() -> int:
         detected = errors(root)
         if not any("DependencyUnavailable" in item and "retain" in item for item in detected):
             raise AssertionError("uncertain dependency failure gate-release fixture unexpectedly passed")
+
+        endpoint_path = root / WORKER_ENDPOINT
+        original_endpoint = endpoint_path.read_text(encoding="utf-8")
+        endpoint_path.write_text(
+            original_endpoint.replace(
+                "verify_generation_object_descriptor_exact(actor.tenant_scope(), probe.object())",
+                "unsafe_skip_exact_replay_object_verification()",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        detected = errors(root)
+        if not any("lost-response replay branch missing exact proof step" in item for item in detected):
+            raise AssertionError("missing replay R2 verification fixture unexpectedly passed")
 
     print("Phase 2F generation-commit authority negative fixtures rejected as expected.")
     return 0
