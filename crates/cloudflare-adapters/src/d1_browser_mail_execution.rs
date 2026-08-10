@@ -163,7 +163,9 @@ impl BrowserMailboxExecutionBindingApplicationPort for D1BrowserMailboxExecution
         )
         .map_err(map_write_error)?;
 
-        let atomic_batch = self.database.batch(vec![command, idempotency, audit, outbox]);
+        let atomic_batch = self
+            .database
+            .batch(vec![command, idempotency, audit, outbox]);
         atomic_batch.await.map(|_| ()).map_err(map_write_error)
     }
 }
