@@ -12,6 +12,7 @@ use cloudflare_adapters::contact_keyring::contact_protection_from_serialized_key
 use cloudflare_adapters::contact_protection::{
     RustCryptoContactProtection, WorkerCryptoNonceSource,
 };
+use cloudflare_adapters::coordinator_ingress::CloudflareDeviceGenerationCommitPort;
 use cloudflare_adapters::d1_authenticated_device::D1AuthenticatedDevice;
 use cloudflare_adapters::d1_browser_mail_execution::D1BrowserMailboxExecutionBinding;
 use cloudflare_adapters::d1_client_merge::D1ClientMergeRepository;
@@ -27,7 +28,7 @@ use cloudflare_adapters::d1_mailbox_bindings::D1MailboxBindingApplicationReposit
 use cloudflare_adapters::d1_mailbox_jobs::D1MailboxJobApplicationRepository;
 use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
 use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
-use control_plane_contract::D1_CATALOG_BINDING;
+use control_plane_contract::{D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING};
 #[cfg(target_arch = "wasm32")]
 use worker::Error;
 use worker::{Env, Result};
@@ -179,4 +180,9 @@ pub fn device_execution_preconditions(env: &Env) -> Result<D1DeviceExecutionPrec
 
 pub fn device_job_repository(env: &Env) -> Result<D1DeviceJobRepository> {
     Ok(D1DeviceJobRepository::new(env.d1(D1_CATALOG_BINDING)?))
+}
+
+#[must_use]
+pub fn device_generation_commit(env: &Env) -> CloudflareDeviceGenerationCommitPort<'_> {
+    CloudflareDeviceGenerationCommitPort::new(env, PROFILE_COORDINATOR_BINDING)
 }
