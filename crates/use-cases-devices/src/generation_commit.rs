@@ -9,6 +9,7 @@ use application_ports::device_jobs::{
 };
 use application_ports::generation_objects::GenerationObjectDescriptorVerifyPort;
 use application_ports::generations::{GenerationPortError, GenerationPortErrorClass};
+use core::fmt;
 use device_domain::{DeviceJobStatus, DeviceJobTarget};
 use profile_platform_primitives::ActorContext;
 
@@ -217,3 +218,24 @@ pub enum DeviceGenerationCommitOperationError {
     DependencyUnavailable,
     Commit(DeviceGenerationCommitErrorClass),
 }
+
+impl fmt::Display for DeviceGenerationCommitOperationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidRequest => "device generation commit request is invalid",
+            Self::Forbidden => "device generation commit is forbidden",
+            Self::NotFound => "device generation commit target was not found",
+            Self::VersionConflict => "device generation job version is stale",
+            Self::StaleClaim => "device generation claim or fence is stale",
+            Self::PreconditionFailed(_) => "device generation execution precondition failed",
+            Self::ObjectVerificationFailed => {
+                "immutable generation object failed exact verification"
+            }
+            Self::IntegrityFailure => "device generation commit integrity validation failed",
+            Self::DependencyUnavailable => "device generation commit dependency is unavailable",
+            Self::Commit(_) => "device generation catalog commit failed",
+        })
+    }
+}
+
+impl std::error::Error for DeviceGenerationCommitOperationError {}
