@@ -68,6 +68,7 @@ ROUTE_SPECS = [
     ("DeviceJobClaimableApi", "devices", ["GET"], "/api/v1/tenants/{tenant_id}/device-jobs/claimable", "/api/v1/tenants/tenant_01/device-jobs/claimable", True),
     ("DeviceJobClaimApi", "devices", ["POST"], "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/claim", "/api/v1/tenants/tenant_01/device-jobs/devjob_01/claim", True),
     ("DeviceJobHeartbeatApi", "devices", ["POST"], "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/heartbeat", "/api/v1/tenants/tenant_01/device-jobs/devjob_01/heartbeat", True),
+    ("DeviceGenerationCommitApi", "devices", ["POST"], "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/generation-commit", "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-commit", True),
     ("DeviceJobOutcomeApi", "devices", ["POST"], "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/outcome", "/api/v1/tenants/tenant_01/device-jobs/devjob_01/outcome", True),
     ("NotificationEventCollectionApi", "notifications", ["GET"], "/api/v1/tenants/{tenant_id}/notifications/events", "/api/v1/tenants/tenant_01/notifications/events", True),
     ("NotificationEventAckApi", "notifications", ["POST"], "/api/v1/tenants/{tenant_id}/notifications/events/ack", "/api/v1/tenants/tenant_01/notifications/events/ack", True),
