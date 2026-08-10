@@ -22,6 +22,7 @@ use cloudflare_adapters::d1_client_persistence::D1ClientPersistenceRepository;
 use cloudflare_adapters::d1_client_registry::D1ClientRegistryProjectionRepository;
 use cloudflare_adapters::d1_clients::D1ClientApplicationRepository;
 use cloudflare_adapters::d1_device_authorization::D1DeviceJobAuthorization;
+use cloudflare_adapters::d1_device_generation_commit::D1DeviceGenerationCommitJournal;
 use cloudflare_adapters::d1_device_jobs::D1DeviceJobRepository;
 use cloudflare_adapters::d1_device_preconditions::D1DeviceExecutionPreconditions;
 use cloudflare_adapters::d1_identity_ceremonies::D1IdentityCeremonyApplicationRepository;
@@ -185,6 +186,12 @@ pub fn device_execution_preconditions(env: &Env) -> Result<D1DeviceExecutionPrec
 
 pub fn device_job_repository(env: &Env) -> Result<D1DeviceJobRepository> {
     Ok(D1DeviceJobRepository::new(env.d1(D1_CATALOG_BINDING)?))
+}
+
+pub fn device_generation_replay_probe(env: &Env) -> Result<D1DeviceGenerationCommitJournal> {
+    Ok(D1DeviceGenerationCommitJournal::new(
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
 }
 
 pub fn generation_object_verifier(env: &Env) -> Result<R2GenerationObjects> {
