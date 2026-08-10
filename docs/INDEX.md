@@ -1,7 +1,7 @@
 # Documentation Index
 
 **Status:** navigation / documentation governance  
-**Date:** 2026-08-08
+**Date:** 2026-08-10
 
 This page is the entry point for repository documentation and makes document authority
 explicit.
@@ -18,6 +18,7 @@ explicit.
 
 - [`DEVELOPER_CAPABILITY_MATRIX.md`](./DEVELOPER_CAPABILITY_MATRIX.md) — authoritative accepted implementation/evidence level (`Composed`, `Library`, `Synthetic`, `Target`, `External`).
 - [`../architecture/inventory.json`](../architecture/inventory.json) — deterministic machine-readable inventory of workspace members, D1 migrations, public route/classifier ownership, generated public contracts and documentation authority; CI verifies drift against repository truth.
+- [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json) — immutable machine-readable ledger of accepted phase issue, implementation PR, exact source head, merge SHA and permanent-workflow count; CI rejects conflicting `DEVELOPMENT_PLAN.md` provenance.
 - [`PROFILE_APPLICATION_BOUNDARY.md`](./PROFILE_APPLICATION_BOUNDARY.md) — capability-specific profile application-boundary architecture/evidence.
 - [`PROFILE_GENERATION_REGISTRY.md`](./PROFILE_GENERATION_REGISTRY.md) — profile-generation lifecycle/storage contract.
 
@@ -36,8 +37,9 @@ explicit.
 1. **What to implement next:** `DEVELOPMENT_PLAN.md` only.
 2. **How the architecture is allowed to work:** `ARCHITECTURE.md` + accepted ADR/security/data-classification invariants.
 3. **What is actually implemented/accepted:** `DEVELOPER_CAPABILITY_MATRIX.md` + merged code/CI/evidence.
-4. **Future development:** `FUTURE_DEVELOPMENT.md` records post-standalone ideas only; it never supplies `NEXT` and never overrides the active Phase 1–2 order.
-5. **Historical rationale:** old roadmaps/plans; they never override current execution order.
+4. **Accepted phase provenance:** `architecture/accepted-phases.json` is the machine-readable integrity ledger; normative prose may explain accepted evidence but may not contradict its issue/PR/SHA record.
+5. **Future development:** `FUTURE_DEVELOPMENT.md` records post-standalone ideas only; it never supplies `NEXT` and never overrides the active Phase 1–2 order.
+6. **Historical rationale:** old roadmaps/plans; they never override current execution order.
 
 A plan/specification is not an implementation claim. PR descriptions are not acceptance
 evidence; the actual merged diff and exact-head gates are authoritative.
@@ -51,6 +53,7 @@ accepts real evidence.
 - Execution-order changes go into `DEVELOPMENT_PLAN.md`.
 - Invariant changes go into the relevant architecture/ADR/security document before code acceptance.
 - Capability PRs update the matrix only for claims they actually change.
+- Accepted issue/PR/source-head/merge-SHA history must match `architecture/accepted-phases.json`.
 - New normative documents must be linked here or folded into an existing source.
 - Temporary amendments must be consolidated and removed rather than accumulating precedence layers.
 - Machine-checkable documentation claims should become CI checks where practical.
