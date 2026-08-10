@@ -73,7 +73,7 @@ jobs:
           cargo run --locked -p profile-bridge --bin profile-bridge-synthetic -- \
             'profilebridge://claim/claim_0123456789abcdef0123456789abcdef' "$root" \
             | tee "$RUNNER_TEMP/profile-bridge-synthetic.out"
-          grep -Fxq 'synthetic-operator-complete state=DIRTY_LOCAL' "$RUNNER_TEMP/profile-bridge-synthetic.out"
+          grep -Fxq 'synthetic-operator-complete state=DIRTY_LOCAL_COMMITTED_GENERATION' "$RUNNER_TEMP/profile-bridge-synthetic.out"
 
       - name: Clean install frontend from exact lockfile
         working-directory: frontend
