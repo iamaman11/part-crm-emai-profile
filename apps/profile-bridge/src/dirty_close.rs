@@ -55,6 +55,7 @@ impl RetainedDirtyClose {
         self.workspace_lock.is_some()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn finalize<U, V, M, P>(
         &mut self,
         scope: &TenantScope,
@@ -490,7 +491,10 @@ mod tests {
 
         let DirtyCloseLocalOutcome::CandidateAccepted(candidate) = completion.local_outcome()
         else {
-            panic!("committed unchanged candidate must be accepted locally");
+            return Err(std::io::Error::other(
+                "committed unchanged candidate must be accepted locally",
+            )
+            .into());
         };
         assert_eq!(candidate.generation_id(), &fixture.candidate_generation_id);
         assert_eq!(candidate.state(), LocalGenerationState::MaterializedClean);
