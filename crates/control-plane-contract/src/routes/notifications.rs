@@ -6,6 +6,12 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
         ["api", "v1", "tenants", _, "notifications", "events"] if method == "GET" => {
             Some(RouteClass::NotificationEventCollectionApi)
         }
+        ["api", "v1", "tenants", _, "notifications", "realtime"] if method == "GET" => {
+            // Realtime remains part of the notification collection ingress family. The owning
+            // notification dispatcher distinguishes the WebSocket upgrade path; wrong methods
+            // still fall through to DynamicRouteNotFound.
+            Some(RouteClass::NotificationEventCollectionApi)
+        }
         ["api", "v1", "tenants", _, "notifications", "events", "ack"] if method == "POST" => {
             Some(RouteClass::NotificationEventAckApi)
         }
