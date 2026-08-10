@@ -1,10 +1,9 @@
 use crate::dirty_generation::PreparedDirtyGeneration;
 use application_ports::generation_objects::{
-    GenerationObjectUploadOutcome, GenerationObjectUploadPort, ImmutableGenerationObject,
+    GenerationObjectExactVerifyPort, GenerationObjectUploadOutcome, GenerationObjectUploadPort,
+    ImmutableGenerationObject,
 };
-use application_ports::generations::{
-    GenerationObjectReference, GenerationObjectStorePort, GenerationPortErrorClass,
-};
+use application_ports::generations::GenerationPortErrorClass;
 use profile_platform_primitives::{GenerationId, TenantScope};
 use std::fmt;
 
@@ -67,7 +66,7 @@ pub async fn publish_prepared_dirty_generation<U, V>(
 ) -> Result<PublishedDirtyGeneration, DirtyGenerationPublishError>
 where
     U: GenerationObjectUploadPort,
-    V: GenerationObjectStorePort,
+    V: GenerationObjectExactVerifyPort,
 {
     let metadata = prepared.sealed().metadata();
     if metadata.tenant_id() != scope.tenant_id() {
@@ -94,10 +93,9 @@ where
         }
     }
 
-    let reference =
-        GenerationObjectReference::new(generation_id.clone(), prepared.container_digest());
     let verified = verifier
-        .verify_generation_object(scope, &reference)
+        .verify_generation_object_exact(scope, &object)
+        .await
         .map_err(|_| DirtyGenerationPublishError::VerificationUnavailable)?;
     if !verified {
         return Err(DirtyGenerationPublishError::VerificationFailed);
@@ -120,15 +118,13 @@ mod tests {
     };
     use crate::local_profile::{LocalGenerationRecord, MaterializationRoot};
     use application_ports::generation_objects::{
-        GenerationObjectUploadOutcome, GenerationObjectUploadPort, ImmutableGenerationObject,
+        GenerationObjectExactVerifyPort, GenerationObjectUploadOutcome, GenerationObjectUploadPort,
+        ImmutableGenerationObject,
     };
-    use application_ports::generations::{
-        GenerationObjectReference, GenerationObjectStorePort, GenerationPortError,
-        GenerationPortErrorClass,
-    };
+    use application_ports::generations::{GenerationPortError, GenerationPortErrorClass};
     use encrypted_generation_domain::{GenerationDek, KeyId, NoncePrefix};
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId, TenantScope, UnixMillis};
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::future::Future;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -186,20 +182,37 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct VerifiedObject {
+        profile_id: String,
+        generation_id: String,
+        object_key: String,
+        metadata_digest: String,
+        container_digest: String,
+        container_bytes: usize,
+    }
+
     struct Verifier {
         result: bool,
         calls: Rc<Cell<u32>>,
+        observed: Rc<RefCell<Vec<VerifiedObject>>>,
     }
 
-    impl GenerationObjectStorePort for Verifier {
-        type Error = ();
-
-        fn verify_generation_object(
+    impl GenerationObjectExactVerifyPort for Verifier {
+        async fn verify_generation_object_exact(
             &self,
             _scope: &TenantScope,
-            _reference: &GenerationObjectReference,
-        ) -> Result<bool, Self::Error> {
+            object: &ImmutableGenerationObject<'_>,
+        ) -> Result<bool, GenerationPortError> {
             self.calls.set(self.calls.get() + 1);
+            self.observed.borrow_mut().push(VerifiedObject {
+                profile_id: object.profile_id().as_str().to_owned(),
+                generation_id: object.generation_id().as_str().to_owned(),
+                object_key: object.object_key().to_owned(),
+                metadata_digest: object.metadata_digest().to_owned(),
+                container_digest: object.container_digest().to_owned(),
+                container_bytes: object.container().len(),
+            });
             Ok(self.result)
         }
     }
@@ -241,8 +254,20 @@ mod tests {
         Ok((TenantScope::new(tenant_id), prepared, root_path))
     }
 
+    fn verifier(
+        result: bool,
+        calls: Rc<Cell<u32>>,
+        observed: Rc<RefCell<Vec<VerifiedObject>>>,
+    ) -> Verifier {
+        Verifier {
+            result,
+            calls,
+            observed,
+        }
+    }
+
     #[test]
-    fn created_or_idempotent_upload_must_verify_before_publish_success()
+    fn created_or_idempotent_upload_must_verify_the_same_object_before_publish_success()
     -> Result<(), Box<dyn std::error::Error>> {
         for outcome in [
             GenerationObjectUploadOutcome::Created,
@@ -251,6 +276,7 @@ mod tests {
             let (scope, prepared, root_path) = fixture()?;
             let upload_calls = Rc::new(Cell::new(0));
             let verify_calls = Rc::new(Cell::new(0));
+            let observed = Rc::new(RefCell::new(Vec::new()));
             let published = block_on(publish_prepared_dirty_generation(
                 &scope,
                 &prepared,
@@ -258,10 +284,7 @@ mod tests {
                     outcome,
                     calls: Rc::clone(&upload_calls),
                 },
-                &Verifier {
-                    result: true,
-                    calls: Rc::clone(&verify_calls),
-                },
+                &verifier(true, Rc::clone(&verify_calls), Rc::clone(&observed)),
             ))?;
             assert_eq!(upload_calls.get(), 1);
             assert_eq!(verify_calls.get(), 1);
@@ -269,7 +292,25 @@ mod tests {
                 published.generation_id(),
                 prepared.sealed().metadata().generation_id()
             );
+            assert_eq!(published.object_key(), prepared.object_key());
+            assert_eq!(published.metadata_digest(), prepared.metadata_digest());
             assert_eq!(published.container_digest(), prepared.container_digest());
+            assert_eq!(
+                observed.borrow().as_slice(),
+                &[VerifiedObject {
+                    profile_id: prepared.sealed().metadata().profile_id().as_str().to_owned(),
+                    generation_id: prepared
+                        .sealed()
+                        .metadata()
+                        .generation_id()
+                        .as_str()
+                        .to_owned(),
+                    object_key: prepared.object_key(),
+                    metadata_digest: prepared.metadata_digest().to_owned(),
+                    container_digest: prepared.container_digest().to_owned(),
+                    container_bytes: prepared.sealed().container().len(),
+                }]
+            );
             let _ = crate::test_support::remove_test_root(&root_path);
         }
         Ok(())
@@ -280,6 +321,7 @@ mod tests {
         let (scope, prepared, root_path) = fixture()?;
         let upload_calls = Rc::new(Cell::new(0));
         let verify_calls = Rc::new(Cell::new(0));
+        let observed = Rc::new(RefCell::new(Vec::new()));
         let result = block_on(publish_prepared_dirty_generation(
             &scope,
             &prepared,
@@ -287,14 +329,12 @@ mod tests {
                 outcome: GenerationObjectUploadOutcome::ImmutableConflict,
                 calls: Rc::clone(&upload_calls),
             },
-            &Verifier {
-                result: true,
-                calls: Rc::clone(&verify_calls),
-            },
+            &verifier(true, Rc::clone(&verify_calls), Rc::clone(&observed)),
         ));
         assert_eq!(result, Err(DirtyGenerationPublishError::ImmutableConflict));
         assert_eq!(upload_calls.get(), 1);
         assert_eq!(verify_calls.get(), 0);
+        assert!(observed.borrow().is_empty());
         let _ = crate::test_support::remove_test_root(&root_path);
         Ok(())
     }
@@ -310,10 +350,11 @@ mod tests {
                 outcome: GenerationObjectUploadOutcome::Created,
                 calls: Rc::new(Cell::new(0)),
             },
-            &Verifier {
-                result: false,
-                calls: Rc::new(Cell::new(0)),
-            },
+            &verifier(
+                false,
+                Rc::new(Cell::new(0)),
+                Rc::new(RefCell::new(Vec::new())),
+            ),
         ));
         assert_eq!(result, Err(DirtyGenerationPublishError::VerificationFailed));
         let _ = crate::test_support::remove_test_root(&root_path);
@@ -340,10 +381,11 @@ mod tests {
             &scope,
             &prepared,
             &FailingUpload,
-            &Verifier {
-                result: true,
-                calls: Rc::new(Cell::new(0)),
-            },
+            &verifier(
+                true,
+                Rc::new(Cell::new(0)),
+                Rc::new(RefCell::new(Vec::new())),
+            ),
         ));
         assert_eq!(
             result,
