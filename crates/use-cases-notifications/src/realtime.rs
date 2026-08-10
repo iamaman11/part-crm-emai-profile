@@ -3,10 +3,13 @@ use crate::error::NotificationOperationError;
 use application_ports::{
     CursorAdvanceWriteOutcome, NotificationAuthorizationPort, NotificationCapability,
     NotificationCatchUpRepositoryPort, NotificationCursorRepositoryPort, NotificationEventRecord,
-    RealtimeNotificationAuthorizationPort, RealtimeNotificationSinkPort,
+    RealtimeNotificationAudiencePort, RealtimeNotificationAuthorizationPort,
+    RealtimeNotificationSinkPort,
 };
 use contracts::{RealtimeInvalidationSignal, RealtimeResourceKind};
-use profile_platform_primitives::{ActorContext, UnixMillis};
+use profile_platform_primitives::{ActorContext, ActorId, TenantId, UnixMillis};
+
+pub const MAX_REALTIME_AUDIENCE_PAGE_SIZE: u32 = 200;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RealtimeSynchronizationOutcome {
@@ -68,6 +71,29 @@ where
     ))
 }
 
+pub async fn load_realtime_audience_page<P>(
+    audience: &P,
+    tenant_id: &TenantId,
+    event: &NotificationEventRecord,
+    after_actor_id: Option<&ActorId>,
+    limit: u32,
+) -> Result<Vec<ActorId>, NotificationOperationError>
+where
+    P: RealtimeNotificationAudiencePort,
+{
+    if limit == 0 || limit > MAX_REALTIME_AUDIENCE_PAGE_SIZE {
+        return Err(NotificationOperationError::InvalidInput);
+    }
+    let actors = audience
+        .load_authorized_actor_page(tenant_id, event, after_actor_id, limit)
+        .await?;
+    let maximum = usize::try_from(limit).map_err(|_| NotificationOperationError::InvalidInput)?;
+    if actors.len() > maximum || !strictly_ordered_after(after_actor_id, &actors) {
+        return Err(NotificationOperationError::IntegrityFailure);
+    }
+    Ok(actors)
+}
+
 /// Publishes one live continuation signal only after both current membership/capability
 /// authorization and event-specific current-grant authorization succeed. Live delivery does not
 /// advance the durable catch-up cursor: reconnect may intentionally repeat live signals, and the
@@ -116,12 +142,23 @@ pub fn invalidation_signal_for_event(event: &NotificationEventRecord) -> Realtim
     RealtimeInvalidationSignal::new(event.event_id().clone(), resource, event.occurred_at())
 }
 
+fn strictly_ordered_after(after: Option<&ActorId>, actors: &[ActorId]) -> bool {
+    let mut previous = after;
+    for actor in actors {
+        if previous.is_some_and(|value| value >= actor) {
+            return false;
+        }
+        previous = Some(actor);
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
-    use super::invalidation_signal_for_event;
+    use super::{invalidation_signal_for_event, strictly_ordered_after};
     use application_ports::NotificationEventRecord;
     use contracts::{REALTIME_INVALIDATION_VERSION, RealtimeResourceKind};
-    use profile_platform_primitives::{OpaqueId, OutboxEventId, UnixMillis};
+    use profile_platform_primitives::{ActorId, OpaqueId, OutboxEventId, UnixMillis};
 
     #[test]
     fn event_is_reduced_to_low_cardinality_invalidation_metadata()
@@ -153,6 +190,29 @@ mod tests {
         );
         let signal = invalidation_signal_for_event(&event);
         assert_eq!(signal.resource(), RealtimeResourceKind::Platform);
+        Ok(())
+    }
+
+    #[test]
+    fn audience_page_order_cannot_rewind_or_duplicate() -> Result<(), Box<dyn std::error::Error>> {
+        let after = ActorId::parse("actor_01JREALTIME_A")?;
+        let ordered = vec![
+            ActorId::parse("actor_01JREALTIME_B")?,
+            ActorId::parse("actor_01JREALTIME_C")?,
+        ];
+        assert!(strictly_ordered_after(Some(&after), &ordered));
+        assert!(!strictly_ordered_after(Some(&after), &[after.clone()]));
+        assert!(!strictly_ordered_after(
+            Some(&after),
+            &[ActorId::parse("actor_01JREALTIME_0")?]
+        ));
+        assert!(!strictly_ordered_after(
+            None,
+            &[
+                ActorId::parse("actor_01JREALTIME_B")?,
+                ActorId::parse("actor_01JREALTIME_B")?,
+            ]
+        ));
         Ok(())
     }
 }
