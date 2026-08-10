@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - pre2g-clean-closeout
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -14,6 +17,7 @@ concurrency:
 
 jobs:
   materialize:
+    if: github.head_ref == '' || github.head_ref == 'pre2g-clean-closeout'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact branch head
