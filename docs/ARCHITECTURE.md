@@ -1,7 +1,7 @@
 # Architecture Map
 
 **Status:** normative target architecture  
-**Date:** 2026-08-09  
+**Date:** 2026-08-10  
 **For:** developers, reviewers, operators and future CRM integration work
 
 This document defines stable architecture boundaries and invariants. It does **not** define
@@ -96,7 +96,8 @@ PII-independent; email/phone/name/URL values are never technical resource identi
 - `client-domain`: decomposed client/contact/assignment/merge rules behind a thin facade;
 - `profile-domain`: profile/generation lifecycle policy;
 - `session-domain`: launch intent, lease epoch, fencing, session and recovery states;
-- `mailbox-domain`: provider-neutral mailbox binding/job/runtime-lane rules.
+- `mailbox-domain`: provider-neutral mailbox binding/job/runtime-lane rules;
+- `device-domain`: provider-neutral durable device-job, claim and lifecycle rules.
 
 Domains contain pure decisions/state machines and compile without D1/Workers/Windows/Python.
 
@@ -147,8 +148,9 @@ should become separate Cargo crates when that improves compile-time dependency i
 crate splitting is not an excuse for one-crate-per-function fragmentation.
 
 Accepted independent application ownership includes `use-cases-identity`,
-`use-cases-notifications`, `use-cases-clients`, `use-cases-query` and `use-cases-mailboxes`; shared
-`use-cases` compatibility re-exports do not regain canonical ownership of those capabilities.
+`use-cases-notifications`, `use-cases-clients`, `use-cases-query`, `use-cases-mailboxes` and
+`use-cases-devices`; shared `use-cases` compatibility re-exports do not regain canonical ownership
+of those capabilities.
 
 Phase 2D accepts `use-cases-query` as the independent cross-capability read/search application context;
 mutation aggregates remain owned by their existing capability use cases. Query orchestration owns
@@ -162,6 +164,15 @@ and one fixed outer `MAILBOX_SECRET_RESOLVER` service binding. Scheduled executi
 metadata-only dispatch/lease/fencing state before provider I/O; duplicate Queue delivery cannot create
 a second canonical provider-result mutation. Browser/device execution remains Phase 2F ownership.
 
+Phase 2F accepts `use-cases-devices` as the independent durable device-job application context and
+keeps device/job state provider-independent. Device authorization, claim identity, base-generation
+freshness, certification, Coordinator lease/fencing and browser/network preconditions are checked before
+execution and revalidated before accepting results. Dirty browser state is persisted only through a new
+immutable encrypted generation, exact object verification and an authoritative fenced/CAS metadata
+commit; graceful Bridge close retains the local writer lock and Coordinator lease until that commit or
+an explicit recovery outcome. Repository-local deterministic evidence proves this composition without
+claiming real physical-device/Camoufox/provider production evidence.
+
 ### Adapters
 
 Adapters implement ports and map provider/storage/runtime behavior:
@@ -169,7 +180,7 @@ Adapters implement ports and map provider/storage/runtime behavior:
 - Cloudflare: Access, D1, R2, Queues, Durable Objects, secrets;
 - Windows: CNG/DPAPI, filesystem, process tree, custom protocol, updater;
 - Camouhost: typed IPC to Python/Camoufox;
-- mailbox providers: Phase 2E accepted Gmail API/IMAP cloud adapters; browser-backed execution remains Phase 2F;
+- mailbox providers: Phase 2E accepted Gmail API/IMAP cloud adapters; Phase 2F accepts the browser/Bridge lane at repository-local deterministic evidence while real browser/provider execution remains External;
 - CRM: future Party/OIDC/PostgreSQL integration adapters.
 
 Adapters may depend inward on domain/application types. They may not redefine domain policy
@@ -183,7 +194,10 @@ typed result. Ordinary transports do not own D1 mutation construction, authoriza
 idempotency workflow or provider-specific business sequencing.
 
 `apps/profile-bridge` owns Windows-native device trust, materialization and process/runtime
-composition. React owns presentation/navigation/remote-cache behavior only.
+composition. Phase 2F additionally makes graceful browser close a retained-ownership transition:
+the Bridge keeps the workspace writer lock and Coordinator lease until immutable dirty-generation
+publication, exact verification, authoritative fenced/CAS commit and local successor bookkeeping
+complete. React owns presentation/navigation/remote-cache behavior only.
 
 ## 5. Core Data Ownership
 
@@ -283,6 +297,12 @@ Unicode IMAP search uses bounded synchronizing literals, and credentials/content
 D1 coordination, Queue envelopes, audit/outbox and operational telemetry. Real provider execution is
 still External evidence rather than a repository-local production claim.
 
+Phase 2F accepts the browser/Bridge mailbox lane behind the same provider-neutral query contract at
+repository-local deterministic evidence. Device jobs bind tenant/device/profile/base generation/claim,
+Coordinator fencing and browser/network preconditions; message bodies remain transient, while dirty
+browser profile state follows the immutable generation upload -> exact verify -> fenced/CAS commit path.
+Real physical-device, Camoufox and mailbox-provider execution remains External evidence.
+
 Any later central encrypted/full-text/blind index requires a separate threat/storage/retention
 decision.
 
@@ -316,7 +336,8 @@ contracts.
 
 ### 11.1 Browser Runtime Identity, Network Policy And Writer Recovery
 
-Browser execution is a Phase 2F outer/runtime concern, but its safety invariants are stable:
+Browser execution is an accepted Phase 2F repository-local outer/runtime boundary; its safety
+invariants remain stable beyond the phase:
 
 - an accepted browser launch uses a versioned `BrowserIdentityManifest` binding the runtime bundle
   version/digest to fingerprint source/configuration and compatibility policy; identity never changes
@@ -335,9 +356,11 @@ Browser execution is a Phase 2F outer/runtime concern, but its safety invariants
   blanket Firefox SQLite `PRAGMA integrity_check` is not canonical profile-health authority; invalid
   candidates are quarantined and rollback may target only a previously verified compatible generation.
 
-These rules complement the immutable-generation saga: dirty browser state becomes durable only after
-writer shutdown, candidate validation, immutable encrypted upload, verification and fenced/CAS
-activation of the D1 active-generation pointer.
+Phase 2F accepts the repository-local retained-close implementation of these rules: dirty browser state
+becomes durable only after writer shutdown, candidate validation, immutable encrypted upload, exact
+object verification and an authoritative fenced/CAS active-generation commit. The old base becomes
+superseded before ownership release; post-commit local candidate drift/failure requires rematerialization
+instead of reopening the base. Real browser/kernel-lock/device/provider execution remains External.
 
 ## 12. Key Hierarchy
 
@@ -403,6 +426,8 @@ Permanent policy should cover:
   synthetic cloud/Bridge Client Mail and native/WASM positive/negative fixtures;
 - Phase 2E mailbox ownership, Queue lease/fencing/idempotency, opaque secret resolution, real cloud
   adapter bounds and mailbox-content privacy positive/negative fixtures;
+- Phase 2F device ownership/claim/fencing/freshness, browser-writer retained ownership, exact immutable
+  generation upload/verification/commit ordering and browser-mail privacy positive/negative fixtures;
 - generation freshness/fencing;
 - secret/PII/content scans;
 - native + WASM + Windows/release composition as applicable;
@@ -434,13 +459,15 @@ crates/
   profile-domain/
   session-domain/
   mailbox-domain/
+  device-domain/
   application-ports/
   use-cases-identity/
   use-cases-clients/
   use-cases-query/
   use-cases-profiles/
   use-cases-mailboxes/
-  # later: devices/crm projection as justified
+  use-cases-devices/
+  # later: crm projection as justified
   cloudflare-adapters/
   windows-adapters/
 
