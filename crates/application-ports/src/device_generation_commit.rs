@@ -213,6 +213,18 @@ impl fmt::Display for DeviceGenerationCommitError {
 
 impl std::error::Error for DeviceGenerationCommitError {}
 
+/// Read-only preparation boundary used by the authenticated Worker transport to derive the
+/// optimistic profile version from the live base-generation pointer. The device never supplies
+/// this version; the final D1 commit still rechecks it atomically.
+pub trait DeviceGenerationProfileVersionPort {
+    fn load_active_profile_version(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+    ) -> impl Future<Output = Result<Option<AggregateVersion>, DeviceGenerationCommitError>>;
+}
+
 /// Final metadata-only commit boundary for a verified immutable generation object.
 ///
 /// Production implementations must revalidate the authenticated actor/device binding, exact
