@@ -85,7 +85,7 @@ SELECT
     job.claim_lease_expires_at_ms,
     job.retry_at_ms,
     job.updated_at_ms
-FROM device_jobs AS job
+FROM device_jobs AS job INDEXED BY device_jobs_claimable_device_lookup
 WHERE job.tenant_id = ?
   AND job.device_id = ?
   AND EXISTS (
@@ -549,6 +549,7 @@ mod tests {
         for required in [
             "job.tenant_id = ?",
             "job.device_id = ?",
+            "INDEXED BY device_jobs_claimable_device_lookup",
             "authorization.status = 'ACTIVE'",
             "membership.status = 'ACTIVE'",
             "profile_grants",
