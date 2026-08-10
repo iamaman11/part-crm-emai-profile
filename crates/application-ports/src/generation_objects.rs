@@ -1,6 +1,6 @@
 use crate::generations::GenerationPortError;
 use core::future::Future;
-use profile_platform_primitives::{GenerationId, TenantScope};
+use profile_platform_primitives::{GenerationId, ProfileId, TenantScope};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GenerationObjectUploadOutcome {
@@ -11,6 +11,7 @@ pub enum GenerationObjectUploadOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImmutableGenerationObject<'a> {
+    profile_id: &'a ProfileId,
     generation_id: &'a GenerationId,
     object_key: &'a str,
     metadata_digest: &'a str,
@@ -21,6 +22,7 @@ pub struct ImmutableGenerationObject<'a> {
 impl<'a> ImmutableGenerationObject<'a> {
     #[must_use]
     pub const fn new(
+        profile_id: &'a ProfileId,
         generation_id: &'a GenerationId,
         object_key: &'a str,
         metadata_digest: &'a str,
@@ -28,12 +30,18 @@ impl<'a> ImmutableGenerationObject<'a> {
         container: &'a [u8],
     ) -> Self {
         Self {
+            profile_id,
             generation_id,
             object_key,
             metadata_digest,
             container_digest,
             container,
         }
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        self.profile_id
     }
 
     #[must_use]
@@ -68,4 +76,12 @@ pub trait GenerationObjectUploadPort {
         scope: &TenantScope,
         object: &ImmutableGenerationObject<'_>,
     ) -> impl Future<Output = Result<GenerationObjectUploadOutcome, GenerationPortError>>;
+}
+
+pub trait GenerationObjectExactVerifyPort {
+    fn verify_generation_object_exact(
+        &self,
+        scope: &TenantScope,
+        object: &ImmutableGenerationObject<'_>,
+    ) -> impl Future<Output = Result<bool, GenerationPortError>>;
 }
