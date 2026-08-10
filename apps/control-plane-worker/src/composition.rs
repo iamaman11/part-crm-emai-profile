@@ -32,15 +32,20 @@ use cloudflare_adapters::d1_mailbox_jobs::D1MailboxJobApplicationRepository;
 use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
 use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
 use cloudflare_adapters::r2_generation_objects::R2GenerationObjects;
+use cloudflare_adapters::r2_generation_upload_capability::{
+    R2GenerationUploadCapabilitySigner, R2SigV4Credentials,
+};
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING,
 };
-#[cfg(target_arch = "wasm32")]
-use worker::Error;
-use worker::{Env, Result};
+use worker::{Env, Error, Result};
 
 #[cfg(target_arch = "wasm32")]
 const CLIENT_CONTACT_PROTECTION_KEYRING_BINDING: &str = "CLIENT_CONTACT_PROTECTION_KEYRING";
+const R2_GENERATION_ACCOUNT_ID_BINDING: &str = "R2_GENERATION_ACCOUNT_ID";
+const R2_GENERATION_BUCKET_NAME_BINDING: &str = "R2_GENERATION_BUCKET_NAME";
+const R2_GENERATION_ACCESS_KEY_ID_BINDING: &str = "R2_GENERATION_ACCESS_KEY_ID";
+const R2_GENERATION_SECRET_ACCESS_KEY_BINDING: &str = "R2_GENERATION_SECRET_ACCESS_KEY";
 
 pub fn client_application(env: &Env) -> Result<D1ClientApplicationRepository> {
     Ok(D1ClientApplicationRepository::new(
@@ -196,6 +201,23 @@ pub fn device_generation_replay_probe(env: &Env) -> Result<D1DeviceGenerationCom
 
 pub fn generation_object_verifier(env: &Env) -> Result<R2GenerationObjects> {
     Ok(R2GenerationObjects::new(env.bucket(R2_PROFILES_BINDING)?))
+}
+
+pub fn generation_upload_capability_signer(
+    env: &Env,
+) -> Result<R2GenerationUploadCapabilitySigner> {
+    let credentials = R2SigV4Credentials::new(
+        env.secret(R2_GENERATION_ACCESS_KEY_ID_BINDING)?.to_string(),
+        env.secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?
+            .to_string(),
+    )
+    .map_err(|_| Error::RustError("invalid R2 generation upload signing configuration".to_owned()))?;
+    R2GenerationUploadCapabilitySigner::new(
+        env.var(R2_GENERATION_ACCOUNT_ID_BINDING)?.to_string(),
+        env.var(R2_GENERATION_BUCKET_NAME_BINDING)?.to_string(),
+        credentials,
+    )
+    .map_err(|_| Error::RustError("invalid R2 generation upload signing configuration".to_owned()))
 }
 
 #[must_use]
