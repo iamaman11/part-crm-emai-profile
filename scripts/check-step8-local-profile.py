@@ -10,6 +10,7 @@ from pathlib import Path
 SOURCE_ROOT = Path("apps/profile-bridge/src")
 SOURCE_ENTRY = SOURCE_ROOT / "local_profile.rs"
 SOURCE_MODULE = SOURCE_ROOT / "local_profile"
+DIRTY_GENERATION_SOURCE = SOURCE_ROOT / "dirty_generation.rs"
 
 REQUIRED_FRAGMENTS = (
     "MaterializationRoot",
@@ -33,6 +34,27 @@ FORBIDDEN_FRAGMENTS = (
     "repair_source_generation",
 )
 
+DIRTY_REQUIRED_FRAGMENTS = (
+    "LocalGenerationState::DirtyLocal",
+    "!local_record.is_locked()",
+    "DirtyGenerationError::CandidateMatchesBase",
+    "RecoveryClone::create",
+    "clone.verify_clone_only()?",
+    "encode_workspace_snapshot",
+    "Some(base_generation_id.clone())",
+    "seal_generation",
+    "SourceChanged",
+    "MAX_SNAPSHOT_BYTES",
+)
+
+DIRTY_FORBIDDEN_FRAGMENTS = (
+    "D1Database",
+    "worker::",
+    "R2Bucket",
+    "PROFILE_GENERATIONS",
+    "GenerationObjectUploadPort",
+)
+
 BROWSER_LOCK_DELETE = re.compile(
     r"remove_(?:file|dir|dir_all)\s*\([^\n;]*(?:\.parentlock|parent\.lock|[\"']lock[\"'])",
     re.IGNORECASE,
@@ -53,6 +75,26 @@ def source_text(root: Path) -> tuple[str, list[str]]:
     return "\n".join(path.read_text(encoding="utf-8") for path in files), failures
 
 
+def dirty_generation_failures(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", 1)[0]
+    failures: list[str] = []
+    for fragment in DIRTY_REQUIRED_FRAGMENTS:
+        if fragment not in production:
+            failures.append(f"missing dirty-generation invariant: {fragment}")
+    for fragment in DIRTY_FORBIDDEN_FRAGMENTS:
+        if fragment in production:
+            failures.append(f"dirty-generation candidate must remain local-only: {fragment}")
+    return failures
+
+
+def dirty_generation_self_test(source: str) -> list[str]:
+    fixture = source.split("#[cfg(test)]", 1)[0] + "\nuse worker::d1::D1Database;\n"
+    failures = dirty_generation_failures(fixture)
+    if not any("local-only: D1Database" in failure for failure in failures):
+        return ["dirty-generation negative storage fixture unexpectedly passed"]
+    return []
+
+
 def check(root: Path) -> list[str]:
     text, failures = source_text(root)
     if failures:
@@ -68,10 +110,22 @@ def check(root: Path) -> list[str]:
         failures.append("browser-owned lock deletion is forbidden")
 
     bridge_lib = root / "apps/profile-bridge/src/lib.rs"
-    if not bridge_lib.is_file() or "pub mod local_profile;" not in bridge_lib.read_text(
-        encoding="utf-8"
-    ):
-        failures.append("Profile Bridge does not expose the local_profile module")
+    if not bridge_lib.is_file():
+        failures.append("Profile Bridge library source is missing")
+    else:
+        bridge_lib_text = bridge_lib.read_text(encoding="utf-8")
+        if "pub mod local_profile;" not in bridge_lib_text:
+            failures.append("Profile Bridge does not expose the local_profile module")
+        if "pub mod dirty_generation;" not in bridge_lib_text:
+            failures.append("Profile Bridge does not expose the dirty_generation module")
+
+    dirty_source = root / DIRTY_GENERATION_SOURCE
+    if not dirty_source.is_file():
+        failures.append(f"missing dirty-generation source: {DIRTY_GENERATION_SOURCE}")
+    else:
+        dirty_text = dirty_source.read_text(encoding="utf-8")
+        failures.extend(dirty_generation_failures(dirty_text))
+        failures.extend(dirty_generation_self_test(dirty_text))
 
     return failures
 
@@ -86,7 +140,7 @@ def main() -> int:
         for failure in failures:
             print(f"ERROR: {failure}")
         return 1
-    print("Repository Step 8 local profile policy passed.")
+    print("Repository Step 8 local profile and dirty-generation policy passed.")
     return 0
 
 
