@@ -97,7 +97,7 @@ def migration_files() -> list[Path]:
     expected = list(range(1, len(files) + 1))
     if not files or versions != expected:
         raise AssertionError(f"D1 migrations must be contiguous: {versions}; expected {expected}")
-    if files[-1].name != "0020_browser_mailbox_execution_bindings.sql":
+    if files[-1].name != "0021_device_generation_commit.sql":
         raise AssertionError(f"unexpected Phase 2F migration tail: {files[-1].name}")
     return files
 
