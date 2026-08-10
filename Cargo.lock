@@ -86,6 +86,7 @@ dependencies = [
  "use-cases-clients",
  "use-cases-devices",
  "use-cases-notifications",
+ "use-cases-query",
  "wasm-bindgen",
  "worker",
 ]
@@ -602,7 +603,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2466b2336ed02bcdca6b294417127b90ec92038d1d5c4fbeac971a922e0e0924"
+checksum = "2466b2336ed02a6cdca6b294417127b90ec92038d1d5c4fbeac971a922e0e0924"
 dependencies = [
  "pin-project-internal",
 ]
@@ -647,7 +648,7 @@ dependencies = [
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
+checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
@@ -851,7 +852,7 @@ dependencies = [
 name = "synstructure"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
+checksum = "728a70f3dbaf5bab0f4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
 dependencies = [
  "proc-macro2",
  "quote",
