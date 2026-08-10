@@ -204,7 +204,8 @@ mod tests {
         GenerationId, ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
     };
 
-    fn fixture() -> Result<(ActorContext, DeviceGenerationCommitRequest), Box<dyn std::error::Error>> {
+    fn fixture() -> Result<(ActorContext, DeviceGenerationCommitRequest), Box<dyn std::error::Error>>
+    {
         let tenant_id = TenantId::parse("tenant_runtime_commit_01")?;
         let profile_id = ProfileId::parse("profile_runtime_commit_01")?;
         let actor = ActorContext::new(
