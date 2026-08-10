@@ -19,6 +19,15 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
             _,
             "device-jobs",
             _,
+            "generation-upload-capability",
+        ] if method == "POST" => Some(RouteClass::DeviceGenerationUploadCapabilityApi),
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "device-jobs",
+            _,
             "generation-commit",
         ] if method == "POST" => Some(RouteClass::DeviceGenerationCommitApi),
         ["api", "v1", "tenants", _, "device-jobs", _, "outcome"] if method == "POST" => {
