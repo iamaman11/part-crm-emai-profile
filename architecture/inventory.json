@@ -51,7 +51,8 @@
       "migrations/d1/0017_mailbox_queue_coordination.sql",
       "migrations/d1/0018_device_authorizations_and_jobs.sql",
       "migrations/d1/0019_device_actor_bindings.sql",
-      "migrations/d1/0020_browser_mailbox_execution_bindings.sql"
+      "migrations/d1/0020_browser_mailbox_execution_bindings.sql",
+      "migrations/d1/0021_device_generation_commit.sql"
     ]
   },
   "routing": {
