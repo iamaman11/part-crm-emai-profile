@@ -11,6 +11,7 @@ SOURCE_ROOT = Path("apps/profile-bridge/src")
 SOURCE_ENTRY = SOURCE_ROOT / "local_profile.rs"
 SOURCE_MODULE = SOURCE_ROOT / "local_profile"
 DIRTY_GENERATION_SOURCE = SOURCE_ROOT / "dirty_generation.rs"
+DIRTY_PUBLISH_SOURCE = SOURCE_ROOT / "dirty_generation_publish.rs"
 
 REQUIRED_FRAGMENTS = (
     "MaterializationRoot",
@@ -55,6 +56,26 @@ DIRTY_FORBIDDEN_FRAGMENTS = (
     "GenerationObjectUploadPort",
 )
 
+PUBLISH_REQUIRED_FRAGMENTS = (
+    "GenerationObjectUploadPort",
+    "GenerationObjectStorePort",
+    "put_generation_object_if_absent",
+    "GenerationObjectUploadOutcome::ImmutableConflict",
+    "verify_generation_object",
+    "Ok(PublishedDirtyGeneration",
+)
+
+PUBLISH_FORBIDDEN_FRAGMENTS = (
+    "D1Database",
+    "worker::",
+    "R2Bucket",
+    "PROFILE_GENERATIONS",
+    "register_generation",
+    "activate_generation",
+    "profile_generation_register_commands",
+    "profile_generation_activate_commands",
+)
+
 BROWSER_LOCK_DELETE = re.compile(
     r"remove_(?:file|dir|dir_all)\s*\([^\n;]*(?:\.parentlock|parent\.lock|[\"']lock[\"'])",
     re.IGNORECASE,
@@ -95,6 +116,36 @@ def dirty_generation_self_test(source: str) -> list[str]:
     return []
 
 
+def dirty_publish_failures(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", 1)[0]
+    failures: list[str] = []
+    for fragment in PUBLISH_REQUIRED_FRAGMENTS:
+        if fragment not in production:
+            failures.append(f"missing dirty-generation publication invariant: {fragment}")
+    for fragment in PUBLISH_FORBIDDEN_FRAGMENTS:
+        if fragment in production:
+            failures.append(f"dirty publication must not own persistence/catalog activation: {fragment}")
+
+    upload = production.find(".put_generation_object_if_absent")
+    conflict = production.find("GenerationObjectUploadOutcome::ImmutableConflict")
+    verify = production.find(".verify_generation_object")
+    published = production.find("Ok(PublishedDirtyGeneration")
+    if min(upload, conflict, verify, published) < 0 or not (upload < conflict < verify < published):
+        failures.append(
+            "dirty publication must preserve upload -> immutable-conflict gate -> verify -> publish order"
+        )
+    return failures
+
+
+def dirty_publish_self_test(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", 1)[0]
+    fixture = production.replace(".verify_generation_object", ".verification_removed", 1)
+    failures = dirty_publish_failures(fixture)
+    if not any("missing dirty-generation publication invariant: verify_generation_object" in failure for failure in failures):
+        return ["dirty-publication missing-verification fixture unexpectedly passed"]
+    return []
+
+
 def check(root: Path) -> list[str]:
     text, failures = source_text(root)
     if failures:
@@ -118,6 +169,8 @@ def check(root: Path) -> list[str]:
             failures.append("Profile Bridge does not expose the local_profile module")
         if "pub mod dirty_generation;" not in bridge_lib_text:
             failures.append("Profile Bridge does not expose the dirty_generation module")
+        if "pub mod dirty_generation_publish;" not in bridge_lib_text:
+            failures.append("Profile Bridge does not expose the dirty_generation_publish module")
 
     dirty_source = root / DIRTY_GENERATION_SOURCE
     if not dirty_source.is_file():
@@ -126,6 +179,14 @@ def check(root: Path) -> list[str]:
         dirty_text = dirty_source.read_text(encoding="utf-8")
         failures.extend(dirty_generation_failures(dirty_text))
         failures.extend(dirty_generation_self_test(dirty_text))
+
+    publish_source = root / DIRTY_PUBLISH_SOURCE
+    if not publish_source.is_file():
+        failures.append(f"missing dirty-generation publication source: {DIRTY_PUBLISH_SOURCE}")
+    else:
+        publish_text = publish_source.read_text(encoding="utf-8")
+        failures.extend(dirty_publish_failures(publish_text))
+        failures.extend(dirty_publish_self_test(publish_text))
 
     return failures
 
