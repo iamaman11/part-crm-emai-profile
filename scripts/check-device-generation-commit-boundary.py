@@ -52,6 +52,15 @@ def endpoint_body_struct(source: str) -> str:
     )
 
 
+def generation_commit_gate_release_helper(source: str) -> str:
+    marker = "fn generation_commit_failure_releases_gate("
+    start = source.find(marker)
+    if start < 0:
+        return ""
+    end = source.find("\nfn generation_commit_error(", start)
+    return source[start:] if end < 0 else source[start:end]
+
+
 def errors(root: Path) -> list[str]:
     result: list[str] = []
     ingress = production(read(root, COORDINATOR_INGRESS))
@@ -82,6 +91,23 @@ def errors(root: Path) -> list[str]:
         result.append("Durable Object must validate exact coordinator version")
     if "coordinator.last_sequence() != request.coordinator().coordinator_sequence()" not in coordinator:
         result.append("Durable Object must validate exact coordinator sequence")
+
+    release_helper = generation_commit_gate_release_helper(coordinator)
+    if not release_helper:
+        result.append("generation commit failures must have an explicit gate-release policy")
+    else:
+        for required_class in ["StaleAuthority", "VersionConflict"]:
+            if f"DeviceGenerationCommitErrorClass::{required_class}" not in release_helper:
+                result.append(f"proved {required_class} failures must release the generation commit gate")
+        for retained_class in ["IntegrityFailure", "DependencyUnavailable"]:
+            if f"DeviceGenerationCommitErrorClass::{retained_class}" in release_helper:
+                result.append(
+                    f"uncertain {retained_class} failures must retain the generation commit gate"
+                )
+    if "generation_commit_failure_releases_gate(error.class())" not in coordinator:
+        result.append("generation commit error handling must apply the explicit gate-release policy")
+    if "schedule_gate_retry_alarm(&self.state).await?" not in coordinator:
+        result.append("retained generation commit reservations must keep the retry alarm alive")
 
     if "coordinator_fencing_token_digest TEXT NOT NULL" not in migration:
         result.append("D1 commit journal must persist only the fencing-token digest")
@@ -182,9 +208,11 @@ def self_test() -> int:
             target = root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(read(ROOT, relative), encoding="utf-8")
+
         coordinator_path = root / WORKER_COORDINATOR
+        original = coordinator_path.read_text(encoding="utf-8")
         coordinator_path.write_text(
-            coordinator_path.read_text(encoding="utf-8").replace(
+            original.replace(
                 ".put(GENERATION_COMMIT_GATE_KEY, &gate)",
                 ".put(\"unsafe-generation-commit-gate\", &gate)",
                 1,
@@ -194,7 +222,20 @@ def self_test() -> int:
         detected = errors(root)
         if not any("persist the authority gate before external D1 commit" in item for item in detected):
             raise AssertionError("missing authority reservation negative fixture unexpectedly passed")
-    print("Phase 2F generation-commit authority negative fixture rejected as expected.")
+
+        coordinator_path.write_text(
+            original.replace(
+                "DeviceGenerationCommitErrorClass::VersionConflict\n    )",
+                "DeviceGenerationCommitErrorClass::VersionConflict\n            | DeviceGenerationCommitErrorClass::DependencyUnavailable\n    )",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        detected = errors(root)
+        if not any("DependencyUnavailable" in item and "retain" in item for item in detected):
+            raise AssertionError("uncertain dependency failure gate-release fixture unexpectedly passed")
+
+    print("Phase 2F generation-commit authority negative fixtures rejected as expected.")
     return 0
 
 
