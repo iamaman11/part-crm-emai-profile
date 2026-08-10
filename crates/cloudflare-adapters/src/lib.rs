@@ -54,6 +54,7 @@ pub mod integration_event_queue;
 pub mod mailbox_job_queue;
 pub mod mailbox_provider;
 pub mod profile_coordinator;
+pub mod r2_generation_objects;
 
 pub use mailbox_domain::MailboxProvider;
 
