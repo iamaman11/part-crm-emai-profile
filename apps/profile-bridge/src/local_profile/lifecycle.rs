@@ -10,6 +10,7 @@ pub enum LocalGenerationState {
     RecoveryRequired,
     Quarantined,
     SyncedEvictable,
+    SupersededEvictable,
     Evicted,
 }
 
@@ -22,6 +23,7 @@ impl LocalGenerationState {
             Self::RecoveryRequired => "recovery_required",
             Self::Quarantined => "quarantined",
             Self::SyncedEvictable => "synced_evictable",
+            Self::SupersededEvictable => "superseded_evictable",
             Self::Evicted => "evicted",
         }
     }
@@ -159,8 +161,22 @@ impl LocalGenerationRecord {
         Ok(())
     }
 
+    pub fn mark_superseded(&mut self, now: UnixMillis) -> Result<(), LocalProfileError> {
+        if self.state != LocalGenerationState::DirtyLocal {
+            return Err(LocalProfileError::InvalidTransition);
+        }
+        ensure_monotonic(self.last_activity_at, now)?;
+        self.state = LocalGenerationState::SupersededEvictable;
+        self.last_activity_at = now;
+        Ok(())
+    }
+
     pub fn evict(&mut self) -> Result<(), LocalProfileError> {
-        if self.state != LocalGenerationState::SyncedEvictable || self.locked {
+        if !matches!(
+            self.state,
+            LocalGenerationState::SyncedEvictable | LocalGenerationState::SupersededEvictable
+        ) || self.locked
+        {
             return Err(LocalProfileError::InvalidTransition);
         }
         self.state = LocalGenerationState::Evicted;
@@ -287,7 +303,11 @@ impl QuotaPolicy {
         let mut eligible = generations
             .iter()
             .filter(|generation| {
-                generation.state == LocalGenerationState::SyncedEvictable && !generation.locked
+                matches!(
+                    generation.state,
+                    LocalGenerationState::SyncedEvictable
+                        | LocalGenerationState::SupersededEvictable
+                ) && !generation.locked
             })
             .collect::<Vec<_>>();
         eligible.sort_by(|left, right| {
