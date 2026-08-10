@@ -58,10 +58,10 @@ DIRTY_FORBIDDEN_FRAGMENTS = (
 
 PUBLISH_REQUIRED_FRAGMENTS = (
     "GenerationObjectUploadPort",
-    "GenerationObjectStorePort",
+    "GenerationObjectExactVerifyPort",
     "put_generation_object_if_absent",
     "GenerationObjectUploadOutcome::ImmutableConflict",
-    "verify_generation_object",
+    "verify_generation_object_exact",
     "Ok(PublishedDirtyGeneration",
 )
 
@@ -70,6 +70,9 @@ PUBLISH_FORBIDDEN_FRAGMENTS = (
     "worker::",
     "R2Bucket",
     "PROFILE_GENERATIONS",
+    "GenerationObjectStorePort",
+    "GenerationObjectReference",
+    ".verify_generation_object(",
     "register_generation",
     "activate_generation",
     "profile_generation_register_commands",
@@ -121,7 +124,19 @@ def publication_function_body(production: str) -> str:
     start = production.find(marker)
     if start < 0:
         return ""
-    return production[start:]
+    opening = production.find("{", start)
+    if opening < 0:
+        return ""
+    depth = 0
+    for index in range(opening, len(production)):
+        character = production[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return production[opening : index + 1]
+    return ""
 
 
 def dirty_publish_failures(source: str) -> list[str]:
@@ -137,21 +152,26 @@ def dirty_publish_failures(source: str) -> list[str]:
     flow = publication_function_body(production)
     upload = flow.find(".put_generation_object_if_absent")
     conflict = flow.find("GenerationObjectUploadOutcome::ImmutableConflict")
-    verify = flow.find(".verify_generation_object")
+    verify = flow.find(".verify_generation_object_exact")
     published = flow.find("Ok(PublishedDirtyGeneration")
     if min(upload, conflict, verify, published) < 0 or not (upload < conflict < verify < published):
         failures.append(
-            "dirty publication must preserve upload -> immutable-conflict gate -> verify -> publish order"
+            "dirty publication must preserve upload -> immutable-conflict gate -> exact verify -> publish order"
         )
     return failures
 
 
 def dirty_publish_self_test(source: str) -> list[str]:
     production = source.split("#[cfg(test)]", 1)[0]
-    fixture = production.replace(".verify_generation_object", ".verification_removed", 1)
+    fixture = production.replace(
+        ".verify_generation_object_exact", ".verification_removed", 1
+    )
     failures = dirty_publish_failures(fixture)
-    if not any("missing dirty-generation publication invariant: verify_generation_object" in failure for failure in failures):
-        return ["dirty-publication missing-verification fixture unexpectedly passed"]
+    if not any(
+        "missing dirty-generation publication invariant: verify_generation_object_exact" in failure
+        for failure in failures
+    ):
+        return ["dirty-publication missing-exact-verification fixture unexpectedly passed"]
     return []
 
 
