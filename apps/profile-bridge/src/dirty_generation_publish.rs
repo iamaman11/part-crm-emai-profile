@@ -1,7 +1,9 @@
 use crate::dirty_generation::PreparedDirtyGeneration;
-use application_ports::{
-    GenerationObjectReference, GenerationObjectStorePort, GenerationObjectUploadOutcome,
-    GenerationObjectUploadPort, GenerationPortErrorClass, ImmutableGenerationObject,
+use application_ports::generation_objects::{
+    GenerationObjectUploadOutcome, GenerationObjectUploadPort, ImmutableGenerationObject,
+};
+use application_ports::generations::{
+    GenerationObjectReference, GenerationObjectStorePort, GenerationPortErrorClass,
 };
 use profile_platform_primitives::{GenerationId, TenantScope};
 use std::fmt;
@@ -91,7 +93,8 @@ where
         }
     }
 
-    let reference = GenerationObjectReference::new(generation_id.clone(), prepared.container_digest());
+    let reference =
+        GenerationObjectReference::new(generation_id.clone(), prepared.container_digest());
     let verified = verifier
         .verify_generation_object(scope, &reference)
         .map_err(|_| DirtyGenerationPublishError::VerificationUnavailable)?;
@@ -111,20 +114,26 @@ where
 mod tests {
     use super::{DirtyGenerationPublishError, publish_prepared_dirty_generation};
     use crate::dirty_generation::{
-        GenerationSealingMaterial, GenerationSealingMaterialPort, prepare_dirty_generation_candidate,
+        GenerationSealingMaterial, GenerationSealingMaterialPort,
+        prepare_dirty_generation_candidate,
     };
     use crate::local_profile::{LocalGenerationRecord, MaterializationRoot};
-    use application_ports::{
-        GenerationObjectReference, GenerationObjectStorePort, GenerationObjectUploadOutcome,
-        GenerationObjectUploadPort, GenerationPortError, GenerationPortErrorClass,
-        ImmutableGenerationObject,
+    use application_ports::generation_objects::{
+        GenerationObjectUploadOutcome, GenerationObjectUploadPort, ImmutableGenerationObject,
+    };
+    use application_ports::generations::{
+        GenerationObjectReference, GenerationObjectStorePort, GenerationPortError,
+        GenerationPortErrorClass,
     };
     use encrypted_generation_domain::{GenerationDek, KeyId, NoncePrefix};
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId, TenantScope, UnixMillis};
     use std::cell::Cell;
     use std::future::Future;
     use std::rc::Rc;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::task::{Context, Poll, Waker};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
     fn block_on<F: Future>(future: F) -> F::Output {
         let waker = Waker::noop();
@@ -150,7 +159,10 @@ mod tests {
             _generation_id: &GenerationId,
         ) -> Result<GenerationSealingMaterial, Self::Error> {
             Ok(GenerationSealingMaterial::new(
-                GenerationDek::new(KeyId::parse("key_publish_dirty_01").map_err(|_| ())?, [3; 32]),
+                GenerationDek::new(
+                    KeyId::parse("key_publish_dirty_01").map_err(|_| ())?,
+                    [3; 32],
+                ),
                 NoncePrefix::new([4; 16]),
                 4096,
             ))
@@ -196,16 +208,16 @@ mod tests {
         crate::dirty_generation::PreparedDirtyGeneration,
         std::path::PathBuf,
     ), Box<dyn std::error::Error>> {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let root_path = std::env::temp_dir().join(format!(
-            "profile-bridge-publish-dirty-{}",
+            "profile-bridge-publish-dirty-{}-{counter}",
             std::process::id()
         ));
-        let _ = crate::test_support::remove_test_root(&root_path);
         let root = MaterializationRoot::open_or_create(root_path.clone())?;
-        let tenant_id = TenantId::parse("tenant_01JPUBLISHDIRTY")?;
-        let profile_id = ProfileId::parse("profile_01JPUBLISHDIRTY")?;
-        let base_id = GenerationId::parse("generation_01JPUBLISHBASE")?;
-        let candidate_id = GenerationId::parse("generation_01JPUBLISHCAND")?;
+        let tenant_id = TenantId::parse(format!("tenant_01JPUBLISHDIRTY{counter}"))?;
+        let profile_id = ProfileId::parse(format!("profile_01JPUBLISHDIRTY{counter}"))?;
+        let base_id = GenerationId::parse(format!("generation_01JPUBLISHBASE{counter}"))?;
+        let candidate_id = GenerationId::parse(format!("generation_01JPUBLISHCAND{counter}"))?;
         let source = root.create_generation(&tenant_id, &profile_id, &base_id)?;
         std::fs::write(source.path().join("prefs.js"), b"published-dirty")?;
         let mut record = LocalGenerationRecord::new(base_id, 0, UnixMillis::new(1));
@@ -249,7 +261,10 @@ mod tests {
             ))?;
             assert_eq!(upload_calls.get(), 1);
             assert_eq!(verify_calls.get(), 1);
-            assert_eq!(published.generation_id(), prepared.sealed().metadata().generation_id());
+            assert_eq!(
+                published.generation_id(),
+                prepared.sealed().metadata().generation_id()
+            );
             assert_eq!(published.container_digest(), prepared.container_digest());
             let _ = crate::test_support::remove_test_root(&root_path);
         }
