@@ -1,6 +1,7 @@
 use application_ports::generation_objects::{
-    GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort, GenerationObjectExactVerifyPort,
-    GenerationObjectUploadOutcome, GenerationObjectUploadPort, ImmutableGenerationObject,
+    GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort,
+    GenerationObjectExactVerifyPort, GenerationObjectUploadOutcome, GenerationObjectUploadPort,
+    ImmutableGenerationObject,
 };
 use application_ports::generations::{GenerationPortError, GenerationPortErrorClass};
 use profile_platform_primitives::TenantScope;
@@ -118,7 +119,8 @@ impl R2GenerationObjects {
         scope: &TenantScope,
         descriptor: &GenerationObjectDescriptor,
     ) -> Result<bool, GenerationPortError> {
-        if stored.key() != descriptor.object_key() || stored.size() != descriptor.container_bytes() {
+        if stored.key() != descriptor.object_key() || stored.size() != descriptor.container_bytes()
+        {
             return Ok(false);
         }
         let metadata = stored.custom_metadata().map_err(|_| integrity_failure())?;
