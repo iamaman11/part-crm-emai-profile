@@ -6,7 +6,7 @@ use application_ports::generations::{GenerationPortError, GenerationPortErrorCla
 use profile_platform_primitives::TenantScope;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use worker::r2::{Conditional, R2Object};
+use worker::r2::{Conditional, Object};
 use worker::Bucket;
 
 const META_TENANT_ID: &str = "profile-platform-tenant-id";
@@ -79,7 +79,7 @@ impl R2GenerationObjects {
         &self,
         scope: &TenantScope,
         object: &ImmutableGenerationObject<'_>,
-    ) -> Result<Option<R2Object>, GenerationPortError> {
+    ) -> Result<Option<Object>, GenerationPortError> {
         Self::validate_object(scope, object)?;
         self.bucket
             .head(object.object_key())
@@ -88,17 +88,17 @@ impl R2GenerationObjects {
     }
 
     fn object_matches(
-        stored: &R2Object,
+        stored: &Object,
         scope: &TenantScope,
         object: &ImmutableGenerationObject<'_>,
-    ) -> bool {
+    ) -> Result<bool, GenerationPortError> {
         let Ok(expected_size) = u64::try_from(object.container().len()) else {
-            return false;
+            return Ok(false);
         };
         if stored.key() != object.object_key() || stored.size() != expected_size {
-            return false;
+            return Ok(false);
         }
-        let metadata = stored.custom_metadata();
+        let metadata = stored.custom_metadata().map_err(|_| integrity_failure())?;
         if metadata.get(META_TENANT_ID).map(String::as_str)
             != Some(scope.tenant_id().as_str())
             || metadata.get(META_PROFILE_ID).map(String::as_str)
@@ -110,10 +110,10 @@ impl R2GenerationObjects {
             || metadata.get(META_CONTAINER_DIGEST).map(String::as_str)
                 != Some(object.container_digest())
         {
-            return false;
+            return Ok(false);
         }
         let expected_checksum = Sha256::digest(object.container()).to_vec();
-        stored.checksums().sha256().as_deref() == Some(expected_checksum.as_slice())
+        Ok(stored.checksum().sha256.as_deref() == Some(expected_checksum.as_slice()))
     }
 }
 
@@ -130,7 +130,10 @@ impl GenerationObjectUploadPort for R2GenerationObjects {
             .put(object.object_key(), object.container().to_vec())
             .custom_metadata(Self::custom_metadata(scope, object))
             .sha256(checksum)
-            .only_if(Conditional::default().etag_does_not_match("*"))
+            .only_if(Conditional {
+                etag_does_not_match: Some("*".to_owned()),
+                ..Default::default()
+            })
             .execute()
             .await
             .map_err(|_| dependency_unavailable())?;
@@ -141,7 +144,7 @@ impl GenerationObjectUploadPort for R2GenerationObjects {
         let Some(stored) = self.head_exact(scope, object).await? else {
             return Err(dependency_unavailable());
         };
-        if Self::object_matches(&stored, scope, object) {
+        if Self::object_matches(&stored, scope, object)? {
             Ok(GenerationObjectUploadOutcome::Idempotent)
         } else {
             Ok(GenerationObjectUploadOutcome::ImmutableConflict)
@@ -158,7 +161,7 @@ impl GenerationObjectExactVerifyPort for R2GenerationObjects {
         let Some(stored) = self.head_exact(scope, object).await? else {
             return Ok(false);
         };
-        Ok(Self::object_matches(&stored, scope, object))
+        Self::object_matches(&stored, scope, object)
     }
 }
 
