@@ -45,7 +45,8 @@ pub async fn connect(request: &mut Request, env: &Env, tenant_id: &str) -> Resul
     internal
         .headers_mut()?
         .set(CORRELATION_HEADER, &connection_correlation)?;
-    let Some(resolved) = resolve_active_request_actor(&internal, env, Some(tenant_id)).await? else {
+    let Some(resolved) = resolve_active_request_actor(&internal, env, Some(tenant_id)).await?
+    else {
         return neutral_not_found(&correlation_hint(&internal));
     };
 
@@ -201,9 +202,10 @@ impl NotificationHub {
             .await
         {
             self.clear_sync_gate_if_owned(&gate).await?;
-            let _close_result = pair
-                .server
-                .close(Some(POLICY_CLOSE_CODE), Some("realtime synchronization failed"));
+            let _close_result = pair.server.close(
+                Some(POLICY_CLOSE_CODE),
+                Some("realtime synchronization failed"),
+            );
             return synchronization_failure(error);
         }
 
@@ -274,14 +276,8 @@ impl NotificationHub {
             self.env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
         );
         let sink = HubBroadcastSink { state: &self.state };
-        match publish_live_invalidation(
-            &authorization,
-            &event_authorization,
-            &sink,
-            &actor,
-            &event,
-        )
-        .await
+        match publish_live_invalidation(&authorization, &event_authorization, &sink, &actor, &event)
+            .await
         {
             Ok(()) => Response::empty().map(|response| response.with_status(204)),
             Err(NotificationOperationError::Forbidden) => Response::error("Forbidden", 403),
@@ -334,7 +330,9 @@ impl RealtimeNotificationSinkPort for SingleSocketSink<'_> {
     ) -> Result<(), NotificationPortError> {
         self.socket
             .send_with_str(signal.canonical_json())
-            .map_err(|_| NotificationPortError::new(NotificationPortErrorClass::DependencyUnavailable))
+            .map_err(|_| {
+                NotificationPortError::new(NotificationPortErrorClass::DependencyUnavailable)
+            })
     }
 }
 
@@ -454,7 +452,9 @@ fn synchronization_failure(error: NotificationOperationError) -> Result<Response
 
 #[cfg(test)]
 mod tests {
-    use super::{SYNC_GATE_STALE_AFTER_MS, StoredSynchronizationGate, notification_hub_object_name};
+    use super::{
+        SYNC_GATE_STALE_AFTER_MS, StoredSynchronizationGate, notification_hub_object_name,
+    };
     use profile_platform_primitives::{ActorId, TenantId};
 
     #[test]
