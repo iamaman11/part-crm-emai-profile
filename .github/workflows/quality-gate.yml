@@ -32,6 +32,7 @@ jobs:
           scripts/check-architecture.py
           scripts/check-contract-compatibility.py
           scripts/check-d1-boundary.py
+          scripts/check-device-generation-commit-boundary.py
           scripts/check-r2-generation-objects.py
           scripts/check-step4-governed-writes.py
           scripts/check-step5-profile-coordinator.py
@@ -76,6 +77,12 @@ jobs:
 
       - name: Prove missing R2 create-only condition is rejected
         run: python scripts/check-r2-generation-objects.py --self-test
+
+      - name: Enforce coordinator-authoritative device generation commit boundary
+        run: python scripts/check-device-generation-commit-boundary.py
+
+      - name: Prove missing generation-commit authority reservation is rejected
+        run: python scripts/check-device-generation-commit-boundary.py --self-test
 
       - name: Enforce governed Step 4 write surfaces
         run: python scripts/check-step4-governed-writes.py
