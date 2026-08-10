@@ -16,6 +16,8 @@ FRONTEND = Path("frontend/src/shared/realtime/NotificationRealtimeBridge.tsx")
 FRONTEND_CONTRACT = Path("frontend/src/shared/realtime/notifications.ts")
 FRONTEND_TEST = Path("frontend/src/shared/realtime/notifications.test.ts")
 ROUTE = Path("crates/control-plane-contract/src/routes/notifications.rs")
+EVIDENCE = Path("crates/use-cases-notifications/src/realtime_evidence.rs")
+DOC = Path("docs/REALTIME_NOTIFICATIONS.md")
 
 PUBLIC_SIGNAL_FIELDS = (
     "version: u16",
@@ -42,6 +44,8 @@ REQUIRED_HUB_MARKERS = (
     "headers.delete(ACCESS_TOKEN_HEADER)",
     'headers.delete("Authorization")',
     'headers.delete("Cookie")',
+    "Sha256::digest",
+    "INTERNAL_CONNECTION_HEADER",
     "SYNC_GATE_KEY",
     "POLICY_CLOSE_CODE: u16 = 1008",
 )
@@ -57,6 +61,12 @@ FORBIDDEN_FRONTEND_MARKERS = (
     "localStorage",
     "sessionStorage",
     "indexedDB",
+)
+REQUIRED_EVIDENCE_MARKERS = (
+    "socket_failure_preserves_cursor_and_fresh_session_replays_without_loss",
+    "cas_race_replays_duplicate_but_never_skips_durable_event",
+    "cursor_gap_drains_in_order_across_bounded_pages",
+    "live_delivery_rechecks_membership_and_exact_event_grant",
 )
 
 
@@ -75,6 +85,8 @@ def failures_for_sources(
     frontend_contract: str,
     frontend_test: str,
     route: str,
+    evidence: str,
+    doc: str,
 ) -> list[str]:
     failures: list[str] = []
 
@@ -123,6 +135,12 @@ def failures_for_sources(
         failures.append("hibernatable WebSocket message handler is required")
     if "RealtimeInternalEvent" not in hub or "canonical_json" not in hub:
         failures.append("hub must bridge only typed internal events to canonical invalidation signals")
+    if "for socket in self.state.get_websockets()" not in hub:
+        failures.append("per-user hub must broadcast to every attached tab/device socket")
+    if '"notification-hub-v1:{}:{}"' not in hub:
+        failures.append("notification hub identity must remain exactly tenant plus actor, not tab/device")
+    if "StoredSynchronizationGate::new(connection_token" not in hub:
+        failures.append("reconnect synchronization gate must be owned by the handshake-derived token")
 
     delivered = queue.find("Ok(DeliveryProcessingOutcome::Delivered")
     realtime = queue.find("publish_durable_event(&event, env)", delivered)
@@ -152,6 +170,19 @@ def failures_for_sources(
     if "deduper.accept('outbox_a')" not in frontend_test:
         failures.append("frontend duplicate-suppression evidence is missing")
 
+    for marker in REQUIRED_EVIDENCE_MARKERS:
+        if marker not in evidence:
+            failures.append(f"deterministic realtime recovery/revocation evidence missing: {marker}")
+
+    for marker in (
+        "**Production readiness:** false",
+        "NOTIFICATION_HUB",
+        "D1 outbox/event/cursor state remains authoritative",
+        "Multiple tabs and multiple devices",
+    ):
+        if marker not in doc:
+            failures.append(f"realtime implementation documentation missing invariant: {marker}")
+
     return failures
 
 
@@ -169,6 +200,8 @@ def load_sources(root: Path) -> tuple[str, ...]:
             FRONTEND_CONTRACT,
             FRONTEND_TEST,
             ROUTE,
+            EVIDENCE,
+            DOC,
         )
     )
 
@@ -197,7 +230,11 @@ def self_test(root: Path) -> list[str]:
         return ["realtime confidential-payload fixture unexpectedly passed"]
 
     queue = sources[5]
-    fixture_queue = queue.replace("publish_durable_event(&event, env)", "removed_realtime_publish(&event, env)", 1)
+    fixture_queue = queue.replace(
+        "publish_durable_event(&event, env)",
+        "removed_realtime_publish(&event, env)",
+        1,
+    )
     fixture_sources = sources.copy()
     fixture_sources[5] = fixture_queue
     rejected = failures_for_sources(*fixture_sources)
@@ -215,6 +252,18 @@ def self_test(root: Path) -> list[str]:
     rejected = failures_for_sources(*fixture_sources)
     if not any("setQueryData" in failure for failure in rejected):
         return ["realtime frontend authority fixture unexpectedly passed"]
+
+    hub = sources[3]
+    fixture_hub = hub.replace(
+        "for socket in self.state.get_websockets() {",
+        "for socket in self.state.get_websockets().into_iter().take(1) {",
+        1,
+    )
+    fixture_sources = sources.copy()
+    fixture_sources[3] = fixture_hub
+    rejected = failures_for_sources(*fixture_sources)
+    if not any("every attached tab/device socket" in failure for failure in rejected):
+        return ["realtime multi-tab/device fanout fixture unexpectedly passed"]
 
     return []
 
