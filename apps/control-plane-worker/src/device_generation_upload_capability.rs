@@ -3,7 +3,8 @@ use crate::access_session::{
 };
 use crate::composition::{
     authenticated_device, coordinator_ingress_application, device_execution_preconditions,
-    device_job_authorization, device_job_repository, generation_upload_capability_signer,
+    device_job_authorization, device_job_repository, generation_object_verifier,
+    generation_upload_capability_signer,
 };
 use application_ports::coordinator_ingress::{
     CoordinatorIngressApplicationPort, CoordinatorIngressPortErrorClass,
@@ -14,7 +15,10 @@ use application_ports::device_generation_commit::{
 use application_ports::device_jobs::{
     DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobRepositoryPort,
 };
-use application_ports::generation_objects::GenerationObjectDescriptor;
+use application_ports::generation_objects::{
+    GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort,
+};
+use application_ports::generations::GenerationPortErrorClass;
 use application_ports::{AuthenticatedDevicePort, DeviceJobPortErrorClass};
 use cloudflare_adapters::r2_generation_upload_capability::{
     R2GenerationUploadCapabilityError, R2GenerationUploadSigningTime,
@@ -162,6 +166,20 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         Ok(value) => value,
         Err(()) => return invalid_request(actor.correlation_id().as_str()),
     };
+    let verifier = generation_object_verifier(env)?;
+    match verifier
+        .verify_generation_object_descriptor_exact(actor.tenant_scope(), &descriptor)
+        .await
+    {
+        Ok(true) => {
+            return Response::from_json(&DeviceGenerationUploadCapabilityResponse::verified());
+        }
+        Ok(false) => {}
+        Err(error) => {
+            return object_verify_failure(actor.correlation_id().as_str(), error.class());
+        }
+    }
+
     let signer = match generation_upload_capability_signer(env) {
         Ok(value) => value,
         Err(_) => return integrity_failure(actor.correlation_id().as_str()),
@@ -180,19 +198,11 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         Err(error) => return signing_failure(actor.correlation_id().as_str(), error),
     };
 
-    Response::from_json(&DeviceGenerationUploadCapabilityResponse {
-        method: "PUT",
-        url: capability.url(),
-        headers: capability
-            .headers()
-            .iter()
-            .map(|(name, value)| DeviceGenerationUploadHeader {
-                name: name.as_str(),
-                value: value.as_str(),
-            })
-            .collect(),
-        expires_seconds: capability.expires_seconds(),
-    })
+    Response::from_json(&DeviceGenerationUploadCapabilityResponse::upload_required(
+        capability.url(),
+        capability.headers(),
+        capability.expires_seconds(),
+    ))
 }
 
 fn server_now() -> UnixMillis {
@@ -252,10 +262,43 @@ impl DeviceGenerationUploadCapabilityBody {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DeviceGenerationUploadCapabilityResponse<'a> {
-    method: &'static str,
-    url: &'a str,
+    state: &'static str,
+    method: Option<&'static str>,
+    url: Option<&'a str>,
     headers: Vec<DeviceGenerationUploadHeader<'a>>,
-    expires_seconds: u32,
+    expires_seconds: Option<u32>,
+}
+
+impl<'a> DeviceGenerationUploadCapabilityResponse<'a> {
+    const fn verified() -> Self {
+        Self {
+            state: "verified",
+            method: None,
+            url: None,
+            headers: Vec::new(),
+            expires_seconds: None,
+        }
+    }
+
+    fn upload_required(
+        url: &'a str,
+        headers: &'a [(String, String)],
+        expires_seconds: u32,
+    ) -> Self {
+        Self {
+            state: "uploadRequired",
+            method: Some("PUT"),
+            url: Some(url),
+            headers: headers
+                .iter()
+                .map(|(name, value)| DeviceGenerationUploadHeader {
+                    name: name.as_str(),
+                    value: value.as_str(),
+                })
+                .collect(),
+            expires_seconds: Some(expires_seconds),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -295,6 +338,18 @@ fn coordinator_snapshot_failure(
         | CoordinatorIngressPortErrorClass::IntegrityFailure
         | CoordinatorIngressPortErrorClass::InternalFailure => integrity_failure(correlation_id),
         CoordinatorIngressPortErrorClass::DependencyUnavailable => dependency(correlation_id),
+    }
+}
+
+fn object_verify_failure(correlation_id: &str, class: GenerationPortErrorClass) -> Result<Response> {
+    match class {
+        GenerationPortErrorClass::DependencyUnavailable => dependency(correlation_id),
+        GenerationPortErrorClass::NotFound
+        | GenerationPortErrorClass::VersionConflict
+        | GenerationPortErrorClass::InvalidState
+        | GenerationPortErrorClass::Conflict
+        | GenerationPortErrorClass::IntegrityFailure
+        | GenerationPortErrorClass::InternalFailure => integrity_failure(correlation_id),
     }
 }
 
@@ -349,7 +404,9 @@ fn dependency(correlation_id: &str) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::DeviceGenerationUploadCapabilityBody;
+    use super::{
+        DeviceGenerationUploadCapabilityBody, DeviceGenerationUploadCapabilityResponse,
+    };
 
     #[test]
     fn transport_is_metadata_only_and_rejects_client_authority_fields() {
@@ -387,5 +444,17 @@ mod tests {
                 "forbidden upload capability field unexpectedly accepted: {forbidden}"
             );
         }
+    }
+
+    #[test]
+    fn exact_verification_response_never_contains_an_upload_capability()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_value(DeviceGenerationUploadCapabilityResponse::verified())?;
+        assert_eq!(json["state"], "verified");
+        assert!(json["method"].is_null());
+        assert!(json["url"].is_null());
+        assert_eq!(json["headers"], serde_json::json!([]));
+        assert!(json["expiresSeconds"].is_null());
+        Ok(())
     }
 }
