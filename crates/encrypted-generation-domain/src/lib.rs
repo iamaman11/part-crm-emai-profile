@@ -4,9 +4,9 @@ mod container;
 mod lifecycle;
 
 pub use container::{
-    ContainerDigest, GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, NoncePrefix,
-    OpenedGeneration, PlaintextDigest, SealedGeneration, open_generation, open_generation_expected,
-    seal_generation,
+    ContainerDigest, GenerationDek, GenerationIdentity, GenerationMetadata, KeyId, MetadataDigest,
+    NoncePrefix, OpenedGeneration, PlaintextDigest, SealedGeneration, open_generation,
+    open_generation_expected, seal_generation,
 };
 pub use lifecycle::{
     CloudGenerationRecord, CloudGenerationRepository, CloudGenerationStatus, OrphanPlan,
