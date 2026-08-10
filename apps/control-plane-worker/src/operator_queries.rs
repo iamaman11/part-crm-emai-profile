@@ -1,14 +1,16 @@
-use crate::access_session::{correlation_hint, neutral_not_found, problem, resolve_active_request_actor};
+use crate::access_session::{
+    correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
+};
+use application_ports::query_mailboxes::{MailboxBindingStatus, MailboxProvider};
 use application_ports::query_profiles::ProfileStatus;
 use application_ports::{QueryCursor, QueryPageRequest, QueryPageSize};
 use cloudflare_adapters::d1_query::D1QueryRepository;
+use control_plane_contract::RouteClass;
 use control_plane_contract::operator_query_api::{
     MailboxListItemDto, MailboxListPageDto, MemberListItemDto, MemberListPageDto,
     ProfileListItemDto, ProfileListPageDto,
 };
-use control_plane_contract::RouteClass;
 use identity_access_domain::{MembershipRole, MembershipStatus};
-use mailbox_domain::{MailboxBindingStatus, MailboxProvider};
 use use_cases_query::{QueryApplicationError, list_mailboxes, list_members, list_profiles};
 use worker::{Env, Method, Request, Response, Result};
 
@@ -134,9 +136,12 @@ fn query_failure(correlation_id: &str, error: QueryApplicationError) -> Result<R
         QueryApplicationError::InvalidInput => {
             problem(correlation_id, 400, "invalid_request", "Invalid Request")
         }
-        QueryApplicationError::IntegrityFailure => {
-            problem(correlation_id, 500, "integrity_failure", "Integrity Failure")
-        }
+        QueryApplicationError::IntegrityFailure => problem(
+            correlation_id,
+            500,
+            "integrity_failure",
+            "Integrity Failure",
+        ),
         QueryApplicationError::DependencyUnavailable => problem(
             correlation_id,
             503,
@@ -185,17 +190,25 @@ const fn mailbox_status(status: MailboxBindingStatus) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{mailbox_provider, mailbox_status, membership_role, membership_status, profile_status};
+    use super::{
+        mailbox_provider, mailbox_status, membership_role, membership_status, profile_status,
+    };
+    use application_ports::query_mailboxes::{MailboxBindingStatus, MailboxProvider};
     use application_ports::query_profiles::ProfileStatus;
     use identity_access_domain::{MembershipRole, MembershipStatus};
-    use mailbox_domain::{MailboxBindingStatus, MailboxProvider};
 
     #[test]
     fn public_query_enums_use_canonical_wire_values() {
         assert_eq!(profile_status(ProfileStatus::DirtyLocal), "DIRTY_LOCAL");
         assert_eq!(membership_role(MembershipRole::TenantOwner), "TENANT_OWNER");
         assert_eq!(membership_status(MembershipStatus::Revoked), "REVOKED");
-        assert_eq!(mailbox_provider(MailboxProvider::BrowserFallback), "BROWSER_FALLBACK");
-        assert_eq!(mailbox_status(MailboxBindingStatus::AuthRequired), "AUTH_REQUIRED");
+        assert_eq!(
+            mailbox_provider(MailboxProvider::BrowserFallback),
+            "BROWSER_FALLBACK"
+        );
+        assert_eq!(
+            mailbox_status(MailboxBindingStatus::AuthRequired),
+            "AUTH_REQUIRED"
+        );
     }
 }
