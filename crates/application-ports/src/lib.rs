@@ -39,6 +39,7 @@ pub use audit::{AuditPort, AuditRecord, AuditResult};
 pub use clients::ClientRepository;
 pub use clock::ClockPort;
 pub use commands::CommandExecutionEvidence;
+pub use contracts::{IntegrationEventEnvelope, RealtimeInvalidationSignal};
 pub use device_generation_commit::{
     CoordinatorGenerationCommitWitness, DeviceGenerationCommitError,
     DeviceGenerationCommitErrorClass, DeviceGenerationCommitOutcome, DeviceGenerationCommitPort,
