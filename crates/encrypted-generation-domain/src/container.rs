@@ -469,12 +469,7 @@ pub fn seal_generation(
     for chunk in plaintext.chunks(chunk_size) {
         let plaintext_length =
             u32::try_from(chunk.len()).map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
-        let aad = record_aad(
-            metadata_digest,
-            RECORD_CHUNK,
-            chunk_count,
-            plaintext_length,
-        );
+        let aad = record_aad(metadata_digest, RECORD_CHUNK, chunk_count, plaintext_length);
         let nonce_bytes = metadata.nonce_prefix().nonce_for(chunk_count);
         let ciphertext = cipher
             .encrypt(
