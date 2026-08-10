@@ -738,7 +738,8 @@ mod tests {
         OperatorFailureStage, OperatorFlowError, ProfileBridgeOperator, RuntimeBundleSelectionPort,
     };
     use crate::local_profile::{
-        BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationState, MaterializationRoot,
+        BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationState, LocalProfileError,
+        MaterializationRoot,
     };
     use crate::runtime_bundle::ApprovedRuntimeBundle;
     use crate::{
