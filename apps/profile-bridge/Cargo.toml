@@ -10,9 +10,11 @@ default-run = "profile-bridge"
 application-ports.workspace = true
 bridge-domain.workspace = true
 browser-execution-domain.workspace = true
+encrypted-generation-domain.workspace = true
 profile-platform-primitives.workspace = true
 runtime-bundle-domain.workspace = true
 session-domain.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true
