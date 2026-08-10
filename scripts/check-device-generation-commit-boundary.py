@@ -14,6 +14,7 @@ D1_JOURNAL = Path("crates/cloudflare-adapters/src/d1_device_generation_commit.rs
 RUNTIME_CONTRACT = Path("crates/cloudflare-adapters/src/device_generation_commit_runtime.rs")
 WORKER_COORDINATOR = Path("apps/control-plane-worker/src/profile_coordinator.rs")
 WORKER_ENDPOINT = Path("apps/control-plane-worker/src/device_generation_commit.rs")
+WORKER_COMPOSITION = Path("apps/control-plane-worker/src/composition.rs")
 DEVICE_ROUTES = Path("crates/control-plane-contract/src/routes/devices.rs")
 MIGRATION = Path("migrations/d1/0021_device_generation_commit.sql")
 
@@ -43,6 +44,7 @@ def errors(root: Path) -> list[str]:
     runtime = production(read(root, RUNTIME_CONTRACT))
     coordinator = production(read(root, WORKER_COORDINATOR))
     endpoint = production(read(root, WORKER_ENDPOINT))
+    composition = production(read(root, WORKER_COMPOSITION))
     routes = read(root, DEVICE_ROUTES)
     migration = read(root, MIGRATION)
 
@@ -81,15 +83,33 @@ def errors(root: Path) -> list[str]:
 
     for required in [
         "deny_unknown_fields",
-        "R2GenerationObjects::new",
         "execute_commit_dirty_generation",
+        "generation_object_verifier(env)",
         "device_generation_commit(env)",
     ]:
         if required not in endpoint:
             result.append(f"metadata-only Worker endpoint missing required boundary: {required}")
-    for forbidden in ["ciphertext", "profile_bytes", "container: Vec", "observed_at_ms"]:
+    for forbidden in [
+        "cloudflare_adapters::r2_",
+        "R2GenerationObjects",
+        "R2_PROFILES_BINDING",
+        "ciphertext",
+        "profile_bytes",
+        "container: Vec",
+        "observed_at_ms",
+    ]:
         if forbidden in endpoint:
-            result.append(f"generation commit endpoint must remain metadata-only: {forbidden}")
+            result.append(f"generation commit endpoint must remain provider-free/metadata-only: {forbidden}")
+
+    for required in [
+        "pub fn generation_object_verifier",
+        "R2GenerationObjects::new",
+        "env.bucket(R2_PROFILES_BINDING)?",
+        "pub fn device_generation_commit",
+        "CloudflareDeviceGenerationCommitPort::new",
+    ]:
+        if required not in composition:
+            result.append(f"Worker composition missing generation commit provider wiring: {required}")
 
     if '"generation-commit"' not in routes or "DeviceGenerationCommitApi" not in routes:
         result.append("authenticated device generation commit route is missing")
@@ -106,6 +126,7 @@ def self_test() -> int:
             RUNTIME_CONTRACT,
             WORKER_COORDINATOR,
             WORKER_ENDPOINT,
+            WORKER_COMPOSITION,
             DEVICE_ROUTES,
             MIGRATION,
         ]:
