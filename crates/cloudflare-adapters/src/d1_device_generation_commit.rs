@@ -1,6 +1,7 @@
 use application_ports::device_generation_commit::{
     DeviceGenerationCommitError, DeviceGenerationCommitErrorClass, DeviceGenerationCommitRequest,
-    DeviceGenerationReplayProbe, DeviceGenerationReplayProbeOutcome, DeviceGenerationReplayProbePort,
+    DeviceGenerationReplayProbe, DeviceGenerationReplayProbeOutcome,
+    DeviceGenerationReplayProbePort,
 };
 use device_domain::DeviceJobId;
 use profile_platform_primitives::{ActorContext, FencingToken, TenantId};
@@ -341,8 +342,8 @@ fn exact_probe_row(
 }
 
 fn committed_state_is_exact(row: &DeviceGenerationCommitRow) -> bool {
-    let Some(expected_profile_version) = non_negative_u64(row.expected_profile_version)
-        .and_then(|version| version.checked_add(1))
+    let Some(expected_profile_version) =
+        non_negative_u64(row.expected_profile_version).and_then(|version| version.checked_add(1))
     else {
         return false;
     };
