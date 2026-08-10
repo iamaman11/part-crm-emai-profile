@@ -9,7 +9,8 @@ use application_ports::{
 };
 use notification_domain::NotificationCursor;
 use profile_platform_primitives::{
-    ActorContext, ActorId, CorrelationId, OpaqueId, OutboxEventId, TenantId, TenantScope, UnixMillis,
+    ActorContext, ActorId, CorrelationId, OpaqueId, OutboxEventId, TenantId, TenantScope,
+    UnixMillis,
 };
 use std::cell::{Cell, RefCell};
 use std::future::Future;
@@ -223,7 +224,10 @@ fn socket_failure_preserves_cursor_and_fresh_session_replays_without_loss()
         200,
         UnixMillis::new(20),
     ));
-    assert_eq!(first, Err(NotificationOperationError::DependencyUnavailable));
+    assert_eq!(
+        first,
+        Err(NotificationOperationError::DependencyUnavailable)
+    );
     assert!(cursors.cursor.borrow().is_none());
     assert_eq!(cursors.compare_and_advance_calls.get(), 0);
 
@@ -238,9 +242,16 @@ fn socket_failure_preserves_cursor_and_fresh_session_replays_without_loss()
         UnixMillis::new(21),
     ))?;
     assert_eq!(second.cursor_outcome(), CursorAdvanceWriteOutcome::Advanced);
-    assert_eq!(fresh_socket.event_ids.borrow().as_slice(), ["outbox_01JREALTIME_A"]);
     assert_eq!(
-        cursors.cursor.borrow().as_ref().map(|value| value.event_id().as_str()),
+        fresh_socket.event_ids.borrow().as_slice(),
+        ["outbox_01JREALTIME_A"]
+    );
+    assert_eq!(
+        cursors
+            .cursor
+            .borrow()
+            .as_ref()
+            .map(|value| value.event_id().as_str()),
         Some("outbox_01JREALTIME_A")
     );
     Ok(())
@@ -286,15 +297,18 @@ fn cas_race_replays_duplicate_but_never_skips_durable_event()
         ["outbox_01JREALTIME_A", "outbox_01JREALTIME_A"]
     );
     assert_eq!(
-        cursors.cursor.borrow().as_ref().map(|value| value.event_id().as_str()),
+        cursors
+            .cursor
+            .borrow()
+            .as_ref()
+            .map(|value| value.event_id().as_str()),
         Some("outbox_01JREALTIME_A")
     );
     Ok(())
 }
 
 #[test]
-fn cursor_gap_drains_in_order_across_bounded_pages()
--> Result<(), Box<dyn std::error::Error>> {
+fn cursor_gap_drains_in_order_across_bounded_pages() -> Result<(), Box<dyn std::error::Error>> {
     let actor = actor()?;
     let authorization = Authorization {
         allowed: Cell::new(true),
@@ -334,7 +348,11 @@ fn cursor_gap_drains_in_order_across_bounded_pages()
         ]
     );
     assert_eq!(
-        cursors.cursor.borrow().as_ref().map(|value| value.event_id().as_str()),
+        cursors
+            .cursor
+            .borrow()
+            .as_ref()
+            .map(|value| value.event_id().as_str()),
         Some("outbox_01JREALTIME_C")
     );
     Ok(())
@@ -360,7 +378,10 @@ fn live_delivery_rechecks_membership_and_exact_event_grant()
         &actor,
         &event,
     ));
-    assert_eq!(revoked_membership, Err(NotificationOperationError::Forbidden));
+    assert_eq!(
+        revoked_membership,
+        Err(NotificationOperationError::Forbidden)
+    );
     assert!(socket.event_ids.borrow().is_empty());
 
     authorization.allowed.set(true);
@@ -383,6 +404,9 @@ fn live_delivery_rechecks_membership_and_exact_event_grant()
         &actor,
         &event,
     ))?;
-    assert_eq!(socket.event_ids.borrow().as_slice(), ["outbox_01JREALTIME_A"]);
+    assert_eq!(
+        socket.event_ids.borrow().as_slice(),
+        ["outbox_01JREALTIME_A"]
+    );
     Ok(())
 }
