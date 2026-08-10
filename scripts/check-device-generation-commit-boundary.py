@@ -99,7 +99,16 @@ def errors(root: Path) -> list[str]:
     endpoint_body = endpoint_body_struct(endpoint)
     if not endpoint_body:
         result.append("strict metadata-only device generation commit body is missing")
-    for forbidden_field in ["device_id", "tenant_id", "observed_at", "executed_at", "coordinator_version", "coordinator_sequence"]:
+    for forbidden_field in [
+        "device_id",
+        "tenant_id",
+        "observed_at",
+        "executed_at",
+        "expected_job_version",
+        "expected_profile_version",
+        "coordinator_version",
+        "coordinator_sequence",
+    ]:
         if forbidden_field in endpoint_body:
             result.append(
                 f"public generation commit body must not accept server authority field: {forbidden_field}"
@@ -107,6 +116,13 @@ def errors(root: Path) -> list[str]:
 
     for required in [
         "deny_unknown_fields",
+        "load_device_job(actor.tenant_scope().tenant_id(), &job_id)",
+        "job.version()",
+        "claim.claim_id() != &claim_id",
+        "claim.fence() != body.fence",
+        "job.last_fence() != body.fence",
+        "claim.is_expired(now)",
+        "load_active_profile_version(actor, &profile_id, &base_generation_id)",
         "coordinator_ingress_application(env)",
         ".snapshot(actor.tenant_scope(), &profile_id).await",
         "projection.active_session_id() != Some(&session_id)",
