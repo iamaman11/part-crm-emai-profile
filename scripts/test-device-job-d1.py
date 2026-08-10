@@ -14,16 +14,17 @@ TENANT_A = "tenant_device_jobs_a"
 TENANT_B = "tenant_device_jobs_b"
 OWNER_A = "actor_device_jobs_a"
 OWNER_B = "actor_device_jobs_b"
-BACKUP_OWNER_A = "actor_device_jobs_backup_owner_a"
+MEMBER_A = "actor_device_jobs_member_a"
 IDENTITY_A = "identity_device_jobs_a"
 IDENTITY_B = "identity_device_jobs_b"
-BACKUP_IDENTITY_A = "identity_device_jobs_backup_owner_a"
+MEMBER_IDENTITY_A = "identity_device_jobs_member_a"
 PROFILE_A = "profile_device_jobs_a"
 PROFILE_B = "profile_device_jobs_b"
 GENERATION_A = "generation_device_jobs_a"
 GENERATION_B = "generation_device_jobs_b"
 DEVICE_A = "device_device_jobs_a"
 DEVICE_A_REBOUND = "device_device_jobs_a_rebound"
+DEVICE_A_MEMBER = "device_device_jobs_member_a"
 DEVICE_B = "device_device_jobs_b"
 JOB_A = "devjob_device_jobs_a"
 JOB_RETRY = "devjob_device_jobs_retry"
@@ -252,8 +253,10 @@ def insert_future_retry_job(connection: sqlite3.Connection) -> None:
     )
 
 
-def authenticated_device_rows(connection: sqlite3.Connection) -> list[tuple[str, int]]:
-    rows = connection.execute(AUTHENTICATED_DEVICE_QUERY, (TENANT_A, OWNER_A)).fetchall()
+def authenticated_device_rows(
+    connection: sqlite3.Connection, actor_id: str = OWNER_A
+) -> list[tuple[str, int]]:
+    rows = connection.execute(AUTHENTICATED_DEVICE_QUERY, (TENANT_A, actor_id)).fetchall()
     return [(str(row[0]), int(row[1])) for row in rows]
 
 
@@ -349,18 +352,28 @@ def test_actor_device_binding_is_unique_revocable_and_membership_scoped(
 
     connection.execute(
         "INSERT INTO identities (identity_id, access_subject, created_at_ms) VALUES (?, ?, 95)",
-        (BACKUP_IDENTITY_A, f"subject-{BACKUP_IDENTITY_A}"),
+        (MEMBER_IDENTITY_A, f"subject-{MEMBER_IDENTITY_A}"),
     )
     connection.execute(
         """
         INSERT INTO memberships (
             tenant_id, actor_id, identity_id, role, status, version,
             created_at_ms, updated_at_ms
-        ) VALUES (?, ?, ?, 'TENANT_OWNER', 'ACTIVE', 1, 95, 95)
+        ) VALUES (?, ?, ?, 'MEMBER', 'ACTIVE', 1, 95, 95)
         """,
-        (TENANT_A, BACKUP_OWNER_A, BACKUP_IDENTITY_A),
+        (TENANT_A, MEMBER_A, MEMBER_IDENTITY_A),
+    )
+    connection.execute(
+        """
+        INSERT INTO device_actor_bindings (
+            tenant_id, actor_id, device_id, version, status, evidence_reference,
+            bound_at_ms, updated_at_ms, revoked_at_ms
+        ) VALUES (?, ?, ?, 1, 'ACTIVE', 'member_binding', 95, 95, NULL)
+        """,
+        (TENANT_A, MEMBER_A, DEVICE_A_MEMBER),
     )
     connection.commit()
+    assert authenticated_device_rows(connection, MEMBER_A) == [(DEVICE_A_MEMBER, 1)]
 
     connection.execute(
         """
@@ -368,11 +381,11 @@ def test_actor_device_binding_is_unique_revocable_and_membership_scoped(
         SET status = 'SUSPENDED', version = version + 1, updated_at_ms = 100
         WHERE tenant_id = ? AND actor_id = ?
         """,
-        (TENANT_A, OWNER_A),
+        (TENANT_A, MEMBER_A),
     )
-    assert authenticated_device_rows(connection) == []
+    assert authenticated_device_rows(connection, MEMBER_A) == []
     connection.rollback()
-    assert authenticated_device_rows(connection) == [(DEVICE_A_REBOUND, 2)]
+    assert authenticated_device_rows(connection, MEMBER_A) == [(DEVICE_A_MEMBER, 1)]
 
     connection.execute(
         """
