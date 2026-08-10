@@ -6,8 +6,7 @@ use application_ports::generations::{GenerationPortError, GenerationPortErrorCla
 use profile_platform_primitives::TenantScope;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use worker::Bucket;
-use worker::r2::{Conditional, Object};
+use worker::{Bucket, Conditional, Object};
 
 const META_TENANT_ID: &str = "profile-platform-tenant-id";
 const META_PROFILE_ID: &str = "profile-platform-profile-id";
