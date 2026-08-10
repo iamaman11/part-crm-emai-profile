@@ -364,10 +364,20 @@ def catalog_snapshot(
         "SELECT COUNT(*) FROM device_generation_commit_commands WHERE tenant_id = ?",
         (TENANT,),
     ).fetchone()[0]
+    job = connection.execute(
+        """
+        SELECT status, aggregate_version, current_claim_id, claim_fence,
+               retry_at_ms, updated_at_ms
+        FROM device_jobs
+        WHERE tenant_id = ? AND job_id = ?
+        """,
+        (TENANT, JOB),
+    ).fetchone()
     return (
         tuple(profile),
         None if generation is None else tuple(generation),
         int(commands),
+        tuple(job),
     )
 
 
@@ -396,12 +406,12 @@ def test_schema_is_metadata_only() -> None:
         connection.close()
 
 
-def test_exact_command_atomically_verifies_and_activates() -> None:
+def test_exact_command_atomically_verifies_activates_and_succeeds_job() -> None:
     connection = seed()
     try:
         insert_device_commit(connection, command_values())
         connection.commit()
-        profile, generation, commands = catalog_snapshot(connection)
+        profile, generation, commands, job = catalog_snapshot(connection)
         assert profile == (CANDIDATE, "READY", 3, 100)
         assert generation == (
             "VERIFIED",
@@ -411,6 +421,7 @@ def test_exact_command_atomically_verifies_and_activates() -> None:
             CONTAINER_DIGEST,
         )
         assert commands == 1
+        assert job == ("SUCCEEDED", 3, None, None, None, 100)
 
         before = catalog_snapshot(connection)
         expect_integrity_error(lambda: insert_device_commit(connection, command_values()))
@@ -533,7 +544,7 @@ def test_competing_generation_keeps_loser_non_authoritative() -> None:
         connection.close()
 
 
-def test_late_activation_failure_rolls_back_journal_and_candidate() -> None:
+def test_late_activation_failure_rolls_back_journal_candidate_and_job() -> None:
     connection = seed()
     try:
         connection.executescript(
@@ -551,7 +562,40 @@ def test_late_activation_failure_rolls_back_journal_and_candidate() -> None:
         assert_failed_without_catalog_mutation(
             connection, lambda: insert_device_commit(connection, command_values())
         )
-        assert catalog_snapshot(connection) == ((BASE, "READY", 2, 40), None, 0)
+        assert catalog_snapshot(connection) == (
+            (BASE, "READY", 2, 40),
+            None,
+            0,
+            ("RUNNING", 2, CLAIM, 1, None, 70),
+        )
+    finally:
+        connection.close()
+
+
+def test_late_job_terminalization_failure_rolls_back_activation_and_candidate() -> None:
+    connection = seed()
+    try:
+        connection.executescript(
+            """
+            CREATE TRIGGER force_device_job_terminalization_failure
+            BEFORE UPDATE OF status ON device_jobs
+            FOR EACH ROW
+            WHEN NEW.status = 'SUCCEEDED'
+            BEGIN
+                SELECT RAISE(ABORT, 'forced_device_job_terminalization_failure');
+            END;
+            """
+        )
+        connection.commit()
+        assert_failed_without_catalog_mutation(
+            connection, lambda: insert_device_commit(connection, command_values())
+        )
+        assert catalog_snapshot(connection) == (
+            (BASE, "READY", 2, 40),
+            None,
+            0,
+            ("RUNNING", 2, CLAIM, 1, None, 70),
+        )
     finally:
         connection.close()
 
@@ -617,12 +661,13 @@ def test_direct_generation_mutations_remain_governed() -> None:
 
 def main() -> int:
     test_schema_is_metadata_only()
-    test_exact_command_atomically_verifies_and_activates()
+    test_exact_command_atomically_verifies_activates_and_succeeds_job()
     test_stale_claim_profile_and_malformed_rows_fail_closed()
     test_revoked_binding_and_authorization_fail_closed()
     test_stale_coordinator_witness_fails_closed()
     test_competing_generation_keeps_loser_non_authoritative()
-    test_late_activation_failure_rolls_back_journal_and_candidate()
+    test_late_activation_failure_rolls_back_journal_candidate_and_job()
+    test_late_job_terminalization_failure_rolls_back_activation_and_candidate()
     test_direct_generation_mutations_remain_governed()
     print("Phase 2F device-generation atomic D1 commit invariants are valid.")
     return 0
