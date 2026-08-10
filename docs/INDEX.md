@@ -21,6 +21,7 @@ explicit.
 - [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json) — immutable machine-readable ledger of accepted phase issue, implementation PR, exact source head, merge SHA and permanent-workflow count; CI rejects conflicting `DEVELOPMENT_PLAN.md` provenance.
 - [`PROFILE_APPLICATION_BOUNDARY.md`](./PROFILE_APPLICATION_BOUNDARY.md) — capability-specific profile application-boundary architecture/evidence.
 - [`PROFILE_GENERATION_REGISTRY.md`](./PROFILE_GENERATION_REGISTRY.md) — profile-generation lifecycle/storage contract.
+- [`REALTIME_NOTIFICATIONS.md`](./REALTIME_NOTIFICATIONS.md) — accepted Phase 2G durable-first, metadata-safe realtime invalidation topology, authorization/reconnect semantics and non-authoritative frontend contract.
 
 ## Future Development — Not Active Execution
 

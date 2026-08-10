@@ -64,6 +64,14 @@
       "source_head": "c36df418f9fa877c5143327e97b60087c33ffd02",
       "merge_sha": "42b26dc0c78c0c65dcea2bc90bb5ce6a3bd4b02b",
       "permanent_workflows": 12
+    },
+    {
+      "phase": "Phase 2G",
+      "issue": 159,
+      "implementation_pr": 160,
+      "source_head": "85ca77b430e7d184204082aea7d51a08fdd72cf9",
+      "merge_sha": "48e24f1f365d87a07bf97322c81099dd6a89f046",
+      "permanent_workflows": 12
     }
   ]
 }
