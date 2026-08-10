@@ -34,16 +34,22 @@ impl CommittedDirtyGeneration {
             return Err(LocalProfileError::InvalidTransition);
         }
 
+        // The server commit is already authoritative. Once its immutable identity matches the
+        // prepared candidate, the old base must never become reopenable again even if the local
+        // candidate workspace changed or can no longer be inspected. Such a candidate must be
+        // rematerialized from the committed immutable R2 generation instead of being accepted as
+        // clean local state.
+        base.mark_superseded(now)?;
         let current_inventory = prepared.candidate_workspace().inventory()?;
         if current_inventory != *prepared.candidate_inventory() {
             return Err(LocalProfileError::CloneChanged);
         }
 
-        base.supersede_with_successor(
+        Ok(LocalGenerationRecord::new(
             metadata.generation_id().clone(),
             current_inventory.total_bytes(),
             now,
-        )
+        ))
     }
 }
 
@@ -278,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_candidate_workspace_blocks_local_successor_transition()
+    fn changed_candidate_workspace_forces_rematerialization_but_keeps_base_superseded()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut fixture = Fixture::new()?;
         let committed = block_on(publish_verify_and_commit_dirty_generation(
@@ -306,7 +312,11 @@ mod tests {
             ),
             Err(LocalProfileError::CloneChanged)
         );
-        assert_eq!(fixture.base.state(), LocalGenerationState::DirtyLocal);
+        assert_eq!(
+            fixture.base.state(),
+            LocalGenerationState::SupersededEvictable
+        );
+        assert!(fixture.base.is_locked());
         fixture.cleanup();
         Ok(())
     }
