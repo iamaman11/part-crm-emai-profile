@@ -2,7 +2,7 @@
 
 **Status:** normative post-composition execution plan  
 **Date:** 2026-08-10
-**Tracking:** Phase 1 complete; Phase 2A/2B/2C/2D/2E/2F accepted via #118/#137, #138/#140, #142/#143, #144/#147, #148/#152 and #154/#155; Phase 2G is the unique NEXT after this docs closeout; expert-plan refinement #133; external CRM is future development only
+**Tracking:** Phase 1 complete; Phase 2A/2B/2C/2D/2E/2F/2G accepted via #118/#137, #138/#140, #142/#143, #144/#147, #148/#152, #154/#155 and #159/#160; Phase 2H is the unique NEXT after this docs closeout; expert-plan refinement #133; external CRM is future development only
 **Production readiness:** unchanged; `production_ready=false` until Phase 2J accepts all mandatory real external evidence
 
 ## 1. Authority And Scope
@@ -51,7 +51,7 @@ Accepted `main` already provides strong repository-local foundations:
   replay, grant-aware catch-up, bounded retention and sanitizer-safe operational visibility;
 - Phase 2A decomposed `client-domain`, opaque PII-independent contact identity, versioned contact
   normalization/protection semantics, protected-only persistence ports and extracted canonical
-  client application ownership in `use-cases-clients`.
+  client application ownership in `use-cases-clients`;
 - Phase 2B authoritative protected client/contact persistence in D1, separate versioned
   encryption and exact-lookup key domains, application-owned checked-version lifecycle/contact
   commands, atomic mutation + idempotency + audit + outbox, and tenant-first indexed HMAC lookup;
@@ -65,7 +65,11 @@ Accepted `main` already provides strong repository-local foundations:
   2D Client Mail contract on the cloud adapter, and permanent mailbox privacy/runtime enforcement;
 - Phase 2F independent `device-domain`/`use-cases-devices`, durable D1 device jobs and browser mailbox
   execution, trusted claim/generation/Coordinator fencing checks, retained Bridge writer ownership through
-  immutable upload + exact verification + fenced/CAS commit, and deterministic rematerialization recovery.
+  immutable upload + exact verification + fenced/CAS commit, and deterministic rematerialization recovery;
+- Phase 2G versioned metadata-only realtime invalidations, provider-neutral notification realtime
+  authorization/audience/sink orchestration, per-user hibernatable NotificationHub Durable Objects,
+  durable cursor catch-up before live continuation, current membership/grant reauthorization,
+  durable-before-live fanout, multi-tab/device broadcast, and frontend invalidation-only refetch/dedupe.
 
 Phase 1A was accepted through issue #114 / PR #115 from exact proven source head
 `21b4bc65cd1bb117504c0a0cfe18c8c11e411f25` and guarded squash merge
@@ -99,6 +103,10 @@ Phase 2F was accepted through issue #154 / PR #155 from exact proven source head
 `c36df418f9fa877c5143327e97b60087c33ffd02` and guarded squash merge
 `42b26dc0c78c0c65dcea2bc90bb5ce6a3bd4b02b`.
 
+Phase 2G was accepted through issue #159 / PR #160 from exact proven source head
+`85ca77b430e7d184204082aea7d51a08fdd72cf9` and guarded squash merge
+`48e24f1f365d87a07bf97322c81099dd6a89f046`.
+
 The critical path is deliberately linear:
 
 ```text
@@ -116,8 +124,8 @@ Phase 2A
   -> only then future CRM planning
 ```
 
-Exactly one implementation slice is active at a time. Phase 2G is the unique NEXT only after this
-Phase 2F docs closeout is accepted on `main`; later Phase 2 slices remain blocked by the same linear rule.
+Exactly one implementation slice is active at a time. Phase 2H is the unique NEXT only after this
+Phase 2G docs closeout is accepted on `main`; later Phase 2 slices remain blocked by the same linear rule.
 
 ### 2.1 Critical-path rules
 
@@ -296,15 +304,15 @@ slice remain mandatory expansion work.
 | A1 | Adapter dependency boundary | **Accepted.** Correct inward dependency rule documented and enforced by architecture allowlists. | Preserve in every slice; no separate future refactor. |
 | A2 | `application-ports` capability split | **Accepted.** Capability modules + thin facade implemented in Phase 0A/PR #79. | Add new modules only with owning capabilities; keep one crate. |
 | A3 | Domain aggregate decomposition | **Accepted.** Phase 2A decomposed `client-domain`; Phase 2E decomposed `mailbox-domain`; Phase 2F owns durable device state separately in `device-domain`. | Preserve continuously; split further only at an explicit growth point. |
-| A4 | Rust/OpenAPI/TypeScript generation | **Foundation accepted, coverage incomplete.** Migrated public slice is generated and CI-enforced; Phase 2B added no public transport DTO. | Every new 2C–2H public DTO/event expands canonical generated coverage before UI use. |
-| A5 | Feature-owned SPA route composition | **Accepted in Phase 2C.** Root app routing imports feature-owned public route APIs; direct feature-internal route composition is permanently rejected by positive/negative CI. | Preserve in later route-family growth. |
+| A4 | Rust/OpenAPI/TypeScript generation | **Foundation accepted, coverage incomplete.** Migrated public slice is generated and CI-enforced; new public shapes remain versioned and generated where applicable. | Phase 2H must complete remaining active public DTO/enum coverage before UI consumes it. |
+| A5 | Feature-owned SPA route composition | **Accepted in Phase 2C.** Root app routing imports feature-owned public route APIs; direct feature-internal route composition is permanently rejected by positive/negative CI. | Preserve in Phase 2H route-family growth. |
 | A6 | Architecture consistency gate | **Accepted.** Deterministic architecture inventory/docs checks in CI. | Expand inventory/checks whenever new governed modules/routes/contracts appear. |
 | A7 | Route classifier modularization | **Accepted.** Capability classifiers behind one fail-closed entrypoint. | New route families must add an owning classifier module; no return to monolith. |
-| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D.** `use-cases-query`, capability-owned read-model ports/projections, bounded typed global search, grant-safe exact-contact lookup and provider-neutral Client Mail sequencing are permanently enforced. | Preserve in Phase 2E/2F provider implementations and later query surfaces; do not move query policy into adapters/UI. |
-| 6.1 | Versioned integration event envelope | **Accepted foundation** in Phase 1A. | Reuse/extend versioned registry for later capabilities; no ad-hoc Queue/WebSocket JSON. |
-| 6.2 | Durable-before-notify | **Accepted through Phase 2F repository-owned consumers.** Phase 1B durable delivery is preserved by Phase 2E mailbox and Phase 2F device/browser execution ordering. | Phase 2G extends the same durable-before-signal rule to realtime; preserve through 2I. |
-| 6.3 | At-least-once consumer idempotency | **Accepted through Phase 2F.** Notification replay, Phase 2E mailbox execution and Phase 2F durable device jobs preserve duplicate-neutral canonical effects. | Preserve for every later consumer/realtime signal. |
-| 6.4 | Authorization-before-projection | **Accepted through Phase 2D query/read-model scope.** Live membership/grants precede list/search/detail projection, exact-contact lookup and mailbox eligibility/provider invocation; the accepted Phase 2E cloud and Phase 2F browser lanes preserve this ordering. | Phase 2G extends the same rule to realtime subscriptions. |
+| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D and preserved through Phase 2G.** `use-cases-query`, capability-owned read-model ports/projections, bounded typed global search, grant-safe exact-contact lookup and provider-neutral Client Mail sequencing remain authoritative; Phase 2G realtime only invalidates/refetches those canonical paths. | Preserve through Phase 2H/2I; do not move query policy into adapters/UI/realtime. |
+| 6.1 | Versioned integration event envelope | **Accepted foundation** in Phase 1A; Phase 2G adds a versioned canonical metadata-only invalidation contract instead of ad-hoc WebSocket JSON. | Reuse/extend versioned registries for later capabilities. |
+| 6.2 | Durable-before-notify | **Accepted through Phase 2G.** Phase 1B durable delivery remains canonical; Phase 2E/2F consumers preserve ordering; Phase 2G live fanout occurs only after durable `Delivered`, reconnect catches up from the durable cursor first, and live delivery never advances canonical catch-up state. | Preserve through 2I. |
+| 6.3 | At-least-once consumer idempotency | **Accepted through Phase 2G.** Notification replay, mailbox/device consumers and realtime duplicate delivery preserve duplicate-neutral canonical/UI logical effects. | Preserve for every later consumer and UI surface. |
+| 6.4 | Authorization-before-projection | **Accepted through Phase 2G.** Live membership/grants precede list/search/detail/provider access and realtime subscription/catch-up; live invalidation rechecks exact-event authorization and bounded reauthorization disconnects revoked/suspended actors. | Preserve through Phase 2H/2I. |
 | 6.5 | PII protection boundary | **Accepted through Phase 2B.** Contact IDs are PII-independent; authoritative D1 contact storage is ciphertext-only; encryption/HMAC key domains and versions are separate; exact lookup is tenant-scoped and index-backed; rotation candidates do not require plaintext scans. | Preserve in every later client/query/mail surface; fuzzy/prefix PII search still requires a separate accepted ADR. |
 | 6.6 | Profile materialization | **Accepted repository-local through Phase 2F.** Retained writer ownership, immutable dirty-generation evolution, exact verification, fenced/CAS commit and deterministic rematerialization are composed/synthetic. | Phase 2I closes broader recovery/E2E; Phase 2J supplies real physical/provider evidence. |
 
@@ -326,7 +334,7 @@ decompositions plus separate Phase 2F device ownership; A5 was accepted in 2C an
 ## 6. Phase 1 — Durable Integration And Delivery Foundation
 
 **Goal:** complete the asynchronous reliability substrate before product expansion depends on it.
-**Status:** ACCEPTED. Phase 1 is complete; Phase 2A through Phase 2F are accepted; Phase 2G is the unique next implementation slice after this closeout.
+**Status:** ACCEPTED. Phase 1 is complete; Phase 2A through Phase 2G are accepted; Phase 2H is the unique next implementation slice after this closeout.
 
 ### Phase 1A — Durable event/outbox foundation — ACCEPTED
 
@@ -428,7 +436,7 @@ No client contact model, client merge, search, real mailbox provider, device exe
 WebSocket hub or CRM work enters Phase 1B.
 
 **Phase 1 completion gate:** ACCEPTED by the implementation merge and bounded documentation closeout.
-Phase 2A and Phase 2B are also accepted; Phase 2C is the unique NEXT and later Phase 2 slices remain
+Phase 2A through Phase 2G are also accepted; Phase 2H is the unique NEXT and later Phase 2 slices remain
 blocked by the same linear rule.
 
 ## 7. Phase 2 — Expert Standalone Product Completion
@@ -737,7 +745,7 @@ verification, authoritative fenced/CAS commit and deterministic post-commit rema
 Real physical-device, Camoufox, provider, remote R2/key and production-runtime evidence remains External;
 `production_ready=false` remains intentional.
 
-### Phase 2G — Durable realtime notification hub — NEXT
+### Phase 2G — Durable realtime notification hub — ACCEPTED
 
 **Purpose:** add realtime only after durable delivery/catch-up and authoritative query paths exist.
 
@@ -761,7 +769,23 @@ Real physical-device, Camoufox, provider, remote R2/key and production-runtime e
 - duplicate event delivery does not duplicate UI logical state;
 - WebSocket/DO is never business authority.
 
-### Phase 2H — Complete standalone UI and administration UX
+#### Phase 2G acceptance evidence
+
+Phase 2G was accepted through issue #159 / PR #160 from exact proven source head
+`85ca77b430e7d184204082aea7d51a08fdd72cf9` and guarded squash merge
+`48e24f1f365d87a07bf97322c81099dd6a89f046`. The unchanged source head passed exactly 12/12
+permanent workflows with `behind_by=0`, reviews=0 and unresolved review threads=0. Accepted scope
+includes a versioned canonical metadata-only invalidation signal, provider-neutral realtime event
+authorization/audience/sink ports and durable-first application orchestration, current D1 membership and
+client/profile grant checks, per-user hibernatable `NotificationHub` Durable Objects, durable cursor
+catch-up before live continuation, bounded reauthorization and policy disconnect, a handshake-derived
+synchronization gate, live fanout only after durable `Delivered`, multi-tab/device broadcast, strict
+frontend parsing/deduplication with TanStack Query invalidation-only refetch, and permanent positive and
+negative realtime architecture/privacy evidence. D1 outbox/event/cursor state and canonical HTTPS query
+paths remain authoritative; real remote Cloudflare/browser deployment evidence remains External and
+`production_ready=false` remains intentional.
+
+### Phase 2H — Complete standalone UI and administration UX — NEXT
 
 **Purpose:** make every ordinary operator workflow discoverable and usable without CLI.
 
@@ -1083,9 +1107,9 @@ Phase 2B encrypted contact persistence + client lifecycle commands              
 Phase 2C merge/assignment/projections + feature-owned routes + Client Registry UI                   ACCEPTED
 Phase 2D use-cases-query + CQRS read models + global/client-mail query contracts                     ACCEPTED
 Phase 2E mailbox-domain split + use-cases-mailboxes + cloud provider lane                            ACCEPTED
-Phase 2F device-domain + use-cases-devices + browser/Bridge mailbox lane                        ACCEPTED
-Phase 2G durable realtime notification hub                                                      NEXT
-Phase 2H complete standalone UI/admin UX
+Phase 2F device-domain + use-cases-devices + browser/Bridge mailbox lane                              ACCEPTED
+Phase 2G durable realtime notification hub                                                            ACCEPTED
+Phase 2H complete standalone UI/admin UX                                                               NEXT
 Phase 2I integrated E2E/security/recovery/operations hardening
 Phase 2J real production evidence + controlled rollout
 ```
@@ -1126,23 +1150,28 @@ Definition of done:
 ## 19. Immediate Next Action
 
 After this docs-only closeout is accepted on `main`, open the bounded implementation issue and start
-**Phase 2G — durable realtime notification hub** from the accepted Phase 2F merge
-`42b26dc0c78c0c65dcea2bc90bb5ce6a3bd4b02b`.
+**Phase 2H — complete standalone UI and administration UX** from the exact resulting pre-2H closeout
+`main` SHA. Do not start Phase 2H directly from the pre-closeout Phase 2G implementation merge
+`48e24f1f365d87a07bf97322c81099dd6a89f046`; the docs/governance closeout is part of the linear gate.
 
-Execute Phase 2G inward-first in this exact order:
+Execute Phase 2H inward-first around the existing accepted backend/query/realtime contracts in this
+exact priority order:
 
 ```text
-versioned realtime-safe change signals only
-  -> per-user notification-hub ports/use cases in use-cases-notifications
-  -> outer per-user Durable Object + Hibernatable WebSocket adapter
-  -> authenticate + authorize before subscribe/deliver
-  -> durable cursor catch-up before live continuation
-  -> bounded reauthorization + immediate revoked-membership disconnect
-  -> metadata-safe signals only; no contact plaintext/mail body/secrets
-  -> frontend invalidates/refetches canonical HTTPS query data
-  -> multi-tab/device/disconnect/reconnect/cursor-gap/revoke-race evidence
+inventory ordinary operator workflows + missing generated public contracts
+  -> complete feature-owned routes and Clients/Profiles activity workflows
+  -> complete Users & Access administration
+  -> complete Client detail -> Mail search -> sanitized full-body view
+  -> complete mailbox binding/job/auth/retry administration
+  -> complete device/session/generation/recovery administration
+  -> complete audit/settings/operational error surfaces
+  -> finish generated DTO/enum coverage for active public UI surfaces
+  -> accessibility + keyboard + loading/empty/error/offline/retry/terminal states
+  -> safe HTML mail rendering + Web Storage/telemetry negative evidence
 ```
 
-No Phase 2H+ implementation starts before Phase 2G is accepted and closed out. Real Gmail/IMAP,
-Camoufox, physical-device, remote R2/key and production-runtime claims remain External evidence, and
+Phase 2G realtime remains an invalidation-only overlay during Phase 2H: UI must continue to refetch
+canonical HTTPS/TanStack Query data and may not turn WebSocket state into business authority. No Phase
+2I+ implementation starts before Phase 2H is accepted and closed out. Real Gmail/IMAP, Camoufox,
+physical-device, remote R2/key and production-runtime claims remain External evidence, and
 `production_ready=false` remains unchanged.
