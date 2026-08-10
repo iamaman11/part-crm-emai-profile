@@ -107,6 +107,7 @@ REQUIRED_INDEX_LINKS = [
     "DATA_CLASSIFICATION.md",
     "UI_ARCHITECTURE.md",
     "DEVELOPER_CAPABILITY_MATRIX.md",
+    "accepted-phases.json",
 ]
 
 
@@ -188,9 +189,15 @@ def validate_docs() -> None:
     required_plan_markers = (
         "Phase 2D — CQRS read models, global search and client-mail query contract — ACCEPTED",
         "Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — ACCEPTED",
-        "Phase 2F — Durable device jobs, browser mailbox lane and materialization integration — NEXT",
+        "Phase 2F — Durable device jobs, browser mailbox lane and materialization integration — ACCEPTED",
+        "Phase 2G — Durable realtime notification hub — NEXT",
+        "Phase 2F was accepted through issue #154 / PR #155",
+        "`c36df418f9fa877c5143327e97b60087c33ffd02`",
+        "`42b26dc0c78c0c65dcea2bc90bb5ce6a3bd4b02b`",
+        "`crates/use-cases` remains the canonical application owner for Profile Catalog and Profile Generation Registry workflows",
         "| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D.**",
         "| 6.4 | Authorization-before-projection | **Accepted through Phase 2D query/read-model scope.**",
+        "| 6.6 | Profile materialization | **Accepted repository-local through Phase 2F.**",
         "`BrowserIdentityManifest`",
         "`NetworkIdentityPolicy` + `NetworkIdentityObservation`",
         "PID alone is never sufficient ownership proof",
@@ -198,6 +205,10 @@ def validate_docs() -> None:
     )
     required_architecture_markers = (
         "### 11.1 Browser Runtime Identity, Network Policy And Writer Recovery",
+        "`use-cases-devices`",
+        "`crates/use-cases` remains the canonical application owner for current Profile Catalog and Profile Generation Registry workflows",
+        "graceful browser close a retained-ownership transition",
+        "Phase 2F accepts the repository-local retained-close implementation",
         "`BrowserIdentityManifest`",
         "`NetworkIdentityPolicy`",
         "PID alone is not ownership proof",
@@ -205,31 +216,40 @@ def validate_docs() -> None:
     )
     stale_plan_markers = (
         "Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — NEXT",
+        "Phase 2F — Durable device jobs, browser mailbox lane and materialization integration — NEXT",
         "Phase 2E issue #148 is the unique NEXT",
         "Phase 2D issue #144 is the unique next implementation slice",
         "| A8 | Query-side/CQRS read-model boundary | **Open.**",
+        "| 6.6 | Profile materialization | **Library/Synthetic foundation.**",
         "2D read/search/provider query; 2G realtime subscriptions",
     )
     required_matrix_markers = (
         "| Client contact protection | Composed |",
         "| Client Registry 2.0 | Composed |",
         "| Read models/global search | Library / Synthetic |",
-        "| Client-scoped mailbox message search/body | Library / Synthetic |",
+        "| Client-scoped mailbox message search/body | Composed / Synthetic |",
+        "| Device job/browser mailbox execution | Composed / Synthetic |",
         "| A3 | Domain aggregate splitting | **Accepted** — Phase 2A decomposed `client-domain`; Phase 2E decomposed `mailbox-domain`",
         "| A5 | Feature-sliced SPA route composition | **Accepted in Phase 2C**",
         "| A8 | CQRS/read-model boundary | **Accepted in Phase 2D**",
         "| 6.5 | PII contact protection | **Accepted through Phase 2B/2D**",
+        "| 6.6 | Profile materialization | **Accepted repository-local through Phase 2F**",
         "crates/use-cases-query",
         "crates/use-cases-mailboxes",
+        "crates/use-cases-devices",
+        "Profile Catalog and Profile Generation Registry",
     )
     stale_matrix_markers = (
         "| A3 | Domain aggregate splitting | **Client half accepted in Phase 2A**",
         "| Client contact protection | Target |",
         "| Client Registry 2.0 | Target |",
         "| Read models/global search | Target |",
+        "| Device job/browser mailbox execution | Target / Synthetic foundation |",
         "| A5 | Feature-sliced SPA route composition | **Open**",
         "| A8 | CQRS/read-model boundary | **Open**",
         "| 6.5 | PII contact protection | **Open for client contacts**",
+        "| 6.6 | Profile materialization | **Library/Synthetic foundation**",
+        "The remaining fixed extraction point in active Phase 2 is devices in Phase 2F.",
     )
     for marker in required_plan_markers:
         if marker not in plan:
@@ -239,7 +259,7 @@ def validate_docs() -> None:
             raise SystemExit(f"DEVELOPMENT_PLAN.md contains stale accepted-phase marker: {marker}")
     for marker in required_architecture_markers:
         if marker not in architecture:
-            raise SystemExit(f"ARCHITECTURE.md is missing browser-runtime safety marker: {marker}")
+            raise SystemExit(f"ARCHITECTURE.md is missing Phase 2F accepted architecture marker: {marker}")
     for marker in required_matrix_markers:
         if marker not in matrix:
             raise SystemExit(f"DEVELOPER_CAPABILITY_MATRIX.md is missing accepted capability marker: {marker}")
