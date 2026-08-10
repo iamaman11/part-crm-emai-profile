@@ -70,6 +70,67 @@ impl<'a> ImmutableGenerationObject<'a> {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenerationObjectDescriptor {
+    profile_id: ProfileId,
+    generation_id: GenerationId,
+    object_key: String,
+    metadata_digest: String,
+    container_digest: String,
+    container_bytes: u64,
+}
+
+impl GenerationObjectDescriptor {
+    #[must_use]
+    pub fn new(
+        profile_id: ProfileId,
+        generation_id: GenerationId,
+        object_key: impl Into<String>,
+        metadata_digest: impl Into<String>,
+        container_digest: impl Into<String>,
+        container_bytes: u64,
+    ) -> Self {
+        Self {
+            profile_id,
+            generation_id,
+            object_key: object_key.into(),
+            metadata_digest: metadata_digest.into(),
+            container_digest: container_digest.into(),
+            container_bytes,
+        }
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn generation_id(&self) -> &GenerationId {
+        &self.generation_id
+    }
+
+    #[must_use]
+    pub fn object_key(&self) -> &str {
+        &self.object_key
+    }
+
+    #[must_use]
+    pub fn metadata_digest(&self) -> &str {
+        &self.metadata_digest
+    }
+
+    #[must_use]
+    pub fn container_digest(&self) -> &str {
+        &self.container_digest
+    }
+
+    #[must_use]
+    pub const fn container_bytes(&self) -> u64 {
+        self.container_bytes
+    }
+}
+
 pub trait GenerationObjectUploadPort {
     fn put_generation_object_if_absent(
         &self,
@@ -83,5 +144,13 @@ pub trait GenerationObjectExactVerifyPort {
         &self,
         scope: &TenantScope,
         object: &ImmutableGenerationObject<'_>,
+    ) -> impl Future<Output = Result<bool, GenerationPortError>>;
+}
+
+pub trait GenerationObjectDescriptorVerifyPort {
+    fn verify_generation_object_descriptor_exact(
+        &self,
+        scope: &TenantScope,
+        descriptor: &GenerationObjectDescriptor,
     ) -> impl Future<Output = Result<bool, GenerationPortError>>;
 }
