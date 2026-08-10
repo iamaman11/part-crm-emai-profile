@@ -77,6 +77,21 @@ impl RealtimeInvalidationSignal {
     pub const fn occurred_at(&self) -> UnixMillis {
         self.occurred_at
     }
+
+    /// Encodes the only allowed public realtime wire shape.
+    ///
+    /// All string components are either parser-restricted opaque IDs or closed stable enum keys,
+    /// so this deterministic encoder does not accept arbitrary JSON fragments or user content.
+    #[must_use]
+    pub fn canonical_json(&self) -> String {
+        format!(
+            "{{\"version\":{},\"eventId\":\"{}\",\"resource\":\"{}\",\"occurredAtMs\":{}}}",
+            self.version,
+            self.event_id.as_str(),
+            self.resource.stable_key(),
+            self.occurred_at.value()
+        )
+    }
 }
 
 #[cfg(test)]
@@ -98,6 +113,10 @@ mod tests {
         assert_eq!(signal.event_id().as_str(), "outbox_01JREALTIME");
         assert_eq!(signal.resource().stable_key(), "clients");
         assert_eq!(signal.occurred_at(), UnixMillis::new(42));
+        assert_eq!(
+            signal.canonical_json(),
+            r#"{"version":1,"eventId":"outbox_01JREALTIME","resource":"clients","occurredAtMs":42}"#
+        );
         Ok(())
     }
 
