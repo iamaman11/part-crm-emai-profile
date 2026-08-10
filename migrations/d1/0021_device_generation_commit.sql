@@ -2,11 +2,11 @@
 --
 -- The immutable encrypted object is uploaded and verified before this command is
 -- attempted. This D1 journal stores metadata-only authority/evidence and applies
--- register -> verify -> profile-pointer activation atomically inside the command
--- INSERT transaction. The Durable Object coordinator remains authoritative; its
--- D1 projection is only a secondary fail-closed witness. Raw fencing tokens,
--- encrypted profile bytes, keys, cookies, mailbox content and secrets are never
--- stored here.
+-- register -> verify -> profile-pointer activation -> device-job success atomically
+-- inside the command INSERT transaction. The Durable Object coordinator remains
+-- authoritative; its D1 projection is only a secondary fail-closed witness. Raw
+-- fencing tokens, encrypted profile bytes, keys, cookies, mailbox content and
+-- secrets are never stored here.
 
 CREATE TABLE device_generation_commit_commands (
     tenant_id TEXT NOT NULL,
@@ -358,6 +358,33 @@ BEGIN
       );
 
     SELECT RAISE(ABORT, 'device_generation_commit_apply_incomplete')
+    WHERE changes() <> 1;
+
+    UPDATE device_jobs
+    SET aggregate_version = aggregate_version + 1,
+        status = 'SUCCEEDED',
+        current_claim_id = NULL,
+        claim_fence = NULL,
+        claimed_at_ms = NULL,
+        claim_heartbeat_at_ms = NULL,
+        claim_lease_expires_at_ms = NULL,
+        retry_at_ms = NULL,
+        updated_at_ms = NEW.executed_at_ms
+    WHERE tenant_id = NEW.tenant_id
+      AND job_id = NEW.job_id
+      AND device_id = NEW.device_id
+      AND profile_id = NEW.profile_id
+      AND generation_id = NEW.base_generation_id
+      AND aggregate_version = NEW.expected_job_version
+      AND status = 'RUNNING'
+      AND current_claim_id = NEW.claim_id
+      AND claim_fence = NEW.claim_fence
+      AND last_fence = NEW.claim_fence
+      AND updated_at_ms <= NEW.executed_at_ms
+      AND claim_heartbeat_at_ms <= NEW.executed_at_ms
+      AND NEW.executed_at_ms < claim_lease_expires_at_ms;
+
+    SELECT RAISE(ABORT, 'device_generation_commit_job_terminalize_incomplete')
     WHERE changes() <> 1;
 END;
 
