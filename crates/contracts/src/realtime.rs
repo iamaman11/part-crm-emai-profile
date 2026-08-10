@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(signal.occurred_at(), UnixMillis::new(42));
         assert_eq!(
             signal.canonical_json(),
-            r#"{"version":1,"eventId":"outbox_01JREALTIME","resource":"clients","occurredAtMs":42}"#
+            r#"{"version":1,"eventId":"outbox_01JREALTIME","resource":"clients","occurredAtMs":42}"#.replace("\\\"", "\"")
         );
         Ok(())
     }
