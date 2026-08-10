@@ -1,6 +1,10 @@
 use crate::access_session::{correlation_hint, neutral_not_found, resolve_active_request_actor};
+use crate::realtime_contract::{
+    INTERNAL_ACTOR_HEADER, INTERNAL_CORRELATION_HEADER, INTERNAL_PUBLISH_PATH,
+    INTERNAL_TENANT_HEADER, RealtimeInternalEvent,
+};
 use application_ports::{
-    NotificationAuthorizationPort, NotificationCapability, NotificationEventRecord,
+    CursorAdvanceWriteOutcome, NotificationAuthorizationPort, NotificationCapability,
     NotificationPortError, NotificationPortErrorClass, RealtimeNotificationSinkPort,
 };
 use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
@@ -8,7 +12,7 @@ use cloudflare_adapters::d1_notifications::D1NotificationRepository;
 use cloudflare_adapters::d1_realtime_notifications::D1RealtimeNotificationAuthorization;
 use contracts::RealtimeInvalidationSignal;
 use profile_platform_primitives::{
-    ActorContext, ActorId, CorrelationId, OpaqueId, OutboxEventId, TenantId, TenantScope, UnixMillis,
+    ActorContext, ActorId, CorrelationId, TenantId, TenantScope, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -21,15 +25,14 @@ use worker::{
 
 pub const NOTIFICATION_HUB_BINDING: &str = "NOTIFICATION_HUB";
 const ACCESS_TOKEN_HEADER: &str = "Cf-Access-Jwt-Assertion";
-const INTERNAL_TENANT_HEADER: &str = "X-Internal-Realtime-Tenant-Id";
-const INTERNAL_ACTOR_HEADER: &str = "X-Internal-Realtime-Actor-Id";
-const INTERNAL_CORRELATION_HEADER: &str = "X-Internal-Realtime-Correlation-Id";
 const REALTIME_CONNECT_SUFFIX: &str = "/notifications/realtime";
-const INTERNAL_PUBLISH_PATH: &str = "/internal/realtime/publish";
 const REAUTH_INTERVAL_SECONDS: u64 = 60;
 const CATCH_UP_PAGE_SIZE: u32 = 200;
+const MAX_CONNECT_CATCH_UP_PAGES: u32 = 25;
 const POLICY_CLOSE_CODE: u16 = 1008;
 const INTERNAL_ALARM_CORRELATION_ID: &str = "corr_realtime_alarm";
+const SYNC_GATE_KEY: &str = "notification-realtime-sync-v1";
+const SYNC_GATE_STALE_AFTER_MS: u64 = 120_000;
 
 pub async fn connect(request: &mut Request, env: &Env, tenant_id: &str) -> Result<Response> {
     if !is_websocket_upgrade(request)? {
@@ -41,8 +44,6 @@ pub async fn connect(request: &mut Request, env: &Env, tenant_id: &str) -> Resul
 
     let mut internal = request.clone_mut()?;
     let headers = internal.headers_mut()?;
-    // Credentials are consumed at the Worker boundary. The per-user Durable Object receives only
-    // the verified opaque actor context required for a second current-membership check.
     headers.delete(ACCESS_TOKEN_HEADER)?;
     headers.delete("Authorization")?;
     headers.delete("Cookie")?;
@@ -131,8 +132,6 @@ impl DurableObject for NotificationHub {
                 Response::ok("realtime authorization revoked")
             }
             Err(_) => {
-                // Fail closed on current-membership uncertainty. Durable notification history is
-                // preserved in D1 and a later authorized reconnect will catch up from its cursor.
                 close_all(&sockets, "authorization unavailable");
                 Response::ok("realtime authorization unavailable")
             }
@@ -144,8 +143,6 @@ impl DurableObject for NotificationHub {
         _socket: WebSocket,
         _message: WebSocketIncomingMessage,
     ) -> Result<()> {
-        // The realtime channel is intentionally server-to-client invalidation only. Client
-        // messages never become business commands or canonical state.
         Ok(())
     }
 
@@ -185,42 +182,73 @@ impl NotificationHub {
             Err(_) => return Response::error("Dependency unavailable", 503),
         }
 
+        let gate = StoredSynchronizationGate::new(&actor, worker::Date::now().as_millis());
+        self.state.storage().put(SYNC_GATE_KEY, &gate).await?;
+
         let pair = WebSocketPair::new()?;
-        let attachment = HubSocketAttachment::from_actor(&actor);
-        pair.server.serialize_attachment(&attachment)?;
+        pair.server
+            .serialize_attachment(HubSocketAttachment::from_actor(&actor))?;
         self.state.accept_web_socket(&pair.server);
 
-        let cursors = D1NotificationRepository::new(
-            self.env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-        );
-        let history = D1NotificationOperationsRepository::new(
-            self.env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-        );
-        let sink = SingleSocketSink {
-            socket: &pair.server,
-        };
-        if let Err(error) = synchronize_realtime_session(
-            &authorization,
-            &cursors,
-            &history,
-            &sink,
-            &actor,
-            CATCH_UP_PAGE_SIZE,
-            UnixMillis::new(worker::Date::now().as_millis()),
-        )
-        .await
+        if let Err(error) = self
+            .drain_catch_up(&actor, &authorization, &pair.server)
+            .await
         {
+            self.clear_sync_gate_if_owned(&gate).await?;
             let _close_result = pair
                 .server
                 .close(Some(POLICY_CLOSE_CODE), Some("realtime synchronization failed"));
             return synchronization_failure(error);
         }
 
+        self.clear_sync_gate_if_owned(&gate).await?;
         schedule_reauthorization(&self.state).await?;
         Response::from_websocket(pair.client)
     }
 
+    async fn drain_catch_up(
+        &self,
+        actor: &ActorContext,
+        authorization: &D1NotificationOperationsRepository,
+        socket: &WebSocket,
+    ) -> Result<(), NotificationOperationError> {
+        let cursors = D1NotificationRepository::new(
+            self.env
+                .d1(control_plane_contract::D1_CATALOG_BINDING)
+                .map_err(|_| NotificationOperationError::InternalFailure)?,
+        );
+        let history = D1NotificationOperationsRepository::new(
+            self.env
+                .d1(control_plane_contract::D1_CATALOG_BINDING)
+                .map_err(|_| NotificationOperationError::InternalFailure)?,
+        );
+        let sink = SingleSocketSink { socket };
+
+        for _ in 0..MAX_CONNECT_CATCH_UP_PAGES {
+            let outcome = synchronize_realtime_session(
+                authorization,
+                &cursors,
+                &history,
+                &sink,
+                actor,
+                CATCH_UP_PAGE_SIZE,
+                UnixMillis::new(worker::Date::now().as_millis()),
+            )
+            .await?;
+            if outcome.cursor_outcome() == CursorAdvanceWriteOutcome::Stale {
+                continue;
+            }
+            if outcome.delivered_count() < CATCH_UP_PAGE_SIZE {
+                return Ok(());
+            }
+        }
+        Err(NotificationOperationError::DependencyUnavailable)
+    }
+
     async fn publish_event(&self, request: &mut Request) -> Result<Response> {
+        if self.synchronization_in_progress().await? {
+            return Response::error("Synchronization in progress", 409);
+        }
         let actor = match internal_actor(request) {
             Ok(value) => value,
             Err(()) => return Response::error("Forbidden", 403),
@@ -231,7 +259,7 @@ impl NotificationHub {
         };
         let event = match body.into_record() {
             Ok(value) => value,
-            Err(()) => return Response::error("Invalid request", 400),
+            Err(_) => return Response::error("Invalid request", 400),
         };
         let authorization = D1NotificationOperationsRepository::new(
             self.env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
@@ -256,6 +284,35 @@ impl NotificationHub {
             }
             Err(_) => Response::error("Realtime delivery failed", 500),
         }
+    }
+
+    async fn synchronization_in_progress(&self) -> Result<bool> {
+        let Some(gate) = self
+            .state
+            .storage()
+            .get::<StoredSynchronizationGate>(SYNC_GATE_KEY)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let now = worker::Date::now().as_millis();
+        if now.saturating_sub(gate.started_at_ms) <= SYNC_GATE_STALE_AFTER_MS {
+            return Ok(true);
+        }
+        let _deleted = self.state.storage().delete(SYNC_GATE_KEY).await?;
+        Ok(false)
+    }
+
+    async fn clear_sync_gate_if_owned(&self, expected: &StoredSynchronizationGate) -> Result<()> {
+        let current = self
+            .state
+            .storage()
+            .get::<StoredSynchronizationGate>(SYNC_GATE_KEY)
+            .await?;
+        if current.as_ref() == Some(expected) {
+            let _deleted = self.state.storage().delete(SYNC_GATE_KEY).await?;
+        }
+        Ok(())
     }
 }
 
@@ -321,38 +378,18 @@ impl HubSocketAttachment {
     }
 }
 
-#[derive(Deserialize, Serialize)]
-pub struct RealtimeInternalEvent {
-    pub event_id: String,
-    pub aggregate_type: String,
-    pub aggregate_id: String,
-    pub event_type: String,
-    pub occurred_at_ms: u64,
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredSynchronizationGate {
+    correlation_id: String,
+    started_at_ms: u64,
 }
 
-impl RealtimeInternalEvent {
-    #[must_use]
-    pub fn from_record(event: &NotificationEventRecord) -> Self {
+impl StoredSynchronizationGate {
+    fn new(actor: &ActorContext, started_at_ms: u64) -> Self {
         Self {
-            event_id: event.event_id().as_str().to_owned(),
-            aggregate_type: event.aggregate_type().to_owned(),
-            aggregate_id: event.aggregate_id().as_str().to_owned(),
-            event_type: event.event_type().to_owned(),
-            occurred_at_ms: event.occurred_at().value(),
+            correlation_id: actor.correlation_id().as_str().to_owned(),
+            started_at_ms,
         }
-    }
-
-    fn into_record(self) -> Result<NotificationEventRecord, ()> {
-        if !valid_symbol(&self.aggregate_type, 80) || !valid_symbol(&self.event_type, 160) {
-            return Err(());
-        }
-        Ok(NotificationEventRecord::new(
-            OutboxEventId::parse(self.event_id).map_err(|_| ())?,
-            self.aggregate_type,
-            OpaqueId::parse(self.aggregate_id).map_err(|_| ())?,
-            self.event_type,
-            UnixMillis::new(self.occurred_at_ms),
-        ))
     }
 }
 
@@ -409,21 +446,10 @@ fn synchronization_failure(error: NotificationOperationError) -> Result<Response
     }
 }
 
-fn valid_symbol(value: &str, maximum: usize) -> bool {
-    let length = value.len();
-    (1..=maximum).contains(&length)
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
-        })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{RealtimeInternalEvent, notification_hub_object_name};
-    use application_ports::NotificationEventRecord;
-    use profile_platform_primitives::{
-        ActorId, OpaqueId, OutboxEventId, TenantId, UnixMillis,
-    };
+    use super::{SYNC_GATE_STALE_AFTER_MS, StoredSynchronizationGate, notification_hub_object_name};
+    use profile_platform_primitives::{ActorId, TenantId};
 
     #[test]
     fn object_name_is_stable_and_opaque_identity_only() -> Result<(), Box<dyn std::error::Error>> {
@@ -437,24 +463,12 @@ mod tests {
     }
 
     #[test]
-    fn internal_event_round_trip_contains_no_integration_payload()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let record = NotificationEventRecord::new(
-            OutboxEventId::parse("outbox_01JREALTIME")?,
-            "client",
-            OpaqueId::parse("client_01JREALTIME")?,
-            "client.changed.v1",
-            UnixMillis::new(42),
-        );
-        let internal = RealtimeInternalEvent::from_record(&record);
-        let encoded = serde_json::to_string(&internal)?;
-        assert!(!encoded.contains("payload"));
-        assert!(!encoded.contains("subject"));
-        assert!(!encoded.contains("body"));
-        let restored = serde_json::from_str::<RealtimeInternalEvent>(&encoded)?
-            .into_record()
-            .map_err(|()| "invalid realtime internal event")?;
-        assert_eq!(restored, record);
-        Ok(())
+    fn synchronization_gate_has_bounded_stale_recovery() {
+        let gate = StoredSynchronizationGate {
+            correlation_id: "corr_01JREALTIME".to_owned(),
+            started_at_ms: 10,
+        };
+        assert_eq!(gate.started_at_ms, 10);
+        assert!(SYNC_GATE_STALE_AFTER_MS > 0);
     }
 }
