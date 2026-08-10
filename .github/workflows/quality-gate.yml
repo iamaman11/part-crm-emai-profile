@@ -52,6 +52,7 @@ jobs:
           scripts/test-step6-bridge-local.py
           scripts/test-mailbox-vertical-slice.py
           scripts/test-device-job-d1.py
+          scripts/test-device-generation-commit-d1.py
           scripts/test-browser-mail-execution-d1.py
 
       - name: Reject temporary Step 4, Step 5 and Step 6 artifacts
@@ -148,6 +149,9 @@ jobs:
 
       - name: Test Phase 2F device identity, job and claimable D1 invariants
         run: python scripts/test-device-job-d1.py
+
+      - name: Test Phase 2F atomic device-generation catalog commit invariants
+        run: python scripts/test-device-generation-commit-d1.py
 
       - name: Test Phase 2F browser mailbox execution D1 invariants
         run: python scripts/test-browser-mail-execution-d1.py
