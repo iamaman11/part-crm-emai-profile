@@ -105,10 +105,8 @@ async fn publish_to_actor(
     }
 
     let namespace = env.durable_object(NOTIFICATION_HUB_BINDING)?;
-    let object_id = namespace.id_from_name(&notification_hub_object_name(
-        event.tenant_id(),
-        actor_id,
-    ))?;
+    let object_id =
+        namespace.id_from_name(&notification_hub_object_name(event.tenant_id(), actor_id))?;
     let response = object_id.get_stub()?.fetch_with_request(request).await?;
     Ok(response.status_code())
 }
