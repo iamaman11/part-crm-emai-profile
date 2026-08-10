@@ -108,6 +108,24 @@ impl DeviceJobRepositoryPort for Repository {
     }
 }
 
+struct Evidence {
+    verifier_calls: Rc<Cell<u32>>,
+    verifier_observed: Rc<RefCell<Option<GenerationObjectDescriptor>>>,
+    commit_calls: Rc<Cell<u32>>,
+    commit_observed: Rc<RefCell<Option<DeviceGenerationCommitRequest>>>,
+}
+
+impl Evidence {
+    fn new() -> Self {
+        Self {
+            verifier_calls: Rc::new(Cell::new(0)),
+            verifier_observed: Rc::new(RefCell::new(None)),
+            commit_calls: Rc::new(Cell::new(0)),
+            commit_observed: Rc::new(RefCell::new(None)),
+        }
+    }
+}
+
 struct Verifier {
     result: bool,
     calls: Rc<Cell<u32>>,
@@ -234,10 +252,7 @@ fn execute(
     fixture: &Fixture,
     identity: &Identity,
     verifier_result: bool,
-    verifier_calls: Rc<Cell<u32>>,
-    verifier_observed: Rc<RefCell<Option<GenerationObjectDescriptor>>>,
-    commit_calls: Rc<Cell<u32>>,
-    commit_observed: Rc<RefCell<Option<DeviceGenerationCommitRequest>>>,
+    evidence: &Evidence,
     request: &DeviceGenerationCommitRequest,
 ) -> Result<DeviceGenerationCommitOutcome, DeviceGenerationCommitOperationError> {
     let repository = Repository {
@@ -245,12 +260,12 @@ fn execute(
     };
     let verifier = Verifier {
         result: verifier_result,
-        calls: verifier_calls,
-        observed: verifier_observed,
+        calls: Rc::clone(&evidence.verifier_calls),
+        observed: Rc::clone(&evidence.verifier_observed),
     };
     let commit = Commit {
-        calls: commit_calls,
-        observed: commit_observed,
+        calls: Rc::clone(&evidence.commit_calls),
+        observed: Rc::clone(&evidence.commit_observed),
     };
     let services = DeviceGenerationCommitServices::new(
         identity,
@@ -270,10 +285,7 @@ fn execute(
 #[test]
 fn exact_verified_request_reaches_commit_unchanged() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
-    let verifier_calls = Rc::new(Cell::new(0));
-    let verifier_observed = Rc::new(RefCell::new(None));
-    let commit_calls = Rc::new(Cell::new(0));
-    let commit_observed = Rc::new(RefCell::new(None));
+    let evidence = Evidence::new();
 
     let outcome = execute(
         &fixture,
@@ -281,21 +293,21 @@ fn exact_verified_request_reaches_commit_unchanged() -> Result<(), Box<dyn std::
             device_id: fixture.device_id.clone(),
         },
         true,
-        Rc::clone(&verifier_calls),
-        Rc::clone(&verifier_observed),
-        Rc::clone(&commit_calls),
-        Rc::clone(&commit_observed),
+        &evidence,
         &fixture.request,
     )?;
 
     assert_eq!(outcome, DeviceGenerationCommitOutcome::Activated);
-    assert_eq!(verifier_calls.get(), 1);
-    assert_eq!(commit_calls.get(), 1);
+    assert_eq!(evidence.verifier_calls.get(), 1);
+    assert_eq!(evidence.commit_calls.get(), 1);
     assert_eq!(
-        verifier_observed.borrow().as_ref(),
+        evidence.verifier_observed.borrow().as_ref(),
         Some(fixture.request.object())
     );
-    assert_eq!(commit_observed.borrow().as_ref(), Some(&fixture.request));
+    assert_eq!(
+        evidence.commit_observed.borrow().as_ref(),
+        Some(&fixture.request)
+    );
     Ok(())
 }
 
@@ -303,8 +315,7 @@ fn exact_verified_request_reaches_commit_unchanged() -> Result<(), Box<dyn std::
 fn stale_claim_fence_stops_before_object_verification_or_commit()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
-    let verifier_calls = Rc::new(Cell::new(0));
-    let commit_calls = Rc::new(Cell::new(0));
+    let evidence = Evidence::new();
     let request = fixture.request_with_fence(fixture.job.last_fence() + 1);
 
     let result = execute(
@@ -313,10 +324,7 @@ fn stale_claim_fence_stops_before_object_verification_or_commit()
             device_id: fixture.device_id.clone(),
         },
         true,
-        Rc::clone(&verifier_calls),
-        Rc::new(RefCell::new(None)),
-        Rc::clone(&commit_calls),
-        Rc::new(RefCell::new(None)),
+        &evidence,
         &request,
     );
 
@@ -324,8 +332,8 @@ fn stale_claim_fence_stops_before_object_verification_or_commit()
         result,
         Err(DeviceGenerationCommitOperationError::StaleClaim)
     );
-    assert_eq!(verifier_calls.get(), 0);
-    assert_eq!(commit_calls.get(), 0);
+    assert_eq!(evidence.verifier_calls.get(), 0);
+    assert_eq!(evidence.commit_calls.get(), 0);
     Ok(())
 }
 
@@ -333,8 +341,7 @@ fn stale_claim_fence_stops_before_object_verification_or_commit()
 fn mismatched_authenticated_device_stops_before_object_verification_or_commit()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
-    let verifier_calls = Rc::new(Cell::new(0));
-    let commit_calls = Rc::new(Cell::new(0));
+    let evidence = Evidence::new();
 
     let result = execute(
         &fixture,
@@ -342,16 +349,13 @@ fn mismatched_authenticated_device_stops_before_object_verification_or_commit()
             device_id: DeviceId::parse("device_other_device_01")?,
         },
         true,
-        Rc::clone(&verifier_calls),
-        Rc::new(RefCell::new(None)),
-        Rc::clone(&commit_calls),
-        Rc::new(RefCell::new(None)),
+        &evidence,
         &fixture.request,
     );
 
     assert_eq!(result, Err(DeviceGenerationCommitOperationError::Forbidden));
-    assert_eq!(verifier_calls.get(), 0);
-    assert_eq!(commit_calls.get(), 0);
+    assert_eq!(evidence.verifier_calls.get(), 0);
+    assert_eq!(evidence.commit_calls.get(), 0);
     Ok(())
 }
 
@@ -359,8 +363,7 @@ fn mismatched_authenticated_device_stops_before_object_verification_or_commit()
 fn failed_exact_object_verification_never_calls_catalog_commit()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
-    let verifier_calls = Rc::new(Cell::new(0));
-    let commit_calls = Rc::new(Cell::new(0));
+    let evidence = Evidence::new();
 
     let result = execute(
         &fixture,
@@ -368,10 +371,7 @@ fn failed_exact_object_verification_never_calls_catalog_commit()
             device_id: fixture.device_id.clone(),
         },
         false,
-        Rc::clone(&verifier_calls),
-        Rc::new(RefCell::new(None)),
-        Rc::clone(&commit_calls),
-        Rc::new(RefCell::new(None)),
+        &evidence,
         &fixture.request,
     );
 
@@ -379,7 +379,7 @@ fn failed_exact_object_verification_never_calls_catalog_commit()
         result,
         Err(DeviceGenerationCommitOperationError::ObjectVerificationFailed)
     );
-    assert_eq!(verifier_calls.get(), 1);
-    assert_eq!(commit_calls.get(), 0);
+    assert_eq!(evidence.verifier_calls.get(), 1);
+    assert_eq!(evidence.commit_calls.get(), 0);
     Ok(())
 }
