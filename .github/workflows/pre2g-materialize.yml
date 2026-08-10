@@ -29,6 +29,19 @@ jobs:
       - name: Materialize bounded docs edits
         run: python scripts/pre2g_materialize.py
 
+      - name: Normalize changed plan header whitespace
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('docs/DEVELOPMENT_PLAN.md')
+          text = path.read_text(encoding='utf-8')
+          old = '**Date:** 2026-08-10  \n'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one changed date line with Markdown break, got {text.count(old)}')
+          path.write_text(text.replace(old, '**Date:** 2026-08-10\n', 1), encoding='utf-8', newline='\n')
+          PY
+
       - name: Compile governance scripts
         run: >-
           python -m py_compile
