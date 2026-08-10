@@ -1,6 +1,7 @@
 use crate::access_session::{
     correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
 };
+use crate::realtime_notifications;
 use application_ports::NotificationReplayIntent;
 use application_ports::{CursorAdvanceWriteOutcome, ReplayPreparationOutcome, ReplayReasonClass};
 use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
@@ -18,6 +19,7 @@ use use_cases_notifications::replay::prepare_replay;
 use worker::{Date, Env, Request, Response, Result};
 
 const DEFAULT_CATCH_UP_PAGE_SIZE: u32 = 100;
+const REALTIME_SEGMENT: &str = "realtime";
 
 pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
@@ -29,6 +31,11 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
     let tenant_id = segments.get(3).copied().unwrap_or_default();
 
     match route {
+        RouteClass::NotificationEventCollectionApi
+            if segments.get(5).copied() == Some(REALTIME_SEGMENT) =>
+        {
+            realtime_notifications::connect(request, env, tenant_id).await
+        }
         RouteClass::NotificationEventCollectionApi => get_catch_up(request, env, tenant_id).await,
         RouteClass::NotificationEventAckApi => acknowledge(request, env, tenant_id).await,
         RouteClass::NotificationReplayCollectionApi => {

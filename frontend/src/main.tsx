@@ -5,6 +5,7 @@ import { RouterProvider } from '@tanstack/react-router';
 import { TenantProvider } from './app/TenantContext';
 import { router } from './app/router';
 import './app/styles.css';
+import { NotificationRealtimeBridge } from './shared/realtime/NotificationRealtimeBridge';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,6 +21,7 @@ ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <TenantProvider>
+        <NotificationRealtimeBridge />
         <RouterProvider router={router} />
       </TenantProvider>
     </QueryClientProvider>

@@ -1,3 +1,4 @@
+use crate::realtime_fanout::{RealtimeFanoutOutcome, publish_durable_event};
 use cloudflare_adapters::d1_integration_events::D1IntegrationEventRepository;
 use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
 use cloudflare_adapters::d1_notifications::D1NotificationRepository;
@@ -26,6 +27,7 @@ const RETRY_MAX_DELAY_MS: u64 = 60_000;
 const RETRY_JITTER_BASIS_POINTS: u16 = 1_000;
 const MAX_AUTOMATIC_DELIVERY_ATTEMPTS: u16 = 6;
 const TRANSPORT_FAILURE_RETRY_SECONDS: u32 = 30;
+const REALTIME_SYNC_RACE_RETRY_SECONDS: u32 = 1;
 const MAX_QUEUE_DELAY_SECONDS: u64 = 86_400;
 
 pub async fn dispatch_pending(env: &Env) -> Result<()> {
@@ -95,9 +97,24 @@ pub async fn consume_one<T>(
     )
     .await
     {
-        Ok(DeliveryProcessingOutcome::Delivered { .. } | DeliveryProcessingOutcome::DeadLetter) => {
-            message.ack();
+        Ok(DeliveryProcessingOutcome::Delivered { .. }) => {
+            // Durable notification state is already committed here. Realtime is only the overlay.
+            // A reconnect/live synchronization race retries this queue message; any other realtime
+            // transport failure is logged and acknowledged because D1 catch-up remains authoritative.
+            match publish_durable_event(&event, env).await {
+                Ok(RealtimeFanoutOutcome::Accepted) => message.ack(),
+                Ok(RealtimeFanoutOutcome::RetrySynchronizationRace) => {
+                    retry_after_seconds(message, REALTIME_SYNC_RACE_RETRY_SECONDS);
+                }
+                Err(_) => {
+                    worker::console_error!(
+                        "realtime fanout failed after durable notification commit"
+                    );
+                    message.ack();
+                }
+            }
         }
+        Ok(DeliveryProcessingOutcome::DeadLetter) => message.ack(),
         Ok(DeliveryProcessingOutcome::RetryScheduled { retry_at }) => {
             retry_after_seconds(message, queue_delay_seconds(now, retry_at)?);
         }
@@ -155,8 +172,8 @@ fn identifier_error(error: profile_platform_primitives::ParseOpaqueIdError) -> E
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_QUEUE_DELAY_SECONDS, RETENTION_BATCH_LIMIT, RETENTION_TTL_MS,
-        TRANSPORT_FAILURE_RETRY_SECONDS, queue_delay_seconds,
+        MAX_QUEUE_DELAY_SECONDS, REALTIME_SYNC_RACE_RETRY_SECONDS, RETENTION_BATCH_LIMIT,
+        RETENTION_TTL_MS, TRANSPORT_FAILURE_RETRY_SECONDS, queue_delay_seconds,
     };
     use profile_platform_primitives::UnixMillis;
     use use_cases_notifications::retention::NotificationRetentionPolicy;
@@ -188,9 +205,11 @@ mod tests {
     }
 
     #[test]
-    fn transport_failure_retry_is_delayed_and_platform_bounded() {
+    fn transport_failure_retries_are_delayed_and_platform_bounded() {
         assert!(TRANSPORT_FAILURE_RETRY_SECONDS > 0);
+        assert!(REALTIME_SYNC_RACE_RETRY_SECONDS > 0);
         assert!(u64::from(TRANSPORT_FAILURE_RETRY_SECONDS) <= MAX_QUEUE_DELAY_SECONDS);
+        assert!(u64::from(REALTIME_SYNC_RACE_RETRY_SECONDS) <= MAX_QUEUE_DELAY_SECONDS);
     }
 
     #[test]

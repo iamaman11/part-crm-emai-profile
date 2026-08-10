@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -107,6 +108,7 @@ FORBIDDEN_DEPENDENCIES = {
 }
 
 DEPENDENCY_SECTIONS = ("dependencies", "dev-dependencies", "build-dependencies")
+PHASE2G_POLICY = Path("scripts/check-phase2g-realtime-boundaries.py")
 
 
 def dependency_names(document: dict[str, object]) -> set[str]:
@@ -123,6 +125,25 @@ def dependency_names(document: dict[str, object]) -> set[str]:
             if isinstance(value, dict):
                 names.update(str(name) for name in value)
     return names
+
+
+def check_phase2g_policy(root: Path) -> list[str]:
+    policy = root / PHASE2G_POLICY
+    if not policy.is_file():
+        return [f"missing permanent Phase 2G realtime policy: {policy}"]
+
+    errors: list[str] = []
+    for extra_args, label in (((), "policy"), (("--self-test",), "negative fixtures")):
+        result = subprocess.run(
+            [sys.executable, str(policy), "--root", str(root), *extra_args],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            errors.append(f"Phase 2G realtime {label} failed: {detail}")
+    return errors
 
 
 def check(root: Path) -> list[str]:
@@ -167,6 +188,7 @@ def check(root: Path) -> list[str]:
             provenance_self_test(plan, ledger)
         except (OSError, ValueError) as error:
             errors.append(f"accepted phase provenance validation failed: {error}")
+        errors.extend(check_phase2g_policy(root))
     return errors
 
 

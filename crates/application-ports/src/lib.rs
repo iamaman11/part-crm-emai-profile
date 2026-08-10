@@ -20,6 +20,8 @@ pub mod integration_events;
 pub mod mailbox_jobs;
 pub mod mailbox_scheduling;
 pub mod mailboxes;
+pub mod notification_realtime;
+pub mod notification_realtime_audience;
 pub mod notifications;
 pub mod profile_assignment_context;
 pub mod profiles;
@@ -37,6 +39,7 @@ pub use audit::{AuditPort, AuditRecord, AuditResult};
 pub use clients::ClientRepository;
 pub use clock::ClockPort;
 pub use commands::CommandExecutionEvidence;
+pub use contracts::{IntegrationEventEnvelope, RealtimeInvalidationSignal};
 pub use device_generation_commit::{
     CoordinatorGenerationCommitWitness, DeviceGenerationCommitError,
     DeviceGenerationCommitErrorClass, DeviceGenerationCommitOutcome, DeviceGenerationCommitPort,
@@ -61,6 +64,10 @@ pub use integration_events::{
     NotificationEventPort,
 };
 pub use mailboxes::{MailboxObservation, MailboxProviderPort};
+pub use notification_realtime::{
+    RealtimeNotificationAuthorizationPort, RealtimeNotificationSinkPort,
+};
+pub use notification_realtime_audience::RealtimeNotificationAudiencePort;
 pub use notifications::{
     CursorAdvanceWriteOutcome, DeliveryTransitionWriteOutcome, NotificationAuthorizationPort,
     NotificationCapability, NotificationCatchUpRepositoryPort, NotificationCursorRepositoryPort,
