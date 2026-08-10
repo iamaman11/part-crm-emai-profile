@@ -124,7 +124,7 @@ def errors(root: Path) -> list[str]:
         "claim.is_expired(now)",
         "load_active_profile_version(actor, &profile_id, &base_generation_id)",
         "coordinator_ingress_application(env)",
-        ".snapshot(actor.tenant_scope(), &profile_id).await",
+        ".snapshot(actor.tenant_scope(), &profile_id)",
         "projection.active_session_id() != Some(&session_id)",
         "projection.active_device_id() != Some(&device_id)",
         "projection.active_epoch() != Some(body.coordinator_epoch)",
