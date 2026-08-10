@@ -162,6 +162,10 @@ impl R2GenerationUploadCapabilitySigner {
                 "x-amz-meta-profile-id".to_owned(),
                 descriptor.profile_id().as_str().to_owned(),
             ),
+            (
+                "x-amz-meta-tenant-id".to_owned(),
+                scope.tenant_id().as_str().to_owned(),
+            ),
         ];
 
         let mut canonical_headers = String::new();
@@ -176,7 +180,7 @@ impl R2GenerationUploadCapabilitySigner {
             canonical_headers.push('\n');
         }
 
-        let signed_headers = "content-type;host;if-none-match;x-amz-checksum-sha256;x-amz-meta-container-bytes;x-amz-meta-container-digest;x-amz-meta-generation-id;x-amz-meta-metadata-digest;x-amz-meta-profile-id";
+        let signed_headers = "content-type;host;if-none-match;x-amz-checksum-sha256;x-amz-meta-container-bytes;x-amz-meta-container-digest;x-amz-meta-generation-id;x-amz-meta-metadata-digest;x-amz-meta-profile-id;x-amz-meta-tenant-id";
         let credential_scope = format!(
             "{}/{}/{}/{}",
             signing_time.date_stamp, REGION, SERVICE, TERMINATOR
@@ -460,7 +464,7 @@ mod tests {
         for required in [
             "X-Amz-Algorithm=AWS4-HMAC-SHA256",
             "X-Amz-Expires=300",
-            "X-Amz-SignedHeaders=content-type%3Bhost%3Bif-none-match%3Bx-amz-checksum-sha256%3Bx-amz-meta-container-bytes%3Bx-amz-meta-container-digest%3Bx-amz-meta-generation-id%3Bx-amz-meta-metadata-digest%3Bx-amz-meta-profile-id",
+            "X-Amz-SignedHeaders=content-type%3Bhost%3Bif-none-match%3Bx-amz-checksum-sha256%3Bx-amz-meta-container-bytes%3Bx-amz-meta-container-digest%3Bx-amz-meta-generation-id%3Bx-amz-meta-metadata-digest%3Bx-amz-meta-profile-id%3Bx-amz-meta-tenant-id",
             "X-Amz-Signature=",
         ] {
             assert!(capability.url().contains(required));
@@ -474,6 +478,10 @@ mod tests {
         );
         assert!(headers.contains(&("x-amz-meta-container-digest".to_owned(), "e".repeat(64))));
         assert!(headers.contains(&("x-amz-meta-metadata-digest".to_owned(), "d".repeat(64))));
+        assert!(headers.contains(&(
+            "x-amz-meta-tenant-id".to_owned(),
+            "tenant_upload_capability_01".to_owned()
+        )));
         assert_eq!(capability.expires_seconds(), 300);
         Ok(())
     }
