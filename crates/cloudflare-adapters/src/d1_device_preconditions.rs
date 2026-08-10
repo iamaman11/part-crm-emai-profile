@@ -1,14 +1,13 @@
 use application_ports::device_generation_commit::{
-    DeviceGenerationCommitError, DeviceGenerationCommitErrorClass, DeviceGenerationProfileVersionPort,
+    DeviceGenerationCommitError, DeviceGenerationCommitErrorClass,
+    DeviceGenerationProfileVersionPort,
 };
 use application_ports::{
     DeviceExecutionBlocker, DeviceExecutionPreconditionPort, DeviceExecutionReadiness,
     DeviceJobPortError, DeviceJobPortErrorClass,
 };
 use device_domain::DeviceJobTarget;
-use profile_platform_primitives::{
-    ActorContext, AggregateVersion, GenerationId, ProfileId,
-};
+use profile_platform_primitives::{ActorContext, AggregateVersion, GenerationId, ProfileId};
 use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::query;
@@ -151,8 +150,8 @@ impl DeviceGenerationProfileVersionPort for D1DeviceExecutionPreconditions {
         .map_err(|_| generation_commit_dependency_failure())?;
 
         row.map(|row| {
-            let version = u64::try_from(row.version)
-                .map_err(|_| generation_commit_integrity_failure())?;
+            let version =
+                u64::try_from(row.version).map_err(|_| generation_commit_integrity_failure())?;
             AggregateVersion::new(version).map_err(|_| generation_commit_integrity_failure())
         })
         .transpose()
