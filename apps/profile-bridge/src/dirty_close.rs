@@ -7,10 +7,10 @@ use crate::dirty_generation_finalize::{
 use crate::local_profile::{
     BridgeWorkspaceLock, LocalGenerationRecord, LocalGenerationState, LocalProfileError,
 };
+use application_ports::ProfileCoordinatorPort;
 use application_ports::generation_objects::{
     GenerationObjectExactVerifyPort, GenerationObjectUploadPort,
 };
-use application_ports::ProfileCoordinatorPort;
 use profile_platform_primitives::{GenerationId, TenantScope, UnixMillis};
 use session_domain::ProfileLease;
 use std::fmt;
@@ -108,8 +108,8 @@ impl RetainedDirtyClose {
                 .set_locked(false)
                 .map_err(RetainedDirtyCloseError::Local)?;
         }
-        let coordinator_lease_released = workspace_lock_released
-            && coordinator.close_lease(&self.lease).is_ok();
+        let coordinator_lease_released =
+            workspace_lock_released && coordinator.close_lease(&self.lease).is_ok();
 
         Ok(DirtyCloseCompletion {
             local_outcome,
@@ -194,6 +194,7 @@ mod tests {
     use crate::local_profile::{
         BridgeWorkspaceLock, LocalGenerationRecord, LocalGenerationState, MaterializationRoot,
     };
+    use application_ports::ProfileCoordinatorPort;
     use application_ports::browser_mail_execution::BrowserMailboxExecutionBinding;
     use application_ports::device_jobs::{DeviceClaimId, DeviceJobId};
     use application_ports::generation_objects::{
@@ -201,7 +202,6 @@ mod tests {
         ImmutableGenerationObject,
     };
     use application_ports::generations::GenerationPortError;
-    use application_ports::ProfileCoordinatorPort;
     use encrypted_generation_domain::{GenerationDek, KeyId, NoncePrefix};
     use profile_platform_primitives::{
         ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId,
@@ -420,7 +420,9 @@ mod tests {
             )?)
         }
 
-        fn base_workspace(&self) -> Result<crate::local_profile::GenerationWorkspace, Box<dyn std::error::Error>> {
+        fn base_workspace(
+            &self,
+        ) -> Result<crate::local_profile::GenerationWorkspace, Box<dyn std::error::Error>> {
             Ok(self.root.open_generation(
                 self.scope.tenant_id(),
                 &self.profile_id,
@@ -456,7 +458,10 @@ mod tests {
             ))
         );
         assert!(fixture.retained.holds_workspace_lock());
-        assert_eq!(fixture.retained.base_record().state(), LocalGenerationState::DirtyLocal);
+        assert_eq!(
+            fixture.retained.base_record().state(),
+            LocalGenerationState::DirtyLocal
+        );
         assert_eq!(coordinator.close_calls, 0);
         assert!(matches!(
             BridgeWorkspaceLock::acquire(&fixture.base_workspace()?, &fixture.device_id, 4),
@@ -483,18 +488,23 @@ mod tests {
             UnixMillis::new(13),
         ))?;
 
-        let DirtyCloseLocalOutcome::CandidateAccepted(candidate) = completion.local_outcome() else {
+        let DirtyCloseLocalOutcome::CandidateAccepted(candidate) = completion.local_outcome()
+        else {
             panic!("committed unchanged candidate must be accepted locally");
         };
         assert_eq!(candidate.generation_id(), &fixture.candidate_generation_id);
         assert_eq!(candidate.state(), LocalGenerationState::MaterializedClean);
-        assert_eq!(fixture.retained.base_record().state(), LocalGenerationState::SupersededEvictable);
+        assert_eq!(
+            fixture.retained.base_record().state(),
+            LocalGenerationState::SupersededEvictable
+        );
         assert!(!fixture.retained.base_record().is_locked());
         assert!(!fixture.retained.holds_workspace_lock());
         assert!(completion.workspace_lock_released());
         assert!(completion.coordinator_lease_released());
         assert_eq!(coordinator.close_calls, 1);
-        let reacquired = BridgeWorkspaceLock::acquire(&fixture.base_workspace()?, &fixture.device_id, 4)?;
+        let reacquired =
+            BridgeWorkspaceLock::acquire(&fixture.base_workspace()?, &fixture.device_id, 4)?;
         reacquired.release()?;
         fixture.cleanup();
         Ok(())
@@ -525,7 +535,10 @@ mod tests {
             completion.local_outcome(),
             &DirtyCloseLocalOutcome::RematerializeRequired(fixture.candidate_generation_id.clone())
         );
-        assert_eq!(fixture.retained.base_record().state(), LocalGenerationState::SupersededEvictable);
+        assert_eq!(
+            fixture.retained.base_record().state(),
+            LocalGenerationState::SupersededEvictable
+        );
         assert!(!fixture.retained.base_record().is_locked());
         assert!(completion.workspace_lock_released());
         assert!(completion.coordinator_lease_released());
