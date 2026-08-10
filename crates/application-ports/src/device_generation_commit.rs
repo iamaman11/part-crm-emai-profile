@@ -161,6 +161,107 @@ impl DeviceGenerationCommitRequest {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceGenerationReplayProbe {
+    job_id: DeviceJobId,
+    claim_id: DeviceClaimId,
+    claim_fence: u64,
+    device_id: DeviceId,
+    profile_id: ProfileId,
+    base_generation_id: GenerationId,
+    object: GenerationObjectDescriptor,
+    coordinator_session_id: SessionId,
+    coordinator_fencing_token: FencingToken,
+    coordinator_epoch: u64,
+}
+
+impl DeviceGenerationReplayProbe {
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub const fn new(
+        job_id: DeviceJobId,
+        claim_id: DeviceClaimId,
+        claim_fence: u64,
+        device_id: DeviceId,
+        profile_id: ProfileId,
+        base_generation_id: GenerationId,
+        object: GenerationObjectDescriptor,
+        coordinator_session_id: SessionId,
+        coordinator_fencing_token: FencingToken,
+        coordinator_epoch: u64,
+    ) -> Self {
+        Self {
+            job_id,
+            claim_id,
+            claim_fence,
+            device_id,
+            profile_id,
+            base_generation_id,
+            object,
+            coordinator_session_id,
+            coordinator_fencing_token,
+            coordinator_epoch,
+        }
+    }
+
+    #[must_use]
+    pub const fn job_id(&self) -> &DeviceJobId {
+        &self.job_id
+    }
+
+    #[must_use]
+    pub const fn claim_id(&self) -> &DeviceClaimId {
+        &self.claim_id
+    }
+
+    #[must_use]
+    pub const fn claim_fence(&self) -> u64 {
+        self.claim_fence
+    }
+
+    #[must_use]
+    pub const fn device_id(&self) -> &DeviceId {
+        &self.device_id
+    }
+
+    #[must_use]
+    pub const fn profile_id(&self) -> &ProfileId {
+        &self.profile_id
+    }
+
+    #[must_use]
+    pub const fn base_generation_id(&self) -> &GenerationId {
+        &self.base_generation_id
+    }
+
+    #[must_use]
+    pub const fn object(&self) -> &GenerationObjectDescriptor {
+        &self.object
+    }
+
+    #[must_use]
+    pub const fn coordinator_session_id(&self) -> &SessionId {
+        &self.coordinator_session_id
+    }
+
+    #[must_use]
+    pub const fn coordinator_fencing_token(&self) -> &FencingToken {
+        &self.coordinator_fencing_token
+    }
+
+    #[must_use]
+    pub const fn coordinator_epoch(&self) -> u64 {
+        self.coordinator_epoch
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceGenerationReplayProbeOutcome {
+    Missing,
+    ExactCommitted,
+    Conflict,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceGenerationCommitOutcome {
     Activated,
@@ -225,12 +326,23 @@ pub trait DeviceGenerationProfileVersionPort {
     ) -> impl Future<Output = Result<Option<AggregateVersion>, DeviceGenerationCommitError>>;
 }
 
+/// Read-only proof of an already committed dirty-generation command. Implementations may use the
+/// append-only D1 command journal because this path performs no mutation. A positive result must
+/// prove both the exact client-supplied metadata and the terminal catalog/job materialization.
+pub trait DeviceGenerationReplayProbePort {
+    fn probe_committed_generation(
+        &self,
+        actor: &ActorContext,
+        probe: &DeviceGenerationReplayProbe,
+    ) -> impl Future<Output = Result<DeviceGenerationReplayProbeOutcome, DeviceGenerationCommitError>>;
+}
+
 /// Final metadata-only commit boundary for a verified immutable generation object.
 ///
 /// Production implementations must revalidate the authenticated actor/device binding, exact
 /// running job claim/fence/base generation, coordinator authority and profile version while the
-/// catalog register/verify/activate mutation is serialized. Application-layer checks are only an
-/// early fail-closed filter and never replace those commit-time authority checks.
+/// catalog register/verify/activate/job-success mutation is serialized. Application-layer checks
+/// are only an early fail-closed filter and never replace those commit-time authority checks.
 pub trait DeviceGenerationCommitPort {
     fn commit_device_generation(
         &self,
