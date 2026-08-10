@@ -183,12 +183,11 @@ fn binding_probe(env: &Env) -> Result<Response> {
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
     let notification_actor = ActorId::parse("actor_binding_probe")
         .map_err(|error| worker::Error::RustError(error.to_string()))?;
-    let notification_hub_id = notification_hubs.id_from_name(
-        &realtime_notifications::notification_hub_object_name(
+    let notification_hub_id =
+        notification_hubs.id_from_name(&realtime_notifications::notification_hub_object_name(
             &notification_tenant,
             &notification_actor,
-        ),
-    )?;
+        ))?;
     let _notification_hub_stub = notification_hub_id.get_stub()?;
     let _ = profile_objects;
     Response::ok("bindings-ready")
