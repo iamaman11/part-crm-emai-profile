@@ -32,10 +32,14 @@ pub enum DirtyGenerationError {
 impl fmt::Display for DirtyGenerationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidState => "local generation is not dirty and stopped",
-            Self::IdentityMismatch => "local generation identity does not match dirty candidate request",
+            Self::InvalidState => "local generation is not dirty under retained writer ownership",
+            Self::IdentityMismatch => {
+                "local generation identity does not match dirty candidate request"
+            }
             Self::CandidateMatchesBase => "dirty candidate generation must be immutable and new",
-            Self::SnapshotTooLarge => "dirty generation snapshot exceeds encrypted-container policy",
+            Self::SnapshotTooLarge => {
+                "dirty generation snapshot exceeds encrypted-container policy"
+            }
             Self::SourceChanged => "dirty generation changed while candidate snapshot was prepared",
             Self::KeyUnavailable => "generation sealing material is unavailable",
             Self::EncryptionFailed => "dirty generation encryption failed",
@@ -130,7 +134,7 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
     candidate_generation_id: &GenerationId,
     keys: &mut K,
 ) -> Result<PreparedDirtyGeneration, DirtyGenerationError> {
-    if local_record.state() != LocalGenerationState::DirtyLocal || local_record.is_locked() {
+    if local_record.state() != LocalGenerationState::DirtyLocal || !local_record.is_locked() {
         return Err(DirtyGenerationError::InvalidState);
     }
     let base_generation_id = local_record.generation_id();
@@ -209,11 +213,14 @@ fn encode_workspace_snapshot(
 
         let full_path = workspace.path().join(entry.relative_path());
         let metadata = std::fs::symlink_metadata(&full_path).map_err(LocalProfileError::from)?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != entry.bytes() {
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() != entry.bytes()
+        {
             return Err(DirtyGenerationError::SourceChanged);
         }
-        let expected_bytes = usize::try_from(entry.bytes())
-            .map_err(|_| DirtyGenerationError::SnapshotTooLarge)?;
+        let expected_bytes =
+            usize::try_from(entry.bytes()).map_err(|_| DirtyGenerationError::SnapshotTooLarge)?;
         let remaining = MAX_SNAPSHOT_BYTES
             .checked_sub(output.len())
             .ok_or(DirtyGenerationError::SnapshotTooLarge)?;
@@ -235,7 +242,11 @@ fn encode_workspace_snapshot(
         }
     }
 
-    if workspace.inventory().map_err(DirtyGenerationError::Local)? != *expected_inventory {
+    if workspace
+        .inventory()
+        .map_err(DirtyGenerationError::Local)?
+        != *expected_inventory
+    {
         return Err(DirtyGenerationError::SourceChanged);
     }
     Ok(output)
@@ -375,7 +386,6 @@ mod tests {
         record.set_locked(true)?;
         record.begin_use(UnixMillis::new(11))?;
         record.graceful_close(UnixMillis::new(12))?;
-        record.set_locked(false)?;
         Ok(record)
     }
 
@@ -409,7 +419,11 @@ mod tests {
         assert_eq!(prepared.candidate_inventory(), &source_before);
         assert_eq!(prepared.metadata_digest().len(), 64);
         assert_eq!(prepared.container_digest().len(), 64);
-        assert!(prepared.object_key().contains(fixture.candidate_generation_id.as_str()));
+        assert!(
+            prepared
+                .object_key()
+                .contains(fixture.candidate_generation_id.as_str())
+        );
         let key = GenerationDek::new(KeyId::parse("key_dirty_generation_01")?, [9_u8; 32]);
         let opened = open_generation_expected(
             prepared.sealed().container(),
