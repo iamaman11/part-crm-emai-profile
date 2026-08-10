@@ -90,9 +90,15 @@ FORBIDDEN_LEGACY_WORKER_ORCHESTRATION = (
     "project_and_respond",
 )
 
+# Step 5 still rejects raw Durable Object API everywhere except explicitly governed outer adapters.
+# Phase 2G adds the notification hub/fanout files to this narrow allowlist; their own architecture,
+# privacy, authorization and durable-before-notify invariants are enforced by the permanent Phase 2G
+# policy invoked from check-architecture.py.
 ALLOWED_DURABLE_OBJECT_FILES = {
     "apps/control-plane-worker/src/lib.rs",
     "apps/control-plane-worker/src/profile_coordinator.rs",
+    "apps/control-plane-worker/src/realtime_fanout.rs",
+    "apps/control-plane-worker/src/realtime_notifications.rs",
     "crates/cloudflare-adapters/src/coordinator_ingress.rs",
 }
 FIXTURE_PREFIX = "tests/profile-coordinator/fixtures/"
