@@ -9,6 +9,7 @@ pub mod clients;
 pub mod clock;
 pub mod commands;
 pub mod coordinator_ingress;
+pub mod device_generation_commit;
 pub mod device_jobs;
 pub mod generation_objects;
 pub mod generations;
@@ -36,6 +37,11 @@ pub use audit::{AuditPort, AuditRecord, AuditResult};
 pub use clients::ClientRepository;
 pub use clock::ClockPort;
 pub use commands::CommandExecutionEvidence;
+pub use device_generation_commit::{
+    CoordinatorGenerationCommitWitness, DeviceGenerationCommitError,
+    DeviceGenerationCommitErrorClass, DeviceGenerationCommitOutcome, DeviceGenerationCommitPort,
+    DeviceGenerationCommitRequest,
+};
 pub use device_jobs::{
     AuthenticatedDevicePort, DeviceExecutionBlocker, DeviceExecutionPreconditionPort,
     DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability,
