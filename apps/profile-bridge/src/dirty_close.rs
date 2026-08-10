@@ -89,9 +89,7 @@ impl RetainedDirtyClose {
 
         let local_outcome = match committed.apply_local_successor(&mut self.base, prepared, now) {
             Ok(candidate) => DirtyCloseLocalOutcome::CandidateAccepted(candidate),
-            Err(LocalProfileError::CloneChanged)
-                if self.base.state() == LocalGenerationState::SupersededEvictable =>
-            {
+            Err(_error) if self.base.state() == LocalGenerationState::SupersededEvictable => {
                 DirtyCloseLocalOutcome::RematerializeRequired(
                     committed.published().generation_id().clone(),
                 )
@@ -544,6 +542,41 @@ mod tests {
             LocalGenerationState::SupersededEvictable
         );
         assert!(!fixture.retained.base_record().is_locked());
+        assert!(completion.workspace_lock_released());
+        assert!(completion.coordinator_lease_released());
+        assert_eq!(coordinator.close_calls, 1);
+        fixture.cleanup();
+        Ok(())
+    }
+
+    #[test]
+    fn post_commit_candidate_read_failure_releases_old_base_and_requires_rematerialization()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut fixture = Fixture::new()?;
+        let prepared = fixture.prepared()?;
+        std::fs::remove_dir_all(prepared.candidate_workspace().path())?;
+        let mut coordinator = Coordinator::default();
+        let completion = block_on(fixture.retained.finalize(
+            &fixture.scope,
+            &fixture.proof,
+            &prepared,
+            &Upload,
+            &Verify,
+            &Commit { fail: false },
+            &mut coordinator,
+            UnixMillis::new(13),
+        ))?;
+
+        assert_eq!(
+            completion.local_outcome(),
+            &DirtyCloseLocalOutcome::RematerializeRequired(fixture.candidate_generation_id.clone())
+        );
+        assert_eq!(
+            fixture.retained.base_record().state(),
+            LocalGenerationState::SupersededEvictable
+        );
+        assert!(!fixture.retained.base_record().is_locked());
+        assert!(!fixture.retained.holds_workspace_lock());
         assert!(completion.workspace_lock_released());
         assert!(completion.coordinator_lease_released());
         assert_eq!(coordinator.close_calls, 1);
