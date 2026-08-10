@@ -15,7 +15,7 @@ EXPECTED_PHASES = [
     (1, "identity_tenant_membership", "active_actor_context"),
     (2, "client_profile_acl_assignment", "assignment_separate_from_explicit_grants"),
     (3, "immutable_generation", "verified_generation_required_for_activation"),
-    (4, "coordinator_bridge", "synthetic_operator_closes_dirty_local_without_cleanup_failure"),
+    (4, "coordinator_bridge", "synthetic_operator_commits_immutable_dirty_generation_before_cleanup"),
     (5, "mailbox_metadata_job", "metadata_only_synthetic_provider_job"),
     (6, "react_operator_projection", "same_origin_typed_ui_projection"),
 ]
@@ -456,8 +456,13 @@ def validate_composition_surfaces() -> None:
         (
             "apps/profile-bridge/src/bin/profile-bridge-synthetic.rs",
             (
-                "synthetic-operator-complete state=DIRTY_LOCAL",
+                "synthetic-operator-complete state=DIRTY_LOCAL_COMMITTED_GENERATION",
                 "LocalGenerationState::DirtyLocal",
+                "finalize_dirty_close",
+                "DirtyCloseLocalOutcome::CandidateAccepted",
+                "LocalGenerationState::SupersededEvictable",
+                "workspace_lock_released()",
+                "coordinator_lease_released()",
                 "cleanup_failures().any()",
                 "ProfileBridgeOperator::new",
             ),
