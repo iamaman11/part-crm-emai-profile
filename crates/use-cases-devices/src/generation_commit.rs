@@ -159,14 +159,17 @@ fn map_device_port_error(error: DeviceJobPortError) -> DeviceGenerationCommitOpe
 
 fn map_generation_port_error(error: GenerationPortError) -> DeviceGenerationCommitOperationError {
     match error.class() {
-        GenerationPortErrorClass::DependencyUnavailable | GenerationPortErrorClass::InternalFailure => {
+        GenerationPortErrorClass::DependencyUnavailable
+        | GenerationPortErrorClass::InternalFailure => {
             DeviceGenerationCommitOperationError::DependencyUnavailable
         }
         GenerationPortErrorClass::IntegrityFailure
         | GenerationPortErrorClass::NotFound
         | GenerationPortErrorClass::VersionConflict
         | GenerationPortErrorClass::InvalidState
-        | GenerationPortErrorClass::Conflict => DeviceGenerationCommitOperationError::IntegrityFailure,
+        | GenerationPortErrorClass::Conflict => {
+            DeviceGenerationCommitOperationError::IntegrityFailure
+        }
     }
 }
 
