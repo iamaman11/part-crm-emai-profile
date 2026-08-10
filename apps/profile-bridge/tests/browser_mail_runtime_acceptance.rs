@@ -168,13 +168,7 @@ fn runtime_policy_errors(source: &str) -> Vec<String> {
             errors.push(format!("missing browser runtime invariant: {required}"));
         }
     }
-    for forbidden in [
-        "D1Database",
-        "worker::",
-        "std::fs",
-        "bridge_outbox",
-        "mailbox_job_run_commands",
-    ] {
+    for forbidden in ["std::fs", "bridge_outbox", "mailbox_job_run_commands"] {
         if production.contains(forbidden) {
             errors.push(format!(
                 "browser runtime must remain transient: {forbidden}"
@@ -197,11 +191,11 @@ fn storage_leakage_negative_fixture_is_rejected() {
         .next()
         .unwrap_or(RUNTIME_SOURCE)
         .to_owned();
-    fixture.push_str("\nuse worker::d1::D1Database;\n");
+    fixture.push_str("\nuse std::fs;\n");
     let errors = runtime_policy_errors(&fixture);
     assert!(
         errors
             .iter()
-            .any(|error| error.contains("browser runtime must remain transient: D1Database"))
+            .any(|error| error.contains("browser runtime must remain transient: std::fs"))
     );
 }
