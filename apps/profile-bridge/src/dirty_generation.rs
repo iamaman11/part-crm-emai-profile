@@ -7,7 +7,6 @@ use encrypted_generation_domain::{
     seal_generation,
 };
 use profile_platform_primitives::{GenerationId, ProfileId, TenantId};
-use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::File;
 use std::io::Read;
@@ -181,9 +180,9 @@ pub fn prepare_dirty_generation_candidate<K: GenerationSealingMaterialPort>(
         &snapshot,
     )
     .map_err(|_| DirtyGenerationError::EncryptionFailed)?;
-    let metadata_digest = dirty_metadata_digest(&metadata, &candidate_inventory);
     let sealed = seal_generation(&metadata, &material.dek, &snapshot)
         .map_err(|_| DirtyGenerationError::EncryptionFailed)?;
+    let metadata_digest = digest_hex(sealed.metadata_digest().bytes());
     let container_digest = digest_hex(sealed.container_digest().bytes());
 
     Ok(PreparedDirtyGeneration {
@@ -262,29 +261,6 @@ fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), DirtyGenerat
     Ok(())
 }
 
-fn dirty_metadata_digest(metadata: &GenerationMetadata, inventory: &GenerationInventory) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"profile-platform-dirty-generation-metadata-v1");
-    digest.update(metadata.tenant_id().as_str().as_bytes());
-    digest.update([0]);
-    digest.update(metadata.profile_id().as_str().as_bytes());
-    digest.update([0]);
-    digest.update(metadata.generation_id().as_str().as_bytes());
-    digest.update([0]);
-    if let Some(base) = metadata.base_generation_id() {
-        digest.update(base.as_str().as_bytes());
-    }
-    digest.update([0]);
-    digest.update(metadata.key_id().as_str().as_bytes());
-    digest.update(metadata.nonce_prefix().bytes());
-    digest.update(metadata.chunk_size().to_be_bytes());
-    digest.update(metadata.plaintext_bytes().to_be_bytes());
-    digest.update(metadata.plaintext_digest().bytes());
-    digest.update(inventory.total_bytes().to_be_bytes());
-    digest.update(inventory.inventory_digest().to_be_bytes());
-    digest_hex(digest.finalize().into())
-}
-
 fn fnv_digest(bytes: &[u8]) -> u64 {
     let mut digest = FNV_OFFSET_BASIS;
     for byte in bytes {
@@ -306,7 +282,7 @@ fn digest_hex(bytes: [u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DirtyGenerationError, GenerationSealingMaterial, GenerationSealingMaterialPort,
+        DirtyGenerationError, GenerationSealingMaterial, GenerationSealingMaterialPort, digest_hex,
         prepare_dirty_generation_candidate,
     };
     use crate::local_profile::{LocalGenerationRecord, MaterializationRoot};
@@ -415,6 +391,14 @@ mod tests {
         assert_eq!(source.inventory()?, source_before);
         assert_eq!(prepared.candidate_inventory(), &source_before);
         assert_eq!(prepared.metadata_digest().len(), 64);
+        assert_eq!(
+            prepared.metadata_digest(),
+            digest_hex(prepared.sealed().metadata_digest().bytes())
+        );
+        assert_eq!(
+            prepared.sealed().metadata_digest(),
+            prepared.sealed().metadata().canonical_digest()?
+        );
         assert_eq!(prepared.container_digest().len(), 64);
         assert!(
             prepared
