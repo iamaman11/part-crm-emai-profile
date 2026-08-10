@@ -7,6 +7,8 @@ pub mod foundation_event_consumer;
 pub mod integration_events;
 pub mod operations;
 pub mod realtime;
+#[cfg(test)]
+mod realtime_evidence;
 pub mod replay;
 pub mod retention;
 pub mod retry;
