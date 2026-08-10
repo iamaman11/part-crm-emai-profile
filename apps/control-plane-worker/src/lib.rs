@@ -19,6 +19,8 @@ mod profile_coordinator;
 mod profile_coordinator_ingress;
 mod profile_generations;
 mod profiles;
+mod realtime_contract;
+mod realtime_fanout;
 mod realtime_notifications;
 mod request_evidence;
 
