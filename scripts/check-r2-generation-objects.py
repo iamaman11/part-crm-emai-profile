@@ -11,6 +11,7 @@ SOURCE = Path("crates/cloudflare-adapters/src/r2_generation_objects.rs")
 REQUIRED_PRODUCTION_FRAGMENTS = (
     "GenerationObjectUploadPort",
     "GenerationObjectExactVerifyPort",
+    "GenerationObjectDescriptorVerifyPort",
     "META_TENANT_ID",
     "META_PROFILE_ID",
     "META_GENERATION_ID",
@@ -53,6 +54,15 @@ def function_body(source: str, marker: str) -> str:
     return ""
 
 
+def verifier_uses_head_and_compare(source: str, marker: str) -> bool:
+    verifier = function_body(source, marker)
+    return bool(
+        verifier
+        and ".head_descriptor(" in verifier
+        and "Self::descriptor_matches(" in verifier
+    )
+
+
 def check_text(source: str) -> list[str]:
     production = source.split("#[cfg(test)]", 1)[0]
     failures: list[str] = []
@@ -77,8 +87,8 @@ def check_text(source: str) -> list[str]:
     conditional = upload.find(".only_if(")
     execute = upload.find(".execute()")
     created = upload.find("GenerationObjectUploadOutcome::Created")
-    head = upload.find(".head_exact(")
-    compare = upload.find("Self::object_matches(")
+    head = upload.find(".head_descriptor(")
+    compare = upload.find("Self::descriptor_matches(")
     idempotent = upload.find("GenerationObjectUploadOutcome::Idempotent")
     conflict = upload.find("GenerationObjectUploadOutcome::ImmutableConflict")
 
@@ -97,20 +107,22 @@ def check_text(source: str) -> list[str]:
 
     conditional_body = function_body(upload, ".only_if(Conditional")
     if conditional_body:
-        # Conditional is a struct literal, so the generic brace scanner can validate its payload.
         if 'etag_does_not_match: Some("*".to_owned())' not in conditional_body:
             failures.append("immutable R2 PUT must require wildcard object-absence condition")
     elif 'etag_does_not_match: Some("*".to_owned())' not in upload:
         failures.append("immutable R2 PUT must require wildcard object-absence condition")
 
-    if ".head_exact(" in upload[:put]:
+    if ".head_descriptor(" in upload[:put]:
         failures.append("immutable R2 create-only semantics must not read before PUT")
 
-    verifier = function_body(production, "async fn verify_generation_object_exact")
-    if not verifier or ".head_exact(" not in verifier or "Self::object_matches(" not in verifier:
-        failures.append("exact R2 verifier must HEAD and compare the immutable object descriptor")
+    if not verifier_uses_head_and_compare(production, "async fn verify_generation_object_exact"):
+        failures.append("exact R2 object verifier must HEAD and compare the immutable descriptor")
+    if not verifier_uses_head_and_compare(
+        production, "async fn verify_generation_object_descriptor_exact"
+    ):
+        failures.append("metadata-only R2 descriptor verifier must HEAD and compare exactly")
 
-    matches = function_body(production, "fn object_matches")
+    matches = function_body(production, "fn descriptor_matches")
     for fragment in (
         "stored.key()",
         "stored.size()",
@@ -121,6 +133,7 @@ def check_text(source: str) -> list[str]:
         "META_METADATA_DIGEST",
         "META_CONTAINER_DIGEST",
         "stored.checksum().sha256",
+        "decode_sha256_hex(descriptor.container_digest())",
     ):
         if fragment not in matches:
             failures.append(f"exact R2 comparison is missing: {fragment}")
@@ -144,6 +157,13 @@ def self_test(root: Path) -> list[str]:
     failures = check_text(fixture)
     if not any("PUT/checksum/conditional" in failure for failure in failures):
         return ["R2 missing-conditional negative fixture unexpectedly passed"]
+
+    descriptor_fixture = production.replace(
+        ".head_descriptor(scope, descriptor)", ".descriptor_head_removed(scope, descriptor)", 1
+    )
+    descriptor_failures = check_text(descriptor_fixture)
+    if not any("metadata-only R2 descriptor verifier" in failure for failure in descriptor_failures):
+        return ["R2 missing-descriptor-HEAD negative fixture unexpectedly passed"]
     return []
 
 
@@ -161,7 +181,7 @@ def main() -> int:
         return 1
 
     if args.self_test:
-        print("Immutable R2 negative fixture was rejected.")
+        print("Immutable R2 negative fixtures were rejected.")
     else:
         print("Immutable R2 generation object policy passed.")
     return 0
