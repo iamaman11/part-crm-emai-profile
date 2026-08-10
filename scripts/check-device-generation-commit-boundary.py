@@ -26,6 +26,16 @@ def read(root: Path, relative: Path) -> str:
     return (root / relative).read_text(encoding="utf-8")
 
 
+def transport_struct(source: str) -> str:
+    marker = "pub struct DeviceGenerationCommitInternalRequest {"
+    start = source.find(marker)
+    if start < 0:
+        return ""
+    remainder = source[start + len(marker) :]
+    end = remainder.find("\n}\n\nimpl DeviceGenerationCommitInternalRequest")
+    return remainder if end < 0 else remainder[:end]
+
+
 def errors(root: Path) -> list[str]:
     result: list[str] = []
     ingress = production(read(root, COORDINATOR_INGRESS))
@@ -61,7 +71,10 @@ def errors(root: Path) -> list[str]:
     if "coordinator_fencing_token TEXT" in migration:
         result.append("raw coordinator fencing token must never be persisted in D1")
 
-    if "observed_at" in runtime or "observedAt" in runtime:
+    transport = transport_struct(runtime)
+    if not transport:
+        result.append("strict internal generation commit transport is missing")
+    elif "observed_at" in transport or "observedAt" in transport or "executed_at" in transport:
         result.append("internal generation commit transport must not accept a client clock")
     if "DeviceGenerationCommitInternalRequest::from_domain" not in ingress:
         result.append("outer DO client must use the strict internal generation commit DTO")
