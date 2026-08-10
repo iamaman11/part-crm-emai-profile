@@ -1,16 +1,32 @@
+use application_ports::device_generation_commit::{
+    DeviceGenerationCommitError, DeviceGenerationCommitErrorClass, DeviceGenerationCommitRequest,
+};
+use cloudflare_adapters::d1_device_generation_commit::{
+    D1DeviceGenerationCommitJournal, DeviceGenerationCommitJournalOutcome,
+};
+use cloudflare_adapters::device_generation_commit_runtime::{
+    DEVICE_GENERATION_COMMIT_PATH, DeviceGenerationCommitInternalErrorClass,
+    DeviceGenerationCommitInternalErrorResponse, DeviceGenerationCommitInternalOutcome,
+    DeviceGenerationCommitInternalRequest, DeviceGenerationCommitInternalResponse,
+};
 use cloudflare_adapters::profile_coordinator::{
     CoordinatorAdapterError, CoordinatorProjection, StoredCoordinatorCommand,
     StoredCoordinatorDocument, StoredCoordinatorEnvelope, outcome_name,
 };
+use control_plane_contract::D1_CATALOG_BINDING;
 use profile_platform_primitives::{ProfileId, TenantId, UnixMillis};
 use serde::{Deserialize, Serialize};
-use session_domain::coordinator::{CoordinatorConfig, CoordinatorOutcome};
+use session_domain::coordinator::{
+    CoordinatorConfig, CoordinatorOutcome, CoordinatorStatus, ProfileCoordinatorState,
+};
 use worker::{
     Date, DateInit, DurableObject, Env, Error, Method, Request, Response, Result, ScheduledTime,
     State, durable_object,
 };
 
 const STORAGE_KEY: &str = "profile-coordinator-v1";
+const GENERATION_COMMIT_GATE_KEY: &str = "profile-generation-commit-gate-v1";
+const GATE_ALARM_RETRY_MS: u64 = 1_000;
 const IDLE_TIMEOUT_MS: u64 = 30_000;
 const HARD_TIMEOUT_MS: u64 = 900_000;
 const DRAIN_TIMEOUT_MS: u64 = 60_000;
@@ -18,23 +34,30 @@ const DRAIN_TIMEOUT_MS: u64 = 60_000;
 #[durable_object]
 pub struct ProfileCoordinator {
     state: State,
-    _env: Env,
+    env: Env,
 }
 
 impl DurableObject for ProfileCoordinator {
     fn new(state: State, env: Env) -> Self {
-        Self { state, _env: env }
+        Self { state, env }
     }
 
     async fn fetch(&self, mut request: Request) -> Result<Response> {
         match (request.method(), request.path().as_str()) {
             (Method::Post, "/snapshot") => self.snapshot(&mut request).await,
             (Method::Post, "/command") => self.command(&mut request).await,
+            (Method::Post, DEVICE_GENERATION_COMMIT_PATH) => {
+                self.generation_commit(&mut request).await
+            }
             _ => Response::error("Not Found", 404),
         }
     }
 
     async fn alarm(&self) -> Result<Response> {
+        if self.load_generation_commit_gate().await?.is_some() {
+            schedule_gate_retry_alarm(&self.state).await?;
+            return Response::ok("generation commit reserved");
+        }
         let Some(mut document) = self
             .state
             .storage()
@@ -76,6 +99,9 @@ impl ProfileCoordinator {
     }
 
     async fn command(&self, request: &mut Request) -> Result<Response> {
+        if self.load_generation_commit_gate().await?.is_some() {
+            return coordinator_busy();
+        }
         let body = request.json::<CoordinatorInternalCommandOwned>().await?;
         let tenant_id = TenantId::parse(body.tenant_id).map_err(identifier_error)?;
         let profile_id = ProfileId::parse(body.profile_id).map_err(identifier_error)?;
@@ -89,6 +115,103 @@ impl ProfileCoordinator {
         }
         schedule_alarm(&self.state, applied.next_alarm_at()).await?;
         Response::from_json(&CoordinatorObjectResponse::from_applied(&applied))
+    }
+
+    async fn generation_commit(&self, request: &mut Request) -> Result<Response> {
+        let internal = match request
+            .json::<DeviceGenerationCommitInternalRequest>()
+            .await
+        {
+            Ok(value) => value,
+            Err(_) => return generation_commit_error(integrity_failure()),
+        };
+        let authority_digest = internal.authority_digest();
+        let existing_gate = self.load_generation_commit_gate().await?;
+        let observed_at = existing_gate
+            .as_ref()
+            .map_or_else(|| UnixMillis::new(Date::now().as_millis()), |gate| {
+                UnixMillis::new(gate.authorized_at_ms)
+            });
+        let (actor, commit) = match internal.into_domain(observed_at) {
+            Ok(value) => value,
+            Err(error) => return generation_commit_error(error),
+        };
+
+        let document = self
+            .load_document(actor.tenant_scope().tenant_id(), commit.profile_id())
+            .await?;
+        let coordinator = match document.replay() {
+            Ok(value) => value,
+            Err(error) => return generation_commit_error(adapter_integrity(error)),
+        };
+
+        match existing_gate {
+            Some(gate) => {
+                if !gate.matches(&authority_digest, &commit) {
+                    return generation_commit_error(version_conflict());
+                }
+                if let Err(error) = validate_generation_commit_authority(
+                    &coordinator,
+                    &commit,
+                    UnixMillis::new(gate.authorized_at_ms),
+                ) {
+                    return generation_commit_error(error);
+                }
+            }
+            None => {
+                if let Err(error) =
+                    validate_generation_commit_authority(&coordinator, &commit, observed_at)
+                {
+                    return generation_commit_error(error);
+                }
+                let gate = StoredGenerationCommitGate::new(
+                    authority_digest,
+                    &commit,
+                    observed_at,
+                );
+                self.state
+                    .storage()
+                    .put(GENERATION_COMMIT_GATE_KEY, &gate)
+                    .await?;
+            }
+        }
+
+        let journal = D1DeviceGenerationCommitJournal::new(self.env.d1(D1_CATALOG_BINDING)?);
+        let outcome = journal.apply(&actor, &commit).await;
+        match outcome {
+            Ok(DeviceGenerationCommitJournalOutcome::Applied) => {
+                self.clear_generation_commit_gate().await?;
+                Response::from_json(&DeviceGenerationCommitInternalResponse {
+                    outcome: DeviceGenerationCommitInternalOutcome::Activated,
+                })
+            }
+            Ok(DeviceGenerationCommitJournalOutcome::ExactReplay) => {
+                self.clear_generation_commit_gate().await?;
+                Response::from_json(&DeviceGenerationCommitInternalResponse {
+                    outcome: DeviceGenerationCommitInternalOutcome::AlreadyActive,
+                })
+            }
+            Err(error) => {
+                self.clear_generation_commit_gate().await?;
+                generation_commit_error(error)
+            }
+        }
+    }
+
+    async fn load_generation_commit_gate(&self) -> Result<Option<StoredGenerationCommitGate>> {
+        self.state
+            .storage()
+            .get::<StoredGenerationCommitGate>(GENERATION_COMMIT_GATE_KEY)
+            .await
+    }
+
+    async fn clear_generation_commit_gate(&self) -> Result<()> {
+        let _ = self
+            .state
+            .storage()
+            .delete(GENERATION_COMMIT_GATE_KEY)
+            .await?;
+        Ok(())
     }
 
     async fn load_document(
@@ -114,6 +237,73 @@ impl ProfileCoordinator {
                 .map_err(domain_error)?,
         ))
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredGenerationCommitGate {
+    authority_digest: String,
+    job_id: String,
+    generation_id: String,
+    authorized_at_ms: u64,
+}
+
+impl StoredGenerationCommitGate {
+    fn new(
+        authority_digest: String,
+        request: &DeviceGenerationCommitRequest,
+        authorized_at: UnixMillis,
+    ) -> Self {
+        Self {
+            authority_digest,
+            job_id: request.job_id().as_str().to_owned(),
+            generation_id: request.object().generation_id().as_str().to_owned(),
+            authorized_at_ms: authorized_at.value(),
+        }
+    }
+
+    fn matches(&self, authority_digest: &str, request: &DeviceGenerationCommitRequest) -> bool {
+        self.authority_digest == authority_digest
+            && self.job_id == request.job_id().as_str()
+            && self.generation_id == request.object().generation_id().as_str()
+    }
+}
+
+fn validate_generation_commit_authority(
+    coordinator: &ProfileCoordinatorState,
+    request: &DeviceGenerationCommitRequest,
+    authorized_at: UnixMillis,
+) -> core::result::Result<(), DeviceGenerationCommitError> {
+    if !matches!(
+        coordinator.status(),
+        CoordinatorStatus::Active | CoordinatorStatus::Draining
+    ) || coordinator.version().value() != request.coordinator().coordinator_version()
+        || coordinator.last_sequence() != request.coordinator().coordinator_sequence()
+        || authorized_at < coordinator.last_observed_at()
+    {
+        return Err(stale_authority());
+    }
+    let Some(lease) = coordinator.active_lease() else {
+        return Err(stale_authority());
+    };
+    if lease.device_id() != request.device_id()
+        || !lease.accepts_writer(
+            request.coordinator().session_id(),
+            request.coordinator().epoch(),
+            request.coordinator().fencing_token(),
+        )
+        || authorized_at >= lease.idle_expires_at()
+        || authorized_at >= lease.hard_expires_at()
+    {
+        return Err(stale_authority());
+    }
+    if coordinator.status() == CoordinatorStatus::Draining
+        && coordinator
+            .drain_deadline()
+            .is_none_or(|deadline| authorized_at >= deadline)
+    {
+        return Err(stale_authority());
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -188,6 +378,23 @@ async fn schedule_alarm(state: &State, deadline: Option<UnixMillis>) -> Result<(
     }
 }
 
+async fn schedule_gate_retry_alarm(state: &State) -> Result<()> {
+    let retry_at = Date::now()
+        .as_millis()
+        .checked_add(GATE_ALARM_RETRY_MS)
+        .ok_or_else(|| Error::RustError("generation commit alarm overflow".to_owned()))?;
+    let date = Date::new(DateInit::Millis(retry_at));
+    state
+        .storage()
+        .set_alarm(ScheduledTime::new(date.into()))
+        .await
+}
+
+fn coordinator_busy() -> Result<Response> {
+    Response::from_json(&CoordinatorErrorResponse { code: "conflict" })
+        .map(|response| response.with_status(409))
+}
+
 fn coordinator_conflict(error: CoordinatorAdapterError) -> Result<Response> {
     let code = match error {
         CoordinatorAdapterError::TenantMismatch | CoordinatorAdapterError::ProfileMismatch => 404,
@@ -208,9 +415,48 @@ fn coordinator_conflict(error: CoordinatorAdapterError) -> Result<Response> {
     .map(|response| response.with_status(code))
 }
 
+fn generation_commit_error(error: DeviceGenerationCommitError) -> Result<Response> {
+    let (status, class) = match error.class() {
+        DeviceGenerationCommitErrorClass::StaleAuthority => (
+            409,
+            DeviceGenerationCommitInternalErrorClass::StaleAuthority,
+        ),
+        DeviceGenerationCommitErrorClass::VersionConflict => (
+            409,
+            DeviceGenerationCommitInternalErrorClass::VersionConflict,
+        ),
+        DeviceGenerationCommitErrorClass::IntegrityFailure => (
+            500,
+            DeviceGenerationCommitInternalErrorClass::IntegrityFailure,
+        ),
+        DeviceGenerationCommitErrorClass::DependencyUnavailable => (
+            503,
+            DeviceGenerationCommitInternalErrorClass::DependencyUnavailable,
+        ),
+    };
+    Response::from_json(&DeviceGenerationCommitInternalErrorResponse { class })
+        .map(|response| response.with_status(status))
+}
+
 #[derive(Serialize)]
 struct CoordinatorErrorResponse {
     code: &'static str,
+}
+
+fn adapter_integrity(_error: CoordinatorAdapterError) -> DeviceGenerationCommitError {
+    integrity_failure()
+}
+
+fn stale_authority() -> DeviceGenerationCommitError {
+    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::StaleAuthority)
+}
+
+fn version_conflict() -> DeviceGenerationCommitError {
+    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::VersionConflict)
+}
+
+fn integrity_failure() -> DeviceGenerationCommitError {
+    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::IntegrityFailure)
 }
 
 fn identifier_error(error: profile_platform_primitives::ParseOpaqueIdError) -> Error {
