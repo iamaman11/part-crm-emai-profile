@@ -13,6 +13,8 @@ MIGRATIONS = ROOT / "migrations" / "d1"
 TENANT = "tenant_browser_mail"
 OWNER = "actor_browser_mail"
 IDENTITY = "identity_browser_mail"
+MEMBER = "actor_browser_mail_member"
+MEMBER_IDENTITY = "identity_browser_mail_member"
 PROFILE = "profile_browser_mail"
 BROWSER_BINDING = "binding_browser_mail"
 SECOND_BROWSER_BINDING = "binding_browser_mail_2"
@@ -85,6 +87,19 @@ def seed(connection: sqlite3.Connection) -> None:
         (TENANT, OWNER, IDENTITY),
     )
     connection.execute(
+        "INSERT INTO identities (identity_id, access_subject, created_at_ms) VALUES (?, ?, 11)",
+        (MEMBER_IDENTITY, f"subject-{MEMBER_IDENTITY}"),
+    )
+    connection.execute(
+        """
+        INSERT INTO memberships (
+            tenant_id, actor_id, identity_id, role, status, version,
+            created_at_ms, updated_at_ms
+        ) VALUES (?, ?, ?, 'MEMBER', 'ACTIVE', 1, 11, 11)
+        """,
+        (TENANT, MEMBER, MEMBER_IDENTITY),
+    )
+    connection.execute(
         """
         INSERT INTO browser_profiles (
             tenant_id, profile_id, status, active_generation_id, version,
@@ -130,6 +145,7 @@ def bind_execution(
     binding_id: str,
     profile_id: str = PROFILE,
     executed_at_ms: int = 40,
+    actor_id: str = OWNER,
 ) -> None:
     connection.execute(
         """
@@ -137,7 +153,7 @@ def bind_execution(
             tenant_id, command_id, command_actor_id, binding_id, profile_id, executed_at_ms
         ) VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (TENANT, command_id, OWNER, binding_id, profile_id, executed_at_ms),
+        (TENANT, command_id, actor_id, binding_id, profile_id, executed_at_ms),
     )
 
 
@@ -241,20 +257,13 @@ def test_provider_profile_owner_and_uniqueness_fail_closed(connection: sqlite3.C
     connection.rollback()
     assert resolved(connection, BROWSER_BINDING) == (BROWSER_BINDING, PROFILE)
 
-    connection.execute(
-        """
-        UPDATE memberships
-        SET status = 'SUSPENDED', version = version + 1, updated_at_ms = 60
-        WHERE tenant_id = ? AND actor_id = ?
-        """,
-        (TENANT, OWNER),
-    )
     expect_integrity_error(
         lambda: bind_execution(
             connection,
-            "cmd_bind_suspended_owner",
+            "cmd_bind_member",
             SECOND_BROWSER_BINDING,
             executed_at_ms=61,
+            actor_id=MEMBER,
         )
     )
     connection.rollback()
