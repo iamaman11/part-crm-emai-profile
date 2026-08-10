@@ -458,10 +458,10 @@ mod tests {
         assert!(fixture.retained.holds_workspace_lock());
         assert_eq!(fixture.retained.base_record().state(), LocalGenerationState::DirtyLocal);
         assert_eq!(coordinator.close_calls, 0);
-        assert_eq!(
+        assert!(matches!(
             BridgeWorkspaceLock::acquire(&fixture.base_workspace()?, &fixture.device_id, 4),
             Err(crate::local_profile::LocalProfileError::LockBusy)
-        );
+        ));
         fixture.cleanup();
         Ok(())
     }
