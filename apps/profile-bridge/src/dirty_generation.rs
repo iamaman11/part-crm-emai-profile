@@ -43,7 +43,9 @@ impl fmt::Display for DirtyGenerationError {
             Self::SourceChanged => "dirty generation changed while candidate snapshot was prepared",
             Self::KeyUnavailable => "generation sealing material is unavailable",
             Self::EncryptionFailed => "dirty generation encryption failed",
-            Self::Local(error) => return write!(formatter, "dirty generation local failure: {error}"),
+            Self::Local(error) => {
+                return write!(formatter, "dirty generation local failure: {error}");
+            }
         })
     }
 }
@@ -242,11 +244,7 @@ fn encode_workspace_snapshot(
         }
     }
 
-    if workspace
-        .inventory()
-        .map_err(DirtyGenerationError::Local)?
-        != *expected_inventory
-    {
+    if workspace.inventory().map_err(DirtyGenerationError::Local)? != *expected_inventory {
         return Err(DirtyGenerationError::SourceChanged);
     }
     Ok(output)
@@ -264,10 +262,7 @@ fn checked_extend(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), DirtyGenerat
     Ok(())
 }
 
-fn dirty_metadata_digest(
-    metadata: &GenerationMetadata,
-    inventory: &GenerationInventory,
-) -> String {
+fn dirty_metadata_digest(metadata: &GenerationMetadata, inventory: &GenerationInventory) -> String {
     let mut digest = Sha256::new();
     digest.update(b"profile-platform-dirty-generation-metadata-v1");
     digest.update(metadata.tenant_id().as_str().as_bytes());
@@ -315,7 +310,9 @@ mod tests {
         prepare_dirty_generation_candidate,
     };
     use crate::local_profile::{LocalGenerationRecord, MaterializationRoot};
-    use encrypted_generation_domain::{GenerationDek, KeyId, NoncePrefix, open_generation_expected};
+    use encrypted_generation_domain::{
+        GenerationDek, KeyId, NoncePrefix, open_generation_expected,
+    };
     use profile_platform_primitives::{GenerationId, ProfileId, TenantId, UnixMillis};
     use std::fs;
     use std::path::PathBuf;
@@ -449,11 +446,8 @@ mod tests {
             &fixture.profile_id,
             &fixture.base_generation_id,
         )?;
-        let clean = LocalGenerationRecord::new(
-            fixture.base_generation_id.clone(),
-            0,
-            UnixMillis::new(10),
-        );
+        let clean =
+            LocalGenerationRecord::new(fixture.base_generation_id.clone(), 0, UnixMillis::new(10));
         let mut keys = FakeKeys;
         assert_eq!(
             prepare_dirty_generation_candidate(
