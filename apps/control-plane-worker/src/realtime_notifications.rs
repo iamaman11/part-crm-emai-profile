@@ -5,12 +5,12 @@ use crate::realtime_contract::{
 };
 use application_ports::{
     CursorAdvanceWriteOutcome, NotificationAuthorizationPort, NotificationCapability,
-    NotificationPortError, NotificationPortErrorClass, RealtimeNotificationSinkPort,
+    NotificationPortError, NotificationPortErrorClass, RealtimeInvalidationSignal,
+    RealtimeNotificationSinkPort,
 };
 use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
 use cloudflare_adapters::d1_notifications::D1NotificationRepository;
 use cloudflare_adapters::d1_realtime_notifications::D1RealtimeNotificationAuthorization;
-use contracts::RealtimeInvalidationSignal;
 use profile_platform_primitives::{
     ActorContext, ActorId, CorrelationId, TenantId, TenantScope, UnixMillis,
 };
@@ -40,9 +40,6 @@ pub async fn connect(request: &mut Request, env: &Env, tenant_id: &str) -> Resul
         return Response::error("WebSocket upgrade required", 426);
     }
 
-    // Browser WebSocket constructors cannot attach the API's normal X-Correlation-Id header.
-    // Generate it at the already trusted Worker ingress instead of weakening the shared HTTP
-    // identity verifier. Access identity is still verified from the incoming Cloudflare header.
     let mut internal = request.clone_mut()?;
     let connection_correlation = format!("corr_realtime_{}", worker::Date::now().as_millis());
     internal
