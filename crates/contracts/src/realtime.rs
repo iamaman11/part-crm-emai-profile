@@ -96,14 +96,12 @@ impl RealtimeInvalidationSignal {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        REALTIME_INVALIDATION_VERSION, RealtimeInvalidationSignal, RealtimeResourceKind,
-    };
+    use super::{REALTIME_INVALIDATION_VERSION, RealtimeInvalidationSignal, RealtimeResourceKind};
     use profile_platform_primitives::{OutboxEventId, UnixMillis};
 
     #[test]
-    fn invalidation_contract_is_versioned_and_metadata_only() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn invalidation_contract_is_versioned_and_metadata_only()
+    -> Result<(), Box<dyn std::error::Error>> {
         let signal = RealtimeInvalidationSignal::new(
             OutboxEventId::parse("outbox_01JREALTIME")?,
             RealtimeResourceKind::Clients,
@@ -115,7 +113,7 @@ mod tests {
         assert_eq!(signal.occurred_at(), UnixMillis::new(42));
         assert_eq!(
             signal.canonical_json(),
-            r#"{"version":1,"eventId":"outbox_01JREALTIME","resource":"clients","occurredAtMs":42}"#.replace("\\\"", "\"")
+            "{\"version\":1,\"eventId\":\"outbox_01JREALTIME\",\"resource\":\"clients\",\"occurredAtMs\":42}"
         );
         Ok(())
     }
