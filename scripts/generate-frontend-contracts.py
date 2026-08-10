@@ -27,9 +27,14 @@ QUERY_MAIL_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "query-mail.js
 QUERY_MAIL_TYPESCRIPT_PATH = (
     ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "query-mail.ts"
 )
+OPERATOR_QUERY_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "operator-query.json"
+OPERATOR_QUERY_TYPESCRIPT_PATH = (
+    ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "operator-query.ts"
+)
 SOURCE_PATH = "crates/control-plane-contract/src/public_api.rs"
 CLIENT_REGISTRY_SOURCE_PATH = "crates/control-plane-contract/src/client_registry_api.rs"
 QUERY_MAIL_SOURCE_PATH = "crates/control-plane-contract/src/bin/export_query_mail.rs"
+OPERATOR_QUERY_SOURCE_PATH = "crates/control-plane-contract/src/bin/export_operator_query.rs"
 GENERATOR_PATH = "scripts/generate-frontend-contracts.py"
 
 
@@ -256,6 +261,13 @@ def main() -> int:
         source_path=QUERY_MAIL_SOURCE_PATH,
         support_nullable=True,
     )
+    operator_query, _ = run_export("export_operator_query")
+    operator_query_openapi = compact_json(operator_query)
+    operator_query_typescript = render_typescript(
+        operator_query,
+        source_path=OPERATOR_QUERY_SOURCE_PATH,
+        support_nullable=True,
+    )
 
     results = [
         check_or_write(OPENAPI_PATH, base_openapi, args.check),
@@ -272,6 +284,12 @@ def main() -> int:
         ),
         check_or_write(QUERY_MAIL_OPENAPI_PATH, query_mail_openapi, args.check),
         check_or_write(QUERY_MAIL_TYPESCRIPT_PATH, query_mail_typescript, args.check),
+        check_or_write(OPERATOR_QUERY_OPENAPI_PATH, operator_query_openapi, args.check),
+        check_or_write(
+            OPERATOR_QUERY_TYPESCRIPT_PATH,
+            operator_query_typescript,
+            args.check,
+        ),
     ]
     if not all(results):
         return 1
