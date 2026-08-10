@@ -320,7 +320,10 @@ fn stale_claim_fence_stops_before_object_verification_or_commit()
         &request,
     );
 
-    assert_eq!(result, Err(DeviceGenerationCommitOperationError::StaleClaim));
+    assert_eq!(
+        result,
+        Err(DeviceGenerationCommitOperationError::StaleClaim)
+    );
     assert_eq!(verifier_calls.get(), 0);
     assert_eq!(commit_calls.get(), 0);
     Ok(())
