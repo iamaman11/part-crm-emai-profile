@@ -127,11 +127,10 @@ impl ProfileCoordinator {
         };
         let authority_digest = internal.authority_digest();
         let existing_gate = self.load_generation_commit_gate().await?;
-        let observed_at = existing_gate
-            .as_ref()
-            .map_or_else(|| UnixMillis::new(Date::now().as_millis()), |gate| {
-                UnixMillis::new(gate.authorized_at_ms)
-            });
+        let observed_at = existing_gate.as_ref().map_or_else(
+            || UnixMillis::new(Date::now().as_millis()),
+            |gate| UnixMillis::new(gate.authorized_at_ms),
+        );
         let (actor, commit) = match internal.into_domain(observed_at) {
             Ok(value) => value,
             Err(error) => return generation_commit_error(error),
@@ -164,11 +163,7 @@ impl ProfileCoordinator {
                 {
                     return generation_commit_error(error);
                 }
-                let gate = StoredGenerationCommitGate::new(
-                    authority_digest,
-                    &commit,
-                    observed_at,
-                );
+                let gate = StoredGenerationCommitGate::new(authority_digest, &commit, observed_at);
                 self.state
                     .storage()
                     .put(GENERATION_COMMIT_GATE_KEY, &gate)
