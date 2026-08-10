@@ -1,9 +1,14 @@
+use application_ports::device_generation_commit::{
+    DeviceGenerationCommitError, DeviceGenerationCommitErrorClass, DeviceGenerationProfileVersionPort,
+};
 use application_ports::{
     DeviceExecutionBlocker, DeviceExecutionPreconditionPort, DeviceExecutionReadiness,
     DeviceJobPortError, DeviceJobPortErrorClass,
 };
 use device_domain::DeviceJobTarget;
-use profile_platform_primitives::ActorContext;
+use profile_platform_primitives::{
+    ActorContext, AggregateVersion, GenerationId, ProfileId,
+};
 use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::query;
@@ -39,11 +44,25 @@ SELECT
     ) AS device_authorized
 "#;
 
+const LOAD_ACTIVE_PROFILE_VERSION: &str = r#"
+SELECT profile.version
+FROM browser_profiles AS profile
+WHERE profile.tenant_id = ?
+  AND profile.profile_id = ?
+  AND profile.status = 'READY'
+  AND profile.active_generation_id = ?
+"#;
+
 #[derive(Deserialize)]
 struct ExecutionPreconditionRow {
     generation_active: i64,
     generation_verified: i64,
     device_authorized: i64,
+}
+
+#[derive(Deserialize)]
+struct ActiveProfileVersionRow {
+    version: i64,
 }
 
 pub struct D1DeviceExecutionPreconditions {
@@ -112,6 +131,34 @@ impl DeviceExecutionPreconditionPort for D1DeviceExecutionPreconditions {
     }
 }
 
+impl DeviceGenerationProfileVersionPort for D1DeviceExecutionPreconditions {
+    async fn load_active_profile_version(
+        &self,
+        actor: &ActorContext,
+        profile_id: &ProfileId,
+        base_generation_id: &GenerationId,
+    ) -> Result<Option<AggregateVersion>, DeviceGenerationCommitError> {
+        let row = query!(
+            &self.database,
+            LOAD_ACTIVE_PROFILE_VERSION,
+            actor.tenant_scope().tenant_id().as_str(),
+            profile_id.as_str(),
+            base_generation_id.as_str()
+        )
+        .map_err(|_| generation_commit_dependency_failure())?
+        .first::<ActiveProfileVersionRow>(None)
+        .await
+        .map_err(|_| generation_commit_dependency_failure())?;
+
+        row.map(|row| {
+            let version = u64::try_from(row.version)
+                .map_err(|_| generation_commit_integrity_failure())?;
+            AggregateVersion::new(version).map_err(|_| generation_commit_integrity_failure())
+        })
+        .transpose()
+    }
+}
+
 fn bounded_boolean(value: i64) -> Result<bool, DeviceJobPortError> {
     match value {
         0 => Ok(false),
@@ -128,9 +175,17 @@ fn map_worker_error(_error: worker::Error) -> DeviceJobPortError {
     DeviceJobPortError::new(DeviceJobPortErrorClass::DependencyUnavailable)
 }
 
+fn generation_commit_integrity_failure() -> DeviceGenerationCommitError {
+    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::IntegrityFailure)
+}
+
+fn generation_commit_dependency_failure() -> DeviceGenerationCommitError {
+    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::DependencyUnavailable)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::EVALUATE_EXECUTION_PRECONDITIONS;
+    use super::{EVALUATE_EXECUTION_PRECONDITIONS, LOAD_ACTIVE_PROFILE_VERSION};
 
     #[test]
     fn precondition_query_is_exact_target_and_freshness_scoped() {
@@ -146,5 +201,18 @@ mod tests {
             assert!(EVALUATE_EXECUTION_PRECONDITIONS.contains(required));
         }
         assert!(!EVALUATE_EXECUTION_PRECONDITIONS.contains("profile_assignments"));
+    }
+
+    #[test]
+    fn active_profile_version_query_is_exact_base_generation_scoped() {
+        for required in [
+            "profile.tenant_id = ?",
+            "profile.profile_id = ?",
+            "profile.status = 'READY'",
+            "profile.active_generation_id = ?",
+        ] {
+            assert!(LOAD_ACTIVE_PROFILE_VERSION.contains(required));
+        }
+        assert!(!LOAD_ACTIVE_PROFILE_VERSION.contains("profile_assignments"));
     }
 }
