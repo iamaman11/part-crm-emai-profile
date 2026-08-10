@@ -203,7 +203,10 @@ mod tests {
             ActorId::parse("actor_01JREALTIME_C")?,
         ];
         assert!(strictly_ordered_after(Some(&after), &ordered));
-        assert!(!strictly_ordered_after(Some(&after), &[after.clone()]));
+        assert!(!strictly_ordered_after(
+            Some(&after),
+            std::slice::from_ref(&after)
+        ));
         assert!(!strictly_ordered_after(
             Some(&after),
             &[ActorId::parse("actor_01JREALTIME_0")?]
