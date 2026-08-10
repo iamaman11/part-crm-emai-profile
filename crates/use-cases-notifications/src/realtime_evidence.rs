@@ -14,18 +14,10 @@ use profile_platform_primitives::{
 };
 use std::cell::{Cell, RefCell};
 use std::future::Future;
-use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
-
-struct ImmediateWake;
-
-impl Wake for ImmediateWake {
-    fn wake(self: Arc<Self>) {}
-}
+use std::task::{Context, Poll, Waker};
 
 fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(ImmediateWake));
-    let mut context = Context::from_waker(&waker);
+    let mut context = Context::from_waker(Waker::noop());
     let mut future = Box::pin(future);
     loop {
         match future.as_mut().poll(&mut context) {
