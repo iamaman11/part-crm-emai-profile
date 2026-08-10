@@ -3,7 +3,7 @@ import { TenantChooser } from './TenantContext';
 import { createAccessRoute } from '../features/access';
 import { createClientsRoutes } from '../features/clients';
 import { createMailboxesRoute } from '../features/mailboxes';
-import { createProfilesRoute } from '../features/profiles';
+import { createProfilesRoutes } from '../features/profiles';
 import { SessionPanel } from '../features/session';
 
 function Shell() {
@@ -37,12 +37,12 @@ function Dashboard() {
       <section className="hero panel">
         <span className="eyebrow">Operator dashboard</span>
         <h2>Explicit-resource workflows, fail-closed by default.</h2>
-        <p>This UI intentionally does not invent catalog list endpoints. Use opaque IDs to resolve resources the Worker authorizes for the active actor.</p>
+        <p>This UI intentionally does not invent catalog list endpoints. Use opaque IDs only where an authorized discovery projection is not yet exposed.</p>
       </section>
       <SessionPanel />
       <section className="workspace-grid">
         <article className="panel"><h3>Clients</h3><p>Browse the live grant-filtered Client Registry and open a canonical client detail route.</p><Link to="/clients">Open clients</Link></article>
-        <article className="panel"><h3>Profiles</h3><p>Resolve profile state, assignment, grants, generations and coordinator projection.</p><Link to="/profiles">Open profiles</Link></article>
+        <article className="panel"><h3>Profiles</h3><p>Open profile state, assignment, grants, generations and coordinator projection on a canonical detail route.</p><Link to="/profiles">Open profiles</Link></article>
         <article className="panel"><h3>Mailboxes</h3><p>Operate metadata-only bindings and bounded jobs without exposing mailbox payloads.</p><Link to="/mailboxes">Open mailboxes</Link></article>
       </section>
     </div>
@@ -52,14 +52,14 @@ function Dashboard() {
 const rootRoute = createRootRoute({ component: Shell });
 const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: Dashboard });
 const clientsRoutes = createClientsRoutes(rootRoute);
-const profilesRoute = createProfilesRoute(rootRoute);
+const profilesRoutes = createProfilesRoutes(rootRoute);
 const mailboxesRoute = createMailboxesRoute(rootRoute);
 const usersRoute = createAccessRoute(rootRoute);
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
   ...clientsRoutes,
-  profilesRoute,
+  ...profilesRoutes,
   mailboxesRoute,
   usersRoute,
 ]);
