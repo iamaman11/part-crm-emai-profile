@@ -35,7 +35,13 @@ SELECT
     generation.object_key AS generation_object_key,
     generation.metadata_digest AS generation_metadata_digest,
     generation.container_digest AS generation_container_digest,
-    generation.verification_reference
+    generation.verification_reference,
+    job.status AS job_status,
+    job.aggregate_version AS job_version,
+    job.current_claim_id AS job_current_claim_id,
+    job.claim_fence AS job_claim_fence,
+    job.retry_at_ms AS job_retry_at_ms,
+    job.updated_at_ms AS job_updated_at_ms
 FROM device_generation_commit_commands AS command
 LEFT JOIN browser_profiles AS profile
   ON profile.tenant_id = command.tenant_id
@@ -44,6 +50,9 @@ LEFT JOIN profile_generations AS generation
   ON generation.tenant_id = command.tenant_id
  AND generation.profile_id = command.profile_id
  AND generation.generation_id = command.generation_id
+LEFT JOIN device_jobs AS job
+  ON job.tenant_id = command.tenant_id
+ AND job.job_id = command.job_id
 WHERE command.tenant_id = ? AND command.job_id = ?
 "#;
 
@@ -211,6 +220,12 @@ struct DeviceGenerationCommitRow {
     generation_metadata_digest: Option<String>,
     generation_container_digest: Option<String>,
     verification_reference: Option<String>,
+    job_status: Option<String>,
+    job_version: Option<i64>,
+    job_current_claim_id: Option<String>,
+    job_claim_fence: Option<i64>,
+    job_retry_at_ms: Option<i64>,
+    job_updated_at_ms: Option<i64>,
 }
 
 fn classify_existing(
@@ -276,6 +291,9 @@ fn catalog_is_exact(
     else {
         return false;
     };
+    let Some(expected_job_version) = request.expected_job_version().value().checked_add(1) else {
+        return false;
+    };
     let expected_verification = format!("r2sha256:{}", object.container_digest());
 
     row.active_generation_id.as_deref() == Some(object.generation_id().as_str())
@@ -289,6 +307,16 @@ fn catalog_is_exact(
         && row.generation_metadata_digest.as_deref() == Some(object.metadata_digest())
         && row.generation_container_digest.as_deref() == Some(object.container_digest())
         && row.verification_reference.as_deref() == Some(expected_verification.as_str())
+        && row.job_status.as_deref() == Some("SUCCEEDED")
+        && row
+            .job_version
+            .is_some_and(|version| i64_matches_u64(version, expected_job_version))
+        && row.job_current_claim_id.is_none()
+        && row.job_claim_fence.is_none()
+        && row.job_retry_at_ms.is_none()
+        && row
+            .job_updated_at_ms
+            .is_some_and(|updated_at| i64_matches_u64(updated_at, request.observed_at().value()))
 }
 
 fn validate_request(
@@ -301,6 +329,7 @@ fn validate_request(
         .value()
         .checked_add(1)
         .is_none()
+        || request.expected_job_version().value().checked_add(1).is_none()
     {
         return Err(integrity_failure());
     }
@@ -376,6 +405,7 @@ fn classify_insert_failure(message: &str) -> DeviceGenerationCommitError {
         || message.contains("FOREIGN KEY constraint failed")
         || message.contains("not_governed")
         || message.contains("device_generation_commit_verify_incomplete")
+        || message.contains("device_generation_commit_job_terminalize_incomplete")
     {
         return integrity_failure();
     }
@@ -415,6 +445,10 @@ mod tests {
         );
         assert_eq!(
             classify_insert_failure("CHECK constraint failed").class(),
+            DeviceGenerationCommitErrorClass::IntegrityFailure
+        );
+        assert_eq!(
+            classify_insert_failure("device_generation_commit_job_terminalize_incomplete").class(),
             DeviceGenerationCommitErrorClass::IntegrityFailure
         );
         assert_eq!(
