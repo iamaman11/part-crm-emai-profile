@@ -200,7 +200,8 @@ impl NotificationHub {
             Err(_) => return Response::error("Dependency unavailable", 503),
         }
 
-        let gate = StoredSynchronizationGate::new(connection_token, worker::Date::now().as_millis());
+        let gate =
+            StoredSynchronizationGate::new(connection_token, worker::Date::now().as_millis());
         self.state.storage().put(SYNC_GATE_KEY, &gate).await?;
 
         let pair = WebSocketPair::new()?;
@@ -454,9 +455,9 @@ fn websocket_connection_token(request: &Request) -> Result<String, ()> {
         .map_err(|_| ())?
         .ok_or(())?;
     if key.len() != 24
-        || !key.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')
-        })
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
     {
         return Err(());
     }
