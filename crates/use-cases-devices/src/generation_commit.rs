@@ -12,14 +12,39 @@ use application_ports::generations::{GenerationPortError, GenerationPortErrorCla
 use device_domain::{DeviceJobStatus, DeviceJobTarget};
 use profile_platform_primitives::ActorContext;
 
+pub struct DeviceGenerationCommitServices<'a, D, A, P, R, V, C> {
+    device_identity: &'a D,
+    authorization: &'a A,
+    preconditions: &'a P,
+    repository: &'a R,
+    object_verifier: &'a V,
+    commit: &'a C,
+}
+
+impl<'a, D, A, P, R, V, C> DeviceGenerationCommitServices<'a, D, A, P, R, V, C> {
+    #[must_use]
+    pub const fn new(
+        device_identity: &'a D,
+        authorization: &'a A,
+        preconditions: &'a P,
+        repository: &'a R,
+        object_verifier: &'a V,
+        commit: &'a C,
+    ) -> Self {
+        Self {
+            device_identity,
+            authorization,
+            preconditions,
+            repository,
+            object_verifier,
+            commit,
+        }
+    }
+}
+
 pub async fn execute_commit_dirty_generation<D, A, P, R, V, C>(
     actor: &ActorContext,
-    device_identity: &D,
-    authorization: &A,
-    preconditions: &P,
-    repository: &R,
-    object_verifier: &V,
-    commit: &C,
+    services: &DeviceGenerationCommitServices<'_, D, A, P, R, V, C>,
     request: &DeviceGenerationCommitRequest,
 ) -> Result<DeviceGenerationCommitOutcome, DeviceGenerationCommitOperationError>
 where
@@ -37,7 +62,8 @@ where
         request.base_generation_id().clone(),
     );
 
-    let authenticated = device_identity
+    let authenticated = services
+        .device_identity
         .authenticated_device_id(actor)
         .await
         .map_err(map_device_port_error)?;
@@ -45,7 +71,8 @@ where
         return Err(DeviceGenerationCommitOperationError::Forbidden);
     }
 
-    if !authorization
+    if !services
+        .authorization
         .is_device_job_authorized(actor, &target, DeviceJobCapability::Complete)
         .await
         .map_err(map_device_port_error)?
@@ -53,7 +80,8 @@ where
         return Err(DeviceGenerationCommitOperationError::Forbidden);
     }
 
-    match preconditions
+    match services
+        .preconditions
         .evaluate_device_execution(actor, &target)
         .await
         .map_err(map_device_port_error)?
@@ -66,7 +94,8 @@ where
         }
     }
 
-    let job = repository
+    let job = services
+        .repository
         .load_device_job(actor.tenant_scope().tenant_id(), request.job_id())
         .await
         .map_err(map_device_port_error)?
@@ -93,7 +122,8 @@ where
     }
 
     validate_request(actor, request)?;
-    let verified = object_verifier
+    let verified = services
+        .object_verifier
         .verify_generation_object_descriptor_exact(actor.tenant_scope(), request.object())
         .await
         .map_err(map_generation_port_error)?;
@@ -101,7 +131,8 @@ where
         return Err(DeviceGenerationCommitOperationError::ObjectVerificationFailed);
     }
 
-    commit
+    services
+        .commit
         .commit_device_generation(actor, request)
         .await
         .map_err(|error| DeviceGenerationCommitOperationError::Commit(error.class()))
