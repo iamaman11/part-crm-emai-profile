@@ -4,7 +4,9 @@ use application_ports::query_mail_provider::{
     ClientMailProviderQueryPort, MailMessageBody, MailMessageSummary, MailSearchTerm,
     MailboxMessageReference, SearchClientMailboxMessagesRequest,
 };
-use application_ports::{QueryPage, QueryPageRequest, QueryPageSize, QueryPortError};
+use application_ports::{
+    QueryPage, QueryPageRequest, QueryPageSize, QueryPortError, QueryPortErrorClass,
+};
 use profile_bridge::browser_mail_query::{
     BrowserClientMailQueryAdapter, BrowserMailExecutionFencePort, BrowserMailExecutionProof,
 };
@@ -19,6 +21,7 @@ use profile_platform_primitives::{
 use session_domain::ProfileLease;
 use std::cell::Cell;
 use std::future::Future;
+use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 const RUNTIME_SOURCE: &str = include_str!("../src/browser_mail_runtime.rs");
@@ -66,7 +69,7 @@ fn proof(
 }
 
 struct CurrentFence {
-    calls: Cell<u32>,
+    calls: Rc<Cell<u32>>,
 }
 
 impl BrowserMailExecutionFencePort for CurrentFence {
@@ -80,7 +83,7 @@ impl BrowserMailExecutionFencePort for CurrentFence {
 }
 
 struct DeterministicAutomation {
-    search_calls: Cell<u32>,
+    search_calls: Rc<Cell<u32>>,
 }
 
 impl BrowserMailAutomationPort for DeterministicAutomation {
@@ -94,7 +97,7 @@ impl BrowserMailAutomationPort for DeterministicAutomation {
             context.binding_id().clone(),
             "browser-runtime-message-1",
         )
-        .map_err(|_| application_ports::QueryPortError::new(application_ports::QueryPortErrorClass::IntegrityFailure))?;
+        .map_err(|_| QueryPortError::new(QueryPortErrorClass::IntegrityFailure))?;
         Ok(QueryPage::new(
             vec![MailMessageSummary::new(
                 reference,
@@ -121,15 +124,17 @@ fn accepted_phase2d_provider_contract_executes_through_bound_runtime()
     let active = active_execution()?;
     let proof = proof(&active)?;
     let binding_id = proof.binding_id().clone();
+    let fence_calls = Rc::new(Cell::new(0));
+    let search_calls = Rc::new(Cell::new(0));
     let adapter = BrowserClientMailQueryAdapter::new(
         proof,
         CurrentFence {
-            calls: Cell::new(0),
+            calls: Rc::clone(&fence_calls),
         },
         BoundBrowserMailRuntime::new(
             active,
             DeterministicAutomation {
-                search_calls: Cell::new(0),
+                search_calls: Rc::clone(&search_calls),
             },
         ),
     );
@@ -141,8 +146,8 @@ fn accepted_phase2d_provider_contract_executes_through_bound_runtime()
 
     let page = block_on(adapter.search_messages(&scope, &binding_id, &request))?;
     assert_eq!(page.items().len(), 1);
-    assert_eq!(adapter.fence().calls.get(), 2);
-    assert_eq!(adapter.runtime().automation().search_calls.get(), 1);
+    assert_eq!(fence_calls.get(), 2);
+    assert_eq!(search_calls.get(), 1);
     assert_eq!(page.items()[0].reference().binding_id(), &binding_id);
     Ok(())
 }
