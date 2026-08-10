@@ -76,6 +76,7 @@ where
     let generation_id = metadata.generation_id().clone();
     let object_key = prepared.object_key();
     let object = ImmutableGenerationObject::new(
+        metadata.profile_id(),
         &generation_id,
         &object_key,
         prepared.metadata_digest(),
