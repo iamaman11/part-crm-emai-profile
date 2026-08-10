@@ -135,7 +135,7 @@ def failures_for_sources(
         failures.append("hibernatable WebSocket message handler is required")
     if "RealtimeInternalEvent" not in hub or "canonical_json" not in hub:
         failures.append("hub must bridge only typed internal events to canonical invalidation signals")
-    if "for socket in self.state.get_websockets()" not in hub:
+    if "for socket in self.state.get_websockets() {" not in hub:
         failures.append("per-user hub must broadcast to every attached tab/device socket")
     if '"notification-hub-v1:{}:{}"' not in hub:
         failures.append("notification hub identity must remain exactly tenant plus actor, not tab/device")
