@@ -659,9 +659,11 @@ dependencies = [
  "application-ports",
  "bridge-domain",
  "browser-execution-domain",
+ "encrypted-generation-domain",
  "profile-platform-primitives",
  "runtime-bundle-domain",
  "session-domain",
+ "sha2",
 ]
 
 [[package]]
