@@ -74,13 +74,18 @@ ENDPOINT_REQUIRED_FRAGMENTS = (
     "projection.active_device_id() != Some(&device_id)",
     "projection.active_epoch() != Some(body.coordinator_epoch)",
     "snapshot.sequence().checked_add(1) != Some(snapshot.version().value())",
+    "generation_object_verifier(env)",
+    ".verify_generation_object_descriptor_exact(actor.tenant_scope(), &descriptor)",
+    "DeviceGenerationUploadCapabilityResponse::verified()",
     "generation_upload_capability_signer(env)",
     "signer.sign_put(",
     "CAPABILITY_EXPIRES_SECONDS",
-    'method: "PUT"',
-    "url: capability.url()",
-    "headers: capability",
-    "expires_seconds: capability.expires_seconds()",
+    "DeviceGenerationUploadCapabilityResponse::upload_required(",
+    'state: "verified"',
+    'state: "uploadRequired"',
+    'method: Some("PUT")',
+    "url: Some(url)",
+    "expires_seconds: Some(expires_seconds)",
 )
 
 ENDPOINT_FORBIDDEN_BODY_FIELDS = (
@@ -310,16 +315,54 @@ def check_endpoint_text(source: str) -> list[str]:
         ".load_active_profile_version(",
         ".snapshot(actor.tenant_scope(), &profile_id)",
         "snapshot.sequence().checked_add(1)",
+        "generation_object_verifier(env)",
+        ".verify_generation_object_descriptor_exact(actor.tenant_scope(), &descriptor)",
         "generation_upload_capability_signer(env)",
         "signer.sign_put(",
     )
     positions = [dispatch.find(fragment) for fragment in ordered]
     if not dispatch or min(positions, default=-1) < 0:
-        failures.append("upload capability endpoint is missing trusted authorization/signing stages")
+        failures.append("upload capability endpoint is missing trusted authorization/verification/signing stages")
     elif positions != sorted(positions):
         failures.append(
-            "upload capability signing must follow device -> job -> claim -> active generation -> coordinator checks"
+            "upload capability flow must follow device -> job -> claim -> active generation -> coordinator -> exact R2 verify -> signer"
         )
+
+    verified = dispatch.find("DeviceGenerationUploadCapabilityResponse::verified()")
+    verifier = dispatch.find(
+        ".verify_generation_object_descriptor_exact(actor.tenant_scope(), &descriptor)"
+    )
+    signer = dispatch.find("generation_upload_capability_signer(env)")
+    if min(verified, verifier, signer) < 0 or not verifier < verified < signer:
+        failures.append("exact verified response must be emitted only after R2 verification and before capability signing")
+
+    response = function_body(production, "struct DeviceGenerationUploadCapabilityResponse")
+    if not response:
+        failures.append("missing upload capability/verification response type")
+    else:
+        for fragment in (
+            "state: &'static str",
+            "method: Option<&'static str>",
+            "url: Option<&'a str>",
+            "headers: Vec<DeviceGenerationUploadHeader<'a>>",
+            "expires_seconds: Option<u32>",
+        ):
+            if fragment not in response:
+                failures.append(f"upload capability/verification response is missing: {fragment}")
+
+    verified_constructor = function_body(production, "const fn verified()")
+    for forbidden in ('Some("PUT")', "Some(url)", "Some(expires_seconds)"):
+        if forbidden in verified_constructor:
+            failures.append(f"verified R2 response must not contain upload capability material: {forbidden}")
+    for required in (
+        'state: "verified"',
+        "method: None",
+        "url: None",
+        "headers: Vec::new()",
+        "expires_seconds: None",
+    ):
+        if required not in verified_constructor:
+            failures.append(f"verified R2 response is not capability-free: {required}")
 
     return failures
 
@@ -508,6 +551,20 @@ def self_test(root: Path) -> list[str]:
             ".snapshot(actor.tenant_scope(), &profile_id)",
         ),
         (
+            "exact R2 verification",
+            endpoint.replace(
+                ".verify_generation_object_descriptor_exact(actor.tenant_scope(), &descriptor)",
+                ".verify_generation_object_descriptor_removed(actor.tenant_scope(), &descriptor)",
+                1,
+            ),
+            ".verify_generation_object_descriptor_exact(actor.tenant_scope(), &descriptor)",
+        ),
+        (
+            "verified response capability leak",
+            endpoint.replace("method: None,", 'method: Some("PUT"),', 1),
+            "verified R2 response must not contain upload capability material",
+        ),
+        (
             "metadata-only body",
             endpoint.replace(
                 "container_bytes: u64,",
@@ -529,7 +586,10 @@ def self_test(root: Path) -> list[str]:
         1,
     )
     composition_failures = check_composition_text(composition_fixture)
-    if not any("Worker secret" in failure or "protected configuration" in failure for failure in composition_failures):
+    if not any(
+        "Worker secret" in failure or "protected configuration" in failure
+        for failure in composition_failures
+    ):
         return ["R2 signing secret-to-var negative fixture unexpectedly passed"]
 
     return []
