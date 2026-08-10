@@ -1,8 +1,8 @@
 use application_ports::{
     NotificationEventRecord, NotificationPortError, NotificationPortErrorClass,
-    RealtimeNotificationAuthorizationPort,
+    RealtimeNotificationAudiencePort, RealtimeNotificationAuthorizationPort,
 };
-use profile_platform_primitives::ActorContext;
+use profile_platform_primitives::{ActorContext, ActorId, TenantId};
 use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::query;
@@ -40,9 +40,49 @@ WHERE membership.tenant_id = ?
   AND membership.status = 'ACTIVE'
 "#;
 
+const LOAD_AUTHORIZED_AUDIENCE: &str = r#"
+SELECT membership.actor_id
+FROM memberships AS membership
+WHERE membership.tenant_id = ?
+  AND membership.status = 'ACTIVE'
+  AND membership.actor_id > ?
+  AND (
+      membership.role = 'TENANT_OWNER'
+      OR (
+          membership.role = 'MEMBER'
+          AND ? = 'client'
+          AND EXISTS (
+              SELECT 1
+              FROM client_grants AS grant
+              WHERE grant.tenant_id = membership.tenant_id
+                AND grant.actor_id = membership.actor_id
+                AND grant.client_id = ?
+          )
+      )
+      OR (
+          membership.role = 'MEMBER'
+          AND ? = 'profile'
+          AND EXISTS (
+              SELECT 1
+              FROM profile_grants AS grant
+              WHERE grant.tenant_id = membership.tenant_id
+                AND grant.actor_id = membership.actor_id
+                AND grant.profile_id = ?
+          )
+      )
+  )
+ORDER BY membership.actor_id ASC
+LIMIT ?
+"#;
+
 #[derive(Deserialize)]
 struct AuthorizationRow {
     authorized: i64,
+}
+
+#[derive(Deserialize)]
+struct ActorRow {
+    actor_id: String,
 }
 
 pub struct D1RealtimeNotificationAuthorization {
@@ -85,6 +125,38 @@ impl RealtimeNotificationAuthorizationPort for D1RealtimeNotificationAuthorizati
     }
 }
 
+impl RealtimeNotificationAudiencePort for D1RealtimeNotificationAuthorization {
+    async fn load_authorized_actor_page(
+        &self,
+        tenant_id: &TenantId,
+        event: &NotificationEventRecord,
+        after_actor_id: Option<&ActorId>,
+        limit: u32,
+    ) -> Result<Vec<ActorId>, NotificationPortError> {
+        let after = after_actor_id.map_or("", ActorId::as_str);
+        let rows = query!(
+            &self.database,
+            LOAD_AUTHORIZED_AUDIENCE,
+            tenant_id.as_str(),
+            after,
+            event.aggregate_type(),
+            event.aggregate_id().as_str(),
+            event.aggregate_type(),
+            event.aggregate_id().as_str(),
+            i64::from(limit)
+        )
+        .map_err(map_worker_error)?
+        .all()
+        .await
+        .map_err(map_worker_error)?
+        .results::<ActorRow>()
+        .map_err(map_worker_error)?;
+        rows.into_iter()
+            .map(|row| ActorId::parse(row.actor_id).map_err(|_| integrity_failure()))
+            .collect()
+    }
+}
+
 fn integrity_failure() -> NotificationPortError {
     NotificationPortError::new(NotificationPortErrorClass::IntegrityFailure)
 }
@@ -95,14 +167,23 @@ fn map_worker_error(_error: worker::Error) -> NotificationPortError {
 
 #[cfg(test)]
 mod tests {
-    use super::LOAD_EVENT_AUTHORIZATION;
+    use super::{LOAD_AUTHORIZED_AUDIENCE, LOAD_EVENT_AUTHORIZATION};
 
     #[test]
-    fn authorization_query_is_live_grant_based_and_assignment_free() {
-        assert!(LOAD_EVENT_AUTHORIZATION.contains("membership.status = 'ACTIVE'"));
-        assert!(LOAD_EVENT_AUTHORIZATION.contains("client_grants"));
-        assert!(LOAD_EVENT_AUTHORIZATION.contains("profile_grants"));
-        assert!(!LOAD_EVENT_AUTHORIZATION.contains("assignment"));
-        assert!(!LOAD_EVENT_AUTHORIZATION.contains("notification_events"));
+    fn authorization_queries_are_live_grant_based_and_assignment_free() {
+        for query in [LOAD_EVENT_AUTHORIZATION, LOAD_AUTHORIZED_AUDIENCE] {
+            assert!(query.contains("membership.status = 'ACTIVE'"));
+            assert!(query.contains("client_grants"));
+            assert!(query.contains("profile_grants"));
+            assert!(!query.contains("assignment"));
+            assert!(!query.contains("notification_events"));
+        }
+    }
+
+    #[test]
+    fn audience_query_is_stably_paged_by_actor_id() {
+        assert!(LOAD_AUTHORIZED_AUDIENCE.contains("membership.actor_id > ?"));
+        assert!(LOAD_AUTHORIZED_AUDIENCE.contains("ORDER BY membership.actor_id ASC"));
+        assert!(LOAD_AUTHORIZED_AUDIENCE.contains("LIMIT ?"));
     }
 }
