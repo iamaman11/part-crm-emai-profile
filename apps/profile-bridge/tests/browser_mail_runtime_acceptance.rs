@@ -93,11 +93,9 @@ impl BrowserMailAutomationPort for DeterministicAutomation {
         _request: &SearchClientMailboxMessagesRequest,
     ) -> Result<QueryPage<MailMessageSummary>, QueryPortError> {
         self.search_calls.set(self.search_calls.get() + 1);
-        let reference = MailboxMessageReference::new(
-            context.binding_id().clone(),
-            "browser-runtime-message-1",
-        )
-        .map_err(|_| QueryPortError::new(QueryPortErrorClass::IntegrityFailure))?;
+        let reference =
+            MailboxMessageReference::new(context.binding_id().clone(), "browser-runtime-message-1")
+                .map_err(|_| QueryPortError::new(QueryPortErrorClass::IntegrityFailure))?;
         Ok(QueryPage::new(
             vec![MailMessageSummary::new(
                 reference,
@@ -178,7 +176,9 @@ fn runtime_policy_errors(source: &str) -> Vec<String> {
         "mailbox_job_run_commands",
     ] {
         if production.contains(forbidden) {
-            errors.push(format!("browser runtime must remain transient: {forbidden}"));
+            errors.push(format!(
+                "browser runtime must remain transient: {forbidden}"
+            ));
         }
     }
     errors
