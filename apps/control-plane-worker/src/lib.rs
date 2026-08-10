@@ -19,9 +19,11 @@ mod profile_coordinator;
 mod profile_coordinator_ingress;
 mod profile_generations;
 mod profiles;
+mod realtime_notifications;
 mod request_evidence;
 
 pub use profile_coordinator::ProfileCoordinator;
+pub use realtime_notifications::NotificationHub;
 
 use access_session::session_response;
 use cloudflare_adapters::control_plane_queue::ControlPlaneQueueMessage;
@@ -34,7 +36,7 @@ use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
     STATIC_ASSETS_BINDING, VERIFICATION_QUEUE_BINDING, classify_route,
 };
-use profile_platform_primitives::ProfileId;
+use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 use session_domain::coordinator::coordinator_object_name;
 use worker::{
     Context, Env, MessageBatch, Request, Response, Result, ScheduleContext, ScheduledEvent, event,
@@ -174,6 +176,18 @@ fn binding_probe(env: &Env) -> Result<Response> {
             .map_err(|error| worker::Error::RustError(error.to_string()))?,
     ))?;
     let _coordinator_stub = coordinator_id.get_stub()?;
+    let notification_hubs = env.durable_object(realtime_notifications::NOTIFICATION_HUB_BINDING)?;
+    let notification_tenant = TenantId::parse("tenant_binding_probe")
+        .map_err(|error| worker::Error::RustError(error.to_string()))?;
+    let notification_actor = ActorId::parse("actor_binding_probe")
+        .map_err(|error| worker::Error::RustError(error.to_string()))?;
+    let notification_hub_id = notification_hubs.id_from_name(
+        &realtime_notifications::notification_hub_object_name(
+            &notification_tenant,
+            &notification_actor,
+        ),
+    )?;
+    let _notification_hub_stub = notification_hub_id.get_stub()?;
     let _ = profile_objects;
     Response::ok("bindings-ready")
 }
