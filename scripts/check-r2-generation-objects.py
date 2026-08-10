@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Permanent policy for immutable encrypted-generation objects and exact R2 upload capabilities."""
+"""Permanent policy for immutable generation objects and exact R2 upload capabilities."""
 
 from __future__ import annotations
 
@@ -11,6 +11,11 @@ CAPABILITY_SOURCE = Path(
     "crates/cloudflare-adapters/src/r2_generation_upload_capability.rs"
 )
 ADAPTER_LIB = Path("crates/cloudflare-adapters/src/lib.rs")
+ENDPOINT_SOURCE = Path(
+    "apps/control-plane-worker/src/device_generation_upload_capability.rs"
+)
+WORKER_COMPOSITION = Path("apps/control-plane-worker/src/composition.rs")
+BRIDGE_SOURCE_ROOT = Path("apps/profile-bridge/src")
 
 REQUIRED_PRODUCTION_FRAGMENTS = (
     "GenerationObjectUploadPort",
@@ -47,6 +52,66 @@ CAPABILITY_HEADERS = (
     "x-amz-meta-metadata-digest",
     "x-amz-meta-profile-id",
     "x-amz-meta-tenant-id",
+)
+
+ENDPOINT_REQUIRED_FRAGMENTS = (
+    'const CAPABILITY_EXPIRES_SECONDS: u32 = 300;',
+    '#[serde(rename_all = "camelCase", deny_unknown_fields)]',
+    "resolve_active_request_actor",
+    "authenticated_device(env)",
+    "DeviceJobCapability::Complete",
+    "job.status() != DeviceJobStatus::Running",
+    "job.active_claim()",
+    "claim.claim_id() != &claim_id",
+    "claim.fence() != body.fence",
+    "job.last_fence() != body.fence",
+    "claim.target() != job.target()",
+    "claim.is_expired(now)",
+    ".load_active_profile_version(",
+    "coordinator_ingress_application(env)",
+    ".snapshot(actor.tenant_scope(), &profile_id)",
+    "projection.active_session_id() != Some(&session_id)",
+    "projection.active_device_id() != Some(&device_id)",
+    "projection.active_epoch() != Some(body.coordinator_epoch)",
+    "snapshot.sequence().checked_add(1) != Some(snapshot.version().value())",
+    "generation_upload_capability_signer(env)",
+    "signer.sign_put(",
+    "CAPABILITY_EXPIRES_SECONDS",
+    'method: "PUT"',
+    "url: capability.url()",
+    "headers: capability",
+    "expires_seconds: capability.expires_seconds()",
+)
+
+ENDPOINT_FORBIDDEN_BODY_FIELDS = (
+    "tenant_id:",
+    "device_id:",
+    "observed_at_ms:",
+    "client_clock_ms:",
+    "expected_job_version:",
+    "expected_profile_version:",
+    "coordinator_version:",
+    "coordinator_sequence:",
+    "coordinator_fencing_token:",
+    "ciphertext:",
+    "container:",
+    "upload_bytes:",
+)
+
+ENDPOINT_FORBIDDEN_PRODUCTION_FRAGMENTS = (
+    "env.bucket(",
+    ".put(",
+    "array_buffer",
+    "Vec<u8>",
+    "ciphertext",
+    "upload_bytes",
+)
+
+BRIDGE_FORBIDDEN_SIGNER_CREDENTIAL_FRAGMENTS = (
+    "R2_GENERATION_ACCESS_KEY_ID",
+    "R2_GENERATION_SECRET_ACCESS_KEY",
+    "R2SigV4Credentials",
+    "secret_access_key",
 )
 
 
@@ -180,9 +245,7 @@ def check_capability_text(source: str) -> list[str]:
 
     signed_headers_marker = "let signed_headers = "
     signed_headers_start = sign_put.find(signed_headers_marker)
-    signed_headers = (
-        sign_put[signed_headers_start:] if signed_headers_start >= 0 else ""
-    )
+    signed_headers = sign_put[signed_headers_start:] if signed_headers_start >= 0 else ""
     for header in CAPABILITY_HEADERS:
         if f'"{header}"' not in sign_put:
             failures.append(f"R2 upload capability does not return required header: {header}")
@@ -219,10 +282,93 @@ def check_capability_text(source: str) -> list[str]:
     return failures
 
 
+def check_endpoint_text(source: str) -> list[str]:
+    production = source.split("#[cfg(test)]", 1)[0]
+    failures: list[str] = []
+    for fragment in ENDPOINT_REQUIRED_FRAGMENTS:
+        if fragment not in production:
+            failures.append(f"missing metadata-only upload endpoint invariant: {fragment}")
+    for fragment in ENDPOINT_FORBIDDEN_PRODUCTION_FRAGMENTS:
+        if fragment in production:
+            failures.append(f"Worker upload capability endpoint must not proxy ciphertext: {fragment}")
+
+    body = function_body(production, "struct DeviceGenerationUploadCapabilityBody")
+    if not body:
+        failures.append("missing metadata-only upload capability request body")
+    else:
+        for field in ENDPOINT_FORBIDDEN_BODY_FIELDS:
+            if field in body:
+                failures.append(f"upload capability request must not accept client authority/body field: {field}")
+
+    dispatch = function_body(production, "pub async fn dispatch")
+    ordered = (
+        "authenticated_device(env)",
+        ".load_device_job(",
+        "DeviceJobCapability::Complete",
+        "job.status() != DeviceJobStatus::Running",
+        "claim.is_expired(now)",
+        ".load_active_profile_version(",
+        ".snapshot(actor.tenant_scope(), &profile_id)",
+        "snapshot.sequence().checked_add(1)",
+        "generation_upload_capability_signer(env)",
+        "signer.sign_put(",
+    )
+    positions = [dispatch.find(fragment) for fragment in ordered]
+    if not dispatch or min(positions, default=-1) < 0:
+        failures.append("upload capability endpoint is missing trusted authorization/signing stages")
+    elif positions != sorted(positions):
+        failures.append(
+            "upload capability signing must follow device -> job -> claim -> active generation -> coordinator checks"
+        )
+
+    return failures
+
+
+def check_composition_text(source: str) -> list[str]:
+    failures: list[str] = []
+    signer = function_body(source, "pub fn generation_upload_capability_signer")
+    if not signer:
+        return ["missing Worker-owned R2 generation upload signer composition"]
+    for fragment in (
+        "env.secret(R2_GENERATION_ACCESS_KEY_ID_BINDING)?",
+        "env.secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?",
+        "env.var(R2_GENERATION_ACCOUNT_ID_BINDING)?",
+        "env.var(R2_GENERATION_BUCKET_NAME_BINDING)?",
+        "R2SigV4Credentials::new(",
+        "R2GenerationUploadCapabilitySigner::new(",
+    ):
+        if fragment not in signer:
+            failures.append(f"Worker R2 signer composition is missing protected configuration: {fragment}")
+    for fragment in (
+        "env.var(R2_GENERATION_ACCESS_KEY_ID_BINDING)",
+        "env.var(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)",
+    ):
+        if fragment in signer:
+            failures.append(f"R2 signing credential must be a Worker secret, not a plain var: {fragment}")
+    return failures
+
+
+def check_bridge_has_no_signing_credentials(root: Path) -> list[str]:
+    failures: list[str] = []
+    bridge_root = root / BRIDGE_SOURCE_ROOT
+    if not bridge_root.is_dir():
+        return [f"missing Profile Bridge source root: {BRIDGE_SOURCE_ROOT}"]
+    for path in bridge_root.rglob("*.rs"):
+        text = path.read_text(encoding="utf-8")
+        for fragment in BRIDGE_FORBIDDEN_SIGNER_CREDENTIAL_FRAGMENTS:
+            if fragment in text:
+                failures.append(
+                    f"Profile Bridge must not contain long-lived R2 signing credentials: {path.relative_to(root)}: {fragment}"
+                )
+    return failures
+
+
 def check(root: Path) -> list[str]:
     source_path = root / SOURCE
     capability_path = root / CAPABILITY_SOURCE
     adapter_lib_path = root / ADAPTER_LIB
+    endpoint_path = root / ENDPOINT_SOURCE
+    composition_path = root / WORKER_COMPOSITION
     failures: list[str] = []
     if not source_path.is_file():
         failures.append(f"missing production immutable R2 adapter: {SOURCE}")
@@ -231,25 +377,38 @@ def check(root: Path) -> list[str]:
     if not capability_path.is_file():
         failures.append(f"missing exact R2 upload capability signer: {CAPABILITY_SOURCE}")
     else:
-        failures.extend(
-            check_capability_text(capability_path.read_text(encoding="utf-8"))
-        )
+        failures.extend(check_capability_text(capability_path.read_text(encoding="utf-8")))
     if not adapter_lib_path.is_file():
         failures.append(f"missing Cloudflare adapter library: {ADAPTER_LIB}")
     elif "pub mod r2_generation_upload_capability;" not in adapter_lib_path.read_text(
         encoding="utf-8"
     ):
         failures.append("R2 upload capability signer must be exported by cloudflare-adapters")
+    if not endpoint_path.is_file():
+        failures.append(f"missing metadata-only upload capability endpoint: {ENDPOINT_SOURCE}")
+    else:
+        failures.extend(check_endpoint_text(endpoint_path.read_text(encoding="utf-8")))
+    if not composition_path.is_file():
+        failures.append(f"missing Worker composition: {WORKER_COMPOSITION}")
+    else:
+        failures.extend(check_composition_text(composition_path.read_text(encoding="utf-8")))
+    failures.extend(check_bridge_has_no_signing_credentials(root))
     return failures
 
 
 def self_test(root: Path) -> list[str]:
     source_path = root / SOURCE
     capability_path = root / CAPABILITY_SOURCE
+    endpoint_path = root / ENDPOINT_SOURCE
+    composition_path = root / WORKER_COMPOSITION
     if not source_path.is_file():
         return [f"missing production immutable R2 adapter: {SOURCE}"]
     if not capability_path.is_file():
         return [f"missing exact R2 upload capability signer: {CAPABILITY_SOURCE}"]
+    if not endpoint_path.is_file():
+        return [f"missing metadata-only upload capability endpoint: {ENDPOINT_SOURCE}"]
+    if not composition_path.is_file():
+        return [f"missing Worker composition: {WORKER_COMPOSITION}"]
 
     production = source_path.read_text(encoding="utf-8")
     fixture = production.replace(".only_if(Conditional {", ".conditional_removed(Conditional {", 1)
@@ -321,6 +480,57 @@ def self_test(root: Path) -> list[str]:
         fixture_failures = check_capability_text(fixture_text)
         if not any(expected in failure for failure in fixture_failures):
             return [f"R2 upload capability {label} negative fixture unexpectedly passed"]
+
+    endpoint = endpoint_path.read_text(encoding="utf-8")
+    endpoint_fixtures = (
+        (
+            "unknown-field rejection",
+            endpoint.replace("deny_unknown_fields", "allow_unknown_fields", 1),
+            "deny_unknown_fields",
+        ),
+        (
+            "running job requirement",
+            endpoint.replace("DeviceJobStatus::Running", "DeviceJobStatus::Succeeded", 1),
+            "DeviceJobStatus::Running",
+        ),
+        (
+            "claim expiry",
+            endpoint.replace("claim.is_expired(now)", "false", 1),
+            "claim.is_expired(now)",
+        ),
+        (
+            "coordinator authority",
+            endpoint.replace(
+                ".snapshot(actor.tenant_scope(), &profile_id)",
+                ".snapshot_removed(actor.tenant_scope(), &profile_id)",
+                1,
+            ),
+            ".snapshot(actor.tenant_scope(), &profile_id)",
+        ),
+        (
+            "metadata-only body",
+            endpoint.replace(
+                "container_bytes: u64,",
+                "container_bytes: u64,\n    ciphertext: Vec<u8>,",
+                1,
+            ),
+            "ciphertext",
+        ),
+    )
+    for label, fixture_text, expected in endpoint_fixtures:
+        fixture_failures = check_endpoint_text(fixture_text)
+        if not any(expected in failure for failure in fixture_failures):
+            return [f"R2 upload endpoint {label} negative fixture unexpectedly passed"]
+
+    composition = composition_path.read_text(encoding="utf-8")
+    composition_fixture = composition.replace(
+        "env.secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?",
+        "env.var(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?",
+        1,
+    )
+    composition_failures = check_composition_text(composition_fixture)
+    if not any("Worker secret" in failure or "protected configuration" in failure for failure in composition_failures):
+        return ["R2 signing secret-to-var negative fixture unexpectedly passed"]
 
     return []
 
