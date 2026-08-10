@@ -116,6 +116,14 @@ def dirty_generation_self_test(source: str) -> list[str]:
     return []
 
 
+def publication_function_body(production: str) -> str:
+    marker = "pub async fn publish_prepared_dirty_generation"
+    start = production.find(marker)
+    if start < 0:
+        return ""
+    return production[start:]
+
+
 def dirty_publish_failures(source: str) -> list[str]:
     production = source.split("#[cfg(test)]", 1)[0]
     failures: list[str] = []
@@ -126,10 +134,11 @@ def dirty_publish_failures(source: str) -> list[str]:
         if fragment in production:
             failures.append(f"dirty publication must not own persistence/catalog activation: {fragment}")
 
-    upload = production.find(".put_generation_object_if_absent")
-    conflict = production.find("GenerationObjectUploadOutcome::ImmutableConflict")
-    verify = production.find(".verify_generation_object")
-    published = production.find("Ok(PublishedDirtyGeneration")
+    flow = publication_function_body(production)
+    upload = flow.find(".put_generation_object_if_absent")
+    conflict = flow.find("GenerationObjectUploadOutcome::ImmutableConflict")
+    verify = flow.find(".verify_generation_object")
+    published = flow.find("Ok(PublishedDirtyGeneration")
     if min(upload, conflict, verify, published) < 0 or not (upload < conflict < verify < published):
         failures.append(
             "dirty publication must preserve upload -> immutable-conflict gate -> verify -> publish order"
