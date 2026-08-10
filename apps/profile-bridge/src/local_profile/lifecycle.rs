@@ -171,6 +171,19 @@ impl LocalGenerationRecord {
         Ok(())
     }
 
+    pub fn supersede_with_successor(
+        &mut self,
+        successor_generation_id: GenerationId,
+        successor_bytes: u64,
+        now: UnixMillis,
+    ) -> Result<Self, LocalProfileError> {
+        if successor_generation_id == self.generation_id {
+            return Err(LocalProfileError::InvalidTransition);
+        }
+        self.mark_superseded(now)?;
+        Ok(Self::new(successor_generation_id, successor_bytes, now))
+    }
+
     pub fn evict(&mut self) -> Result<(), LocalProfileError> {
         if !matches!(
             self.state,
@@ -395,4 +408,53 @@ fn elapsed(previous: UnixMillis, now: UnixMillis) -> Result<u64, LocalProfileErr
     now.value()
         .checked_sub(previous.value())
         .ok_or(LocalProfileError::ClockRegression)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LocalGenerationRecord, LocalGenerationState, QuotaPolicy};
+    use crate::local_profile::LocalProfileError;
+    use profile_platform_primitives::{GenerationId, UnixMillis};
+
+    #[test]
+    fn superseded_base_cannot_reopen_and_successor_has_exact_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let base_id = GenerationId::parse("generation_local_successor_base_01")?;
+        let candidate_id = GenerationId::parse("generation_local_successor_candidate_01")?;
+        let mut base = LocalGenerationRecord::new(base_id.clone(), 128, UnixMillis::new(10));
+        base.set_locked(true)?;
+        base.begin_use(UnixMillis::new(11))?;
+        base.graceful_close(UnixMillis::new(12))?;
+
+        let candidate = base.supersede_with_successor(candidate_id.clone(), 256, UnixMillis::new(13))?;
+        assert_eq!(base.generation_id(), &base_id);
+        assert_eq!(base.state(), LocalGenerationState::SupersededEvictable);
+        assert_eq!(candidate.generation_id(), &candidate_id);
+        assert_eq!(candidate.state(), LocalGenerationState::MaterializedClean);
+        assert_eq!(candidate.bytes(), 256);
+        assert_eq!(base.begin_use(UnixMillis::new(14)), Err(LocalProfileError::InvalidTransition));
+
+        base.set_locked(false)?;
+        let plan = QuotaPolicy::new(256)?.plan(&[base.clone(), candidate])?;
+        assert_eq!(plan.candidates(), [base_id]);
+        base.evict()?;
+        assert_eq!(base.state(), LocalGenerationState::Evicted);
+        Ok(())
+    }
+
+    #[test]
+    fn successor_must_use_a_new_generation_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let base_id = GenerationId::parse("generation_local_successor_same_01")?;
+        let mut base = LocalGenerationRecord::new(base_id.clone(), 128, UnixMillis::new(10));
+        base.set_locked(true)?;
+        base.begin_use(UnixMillis::new(11))?;
+        base.graceful_close(UnixMillis::new(12))?;
+
+        assert_eq!(
+            base.supersede_with_successor(base_id, 128, UnixMillis::new(13)),
+            Err(LocalProfileError::InvalidTransition)
+        );
+        assert_eq!(base.state(), LocalGenerationState::DirtyLocal);
+        Ok(())
+    }
 }
