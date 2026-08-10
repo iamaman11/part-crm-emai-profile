@@ -5,6 +5,7 @@ mod clients;
 mod command_evidence;
 mod composition;
 mod device_generation_commit;
+mod device_generation_upload_capability;
 mod device_jobs;
 mod identity;
 mod integration_events;
@@ -87,6 +88,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::DeviceJobClaimApi
         | RouteClass::DeviceJobHeartbeatApi
         | RouteClass::DeviceJobOutcomeApi => device_jobs::dispatch(route, &mut request, &env).await,
+        RouteClass::DeviceGenerationUploadCapabilityApi => {
+            device_generation_upload_capability::dispatch(&mut request, &env).await
+        }
         RouteClass::DeviceGenerationCommitApi => {
             device_generation_commit::dispatch(&mut request, &env).await
         }
@@ -158,6 +162,7 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let idempotency_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _idempotency_repository = D1IdempotencyRepository::new(idempotency_catalog);
     let profile_objects = env.bucket(R2_PROFILES_BINDING)?;
+    let _generation_upload_signer = composition::generation_upload_capability_signer(env)?;
     let _verification_queue = env.queue(VERIFICATION_QUEUE_BINDING)?;
     let _integration_events_queue =
         env.queue(integration_events::INTEGRATION_EVENTS_QUEUE_BINDING)?;

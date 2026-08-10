@@ -464,6 +464,16 @@
         "authenticated": true
       },
       {
+        "route_class": "DeviceGenerationUploadCapabilityApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/generation-upload-capability",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-upload-capability",
+        "authenticated": true
+      },
+      {
         "route_class": "DeviceGenerationCommitApi",
         "capability": "devices",
         "methods": [
