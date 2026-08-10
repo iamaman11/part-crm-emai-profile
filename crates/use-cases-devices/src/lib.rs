@@ -1,8 +1,12 @@
 #![forbid(unsafe_code)]
 
+pub mod generation_commit;
 pub mod jobs;
 pub mod queries;
 
+pub use generation_commit::{
+    DeviceGenerationCommitOperationError, execute_commit_dirty_generation,
+};
 pub use jobs::{
     ApplyDeviceJobOutcomeCommand, CancelDeviceJobCommand, ClaimDeviceJobCommand,
     DeviceJobOperationError, DeviceJobOutcome, ExpireDeviceClaimCommand, HeartbeatDeviceJobCommand,
