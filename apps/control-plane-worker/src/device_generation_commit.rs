@@ -6,16 +6,18 @@ use crate::composition::{
     device_generation_commit, device_job_authorization, device_job_repository,
     generation_object_verifier,
 };
-use application_ports::AuthenticatedDevicePort;
 use application_ports::coordinator_ingress::{
     CoordinatorIngressApplicationPort, CoordinatorIngressPortErrorClass,
 };
 use application_ports::device_generation_commit::{
     CoordinatorGenerationCommitWitness, DeviceGenerationCommitErrorClass,
     DeviceGenerationCommitOutcome, DeviceGenerationCommitRequest,
+    DeviceGenerationProfileVersionPort,
 };
+use application_ports::device_jobs::DeviceJobRepositoryPort;
 use application_ports::generation_objects::GenerationObjectDescriptor;
-use device_domain::{DeviceClaimId, DeviceJobId};
+use application_ports::{AuthenticatedDevicePort, DeviceJobPortErrorClass};
+use device_domain::{DeviceClaimId, DeviceJobId, DeviceJobStatus};
 use profile_platform_primitives::{
     AggregateVersion, DeviceId, FencingToken, GenerationId, ProfileId, SessionId, UnixMillis,
 };
@@ -53,15 +55,77 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
+    let base_generation_id = match GenerationId::parse(body.base_generation_id.clone()) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let claim_id = match DeviceClaimId::parse(body.claim_id.clone()) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
     let session_id = match SessionId::parse(body.coordinator_session_id.clone()) {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
+    if body.fence == 0 || body.coordinator_epoch == 0 {
+        return invalid_request(actor.correlation_id().as_str());
+    }
+    let now = server_now();
 
     let trusted_identity = authenticated_device(env)?;
     let device_id = match trusted_identity.authenticated_device_id(actor).await {
         Ok(value) => value,
-        Err(_) => return forbidden(actor.correlation_id().as_str()),
+        Err(error) => {
+            return device_port_failure(actor.correlation_id().as_str(), error.class());
+        }
+    };
+
+    let repository = device_job_repository(env)?;
+    let job = match repository
+        .load_device_job(actor.tenant_scope().tenant_id(), &job_id)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return neutral_not_found(actor.correlation_id().as_str()),
+        Err(error) => {
+            return device_port_failure(actor.correlation_id().as_str(), error.class());
+        }
+    };
+    if job.target().device_id() != &device_id
+        || job.target().profile_id() != &profile_id
+        || job.target().generation_id() != &base_generation_id
+    {
+        return neutral_not_found(actor.correlation_id().as_str());
+    }
+    if job.status() != DeviceJobStatus::Running {
+        return stale_authority(actor.correlation_id().as_str());
+    }
+    let Some(claim) = job.active_claim() else {
+        return stale_authority(actor.correlation_id().as_str());
+    };
+    if claim.claim_id() != &claim_id
+        || claim.fence() != body.fence
+        || job.last_fence() != body.fence
+        || claim.target() != job.target()
+        || claim.is_expired(now)
+    {
+        return stale_authority(actor.correlation_id().as_str());
+    }
+    let expected_job_version = job.version();
+
+    let preconditions = device_execution_preconditions(env)?;
+    let expected_profile_version = match preconditions
+        .load_active_profile_version(actor, &profile_id, &base_generation_id)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return version_conflict(actor.correlation_id().as_str()),
+        Err(error) => {
+            return generation_commit_port_failure(
+                actor.correlation_id().as_str(),
+                error.class(),
+            );
+        }
     };
 
     let coordinator = coordinator_ingress_application(env);
@@ -81,10 +145,16 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
 
     let request = match body.into_domain(
         job_id,
+        claim_id,
         device_id,
-        server_now(),
+        profile_id,
+        base_generation_id,
+        now,
+        expected_job_version,
+        expected_profile_version,
         snapshot.version().value(),
         snapshot.sequence(),
+        session_id,
     ) {
         Ok(value) => value,
         Err(()) => return invalid_request(actor.correlation_id().as_str()),
@@ -92,8 +162,6 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
 
     let identity = ResolvedAuthenticatedDevice::new(request.device_id().clone());
     let authorization = device_job_authorization(env)?;
-    let preconditions = device_execution_preconditions(env)?;
-    let repository = device_job_repository(env)?;
     let verifier = generation_object_verifier(env)?;
     let commit = device_generation_commit(env);
     let services = DeviceGenerationCommitServices::new(
@@ -120,7 +188,6 @@ fn server_now() -> UnixMillis {
 struct DeviceGenerationCommitBody {
     profile_id: String,
     base_generation_id: String,
-    expected_job_version: u64,
     claim_id: String,
     fence: u64,
     generation_id: String,
@@ -128,28 +195,32 @@ struct DeviceGenerationCommitBody {
     metadata_digest: String,
     container_digest: String,
     container_bytes: u64,
-    expected_profile_version: u64,
     coordinator_session_id: String,
     coordinator_fencing_token: String,
     coordinator_epoch: u64,
 }
 
 impl DeviceGenerationCommitBody {
+    #[allow(clippy::too_many_arguments)]
     fn into_domain(
         self,
         job_id: DeviceJobId,
+        claim_id: DeviceClaimId,
         device_id: DeviceId,
+        profile_id: ProfileId,
+        base_generation_id: GenerationId,
         observed_at: UnixMillis,
+        expected_job_version: AggregateVersion,
+        expected_profile_version: AggregateVersion,
         coordinator_version: u64,
         coordinator_sequence: u64,
+        coordinator_session_id: SessionId,
     ) -> core::result::Result<DeviceGenerationCommitRequest, ()> {
-        let profile_id = ProfileId::parse(self.profile_id).map_err(|_| ())?;
-        let base_generation_id = GenerationId::parse(self.base_generation_id).map_err(|_| ())?;
         let generation_id = GenerationId::parse(self.generation_id).map_err(|_| ())?;
         Ok(DeviceGenerationCommitRequest::new(
             job_id,
-            DeviceClaimId::parse(self.claim_id).map_err(|_| ())?,
-            AggregateVersion::new(self.expected_job_version).map_err(|_| ())?,
+            claim_id,
+            expected_job_version,
             self.fence,
             device_id,
             profile_id.clone(),
@@ -162,9 +233,9 @@ impl DeviceGenerationCommitBody {
                 self.container_digest,
                 self.container_bytes,
             ),
-            AggregateVersion::new(self.expected_profile_version).map_err(|_| ())?,
+            expected_profile_version,
             CoordinatorGenerationCommitWitness::new(
-                SessionId::parse(self.coordinator_session_id).map_err(|_| ())?,
+                coordinator_session_id,
                 FencingToken::parse(self.coordinator_fencing_token).map_err(|_| ())?,
                 self.coordinator_epoch,
                 coordinator_version,
@@ -223,6 +294,26 @@ impl From<DeviceGenerationCommitOutcome> for DeviceGenerationCommitResponse {
     }
 }
 
+fn device_port_failure(correlation_id: &str, class: DeviceJobPortErrorClass) -> Result<Response> {
+    match class {
+        DeviceJobPortErrorClass::AuthenticationFailed => forbidden(correlation_id),
+        DeviceJobPortErrorClass::IntegrityFailure => integrity_failure(correlation_id),
+        DeviceJobPortErrorClass::DependencyUnavailable => dependency(correlation_id),
+    }
+}
+
+fn generation_commit_port_failure(
+    correlation_id: &str,
+    class: DeviceGenerationCommitErrorClass,
+) -> Result<Response> {
+    match class {
+        DeviceGenerationCommitErrorClass::StaleAuthority => stale_authority(correlation_id),
+        DeviceGenerationCommitErrorClass::VersionConflict => version_conflict(correlation_id),
+        DeviceGenerationCommitErrorClass::IntegrityFailure => integrity_failure(correlation_id),
+        DeviceGenerationCommitErrorClass::DependencyUnavailable => dependency(correlation_id),
+    }
+}
+
 fn coordinator_snapshot_failure(
     correlation_id: &str,
     class: CoordinatorIngressPortErrorClass,
@@ -245,9 +336,7 @@ fn operation_failure(
         DeviceGenerationCommitOperationError::InvalidRequest => invalid_request(correlation_id),
         DeviceGenerationCommitOperationError::Forbidden => forbidden(correlation_id),
         DeviceGenerationCommitOperationError::NotFound => neutral_not_found(correlation_id),
-        DeviceGenerationCommitOperationError::VersionConflict => {
-            problem(correlation_id, 409, "version_conflict", "Version Conflict")
-        }
+        DeviceGenerationCommitOperationError::VersionConflict => version_conflict(correlation_id),
         DeviceGenerationCommitOperationError::StaleClaim => stale_authority(correlation_id),
         DeviceGenerationCommitOperationError::PreconditionFailed(_) => {
             problem(correlation_id, 409, "invalid_state", "Invalid State")
@@ -261,22 +350,8 @@ fn operation_failure(
         DeviceGenerationCommitOperationError::IntegrityFailure => integrity_failure(correlation_id),
         DeviceGenerationCommitOperationError::DependencyUnavailable => dependency(correlation_id),
         DeviceGenerationCommitOperationError::Commit(class) => {
-            commit_failure(correlation_id, class)
+            generation_commit_port_failure(correlation_id, class)
         }
-    }
-}
-
-fn commit_failure(
-    correlation_id: &str,
-    class: DeviceGenerationCommitErrorClass,
-) -> Result<Response> {
-    match class {
-        DeviceGenerationCommitErrorClass::StaleAuthority => stale_authority(correlation_id),
-        DeviceGenerationCommitErrorClass::VersionConflict => {
-            problem(correlation_id, 409, "version_conflict", "Version Conflict")
-        }
-        DeviceGenerationCommitErrorClass::IntegrityFailure => integrity_failure(correlation_id),
-        DeviceGenerationCommitErrorClass::DependencyUnavailable => dependency(correlation_id),
     }
 }
 
@@ -290,6 +365,10 @@ fn forbidden(correlation_id: &str) -> Result<Response> {
 
 fn stale_authority(correlation_id: &str) -> Result<Response> {
     problem(correlation_id, 409, "lease_conflict", "Lease Conflict")
+}
+
+fn version_conflict(correlation_id: &str) -> Result<Response> {
+    problem(correlation_id, 409, "version_conflict", "Version Conflict")
 }
 
 fn integrity_failure(correlation_id: &str) -> Result<Response> {
@@ -319,7 +398,6 @@ mod tests {
         let base = r#"{
             "profileId":"profile_commit_route_01",
             "baseGenerationId":"generation_commit_route_base_01",
-            "expectedJobVersion":2,
             "claimId":"devclaim_commit_route_01",
             "fence":1,
             "generationId":"generation_commit_route_candidate_01",
@@ -327,7 +405,6 @@ mod tests {
             "metadataDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "containerDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "containerBytes":4096,
-            "expectedProfileVersion":3,
             "coordinatorSessionId":"session_commit_route_01",
             "coordinatorFencingToken":"fence_commit_route_01",
             "coordinatorEpoch":4
@@ -338,6 +415,8 @@ mod tests {
             "tenantId",
             "observedAtMs",
             "executedAtMs",
+            "expectedJobVersion",
+            "expectedProfileVersion",
             "coordinatorVersion",
             "coordinatorSequence",
             "ciphertext",
