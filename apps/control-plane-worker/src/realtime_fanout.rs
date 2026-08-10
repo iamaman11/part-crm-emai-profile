@@ -3,9 +3,8 @@ use crate::realtime_contract::{
     INTERNAL_TENANT_HEADER, RealtimeInternalEvent,
 };
 use crate::realtime_notifications::{NOTIFICATION_HUB_BINDING, notification_hub_object_name};
-use application_ports::NotificationEventRecord;
+use application_ports::{IntegrationEventEnvelope, NotificationEventRecord};
 use cloudflare_adapters::d1_realtime_notifications::D1RealtimeNotificationAuthorization;
-use contracts::IntegrationEventEnvelope;
 use profile_platform_primitives::ActorId;
 use use_cases_notifications::realtime::{
     MAX_REALTIME_AUDIENCE_PAGE_SIZE, load_realtime_audience_page,
@@ -62,9 +61,6 @@ pub async fn publish_durable_event(
                 204 | 403 => {}
                 SYNC_RACE_STATUS => synchronization_race = true,
                 _ => {
-                    // Realtime is an invalidation overlay. Durable notification history already
-                    // exists, so an outer transport failure must never roll back or redefine the
-                    // canonical event. Reconnect catch-up remains the recovery path.
                     worker::console_error!("realtime hub fanout transport failed");
                 }
             }
