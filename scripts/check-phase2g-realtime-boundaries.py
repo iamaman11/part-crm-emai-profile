@@ -107,8 +107,12 @@ def failures_for_sources(
     for marker in ("membership.status = 'ACTIVE'", "client_grants", "profile_grants"):
         if marker not in d1_auth:
             failures.append(f"realtime D1 authorization missing current ACL marker: {marker}")
-    if "assignment" in d1_auth.split("#[cfg(test)]", 1)[0].lower():
-        failures.append("realtime D1 authorization must never treat assignment as ACL")
+    production_auth = d1_auth.split("#[cfg(test)]", 1)[0].lower()
+    for forbidden_acl_source in ("profile_assignments", "client_assignments", "assignment_id"):
+        if forbidden_acl_source in production_auth:
+            failures.append(
+                f"realtime D1 authorization must never treat assignment state as ACL: {forbidden_acl_source}"
+            )
     if "ORDER BY membership.actor_id ASC" not in d1_auth or "membership.actor_id > ?" not in d1_auth:
         failures.append("realtime audience query must use stable actor-id keyset paging")
 
@@ -130,7 +134,8 @@ def failures_for_sources(
     if "load_realtime_audience_page" not in fanout or "INTERNAL_PUBLISH_PATH" not in fanout:
         failures.append("live fanout must use bounded authorized audience and typed internal DO path")
 
-    if '/notifications/realtime' not in route or 'method == "GET"' not in route:
+    route_shape = '["api", "v1", "tenants", _, "notifications", "realtime"]'
+    if route_shape not in route or 'method == "GET"' not in route:
         failures.append("public realtime upgrade route must be explicit GET-only notification ingress")
 
     for marker in REQUIRED_FRONTEND_MARKERS:
