@@ -107,7 +107,9 @@ pub async fn consume_one<T>(
                     retry_after_seconds(message, REALTIME_SYNC_RACE_RETRY_SECONDS);
                 }
                 Err(_) => {
-                    worker::console_error!("realtime fanout failed after durable notification commit");
+                    worker::console_error!(
+                        "realtime fanout failed after durable notification commit"
+                    );
                     message.ack();
                 }
             }
