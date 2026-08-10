@@ -11,8 +11,9 @@ use application_ports::coordinator_ingress::{
 };
 use application_ports::device_generation_commit::{
     CoordinatorGenerationCommitWitness, DeviceGenerationCommitErrorClass,
-    DeviceGenerationCommitOutcome, DeviceGenerationCommitRequest, DeviceGenerationProfileVersionPort,
-    DeviceGenerationReplayProbe, DeviceGenerationReplayProbeOutcome, DeviceGenerationReplayProbePort,
+    DeviceGenerationCommitOutcome, DeviceGenerationCommitRequest,
+    DeviceGenerationProfileVersionPort, DeviceGenerationReplayProbe,
+    DeviceGenerationReplayProbeOutcome, DeviceGenerationReplayProbePort,
 };
 use application_ports::device_jobs::{
     DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobRepositoryPort,
@@ -407,11 +408,13 @@ fn generation_commit_port_failure(
     }
 }
 
-fn replay_object_failure(correlation_id: &str, class: GenerationPortErrorClass) -> Result<Response> {
+fn replay_object_failure(
+    correlation_id: &str,
+    class: GenerationPortErrorClass,
+) -> Result<Response> {
     match class {
-        GenerationPortErrorClass::DependencyUnavailable | GenerationPortErrorClass::InternalFailure => {
-            dependency(correlation_id)
-        }
+        GenerationPortErrorClass::DependencyUnavailable
+        | GenerationPortErrorClass::InternalFailure => dependency(correlation_id),
         GenerationPortErrorClass::NotFound
         | GenerationPortErrorClass::VersionConflict
         | GenerationPortErrorClass::InvalidState
