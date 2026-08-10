@@ -20,6 +20,7 @@ pub mod integration_events;
 pub mod mailbox_jobs;
 pub mod mailbox_scheduling;
 pub mod mailboxes;
+pub mod notification_realtime;
 pub mod notifications;
 pub mod profile_assignment_context;
 pub mod profiles;
@@ -61,6 +62,9 @@ pub use integration_events::{
     NotificationEventPort,
 };
 pub use mailboxes::{MailboxObservation, MailboxProviderPort};
+pub use notification_realtime::{
+    RealtimeNotificationAuthorizationPort, RealtimeNotificationSinkPort,
+};
 pub use notifications::{
     CursorAdvanceWriteOutcome, DeliveryTransitionWriteOutcome, NotificationAuthorizationPort,
     NotificationCapability, NotificationCatchUpRepositoryPort, NotificationCursorRepositoryPort,
