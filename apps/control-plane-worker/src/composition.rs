@@ -211,7 +211,9 @@ pub fn generation_upload_capability_signer(
         env.secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?
             .to_string(),
     )
-    .map_err(|_| Error::RustError("invalid R2 generation upload signing configuration".to_owned()))?;
+    .map_err(|_| {
+        Error::RustError("invalid R2 generation upload signing configuration".to_owned())
+    })?;
     R2GenerationUploadCapabilitySigner::new(
         env.var(R2_GENERATION_ACCOUNT_ID_BINDING)?.to_string(),
         env.var(R2_GENERATION_BUCKET_NAME_BINDING)?.to_string(),
