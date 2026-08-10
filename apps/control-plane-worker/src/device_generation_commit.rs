@@ -3,7 +3,7 @@ use crate::access_session::{
 };
 use crate::composition::{
     authenticated_device, device_execution_preconditions, device_generation_commit,
-    device_job_authorization, device_job_repository,
+    device_job_authorization, device_job_repository, generation_object_verifier,
 };
 use application_ports::AuthenticatedDevicePort;
 use application_ports::device_generation_commit::{
@@ -11,8 +11,6 @@ use application_ports::device_generation_commit::{
     DeviceGenerationCommitOutcome, DeviceGenerationCommitRequest,
 };
 use application_ports::generation_objects::GenerationObjectDescriptor;
-use cloudflare_adapters::r2_generation_objects::R2GenerationObjects;
-use control_plane_contract::R2_PROFILES_BINDING;
 use device_domain::{DeviceClaimId, DeviceJobId};
 use profile_platform_primitives::{
     AggregateVersion, DeviceId, FencingToken, GenerationId, ProfileId, SessionId, UnixMillis,
@@ -62,7 +60,7 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
     let authorization = device_job_authorization(env)?;
     let preconditions = device_execution_preconditions(env)?;
     let repository = device_job_repository(env)?;
-    let verifier = R2GenerationObjects::new(env.bucket(R2_PROFILES_BINDING)?);
+    let verifier = generation_object_verifier(env)?;
     let commit = device_generation_commit(env);
     let services = DeviceGenerationCommitServices::new(
         &identity,
