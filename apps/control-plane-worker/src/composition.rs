@@ -192,9 +192,7 @@ pub fn generation_object_verifier(env: &Env) -> Result<R2GenerationObjects> {
 }
 
 #[must_use]
-pub fn coordinator_ingress_application(
-    env: &Env,
-) -> CloudflareCoordinatorIngressApplication<'_> {
+pub fn coordinator_ingress_application(env: &Env) -> CloudflareCoordinatorIngressApplication<'_> {
     CloudflareCoordinatorIngressApplication::new(
         env,
         D1_CATALOG_BINDING,
