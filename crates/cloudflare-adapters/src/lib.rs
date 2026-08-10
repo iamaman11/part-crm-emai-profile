@@ -57,6 +57,7 @@ pub mod mailbox_job_queue;
 pub mod mailbox_provider;
 pub mod profile_coordinator;
 pub mod r2_generation_objects;
+pub mod r2_generation_upload_capability;
 
 pub use mailbox_domain::MailboxProvider;
 
