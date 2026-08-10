@@ -48,6 +48,7 @@ pub enum RouteClass {
     DeviceJobClaimableApi,
     DeviceJobClaimApi,
     DeviceJobHeartbeatApi,
+    DeviceGenerationCommitApi,
     DeviceJobOutcomeApi,
     NotificationEventCollectionApi,
     NotificationEventAckApi,
@@ -376,6 +377,11 @@ mod tests {
             ),
             (
                 "POST",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-commit",
+                RouteClass::DeviceGenerationCommitApi,
+            ),
+            (
+                "POST",
                 "/api/v1/tenants/tenant_01/device-jobs/devjob_01/outcome",
                 RouteClass::DeviceJobOutcomeApi,
             ),
@@ -394,6 +400,10 @@ mod tests {
             (
                 "PUT",
                 "/api/v1/tenants/tenant_01/device-jobs/devjob_01/heartbeat",
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-commit",
             ),
             (
                 "GET",
