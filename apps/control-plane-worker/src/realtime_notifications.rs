@@ -25,6 +25,7 @@ use worker::{
 
 pub const NOTIFICATION_HUB_BINDING: &str = "NOTIFICATION_HUB";
 const ACCESS_TOKEN_HEADER: &str = "Cf-Access-Jwt-Assertion";
+const CORRELATION_HEADER: &str = "X-Correlation-Id";
 const REALTIME_CONNECT_SUFFIX: &str = "/notifications/realtime";
 const REAUTH_INTERVAL_SECONDS: u64 = 60;
 const CATCH_UP_PAGE_SIZE: u32 = 200;
@@ -38,11 +39,19 @@ pub async fn connect(request: &mut Request, env: &Env, tenant_id: &str) -> Resul
     if !is_websocket_upgrade(request)? {
         return Response::error("WebSocket upgrade required", 426);
     }
-    let Some(resolved) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
-        return neutral_not_found(&correlation_hint(request));
+
+    // Browser WebSocket constructors cannot attach the API's normal X-Correlation-Id header.
+    // Generate it at the already trusted Worker ingress instead of weakening the shared HTTP
+    // identity verifier. Access identity is still verified from the incoming Cloudflare header.
+    let mut internal = request.clone_mut()?;
+    let connection_correlation = format!("corr_realtime_{}", worker::Date::now().as_millis());
+    internal
+        .headers_mut()?
+        .set(CORRELATION_HEADER, &connection_correlation)?;
+    let Some(resolved) = resolve_active_request_actor(&internal, env, Some(tenant_id)).await? else {
+        return neutral_not_found(&correlation_hint(&internal));
     };
 
-    let mut internal = request.clone_mut()?;
     let headers = internal.headers_mut()?;
     headers.delete(ACCESS_TOKEN_HEADER)?;
     headers.delete("Authorization")?;
