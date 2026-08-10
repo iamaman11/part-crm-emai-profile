@@ -6,6 +6,7 @@ pub mod browser_mail_runtime;
 pub mod browser_preflight;
 pub mod dirty_generation;
 pub mod dirty_generation_finalize;
+mod dirty_generation_local;
 pub mod dirty_generation_publish;
 pub mod fake_mail_query;
 pub mod local_profile;
