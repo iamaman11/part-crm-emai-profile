@@ -6,8 +6,8 @@ use application_ports::generations::{GenerationPortError, GenerationPortErrorCla
 use profile_platform_primitives::TenantScope;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use worker::r2::{Conditional, Object};
 use worker::Bucket;
+use worker::r2::{Conditional, Object};
 
 const META_TENANT_ID: &str = "profile-platform-tenant-id";
 const META_PROFILE_ID: &str = "profile-platform-profile-id";
@@ -99,8 +99,7 @@ impl R2GenerationObjects {
             return Ok(false);
         }
         let metadata = stored.custom_metadata().map_err(|_| integrity_failure())?;
-        if metadata.get(META_TENANT_ID).map(String::as_str)
-            != Some(scope.tenant_id().as_str())
+        if metadata.get(META_TENANT_ID).map(String::as_str) != Some(scope.tenant_id().as_str())
             || metadata.get(META_PROFILE_ID).map(String::as_str)
                 != Some(object.profile_id().as_str())
             || metadata.get(META_GENERATION_ID).map(String::as_str)
