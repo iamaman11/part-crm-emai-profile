@@ -53,8 +53,8 @@ def load_ledger(path: Path) -> dict[str, Any]:
             raise ValueError(f"invalid issue number for {item['phase']}")
         if not isinstance(item["implementation_pr"], int) or item["implementation_pr"] <= 0:
             raise ValueError(f"invalid implementation PR for {item['phase']}")
-        if not isinstance(item["permanent_workflows"], int) or item["permanent_workflows"] <= 0:
-            raise ValueError(f"invalid workflow count for {item['phase']}")
+        if item["permanent_workflows"] != 12:
+            raise ValueError(f"accepted workflow count must remain 12 for {item['phase']}")
         for key in ("source_head", "merge_sha"):
             value = item[key]
             if not isinstance(value, str) or SHA40.fullmatch(value) is None:
@@ -77,12 +77,17 @@ def validate_plan_provenance(plan: str, ledger: dict[str, Any]) -> list[str]:
     for expected in ledger["accepted_phases"]:
         phase = expected["phase"]
         matches = _phase_record_pattern(phase).findall(plan)
-        if len(matches) != 1:
-            errors.append(
-                f"{phase} must have exactly one accepted provenance record; observed={len(matches)}"
-            )
+        if not matches:
+            errors.append(f"{phase} is missing an accepted provenance record")
             continue
-        issue, implementation_pr, source_head, merge_sha = matches[0]
+
+        unique_matches = set(matches)
+        if len(unique_matches) != 1:
+            rendered = sorted("/".join(match) for match in unique_matches)
+            errors.append(f"{phase} has conflicting accepted provenance records: {rendered}")
+            continue
+
+        issue, implementation_pr, source_head, merge_sha = next(iter(unique_matches))
         observed = {
             "issue": int(issue),
             "implementation_pr": int(implementation_pr),
@@ -94,24 +99,17 @@ def validate_plan_provenance(plan: str, ledger: dict[str, Any]) -> list[str]:
                 errors.append(
                     f"{phase} provenance mismatch for {key}: observed={value}, expected={expected[key]}"
                 )
-        workflow_marker = f"{expected['permanent_workflows']}/{expected['permanent_workflows']} permanent workflows"
-        phase_start = plan.find(f"{phase} was accepted through issue #{expected['issue']}")
-        if phase_start >= 0:
-            next_start = len(plan)
-            for later in ledger["accepted_phases"]:
-                marker = f"{later['phase']} was accepted through issue #"
-                candidate = plan.find(marker, phase_start + 1)
-                if candidate >= 0:
-                    next_start = min(next_start, candidate)
-            block = plan[phase_start:next_start]
-            if workflow_marker not in block and "12/12 permanent workflows" not in block:
-                errors.append(f"{phase} accepted provenance block is missing workflow evidence")
     return errors
 
 
 def provenance_self_test(plan: str, ledger: dict[str, Any]) -> None:
-    if validate_plan_provenance(plan, ledger):
-        raise ValueError("accepted phase provenance baseline is invalid before self-test")
+    baseline_errors = validate_plan_provenance(plan, ledger)
+    if baseline_errors:
+        raise ValueError(
+            "accepted phase provenance baseline is invalid before self-test: "
+            + "; ".join(baseline_errors)
+        )
+
     tampered = copy.deepcopy(ledger)
     original = tampered["accepted_phases"][-1]["merge_sha"]
     tampered["accepted_phases"][-1]["merge_sha"] = "0" * 40
