@@ -68,12 +68,17 @@ Phase 2H therefore treats Users & Access discovery as contract-first work: authe
 membership/authorization -> bounded member projection -> generated public contract -> UI. Client/profile
 assignments remain non-authorizing and cannot be used to infer membership visibility.
 
-### Client Mail — application contract exists
+### Client Mail — application/query contract accepted, public HTTP transport missing
 
-The accepted Phase 2D/2E/2F query-mail contract already defines authorized client-scoped message search
-and full-message retrieval across eligible cloud/Bridge lanes. Phase 2H must connect it to Client detail
-and add a sanitized full-body presentation surface. Message bodies remain transient confidential product
-data and must never enter Web Storage, telemetry, audit, integration events or realtime payloads.
+The accepted Phase 2D/2E/2F query-mail application contract defines authorized client-scoped message
+search and full-message retrieval across eligible cloud/Bridge lanes, and its Rust-derived schema types
+are generated for TypeScript. The accepted `query-mail` OpenAPI fragment currently has `paths: {}` and
+the frontend endpoint layer has no executable search/get-message functions.
+
+Therefore Phase 2H must first add a thin fail-closed public query ingress/classifier that calls the
+existing application contract, generate the corresponding public path contract, and only then wire the
+Client detail search/result/body UI. Message bodies remain transient confidential product data and must
+never enter Web Storage, telemetry, audit, integration events or realtime payloads.
 
 ### Mailboxes — commands/detail exist, operator collection discovery is incomplete
 
@@ -122,24 +127,28 @@ The architecture inventory currently governs three generated public contract fam
 2. `client-registry-api`;
 3. `query-mail-api`.
 
+The first two include active HTTP surface coverage used by the frontend. `query-mail-api` currently
+proves schema generation only; it does not yet define public HTTP paths. Phase 2H must not confuse a
+generated schema with a composed transport.
+
 Phase 2H must extend canonical Rust/OpenAPI/generated TypeScript coverage before UI consumption whenever
 it adds a public profile/member/mailbox/session/device/audit/settings DTO or enum. Feature code may use
 private view models for presentation-only state, but may not duplicate a server-owned public shape.
 
 ## 4. Inward-First Phase 2H Work Buckets
 
-### Bucket A — can proceed on accepted public contracts
+### Bucket A — can proceed on accepted public HTTP contracts
 
 - feature-owned `/clients/:clientId` composition and client list/detail navigation;
 - feature-owned `/profiles/:profileId` detail composition while keeping unsupported list discovery
   explicit until a real projection exists;
-- Client detail -> accepted Client Mail search/result/body flow;
-- safe HTML/plain-text message presentation;
 - accessibility/loading/empty/error/offline states for already-supported operations;
 - navigation to accepted Users & Access mutation workflows without inventing member discovery.
 
-### Bucket B — contract-first before UI discoverability claims
+### Bucket B — contract/transport-first before UI execution or discoverability claims
 
+- thin Client Mail HTTP query ingress/classifier plus generated public path contract over the already
+  accepted query-mail application contract;
 - grant-safe profile collection read model;
 - member/access directory projection;
 - mailbox administration collection projection;
@@ -151,14 +160,18 @@ private view models for presentation-only state, but may not duplicate a server-
 Every Bucket B surface follows:
 
 ```text
-typed projection contract
+typed projection/query contract
   -> application authorization/query sequencing
-  -> bounded adapter/read model
-  -> fail-closed public classifier
+  -> bounded adapter/read model where required
+  -> fail-closed public classifier + thin ingress
   -> generated OpenAPI/TypeScript
   -> feature-owned route/UI
   -> positive + negative architecture/privacy evidence
 ```
+
+Safe HTML/plain-text message rendering may be developed and tested against synthetic DTO fixtures while
+the Client Mail transport is being composed, but the product UI may not claim executable message search
+until the real accepted application query path is wired end to end.
 
 ## 5. Phase 2H UI Safety Gates
 
@@ -181,11 +194,12 @@ The Phase 2H implementation must keep these properties machine-checkable:
 The first executable Phase 2H sequence is therefore:
 
 ```text
-client list/detail route composition on generated Client Registry contracts
-  -> profile detail route composition
-  -> Client detail -> Mail search/body presentation on generated query-mail contracts
-  -> identify and add the first missing operator read projection (Users & Access before lower-priority infrastructure)
+client list/detail route composition on generated Client Registry HTTP contracts
+  -> profile detail route composition on the accepted detail HTTP contract
+  -> thin Client Mail HTTP query ingress over the accepted query-mail application contract
+  -> generated query-mail paths + frontend search/result/sanitized-body presentation
+  -> first missing operator read projection (Users & Access before lower-priority infrastructure)
 ```
 
-This ordering uses accepted contracts first, then introduces new public query surfaces only where the
-standalone UX demonstrably needs them.
+This ordering uses actually composed public contracts first, then introduces missing query transports and
+read projections inward-first instead of treating generated schemas as proof of an executable endpoint.
