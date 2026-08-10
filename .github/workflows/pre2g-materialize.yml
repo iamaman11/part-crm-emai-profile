@@ -1,0 +1,54 @@
+name: Pre-2G Docs Materializer
+
+on:
+  push:
+    branches:
+      - pre2g-clean-closeout
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pre2g-docs-materializer
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: pre2g-clean-closeout
+          fetch-depth: 0
+
+      - name: Materialize bounded docs edits
+        run: python scripts/pre2g_materialize.py
+
+      - name: Compile governance scripts
+        run: >-
+          python -m py_compile
+          scripts/accepted_phase_provenance.py
+          scripts/check-architecture.py
+          scripts/generate-architecture-inventory.py
+
+      - name: Validate dependency and provenance architecture
+        run: python scripts/check-architecture.py
+
+      - name: Validate documentation semantics and deterministic inventory
+        run: python scripts/generate-architecture-inventory.py --check
+
+      - name: Reject whitespace damage
+        run: git diff --check
+
+      - name: Commit only durable closeout files and self-clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/pre2g-materialize.yml scripts/pre2g_materialize.py
+          git add docs/DEVELOPMENT_PLAN.md docs/ARCHITECTURE.md
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: materialize clean Phase 2F closeout [skip ci]"
+          git push origin HEAD:pre2g-clean-closeout
