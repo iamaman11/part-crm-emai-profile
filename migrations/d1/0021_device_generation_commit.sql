@@ -247,8 +247,7 @@ BEGIN
           AND profile_id = OLD.profile_id
           AND generation_id = OLD.generation_id
           AND command_actor_id = NEW.verified_by_actor_id
-          AND verification_reference = 'r2sha256:' || container_digest
-          AND NEW.verification_reference = verification_reference
+          AND NEW.verification_reference = 'r2sha256:' || container_digest
           AND executed_at_ms = NEW.updated_at_ms
           AND OLD.status = 'REGISTERED'
           AND OLD.version = 1
@@ -330,6 +329,9 @@ BEGIN
       AND status = 'REGISTERED'
       AND version = 1;
 
+    SELECT RAISE(ABORT, 'device_generation_commit_verify_incomplete')
+    WHERE changes() <> 1;
+
     UPDATE browser_profiles
     SET active_generation_id = NEW.generation_id,
         status = 'READY',
@@ -340,7 +342,19 @@ BEGIN
       AND profile_id = NEW.profile_id
       AND version = NEW.expected_profile_version
       AND status = 'READY'
-      AND active_generation_id = NEW.base_generation_id;
+      AND active_generation_id = NEW.base_generation_id
+      AND EXISTS (
+          SELECT 1
+          FROM profile_generations
+          WHERE tenant_id = NEW.tenant_id
+            AND profile_id = NEW.profile_id
+            AND generation_id = NEW.generation_id
+            AND object_key = NEW.object_key
+            AND metadata_digest = NEW.metadata_digest
+            AND container_digest = NEW.container_digest
+            AND status = 'VERIFIED'
+            AND version = 2
+      );
 
     SELECT RAISE(ABORT, 'device_generation_commit_apply_incomplete')
     WHERE changes() <> 1;
