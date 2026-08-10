@@ -10,6 +10,7 @@ pub mod clock;
 pub mod commands;
 pub mod coordinator_ingress;
 pub mod device_jobs;
+pub mod generation_objects;
 pub mod generations;
 pub mod identity;
 pub mod identity_ceremonies;
@@ -40,6 +41,9 @@ pub use device_jobs::{
     DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability,
     DeviceJobInsertOutcome, DeviceJobPortError, DeviceJobPortErrorClass, DeviceJobQueryPort,
     DeviceJobRepositoryPort, DeviceJobWriteOutcome,
+};
+pub use generation_objects::{
+    GenerationObjectUploadOutcome, GenerationObjectUploadPort, ImmutableGenerationObject,
 };
 pub use generations::{GenerationObjectReference, GenerationObjectStorePort};
 pub use identity::MembershipRepository;
