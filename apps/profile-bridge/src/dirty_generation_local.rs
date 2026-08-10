@@ -290,7 +290,11 @@ mod tests {
             &Commit,
         ))?;
         std::fs::write(
-            fixture.prepared.candidate_workspace().path().join("late-change"),
+            fixture
+                .prepared
+                .candidate_workspace()
+                .path()
+                .join("late-change"),
             b"changed-after-commit",
         )?;
 
