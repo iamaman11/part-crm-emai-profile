@@ -341,7 +341,10 @@ fn coordinator_snapshot_failure(
     }
 }
 
-fn object_verify_failure(correlation_id: &str, class: GenerationPortErrorClass) -> Result<Response> {
+fn object_verify_failure(
+    correlation_id: &str,
+    class: GenerationPortErrorClass,
+) -> Result<Response> {
     match class {
         GenerationPortErrorClass::DependencyUnavailable => dependency(correlation_id),
         GenerationPortErrorClass::NotFound
@@ -404,9 +407,7 @@ fn dependency(correlation_id: &str) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DeviceGenerationUploadCapabilityBody, DeviceGenerationUploadCapabilityResponse,
-    };
+    use super::{DeviceGenerationUploadCapabilityBody, DeviceGenerationUploadCapabilityResponse};
 
     #[test]
     fn transport_is_metadata_only_and_rejects_client_authority_fields() {
