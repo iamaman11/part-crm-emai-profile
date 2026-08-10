@@ -3,19 +3,24 @@ use crate::access_session::{
 };
 use crate::composition::{
     authenticated_device, coordinator_ingress_application, device_execution_preconditions,
-    device_generation_commit, device_job_authorization, device_job_repository,
-    generation_object_verifier,
+    device_generation_commit, device_generation_replay_probe, device_job_authorization,
+    device_job_repository, generation_object_verifier,
 };
 use application_ports::coordinator_ingress::{
     CoordinatorIngressApplicationPort, CoordinatorIngressPortErrorClass,
 };
 use application_ports::device_generation_commit::{
     CoordinatorGenerationCommitWitness, DeviceGenerationCommitErrorClass,
-    DeviceGenerationCommitOutcome, DeviceGenerationCommitRequest,
-    DeviceGenerationProfileVersionPort,
+    DeviceGenerationCommitOutcome, DeviceGenerationCommitRequest, DeviceGenerationProfileVersionPort,
+    DeviceGenerationReplayProbe, DeviceGenerationReplayProbeOutcome, DeviceGenerationReplayProbePort,
 };
-use application_ports::device_jobs::DeviceJobRepositoryPort;
-use application_ports::generation_objects::GenerationObjectDescriptor;
+use application_ports::device_jobs::{
+    DeviceJobAuthorizationPort, DeviceJobCapability, DeviceJobRepositoryPort,
+};
+use application_ports::generation_objects::{
+    GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort,
+};
+use application_ports::generations::GenerationPortErrorClass;
 use application_ports::{AuthenticatedDevicePort, DeviceJobPortErrorClass};
 use device_domain::{DeviceClaimId, DeviceJobId, DeviceJobStatus};
 use profile_platform_primitives::{
@@ -97,6 +102,62 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
     {
         return neutral_not_found(actor.correlation_id().as_str());
     }
+
+    let authorization = device_job_authorization(env)?;
+    match authorization
+        .is_device_job_authorized(actor, job.target(), DeviceJobCapability::Complete)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => return forbidden(actor.correlation_id().as_str()),
+        Err(error) => {
+            return device_port_failure(actor.correlation_id().as_str(), error.class());
+        }
+    }
+
+    if job.status() == DeviceJobStatus::Succeeded {
+        let probe = match body.replay_probe(
+            job_id,
+            claim_id,
+            device_id,
+            profile_id,
+            base_generation_id,
+            session_id,
+        ) {
+            Ok(value) => value,
+            Err(()) => return invalid_request(actor.correlation_id().as_str()),
+        };
+        let replay = device_generation_replay_probe(env)?;
+        match replay.probe_committed_generation(actor, &probe).await {
+            Ok(DeviceGenerationReplayProbeOutcome::ExactCommitted) => {}
+            Ok(DeviceGenerationReplayProbeOutcome::Missing)
+            | Ok(DeviceGenerationReplayProbeOutcome::Conflict) => {
+                return version_conflict(actor.correlation_id().as_str());
+            }
+            Err(error) => {
+                return generation_commit_port_failure(
+                    actor.correlation_id().as_str(),
+                    error.class(),
+                );
+            }
+        }
+        let verifier = generation_object_verifier(env)?;
+        match verifier
+            .verify_generation_object_descriptor_exact(actor.tenant_scope(), probe.object())
+            .await
+        {
+            Ok(true) => {
+                return Response::from_json(&DeviceGenerationCommitResponse::from(
+                    DeviceGenerationCommitOutcome::AlreadyActive,
+                ));
+            }
+            Ok(false) => return integrity_failure(actor.correlation_id().as_str()),
+            Err(error) => {
+                return replay_object_failure(actor.correlation_id().as_str(), error.class());
+            }
+        }
+    }
+
     if job.status() != DeviceJobStatus::Running {
         return stale_authority(actor.correlation_id().as_str());
     }
@@ -161,7 +222,7 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
     };
 
     let identity = ResolvedAuthenticatedDevice::new(request.device_id().clone());
-    let authorization = device_job_authorization(env)?;
+    let preconditions = device_execution_preconditions(env)?;
     let verifier = generation_object_verifier(env)?;
     let commit = device_generation_commit(env);
     let services = DeviceGenerationCommitServices::new(
@@ -183,7 +244,7 @@ fn server_now() -> UnixMillis {
     UnixMillis::new(Date::now().as_millis())
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DeviceGenerationCommitBody {
     profile_id: String,
@@ -201,6 +262,38 @@ struct DeviceGenerationCommitBody {
 }
 
 impl DeviceGenerationCommitBody {
+    #[allow(clippy::too_many_arguments)]
+    fn replay_probe(
+        &self,
+        job_id: DeviceJobId,
+        claim_id: DeviceClaimId,
+        device_id: DeviceId,
+        profile_id: ProfileId,
+        base_generation_id: GenerationId,
+        coordinator_session_id: SessionId,
+    ) -> core::result::Result<DeviceGenerationReplayProbe, ()> {
+        let generation_id = GenerationId::parse(self.generation_id.clone()).map_err(|_| ())?;
+        Ok(DeviceGenerationReplayProbe::new(
+            job_id,
+            claim_id,
+            self.fence,
+            device_id,
+            profile_id.clone(),
+            base_generation_id,
+            GenerationObjectDescriptor::new(
+                profile_id,
+                generation_id,
+                self.object_key.clone(),
+                self.metadata_digest.clone(),
+                self.container_digest.clone(),
+                self.container_bytes,
+            ),
+            coordinator_session_id,
+            FencingToken::parse(self.coordinator_fencing_token.clone()).map_err(|_| ())?,
+            self.coordinator_epoch,
+        ))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn into_domain(
         self,
@@ -311,6 +404,19 @@ fn generation_commit_port_failure(
         DeviceGenerationCommitErrorClass::VersionConflict => version_conflict(correlation_id),
         DeviceGenerationCommitErrorClass::IntegrityFailure => integrity_failure(correlation_id),
         DeviceGenerationCommitErrorClass::DependencyUnavailable => dependency(correlation_id),
+    }
+}
+
+fn replay_object_failure(correlation_id: &str, class: GenerationPortErrorClass) -> Result<Response> {
+    match class {
+        GenerationPortErrorClass::DependencyUnavailable | GenerationPortErrorClass::InternalFailure => {
+            dependency(correlation_id)
+        }
+        GenerationPortErrorClass::NotFound
+        | GenerationPortErrorClass::VersionConflict
+        | GenerationPortErrorClass::InvalidState
+        | GenerationPortErrorClass::Conflict
+        | GenerationPortErrorClass::IntegrityFailure => integrity_failure(correlation_id),
     }
 }
 
