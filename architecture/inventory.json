@@ -464,6 +464,16 @@
         "authenticated": true
       },
       {
+        "route_class": "DeviceGenerationCommitApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/generation-commit",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-commit",
+        "authenticated": true
+      },
+      {
         "route_class": "DeviceJobOutcomeApi",
         "capability": "devices",
         "methods": [
