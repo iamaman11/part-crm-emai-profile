@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const INTERNAL_TENANT_HEADER: &str = "X-Internal-Realtime-Tenant-Id";
 pub const INTERNAL_ACTOR_HEADER: &str = "X-Internal-Realtime-Actor-Id";
 pub const INTERNAL_CORRELATION_HEADER: &str = "X-Internal-Realtime-Correlation-Id";
+pub const INTERNAL_CONNECTION_HEADER: &str = "X-Internal-Realtime-Connection-Token";
 pub const INTERNAL_PUBLISH_PATH: &str = "/internal/realtime/publish";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
