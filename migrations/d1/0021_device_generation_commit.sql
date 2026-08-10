@@ -261,6 +261,7 @@ CREATE TRIGGER profile_generation_activation_requires_command
 BEFORE UPDATE OF active_generation_id ON browser_profiles
 FOR EACH ROW
 WHEN NEW.active_generation_id IS NOT OLD.active_generation_id
+ AND NEW.active_generation_id IS NOT NULL
 BEGIN
     SELECT RAISE(ABORT, 'profile_generation_activation_not_governed')
     WHERE NOT EXISTS (
