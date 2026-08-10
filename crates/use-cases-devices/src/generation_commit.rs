@@ -144,6 +144,11 @@ fn validate_request(
     request: &DeviceGenerationCommitRequest,
 ) -> Result<(), DeviceGenerationCommitOperationError> {
     let object = request.object();
+    let expected_coordinator_version = request
+        .coordinator()
+        .coordinator_sequence()
+        .checked_add(1)
+        .ok_or(DeviceGenerationCommitOperationError::InvalidRequest)?;
     if object.profile_id() != request.profile_id()
         || object.generation_id() == request.base_generation_id()
         || object.container_bytes() == 0
@@ -151,6 +156,7 @@ fn validate_request(
         || request.coordinator().epoch() == 0
         || request.coordinator().coordinator_version() == 0
         || request.coordinator().coordinator_sequence() == 0
+        || request.coordinator().coordinator_version() != expected_coordinator_version
         || !is_sha256_hex(object.metadata_digest())
         || !is_sha256_hex(object.container_digest())
     {
