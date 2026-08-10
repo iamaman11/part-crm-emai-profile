@@ -20,6 +20,7 @@ pub mod d1_clients;
 mod d1_command_identity;
 pub mod d1_contact_query;
 pub mod d1_device_authorization;
+pub mod d1_device_generation_commit;
 pub mod d1_device_jobs;
 pub mod d1_device_preconditions;
 pub mod d1_global_query;
