@@ -4,6 +4,7 @@ mod access_session;
 mod clients;
 mod command_evidence;
 mod composition;
+mod device_generation_commit;
 mod device_jobs;
 mod identity;
 mod integration_events;
@@ -86,6 +87,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::DeviceJobClaimApi
         | RouteClass::DeviceJobHeartbeatApi
         | RouteClass::DeviceJobOutcomeApi => device_jobs::dispatch(route, &mut request, &env).await,
+        RouteClass::DeviceGenerationCommitApi => {
+            device_generation_commit::dispatch(&mut request, &env).await
+        }
         RouteClass::NotificationEventCollectionApi
         | RouteClass::NotificationEventAckApi
         | RouteClass::NotificationReplayCollectionApi
