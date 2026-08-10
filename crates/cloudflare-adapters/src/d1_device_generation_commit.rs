@@ -329,7 +329,11 @@ fn validate_request(
         .value()
         .checked_add(1)
         .is_none()
-        || request.expected_job_version().value().checked_add(1).is_none()
+        || request
+            .expected_job_version()
+            .value()
+            .checked_add(1)
+            .is_none()
     {
         return Err(integrity_failure());
     }
