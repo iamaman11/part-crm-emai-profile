@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 client-domain.workspace = true
 contracts.workspace = true
+device-domain.workspace = true
 identity-access-domain.workspace = true
 mailbox-domain.workspace = true
 notification-domain.workspace = true

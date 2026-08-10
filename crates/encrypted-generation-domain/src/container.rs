@@ -124,6 +124,21 @@ impl PlaintextDigest {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MetadataDigest([u8; 32]);
+
+impl MetadataDigest {
+    #[must_use]
+    fn calculate(metadata_bytes: &[u8]) -> Self {
+        Self(Sha256::digest(metadata_bytes).into())
+    }
+
+    #[must_use]
+    pub const fn bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContainerDigest([u8; 32]);
 
 impl ContainerDigest {
@@ -264,6 +279,10 @@ impl GenerationMetadata {
         )
     }
 
+    pub fn canonical_digest(&self) -> Result<MetadataDigest, EncryptedGenerationError> {
+        Ok(MetadataDigest::calculate(&self.encode()?))
+    }
+
     fn validate_plaintext(&self, plaintext: &[u8]) -> Result<(), EncryptedGenerationError> {
         let bytes = u64::try_from(plaintext.len())
             .map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
@@ -366,6 +385,7 @@ impl GenerationMetadata {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SealedGeneration {
     metadata: GenerationMetadata,
+    metadata_digest: MetadataDigest,
     container: Vec<u8>,
     container_digest: ContainerDigest,
 }
@@ -374,6 +394,11 @@ impl SealedGeneration {
     #[must_use]
     pub const fn metadata(&self) -> &GenerationMetadata {
         &self.metadata
+    }
+
+    #[must_use]
+    pub const fn metadata_digest(&self) -> MetadataDigest {
+        self.metadata_digest
     }
 
     #[must_use]
@@ -423,7 +448,7 @@ pub fn seal_generation(
     }
     metadata.validate_plaintext(plaintext)?;
     let metadata_bytes = metadata.encode()?;
-    let metadata_digest: [u8; 32] = Sha256::digest(&metadata_bytes).into();
+    let metadata_digest = MetadataDigest::calculate(&metadata_bytes);
     let metadata_length = u32::try_from(metadata_bytes.len())
         .map_err(|_| EncryptedGenerationError::InvalidContainer)?;
     let chunk_size = usize::try_from(metadata.chunk_size())
@@ -444,12 +469,7 @@ pub fn seal_generation(
     for chunk in plaintext.chunks(chunk_size) {
         let plaintext_length =
             u32::try_from(chunk.len()).map_err(|_| EncryptedGenerationError::PlaintextTooLarge)?;
-        let aad = record_aad(
-            &metadata_digest,
-            RECORD_CHUNK,
-            chunk_count,
-            plaintext_length,
-        );
+        let aad = record_aad(metadata_digest, RECORD_CHUNK, chunk_count, plaintext_length);
         let nonce_bytes = metadata.nonce_prefix().nonce_for(chunk_count);
         let ciphertext = cipher
             .encrypt(
@@ -474,7 +494,7 @@ pub fn seal_generation(
             .ok_or(EncryptedGenerationError::PlaintextTooLarge)?;
     }
 
-    let aad = record_aad(&metadata_digest, RECORD_FINAL, chunk_count, 0);
+    let aad = record_aad(metadata_digest, RECORD_FINAL, chunk_count, 0);
     let nonce_bytes = metadata.nonce_prefix().nonce_for(chunk_count);
     let final_tag = cipher
         .encrypt(
@@ -499,6 +519,7 @@ pub fn seal_generation(
     let container_digest = ContainerDigest::calculate(&container);
     Ok(SealedGeneration {
         metadata: metadata.clone(),
+        metadata_digest,
         container,
         container_digest,
     })
@@ -525,7 +546,7 @@ pub fn open_generation(
     if metadata.key_id() != key.key_id() {
         return Err(EncryptedGenerationError::MetadataMismatch);
     }
-    let metadata_digest: [u8; 32] = Sha256::digest(metadata_bytes).into();
+    let metadata_digest = MetadataDigest::calculate(metadata_bytes);
     let cipher = key.cipher()?;
     let mut plaintext = Zeroizing::new(Vec::new());
     let mut expected_index = 0_u64;
@@ -544,7 +565,7 @@ pub fn open_generation(
             return Err(EncryptedGenerationError::InvalidContainer);
         }
         let ciphertext = cursor.take(ciphertext_length)?;
-        let aad = record_aad(&metadata_digest, record_type, index, plaintext_length);
+        let aad = record_aad(metadata_digest, record_type, index, plaintext_length);
         let nonce_bytes = metadata.nonce_prefix().nonce_for(index);
         let opened = Zeroizing::new(
             cipher
@@ -641,13 +662,13 @@ fn validate_chunk_size(chunk_size: u32) -> Result<(), EncryptedGenerationError> 
 }
 
 fn record_aad(
-    metadata_digest: &[u8; 32],
+    metadata_digest: MetadataDigest,
     record_type: u8,
     index: u64,
     plaintext_length: u32,
 ) -> Vec<u8> {
     let mut aad = Vec::with_capacity(45);
-    aad.extend_from_slice(metadata_digest);
+    aad.extend_from_slice(&metadata_digest.bytes());
     aad.push(record_type);
     aad.extend_from_slice(&index.to_be_bytes());
     aad.extend_from_slice(&plaintext_length.to_be_bytes());

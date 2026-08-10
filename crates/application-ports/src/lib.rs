@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audit;
+pub mod browser_mail_execution;
 pub mod client_contact_lookup;
 pub mod client_merge;
 pub mod client_registry;
@@ -8,6 +9,9 @@ pub mod clients;
 pub mod clock;
 pub mod commands;
 pub mod coordinator_ingress;
+pub mod device_generation_commit;
+pub mod device_jobs;
+pub mod generation_objects;
 pub mod generations;
 pub mod identity;
 pub mod identity_ceremonies;
@@ -33,6 +37,22 @@ pub use audit::{AuditPort, AuditRecord, AuditResult};
 pub use clients::ClientRepository;
 pub use clock::ClockPort;
 pub use commands::CommandExecutionEvidence;
+pub use device_generation_commit::{
+    CoordinatorGenerationCommitWitness, DeviceGenerationCommitError,
+    DeviceGenerationCommitErrorClass, DeviceGenerationCommitOutcome, DeviceGenerationCommitPort,
+    DeviceGenerationCommitRequest,
+};
+pub use device_jobs::{
+    AuthenticatedDevicePort, DeviceExecutionBlocker, DeviceExecutionPreconditionPort,
+    DeviceExecutionReadiness, DeviceJobAuthorizationPort, DeviceJobCapability,
+    DeviceJobInsertOutcome, DeviceJobPortError, DeviceJobPortErrorClass, DeviceJobQueryPort,
+    DeviceJobRepositoryPort, DeviceJobWriteOutcome,
+};
+pub use generation_objects::{
+    GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort,
+    GenerationObjectExactVerifyPort, GenerationObjectUploadOutcome, GenerationObjectUploadPort,
+    ImmutableGenerationObject,
+};
 pub use generations::{GenerationObjectReference, GenerationObjectStorePort};
 pub use identity::MembershipRepository;
 pub use integration_events::{

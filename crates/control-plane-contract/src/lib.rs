@@ -41,9 +41,16 @@ pub enum RouteClass {
     MailboxBindingCollectionApi,
     MailboxBindingResourceApi,
     MailboxBindingRevokeApi,
+    MailboxBrowserExecutionBindApi,
     MailboxJobCollectionApi,
     MailboxJobResourceApi,
     MailboxJobRunApi,
+    DeviceJobClaimableApi,
+    DeviceJobClaimApi,
+    DeviceJobHeartbeatApi,
+    DeviceGenerationUploadCapabilityApi,
+    DeviceGenerationCommitApi,
+    DeviceJobOutcomeApi,
     NotificationEventCollectionApi,
     NotificationEventAckApi,
     NotificationReplayCollectionApi,
@@ -325,6 +332,11 @@ mod tests {
             ),
             (
                 "POST",
+                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/browser-execution",
+                RouteClass::MailboxBrowserExecutionBindApi,
+            ),
+            (
+                "POST",
                 "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs",
                 RouteClass::MailboxJobCollectionApi,
             ),
@@ -343,6 +355,75 @@ mod tests {
             let actual = classify_route(method, path);
             assert_eq!(actual, expected);
             assert!(is_authenticated_api(actual));
+        }
+    }
+
+    #[test]
+    fn device_job_routes_are_specific_authenticated_and_fail_closed() {
+        let routes = [
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/device-jobs/claimable",
+                RouteClass::DeviceJobClaimableApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/claim",
+                RouteClass::DeviceJobClaimApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/heartbeat",
+                RouteClass::DeviceJobHeartbeatApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-upload-capability",
+                RouteClass::DeviceGenerationUploadCapabilityApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-commit",
+                RouteClass::DeviceGenerationCommitApi,
+            ),
+            (
+                "POST",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/outcome",
+                RouteClass::DeviceJobOutcomeApi,
+            ),
+        ];
+        for (method, path, expected) in routes {
+            let actual = classify_route(method, path);
+            assert_eq!(actual, expected);
+            assert!(is_authenticated_api(actual));
+        }
+        for (method, path) in [
+            ("POST", "/api/v1/tenants/tenant_01/device-jobs/claimable"),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/claim",
+            ),
+            (
+                "PUT",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/heartbeat",
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-upload-capability",
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-commit",
+            ),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/outcome",
+            ),
+        ] {
+            assert_eq!(
+                classify_route(method, path),
+                RouteClass::DynamicRouteNotFound
+            );
         }
     }
 
@@ -418,6 +499,10 @@ mod tests {
             ),
             ("GET", "/api/v1/tenants/tenant_01/mailboxes"),
             ("DELETE", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01"),
+            (
+                "GET",
+                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/browser-execution",
+            ),
             (
                 "PUT",
                 "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",

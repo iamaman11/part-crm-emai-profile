@@ -1,9 +1,21 @@
 #![forbid(unsafe_code)]
 
+pub mod browser_execution;
+pub mod browser_mail_query;
+pub mod browser_mail_runtime;
+pub mod browser_preflight;
+pub mod dirty_close;
+pub mod dirty_generation;
+pub mod dirty_generation_finalize;
+mod dirty_generation_local;
+pub mod dirty_generation_publish;
 pub mod fake_mail_query;
 pub mod local_profile;
 pub mod operator_flow;
 pub mod runtime_bundle;
+
+#[cfg(test)]
+mod test_support;
 
 #[cfg(windows)]
 pub mod windows_native;
@@ -223,33 +235,32 @@ mod tests {
     }
 
     #[test]
-    fn fake_camouhost_rejects_unsupported_version() {
+    fn fake_camouhost_rejects_unsupported_version() -> Result<(), Box<dyn std::error::Error>> {
         let mut runtime = FakeCamouhost::default();
+        let unsupported = CAMOUHOST_IPC_VERSION.saturating_add(1);
         assert_eq!(
-            runtime.exchange(&CamouhostMessage::Hello { version: 2 }),
+            runtime.exchange(&CamouhostMessage::Hello {
+                version: unsupported,
+            }),
             Err(BridgePortError::InvalidResponse)
         );
+        Ok(())
     }
 
     #[test]
     fn fake_process_control_records_graceful_and_forced_paths()
     -> Result<(), Box<dyn std::error::Error>> {
-        let first = SessionId::parse("session_01JBRIDGE")?;
-        let second = SessionId::parse("session_02JBRIDGE")?;
+        let session_id = SessionId::parse("session_01JPROCESS")?;
         let mut process = FakeProcessControl::default();
-        process.spawn(&first)?;
-        process.request_graceful_close(&first)?;
-        process.confirm_stopped(&first)?;
-        process.spawn(&second)?;
-        process.force_terminate(&second)?;
+        process.spawn(&session_id)?;
+        process.request_graceful_close(&session_id)?;
+        process.force_terminate(&session_id)?;
         assert_eq!(
             process.actions(),
             [
-                ProcessAction::Spawn(first.clone()),
-                ProcessAction::GracefulClose(first.clone()),
-                ProcessAction::ConfirmStopped(first),
-                ProcessAction::Spawn(second.clone()),
-                ProcessAction::ForceTerminate(second),
+                ProcessAction::Spawn(session_id.clone()),
+                ProcessAction::GracefulClose(session_id),
+                ProcessAction::ForceTerminate(SessionId::parse("session_01JPROCESS")?)
             ]
         );
         Ok(())

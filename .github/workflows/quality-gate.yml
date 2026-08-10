@@ -32,6 +32,8 @@ jobs:
           scripts/check-architecture.py
           scripts/check-contract-compatibility.py
           scripts/check-d1-boundary.py
+          scripts/check-device-generation-commit-boundary.py
+          scripts/check-r2-generation-objects.py
           scripts/check-step4-governed-writes.py
           scripts/check-step5-profile-coordinator.py
           scripts/check-step6-windows-bridge.py
@@ -50,6 +52,9 @@ jobs:
           scripts/test-step5-coordinator-projection.py
           scripts/test-step6-bridge-local.py
           scripts/test-mailbox-vertical-slice.py
+          scripts/test-device-job-d1.py
+          scripts/test-device-generation-commit-d1.py
+          scripts/test-browser-mail-execution-d1.py
 
       - name: Reject temporary Step 4, Step 5 and Step 6 artifacts
         run: python scripts/check-no-temporary-step4.py
@@ -66,6 +71,18 @@ jobs:
 
       - name: Enforce typed D1 adapter boundary
         run: python scripts/check-d1-boundary.py
+
+      - name: Enforce immutable R2 generation object boundary
+        run: python scripts/check-r2-generation-objects.py
+
+      - name: Prove missing R2 create-only condition is rejected
+        run: python scripts/check-r2-generation-objects.py --self-test
+
+      - name: Enforce coordinator-authoritative device generation commit boundary
+        run: python scripts/check-device-generation-commit-boundary.py
+
+      - name: Prove missing generation-commit authority reservation is rejected
+        run: python scripts/check-device-generation-commit-boundary.py --self-test
 
       - name: Enforce governed Step 4 write surfaces
         run: python scripts/check-step4-governed-writes.py
@@ -136,6 +153,15 @@ jobs:
 
       - name: Test mailbox metadata, lifecycle, replay and atomicity invariants
         run: python scripts/test-mailbox-vertical-slice.py
+
+      - name: Test Phase 2F device identity, job and claimable D1 invariants
+        run: python scripts/test-device-job-d1.py
+
+      - name: Test Phase 2F atomic device-generation catalog commit invariants
+        run: python scripts/test-device-generation-commit-d1.py
+
+      - name: Test Phase 2F browser mailbox execution D1 invariants
+        run: python scripts/test-browser-mail-execution-d1.py
 
       - name: Test coordinator projection and reconciliation invariants
         run: python scripts/test-step5-coordinator-projection.py
@@ -277,7 +303,7 @@ jobs:
           --local
           --config deploy/cloudflare/wrangler.d1-test.jsonc
           --persist-to .wrangler/d1-test-state
-          --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT COUNT(*) AS invitation_acceptances FROM invitation_acceptances; SELECT COUNT(*) AS governed_owner_transfers FROM owner_transfer_commands; SELECT COUNT(*) AS governed_profile_grants FROM profile_grant_commands; SELECT COUNT(*) AS coordinator_projection_commands FROM profile_coordinator_projection_commands; SELECT COUNT(*) AS coordinator_projections FROM profile_coordinator_projections; SELECT COUNT(*) AS mailbox_bindings FROM mailbox_bindings; SELECT COUNT(*) AS mailbox_jobs FROM mailbox_jobs; SELECT name FROM d1_migrations ORDER BY id;"
+          --command "SELECT COUNT(*) AS tenants FROM tenants; SELECT COUNT(*) AS clients FROM clients; SELECT COUNT(*) AS profiles FROM browser_profiles; SELECT COUNT(*) AS invitation_acceptances FROM invitation_acceptances; SELECT COUNT(*) AS governed_owner_transfers FROM owner_transfer_commands; SELECT COUNT(*) AS governed_profile_grants FROM profile_grant_commands; SELECT COUNT(*) AS coordinator_projection_commands FROM profile_coordinator_projection_commands; SELECT COUNT(*) AS coordinator_projections FROM profile_coordinator_projections; SELECT COUNT(*) AS mailbox_bindings FROM mailbox_bindings; SELECT COUNT(*) AS mailbox_jobs FROM mailbox_jobs; SELECT COUNT(*) AS browser_mailbox_execution_bindings FROM browser_mailbox_execution_bindings; SELECT name FROM d1_migrations ORDER BY id;"
 
   cloudflare-worker:
     name: Cloudflare Worker Release Build

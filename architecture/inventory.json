@@ -6,8 +6,10 @@
     "apps/profile-bridge",
     "crates/application-ports",
     "crates/bridge-domain",
+    "crates/browser-execution-domain",
     "crates/certification-domain",
     "crates/client-domain",
+    "crates/device-domain",
     "crates/cloudflare-adapters",
     "crates/contracts",
     "crates/control-plane-contract",
@@ -21,6 +23,7 @@
     "crates/session-domain",
     "crates/use-cases",
     "crates/use-cases-clients",
+    "crates/use-cases-devices",
     "crates/use-cases-identity",
     "crates/use-cases-mailboxes",
     "crates/use-cases-notifications",
@@ -45,7 +48,11 @@
       "migrations/d1/0014_client_contact_protection.sql",
       "migrations/d1/0015_client_merge_assignment_history.sql",
       "migrations/d1/0016_mailbox_cloud_lane.sql",
-      "migrations/d1/0017_mailbox_queue_coordination.sql"
+      "migrations/d1/0017_mailbox_queue_coordination.sql",
+      "migrations/d1/0018_device_authorizations_and_jobs.sql",
+      "migrations/d1/0019_device_actor_bindings.sql",
+      "migrations/d1/0020_browser_mailbox_execution_bindings.sql",
+      "migrations/d1/0021_device_generation_commit.sql"
     ]
   },
   "routing": {
@@ -79,6 +86,10 @@
       {
         "capability": "mailboxes",
         "module": "crates/control-plane-contract/src/routes/mailboxes.rs"
+      },
+      {
+        "capability": "devices",
+        "module": "crates/control-plane-contract/src/routes/devices.rs"
       },
       {
         "capability": "notifications",
@@ -383,6 +394,16 @@
         "authenticated": true
       },
       {
+        "route_class": "MailboxBrowserExecutionBindApi",
+        "capability": "mailboxes",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/browser-execution",
+        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/browser-execution",
+        "authenticated": true
+      },
+      {
         "route_class": "MailboxJobCollectionApi",
         "capability": "mailboxes",
         "methods": [
@@ -410,6 +431,66 @@
         ],
         "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}/run",
         "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobClaimableApi",
+        "capability": "devices",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/claimable",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/claimable",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobClaimApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/claim",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/claim",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobHeartbeatApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/heartbeat",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/heartbeat",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceGenerationUploadCapabilityApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/generation-upload-capability",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-upload-capability",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceGenerationCommitApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/generation-commit",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-commit",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobOutcomeApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/outcome",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/outcome",
         "authenticated": true
       },
       {

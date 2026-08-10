@@ -18,6 +18,7 @@ version = "0.1.0"
 dependencies = [
  "client-domain",
  "contracts",
+ "device-domain",
  "identity-access-domain",
  "mailbox-domain",
  "notification-domain",
@@ -60,6 +61,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "browser-execution-domain"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
+]
+
+[[package]]
 name = "browser-profile-control-plane-worker"
 version = "0.1.0"
 dependencies = [
@@ -67,6 +75,7 @@ dependencies = [
  "client-domain",
  "cloudflare-adapters",
  "control-plane-contract",
+ "device-domain",
  "identity-access-domain",
  "profile-platform-primitives",
  "serde",
@@ -75,6 +84,7 @@ dependencies = [
  "sha2",
  "use-cases",
  "use-cases-clients",
+ "use-cases-devices",
  "use-cases-notifications",
  "wasm-bindgen",
  "worker",
@@ -169,6 +179,7 @@ dependencies = [
  "chacha20poly1305",
  "client-domain",
  "contracts",
+ "device-domain",
  "hmac",
  "identity-access-domain",
  "mailbox-domain",
@@ -231,6 +242,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
 dependencies = [
  "cmov",
+]
+
+[[package]]
+name = "device-domain"
+version = "0.1.0"
+dependencies = [
+ "profile-platform-primitives",
 ]
 
 [[package]]
@@ -640,9 +658,12 @@ version = "0.1.0"
 dependencies = [
  "application-ports",
  "bridge-domain",
+ "browser-execution-domain",
+ "encrypted-generation-domain",
  "profile-platform-primitives",
  "runtime-bundle-domain",
  "session-domain",
+ "sha2",
 ]
 
 [[package]]
@@ -917,6 +938,15 @@ dependencies = [
  "identity-access-domain",
  "profile-platform-primitives",
  "zeroize",
+]
+
+[[package]]
+name = "use-cases-devices"
+version = "0.1.0"
+dependencies = [
+ "application-ports",
+ "device-domain",
+ "profile-platform-primitives",
 ]
 
 [[package]]

@@ -14,6 +14,8 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
     "control-plane-contract": {"serde", "serde_json"},
     "identity-access-domain": {"profile-platform-primitives", "contracts"},
     "client-domain": {"profile-platform-primitives", "contracts", "zeroize"},
+    "device-domain": {"profile-platform-primitives"},
+    "browser-execution-domain": {"profile-platform-primitives"},
     "profile-domain": {"profile-platform-primitives", "contracts"},
     "session-domain": {"profile-platform-primitives", "contracts"},
     "mailbox-domain": {"profile-platform-primitives", "contracts"},
@@ -35,6 +37,7 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
         "contracts",
         "identity-access-domain",
         "client-domain",
+        "device-domain",
         "profile-domain",
         "session-domain",
         "mailbox-domain",
@@ -47,6 +50,11 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
         "client-domain",
         "application-ports",
         "zeroize",
+    },
+    "use-cases-devices": {
+        "profile-platform-primitives",
+        "device-domain",
+        "application-ports",
     },
     "use-cases-identity": {
         "profile-platform-primitives",

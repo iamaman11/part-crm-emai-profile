@@ -2,12 +2,18 @@ use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
 use crate::command_evidence;
-use crate::composition::mailbox_binding_application;
+use crate::composition::{browser_mailbox_execution_application, mailbox_binding_application};
 use application_ports::mailboxes::MailboxProvider;
 use control_plane_contract::RouteClass;
 use identity_access_domain::MembershipRole;
-use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, SecretHandle};
+use profile_platform_primitives::{
+    ActorContext, AggregateVersion, MailboxBindingId, ProfileId, SecretHandle,
+};
 use serde::{Deserialize, Serialize};
+use use_cases::browser_execution::{
+    BindBrowserMailboxExecutionCommand, BrowserMailboxExecutionBindingOutcome,
+    execute_bind_browser_mailbox_execution,
+};
 use use_cases::mailboxes::{
     ExecuteCreateMailboxBindingCommand, ExecuteRevokeMailboxBindingCommand, MailboxBindingDetails,
     MailboxBindingMutationOutcome, MailboxBindingOperationError, authorize_mailbox_binding,
@@ -47,6 +53,12 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
                 return neutral_not_found(actor.actor().correlation_id().as_str());
             };
             revoke_binding(request, env, actor.actor(), role, binding_id).await
+        }
+        RouteClass::MailboxBrowserExecutionBindApi => {
+            let Some(binding_id) = parse_binding_id(&segments) else {
+                return neutral_not_found(actor.actor().correlation_id().as_str());
+            };
+            bind_browser_execution(request, env, actor.actor(), role, binding_id).await
         }
         _ => neutral_not_found(actor.actor().correlation_id().as_str()),
     }
@@ -153,6 +165,42 @@ async fn revoke_binding(
     }
 }
 
+async fn bind_browser_execution(
+    request: &mut Request,
+    env: &Env,
+    actor: &ActorContext,
+    role: MembershipRole,
+    binding_id: MailboxBindingId,
+) -> Result<Response> {
+    let body = match request.json::<BindBrowserMailboxExecutionRequest>().await {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let profile_id = match ProfileId::parse(body.profile_id) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    if !valid_digest(&body.request_digest) {
+        return invalid_request(actor.correlation_id().as_str());
+    }
+    let evidence = match command_evidence::from_request(request, actor, body.request_digest) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let application = browser_mailbox_execution_application(env)?;
+    match execute_bind_browser_mailbox_execution(
+        actor,
+        role,
+        &application,
+        BindBrowserMailboxExecutionCommand::new(binding_id, profile_id, evidence),
+    )
+    .await
+    {
+        Ok(outcome) => browser_execution_receipt(&outcome),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
+    }
+}
+
 fn operation_failure(
     correlation_id: &str,
     error: MailboxBindingOperationError,
@@ -216,6 +264,23 @@ fn mutation_receipt(outcome: &MailboxBindingMutationOutcome, status: u16) -> Res
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct BrowserExecutionBindingReceipt<'a> {
+    binding_id: &'a str,
+    profile_id: &'a str,
+    replayed: bool,
+}
+
+fn browser_execution_receipt(outcome: &BrowserMailboxExecutionBindingOutcome) -> Result<Response> {
+    Response::from_json(&BrowserExecutionBindingReceipt {
+        binding_id: outcome.binding_id().as_str(),
+        profile_id: outcome.profile_id().as_str(),
+        replayed: outcome.replayed(),
+    })
+    .map(|response| response.with_status(201))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct MailboxBindingResponse<'a> {
     binding_id: &'a str,
     provider: &'static str,
@@ -250,10 +315,18 @@ struct RevokeMailboxBindingRequest {
     request_digest: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BindBrowserMailboxExecutionRequest {
+    profile_id: String,
+    request_digest: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CreateMailboxBindingRequest, MailboxBindingResponse, MutationReceipt, valid_digest,
+        BindBrowserMailboxExecutionRequest, CreateMailboxBindingRequest, MailboxBindingResponse,
+        MutationReceipt, valid_digest,
     };
 
     #[test]
@@ -306,6 +379,27 @@ mod tests {
         assert!(response.get("status").is_some());
         assert!(response.get("version").is_some());
         assert!(response.get("secretHandle").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn browser_execution_binding_transport_is_metadata_only_and_strict()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let digest = "b".repeat(64);
+        let valid = format!(r#"{{"profileId":"profile_01JTRANSPORT","requestDigest":"{digest}"}}"#);
+        assert!(serde_json::from_str::<BindBrowserMailboxExecutionRequest>(&valid).is_ok());
+        for forbidden in [
+            "deviceId",
+            "generationId",
+            "query",
+            "messageBody",
+            "secretHandle",
+        ] {
+            let invalid = format!(
+                r#"{{"profileId":"profile_01JTRANSPORT","requestDigest":"{digest}","{forbidden}":"forbidden"}}"#
+            );
+            assert!(serde_json::from_str::<BindBrowserMailboxExecutionRequest>(&invalid).is_err());
+        }
         Ok(())
     }
 }

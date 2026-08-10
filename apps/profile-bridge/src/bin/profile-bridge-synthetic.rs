@@ -1,6 +1,33 @@
 use application_ports::ProfileCoordinatorPort;
+use application_ports::browser_mail_execution::BrowserMailboxExecutionBinding;
+use application_ports::device_jobs::{DeviceClaimId, DeviceJobId};
+use application_ports::generation_objects::{
+    GenerationObjectExactVerifyPort, GenerationObjectUploadOutcome, GenerationObjectUploadPort,
+    ImmutableGenerationObject,
+};
+use application_ports::generations::GenerationPortError;
 use bridge_domain::{BridgePortError, ClaimUri, EnrollmentClaim};
-use profile_bridge::local_profile::{LocalGenerationState, MaterializationRoot};
+use browser_execution_domain::{
+    BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
+    NetworkIdentityPolicy,
+};
+use encrypted_generation_domain::{GenerationDek, KeyId, NoncePrefix};
+use profile_bridge::browser_execution::persist_materialization_binding;
+use profile_bridge::browser_mail_query::BrowserMailExecutionProof;
+use profile_bridge::browser_preflight::{
+    BoundBrowserLaunchPreflight, BrowserRuntimeObservation, BrowserRuntimeObservationPort,
+};
+use profile_bridge::dirty_close::DirtyCloseLocalOutcome;
+use profile_bridge::dirty_generation::{
+    GenerationSealingMaterial, GenerationSealingMaterialPort, prepare_dirty_generation_candidate,
+};
+use profile_bridge::dirty_generation_finalize::{
+    DirtyGenerationCommitClientPort, DirtyGenerationCommitOutcome,
+};
+use profile_bridge::local_profile::{
+    BridgeWorkspaceLock, GenerationWorkspace, LocalGenerationRecord, LocalGenerationState,
+    MaterializationRoot,
+};
 use profile_bridge::operator_flow::{
     DeviceAuthenticationPort, EnrollmentPort, OperatorEnrollment, ProfileBridgeOperator,
     RuntimeBundleSelectionPort,
@@ -8,8 +35,8 @@ use profile_bridge::operator_flow::{
 use profile_bridge::runtime_bundle::ApprovedRuntimeBundle;
 use profile_bridge::{FakeCamouhost, FakeDeviceIdentity, FakeDeviceKeyStore, FakeProcessControl};
 use profile_platform_primitives::{
-    ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, ProfileId,
-    SessionId, TenantId, TenantScope, UnixMillis,
+    ActorContext, ActorId, CorrelationId, DeviceId, FencingToken, GenerationId, MailboxBindingId,
+    ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
 };
 use runtime_bundle_domain::{
     BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
@@ -18,12 +45,16 @@ use runtime_bundle_domain::{
 use session_domain::ProfileLease;
 use std::env;
 use std::fmt;
+use std::future::Future;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::task::{Context, Poll, Waker};
 
 const SYNTHETIC_NOW: UnixMillis = UnixMillis::new(10);
 const SYNTHETIC_CLOSE_AT: UnixMillis = UnixMillis::new(20);
+const SYNTHETIC_FINALIZE_AT: UnixMillis = UnixMillis::new(30);
 const SYNTHETIC_CLAIM_EXPIRY: UnixMillis = UnixMillis::new(1_000);
+const SYNTHETIC_RUNTIME_VERSION: &str = "0.1.0";
 
 fn main() -> ExitCode {
     match run(env::args().skip(1)) {
@@ -45,37 +76,290 @@ where
     let root = MaterializationRoot::open_or_create(arguments.materialization_root)
         .map_err(|_| SyntheticOperatorError::MaterializationRoot)?;
     let fixture = SyntheticFixture::new(&claim)?;
-    root.create_generation(
-        fixture.actor.tenant_scope().tenant_id(),
-        &fixture.profile_id,
-        &fixture.generation_id,
-    )
-    .map_err(|_| SyntheticOperatorError::MaterializationGeneration)?;
+    let workspace = root
+        .create_generation(
+            fixture.actor.tenant_scope().tenant_id(),
+            &fixture.profile_id,
+            &fixture.generation_id,
+        )
+        .map_err(|_| SyntheticOperatorError::MaterializationGeneration)?;
 
+    let runtime_bundles = SyntheticRuntimeBundles::new()?;
+    let browser_preflight = synthetic_browser_preflight(&workspace, &fixture, &runtime_bundles)?;
     let mut operator = ProfileBridgeOperator::new(
         FakeDeviceIdentity::new(fixture.device_id.clone()),
         FakeDeviceKeyStore::default(),
         SyntheticDeviceAuthentication,
         SyntheticEnrollment::new(&claim, &fixture)?,
         SyntheticCoordinator::new(&fixture)?,
-        SyntheticRuntimeBundles::new()?,
+        runtime_bundles,
+        browser_preflight,
         FakeProcessControl::default(),
         FakeCamouhost::default(),
     );
     operator
         .open(&claim, &root, SYNTHETIC_NOW)
         .map_err(|_| SyntheticOperatorError::OperatorOpen)?;
-    let terminal = operator
+    operator
         .close(SYNTHETIC_CLOSE_AT)
         .map_err(|_| SyntheticOperatorError::OperatorClose)?;
-    if terminal.local_state() != LocalGenerationState::DirtyLocal
-        || terminal.cleanup_failures().any()
+    if operator.pending_dirty_local_state() != Some(LocalGenerationState::DirtyLocal)
+        || !operator.has_pending_dirty_close()
         || operator.cleanup_blocked()
     {
-        return Err(SyntheticOperatorError::UnexpectedTerminalState);
+        return Err(SyntheticOperatorError::UnexpectedPendingState);
     }
-    println!("synthetic-operator-complete state=DIRTY_LOCAL");
+
+    let mut preparation_record = LocalGenerationRecord::new(
+        fixture.generation_id.clone(),
+        workspace
+            .inventory()
+            .map_err(|_| SyntheticOperatorError::DirtyGenerationPreparation)?
+            .total_bytes(),
+        SYNTHETIC_NOW,
+    );
+    preparation_record
+        .set_locked(true)
+        .map_err(|_| SyntheticOperatorError::DirtyGenerationPreparation)?;
+    preparation_record
+        .begin_use(SYNTHETIC_NOW)
+        .map_err(|_| SyntheticOperatorError::DirtyGenerationPreparation)?;
+    preparation_record
+        .graceful_close(SYNTHETIC_CLOSE_AT)
+        .map_err(|_| SyntheticOperatorError::DirtyGenerationPreparation)?;
+    let candidate_generation_id = GenerationId::parse("generation_01JSYNTHETICOPERATOR_NEXT")
+        .map_err(|_| SyntheticOperatorError::FixtureIdentity)?;
+    let mut sealing = SyntheticSealingMaterial;
+    let prepared = prepare_dirty_generation_candidate(
+        &preparation_record,
+        &workspace,
+        &root,
+        fixture.actor.tenant_scope().tenant_id(),
+        &fixture.profile_id,
+        &candidate_generation_id,
+        &mut sealing,
+    )
+    .map_err(|_| SyntheticOperatorError::DirtyGenerationPreparation)?;
+    let proof = synthetic_execution_proof(&fixture)?;
+    let completion = block_on(operator.finalize_dirty_close(
+        fixture.actor.tenant_scope(),
+        &proof,
+        &prepared,
+        &SyntheticUpload,
+        &SyntheticVerify,
+        &SyntheticCommit,
+        SYNTHETIC_FINALIZE_AT,
+    ))
+    .map_err(|_| SyntheticOperatorError::DirtyGenerationFinalize)?;
+
+    let DirtyCloseLocalOutcome::CandidateAccepted(candidate) = completion.local_outcome() else {
+        return Err(SyntheticOperatorError::UnexpectedCommittedState);
+    };
+    if candidate.generation_id() != &candidate_generation_id
+        || candidate.state() != LocalGenerationState::MaterializedClean
+        || !completion.workspace_lock_released()
+        || !completion.coordinator_lease_released()
+        || operator.has_pending_dirty_close()
+        || operator.cleanup_blocked()
+    {
+        return Err(SyntheticOperatorError::UnexpectedCommittedState);
+    }
+    let Some(terminal) = operator.last_terminal() else {
+        return Err(SyntheticOperatorError::UnexpectedCommittedState);
+    };
+    if terminal.local_state() != LocalGenerationState::SupersededEvictable
+        || terminal.cleanup_failures().any()
+    {
+        return Err(SyntheticOperatorError::UnexpectedCommittedState);
+    }
+    let reacquired = BridgeWorkspaceLock::acquire(&workspace, &fixture.device_id, 1)
+        .map_err(|_| SyntheticOperatorError::UnexpectedCommittedState)?;
+    reacquired
+        .release()
+        .map_err(|_| SyntheticOperatorError::UnexpectedCommittedState)?;
+
+    println!("synthetic-operator-complete state=DIRTY_LOCAL_COMMITTED_GENERATION");
     Ok(())
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    let mut future = Box::pin(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => std::hint::spin_loop(),
+        }
+    }
+}
+
+fn synthetic_execution_proof(
+    fixture: &SyntheticFixture,
+) -> Result<BrowserMailExecutionProof, SyntheticOperatorError> {
+    let lease = synthetic_lease(fixture)?;
+    BrowserMailExecutionProof::new(
+        BrowserMailboxExecutionBinding::new(
+            MailboxBindingId::parse("binding_01JSYNTHETICOPERATOR")
+                .map_err(|_| SyntheticOperatorError::FixtureIdentity)?,
+            fixture.profile_id.clone(),
+        ),
+        fixture.generation_id.clone(),
+        DeviceJobId::parse("devjob_01JSYNTHETICOPERATOR")
+            .map_err(|_| SyntheticOperatorError::FixtureIdentity)?,
+        DeviceClaimId::parse("devclaim_01JSYNTHETICOPERATOR")
+            .map_err(|_| SyntheticOperatorError::FixtureIdentity)?,
+        1,
+        lease,
+    )
+    .map_err(|_| SyntheticOperatorError::ExecutionProof)
+}
+
+fn synthetic_lease(fixture: &SyntheticFixture) -> Result<ProfileLease, SyntheticOperatorError> {
+    ProfileLease::issue(
+        fixture.actor.tenant_scope().tenant_id().clone(),
+        fixture.profile_id.clone(),
+        SessionId::parse("session_01JSYNTHETICOPERATOR")
+            .map_err(|_| SyntheticOperatorError::FixtureIdentity)?,
+        fixture.device_id.clone(),
+        1,
+        FencingToken::parse("fence_01JSYNTHETICOPERATOR")
+            .map_err(|_| SyntheticOperatorError::FixtureIdentity)?,
+    )
+    .map_err(|_| SyntheticOperatorError::CoordinatorFixture)
+}
+
+fn synthetic_browser_preflight(
+    workspace: &GenerationWorkspace,
+    fixture: &SyntheticFixture,
+    runtime_bundles: &SyntheticRuntimeBundles,
+) -> Result<BoundBrowserLaunchPreflight<SyntheticRuntimeObservation>, SyntheticOperatorError> {
+    let manifest = runtime_bundles.bundle.manifest();
+    let browser_identity = BrowserIdentityManifest::new(
+        1,
+        manifest.runtime_version(),
+        manifest.inventory_sha256().as_str(),
+        "synthetic-camoufox-v1",
+        "b".repeat(64),
+    )
+    .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
+    let binding = MaterializationBinding::new(
+        fixture.actor.tenant_scope().tenant_id().clone(),
+        fixture.profile_id.clone(),
+        fixture.generation_id.clone(),
+        "c".repeat(64),
+        workspace
+            .inventory()
+            .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?
+            .inventory_digest(),
+        browser_identity,
+    )
+    .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
+    persist_materialization_binding(workspace, &binding)
+        .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
+    let policy = NetworkIdentityPolicy::new(
+        Some("PL".to_owned()),
+        Some("Mazowieckie".to_owned()),
+        Some("Europe/Warsaw".to_owned()),
+        [NetworkClass::Mobile],
+        [5617],
+        Some("synthetic-route".to_owned()),
+    )
+    .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
+    let observation = NetworkIdentityObservation::new(
+        "PL",
+        "Mazowieckie",
+        "Europe/Warsaw",
+        NetworkClass::Mobile,
+        5617,
+        "synthetic-route",
+    )
+    .map_err(|_| SyntheticOperatorError::BrowserPreflightFixture)?;
+    Ok(BoundBrowserLaunchPreflight::new(
+        binding,
+        policy,
+        SyntheticRuntimeObservation { observation },
+    ))
+}
+
+struct SyntheticRuntimeObservation {
+    observation: NetworkIdentityObservation,
+}
+
+impl BrowserRuntimeObservationPort for SyntheticRuntimeObservation {
+    type Error = BridgePortError;
+
+    fn observe(
+        &mut self,
+        _workspace: &GenerationWorkspace,
+        _device_id: &DeviceId,
+    ) -> Result<BrowserRuntimeObservation, Self::Error> {
+        Ok(BrowserRuntimeObservation::new(
+            self.observation.clone(),
+            false,
+        ))
+    }
+}
+
+struct SyntheticSealingMaterial;
+
+impl GenerationSealingMaterialPort for SyntheticSealingMaterial {
+    type Error = BridgePortError;
+
+    fn material_for(
+        &mut self,
+        _tenant_id: &TenantId,
+        _profile_id: &ProfileId,
+        _generation_id: &GenerationId,
+    ) -> Result<GenerationSealingMaterial, Self::Error> {
+        Ok(GenerationSealingMaterial::new(
+            GenerationDek::new(
+                KeyId::parse("key_01JSYNTHETICOPERATOR")
+                    .map_err(|_| BridgePortError::InvalidResponse)?,
+                [23; 32],
+            ),
+            NoncePrefix::new([24; 16]),
+            4096,
+        ))
+    }
+}
+
+struct SyntheticUpload;
+
+impl GenerationObjectUploadPort for SyntheticUpload {
+    async fn put_generation_object_if_absent(
+        &self,
+        _scope: &TenantScope,
+        _object: &ImmutableGenerationObject<'_>,
+    ) -> Result<GenerationObjectUploadOutcome, GenerationPortError> {
+        Ok(GenerationObjectUploadOutcome::Created)
+    }
+}
+
+struct SyntheticVerify;
+
+impl GenerationObjectExactVerifyPort for SyntheticVerify {
+    async fn verify_generation_object_exact(
+        &self,
+        _scope: &TenantScope,
+        _object: &ImmutableGenerationObject<'_>,
+    ) -> Result<bool, GenerationPortError> {
+        Ok(true)
+    }
+}
+
+struct SyntheticCommit;
+
+impl DirtyGenerationCommitClientPort for SyntheticCommit {
+    type Error = BridgePortError;
+
+    async fn commit_dirty_generation(
+        &self,
+        _scope: &TenantScope,
+        _request: &profile_bridge::dirty_generation_finalize::DirtyGenerationCommitRequest,
+    ) -> Result<DirtyGenerationCommitOutcome, Self::Error> {
+        Ok(DirtyGenerationCommitOutcome::Activated)
+    }
 }
 
 struct SyntheticArguments {
@@ -202,19 +486,8 @@ struct SyntheticCoordinator {
 
 impl SyntheticCoordinator {
     fn new(fixture: &SyntheticFixture) -> Result<Self, SyntheticOperatorError> {
-        let lease = ProfileLease::issue(
-            fixture.actor.tenant_scope().tenant_id().clone(),
-            fixture.profile_id.clone(),
-            SessionId::parse("session_01JSYNTHETICOPERATOR")
-                .map_err(|_| SyntheticOperatorError::FixtureIdentity)?,
-            fixture.device_id.clone(),
-            1,
-            FencingToken::parse("fence_01JSYNTHETICOPERATOR")
-                .map_err(|_| SyntheticOperatorError::FixtureIdentity)?,
-        )
-        .map_err(|_| SyntheticOperatorError::CoordinatorFixture)?;
         Ok(Self {
-            lease,
+            lease: synthetic_lease(fixture)?,
             active: false,
         })
     }
@@ -255,7 +528,7 @@ impl SyntheticRuntimeBundles {
         let entrypoint = BundleRelativePath::parse("camouhost/main.py")
             .map_err(|_| SyntheticOperatorError::RuntimeBundleFixture)?;
         let manifest = RuntimeManifest::new(
-            "0.1.0",
+            SYNTHETIC_RUNTIME_VERSION,
             "3.12",
             RuntimePlatform::WindowsX86_64,
             entrypoint.clone(),
@@ -297,13 +570,18 @@ enum SyntheticOperatorError {
     MaterializationRootMustBeAbsolute,
     MaterializationRoot,
     MaterializationGeneration,
+    BrowserPreflightFixture,
     FixtureIdentity,
     EnrollmentFixture,
     CoordinatorFixture,
     RuntimeBundleFixture,
+    ExecutionProof,
     OperatorOpen,
     OperatorClose,
-    UnexpectedTerminalState,
+    UnexpectedPendingState,
+    DirtyGenerationPreparation,
+    DirtyGenerationFinalize,
+    UnexpectedCommittedState,
 }
 
 impl fmt::Display for SyntheticOperatorError {
@@ -316,13 +594,18 @@ impl fmt::Display for SyntheticOperatorError {
             Self::MaterializationRootMustBeAbsolute => "materialization root must be absolute",
             Self::MaterializationRoot => "could not prepare materialization root",
             Self::MaterializationGeneration => "could not create synthetic generation",
+            Self::BrowserPreflightFixture => "synthetic browser preflight fixture is invalid",
             Self::FixtureIdentity => "synthetic identity fixture is invalid",
             Self::EnrollmentFixture => "synthetic enrollment fixture is invalid",
             Self::CoordinatorFixture => "synthetic coordinator fixture is invalid",
             Self::RuntimeBundleFixture => "synthetic runtime bundle fixture is invalid",
+            Self::ExecutionProof => "synthetic browser execution proof is invalid",
             Self::OperatorOpen => "synthetic operator open failed",
             Self::OperatorClose => "synthetic operator close failed",
-            Self::UnexpectedTerminalState => "synthetic operator ended in an unexpected state",
+            Self::UnexpectedPendingState => "synthetic operator did not retain dirty persistence",
+            Self::DirtyGenerationPreparation => "synthetic dirty generation preparation failed",
+            Self::DirtyGenerationFinalize => "synthetic dirty generation finalization failed",
+            Self::UnexpectedCommittedState => "synthetic dirty generation commit state is invalid",
         };
         formatter.write_str(message)
     }

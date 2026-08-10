@@ -5,8 +5,10 @@ members = [
     "apps/profile-bridge",
     "crates/application-ports",
     "crates/bridge-domain",
+    "crates/browser-execution-domain",
     "crates/certification-domain",
     "crates/client-domain",
+    "crates/device-domain",
     "crates/cloudflare-adapters",
     "crates/contracts",
     "crates/control-plane-contract",
@@ -20,6 +22,7 @@ members = [
     "crates/session-domain",
     "crates/use-cases",
     "crates/use-cases-clients",
+    "crates/use-cases-devices",
     "crates/use-cases-identity",
     "crates/use-cases-mailboxes",
     "crates/use-cases-notifications",
@@ -34,9 +37,11 @@ rust-version = "1.97.1"
 [workspace.dependencies]
 application-ports = { path = "crates/application-ports" }
 bridge-domain = { path = "crates/bridge-domain" }
+browser-execution-domain = { path = "crates/browser-execution-domain" }
 certification-domain = { path = "crates/certification-domain" }
 chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "zeroize"] }
 client-domain = { path = "crates/client-domain" }
+device-domain = { path = "crates/device-domain" }
 cloudflare-adapters = { path = "crates/cloudflare-adapters" }
 contracts = { path = "crates/contracts" }
 encrypted-generation-domain = { path = "crates/encrypted-generation-domain" }
@@ -52,6 +57,7 @@ sha2 = { version = "=0.11.0", default-features = false }
 tokio = { version = "=1.53.1", default-features = false, features = ["io-util"] }
 use-cases = { path = "crates/use-cases" }
 use-cases-clients = { path = "crates/use-cases-clients" }
+use-cases-devices = { path = "crates/use-cases-devices" }
 use-cases-identity = { path = "crates/use-cases-identity" }
 use-cases-mailboxes = { path = "crates/use-cases-mailboxes" }
 use-cases-notifications = { path = "crates/use-cases-notifications" }

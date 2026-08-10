@@ -1,4 +1,5 @@
 mod clients;
+mod devices;
 mod foundation;
 mod generations;
 mod identity;
@@ -38,6 +39,9 @@ pub(super) fn classify(method: &str, path: &str) -> RouteClass {
         return route;
     }
     if let Some(route) = mailboxes::classify(method, segments) {
+        return route;
+    }
+    if let Some(route) = devices::classify(method, segments) {
         return route;
     }
     if let Some(route) = notifications::classify(method, segments) {

@@ -13,7 +13,7 @@ fn temp_root(label: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn synthetic_operator_cli_completes_dirty_local() -> Result<(), Box<dyn std::error::Error>> {
+fn synthetic_operator_cli_commits_dirty_generation() -> Result<(), Box<dyn std::error::Error>> {
     let root = temp_root("success");
     if root.exists() {
         fs::remove_dir_all(&root)?;
@@ -31,7 +31,7 @@ fn synthetic_operator_cli_completes_dirty_local() -> Result<(), Box<dyn std::err
     );
     assert_eq!(
         String::from_utf8(output.stdout)?,
-        "synthetic-operator-complete state=DIRTY_LOCAL\n"
+        "synthetic-operator-complete state=DIRTY_LOCAL_COMMITTED_GENERATION\n"
     );
     assert!(output.stderr.is_empty());
     Ok(())
