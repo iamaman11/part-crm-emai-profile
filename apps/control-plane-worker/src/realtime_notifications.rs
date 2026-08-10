@@ -1,7 +1,7 @@
 use crate::access_session::{correlation_hint, neutral_not_found, resolve_active_request_actor};
 use crate::realtime_contract::{
-    INTERNAL_ACTOR_HEADER, INTERNAL_CORRELATION_HEADER, INTERNAL_PUBLISH_PATH,
-    INTERNAL_TENANT_HEADER, RealtimeInternalEvent,
+    INTERNAL_ACTOR_HEADER, INTERNAL_CONNECTION_HEADER, INTERNAL_CORRELATION_HEADER,
+    INTERNAL_PUBLISH_PATH, INTERNAL_TENANT_HEADER, RealtimeInternalEvent,
 };
 use application_ports::{
     CursorAdvanceWriteOutcome, NotificationAuthorizationPort, NotificationCapability,
@@ -15,6 +15,7 @@ use profile_platform_primitives::{
     ActorContext, ActorId, CorrelationId, TenantId, TenantScope, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 use use_cases_notifications::error::NotificationOperationError;
 use use_cases_notifications::realtime::{publish_live_invalidation, synchronize_realtime_session};
@@ -26,6 +27,7 @@ use worker::{
 pub const NOTIFICATION_HUB_BINDING: &str = "NOTIFICATION_HUB";
 const ACCESS_TOKEN_HEADER: &str = "Cf-Access-Jwt-Assertion";
 const CORRELATION_HEADER: &str = "X-Correlation-Id";
+const WEBSOCKET_KEY_HEADER: &str = "Sec-WebSocket-Key";
 const REALTIME_CONNECT_SUFFIX: &str = "/notifications/realtime";
 const REAUTH_INTERVAL_SECONDS: u64 = 60;
 const CATCH_UP_PAGE_SIZE: u32 = 200;
@@ -39,9 +41,13 @@ pub async fn connect(request: &mut Request, env: &Env, tenant_id: &str) -> Resul
     if !is_websocket_upgrade(request)? {
         return Response::error("WebSocket upgrade required", 426);
     }
+    let connection_token = match websocket_connection_token(request) {
+        Ok(value) => value,
+        Err(()) => return Response::error("Invalid WebSocket handshake", 400),
+    };
 
     let mut internal = request.clone_mut()?;
-    let connection_correlation = format!("corr_realtime_{}", worker::Date::now().as_millis());
+    let connection_correlation = format!("corr_realtime_{connection_token}");
     internal
         .headers_mut()?
         .set(CORRELATION_HEADER, &connection_correlation)?;
@@ -63,6 +69,7 @@ pub async fn connect(request: &mut Request, env: &Env, tenant_id: &str) -> Resul
         INTERNAL_CORRELATION_HEADER,
         resolved.actor().correlation_id().as_str(),
     )?;
+    headers.set(INTERNAL_CONNECTION_HEADER, &connection_token)?;
 
     let namespace = env.durable_object(NOTIFICATION_HUB_BINDING)?;
     let object_id = namespace.id_from_name(&notification_hub_object_name(
@@ -173,6 +180,10 @@ impl NotificationHub {
         if !is_websocket_upgrade(request)? {
             return Response::error("WebSocket upgrade required", 426);
         }
+        let connection_token = match internal_connection_token(request) {
+            Ok(value) => value,
+            Err(()) => return Response::error("Forbidden", 403),
+        };
         let actor = match internal_actor(request) {
             Ok(value) => value,
             Err(()) => return Response::error("Forbidden", 403),
@@ -189,7 +200,7 @@ impl NotificationHub {
             Err(_) => return Response::error("Dependency unavailable", 503),
         }
 
-        let gate = StoredSynchronizationGate::new(&actor, worker::Date::now().as_millis());
+        let gate = StoredSynchronizationGate::new(connection_token, worker::Date::now().as_millis());
         self.state.storage().put(SYNC_GATE_KEY, &gate).await?;
 
         let pair = WebSocketPair::new()?;
@@ -384,14 +395,14 @@ impl HubSocketAttachment {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredSynchronizationGate {
-    correlation_id: String,
+    connection_token: String,
     started_at_ms: u64,
 }
 
 impl StoredSynchronizationGate {
-    fn new(actor: &ActorContext, started_at_ms: u64) -> Self {
+    fn new(connection_token: String, started_at_ms: u64) -> Self {
         Self {
-            correlation_id: actor.correlation_id().as_str().to_owned(),
+            connection_token,
             started_at_ms,
         }
     }
@@ -418,6 +429,46 @@ fn internal_actor(request: &Request) -> Result<ActorContext, ()> {
         actor_id,
     }
     .into_actor_context(&correlation_id)
+}
+
+fn internal_connection_token(request: &Request) -> Result<String, ()> {
+    let token = request
+        .headers()
+        .get(INTERNAL_CONNECTION_HEADER)
+        .map_err(|_| ())?
+        .ok_or(())?;
+    if token.len() != 64
+        || !token
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(());
+    }
+    Ok(token)
+}
+
+fn websocket_connection_token(request: &Request) -> Result<String, ()> {
+    let key = request
+        .headers()
+        .get(WEBSOCKET_KEY_HEADER)
+        .map_err(|_| ())?
+        .ok_or(())?;
+    if key.len() != 24
+        || !key.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')
+        })
+    {
+        return Err(());
+    }
+
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(key.as_bytes());
+    let mut token = String::with_capacity(64);
+    for byte in digest {
+        token.push(char::from(HEX[usize::from(byte >> 4)]));
+        token.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    Ok(token)
 }
 
 fn is_websocket_upgrade(request: &Request) -> Result<bool> {
@@ -469,12 +520,11 @@ mod tests {
     }
 
     #[test]
-    fn synchronization_gate_has_bounded_stale_recovery() {
-        let gate = StoredSynchronizationGate {
-            correlation_id: "corr_01JREALTIME".to_owned(),
-            started_at_ms: 10,
-        };
-        assert_eq!(gate.started_at_ms, 10);
+    fn synchronization_gate_has_bounded_stale_recovery_and_distinct_owner() {
+        let first = StoredSynchronizationGate::new("a".repeat(64), 10);
+        let second = StoredSynchronizationGate::new("b".repeat(64), 10);
+        assert_ne!(first, second);
+        assert_eq!(first.started_at_ms, 10);
         assert!(SYNC_GATE_STALE_AFTER_MS > 0);
     }
 }
