@@ -15,6 +15,7 @@ mod mailbox_queue_evidence;
 mod mailbox_scheduling;
 mod mutation_failure;
 mod notifications;
+mod operator_queries;
 mod profile_coordinator;
 mod profile_coordinator_ingress;
 mod profile_generations;
@@ -41,7 +42,8 @@ use control_plane_contract::{
 use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 use session_domain::coordinator::coordinator_object_name;
 use worker::{
-    Context, Env, MessageBatch, Request, Response, Result, ScheduleContext, ScheduledEvent, event,
+    Context, Env, MessageBatch, Method, Request, Response, Result, ScheduleContext, ScheduledEvent,
+    event,
 };
 
 #[event(fetch, respond_with_errors)]
@@ -66,6 +68,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::ClientMergeApi
         | RouteClass::ClientHistoryApi
         | RouteClass::ClientGrantApi => clients::dispatch(route, &mut request, &env).await,
+        RouteClass::ProfileCollectionApi if request.method() == Method::Get => {
+            operator_queries::dispatch(route, &request, &env).await
+        }
         RouteClass::ProfileCollectionApi
         | RouteClass::ProfileResourceApi
         | RouteClass::ProfileAssignmentApi
@@ -78,6 +83,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::ProfileGenerationDeactivateApi
         | RouteClass::ProfileGenerationQuarantineApi => {
             profile_generations::dispatch(route, &mut request, &env).await
+        }
+        RouteClass::MailboxBindingCollectionApi if request.method() == Method::Get => {
+            operator_queries::dispatch(route, &request, &env).await
         }
         RouteClass::MailboxBindingCollectionApi
         | RouteClass::MailboxBindingResourceApi
@@ -103,6 +111,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::NotificationReplayCollectionApi
         | RouteClass::NotificationOperationsApi => {
             notifications::dispatch(route, &mut request, &env).await
+        }
+        RouteClass::MembershipCollectionApi => {
+            operator_queries::dispatch(route, &request, &env).await
         }
         RouteClass::OwnerBootstrapApi
         | RouteClass::OwnerTransferApi
