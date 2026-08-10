@@ -275,8 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn immutable_conflict_never_reaches_verification()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn immutable_conflict_never_reaches_verification() -> Result<(), Box<dyn std::error::Error>> {
         let (scope, prepared, root_path) = fixture()?;
         let upload_calls = Rc::new(Cell::new(0));
         let verify_calls = Rc::new(Cell::new(0));
@@ -292,10 +291,7 @@ mod tests {
                 calls: Rc::clone(&verify_calls),
             },
         ));
-        assert_eq!(
-            result,
-            Err(DirtyGenerationPublishError::ImmutableConflict)
-        );
+        assert_eq!(result, Err(DirtyGenerationPublishError::ImmutableConflict));
         assert_eq!(upload_calls.get(), 1);
         assert_eq!(verify_calls.get(), 0);
         let _ = crate::test_support::remove_test_root(&root_path);
@@ -318,10 +314,7 @@ mod tests {
                 calls: Rc::new(Cell::new(0)),
             },
         ));
-        assert_eq!(
-            result,
-            Err(DirtyGenerationPublishError::VerificationFailed)
-        );
+        assert_eq!(result, Err(DirtyGenerationPublishError::VerificationFailed));
         let _ = crate::test_support::remove_test_root(&root_path);
         Ok(())
     }
