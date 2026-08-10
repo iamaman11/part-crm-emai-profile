@@ -203,11 +203,14 @@ mod tests {
         }
     }
 
-    fn fixture() -> Result<(
-        TenantScope,
-        crate::dirty_generation::PreparedDirtyGeneration,
-        std::path::PathBuf,
-    ), Box<dyn std::error::Error>> {
+    fn fixture() -> Result<
+        (
+            TenantScope,
+            crate::dirty_generation::PreparedDirtyGeneration,
+            std::path::PathBuf,
+        ),
+        Box<dyn std::error::Error>,
+    > {
         let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let root_path = std::env::temp_dir().join(format!(
             "profile-bridge-publish-dirty-{}-{counter}",
@@ -289,7 +292,10 @@ mod tests {
                 calls: Rc::clone(&verify_calls),
             },
         ));
-        assert_eq!(result, Err(DirtyGenerationPublishError::ImmutableConflict));
+        assert_eq!(
+            result,
+            Err(DirtyGenerationPublishError::ImmutableConflict)
+        );
         assert_eq!(upload_calls.get(), 1);
         assert_eq!(verify_calls.get(), 0);
         let _ = crate::test_support::remove_test_root(&root_path);
@@ -312,14 +318,16 @@ mod tests {
                 calls: Rc::new(Cell::new(0)),
             },
         ));
-        assert_eq!(result, Err(DirtyGenerationPublishError::VerificationFailed));
+        assert_eq!(
+            result,
+            Err(DirtyGenerationPublishError::VerificationFailed)
+        );
         let _ = crate::test_support::remove_test_root(&root_path);
         Ok(())
     }
 
     #[test]
-    fn upload_dependency_failure_is_preserved()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn upload_dependency_failure_is_preserved() -> Result<(), Box<dyn std::error::Error>> {
         struct FailingUpload;
         impl GenerationObjectUploadPort for FailingUpload {
             async fn put_generation_object_if_absent(
