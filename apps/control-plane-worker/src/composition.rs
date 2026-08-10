@@ -12,7 +12,9 @@ use cloudflare_adapters::contact_keyring::contact_protection_from_serialized_key
 use cloudflare_adapters::contact_protection::{
     RustCryptoContactProtection, WorkerCryptoNonceSource,
 };
-use cloudflare_adapters::coordinator_ingress::CloudflareDeviceGenerationCommitPort;
+use cloudflare_adapters::coordinator_ingress::{
+    CloudflareCoordinatorIngressApplication, CloudflareDeviceGenerationCommitPort,
+};
 use cloudflare_adapters::d1_authenticated_device::D1AuthenticatedDevice;
 use cloudflare_adapters::d1_browser_mail_execution::D1BrowserMailboxExecutionBinding;
 use cloudflare_adapters::d1_client_merge::D1ClientMergeRepository;
@@ -187,6 +189,17 @@ pub fn device_job_repository(env: &Env) -> Result<D1DeviceJobRepository> {
 
 pub fn generation_object_verifier(env: &Env) -> Result<R2GenerationObjects> {
     Ok(R2GenerationObjects::new(env.bucket(R2_PROFILES_BINDING)?))
+}
+
+#[must_use]
+pub fn coordinator_ingress_application(
+    env: &Env,
+) -> CloudflareCoordinatorIngressApplication<'_> {
+    CloudflareCoordinatorIngressApplication::new(
+        env,
+        D1_CATALOG_BINDING,
+        PROFILE_COORDINATOR_BINDING,
+    )
 }
 
 #[must_use]
