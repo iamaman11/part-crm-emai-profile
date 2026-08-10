@@ -34,6 +34,7 @@ pub struct PublishedDirtyGeneration {
     object_key: String,
     metadata_digest: String,
     container_digest: String,
+    container_bytes: u64,
 }
 
 impl PublishedDirtyGeneration {
@@ -56,6 +57,11 @@ impl PublishedDirtyGeneration {
     pub fn container_digest(&self) -> &str {
         &self.container_digest
     }
+
+    #[must_use]
+    pub const fn container_bytes(&self) -> u64 {
+        self.container_bytes
+    }
 }
 
 pub async fn publish_prepared_dirty_generation<U, V>(
@@ -72,6 +78,8 @@ where
     if metadata.tenant_id() != scope.tenant_id() {
         return Err(DirtyGenerationPublishError::VerificationFailed);
     }
+    let container_bytes = u64::try_from(prepared.sealed().container().len())
+        .map_err(|_| DirtyGenerationPublishError::VerificationFailed)?;
     let generation_id = metadata.generation_id().clone();
     let object_key = prepared.object_key();
     let object = ImmutableGenerationObject::new(
@@ -106,6 +114,7 @@ where
         object_key,
         metadata_digest: prepared.metadata_digest().to_owned(),
         container_digest: prepared.container_digest().to_owned(),
+        container_bytes,
     })
 }
 
@@ -295,6 +304,10 @@ mod tests {
             assert_eq!(published.object_key(), prepared.object_key());
             assert_eq!(published.metadata_digest(), prepared.metadata_digest());
             assert_eq!(published.container_digest(), prepared.container_digest());
+            assert_eq!(
+                published.container_bytes(),
+                u64::try_from(prepared.sealed().container().len())?
+            );
             assert_eq!(
                 observed.borrow().as_slice(),
                 &[VerifiedObject {
