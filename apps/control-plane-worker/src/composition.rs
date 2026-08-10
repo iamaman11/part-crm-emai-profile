@@ -28,7 +28,10 @@ use cloudflare_adapters::d1_mailbox_bindings::D1MailboxBindingApplicationReposit
 use cloudflare_adapters::d1_mailbox_jobs::D1MailboxJobApplicationRepository;
 use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
 use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
-use control_plane_contract::{D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING};
+use cloudflare_adapters::r2_generation_objects::R2GenerationObjects;
+use control_plane_contract::{
+    D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING,
+};
 #[cfg(target_arch = "wasm32")]
 use worker::Error;
 use worker::{Env, Result};
@@ -180,6 +183,10 @@ pub fn device_execution_preconditions(env: &Env) -> Result<D1DeviceExecutionPrec
 
 pub fn device_job_repository(env: &Env) -> Result<D1DeviceJobRepository> {
     Ok(D1DeviceJobRepository::new(env.d1(D1_CATALOG_BINDING)?))
+}
+
+pub fn generation_object_verifier(env: &Env) -> Result<R2GenerationObjects> {
+    Ok(R2GenerationObjects::new(env.bucket(R2_PROFILES_BINDING)?))
 }
 
 #[must_use]
