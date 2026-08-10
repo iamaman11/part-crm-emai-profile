@@ -130,7 +130,9 @@ where
 }
 
 #[must_use]
-pub fn invalidation_signal_for_event(event: &NotificationEventRecord) -> RealtimeInvalidationSignal {
+pub fn invalidation_signal_for_event(
+    event: &NotificationEventRecord,
+) -> RealtimeInvalidationSignal {
     let resource = match event.aggregate_type() {
         "client" => RealtimeResourceKind::Clients,
         "profile" => RealtimeResourceKind::Profiles,
