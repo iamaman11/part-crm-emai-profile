@@ -426,13 +426,17 @@ mod tests {
         base.begin_use(UnixMillis::new(11))?;
         base.graceful_close(UnixMillis::new(12))?;
 
-        let candidate = base.supersede_with_successor(candidate_id.clone(), 256, UnixMillis::new(13))?;
+        let candidate =
+            base.supersede_with_successor(candidate_id.clone(), 256, UnixMillis::new(13))?;
         assert_eq!(base.generation_id(), &base_id);
         assert_eq!(base.state(), LocalGenerationState::SupersededEvictable);
         assert_eq!(candidate.generation_id(), &candidate_id);
         assert_eq!(candidate.state(), LocalGenerationState::MaterializedClean);
         assert_eq!(candidate.bytes(), 256);
-        assert_eq!(base.begin_use(UnixMillis::new(14)), Err(LocalProfileError::InvalidTransition));
+        assert_eq!(
+            base.begin_use(UnixMillis::new(14)),
+            Err(LocalProfileError::InvalidTransition)
+        );
 
         base.set_locked(false)?;
         let plan = QuotaPolicy::new(256)?.plan(&[base.clone(), candidate])?;
