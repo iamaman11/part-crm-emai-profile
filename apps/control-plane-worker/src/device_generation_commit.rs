@@ -121,15 +121,15 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         Ok(Some(value)) => value,
         Ok(None) => return version_conflict(actor.correlation_id().as_str()),
         Err(error) => {
-            return generation_commit_port_failure(
-                actor.correlation_id().as_str(),
-                error.class(),
-            );
+            return generation_commit_port_failure(actor.correlation_id().as_str(), error.class());
         }
     };
 
     let coordinator = coordinator_ingress_application(env);
-    let snapshot = match coordinator.snapshot(actor.tenant_scope(), &profile_id).await {
+    let snapshot = match coordinator
+        .snapshot(actor.tenant_scope(), &profile_id)
+        .await
+    {
         Ok(value) => value,
         Err(error) => {
             return coordinator_snapshot_failure(actor.correlation_id().as_str(), error.class());
