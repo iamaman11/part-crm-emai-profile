@@ -218,7 +218,7 @@ impl Fixture {
                 SessionId::parse("session_commit_device_01")?,
                 FencingToken::parse("fencing_commit_device_01")?,
                 5,
-                11,
+                18,
                 17,
             ),
             UnixMillis::new(30),
@@ -243,6 +243,33 @@ impl Fixture {
             self.request.object().clone(),
             self.request.expected_profile_version(),
             self.request.coordinator().clone(),
+            self.request.observed_at(),
+        )
+    }
+
+    fn request_with_coordinator_versions(
+        &self,
+        coordinator_version: u64,
+        coordinator_sequence: u64,
+    ) -> DeviceGenerationCommitRequest {
+        let coordinator = self.request.coordinator();
+        DeviceGenerationCommitRequest::new(
+            self.request.job_id().clone(),
+            self.request.claim_id().clone(),
+            self.request.expected_job_version(),
+            self.request.claim_fence(),
+            self.request.device_id().clone(),
+            self.request.profile_id().clone(),
+            self.request.base_generation_id().clone(),
+            self.request.object().clone(),
+            self.request.expected_profile_version(),
+            CoordinatorGenerationCommitWitness::new(
+                coordinator.session_id().clone(),
+                coordinator.fencing_token().clone(),
+                coordinator.epoch(),
+                coordinator_version,
+                coordinator_sequence,
+            ),
             self.request.observed_at(),
         )
     }
@@ -308,6 +335,32 @@ fn exact_verified_request_reaches_commit_unchanged() -> Result<(), Box<dyn std::
         evidence.commit_observed.borrow().as_ref(),
         Some(&fixture.request)
     );
+    Ok(())
+}
+
+#[test]
+fn inconsistent_coordinator_witness_stops_before_object_verification_or_commit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new()?;
+    let evidence = Evidence::new();
+    let request = fixture.request_with_coordinator_versions(11, 17);
+
+    let result = execute(
+        &fixture,
+        &Identity {
+            device_id: fixture.device_id.clone(),
+        },
+        true,
+        &evidence,
+        &request,
+    );
+
+    assert_eq!(
+        result,
+        Err(DeviceGenerationCommitOperationError::InvalidRequest)
+    );
+    assert_eq!(evidence.verifier_calls.get(), 0);
+    assert_eq!(evidence.commit_calls.get(), 0);
     Ok(())
 }
 
