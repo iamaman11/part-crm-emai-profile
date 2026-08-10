@@ -187,7 +187,11 @@ impl ProfileCoordinator {
                 })
             }
             Err(error) => {
-                self.clear_generation_commit_gate().await?;
+                if generation_commit_failure_releases_gate(error.class()) {
+                    self.clear_generation_commit_gate().await?;
+                } else {
+                    schedule_gate_retry_alarm(&self.state).await?;
+                }
                 generation_commit_error(error)
             }
         }
@@ -408,6 +412,14 @@ fn coordinator_conflict(error: CoordinatorAdapterError) -> Result<Response> {
         },
     })
     .map(|response| response.with_status(code))
+}
+
+fn generation_commit_failure_releases_gate(class: DeviceGenerationCommitErrorClass) -> bool {
+    matches!(
+        class,
+        DeviceGenerationCommitErrorClass::StaleAuthority
+            | DeviceGenerationCommitErrorClass::VersionConflict
+    )
 }
 
 fn generation_commit_error(error: DeviceGenerationCommitError) -> Result<Response> {
