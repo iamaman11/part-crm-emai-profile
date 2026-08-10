@@ -1,6 +1,6 @@
 use application_ports::generation_objects::{
-    GenerationObjectExactVerifyPort, GenerationObjectUploadOutcome, GenerationObjectUploadPort,
-    ImmutableGenerationObject,
+    GenerationObjectDescriptor, GenerationObjectDescriptorVerifyPort, GenerationObjectExactVerifyPort,
+    GenerationObjectUploadOutcome, GenerationObjectUploadPort, ImmutableGenerationObject,
 };
 use application_ports::generations::{GenerationPortError, GenerationPortErrorClass};
 use profile_platform_primitives::TenantScope;
@@ -24,31 +24,58 @@ impl R2GenerationObjects {
         Self { bucket }
     }
 
-    fn validate_object(
-        scope: &TenantScope,
+    fn descriptor_from_object(
         object: &ImmutableGenerationObject<'_>,
+    ) -> Result<GenerationObjectDescriptor, GenerationPortError> {
+        let container_bytes =
+            u64::try_from(object.container().len()).map_err(|_| integrity_failure())?;
+        Ok(GenerationObjectDescriptor::new(
+            object.profile_id().clone(),
+            object.generation_id().clone(),
+            object.object_key(),
+            object.metadata_digest(),
+            object.container_digest(),
+            container_bytes,
+        ))
+    }
+
+    fn validate_descriptor(
+        scope: &TenantScope,
+        descriptor: &GenerationObjectDescriptor,
     ) -> Result<(), GenerationPortError> {
-        if !is_sha256_hex(object.metadata_digest()) || !is_sha256_hex(object.container_digest()) {
+        if descriptor.container_bytes() == 0
+            || !is_sha256_hex(descriptor.metadata_digest())
+            || !is_sha256_hex(descriptor.container_digest())
+        {
             return Err(integrity_failure());
         }
         let canonical = canonical_object_key(
             scope,
-            object.profile_id().as_str(),
-            object.generation_id().as_str(),
+            descriptor.profile_id().as_str(),
+            descriptor.generation_id().as_str(),
         );
-        if object.object_key() != canonical {
-            return Err(integrity_failure());
-        }
-        let actual_container_digest = sha256_hex(object.container());
-        if actual_container_digest != object.container_digest() {
+        if descriptor.object_key() != canonical {
             return Err(integrity_failure());
         }
         Ok(())
     }
 
-    fn custom_metadata(
+    fn validate_object(
         scope: &TenantScope,
         object: &ImmutableGenerationObject<'_>,
+    ) -> Result<GenerationObjectDescriptor, GenerationPortError> {
+        let descriptor = Self::descriptor_from_object(object)?;
+        Self::validate_descriptor(scope, &descriptor)?;
+        let actual_container_digest = sha256_hex(object.container());
+        if actual_container_digest != descriptor.container_digest() {
+            return Err(integrity_failure());
+        }
+        Ok(descriptor)
+    }
+
+    fn custom_metadata(
+        scope: &TenantScope,
+        descriptor: &GenerationObjectDescriptor,
     ) -> HashMap<String, String> {
         HashMap::from([
             (
@@ -57,60 +84,58 @@ impl R2GenerationObjects {
             ),
             (
                 META_PROFILE_ID.to_owned(),
-                object.profile_id().as_str().to_owned(),
+                descriptor.profile_id().as_str().to_owned(),
             ),
             (
                 META_GENERATION_ID.to_owned(),
-                object.generation_id().as_str().to_owned(),
+                descriptor.generation_id().as_str().to_owned(),
             ),
             (
                 META_METADATA_DIGEST.to_owned(),
-                object.metadata_digest().to_owned(),
+                descriptor.metadata_digest().to_owned(),
             ),
             (
                 META_CONTAINER_DIGEST.to_owned(),
-                object.container_digest().to_owned(),
+                descriptor.container_digest().to_owned(),
             ),
         ])
     }
 
-    async fn head_exact(
+    async fn head_descriptor(
         &self,
         scope: &TenantScope,
-        object: &ImmutableGenerationObject<'_>,
+        descriptor: &GenerationObjectDescriptor,
     ) -> Result<Option<Object>, GenerationPortError> {
-        Self::validate_object(scope, object)?;
+        Self::validate_descriptor(scope, descriptor)?;
         self.bucket
-            .head(object.object_key())
+            .head(descriptor.object_key())
             .await
             .map_err(|_| dependency_unavailable())
     }
 
-    fn object_matches(
+    fn descriptor_matches(
         stored: &Object,
         scope: &TenantScope,
-        object: &ImmutableGenerationObject<'_>,
+        descriptor: &GenerationObjectDescriptor,
     ) -> Result<bool, GenerationPortError> {
-        let Ok(expected_size) = u64::try_from(object.container().len()) else {
-            return Ok(false);
-        };
-        if stored.key() != object.object_key() || stored.size() != expected_size {
+        if stored.key() != descriptor.object_key() || stored.size() != descriptor.container_bytes() {
             return Ok(false);
         }
         let metadata = stored.custom_metadata().map_err(|_| integrity_failure())?;
         if metadata.get(META_TENANT_ID).map(String::as_str) != Some(scope.tenant_id().as_str())
             || metadata.get(META_PROFILE_ID).map(String::as_str)
-                != Some(object.profile_id().as_str())
+                != Some(descriptor.profile_id().as_str())
             || metadata.get(META_GENERATION_ID).map(String::as_str)
-                != Some(object.generation_id().as_str())
+                != Some(descriptor.generation_id().as_str())
             || metadata.get(META_METADATA_DIGEST).map(String::as_str)
-                != Some(object.metadata_digest())
+                != Some(descriptor.metadata_digest())
             || metadata.get(META_CONTAINER_DIGEST).map(String::as_str)
-                != Some(object.container_digest())
+                != Some(descriptor.container_digest())
         {
             return Ok(false);
         }
-        let expected_checksum = Sha256::digest(object.container()).to_vec();
+        let expected_checksum =
+            decode_sha256_hex(descriptor.container_digest()).ok_or_else(integrity_failure)?;
         Ok(stored.checksum().sha256.as_deref() == Some(expected_checksum.as_slice()))
     }
 }
@@ -121,12 +146,12 @@ impl GenerationObjectUploadPort for R2GenerationObjects {
         scope: &TenantScope,
         object: &ImmutableGenerationObject<'_>,
     ) -> Result<GenerationObjectUploadOutcome, GenerationPortError> {
-        Self::validate_object(scope, object)?;
+        let descriptor = Self::validate_object(scope, object)?;
         let checksum = Sha256::digest(object.container()).to_vec();
         let created = self
             .bucket
             .put(object.object_key(), object.container().to_vec())
-            .custom_metadata(Self::custom_metadata(scope, object))
+            .custom_metadata(Self::custom_metadata(scope, &descriptor))
             .sha256(checksum)
             .only_if(Conditional {
                 etag_does_not_match: Some("*".to_owned()),
@@ -139,10 +164,10 @@ impl GenerationObjectUploadPort for R2GenerationObjects {
             return Ok(GenerationObjectUploadOutcome::Created);
         }
 
-        let Some(stored) = self.head_exact(scope, object).await? else {
+        let Some(stored) = self.head_descriptor(scope, &descriptor).await? else {
             return Err(dependency_unavailable());
         };
-        if Self::object_matches(&stored, scope, object)? {
+        if Self::descriptor_matches(&stored, scope, &descriptor)? {
             Ok(GenerationObjectUploadOutcome::Idempotent)
         } else {
             Ok(GenerationObjectUploadOutcome::ImmutableConflict)
@@ -156,10 +181,24 @@ impl GenerationObjectExactVerifyPort for R2GenerationObjects {
         scope: &TenantScope,
         object: &ImmutableGenerationObject<'_>,
     ) -> Result<bool, GenerationPortError> {
-        let Some(stored) = self.head_exact(scope, object).await? else {
+        let descriptor = Self::validate_object(scope, object)?;
+        let Some(stored) = self.head_descriptor(scope, &descriptor).await? else {
             return Ok(false);
         };
-        Self::object_matches(&stored, scope, object)
+        Self::descriptor_matches(&stored, scope, &descriptor)
+    }
+}
+
+impl GenerationObjectDescriptorVerifyPort for R2GenerationObjects {
+    async fn verify_generation_object_descriptor_exact(
+        &self,
+        scope: &TenantScope,
+        descriptor: &GenerationObjectDescriptor,
+    ) -> Result<bool, GenerationPortError> {
+        let Some(stored) = self.head_descriptor(scope, descriptor).await? else {
+            return Ok(false);
+        };
+        Self::descriptor_matches(&stored, scope, descriptor)
     }
 }
 
@@ -176,6 +215,27 @@ fn is_sha256_hex(value: &str) -> bool {
             .as_bytes()
             .iter()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+}
+
+fn decode_sha256_hex(value: &str) -> Option<[u8; 32]> {
+    if !is_sha256_hex(value) {
+        return None;
+    }
+    let mut output = [0_u8; 32];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let high = hex_nibble(chunk[0])?;
+        let low = hex_nibble(chunk[1])?;
+        output[index] = (high << 4) | low;
+    }
+    Some(output)
+}
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -198,7 +258,7 @@ fn integrity_failure() -> GenerationPortError {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_object_key, is_sha256_hex};
+    use super::{canonical_object_key, decode_sha256_hex, is_sha256_hex};
     use profile_platform_primitives::{TenantId, TenantScope};
 
     #[test]
@@ -218,5 +278,15 @@ mod tests {
         assert!(!is_sha256_hex(&"A".repeat(64)));
         assert!(!is_sha256_hex(&"a".repeat(63)));
         assert!(!is_sha256_hex(&"g".repeat(64)));
+    }
+
+    #[test]
+    fn descriptor_checksum_hex_decodes_exactly() {
+        let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let decoded = decode_sha256_hex(digest).expect("valid digest");
+        assert_eq!(decoded[0], 0x01);
+        assert_eq!(decoded[1], 0x23);
+        assert_eq!(decoded[31], 0xef);
+        assert!(decode_sha256_hex(&"A".repeat(64)).is_none());
     }
 }
