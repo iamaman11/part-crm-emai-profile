@@ -45,7 +45,7 @@ LIMIT 2
 
 CLAIMABLE_QUERY = """
 SELECT job.job_id
-FROM device_jobs AS job
+FROM device_jobs AS job INDEXED BY device_jobs_claimable_device_lookup
 WHERE job.tenant_id = ?
   AND job.device_id = ?
   AND EXISTS (
