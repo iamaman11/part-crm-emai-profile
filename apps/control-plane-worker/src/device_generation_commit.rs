@@ -206,9 +206,12 @@ fn operation_failure(
         DeviceGenerationCommitOperationError::PreconditionFailed(_) => {
             problem(correlation_id, 409, "invalid_state", "Invalid State")
         }
-        DeviceGenerationCommitOperationError::ObjectVerificationFailed => {
-            problem(correlation_id, 409, "integrity_failure", "Integrity Failure")
-        }
+        DeviceGenerationCommitOperationError::ObjectVerificationFailed => problem(
+            correlation_id,
+            409,
+            "integrity_failure",
+            "Integrity Failure",
+        ),
         DeviceGenerationCommitOperationError::IntegrityFailure => integrity_failure(correlation_id),
         DeviceGenerationCommitOperationError::DependencyUnavailable => dependency(correlation_id),
         DeviceGenerationCommitOperationError::Commit(class) => {
@@ -217,7 +220,10 @@ fn operation_failure(
     }
 }
 
-fn commit_failure(correlation_id: &str, class: DeviceGenerationCommitErrorClass) -> Result<Response> {
+fn commit_failure(
+    correlation_id: &str,
+    class: DeviceGenerationCommitErrorClass,
+) -> Result<Response> {
     match class {
         DeviceGenerationCommitErrorClass::StaleAuthority => {
             problem(correlation_id, 409, "lease_conflict", "Lease Conflict")
