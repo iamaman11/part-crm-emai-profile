@@ -1,7 +1,8 @@
 use crate::browser_mail_query::{BrowserMailExecutionProof, BrowserMailRuntimePort};
 use application_ports::device_jobs::{DeviceClaimId, DeviceJobId};
 use application_ports::query_mail_provider::{
-    MailMessageBody, MailMessageSummary, MailboxMessageReference, SearchClientMailboxMessagesRequest,
+    MailMessageBody, MailMessageSummary, MailboxMessageReference,
+    SearchClientMailboxMessagesRequest,
 };
 use application_ports::{QueryPage, QueryPortError, QueryPortErrorClass};
 use core::future::Future;
@@ -18,11 +19,14 @@ pub struct ActiveProfileExecution {
 }
 
 impl ActiveProfileExecution {
-    pub(crate) fn from_operator_session(lease: ProfileLease, generation_id: GenerationId) -> Self {
-        Self {
+    pub fn new(lease: ProfileLease, generation_id: GenerationId) -> Result<Self, QueryPortError> {
+        if lease.status() != LeaseStatus::Active {
+            return Err(integrity_failure());
+        }
+        Ok(Self {
             lease,
             generation_id,
-        }
+        })
     }
 
     #[must_use]
@@ -267,10 +271,10 @@ mod tests {
     }
 
     fn active_execution() -> Result<ActiveProfileExecution, Box<dyn std::error::Error>> {
-        Ok(ActiveProfileExecution::from_operator_session(
+        Ok(ActiveProfileExecution::new(
             lease("session_01JBRMAILRUN")?,
             GenerationId::parse("generation_01JBRMAILRUN")?,
-        ))
+        )?)
     }
 
     fn proof(
@@ -350,7 +354,10 @@ mod tests {
         assert_eq!(context.generation_id(), proof.generation_id());
         assert_eq!(context.session_id(), proof.coordinator_lease().session_id());
         assert_eq!(context.device_id(), proof.coordinator_lease().device_id());
-        assert_eq!(context.coordinator_epoch(), proof.coordinator_lease().epoch());
+        assert_eq!(
+            context.coordinator_epoch(),
+            proof.coordinator_lease().epoch()
+        );
         assert_eq!(
             context.coordinator_fencing_token(),
             proof.coordinator_lease().fencing_token()
@@ -371,7 +378,8 @@ mod tests {
         )?;
         let binding_id = proof.binding_id().clone();
         let runtime = BoundBrowserMailRuntime::new(active, RecordingAutomation::default());
-        let result = block_on(runtime.search_messages(&proof, &scope()?, &binding_id, &search_request()?));
+        let result =
+            block_on(runtime.search_messages(&proof, &scope()?, &binding_id, &search_request()?));
         assert_eq!(
             result.map(|_| ()),
             Err(QueryPortError::new(QueryPortErrorClass::IntegrityFailure))
@@ -384,13 +392,11 @@ mod tests {
     fn generation_substitution_is_rejected_before_automation()
     -> Result<(), Box<dyn std::error::Error>> {
         let active = active_execution()?;
-        let proof = proof(
-            active.lease().clone(),
-            "generation_02JBRMAILRUN",
-        )?;
+        let proof = proof(active.lease().clone(), "generation_02JBRMAILRUN")?;
         let binding_id = proof.binding_id().clone();
         let runtime = BoundBrowserMailRuntime::new(active, RecordingAutomation::default());
-        let result = block_on(runtime.search_messages(&proof, &scope()?, &binding_id, &search_request()?));
+        let result =
+            block_on(runtime.search_messages(&proof, &scope()?, &binding_id, &search_request()?));
         assert_eq!(
             result.map(|_| ()),
             Err(QueryPortError::new(QueryPortErrorClass::IntegrityFailure))
@@ -400,8 +406,8 @@ mod tests {
     }
 
     #[test]
-    fn binding_substitution_is_rejected_before_automation()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn binding_substitution_is_rejected_before_automation() -> Result<(), Box<dyn std::error::Error>>
+    {
         let active = active_execution()?;
         let proof = proof(active.lease().clone(), active.generation_id().as_str())?;
         let runtime = BoundBrowserMailRuntime::new(active, RecordingAutomation::default());
