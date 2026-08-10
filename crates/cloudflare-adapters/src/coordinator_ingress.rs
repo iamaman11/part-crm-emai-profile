@@ -3,6 +3,11 @@ use crate::d1_identity_queries::D1IdentityQueryRepository;
 use crate::d1_profile_coordinator::{
     CoordinatorProjectionMutation, CoordinatorProjectionOutcome, D1ProfileCoordinatorRepository,
 };
+use crate::device_generation_commit_runtime::{
+    DEVICE_GENERATION_COMMIT_PATH, DeviceGenerationCommitInternalErrorClass,
+    DeviceGenerationCommitInternalErrorResponse, DeviceGenerationCommitInternalOutcome,
+    DeviceGenerationCommitInternalRequest, DeviceGenerationCommitInternalResponse,
+};
 use crate::profile_coordinator::{
     CoordinatorProjection, StoredCoordinatorCommand, StoredCoordinatorEnvelope,
     StoredReleaseDisposition,
@@ -12,6 +17,10 @@ use application_ports::coordinator_ingress::{
     CoordinatorIngressApplicationPort, CoordinatorIngressPortError,
     CoordinatorIngressPortErrorClass, CoordinatorProfileAccess, CoordinatorProjectionSnapshot,
     CoordinatorRuntimeOutcome, CoordinatorRuntimeResult,
+};
+use application_ports::device_generation_commit::{
+    DeviceGenerationCommitError, DeviceGenerationCommitErrorClass, DeviceGenerationCommitOutcome,
+    DeviceGenerationCommitPort, DeviceGenerationCommitRequest,
 };
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{
@@ -105,6 +114,82 @@ impl<'a> CloudflareCoordinatorIngressApplication<'a> {
             .await
             .map_err(map_worker_dependency)?;
         runtime_result(response)
+    }
+}
+
+pub struct CloudflareDeviceGenerationCommitPort<'a> {
+    env: &'a Env,
+    coordinator_binding: &'a str,
+}
+
+impl<'a> CloudflareDeviceGenerationCommitPort<'a> {
+    #[must_use]
+    pub const fn new(env: &'a Env, coordinator_binding: &'a str) -> Self {
+        Self {
+            env,
+            coordinator_binding,
+        }
+    }
+}
+
+impl DeviceGenerationCommitPort for CloudflareDeviceGenerationCommitPort<'_> {
+    async fn commit_device_generation(
+        &self,
+        actor: &ActorContext,
+        request: &DeviceGenerationCommitRequest,
+    ) -> Result<DeviceGenerationCommitOutcome, DeviceGenerationCommitError> {
+        let namespace = self
+            .env
+            .durable_object(self.coordinator_binding)
+            .map_err(|_| generation_commit_dependency())?;
+        let object_id = namespace
+            .id_from_name(&coordinator_object_name(request.profile_id()))
+            .map_err(|_| generation_commit_dependency())?;
+        let stub = object_id
+            .get_stub()
+            .map_err(|_| generation_commit_dependency())?;
+        let internal = DeviceGenerationCommitInternalRequest::from_domain(actor, request);
+        let request = generation_commit_internal_request(&internal)?;
+        let mut response = stub
+            .fetch_with_request(request)
+            .await
+            .map_err(|_| generation_commit_dependency())?;
+
+        if response.status_code() == 200 {
+            let body = response
+                .json::<DeviceGenerationCommitInternalResponse>()
+                .await
+                .map_err(|_| generation_commit_integrity())?;
+            return Ok(match body.outcome {
+                DeviceGenerationCommitInternalOutcome::Activated => {
+                    DeviceGenerationCommitOutcome::Activated
+                }
+                DeviceGenerationCommitInternalOutcome::AlreadyActive => {
+                    DeviceGenerationCommitOutcome::AlreadyActive
+                }
+            });
+        }
+
+        let status = response.status_code();
+        let body = response
+            .json::<DeviceGenerationCommitInternalErrorResponse>()
+            .await
+            .map_err(|_| generation_commit_dependency())?;
+        Err(match (status, body.class) {
+            (409, DeviceGenerationCommitInternalErrorClass::StaleAuthority) => {
+                generation_commit_stale_authority()
+            }
+            (409, DeviceGenerationCommitInternalErrorClass::VersionConflict) => {
+                generation_commit_version_conflict()
+            }
+            (400 | 500, DeviceGenerationCommitInternalErrorClass::IntegrityFailure) => {
+                generation_commit_integrity()
+            }
+            (503, DeviceGenerationCommitInternalErrorClass::DependencyUnavailable) => {
+                generation_commit_dependency()
+            }
+            _ => generation_commit_dependency(),
+        })
     }
 }
 
@@ -402,6 +487,25 @@ fn internal_request<T: Serialize>(
     .map_err(map_worker_dependency)
 }
 
+fn generation_commit_internal_request(
+    body: &DeviceGenerationCommitInternalRequest,
+) -> Result<Request, DeviceGenerationCommitError> {
+    let payload = serde_json::to_string(body).map_err(|_| generation_commit_integrity())?;
+    let headers = Headers::new();
+    headers
+        .set("content-type", "application/json")
+        .map_err(|_| generation_commit_dependency())?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(JsValue::from_str(&payload)));
+    Request::new_with_init(
+        &format!("https://profile-coordinator.internal{DEVICE_GENERATION_COMMIT_PATH}"),
+        &init,
+    )
+    .map_err(|_| generation_commit_dependency())
+}
+
 #[derive(Serialize)]
 struct CoordinatorSnapshotRequest<'a> {
     tenant_id: &'a str,
@@ -436,4 +540,20 @@ const fn integrity_failure() -> CoordinatorIngressPortError {
 
 const fn internal_failure() -> CoordinatorIngressPortError {
     CoordinatorIngressPortError::new(CoordinatorIngressPortErrorClass::InternalFailure)
+}
+
+const fn generation_commit_stale_authority() -> DeviceGenerationCommitError {
+    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::StaleAuthority)
+}
+
+const fn generation_commit_version_conflict() -> DeviceGenerationCommitError {
+    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::VersionConflict)
+}
+
+const fn generation_commit_integrity() -> DeviceGenerationCommitError {
+    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::IntegrityFailure)
+}
+
+const fn generation_commit_dependency() -> DeviceGenerationCommitError {
+    DeviceGenerationCommitError::new(DeviceGenerationCommitErrorClass::DependencyUnavailable)
 }
