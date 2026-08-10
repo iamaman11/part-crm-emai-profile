@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "accepted_phases": [
+    {
+      "phase": "Phase 1A",
+      "issue": 114,
+      "implementation_pr": 115,
+      "source_head": "21b4bc65cd1bb117504c0a0cfe18c8c11e411f25",
+      "merge_sha": "0186b780f7fed4b7c5e7f212c2fe437cbc46a5e5",
+      "permanent_workflows": 12
+    },
+    {
+      "phase": "Phase 1B",
+      "issue": 120,
+      "implementation_pr": 135,
+      "source_head": "22b2ef36a943d07d22755bf467ec6e7c27ef081d",
+      "merge_sha": "f081e0709481d6bbaa150f5518ec8552124c78de",
+      "permanent_workflows": 12
+    },
+    {
+      "phase": "Phase 2A",
+      "issue": 118,
+      "implementation_pr": 137,
+      "source_head": "2d80ee74bc8d05657414ea4e75dcf6f41c723926",
+      "merge_sha": "a1eb2833a74d9156bce8f4b1c6e92815cc0d55bc",
+      "permanent_workflows": 12
+    },
+    {
+      "phase": "Phase 2B",
+      "issue": 138,
+      "implementation_pr": 140,
+      "source_head": "895594e35b77ddd86395300b1644e9df6a712123",
+      "merge_sha": "298062ea443c31c69212cb03b3988265b6bbcd48",
+      "permanent_workflows": 12
+    },
+    {
+      "phase": "Phase 2C",
+      "issue": 142,
+      "implementation_pr": 143,
+      "source_head": "d3ad2e774a98ad5fed2565ba410ba9923062d170",
+      "merge_sha": "042d0dc72fa37e99f971d61d21544609a69c6e31",
+      "permanent_workflows": 12
+    },
+    {
+      "phase": "Phase 2D",
+      "issue": 144,
+      "implementation_pr": 147,
+      "source_head": "ad491e2f0c9ba9f79130923fdde6fe1407af4dc5",
+      "merge_sha": "26f8fa82bdad02a5a0867b0d36748b915579ef1c",
+      "permanent_workflows": 12
+    },
+    {
+      "phase": "Phase 2E",
+      "issue": 148,
+      "implementation_pr": 152,
+      "source_head": "0cefa67abe810db079102462f33ec28fcfc73f69",
+      "merge_sha": "6c6ba4564de88b40d282081e701a2d24f1611cc2",
+      "permanent_workflows": 12
+    },
+    {
+      "phase": "Phase 2F",
+      "issue": 154,
+      "implementation_pr": 155,
+      "source_head": "c36df418f9fa877c5143327e97b60087c33ffd02",
+      "merge_sha": "42b26dc0c78c0c65dcea2bc90bb5ce6a3bd4b02b",
+      "permanent_workflows": 12
+    }
+  ]
+}
