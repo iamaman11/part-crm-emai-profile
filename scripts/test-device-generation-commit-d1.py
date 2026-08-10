@@ -25,6 +25,8 @@ SESSION = "session_device_generation_commit"
 TOKEN_DIGEST = "c" * 64
 METADATA_DIGEST = "d" * 64
 CONTAINER_DIGEST = "e" * 64
+COORDINATOR_VERSION = 3
+COORDINATOR_SEQUENCE = 2
 
 
 def migration_files() -> list[Path]:
@@ -141,22 +143,23 @@ def projection_payload(
     epoch: int,
     session_id: str = SESSION,
     device_id: str = DEVICE,
-    updated_at_ms: int,
 ) -> str:
     return json.dumps(
         {
             "tenant_id": TENANT,
             "profile_id": PROFILE,
-            "coordinator_version": version,
-            "coordinator_sequence": sequence,
-            "coordinator_status": "active",
+            "status": "active",
+            "version": version,
+            "sequence": sequence,
+            "next_epoch": epoch,
             "active_session_id": session_id,
             "active_device_id": device_id,
             "active_epoch": epoch,
             "idle_expires_at_ms": 500,
             "hard_expires_at_ms": 1000,
             "drain_deadline_ms": None,
-            "updated_at_ms": updated_at_ms,
+            "pending_launch_intent_id": None,
+            "pending_intent_expires_at_ms": None,
         },
         separators=(",", ":"),
     )
@@ -165,37 +168,35 @@ def projection_payload(
 def project_coordinator(
     connection: sqlite3.Connection,
     *,
-    command_id: str,
-    expected_version: int,
+    event_id: str,
     version: int,
     sequence: int,
     epoch: int,
-    updated_at_ms: int,
+    projected_at_ms: int,
     session_id: str = SESSION,
     device_id: str = DEVICE,
 ) -> None:
     connection.execute(
         """
         INSERT INTO profile_coordinator_projection_commands (
-            tenant_id, command_id, command_actor_id, profile_id,
-            expected_coordinator_version, projection_json, executed_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            tenant_id, profile_id, coordinator_sequence, coordinator_version,
+            outbox_event_id, outcome, projection_json, projected_at_ms
+        ) VALUES (?, ?, ?, ?, ?, 'snapshot', ?, ?)
         """,
         (
             TENANT,
-            command_id,
-            OWNER,
             PROFILE,
-            expected_version,
+            sequence,
+            version,
+            event_id,
             projection_payload(
                 version=version,
                 sequence=sequence,
                 epoch=epoch,
                 session_id=session_id,
                 device_id=device_id,
-                updated_at_ms=updated_at_ms,
             ),
-            updated_at_ms,
+            projected_at_ms,
         ),
     )
 
@@ -271,12 +272,11 @@ def seed() -> sqlite3.Connection:
     )
     project_coordinator(
         connection,
-        command_id="cmd_projection_initial",
-        expected_version=0,
-        version=1,
-        sequence=0,
+        event_id="event_projection_initial",
+        version=COORDINATOR_VERSION,
+        sequence=COORDINATOR_SEQUENCE,
         epoch=1,
-        updated_at_ms=60,
+        projected_at_ms=60,
     )
     connection.commit()
     return connection
@@ -295,8 +295,8 @@ def command_values(
     expected_profile_version: int = 2,
     coordinator_session_id: str = SESSION,
     coordinator_epoch: int = 1,
-    coordinator_version: int = 1,
-    coordinator_sequence: int = 0,
+    coordinator_version: int = COORDINATOR_VERSION,
+    coordinator_sequence: int = COORDINATOR_SEQUENCE,
     executed_at_ms: int = 100,
     base_generation_id: str = BASE,
 ) -> tuple[object, ...]:
@@ -341,7 +341,9 @@ def insert_device_commit(connection: sqlite3.Connection, values: tuple[object, .
     )
 
 
-def catalog_snapshot(connection: sqlite3.Connection, generation_id: str = CANDIDATE) -> tuple[object, ...]:
+def catalog_snapshot(
+    connection: sqlite3.Connection, generation_id: str = CANDIDATE
+) -> tuple[object, ...]:
     profile = connection.execute(
         """
         SELECT active_generation_id, status, version, updated_at_ms
@@ -383,7 +385,8 @@ def test_schema_is_metadata_only() -> None:
     connection = database()
     try:
         columns = {
-            str(row[1]) for row in connection.execute("PRAGMA table_info(device_generation_commit_commands)")
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(device_generation_commit_commands)")
         }
         assert "coordinator_fencing_token_digest" in columns
         assert "coordinator_fencing_token" not in columns
@@ -414,31 +417,32 @@ def test_exact_command_atomically_verifies_and_activates() -> None:
         connection.rollback()
         assert catalog_snapshot(connection) == before
 
-        expect_integrity_error(
-            lambda: connection.execute(
-                "UPDATE device_generation_commit_commands SET executed_at_ms = 101 WHERE tenant_id = ? AND job_id = ?",
-                (TENANT, JOB),
-            )
-        )
-        connection.rollback()
-        expect_integrity_error(
-            lambda: connection.execute(
-                "DELETE FROM device_generation_commit_commands WHERE tenant_id = ? AND job_id = ?",
-                (TENANT, JOB),
-            )
-        )
-        connection.rollback()
+        for statement in (
+            "UPDATE device_generation_commit_commands SET executed_at_ms = 101 WHERE tenant_id = ? AND job_id = ?",
+            "DELETE FROM device_generation_commit_commands WHERE tenant_id = ? AND job_id = ?",
+        ):
+            expect_integrity_error(lambda statement=statement: connection.execute(statement, (TENANT, JOB)))
+            connection.rollback()
     finally:
         connection.close()
 
 
-def test_stale_claim_fence_and_expired_claim_fail_before_catalog_mutation() -> None:
-    for values in (
+def test_stale_claim_profile_and_malformed_rows_fail_closed() -> None:
+    cases = (
         command_values(claim_fence=2),
         command_values(claim_id="devclaim_stale_generation_commit"),
         command_values(executed_at_ms=200),
         command_values(expected_job_version=1),
-    ):
+        command_values(expected_profile_version=1),
+        command_values(generation_id=BASE, base_generation_id=BASE),
+        command_values(object_key="profiles/not-canonical.enc"),
+        command_values(metadata_digest="A" * 64),
+        command_values(container_digest="g" * 64),
+        command_values(container_bytes=0),
+        command_values(container_bytes=83_886_081),
+        command_values(coordinator_version=4, coordinator_sequence=2),
+    )
+    for values in cases:
         connection = seed()
         try:
             assert_failed_without_catalog_mutation(
@@ -485,6 +489,26 @@ def test_revoked_binding_and_authorization_fail_closed() -> None:
         connection.close()
 
 
+def test_stale_coordinator_witness_fails_closed() -> None:
+    connection = seed()
+    try:
+        project_coordinator(
+            connection,
+            event_id="event_projection_advanced",
+            version=4,
+            sequence=3,
+            epoch=2,
+            session_id="session_device_generation_new",
+            projected_at_ms=80,
+        )
+        connection.commit()
+        assert_failed_without_catalog_mutation(
+            connection, lambda: insert_device_commit(connection, command_values())
+        )
+    finally:
+        connection.close()
+
+
 def test_competing_generation_keeps_loser_non_authoritative() -> None:
     connection = seed()
     try:
@@ -505,27 +529,6 @@ def test_competing_generation_keeps_loser_non_authoritative() -> None:
             (TENANT, PROFILE, CANDIDATE),
         ).fetchone()[0] == 0
         assert catalog_snapshot(connection)[0] == (WINNER, "READY", 3, 90)
-    finally:
-        connection.close()
-
-
-def test_stale_coordinator_witness_fails_closed() -> None:
-    connection = seed()
-    try:
-        project_coordinator(
-            connection,
-            command_id="cmd_projection_advanced",
-            expected_version=1,
-            version=2,
-            sequence=1,
-            epoch=2,
-            session_id="session_device_generation_new",
-            updated_at_ms=80,
-        )
-        connection.commit()
-        assert_failed_without_catalog_mutation(
-            connection, lambda: insert_device_commit(connection, command_values())
-        )
     finally:
         connection.close()
 
@@ -612,36 +615,15 @@ def test_direct_generation_mutations_remain_governed() -> None:
         connection.close()
 
 
-def test_malformed_command_rows_fail_closed() -> None:
-    cases = (
-        command_values(generation_id=BASE, base_generation_id=BASE),
-        command_values(object_key="profiles/not-canonical.enc"),
-        command_values(metadata_digest="A" * 64),
-        command_values(container_digest="g" * 64),
-        command_values(container_bytes=0),
-        command_values(container_bytes=83_886_081),
-        command_values(coordinator_version=2, coordinator_sequence=0),
-    )
-    for values in cases:
-        connection = seed()
-        try:
-            assert_failed_without_catalog_mutation(
-                connection, lambda values=values: insert_device_commit(connection, values)
-            )
-        finally:
-            connection.close()
-
-
 def main() -> int:
     test_schema_is_metadata_only()
     test_exact_command_atomically_verifies_and_activates()
-    test_stale_claim_fence_and_expired_claim_fail_before_catalog_mutation()
+    test_stale_claim_profile_and_malformed_rows_fail_closed()
     test_revoked_binding_and_authorization_fail_closed()
-    test_competing_generation_keeps_loser_non_authoritative()
     test_stale_coordinator_witness_fails_closed()
+    test_competing_generation_keeps_loser_non_authoritative()
     test_late_activation_failure_rolls_back_journal_and_candidate()
     test_direct_generation_mutations_remain_governed()
-    test_malformed_command_rows_fail_closed()
     print("Phase 2F device-generation atomic D1 commit invariants are valid.")
     return 0
 
