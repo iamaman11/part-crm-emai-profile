@@ -18,6 +18,7 @@ EXPECTED_PHASE_ORDER = (
     "Phase 2D",
     "Phase 2E",
     "Phase 2F",
+    "Phase 2G",
 )
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
@@ -111,10 +112,13 @@ def provenance_self_test(plan: str, ledger: dict[str, Any]) -> None:
         )
 
     tampered = copy.deepcopy(ledger)
+    latest_phase = tampered["accepted_phases"][-1]["phase"]
     original = tampered["accepted_phases"][-1]["merge_sha"]
     tampered["accepted_phases"][-1]["merge_sha"] = "0" * 40
     if tampered["accepted_phases"][-1]["merge_sha"] == original:
         raise ValueError("accepted phase provenance self-test could not tamper merge SHA")
     errors = validate_plan_provenance(plan, tampered)
-    if not any("Phase 2F provenance mismatch for merge_sha" in error for error in errors):
+    if not any(
+        f"{latest_phase} provenance mismatch for merge_sha" in error for error in errors
+    ):
         raise ValueError("tampered accepted phase merge SHA unexpectedly passed provenance validation")
