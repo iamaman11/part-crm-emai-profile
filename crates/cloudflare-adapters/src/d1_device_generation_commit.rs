@@ -1,7 +1,9 @@
 use application_ports::device_generation_commit::{
     DeviceGenerationCommitError, DeviceGenerationCommitErrorClass, DeviceGenerationCommitRequest,
+    DeviceGenerationReplayProbe, DeviceGenerationReplayProbeOutcome, DeviceGenerationReplayProbePort,
 };
-use profile_platform_primitives::ActorContext;
+use device_domain::DeviceJobId;
+use profile_platform_primitives::{ActorContext, FencingToken, TenantId};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use worker::d1::D1Database;
@@ -27,6 +29,7 @@ SELECT
     command.coordinator_epoch,
     command.coordinator_version,
     command.coordinator_sequence,
+    command.executed_at_ms,
     profile.active_generation_id,
     profile.status AS profile_status,
     profile.version AS profile_version,
@@ -105,9 +108,12 @@ impl D1DeviceGenerationCommitJournal {
         request: &DeviceGenerationCommitRequest,
     ) -> Result<DeviceGenerationCommitJournalOutcome, DeviceGenerationCommitError> {
         validate_request(actor, request)?;
-        let token_digest = fencing_token_digest(request);
+        let token_digest = fencing_token_digest(request.coordinator().fencing_token());
 
-        if let Some(row) = self.load(actor, request).await? {
+        if let Some(row) = self
+            .load_by_job(actor.tenant_scope().tenant_id(), request.job_id())
+            .await?
+        {
             return classify_existing(&row, actor, request, &token_digest);
         }
 
@@ -153,10 +159,10 @@ impl D1DeviceGenerationCommitJournal {
         match insert {
             Ok(Some(_)) => {
                 let row = self
-                    .load(actor, request)
+                    .load_by_job(actor.tenant_scope().tenant_id(), request.job_id())
                     .await?
                     .ok_or_else(integrity_failure)?;
-                if exact_row(&row, actor, request, &token_digest) && catalog_is_exact(&row, request)
+                if exact_row(&row, actor, request, &token_digest) && committed_state_is_exact(&row)
                 {
                     Ok(DeviceGenerationCommitJournalOutcome::Applied)
                 } else {
@@ -165,7 +171,10 @@ impl D1DeviceGenerationCommitJournal {
             }
             Ok(None) => Err(integrity_failure()),
             Err(error) => {
-                if let Some(row) = self.load(actor, request).await? {
+                if let Some(row) = self
+                    .load_by_job(actor.tenant_scope().tenant_id(), request.job_id())
+                    .await?
+                {
                     return classify_existing(&row, actor, request, &token_digest);
                 }
                 Err(classify_insert_failure(&error.to_string()))
@@ -173,21 +182,45 @@ impl D1DeviceGenerationCommitJournal {
         }
     }
 
-    async fn load(
+    async fn load_by_job(
         &self,
-        actor: &ActorContext,
-        request: &DeviceGenerationCommitRequest,
+        tenant_id: &TenantId,
+        job_id: &DeviceJobId,
     ) -> Result<Option<DeviceGenerationCommitRow>, DeviceGenerationCommitError> {
         query!(
             &self.database,
             LOAD_DEVICE_GENERATION_COMMIT,
-            actor.tenant_scope().tenant_id().as_str(),
-            request.job_id().as_str(),
+            tenant_id.as_str(),
+            job_id.as_str(),
         )
         .map_err(|_| dependency_failure())?
         .first::<DeviceGenerationCommitRow>(None)
         .await
         .map_err(|_| dependency_failure())
+    }
+}
+
+impl DeviceGenerationReplayProbePort for D1DeviceGenerationCommitJournal {
+    async fn probe_committed_generation(
+        &self,
+        actor: &ActorContext,
+        probe: &DeviceGenerationReplayProbe,
+    ) -> Result<DeviceGenerationReplayProbeOutcome, DeviceGenerationCommitError> {
+        validate_replay_probe(actor, probe)?;
+        let Some(row) = self
+            .load_by_job(actor.tenant_scope().tenant_id(), probe.job_id())
+            .await?
+        else {
+            return Ok(DeviceGenerationReplayProbeOutcome::Missing);
+        };
+        let token_digest = fencing_token_digest(probe.coordinator_fencing_token());
+        if !exact_probe_row(&row, actor, probe, &token_digest) {
+            return Ok(DeviceGenerationReplayProbeOutcome::Conflict);
+        }
+        if !committed_state_is_exact(&row) {
+            return Ok(DeviceGenerationReplayProbeOutcome::Conflict);
+        }
+        Ok(DeviceGenerationReplayProbeOutcome::ExactCommitted)
     }
 }
 
@@ -211,6 +244,7 @@ struct DeviceGenerationCommitRow {
     coordinator_epoch: i64,
     coordinator_version: i64,
     coordinator_sequence: i64,
+    executed_at_ms: i64,
     active_generation_id: Option<String>,
     profile_status: Option<String>,
     profile_version: Option<i64>,
@@ -237,7 +271,7 @@ fn classify_existing(
     if !exact_row(row, actor, request, token_digest) {
         return Err(version_conflict());
     }
-    if !catalog_is_exact(row, request) {
+    if !committed_state_is_exact(row) {
         return Err(version_conflict());
     }
     Ok(DeviceGenerationCommitJournalOutcome::ExactReplay)
@@ -280,32 +314,55 @@ fn exact_row(
             row.coordinator_sequence,
             request.coordinator().coordinator_sequence(),
         )
+        && i64_matches_u64(row.executed_at_ms, request.observed_at().value())
 }
 
-fn catalog_is_exact(
+fn exact_probe_row(
     row: &DeviceGenerationCommitRow,
-    request: &DeviceGenerationCommitRequest,
+    actor: &ActorContext,
+    probe: &DeviceGenerationReplayProbe,
+    token_digest: &str,
 ) -> bool {
-    let object = request.object();
-    let Some(expected_profile_version) = request.expected_profile_version().value().checked_add(1)
+    let object = probe.object();
+    row.command_actor_id == actor.actor_id().as_str()
+        && row.device_id == probe.device_id().as_str()
+        && row.profile_id == probe.profile_id().as_str()
+        && row.base_generation_id == probe.base_generation_id().as_str()
+        && row.generation_id == object.generation_id().as_str()
+        && row.object_key == object.object_key()
+        && row.metadata_digest == object.metadata_digest()
+        && row.container_digest == object.container_digest()
+        && i64_matches_u64(row.container_bytes, object.container_bytes())
+        && row.claim_id == probe.claim_id().as_str()
+        && i64_matches_u64(row.claim_fence, probe.claim_fence())
+        && row.coordinator_session_id == probe.coordinator_session_id().as_str()
+        && row.coordinator_fencing_token_digest == token_digest
+        && i64_matches_u64(row.coordinator_epoch, probe.coordinator_epoch())
+}
+
+fn committed_state_is_exact(row: &DeviceGenerationCommitRow) -> bool {
+    let Some(expected_profile_version) = non_negative_u64(row.expected_profile_version)
+        .and_then(|version| version.checked_add(1))
     else {
         return false;
     };
-    let Some(expected_job_version) = request.expected_job_version().value().checked_add(1) else {
+    let Some(expected_job_version) =
+        non_negative_u64(row.expected_job_version).and_then(|version| version.checked_add(1))
+    else {
         return false;
     };
-    let expected_verification = format!("r2sha256:{}", object.container_digest());
+    let expected_verification = format!("r2sha256:{}", row.container_digest);
 
-    row.active_generation_id.as_deref() == Some(object.generation_id().as_str())
+    row.active_generation_id.as_deref() == Some(row.generation_id.as_str())
         && row.profile_status.as_deref() == Some("READY")
         && row
             .profile_version
             .is_some_and(|version| i64_matches_u64(version, expected_profile_version))
         && row.generation_status.as_deref() == Some("VERIFIED")
         && row.generation_version == Some(2)
-        && row.generation_object_key.as_deref() == Some(object.object_key())
-        && row.generation_metadata_digest.as_deref() == Some(object.metadata_digest())
-        && row.generation_container_digest.as_deref() == Some(object.container_digest())
+        && row.generation_object_key.as_deref() == Some(row.object_key.as_str())
+        && row.generation_metadata_digest.as_deref() == Some(row.metadata_digest.as_str())
+        && row.generation_container_digest.as_deref() == Some(row.container_digest.as_str())
         && row.verification_reference.as_deref() == Some(expected_verification.as_str())
         && row.job_status.as_deref() == Some("SUCCEEDED")
         && row
@@ -314,9 +371,7 @@ fn catalog_is_exact(
         && row.job_current_claim_id.is_none()
         && row.job_claim_fence.is_none()
         && row.job_retry_at_ms.is_none()
-        && row
-            .job_updated_at_ms
-            .is_some_and(|updated_at| i64_matches_u64(updated_at, request.observed_at().value()))
+        && row.job_updated_at_ms == Some(row.executed_at_ms)
 }
 
 fn validate_request(
@@ -342,30 +397,60 @@ fn validate_request(
         .coordinator_sequence()
         .checked_add(1)
         .ok_or_else(integrity_failure)?;
-    let canonical_key = format!(
-        "tenants/{}/profiles/{}/generations/{}.bpgc",
-        actor.tenant_scope().tenant_id().as_str(),
-        request.profile_id().as_str(),
-        object.generation_id().as_str(),
-    );
-    if object.profile_id() != request.profile_id()
-        || object.generation_id() == request.base_generation_id()
-        || object.object_key() != canonical_key
-        || object.container_bytes() == 0
-        || request.claim_fence() == 0
+    if !descriptor_is_valid(
+        actor,
+        request.profile_id(),
+        request.base_generation_id(),
+        object,
+    ) || request.claim_fence() == 0
         || request.coordinator().epoch() == 0
         || request.coordinator().coordinator_sequence() == 0
         || request.coordinator().coordinator_version() != expected_coordinator_version
-        || !is_sha256_hex(object.metadata_digest())
-        || !is_sha256_hex(object.container_digest())
     {
         return Err(integrity_failure());
     }
     Ok(())
 }
 
-fn fencing_token_digest(request: &DeviceGenerationCommitRequest) -> String {
-    let digest = Sha256::digest(request.coordinator().fencing_token().as_str().as_bytes());
+fn validate_replay_probe(
+    actor: &ActorContext,
+    probe: &DeviceGenerationReplayProbe,
+) -> Result<(), DeviceGenerationCommitError> {
+    if !descriptor_is_valid(
+        actor,
+        probe.profile_id(),
+        probe.base_generation_id(),
+        probe.object(),
+    ) || probe.claim_fence() == 0
+        || probe.coordinator_epoch() == 0
+    {
+        return Err(integrity_failure());
+    }
+    Ok(())
+}
+
+fn descriptor_is_valid(
+    actor: &ActorContext,
+    profile_id: &profile_platform_primitives::ProfileId,
+    base_generation_id: &profile_platform_primitives::GenerationId,
+    object: &application_ports::generation_objects::GenerationObjectDescriptor,
+) -> bool {
+    let canonical_key = format!(
+        "tenants/{}/profiles/{}/generations/{}.bpgc",
+        actor.tenant_scope().tenant_id().as_str(),
+        profile_id.as_str(),
+        object.generation_id().as_str(),
+    );
+    object.profile_id() == profile_id
+        && object.generation_id() != base_generation_id
+        && object.object_key() == canonical_key
+        && object.container_bytes() > 0
+        && is_sha256_hex(object.metadata_digest())
+        && is_sha256_hex(object.container_digest())
+}
+
+fn fencing_token_digest(token: &FencingToken) -> String {
+    let digest = Sha256::digest(token.as_str().as_bytes());
     let mut output = String::with_capacity(64);
     for byte in digest {
         use core::fmt::Write as _;
@@ -381,8 +466,12 @@ fn is_sha256_hex(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn non_negative_u64(value: i64) -> Option<u64> {
+    u64::try_from(value).ok()
+}
+
 fn i64_matches_u64(value: i64, expected: u64) -> bool {
-    u64::try_from(value).ok() == Some(expected)
+    non_negative_u64(value) == Some(expected)
 }
 
 fn u64_to_i64(value: u64) -> Result<i64, DeviceGenerationCommitError> {
