@@ -1,241 +1,72 @@
-# Browser Profile and Mail Runtime
+# Browser Profile Platform
 
-Самостоятельное приложение для создания, хранения, воспроизведения и
-сертификации browser profiles, безопасной проверки подключенных почтовых ящиков
-и привязки профилей к карточкам клиентов.
+Browser Profile Platform is a standalone, provider-neutral control plane for governed browser-profile,
+client, mailbox, device and notification workflows. The Rust control plane, Cloudflare adapters,
+Windows Profile Bridge and React operator UI are developed as one product with explicit authority and
+privacy boundaries.
 
-Первая рабочая версия разрабатывается в этом репозитории независимо. В будущем
-она подключается к CRM через версионированные contracts/events и заменяемые
-adapters, а не переносит Camoufox или локальный browser lifecycle в процесс CRM.
+## Current state
 
-## Текущий Статус
+- **Accepted repository-local product phase: Phase 2I.** The immutable acceptance ledger is
+  [`architecture/accepted-phases.json`](architecture/accepted-phases.json).
+- **Pre-2J remediation: ACTIVE / BLOCKING PHASE 2J.** The active repository-owned closeout is
+  [`docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md).
+- **Phase 2J has not started.** Real production evidence and controlled rollout remain blocked until
+  the pre-2J closure rule is satisfied on accepted `main`.
+- **Production readiness:** `production_ready=false`. The machine-readable projection is
+  [`docs/status.json`](docs/status.json).
 
-**Repository Steps 0–10 приняты в ограниченном repository-local scope.**
+Repository Steps 0–10 are historical delivery history, not the current implementation queue. Their
+accepted evidence remains in [`docs/DELIVERY_ROADMAP.md`](docs/DELIVERY_ROADMAP.md) and
+[`docs/evidence/`](docs/evidence/).
 
-- Step 0 создал exact Rust workspace, pure primitives и постоянный
-  Linux/Windows/WASM quality gate.
-- Step 1 добавил минимальный Rust Cloudflare Worker и доказал repository cold
-  build D1/R2/Queue/Durable Object/Static Assets boundary.
-- Step 2 добавил typed IDs и actor context, pure identity/client/profile/session/
-  mailbox domains, application ports, initial use cases, OpenAPI/protobuf v1 roots
-  и активные architecture/contract breaking-change gates.
-- Step 3 добавил strict D1 catalog migrations, tenant-inclusive constraints,
-  typed Cloudflare adapter, optimistic versions, idempotency/audit/outbox envelope
-  и постоянные migration/isolation negative gates.
-- Step 4 добавил Cloudflare Access RS256 identity adapter, active membership to
-  `ActorContext` resolution, owner bootstrap/transfer, invitations and membership
-  lifecycle, explicit client/profile ACL, neutral foreign-resource concealment,
-  governed atomic D1 commands and versioned authenticated Worker API.
-- Step 5 добавил one Durable Object per profile, monotonic lease epoch и
-  server-generated fencing token, launch/heartbeat/TTL/drain/recovery state
-  machine, stale-writer rejection, authenticated profile ACL boundary и
-  idempotently repairable D1 projection/outbox reconciliation.
-- Step 6 добавил pure Bridge domain и Windows-native `profile-bridge.exe`,
-  fail-closed redacted custom URI enrollment, single-use device-bound claim,
-  one-writer workspace epoch, clean/crash/timeout supervision, versioned fake
-  Camouhost IPC и локальный idempotent SQLite command/outbox protocol.
-- Step 7 добавил dependency-free runtime-bundle domain, deterministic
-  content-addressed synthetic bundle, safe path/extraction validation, typed
-  Bridge approval before spawn, rollback on IPC failure, fake Camouhost subprocess
-  и active/clean synthetic profile evidence.
-- Step 8 добавил marked opaque materialization paths, atomic Bridge-owned
-  lock-file protocol, deterministic regular-file inventory, clone-only recovery,
-  explicit dirty/recovery lifecycle, forgotten-window and safe quota policies,
-  metadata-only support evidence и отдельный Linux/Windows Local Profile Gate.
-- Step 9 добавил exact-pinned XChaCha20-Poly1305/SHA-256 container,
-  authenticated canonical metadata и final record, immutable generation
-  lifecycle, strict pointer CAS/rollback/quarantine/orphan planning, DEK-bound
-  nonce-reuse policy, zeroizing plaintext boundaries и Linux/Windows/WASM gate.
-- Step 10 добавил synthetic required/optional/prohibited certification policy,
-  deterministic drift matrix, privacy-safe support summary, device-scoped
-  grant/revoke/regrant journal, exact preverified update evidence binding,
-  health/rollback state machine и Linux/Windows/WASM Certification Gate.
+## Current authority
 
-Accepted Step 10 source head: `7d5ba8c2a00bac256a9365a40dee7e3c28ef5b56`.
-Exact-head Quality Gate run: `31074745842`. Certification Gate run:
-`31074745854`. Encrypted Generation regression: `31074745859`.
-Local Profile regression: `31074745880`. Runtime Bundle regression:
-`31074745848`. Squash merge: `3ddde2f48ddf82decf66c933ae5326a4455263e5`.
+Start with [`docs/INDEX.md`](docs/INDEX.md). The main current sources are:
 
-Нумерованный repository roadmap завершён на Step 10 и не продолжается
-искусственным Step 11. После него работа разделена на два явно разных трека:
+- [`docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) —
+  temporary pre-2J blocker and closure rule while its status is ACTIVE;
+- [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — normative product phase plan;
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) + accepted ADRs — stable architecture invariants;
+- [`docs/DEVELOPER_CAPABILITY_MATRIX.md`](docs/DEVELOPER_CAPABILITY_MATRIX.md) — accepted capability
+  and evidence level on `main`;
+- [`docs/status.json`](docs/status.json) — machine-readable current/readiness projection;
+- [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — canonical current repository-local threat model;
+- [`architecture/accepted-phases.json`](architecture/accepted-phases.json) — immutable accepted phase
+  provenance.
 
-- **completed repository-local composition epic #43**: authoritative profile-generation
-  registry/API, полный Profile Bridge operator flow, mailbox vertical slice,
-  React UI composition и cross-component synthetic acceptance приняты;
-- **external production evidence gates #3**: принятие ADR-0001 и ADR-0006, real
-  Camoufox fingerprint certification, второй независимый Windows host,
-  production device-key unwrap, remote R2/D1 atomicity, clean-environment escrow
-  restore, trusted Windows signing и independent security review.
+If prose conflicts, follow the hierarchy in `docs/INDEX.md`; do not infer acceptance from an open PR,
+historical evidence file or phase-specific closeout document.
 
-Profile Generation Registry/API (#44, PR #51) является первым bounded slice
-post-roadmap composition. Он не меняет machine-readable production readiness:
-[`docs/status.json`](docs/status.json) остаётся authoritative readiness projection.
+## Architecture snapshot
 
-Единственный разрешенный источник legacy-профилей:
+- pure Rust domain/application crates own business rules and provider-neutral use cases;
+- capability-specific application ownership is separated (`use-cases-clients`, `use-cases-identity`,
+  `use-cases-mailboxes`, `use-cases-devices`, `use-cases-notifications`, `use-cases-query`), while the
+  remaining shared `use-cases` crate owns current Profile/Generation/coordinator orchestration;
+- Cloudflare D1/R2/Queue/Durable Object and provider mechanics stay in outer adapters/composition;
+- the React SPA uses feature-owned routes and feature-owned capability API modules; shared API code is
+  transport/generated-contract infrastructure only;
+- governed public DTOs are Rust-owned and generated deterministically to OpenAPI/TypeScript;
+- authorization, neutral disclosure, idempotency, fencing, privacy and recovery boundaries are backed
+  by permanent positive and negative CI evidence.
 
-```text
-temp/browser_profiles/
+## Fast local verification
+
+```bash
+python scripts/verify-fast.py
+python scripts/verify-fast.py --with-compile
 ```
 
-В нем находится 22 профиля. Оригиналы запрещено запускать, автоматически
-исправлять, очищать или мигрировать на месте. Все эксперименты выполняются на
-изолированных копиях с новым generation ID.
+Full acceptance still requires all permanent GitHub workflows to succeed on one unchanged exact PR
+head, zero blocking reviews/unresolved threads, `behind_by=0` and a guarded squash merge.
 
-## Порядок Разработки
+## Development and security
 
-Работа выполняется последовательными Repository Steps через GitHub branch, PR,
-постоянный CI и squash merge. Нормативный порядок находится в
-[`docs/DELIVERY_ROADMAP.md`](docs/DELIVERY_ROADMAP.md). После завершённого Step 10
-новые repository-local capabilities поставляются bounded PR из composition epic
-#43, а не получают искусственные номера Step 11+.
+- Contributor workflow: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Security policy: [`SECURITY.md`](SECURITY.md)
+- Product intent: [`docs/PRODUCT.md`](docs/PRODUCT.md)
+- Future CRM boundary: [`docs/FUTURE_DEVELOPMENT.md`](docs/FUTURE_DEVELOPMENT.md)
 
-Текущая среда позволяет автономно выполнять repository code, tests, workflows,
-issues, PR review fixes и merge. Внешние операции не симулируются: credential
-rotation, Cloudflare account provisioning, физический Windows host, trusted code
-signing и offline key escrow требуют отдельного подтверждаемого evidence.
-
-## Основная Документация
-
-- [Product boundary](docs/PRODUCT.md)
-- [Delivery roadmap](docs/DELIVERY_ROADMAP.md)
-- [Экспертный implementation plan](IMPLEMENTATION_PLAN.md)
-- [Архитектурная карта](docs/ARCHITECTURE.md)
-- [Архитектура standalone UI](docs/UI_ARCHITECTURE.md)
-- [Cross-component repository-local acceptance](docs/CROSS_COMPONENT_ACCEPTANCE.md)
-- [Целевой жизненный цикл профиля](PROFILE_LIFECYCLE_PLAN.md)
-- [Contract compatibility policy](docs/CONTRACT_POLICY.md)
-- [D1 catalog boundary](docs/D1_CATALOG.md)
-- [Profile Generation Registry boundary](docs/PROFILE_GENERATION_REGISTRY.md)
-- [Profile Coordinator boundary](docs/PROFILE_COORDINATOR.md)
-- [Windows Bridge feasibility boundary](docs/WINDOWS_BRIDGE_FEASIBILITY.md)
-- [Camouhost runtime bundle boundary](docs/CAMOUHOST_RUNTIME_BUNDLE.md)
-- [Local profile lifecycle boundary](docs/LOCAL_PROFILE_LIFECYCLE.md)
-- [Encrypted cloud generations boundary](docs/ENCRYPTED_CLOUD_GENERATIONS.md)
-- [Certification and multi-device boundary](docs/CERTIFICATION_MULTI_DEVICE.md)
-- [ADR status registry](docs/ADR_STATUS.md)
-- [Threat model](docs/THREAT_MODEL.md)
-- [Data classification](docs/DATA_CLASSIFICATION.md)
-- [Privacy and retention governance](docs/PRIVACY_AND_RETENTION.md)
-- [Test and evidence index](docs/TEST_EVIDENCE_INDEX.md)
-- [Cloudflare cold-build evidence](docs/evidence/2026-08-05-repository-step-1-cloudflare-cold-build.md)
-- [Domain and contract evidence](docs/evidence/2026-08-05-repository-step-2-domain-contract-skeleton.md)
-- [D1 catalog evidence](docs/evidence/2026-08-05-repository-step-3-d1-catalog-foundation.md)
-- [Identity, clients and ACL evidence](docs/evidence/2026-08-06-repository-step-4-identity-clients-acl.md)
-- [Profile Coordinator evidence](docs/evidence/2026-08-06-repository-step-5-profile-coordinator.md)
-- [Windows Bridge feasibility evidence](docs/evidence/2026-08-06-repository-step-6-windows-bridge-feasibility.md)
-- [Camouhost runtime bundle evidence](docs/evidence/2026-08-06-repository-step-7-camouhost-runtime-bundle.md)
-- [Local profile lifecycle evidence](docs/evidence/2026-08-06-repository-step-8-local-profile-lifecycle.md)
-- [Encrypted cloud generations evidence](docs/evidence/2026-08-06-repository-step-9-encrypted-cloud-generations.md)
-- [Certification and multi-device evidence](docs/evidence/2026-08-06-repository-step-10-certification-multi-device.md)
-- [Проверенные выводы исследования](docs/RESEARCH_FINDINGS.md)
-- [Cloud profile smoke test](docs/CLOUD_PROFILE_SMOKE_TEST.md)
-- [Текущая проверка готовности плана](docs/PLAN_READINESS_REVIEW.md)
-- [Полный индекс документов](docs/README.md)
-
-## Целевая Форма Системы
-
-```text
-app.example.com -> one Cloudflare Worker deployment
-  browser routes -> Cloudflare Access -> Rust API + React Static Assets
-  bridge routes  -> device-proof policy -> Rust API
-  control plane  -> D1 + Durable Objects + Queues/Schedules + encrypted R2
-
-React UI
-  -> profilebridge://claim/<single-use-code>
-    -> Windows-native Rust Profile Bridge
-      -> local encrypted workspace + SQLite cache/outbox
-      -> typed IPC -> embedded Python Camouhost
-        -> separate visible Camoufox window
-```
-
-Standalone v1 не требует отдельной VM, PostgreSQL или Keycloak. Cloudflare
-является control plane и хостингом, а Camoufox исполняется только на компьютере
-пользователя. Browser payload никогда не исполняется непосредственно из R2.
-
-## Базовый Стек
-
-- Rust `1.97.1`, edition `2024`, exact toolchain;
-- `worker 0.8.5`, direct `wasm-bindgen 0.2.126` и `worker-build 0.8.5` для
-  Cloudflare Worker baseline;
-- pure Rust domains and application ports, compiled natively and for Workers WASM;
-- typed Cloudflare D1 adapters with direct `serde 1.0.229` macro dependency;
-- forward-only strict D1 migrations tested with Wrangler `4.94.0` and SQLite;
-- Cloudflare Access RS256/JWK identity verification through Workers WebCrypto;
-- Tokio только в native Profile Bridge и локальных tools;
-- Cloudflare Workers Static Assets для React SPA и same-origin API;
-- Cloudflare Access identity отдельно от application memberships/grants;
-- D1 для каталога/audit, Durable Object на профиль, R2 для encrypted immutable
-  generations;
-- SQLite WAL только для локального rebuildable cache/outbox Bridge;
-- embedded Python/Camoufox runtime как отдельный signed bundle;
-- OpenAPI v1 для web API и protobuf v1 для Bridge/CRM contracts.
-
-Step 1 подтвердил reproducible repository cold build Cloudflare pins. Step 2
-добавил immutable v1 compatibility floor. Step 3 подтвердил local D1 migration
-replay, tenant constraints, typed adapter compilation and Worker packaging. Step
-4 подтвердил authenticated owner/member Worker slice, explicit ACL и
-transaction-fatal governed D1 mutations. Step 5 подтвердил repository-local
-Durable Object coordinator, monotonic epoch/fencing, timeout uncertainty,
-assignment-independent authorization, repairable D1 projection и release Worker
-packaging. Step 6 подтвердил provider-free Bridge boundaries, redacted
-single-use enrollment, local writer/process/outbox semantics и non-empty Windows
-release executable. Step 7 подтвердил deterministic synthetic runtime bundle,
-manifest/path/content verification, Bridge approval before spawn, rollback and
-active-versus-clean synthetic lifecycle. Step 8 подтвердил safe marked local
-materialization, atomic Bridge lock-file ownership, deterministic inventory,
-clone-only integrity evidence, dirty/recovery preservation, quota exclusion and
-metadata-only support output. Step 9 подтвердил synthetic authenticated encrypted-generation container,
-immutable lifecycle, DEK-bound nonce protection, zeroizing plaintext memory,
-strict parsing, pointer/rollback/quarantine/orphan behavior и native/WASM
-portability. Step 10 подтвердил synthetic certification matrix, explicit
-prohibited/incomplete/drift outcomes, immutable device-grant journal, exact
-preverified release/health identity и fail-closed rollback state machine. Remote
-staging, real Camoufox, kernel advisory locking, third-party redistribution,
-trusted signing, backup/restore, physical multi-device runtime и account recovery
-пока не считаются выполненными.
-
-Post-roadmap composition отдельно добавляет executable catalog/API capabilities
-без изменения external-evidence claims. Текущий profile-generation slice
-связывает immutable generation metadata, governed verification, exact activation/
-deactivation, coordinator eligibility и quarantine через typed D1/Worker/OpenAPI
-boundaries; реальный R2 object lifecycle и device execution по-прежнему требуют
-отдельного external evidence.
-
-## Ключевые Инварианты
-
-1. Profile ID является opaque typed ID и никогда не равен email или имени каталога.
-2. Каждый application command/query получает verified `ActorContext` и tenant scope.
-3. D1 reads require typed `TenantScope`; mutations require `ActorContext`.
-4. Raw D1 statements принадлежат только Cloudflare adapter boundary.
-5. Tenant-owned D1 relations используют tenant-inclusive keys и foreign keys.
-6. Один профиль имеет только одного writer через Durable Object lease, monotonic
-   epoch/fencing token и локальный Bridge-owned lock protocol.
-7. Firefox lock-файлы никогда не удаляются автоматически.
-8. Snapshot создается только после graceful close и подтвержденного quiescence.
-9. R2 не используется как live filesystem: generation сначала материализуется
-   на локальный диск.
-10. Cookies, localStorage, IndexedDB, fingerprint data и mailbox secrets являются
-    credential-equivalent данными.
-11. Пароли, proxy credentials и OAuth tokens хранятся только как secret handles.
-12. Assignment профиля клиенту не является правом доступа.
-13. Member без явного grant не видит и не запускает профиль.
-14. Missing, foreign и unauthorized resources имеют одинаковую neutral disclosure
-    форму там, где раскрытие запрещено.
-15. Pure domains не зависят от Cloudflare, Windows, Python, browser или storage SDK.
-16. D1, Durable Objects и R2 связываются idempotency, immutable objects, outbox и
-    reconciliation, а не фиктивной общей транзакцией.
-17. Статус ADR и readiness берётся из `ADR_STATUS.md` и `status.json`.
-
-## Безопасность До Реализации
-
-В legacy-скриптах и истории репозитория обнаружен hardcoded proxy credential.
-Он считается скомпрометированным и должен быть отозван/ротирован владельцем с
-provider-side подтверждением (issue #1). Удаление строки из Git не является
-remediation. Значение секрета запрещено переносить в новую конфигурацию,
-документацию, тесты, issues или логи.
-
-До production cloud sync ADR-0006 должен стать accepted, а clean-environment
-restore drill должен подтвердить root wrapping key, tenant KEK, rotation,
-offline recovery escrow и key-loss policy. Обычный Workers Secret сам по себе не
-считается завершенной key-management системой.
+Phase 2J External evidence cannot be substituted with repository-local/synthetic proof and cannot set
+`production_ready=true` before every mandatory external acceptance gate is reviewed and accepted.

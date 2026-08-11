@@ -1,10 +1,14 @@
 # Phase 2I Repository-Local Threat Model
 
+**Historical accepted Phase 2I evidence.**
+**Canonical current threat model: [THREAT_MODEL.md](THREAT_MODEL.md).**
 Status: ACCEPTED for repository-local Phase 2I scope. Production readiness remains false pending Phase 2J External evidence.
 
 ## Trust boundaries
 
-The accepted system separates browser UI, Control Plane Worker, D1 catalog, R2 immutable generations, Durable Object coordination, mailbox providers, device execution, and the local Profile Bridge. Application/domain layers remain provider-agnostic; adapters own provider mechanics.
+The accepted Phase 2I system separated browser UI, Control Plane Worker, D1 catalog, R2 immutable
+generations, Durable Object coordination, mailbox providers, device execution and the local Profile
+Bridge. Application/domain layers remained provider-agnostic; adapters owned provider mechanics.
 
 ## Threat and control matrix
 
@@ -27,8 +31,13 @@ The accepted system separates browser UI, Control Plane Worker, D1 catalog, R2 i
 
 ## Residual External risks
 
-Phase 2I does not convert repository-local tests into proof of production Cloudflare behavior, real mailbox-provider behavior, real Camoufox execution, physical multi-device behavior, production device-key protection, trusted signing, remote R2/key recovery, or independent cryptographic review. Those remain Phase 2J evidence requirements.
+Phase 2I did not convert repository-local tests into proof of production Cloudflare behavior, real
+mailbox-provider behavior, real Camoufox execution, physical multi-device behavior, production device-key
+protection, trusted signing, remote R2/key recovery or independent cryptographic review. Those remain
+Phase 2J evidence requirements and are tracked in the canonical threat model.
 
 ## Closure rule
 
-A repository-owned threat is closed for Phase 2I only when its control is executable in permanent CI or explicitly represented by a fail-closed policy with negative fixtures. Any unresolved repository-owned architecture/security finding blocks Phase 2I acceptance. External evidence gaps continue to keep production readiness false without being misreported as repository-local failures.
+A repository-owned threat was closed for Phase 2I only when its control was executable in permanent CI
+or explicitly represented by a fail-closed policy with negative fixtures. External evidence gaps
+continued to keep production readiness false without being misreported as repository-local failures.

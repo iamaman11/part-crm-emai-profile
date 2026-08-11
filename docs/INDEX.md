@@ -1,60 +1,54 @@
-# Documentation Index
+# Documentation Authority Index
 
-**Status:** navigation / documentation governance  
-**Date:** 2026-08-10
+This index defines which repository documents are normative **now** and which files are historical or
+evidence-only. It is intentionally small so current implementation and security truth do not drift
+across multiple roadmaps.
 
-This page is the entry point for repository documentation and makes document authority
-explicit.
+## Current repository state
 
-## Normative Current Sources
+- Accepted repository-local product phase: **Phase 2I**, proven by
+  [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json).
+- Phase 2J remains blocked while the pre-2J remediation plan is ACTIVE.
+- Machine-readable readiness authority: [`status.json`](status.json), with `production_ready=false`.
+- Canonical current repository-local security authority: [`THREAT_MODEL.md`](THREAT_MODEL.md).
 
-- [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md) — **single normative post-composition execution order**: what comes next, phase dependencies and acceptance.
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — stable architecture boundaries, ownership and allowed dependency direction.
-- [`DATA_CLASSIFICATION.md`](./DATA_CLASSIFICATION.md) — normative data classes, storage/logging/disclosure and mailbox-content handling.
-- [`UI_ARCHITECTURE.md`](./UI_ARCHITECTURE.md) — normative standalone product/UI target.
-- accepted ADRs/security/privacy documents — invariant authority for their bounded concern.
+## Authority hierarchy
 
-## Current Implementation / Evidence Orientation
+1. While [`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) is
+   **ACTIVE / BLOCKING PHASE 2J**, it is the temporary execution blocker and closure rule. It may stop
+   the next product phase but does not redefine product scope.
+2. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) defines product phase order, ownership and acceptance.
+3. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs and [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md)
+   define stable architecture/security/privacy invariants.
+4. [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) defines the standalone UI target.
+5. [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md) records what is accepted on `main`
+   and at which evidence level.
+6. [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json) is the immutable phase
+   provenance ledger; [`status.json`](status.json) is the current machine-readable projection.
+7. [`THREAT_MODEL.md`](THREAT_MODEL.md) is the canonical current threat model. Phase-specific threat
+   documents are accepted evidence/history only.
 
-- [`DEVELOPER_CAPABILITY_MATRIX.md`](./DEVELOPER_CAPABILITY_MATRIX.md) — authoritative accepted implementation/evidence level (`Composed`, `Library`, `Synthetic`, `Target`, `External`).
-- [`../architecture/inventory.json`](../architecture/inventory.json) — deterministic machine-readable inventory of workspace members, D1 migrations, public route/classifier ownership, generated public contracts and documentation authority; CI verifies drift against repository truth.
-- [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json) — immutable machine-readable ledger of accepted phase issue, implementation PR, exact source head, merge SHA and permanent-workflow count; CI rejects conflicting `DEVELOPMENT_PLAN.md` provenance.
-- [`PROFILE_APPLICATION_BOUNDARY.md`](./PROFILE_APPLICATION_BOUNDARY.md) — capability-specific profile application-boundary architecture/evidence.
-- [`PROFILE_GENERATION_REGISTRY.md`](./PROFILE_GENERATION_REGISTRY.md) — profile-generation lifecycle/storage contract.
-- [`REALTIME_NOTIFICATIONS.md`](./REALTIME_NOTIFICATIONS.md) — accepted Phase 2G durable-first, metadata-safe realtime invalidation topology, authorization/reconnect semantics and non-authoritative frontend contract.
+If these sources disagree, implementation stops and the authority documents are corrected before work
+continues. An open branch/PR never outranks accepted `main`.
 
-## Future Development — Not Active Execution
+## Current architecture and capability references
 
-- [`FUTURE_DEVELOPMENT.md`](./FUTURE_DEVELOPMENT.md) — post-standalone evolution only. External CRM/Party integration is explicitly outside the active Phase 1–2 critical path and can be considered only after Phase 2J production-readiness closure.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md)
+- [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md)
+- [`REALTIME_NOTIFICATIONS.md`](REALTIME_NOTIFICATIONS.md)
+- [`PROFILE_GENERATION_REGISTRY.md`](PROFILE_GENERATION_REGISTRY.md)
+- [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md)
+- [`THREAT_MODEL.md`](THREAT_MODEL.md)
+- [`TEST_EVIDENCE_INDEX.md`](TEST_EVIDENCE_INDEX.md)
 
-## Historical / Design Baseline
+## Historical and evidence context
 
-- [`DELIVERY_ROADMAP.md`](./DELIVERY_ROADMAP.md) — historical Repository Steps 0–10 and their delivery discipline. Old Step 11–12 sketches are superseded by current `DEVELOPMENT_PLAN.md` phases.
-- [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) — original expert design baseline; not current execution order.
-- [`../PROFILE_LIFECYCLE_PLAN.md`](../PROFILE_LIFECYCLE_PLAN.md) and similar original plans — historical/design input unless a current normative document explicitly delegates an invariant to them.
+- [`DELIVERY_ROADMAP.md`](DELIVERY_ROADMAP.md) — historical Repository Steps 0–10.
+- [`evidence/`](evidence/) — immutable/bounded acceptance evidence.
+- [`PHASE2I_THREAT_MODEL.md`](PHASE2I_THREAT_MODEL.md) — Historical accepted Phase 2I evidence; current
+  threat authority is `THREAT_MODEL.md`.
+- Phase-specific governance/closeout/runbook files preserve the evidence and reasoning of their owning
+  phase; they do not become a second current roadmap.
 
-## Authority Rules
-
-1. **What to implement next:** `DEVELOPMENT_PLAN.md` only.
-2. **How the architecture is allowed to work:** `ARCHITECTURE.md` + accepted ADR/security/data-classification invariants.
-3. **What is actually implemented/accepted:** `DEVELOPER_CAPABILITY_MATRIX.md` + merged code/CI/evidence.
-4. **Accepted phase provenance:** `architecture/accepted-phases.json` is the machine-readable integrity ledger; normative prose may explain accepted evidence but may not contradict its issue/PR/SHA record.
-5. **Future development:** `FUTURE_DEVELOPMENT.md` records post-standalone ideas only; it never supplies `NEXT` and never overrides the active Phase 1–2 order.
-6. **Historical rationale:** old roadmaps/plans; they never override current execution order.
-
-A plan/specification is not an implementation claim. PR descriptions are not acceptance
-evidence; the actual merged diff and exact-head gates are authoritative.
-
-External/physical/provider claims remain External until the repository's evidence process
-accepts real evidence.
-
-## Documentation Governance
-
-- Do not create another parallel normative execution roadmap.
-- Execution-order changes go into `DEVELOPMENT_PLAN.md`.
-- Invariant changes go into the relevant architecture/ADR/security document before code acceptance.
-- Capability PRs update the matrix only for claims they actually change.
-- Accepted issue/PR/source-head/merge-SHA history must match `architecture/accepted-phases.json`.
-- New normative documents must be linked here or folded into an existing source.
-- Temporary amendments must be consolidated and removed rather than accumulating precedence layers.
-- Machine-checkable documentation claims should become CI checks where practical.
+Future CRM/Party work remains future-only in [`FUTURE_DEVELOPMENT.md`](FUTURE_DEVELOPMENT.md) until the
+standalone product passes Phase 2J.

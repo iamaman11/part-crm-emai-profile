@@ -1,75 +1,87 @@
 # Threat Model
 
-**Статус:** Phase 0 baseline; requires review before production data  
-**Метод:** trust-boundary and STRIDE-oriented analysis
+**Status:** Canonical current repository-local threat model; Phase 2I accepted repository-local controls
+**Production readiness:** `production_ready=false`; Phase 2J External residual risks remain unaccepted
+**Method:** trust-boundary and STRIDE-oriented analysis
 
-## 1. Защищаемые Активы
+## 1. Protected assets
 
-- browser profile generations: cookies, login databases, localStorage, IndexedDB;
-- profile entropy/fingerprint policy and network bindings;
+- browser profile generations: cookies, login databases, localStorage, IndexedDB and materialized state;
+- profile entropy/fingerprint/network identity policy and observations;
 - mailbox, proxy and OAuth secret handles;
 - root wrapping keys, tenant KEK, generation DEK and device private keys;
-- memberships, grants, client records and assignments;
-- launch intents, leases, fencing tokens and session state;
-- runtime/Bridge installers, signatures and update metadata;
-- audit, evidence and recovery artifacts.
+- memberships, grants, client/contact records and historical profile assignments;
+- launch intents, durable jobs, leases, fencing tokens, sessions and realtime cursors;
+- runtime/Bridge installers, signatures, update metadata and immutable generation objects;
+- audit, support, operational evidence, backup and recovery artifacts.
 
-## 2. Trust Boundaries
+## 2. Trust boundaries
 
-1. Browser user -> Cloudflare Access.
-2. Access identity -> application membership/grant.
-3. React SPA -> Rust Worker API.
-4. Browser launch intent -> Windows Profile Bridge.
-5. Bridge device key -> device-bound Worker routes.
-6. Worker -> D1, Durable Objects, Queues and R2.
-7. Bridge -> local encrypted workspace and SQLite outbox.
-8. Bridge -> embedded Camouhost IPC -> Camoufox process.
-9. Operators -> Cloudflare account, signing keys and recovery escrow.
-10. Future CRM -> versioned contracts, never direct profile storage.
+1. Browser user -> Cloudflare Access -> verified application actor.
+2. Verified actor -> live tenant membership/capability/grant authorization.
+3. React SPA -> Rust Control Plane Worker API; UI state is never authorization authority.
+4. Worker application orchestration -> D1/R2/Queue/Durable Objects through outer adapters.
+5. Mailbox application ports -> cloud provider adapters or browser/device execution lane.
+6. Durable device job/claim -> Windows Profile Bridge device identity and fencing context.
+7. Bridge -> local workspace/SQLite outbox -> embedded browser runtime process.
+8. Immutable encrypted generation -> exact verification -> authoritative catalog activation.
+9. Durable notification/realtime event -> current authorization -> metadata-only invalidation -> refetch.
+10. Operators -> Cloudflare account, signing material, recovery escrow and production rollout controls.
+11. Future CRM -> versioned contracts only; never direct profile/mailbox authority.
 
-## 3. Principal Threats And Required Controls
+## 3. Phase 2I accepted repository-local controls
 
-| Threat | Example | Required controls |
+| Threat | Accepted repository-local control | Permanent evidence class |
 |---|---|---|
-| Spoofing | forged Access subject or device | full JWT validation, live membership, device proof-of-possession, short-lived tokens |
-| Privilege escalation | viewer calls operator endpoint | server-side capability checks, default deny, IDOR suite, no UI-only authorization |
-| Replay | reused launch intent or command | single-use nonce, expiry, actor/device binding, idempotency record |
-| Concurrent stale writer | old device uploads later | DO lease epoch, fencing token, expected profile version, immutable object key |
-| Secret disclosure | credentials in logs/support bundle | secret handles, redaction, tracked-file scan, bounded audit schemas |
-| Storage compromise | R2 snapshot read by attacker | application-layer authenticated encryption and scoped object operations |
-| Key loss | Cloudflare account/root secret lost | offline escrow, version inventory, dual control and clean recovery drill |
-| Malicious archive | path traversal/symlink escape | safe streaming extraction, canonical paths, inventory and size limits |
-| Runtime supply-chain attack | tampered Bridge/Camoufox bundle | content address, signature, SBOM, side-by-side activation and rollback |
-| Local theft | copied workspace/device | OS-protected device key, encrypted workspace, revoke and bounded plaintext lifetime |
-| Cross-tenant disclosure | unscoped D1 query | single-tenant deployment guard, typed scope, tenant-inclusive keys, negative tests |
-| Denial of service/cost abuse | intent flood, queue/R2 growth | rate limits, quotas, retry budgets, DLQ, retention and cost alerts |
-| Audit tampering | mutation without trace | mutation envelope, append-only logical events, correlation and reconciliation |
-| Browser escape/abuse | generic remote command | typed IPC only, capability allowlist, no generic exec or privileged localhost API |
+| Cross-tenant / IDOR access | live membership/capability/grant checks before projection/provider/device/realtime access; neutral denial | identity/query/application boundary gates and cross-component acceptance |
+| Result-count / existence disclosure | foreign and absent resources are public-response neutral; denied paths return no foreign projections/counts | query/transport negative fixtures |
+| Revoked actor receives realtime data | current authorization before catch-up/live delivery; durable cursor semantics | Phase 2G notification/realtime policy/tests |
+| Realtime becomes business authority | metadata-only invalidation followed by authorized refetch; no direct business query mutation | frontend realtime policy/self-tests |
+| Duplicate/replayed command | idempotency receipts, replay neutrality and atomic governed mutation envelopes | D1/application/mailbox/device tests |
+| Concurrent or stale writer | expected-version CAS, coordinator/device/generation fencing and single-writer ownership | coordinator/device/generation tests |
+| Unverified/corrupt generation becomes active | immutable candidate, exact verification, quarantine/fail-closed parsing, then activation | profile-generation/encrypted-generation/R2 gates |
+| Failed remote commit destroys recoverable local state | retained dirty/operator-owned state until verified remote commit | Bridge/materialization recovery tests |
+| Provider outage/auth expiry reported as success | explicit retry/auth-required/suspended/failed durable states | mailbox application failure tests |
+| Offline/busy device reported as success | durable retry/remediation state and bounded claims; no false completion | device domain/application tests |
+| Corrupt backup/restore | point-in-time restore plus schema/data/integrity validation | Phase 2I recovery/DR drills |
+| Sensitive/high-cardinality telemetry | metadata/class-only dimensions and explicit forbidden identifier/content classes | operational-bounds negative policy |
+| Sensitive support evidence | allowlist-only support fields and sanitizer/forbidden-data policy | support-bundle negative policy |
+| Dependency/CI source substitution | exact dependency locks, approved sources and SHA-pinned permanent actions | supply-chain/license/runtime policies |
+| Malicious archive/path escape | safe paths, streaming/bounded extraction and deterministic inventory | runtime bundle/materialization gates |
+| Browser/runtime command abuse | typed bounded IPC/capability allowlists; no generic privileged command channel | Bridge/runtime contract gates |
 
-## 4. Fail-Closed Rules
+## 4. Fail-closed rules
 
-- Unknown membership, grant, device, runtime or generation state denies access.
-- Foreign and absent resources produce indistinguishable public responses.
-- Unverified generation cannot become active.
-- Dirty local state cannot be evicted.
-- Unknown snapshot file is not silently discarded.
-- Expired/stale fencing token cannot activate a generation.
+- Unknown membership, grant, device, runtime, mailbox or generation state denies access.
+- Foreign and absent resources produce indistinguishable public denial behavior.
+- Authorization precedes projection, provider, device and realtime access.
+- Unverified/corrupt/quarantined generation cannot become authoritative.
+- Dirty or recovery-required local state is not silently evicted or overwritten.
+- Expired/stale fencing, claim, generation or session state cannot write newer authority.
 - Missing key/recovery evidence quarantines data rather than guessing.
-- Signature or update verification failure preserves the previous runtime.
+- Signature/update verification failure preserves the previous accepted runtime.
+- Confidential mail input stays in request bodies; sanitized mail HTML remains sandboxed and non-networked.
+- Technical telemetry/support/evidence never carries raw PII, secrets, mailbox content or unbounded IDs.
 
-## 5. Explicit Residual Risks
+## 5. Phase 2J External residual risks
 
-- Cloudflare account compromise remains a high-impact control-plane event.
-- D1 lacks PostgreSQL RLS defense in depth.
-- A compromised authorized endpoint can observe plaintext while a profile is in use.
-- External fingerprint checkers and target sites change independently.
-- A physical device with an active unlocked session can expose profile state.
-- Current one-device smoke test does not prove multi-device or disaster recovery.
+Repository-local Phase 2I evidence does **not** prove production Cloudflare behavior, real mailbox-provider
+behavior, real Camoufox/fingerprint behavior, physical multi-device recovery, production device-key
+protection, trusted Windows signing/update, remote R2/key recovery, offline escrow restore, independent
+cryptographic review, production privacy/retention approval or operational rollout/on-call readiness.
 
-## 6. Review Gates
+Cloudflare account compromise remains high impact; D1 has no PostgreSQL-style RLS defense in depth; an
+authorized compromised endpoint/device can observe plaintext while a profile is in active use; provider
+and fingerprint behavior changes independently. These risks are accepted only through the applicable
+real Phase 2J evidence/review, never by relabelling synthetic tests.
 
-The threat model must be updated when a trust boundary, cryptographic protocol,
-identity provider, operating system lane, mailbox provider, second tenant or CRM
-adapter is introduced. Production promotion requires evidence links in
-`TEST_EVIDENCE_INDEX.md` for key recovery, device revoke, stale-writer rejection,
-archive corruption and clean-environment restore.
+## 6. Security authority and review gates
+
+This file is the canonical current threat model. [`PHASE2I_THREAT_MODEL.md`](PHASE2I_THREAT_MODEL.md)
+is Historical accepted Phase 2I evidence and remains useful provenance, but it does not override this
+model.
+
+Update this model whenever a trust boundary, cryptographic protocol, identity provider, operating-system
+lane, mailbox provider, tenant model or future CRM adapter changes. Production promotion requires the
+Phase 2J evidence matrix and immutable reviewed evidence for all mandatory external security/recovery
+controls; until then `production_ready=false`.

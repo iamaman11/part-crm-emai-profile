@@ -43,6 +43,7 @@ def main() -> int:
         "check-step5-profile-coordinator.py",
         "check-step6-windows-bridge.py",
         "check-frontend-feature-boundaries.py",
+        "check-documentation-authority.py",
         "check-phase1a-event-boundaries.py",
     ]
     for script in scripts:
