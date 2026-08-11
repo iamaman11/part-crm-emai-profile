@@ -4,12 +4,12 @@ use crate::access_session::{
 use crate::command_evidence;
 use crate::composition::profile_generation_application;
 use application_ports::generations::{GenerationReadModel, GenerationStatus};
+use control_plane_contract::RouteClass;
 use control_plane_contract::profile_generation_api::{
     GenerationProjectionDto, GenerationStatusDto, ProfileGenerationVersionRequest,
     QuarantineGenerationRequest, RegisterGenerationRequest, VerifyGenerationRequest,
 };
 use control_plane_contract::public_api::MutationReceipt;
-use control_plane_contract::RouteClass;
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, AggregateVersion, GenerationId, ProfileId};
 use use_cases::generations::{
@@ -385,9 +385,15 @@ mod tests {
     #[test]
     fn domain_status_mapping_covers_every_public_generation_status() {
         for (domain, wire) in [
-            (GenerationStatus::Registered, GenerationStatusDto::Registered),
+            (
+                GenerationStatus::Registered,
+                GenerationStatusDto::Registered,
+            ),
             (GenerationStatus::Verified, GenerationStatusDto::Verified),
-            (GenerationStatus::Quarantined, GenerationStatusDto::Quarantined),
+            (
+                GenerationStatus::Quarantined,
+                GenerationStatusDto::Quarantined,
+            ),
         ] {
             assert_eq!(generation_status(domain), wire);
         }
