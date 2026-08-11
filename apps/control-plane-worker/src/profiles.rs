@@ -4,20 +4,20 @@ use crate::access_session::{
 use crate::command_evidence;
 use crate::composition::profile_application;
 use application_ports::profiles::ProfileStatus;
+use control_plane_contract::RouteClass;
 use control_plane_contract::profile_generation_api::{
     ProfileAssignmentRequest, ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto,
     ProfileStatusDto,
 };
 use control_plane_contract::public_api::MutationReceipt;
-use control_plane_contract::RouteClass;
 use profile_platform_primitives::{ActorId, AggregateVersion, AssignmentId, ClientId, ProfileId};
 use use_cases::profile_assignments::{
     ExecuteAssignProfileCommand, ProfileAssignmentOperationError, ProfileAssignmentOutcome,
     authorize_profile_assignment, execute_assign_profile, next_profile_assignment_version,
 };
 use use_cases::profile_grants::{
-    ExecuteProfileGrantCommand, ProfileGrantAction, ProfileGrantOperationError, ProfileGrantOutcome,
-    authorize_profile_grant, execute_profile_grant,
+    ExecuteProfileGrantCommand, ProfileGrantAction, ProfileGrantOperationError,
+    ProfileGrantOutcome, authorize_profile_grant, execute_profile_grant,
 };
 use use_cases::profiles::{
     ExecuteCreateProfileCommand, ProfileDetails, ProfileMutationOutcome, ProfileOperationError,
@@ -375,7 +375,9 @@ fn profile_projection(profile: &ProfileDetails) -> ProfileProjectionDto {
         profile_id: profile.profile_id().as_str().to_owned(),
         status: profile_status(profile.status()),
         version: profile.version().value(),
-        linked_client_id: profile.linked_client_id().map(|value| value.as_str().to_owned()),
+        linked_client_id: profile
+            .linked_client_id()
+            .map(|value| value.as_str().to_owned()),
     }
 }
 
