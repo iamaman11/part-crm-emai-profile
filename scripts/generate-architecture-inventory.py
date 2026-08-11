@@ -12,6 +12,7 @@ import argparse
 import copy
 import json
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -140,6 +141,9 @@ REQUIRED_INDEX_LINKS = [
     "DEVELOPER_CAPABILITY_MATRIX.md",
     "accepted-phases.json",
     "REALTIME_NOTIFICATIONS.md",
+    "PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+    "status.json",
+    "THREAT_MODEL.md",
 ]
 
 
@@ -203,6 +207,17 @@ def validate_route_ownership() -> None:
 
 
 def validate_docs() -> None:
+    authority = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "check-documentation-authority.py"), "--root", str(ROOT)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if authority.returncode != 0:
+        details = "\n".join(value.strip() for value in (authority.stdout, authority.stderr) if value.strip())
+        raise SystemExit(f"documentation authority check failed:\n{details}")
+
     index = (ROOT / "docs" / "INDEX.md").read_text(encoding="utf-8")
     missing_links = [value for value in REQUIRED_INDEX_LINKS if value not in index]
     if missing_links:
@@ -212,11 +227,14 @@ def validate_docs() -> None:
     architecture = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     matrix = (ROOT / "docs" / "DEVELOPER_CAPABILITY_MATRIX.md").read_text(encoding="utf-8")
     next_sections = re.findall(r"^### (Phase [^\n]+?) — NEXT\s*$", plan, re.MULTILINE)
-    if len(next_sections) != 1:
-        raise SystemExit(f"DEVELOPMENT_PLAN.md must have exactly one Phase ... — NEXT section: {next_sections}")
+    if next_sections:
+        raise SystemExit(f"no product Phase ... — NEXT section is allowed while pre-2J remediation is active: {next_sections}")
+    blocked_phase2j = "Phase 2J — Production-readiness evidence and controlled rollout — BLOCKED / NEXT AFTER PRE-2J"
+    if blocked_phase2j not in plan:
+        raise SystemExit("DEVELOPMENT_PLAN.md must keep Phase 2J blocked behind pre-2J closure")
     immediate = plan.split("## 19. Immediate Next Action", 1)
-    if len(immediate) != 2 or next_sections[0].split(" — ", 1)[0] not in immediate[1]:
-        raise SystemExit("Immediate Next Action is inconsistent with the unique NEXT phase")
+    if len(immediate) != 2 or "PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md" not in immediate[1] or "Do not start Phase 2J" not in immediate[1]:
+        raise SystemExit("Immediate Next Action must enforce the active pre-2J blocker")
 
     required_plan_markers = (
         "Phase 2D — CQRS read models, global search and client-mail query contract — ACCEPTED",
@@ -225,7 +243,8 @@ def validate_docs() -> None:
         "Phase 2G — Durable realtime notification hub — ACCEPTED",
         "Phase 2H — Complete standalone UI and administration UX — ACCEPTED",
         "Phase 2I — Standalone E2E, security, recovery and operational hardening — ACCEPTED",
-        "Phase 2J — Production-readiness evidence and controlled rollout — NEXT",
+        "Phase 2J — Production-readiness evidence and controlled rollout — BLOCKED / NEXT AFTER PRE-2J",
+        "`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`",
         "Phase 2I was accepted through issue #167 / PR #168",
         "`c1075337cfc582d0f4c00ec34b1aa7cda9ac1101`",
         "`800c634147d6300ea3989ff0cf87ade6e2387ee9`",
@@ -252,6 +271,8 @@ def validate_docs() -> None:
         "blanket Firefox SQLite `PRAGMA integrity_check` is not canonical profile-health authority",
     )
     stale_plan_markers = (
+        "Phase 2J — Production-readiness evidence and controlled rollout — NEXT",
+        "Phase 2J is the unique NEXT",
         "Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — NEXT",
         "Phase 2F — Durable device jobs, browser mailbox lane and materialization integration — NEXT",
         "Phase 2G — Durable realtime notification hub — NEXT",
@@ -395,6 +416,10 @@ def build_inventory() -> dict[str, object]:
             "ui_target": "docs/UI_ARCHITECTURE.md",
             "accepted_capabilities": "docs/DEVELOPER_CAPABILITY_MATRIX.md",
             "index": "docs/INDEX.md",
+            "pre2j_execution_blocker": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+            "readiness": "docs/status.json",
+            "security": "docs/THREAT_MODEL.md",
+            "accepted_phase_ledger": "architecture/accepted-phases.json",
         },
     }
 
@@ -432,6 +457,19 @@ def self_test(expected: dict[str, object]) -> None:
     route["routing"]["public_routes"][0]["route_class"] = "UnknownApi"
     if serialized(route) == serialized(expected):
         raise SystemExit("route inventory self-test failed to detect deterministic drift")
+
+    authority = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "check-documentation-authority.py"), "--root", str(ROOT), "--self-test"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if authority.returncode != 0:
+        details = "\n".join(value.strip() for value in (authority.stdout, authority.stderr) if value.strip())
+        raise SystemExit(f"documentation authority negative self-test failed:\n{details}")
+    if authority.stdout.strip():
+        print(authority.stdout.strip())
     print("Architecture inventory negative self-test passed.")
 
 

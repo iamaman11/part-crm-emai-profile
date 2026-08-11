@@ -64,7 +64,7 @@ def validate(root: Path) -> list[str]:
     except ValueError as exc:
         return [str(exc)]
 
-    phases = ledger.get("phases")
+    phases = ledger.get("accepted_phases")
     if not isinstance(phases, list) or not phases:
         errors.append("accepted phase ledger must contain a non-empty phases array")
         accepted_phase = None
