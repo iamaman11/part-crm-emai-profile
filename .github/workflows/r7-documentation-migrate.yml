@@ -1,0 +1,48 @@
+name: R7 Documentation Authority Migrate Temporary
+
+on:
+  push:
+    branches:
+      - audit/documentation-authority
+    paths:
+      - .github/workflows/r7-documentation-migrate.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audit/documentation-authority
+          fetch-depth: 1
+
+      - name: Migrate documentation authority fail closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/r7-documentation-authority.py
+          python -m py_compile scripts/check-documentation-authority.py scripts/generate-architecture-inventory.py
+          python scripts/generate-architecture-inventory.py --write
+          python scripts/check-documentation-authority.py
+          python scripts/check-documentation-authority.py --self-test
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/generate-architecture-inventory.py --self-test
+          python scripts/verify-fast.py
+          python -m json.tool docs/status.json >/dev/null
+          git diff --check
+
+      - name: Commit coherent R7 migration and remove temporary tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/r7-documentation-audit.yml
+          rm .github/workflows/r7-documentation-migrate.yml
+          rm .github/r7-documentation-authority.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Converge current documentation authority"
+          git push origin HEAD:audit/documentation-authority
