@@ -269,14 +269,13 @@ mod tests {
     }
 
     #[test]
-    fn canonical_status_sets_match_runtime_wire_values() {
+    fn canonical_status_sets_match_runtime_wire_values() -> Result<(), Box<dyn std::error::Error>> {
         let binding = serde_json::to_value(MailboxBindingProjectionDto {
             binding_id: "mailbox_01JTEST".to_owned(),
             provider: MailboxProviderDto::BrowserFallback,
             status: MailboxBindingStatusDto::AuthRequired,
             version: 2,
-        })
-        .expect("serialize binding");
+        })?;
         assert_eq!(binding["provider"], "BROWSER_FALLBACK");
         assert_eq!(binding["status"], "AUTH_REQUIRED");
 
@@ -289,10 +288,10 @@ mod tests {
             provider_status: None,
             bounded_item_count: 0,
             version: 1,
-        })
-        .expect("serialize job");
+        })?;
         assert_eq!(job["status"], "SCHEDULED");
         assert!(job.get("providerStatus").is_some_and(Value::is_null));
+        Ok(())
     }
 
     #[test]
