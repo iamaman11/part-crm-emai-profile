@@ -1,0 +1,53 @@
+name: Phase 2I Governance PR Trigger
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-closeout:
+    if: github.head_ref == 'phase2i-governance-closeout' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: phase2i-governance-closeout
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Execute bounded closeout patch from bootstrap workflow
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path('.github/workflows/phase2i-governance-patch.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          end = "\n          PY\n"
+          if source.count(marker) != 1:
+              raise SystemExit('governance bootstrap patch block marker is missing or ambiguous')
+          block = source.split(marker, 1)[1].split(end, 1)[0]
+          exec(compile(textwrap.dedent(block), 'phase2i-governance-closeout', 'exec'))
+          PY
+
+      - name: Validate governance semantics
+        run: |
+          python scripts/check-phase2i-hardening.py
+          python scripts/check-phase2i-hardening.py --self-test
+          python scripts/check-phase2i-support-bundle.py
+          python scripts/check-phase2i-support-bundle.py --self-test
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/check-architecture.py
+
+      - name: Commit closeout and remove bootstrap machinery
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/phase2i-governance-patch.yml .github/workflows/phase2i-governance-pr-trigger.yml
+          git add architecture/accepted-phases.json docs/DEVELOPMENT_PLAN.md docs/DEVELOPER_CAPABILITY_MATRIX.md docs/PHASE2I_RELEASE_CANDIDATE_MATRIX.md docs/PHASE2I_THREAT_MODEL.md scripts/accepted_phase_provenance.py scripts/generate-architecture-inventory.py scripts/check-phase2i-hardening.py scripts/check-phase2i-support-bundle.py tests/cross-component/phase2i-release-candidate.json tests/support/phase2i-support-bundle.json
+          git commit -m "Phase 2I: complete governance closeout"
+          git push origin HEAD:phase2i-governance-closeout
