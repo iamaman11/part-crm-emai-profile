@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate committed OpenAPI and TypeScript from canonical Rust contracts.
 
-The accepted base public contract remains byte-stable. Phase-specific additive surfaces are emitted
-as source OpenAPI fragments plus separate generated TypeScript modules. `--check` fails closed and
+The accepted base public contract remains byte-stable. Capability-owned additive surfaces are emitted
+as generated OpenAPI artifacts plus separate generated TypeScript modules. `--check` fails closed and
 prints a unified diff for drift so fixes never require temporary generation workflows.
 """
 
@@ -31,7 +31,7 @@ OPERATOR_QUERY_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "operator-
 OPERATOR_QUERY_TYPESCRIPT_PATH = (
     ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "operator-query.ts"
 )
-PROFILE_GENERATION_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "profile-generation.json"
+PROFILE_GENERATION_OPENAPI_PATH = ROOT / "contracts" / "generated" / "profile-generation.openapi.json"
 PROFILE_GENERATION_TYPESCRIPT_PATH = (
     ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "profile-generation.ts"
 )
