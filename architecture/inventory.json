@@ -262,6 +262,26 @@
         "authenticated": true
       },
       {
+        "route_class": "ClientMailSearchApi",
+        "capability": "clients",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/mail/search",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/mail/search",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientMailMessageApi",
+        "capability": "clients",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/mail/message",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/mail/message",
+        "authenticated": true
+      },
+      {
         "route_class": "ProfileCollectionApi",
         "capability": "profiles",
         "methods": [
