@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: audit/frontend-api-ownership
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Sync R6 cross-component evidence fail closed
         shell: bash
