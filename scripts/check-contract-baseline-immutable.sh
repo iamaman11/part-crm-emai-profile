@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+python scripts/check-contract-compatibility.py --self-test
+
 if [[ "${GITHUB_EVENT_NAME:-}" != "pull_request" ]]; then
   echo "Accepted contract and phase-history baselines are enforced on pull requests."
   exit 0
