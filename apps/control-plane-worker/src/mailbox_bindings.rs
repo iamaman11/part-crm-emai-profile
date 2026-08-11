@@ -17,11 +17,11 @@ use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{
     ActorContext, AggregateVersion, MailboxBindingId, ProfileId, SecretHandle,
 };
-use use_cases::browser_execution::{
+use use_cases_mailboxes::browser_execution::{
     BindBrowserMailboxExecutionCommand, BrowserMailboxExecutionBindingOutcome,
     execute_bind_browser_mailbox_execution,
 };
-use use_cases::mailboxes::{
+use use_cases_mailboxes::mailboxes::{
     ExecuteCreateMailboxBindingCommand, ExecuteRevokeMailboxBindingCommand, MailboxBindingDetails,
     MailboxBindingMutationOutcome, MailboxBindingOperationError, authorize_mailbox_binding,
     execute_create_mailbox_binding, execute_revoke_mailbox_binding, get_mailbox_binding,
