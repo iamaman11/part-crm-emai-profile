@@ -29,6 +29,9 @@ FIELD_RE = re.compile(
     r"(?P<name>[A-Za-z0-9_]+)\s*=\s*(?P<number>[1-9][0-9]*)\s*;",
     re.MULTILINE,
 )
+REQUEST_ROLE = "request"
+RESPONSE_ROLE = "response"
+BOTH_ROLES = frozenset({REQUEST_ROLE, RESPONSE_ROLE})
 
 
 @dataclass(frozen=True)
@@ -168,36 +171,125 @@ def lint_openapi(document: dict[str, object], path: Path) -> list[str]:
     return errors
 
 
-def required_properties(schema: dict[str, object]) -> set[str]:
+def resolve_local_ref(document: dict[str, object], reference: str) -> object | None:
+    if not reference.startswith("#/"):
+        return None
+    current: object = document
+    for token in reference[2:].split("/"):
+        token = token.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, dict) or token not in current:
+            return None
+        current = current[token]
+    return current
+
+
+def collect_schema_roles(
+    document: dict[str, object],
+    node: object,
+    role: str,
+    roles: dict[str, set[str]],
+    visited_refs: set[tuple[str, str]],
+) -> None:
+    if isinstance(node, list):
+        for item in node:
+            collect_schema_roles(document, item, role, roles, visited_refs)
+        return
+    if not isinstance(node, dict):
+        return
+
+    reference = node.get("$ref")
+    if isinstance(reference, str):
+        prefix = "#/components/schemas/"
+        if reference.startswith(prefix):
+            schema_name = reference[len(prefix) :].replace("~1", "/").replace("~0", "~")
+            roles.setdefault(schema_name, set()).add(role)
+        key = (role, reference)
+        if key not in visited_refs:
+            visited_refs.add(key)
+            target = resolve_local_ref(document, reference)
+            if target is not None:
+                collect_schema_roles(document, target, role, roles, visited_refs)
+
+    for key, value in node.items():
+        if key != "$ref":
+            collect_schema_roles(document, value, role, roles, visited_refs)
+
+
+def schema_usage_roles(document: dict[str, object]) -> dict[str, set[str]]:
+    roles: dict[str, set[str]] = {}
+    paths = document.get("paths", {})
+    if not isinstance(paths, dict):
+        return roles
+    for item in paths.values():
+        if not isinstance(item, dict):
+            continue
+        for method, operation in item.items():
+            if method not in HTTP_METHODS or not isinstance(operation, dict):
+                continue
+            if "requestBody" in operation:
+                collect_schema_roles(
+                    document,
+                    operation["requestBody"],
+                    REQUEST_ROLE,
+                    roles,
+                    set(),
+                )
+            responses = operation.get("responses")
+            if responses is not None:
+                collect_schema_roles(
+                    document,
+                    responses,
+                    RESPONSE_ROLE,
+                    roles,
+                    set(),
+                )
+    return roles
+
+
+def required_properties(schema: dict[str, object]) -> tuple[set[str], bool]:
     value = schema.get("required", [])
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        return set()
-    return set(value)
+        return set(), False
+    return set(value), True
 
 
 def compare_schema_constraints(
-    baseline: dict[str, object], current: dict[str, object], location: str
+    baseline: dict[str, object],
+    current: dict[str, object],
+    location: str,
+    roles: frozenset[str],
 ) -> list[str]:
     errors: list[str] = []
+
     for keyword in ("$ref", "type", "format"):
-        baseline_has = keyword in baseline
-        current_has = keyword in current
-        if baseline_has and current.get(keyword) != baseline.get(keyword):
-            errors.append(f"{location}: changed {keyword}")
-        elif not baseline_has and current_has:
-            errors.append(f"{location}: added narrowing {keyword}")
+        if keyword in baseline:
+            if current.get(keyword) != baseline.get(keyword):
+                errors.append(f"{location}: changed {keyword}")
+        elif keyword in current and REQUEST_ROLE in roles:
+            errors.append(f"{location}: added request-narrowing {keyword}")
 
     baseline_enum = baseline.get("enum")
     current_enum = current.get("enum")
     if isinstance(baseline_enum, list):
-        if isinstance(current_enum, list):
-            removed = [value for value in baseline_enum if value not in current_enum]
-            if removed:
-                errors.append(f"{location}: removed enum values {removed}")
-        elif current_enum is not None:
+        if current_enum is None:
+            if RESPONSE_ROLE in roles:
+                errors.append(f"{location}: widened response enum to unconstrained")
+        elif not isinstance(current_enum, list):
             errors.append(f"{location}: changed enum shape")
+        else:
+            if REQUEST_ROLE in roles:
+                removed = [value for value in baseline_enum if value not in current_enum]
+                if removed:
+                    errors.append(f"{location}: removed request enum values {removed}")
+            if RESPONSE_ROLE in roles:
+                added = [value for value in current_enum if value not in baseline_enum]
+                if added:
+                    errors.append(f"{location}: added response enum values {added}")
     elif current_enum is not None:
-        errors.append(f"{location}: narrowed unconstrained value to enum")
+        if not isinstance(current_enum, list):
+            errors.append(f"{location}: changed enum shape")
+        elif REQUEST_ROLE in roles:
+            errors.append(f"{location}: narrowed unconstrained request value to enum")
 
     if baseline.get("type") == "array":
         baseline_items = baseline.get("items")
@@ -208,7 +300,10 @@ def compare_schema_constraints(
             else:
                 errors.extend(
                     compare_schema_constraints(
-                        baseline_items, current_items, f"{location}.items"
+                        baseline_items,
+                        current_items,
+                        f"{location}.items",
+                        roles,
                     )
                 )
     return errors
@@ -238,6 +333,7 @@ def compare_openapi(
             if current_operation.get("operationId") != baseline_operation.get("operationId"):
                 errors.append(f"{path}: changed operationId for {method.upper()} {route}")
 
+    usage = schema_usage_roles(baseline)
     baseline_components = baseline.get("components")
     current_components = current.get("components")
     baseline_schemas = (
@@ -253,11 +349,16 @@ def compare_openapi(
                 errors.append(f"{path}: removed schema {name}")
                 continue
 
+            roles = frozenset(usage.get(name, BOTH_ROLES))
             errors.extend(
                 compare_schema_constraints(
-                    baseline_schema, current_schema, f"{path}: schema {name}"
+                    baseline_schema,
+                    current_schema,
+                    f"{path}: schema {name}",
+                    roles,
                 )
             )
+
             baseline_properties = baseline_schema.get("properties", {})
             current_properties = current_schema.get("properties", {})
             if isinstance(baseline_properties, dict) and isinstance(current_properties, dict):
@@ -272,21 +373,30 @@ def compare_openapi(
                                 baseline_property,
                                 current_property,
                                 f"{path}: schema {name}.{property_name}",
+                                roles,
                             )
                         )
 
-            baseline_required = required_properties(baseline_schema)
-            current_required = required_properties(current_schema)
-            removed_required = baseline_required - current_required
-            added_required = current_required - baseline_required
-            if removed_required:
-                errors.append(
-                    f"{path}: schema {name} removed required properties {sorted(removed_required)}"
-                )
-            if added_required:
-                errors.append(
-                    f"{path}: schema {name} added required properties {sorted(added_required)}"
-                )
+            baseline_required, baseline_required_valid = required_properties(baseline_schema)
+            current_required, current_required_valid = required_properties(current_schema)
+            if not baseline_required_valid or not current_required_valid:
+                errors.append(f"{path}: schema {name} has invalid required shape")
+                continue
+
+            if REQUEST_ROLE in roles:
+                added_required = current_required - baseline_required
+                if added_required:
+                    errors.append(
+                        f"{path}: schema {name} added request-required properties "
+                        f"{sorted(added_required)}"
+                    )
+            if RESPONSE_ROLE in roles:
+                removed_required = baseline_required - current_required
+                if removed_required:
+                    errors.append(
+                        f"{path}: schema {name} removed response-required properties "
+                        f"{sorted(removed_required)}"
+                    )
     return errors
 
 
@@ -310,11 +420,10 @@ def parse_proto(path: Path) -> tuple[ProtoContract | None, list[str]]:
         for field_match in FIELD_RE.finditer(message_match.group(2)):
             field_name = field_match.group("name")
             field_number = int(field_match.group("number"))
-            cardinality = field_match.group("label") or "singular"
             field = ProtoField(
                 name=field_name,
                 type_name=field_match.group("type"),
-                cardinality=cardinality,
+                cardinality=field_match.group("label") or "singular",
             )
             if field_number in fields:
                 errors.append(
@@ -364,29 +473,31 @@ def compare_proto(
                 current_field = current_fields.get(field_number)
                 if current_field is None or current_field.name != baseline_field.name:
                     errors.append(
-                        f"{relative_path}: removed/renamed {message_name}.{baseline_field.name} = {field_number}"
+                        f"{relative_path}: removed/renamed "
+                        f"{message_name}.{baseline_field.name} = {field_number}"
                     )
                     continue
                 if current_field.type_name != baseline_field.type_name:
                     errors.append(
-                        f"{relative_path}: changed type of {message_name}.{baseline_field.name} = {field_number}"
+                        f"{relative_path}: changed type of "
+                        f"{message_name}.{baseline_field.name} = {field_number}"
                     )
                 if current_field.cardinality != baseline_field.cardinality:
                     errors.append(
-                        f"{relative_path}: changed cardinality of {message_name}.{baseline_field.name} = {field_number}"
+                        f"{relative_path}: changed cardinality of "
+                        f"{message_name}.{baseline_field.name} = {field_number}"
                     )
     return errors
 
 
 def check(current_root: Path, baseline_root: Path) -> list[str]:
-    errors: list[str] = []
     try:
         current_openapi, current_openapi_path = load_openapi_tree(current_root)
-        baseline_openapi, _baseline_openapi_path = load_openapi_tree(baseline_root)
+        baseline_openapi, _ = load_openapi_tree(baseline_root)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         return [str(error)]
 
-    errors.extend(lint_openapi(current_openapi, current_openapi_path))
+    errors = lint_openapi(current_openapi, current_openapi_path)
     errors.extend(compare_openapi(baseline_openapi, current_openapi, current_openapi_path))
 
     current_proto, current_errors = load_proto_tree(current_root)
@@ -403,12 +514,31 @@ def synthetic_openapi() -> dict[str, object]:
         "info": {"title": "fixture", "version": "1.0.0"},
         "paths": {
             "/api/v1/widgets": {
-                "post": {"operationId": "createWidget"},
+                "post": {
+                    "operationId": "createWidget",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/WidgetRequest"}
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/WidgetResponse"}
+                                }
+                            },
+                        }
+                    },
+                }
             }
         },
         "components": {
             "schemas": {
-                "Widget": {
+                "WidgetRequest": {
                     "type": "object",
                     "required": ["id", "state"],
                     "properties": {
@@ -423,6 +553,15 @@ def synthetic_openapi() -> dict[str, object]:
                     "required": ["id"],
                     "properties": {"id": {"type": "string"}},
                 },
+                "WidgetResponse": {
+                    "type": "object",
+                    "required": ["id", "state"],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "state": {"type": "string", "enum": ["ready", "failed"]},
+                        "code": {"type": "string"},
+                    },
+                },
             }
         },
     }
@@ -432,51 +571,65 @@ def self_test() -> None:
     baseline = synthetic_openapi()
     path = Path("synthetic/openapi.json")
 
-    allowed_optional = copy.deepcopy(baseline)
-    widget = allowed_optional["components"]["schemas"]["Widget"]
-    widget["properties"]["description"] = {"type": "string"}
-    widget["properties"]["state"]["enum"].append("paused")
-    if compare_openapi(baseline, allowed_optional, path):
-        raise ValueError("compatible optional-field/enum widening fixture was rejected")
+    allowed = copy.deepcopy(baseline)
+    request = allowed["components"]["schemas"]["WidgetRequest"]
+    request["properties"]["description"] = {"type": "string"}
+    request["properties"]["state"]["enum"].append("paused")
+    response = allowed["components"]["schemas"]["WidgetResponse"]
+    response["properties"]["title"] = {"type": "string"}
+    response["required"].append("title")
+    response["properties"]["code"]["enum"] = ["ok", "error"]
+    if compare_openapi(baseline, allowed, path):
+        raise ValueError("compatible request/response evolution fixture was rejected")
 
-    mutations: list[tuple[str, callable]] = [
+    mutations: list[tuple[str, object]] = [
         (
-            "new required property",
+            "new request-required property",
             lambda value: (
-                value["components"]["schemas"]["Widget"]["properties"].__setitem__(
+                value["components"]["schemas"]["WidgetRequest"]["properties"].__setitem__(
                     "description", {"type": "string"}
                 ),
-                value["components"]["schemas"]["Widget"]["required"].append("description"),
+                value["components"]["schemas"]["WidgetRequest"]["required"].append("description"),
             ),
         ),
         (
-            "property type change",
-            lambda value: value["components"]["schemas"]["Widget"]["properties"]["id"].__setitem__(
+            "request property type change",
+            lambda value: value["components"]["schemas"]["WidgetRequest"]["properties"]["id"].__setitem__(
                 "type", "integer"
             ),
         ),
         (
-            "property format change",
-            lambda value: value["components"]["schemas"]["Widget"]["properties"]["id"].__setitem__(
+            "request property format change",
+            lambda value: value["components"]["schemas"]["WidgetRequest"]["properties"]["id"].__setitem__(
                 "format", "email"
             ),
         ),
         (
-            "reference change",
-            lambda value: value["components"]["schemas"]["Widget"]["properties"]["owner"].__setitem__(
-                "$ref", "#/components/schemas/Widget"
+            "request reference change",
+            lambda value: value["components"]["schemas"]["WidgetRequest"]["properties"]["owner"].__setitem__(
+                "$ref", "#/components/schemas/WidgetResponse"
             ),
         ),
         (
-            "enum narrowing",
-            lambda value: value["components"]["schemas"]["Widget"]["properties"]["state"].__setitem__(
+            "request enum narrowing",
+            lambda value: value["components"]["schemas"]["WidgetRequest"]["properties"]["state"].__setitem__(
                 "enum", ["ready"]
             ),
         ),
         (
-            "array item type change",
-            lambda value: value["components"]["schemas"]["Widget"]["properties"]["tags"]["items"].__setitem__(
+            "request array item type change",
+            lambda value: value["components"]["schemas"]["WidgetRequest"]["properties"]["tags"]["items"].__setitem__(
                 "type", "integer"
+            ),
+        ),
+        (
+            "response required removal",
+            lambda value: value["components"]["schemas"]["WidgetResponse"]["required"].remove("state"),
+        ),
+        (
+            "response enum widening",
+            lambda value: value["components"]["schemas"]["WidgetResponse"]["properties"]["state"]["enum"].append(
+                "paused"
             ),
         ),
     ]
@@ -488,41 +641,45 @@ def self_test() -> None:
 
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        baseline_proto_path = root / "baseline.proto"
-        current_proto_path = root / "current.proto"
-        baseline_proto_path.write_text(
-            'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n  string id = 1;\n  repeated string tags = 2;\n}\n',
+        baseline_path = root / "baseline.proto"
+        current_path = root / "current.proto"
+        baseline_path.write_text(
+            'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n'
+            '  string id = 1;\n  repeated string tags = 2;\n}\n',
             encoding="utf-8",
         )
-        baseline_contract, baseline_errors = parse_proto(baseline_proto_path)
+        baseline_contract, baseline_errors = parse_proto(baseline_path)
         if baseline_contract is None or baseline_errors:
-            raise ValueError(f"protobuf self-test baseline failed to parse: {baseline_errors}")
+            raise ValueError(f"protobuf baseline failed to parse: {baseline_errors}")
 
-        current_proto_path.write_text(
-            'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n  string id = 1;\n  repeated string tags = 2;\n  string description = 3;\n}\n',
+        current_path.write_text(
+            'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n'
+            '  string id = 1;\n  repeated string tags = 2;\n  string description = 3;\n}\n',
             encoding="utf-8",
         )
-        additive_contract, additive_errors = parse_proto(current_proto_path)
-        if additive_contract is None or additive_errors:
+        additive, additive_errors = parse_proto(current_path)
+        if additive is None or additive_errors:
             raise ValueError(f"protobuf additive fixture failed to parse: {additive_errors}")
         if compare_proto(
             {Path("fixture.proto"): baseline_contract},
-            {Path("fixture.proto"): additive_contract},
+            {Path("fixture.proto"): additive},
         ):
             raise ValueError("compatible protobuf field addition was rejected")
 
         for label, source in [
             (
                 "protobuf type change",
-                'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n  bytes id = 1;\n  repeated string tags = 2;\n}\n',
+                'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n'
+                '  bytes id = 1;\n  repeated string tags = 2;\n}\n',
             ),
             (
                 "protobuf cardinality change",
-                'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n  string id = 1;\n  string tags = 2;\n}\n',
+                'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n'
+                '  string id = 1;\n  string tags = 2;\n}\n',
             ),
         ]:
-            current_proto_path.write_text(source, encoding="utf-8")
-            candidate, candidate_errors = parse_proto(current_proto_path)
+            current_path.write_text(source, encoding="utf-8")
+            candidate, candidate_errors = parse_proto(current_path)
             if candidate is None or candidate_errors:
                 raise ValueError(f"{label} fixture failed to parse: {candidate_errors}")
             if not compare_proto(
