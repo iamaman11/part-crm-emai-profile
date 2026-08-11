@@ -5,7 +5,7 @@ use profile_platform_primitives::{
     ActorContext, AggregateVersion, DeviceId, FencingToken, LaunchIntentId, OutboxEventId,
     ProfileId, SessionId, TenantId, TenantScope, UnixMillis,
 };
-use session_domain::coordinator::CoordinatorCommandEnvelope;
+use session_domain::coordinator::{CoordinatorCommandEnvelope, CoordinatorStatus};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CoordinatorIngressPortErrorClass {
@@ -95,7 +95,7 @@ pub enum CoordinatorRuntimeOutcome {
 pub struct CoordinatorProjectionSnapshot {
     tenant_id: TenantId,
     profile_id: ProfileId,
-    status: String,
+    status: CoordinatorStatus,
     version: AggregateVersion,
     sequence: u64,
     next_epoch: u64,
@@ -112,10 +112,10 @@ pub struct CoordinatorProjectionSnapshot {
 impl CoordinatorProjectionSnapshot {
     #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn new(
+    pub const fn new(
         tenant_id: TenantId,
         profile_id: ProfileId,
-        status: impl Into<String>,
+        status: CoordinatorStatus,
         version: AggregateVersion,
         sequence: u64,
         next_epoch: u64,
@@ -131,7 +131,7 @@ impl CoordinatorProjectionSnapshot {
         Self {
             tenant_id,
             profile_id,
-            status: status.into(),
+            status,
             version,
             sequence,
             next_epoch,
@@ -157,8 +157,8 @@ impl CoordinatorProjectionSnapshot {
     }
 
     #[must_use]
-    pub fn status(&self) -> &str {
-        &self.status
+    pub const fn status(&self) -> CoordinatorStatus {
+        self.status
     }
 
     #[must_use]
