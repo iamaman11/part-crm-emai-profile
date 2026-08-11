@@ -256,7 +256,7 @@ mod tests {
         ProfileAssignmentRequest, ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto,
         ProfileStatusDto, RegisterGenerationRequest, openapi_fragment,
     };
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     #[test]
     fn profile_contract_preserves_legacy_unknown_field_tolerance() {
