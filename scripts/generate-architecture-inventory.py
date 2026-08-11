@@ -116,6 +116,13 @@ GENERATED_CONTRACTS = [
         "typescript": "frontend/src/shared/api/generated/profile-generation.ts",
         "generator": "scripts/generate-frontend-contracts.py",
     },
+    {
+        "name": "mailbox-api",
+        "canonical_source": "crates/control-plane-contract/src/mailbox_api.rs",
+        "openapi": "contracts/generated/mailbox.openapi.json",
+        "typescript": "frontend/src/shared/api/generated/mailbox.ts",
+        "generator": "scripts/generate-frontend-contracts.py",
+    },
 ]
 
 REQUIRED_INDEX_LINKS = [
