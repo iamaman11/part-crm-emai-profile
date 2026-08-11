@@ -19,11 +19,13 @@ However, accepted green CI is not yet sufficient for a 10/10 foundation because 
 
 ## 3. Findings and remediation sequence
 
-### R1 — P1 — Query application dependency gate hole
+### R1 — P1 — Query application dependency gate hole — ACCEPTED
+
+**Accepted main:** squash merge `88d4412084f85b3512ce28a3bec637fc6e687151` via PR #173.
 
 **Finding**
 
-`use-cases-query` is an accepted independent provider-neutral application context, but `scripts/check-architecture.py` did not govern its dependency allowlist. A provider/runtime dependency could therefore enter that context while the main architecture gate stayed green.
+`use-cases-query` was an accepted independent provider-neutral application context, but `scripts/check-architecture.py` did not govern its dependency allowlist. A provider/runtime dependency could therefore enter that context while the main architecture gate stayed green.
 
 **Remediation**
 
@@ -37,11 +39,13 @@ However, accepted green CI is not yet sufficient for a 10/10 foundation because 
 - the query negative fixture fails closed;
 - all permanent workflows pass at exact PR head.
 
-### R2 — P1 — Client Mail bypasses canonical route authority
+### R2 — P1 — Client Mail bypasses canonical route authority — ACCEPTED
+
+**Accepted main:** squash merge `443bd39a9589eb0fb75f305043a2acc1b93314a1` via PR #175.
 
 **Finding**
 
-Client Mail ingress is dispatched before `control_plane_contract::classify_route` and `apps/control-plane-worker/src/client_mail_query.rs` owns a second `matches_route` implementation. This violates the intended single fail-closed route authority and allows route semantics to drift between contract and Worker transport.
+Client Mail ingress was dispatched before `control_plane_contract::classify_route` and `apps/control-plane-worker/src/client_mail_query.rs` owned a second `matches_route` implementation. This violated the intended single fail-closed route authority and allowed route semantics to drift between contract and Worker transport.
 
 **Remediation**
 
@@ -56,23 +60,32 @@ Client Mail ingress is dispatched before `control_plane_contract::classify_route
 - no Client Mail route literal classifier in Worker ingress;
 - permanent route tests fail closed.
 
-### R3 — P1 — Contract compatibility gate can miss breaking OpenAPI changes
+### R3 — P1 — Contract compatibility gate can miss breaking OpenAPI/protobuf changes — IN PROGRESS
+
+**Active PR:** #177.
 
 **Finding**
 
-The current compatibility checker detects removed paths/properties but does not comprehensively reject breaking schema evolution such as adding a new required property to an existing object, incompatible type changes or enum narrowing. A green Compatibility Gate can therefore miss real v1 client breaks.
+The previous compatibility checker detected removed paths/properties but did not comprehensively protect schema directionality or protobuf field semantics. In particular, it could miss request-side required-field additions, request enum narrowing, response-side required-field removal, response enum widening, incompatible type/format/reference changes, and protobuf type/cardinality changes.
+
+A first remediation attempt deliberately exposed why component schemas cannot be judged by a direction-free rule: the accepted `Problem` schema is response-only, so adding guaranteed response fields and narrowing values the server may emit are compatible with old consumers even though the same changes would be breaking for a request schema. The permanent policy must therefore classify accepted schemas by request/response use before applying required/enum compatibility rules.
 
 **Remediation**
 
-- compare required-property sets in the breaking direction;
-- compare schema types/formats and reference identity where applicable;
-- reject enum narrowing/removal of accepted values;
-- add focused negative fixtures for each breaking class;
-- preserve additive-compatible evolution.
+- derive request/response schema roles from accepted OpenAPI operations and local component references;
+- for request schemas, reject newly required fields and enum narrowing while allowing optional-field additions and accepted-value widening;
+- for response schemas, reject removal of guaranteed required fields and enum widening while allowing additional guaranteed fields and output-value narrowing;
+- treat schemas used in both directions, or with unknown role, conservatively under both rules;
+- preserve accepted type/format/reference identity for existing constrained fields and check supported array item constraints recursively;
+- preserve protobuf field number/name/type/cardinality while allowing new field numbers;
+- run deterministic positive and negative self-tests from the existing contract baseline interlock;
+- keep the accepted v1 baseline immutable.
 
 **Acceptance**
 
 - every supported breaking class has a negative fixture;
+- compatible request/response additive evolution has positive fixtures;
+- the current accepted v1 contract tree passes without grandfathered path/schema exceptions;
 - accepted v1 baseline remains immutable;
 - compatibility gate remains deterministic and provider-independent.
 
@@ -193,9 +206,9 @@ Native workspace clippy already uses `-D warnings`, but Cloudflare adapter tests
 
 Use multiple bounded PRs. The expected sequence is:
 
-1. **Guardrail integrity** — R1.
-2. **Canonical routing** — R2.
-3. **Compatibility semantics** — R3.
+1. **Guardrail integrity** — R1. Accepted via PR #173 / `88d4412084f85b3512ce28a3bec637fc6e687151`.
+2. **Canonical routing** — R2. Accepted via PR #175 / `443bd39a9589eb0fb75f305043a2acc1b93314a1`.
+3. **Compatibility semantics** — R3. In progress via PR #177.
 4. **Contract authority migration** — R4, split into multiple capability PRs if needed to keep each reviewable.
 5. **Application ownership cleanup** — R5.
 6. **Frontend API modularization** — R6, preferably aligned with R4 capability migrations rather than a mechanical rewrite.
