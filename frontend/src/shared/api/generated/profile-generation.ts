@@ -23,7 +23,7 @@ export interface ProfileAssignmentRequest {
   requestDigest: string;
 }
 
-export interface ProfileCreateRequest {
+export interface ProfileCreateRequestDto {
   profileId: string;
   requestDigest: string;
 }
@@ -33,7 +33,7 @@ export interface ProfileGenerationVersionRequest {
   requestDigest: string;
 }
 
-export interface ProfileGrantRequest {
+export interface ProfileGrantRequestDto {
   expectedProfileVersion: number;
   reason: string;
   requestDigest: string;
