@@ -14,7 +14,8 @@ from pathlib import Path
 
 HTTP_METHODS = {"get", "put", "post", "delete", "patch", "options", "head", "trace"}
 OPENAPI_FRAGMENT_COMPONENTS = {
-    "schemas",\n    "parameters",
+    "schemas",
+    "parameters",
     "responses",
     "requestBodies",
     "headers",
