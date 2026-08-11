@@ -72,6 +72,12 @@ Production latency, error-budget, provider-rate, Cloudflare-cost and physical-de
 
 `tests/support/phase2i-support-bundle.json` and `scripts/check-phase2i-support-bundle.py` define an allowlist-only support evidence contract. Only bounded class-level fields are accepted; negative fixtures prove that identifier-like or address-like payloads are rejected.
 
+## Release-candidate freeze
+
+`scripts/check-phase2i-release-freeze.sh` is invoked by the accepted contract-baseline policy. On pull requests it compares the release candidate with the base branch and rejects changes to `openapi/v1`, `proto`, `contracts/baseline`, or `migrations/d1`. It then re-runs contract compatibility and D1 schema validation.
+
+The current Phase 2I PR contains no changes in those frozen roots.
+
 ## Delivery state
 
 Completed in the current Phase 2I branch:
@@ -81,12 +87,12 @@ Completed in the current Phase 2I branch:
 3. repository-local D1/R2/coordinator/Bridge recovery drills and runbook;
 4. operational indicator policy and source-backed capacity/query-plan bounds;
 5. supply-chain source policy, threat model and installed dependency license checks;
-6. allowlist-only support/evidence bundle policy.
+6. allowlist-only support/evidence bundle policy;
+7. release-candidate contract/migration freeze.
 
 Still required before Phase 2I acceptance:
 
-1. complete the current exact-head CI validation for the new supply-chain/license/support gates;
-2. establish the release-candidate contract/migration freeze;
-3. perform final exact-head acceptance with no unresolved repository-owned findings, `behind_by=0`, clean reviews/threads and all 12 permanent workflows successful on one unchanged head.
+1. complete exact-head CI validation of all repository-owned Phase 2I gates, including installed dependency license checks;
+2. confirm no unresolved repository-owned findings, `behind_by=0`, clean reviews/threads and all 12 permanent workflows successful on one unchanged head.
 
 Phase 2J remains blocked and `production_ready=false` remains unchanged until Phase 2I is accepted.
