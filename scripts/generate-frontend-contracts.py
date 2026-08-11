@@ -35,11 +35,16 @@ PROFILE_GENERATION_OPENAPI_PATH = ROOT / "contracts" / "generated" / "profile-ge
 PROFILE_GENERATION_TYPESCRIPT_PATH = (
     ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "profile-generation.ts"
 )
+MAILBOX_OPENAPI_PATH = ROOT / "contracts" / "generated" / "mailbox.openapi.json"
+MAILBOX_TYPESCRIPT_PATH = (
+    ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "mailbox.ts"
+)
 SOURCE_PATH = "crates/control-plane-contract/src/public_api.rs"
 CLIENT_REGISTRY_SOURCE_PATH = "crates/control-plane-contract/src/client_registry_api.rs"
 QUERY_MAIL_SOURCE_PATH = "crates/control-plane-contract/src/bin/export_query_mail.rs"
 OPERATOR_QUERY_SOURCE_PATH = "crates/control-plane-contract/src/bin/export_operator_query.rs"
 PROFILE_GENERATION_SOURCE_PATH = "crates/control-plane-contract/src/profile_generation_api.rs"
+MAILBOX_SOURCE_PATH = "crates/control-plane-contract/src/mailbox_api.rs"
 GENERATOR_PATH = "scripts/generate-frontend-contracts.py"
 
 
@@ -280,6 +285,13 @@ def main() -> int:
         source_path=PROFILE_GENERATION_SOURCE_PATH,
         support_nullable=True,
     )
+    mailbox, _ = run_export("export_mailbox")
+    mailbox_openapi = compact_json(mailbox)
+    mailbox_typescript = render_typescript(
+        mailbox,
+        source_path=MAILBOX_SOURCE_PATH,
+        support_nullable=True,
+    )
 
     results = [
         check_or_write(OPENAPI_PATH, base_openapi, args.check),
@@ -312,6 +324,8 @@ def main() -> int:
             profile_generation_typescript,
             args.check,
         ),
+        check_or_write(MAILBOX_OPENAPI_PATH, mailbox_openapi, args.check),
+        check_or_write(MAILBOX_TYPESCRIPT_PATH, mailbox_typescript, args.check),
     ]
     if not all(results):
         return 1
