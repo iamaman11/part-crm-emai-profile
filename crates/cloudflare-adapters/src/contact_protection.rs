@@ -339,8 +339,8 @@ impl<N: ContactNonceSource> RustCryptoContactProtection<N> {
             .map_err(|_| ContactCryptoError::InvalidKeyring)?;
         let mut nonce = [0_u8; NONCE_LENGTH];
         self.nonce_source.fill_nonce(&mut nonce)?;
-        let aead_nonce = XNonce::try_from(nonce.as_slice())
-            .map_err(|_| ContactCryptoError::EncryptionFailed)?;
+        let aead_nonce =
+            XNonce::try_from(nonce.as_slice()).map_err(|_| ContactCryptoError::EncryptionFailed)?;
         let aad = encryption_aad(
             request.tenant_id(),
             request.contact_point_id(),
