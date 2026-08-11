@@ -81,18 +81,18 @@ pub fn openapi_fragment() -> Value {
         },
         "components": {
             "schemas": {
-                "ProfileStatus": string_enum(&PROFILE_STATUSES),
-                "MembershipRole": string_enum(&MEMBERSHIP_ROLES),
-                "MembershipStatus": string_enum(&MEMBERSHIP_STATUSES),
-                "MailboxProvider": string_enum(&MAILBOX_PROVIDERS),
-                "MailboxStatus": string_enum(&MAILBOX_STATUSES),
+                "OperatorProfileStatus": string_enum(&PROFILE_STATUSES),
+                "OperatorMembershipRole": string_enum(&MEMBERSHIP_ROLES),
+                "OperatorMembershipStatus": string_enum(&MEMBERSHIP_STATUSES),
+                "OperatorMailboxProvider": string_enum(&MAILBOX_PROVIDERS),
+                "OperatorMailboxStatus": string_enum(&MAILBOX_STATUSES),
                 "ProfileListItemDto": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": ["profileId", "status", "version", "linkedClientId", "activeGenerationId"],
                     "properties": {
                         "profileId": {"type": "string", "minLength": 8, "maxLength": 96},
-                        "status": schema_ref("ProfileStatus"),
+                        "status": schema_ref("OperatorProfileStatus"),
                         "version": {"type": "integer", "minimum": 1},
                         "linkedClientId": {"type": "string", "nullable": true, "minLength": 8, "maxLength": 96},
                         "activeGenerationId": {"type": "string", "nullable": true, "minLength": 8, "maxLength": 96}
@@ -117,8 +117,8 @@ pub fn openapi_fragment() -> Value {
                     "required": ["actorId", "role", "status"],
                     "properties": {
                         "actorId": {"type": "string", "minLength": 8, "maxLength": 96},
-                        "role": schema_ref("MembershipRole"),
-                        "status": schema_ref("MembershipStatus")
+                        "role": schema_ref("OperatorMembershipRole"),
+                        "status": schema_ref("OperatorMembershipStatus")
                     }
                 },
                 "MemberListPageDto": {
@@ -140,8 +140,8 @@ pub fn openapi_fragment() -> Value {
                     "required": ["bindingId", "provider", "status", "version"],
                     "properties": {
                         "bindingId": {"type": "string", "minLength": 8, "maxLength": 96},
-                        "provider": schema_ref("MailboxProvider"),
-                        "status": schema_ref("MailboxStatus"),
+                        "provider": schema_ref("OperatorMailboxProvider"),
+                        "status": schema_ref("OperatorMailboxStatus"),
                         "version": {"type": "integer", "minimum": 1}
                     }
                 },
@@ -235,6 +235,32 @@ mod tests {
             "/api/v1/tenants/{tenantId}/mailboxes",
         ] {
             assert!(document["paths"][path]["get"].is_object());
+        }
+    }
+
+    #[test]
+    fn operator_query_enum_names_are_fragment_scoped() {
+        let document = openapi_fragment();
+        let schemas = document["components"]["schemas"]
+            .as_object()
+            .expect("operator-query schemas must be an object");
+        for name in [
+            "OperatorProfileStatus",
+            "OperatorMembershipRole",
+            "OperatorMembershipStatus",
+            "OperatorMailboxProvider",
+            "OperatorMailboxStatus",
+        ] {
+            assert!(schemas.contains_key(name));
+        }
+        for globally_reserved in [
+            "ProfileStatus",
+            "MembershipRole",
+            "MembershipStatus",
+            "MailboxProvider",
+            "MailboxStatus",
+        ] {
+            assert!(!schemas.contains_key(globally_reserved));
         }
     }
 
