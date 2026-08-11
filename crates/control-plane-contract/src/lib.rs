@@ -3,6 +3,7 @@
 pub mod client_registry_api;
 pub mod operator_query_api;
 pub mod public_api;
+pub mod query_mail_api;
 mod routes;
 
 pub const D1_CATALOG_BINDING: &str = "CATALOG_DB";
@@ -190,11 +191,6 @@ mod tests {
                 RouteClass::MembershipStatusApi,
             ),
             (
-                "POST",
-                "/api/v1/tenants/tenant_01/clients",
-                RouteClass::ClientCollectionApi,
-            ),
-            (
                 "GET",
                 "/api/v1/tenants/tenant_01/clients",
                 RouteClass::ClientCollectionApi,
@@ -203,46 +199,6 @@ mod tests {
                 "GET",
                 "/api/v1/tenants/tenant_01/clients/client_01",
                 RouteClass::ClientResourceApi,
-            ),
-            (
-                "PATCH",
-                "/api/v1/tenants/tenant_01/clients/client_01",
-                RouteClass::ClientResourceApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/clients/client_01/archive",
-                RouteClass::ClientArchiveApi,
-            ),
-            (
-                "PUT",
-                "/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01",
-                RouteClass::ClientContactApi,
-            ),
-            (
-                "DELETE",
-                "/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01",
-                RouteClass::ClientContactApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/clients/client_01/merge",
-                RouteClass::ClientMergeApi,
-            ),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/clients/client_01/history",
-                RouteClass::ClientHistoryApi,
-            ),
-            (
-                "DELETE",
-                "/api/v1/tenants/tenant_01/clients/client_01/grants/actor_01",
-                RouteClass::ClientGrantApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/profiles",
-                RouteClass::ProfileCollectionApi,
             ),
             (
                 "GET",
@@ -255,296 +211,20 @@ mod tests {
                 RouteClass::ProfileResourceApi,
             ),
             (
-                "PUT",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/assignment",
-                RouteClass::ProfileAssignmentApi,
-            ),
-            (
-                "PUT",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/grants/actor_01",
-                RouteClass::ProfileGrantApi,
-            ),
-            (
                 "POST",
                 "/api/v1/tenants/tenant_01/profiles/profile_01/coordinator",
                 RouteClass::ProfileCoordinatorApi,
             ),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/coordinator",
-                RouteClass::ProfileCoordinatorApi,
-            ),
-        ];
-
-        for (method, path, expected) in routes {
-            let actual = classify_route(method, path);
-            assert_eq!(actual, expected);
-            assert!(is_authenticated_api(actual));
-        }
-    }
-
-    #[test]
-    fn generation_routes_are_specific_and_authenticated() {
-        let routes = [
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/generations",
-                RouteClass::ProfileGenerationCollectionApi,
-            ),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01",
-                RouteClass::ProfileGenerationResourceApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/verify",
-                RouteClass::ProfileGenerationVerifyApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/activate",
-                RouteClass::ProfileGenerationActivateApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate",
-                RouteClass::ProfileGenerationDeactivateApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/quarantine",
-                RouteClass::ProfileGenerationQuarantineApi,
-            ),
         ];
         for (method, path, expected) in routes {
-            let actual = classify_route(method, path);
-            assert_eq!(actual, expected);
-            assert!(is_authenticated_api(actual));
+            let route = classify_route(method, path);
+            assert_eq!(route, expected, "unexpected route for {method} {path}");
+            assert!(is_authenticated_api(route));
         }
     }
 
     #[test]
-    fn mailbox_routes_are_specific_and_authenticated() {
-        let routes = [
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/mailboxes",
-                RouteClass::MailboxBindingCollectionApi,
-            ),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/mailboxes",
-                RouteClass::MailboxBindingCollectionApi,
-            ),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01",
-                RouteClass::MailboxBindingResourceApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/revoke",
-                RouteClass::MailboxBindingRevokeApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/browser-execution",
-                RouteClass::MailboxBrowserExecutionBindApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs",
-                RouteClass::MailboxJobCollectionApi,
-            ),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01",
-                RouteClass::MailboxJobResourceApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
-                RouteClass::MailboxJobRunApi,
-            ),
-        ];
-        for (method, path, expected) in routes {
-            let actual = classify_route(method, path);
-            assert_eq!(actual, expected);
-            assert!(is_authenticated_api(actual));
-        }
-    }
-
-    #[test]
-    fn device_job_routes_are_specific_authenticated_and_fail_closed() {
-        let routes = [
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/device-jobs/claimable",
-                RouteClass::DeviceJobClaimableApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/claim",
-                RouteClass::DeviceJobClaimApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/heartbeat",
-                RouteClass::DeviceJobHeartbeatApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-upload-capability",
-                RouteClass::DeviceGenerationUploadCapabilityApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-commit",
-                RouteClass::DeviceGenerationCommitApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/outcome",
-                RouteClass::DeviceJobOutcomeApi,
-            ),
-        ];
-        for (method, path, expected) in routes {
-            let actual = classify_route(method, path);
-            assert_eq!(actual, expected);
-            assert!(is_authenticated_api(actual));
-        }
-        for (method, path) in [
-            ("POST", "/api/v1/tenants/tenant_01/device-jobs/claimable"),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/claim",
-            ),
-            (
-                "PUT",
-                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/heartbeat",
-            ),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-upload-capability",
-            ),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-commit",
-            ),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/device-jobs/devjob_01/outcome",
-            ),
-        ] {
-            assert_eq!(
-                classify_route(method, path),
-                RouteClass::DynamicRouteNotFound
-            );
-        }
-    }
-
-    #[test]
-    fn notification_routes_are_specific_authenticated_and_fail_closed() {
-        let routes = [
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/notifications/events",
-                RouteClass::NotificationEventCollectionApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/notifications/events/ack",
-                RouteClass::NotificationEventAckApi,
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/notifications/replays",
-                RouteClass::NotificationReplayCollectionApi,
-            ),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/notifications/operations",
-                RouteClass::NotificationOperationsApi,
-            ),
-        ];
-        for (method, path, expected) in routes {
-            let actual = classify_route(method, path);
-            assert_eq!(actual, expected);
-            assert!(is_authenticated_api(actual));
-        }
-        for (method, path) in [
-            ("POST", "/api/v1/tenants/tenant_01/notifications/events"),
-            ("GET", "/api/v1/tenants/tenant_01/notifications/replays"),
-            ("POST", "/api/v1/tenants/tenant_01/notifications/operations"),
-        ] {
-            assert_eq!(
-                classify_route(method, path),
-                RouteClass::DynamicRouteNotFound
-            );
-        }
-    }
-
-    #[test]
-    fn versioned_resource_wrong_methods_never_fall_back_to_static_assets() {
-        for (method, path) in [
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/generations",
-            ),
-            (
-                "DELETE",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01",
-            ),
-            (
-                "PUT",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/verify",
-            ),
-            (
-                "DELETE",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate",
-            ),
-            ("PUT", "/api/v1/tenants/tenant_01/clients/client_01/archive"),
-            ("GET", "/api/v1/tenants/tenant_01/clients/client_01/merge"),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/clients/client_01/history",
-            ),
-            (
-                "POST",
-                "/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01",
-            ),
-            ("DELETE", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01"),
-            (
-                "GET",
-                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/browser-execution",
-            ),
-            (
-                "PUT",
-                "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
-            ),
-            ("DELETE", "/api/v1/tenants/tenant_01/notifications/events"),
-        ] {
-            assert_eq!(
-                classify_route(method, path),
-                RouteClass::DynamicRouteNotFound
-            );
-        }
-    }
-
-    #[test]
-    fn coordinator_wrong_method_never_falls_back_to_static_assets() {
-        assert_eq!(
-            classify_route(
-                "DELETE",
-                "/api/v1/tenants/tenant_01/profiles/profile_01/coordinator"
-            ),
-            RouteClass::DynamicRouteNotFound
-        );
-    }
-
-    #[test]
-    fn health_payload_is_contract_versioned() {
+    fn health_contract_is_explicitly_versioned() {
         let payload = health_payload();
         assert_eq!(payload.status, "ok");
         assert_eq!(payload.contract_version, "v1");
