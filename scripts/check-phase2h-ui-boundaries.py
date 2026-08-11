@@ -18,7 +18,7 @@ FILES = {
     "audit_route": Path("frontend/src/features/audit/route.tsx"),
     "settings_route": Path("frontend/src/features/settings/route.tsx"),
     "client_mail_panel": Path("frontend/src/features/clients/ClientMailPanel.tsx"),
-    "client_mail_api": Path("frontend/src/shared/api/clientMail.ts"),
+    "client_mail_api": Path("frontend/src/features/clients/api.ts"),
     "mail_html": Path("frontend/src/shared/mail/safeMailHtml.ts"),
     "mail_body": Path("frontend/src/shared/mail/SafeMailBody.tsx"),
     "worker_mail": Path("apps/control-plane-worker/src/client_mail_query.rs"),
@@ -27,6 +27,10 @@ FILES = {
     "query_mail_openapi": Path("openapi/v1/fragments/query-mail.json"),
     "realtime": Path("frontend/src/shared/realtime/NotificationRealtimeBridge.tsx"),
 }
+
+OBSOLETE_CLIENT_MAIL_FACADES = (
+    Path("frontend/src/shared/api/clientMail.ts"),
+)
 
 ROUTE_MARKERS = (
     "path: '/clients'",
@@ -67,6 +71,10 @@ BROWSER_PERSISTENCE_SINKS = (
 
 
 def load_sources(root: Path) -> dict[str, str]:
+    for relative in OBSOLETE_CLIENT_MAIL_FACADES:
+        if (root / relative).exists():
+            raise ValueError(f"obsolete shared Client Mail facade must remain removed: {relative}")
+
     sources: dict[str, str] = {}
     for key, relative in FILES.items():
         path = root / relative
