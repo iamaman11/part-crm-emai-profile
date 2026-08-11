@@ -2,7 +2,7 @@
 
 **Status:** ACTIVE / BLOCKING PHASE 2J  
 **Audit base:** accepted `main` at `d8b5bd07b99596d066fa2af976b263d41b5e2f3c`  
-**Current accepted base:** `51719b5b0590c76fd4b18ae876b02c69e59756c8` after accepted R5 PR #187 from exact source head `1c51bf850ce6ec2cae63a086eee24411b413c2d3`
+**Current accepted base:** `48c49349047a0a200e6d405ed1a2623ab6183d87` after accepted R6 PR #190 from exact source head `94e66d139b1b5227c9edb2981d07e529afdf72d5`
 **Production readiness:** remains `false`  
 **Rule:** Phase 2J External evidence work must not begin while any repository-owned P1 below is open.
 
@@ -172,7 +172,9 @@ The shared `use-cases` crate genuinely owns remaining Profile/Generation/cross-r
 - Worker imports ownership directly;
 - policy protects ownership, not migration history.
 
-### R6 — P1/P2 — Frontend API facade is becoming a central bottleneck
+### R6 — P1/P2 — Frontend API facade is becoming a central bottleneck — ACCEPTED
+
+**Accepted main:** squash merge `48c49349047a0a200e6d405ed1a2623ab6183d87` via PR #190 from exact source head `94e66d139b1b5227c9edb2981d07e529afdf72d5`.
 
 **Finding**
 
@@ -253,7 +255,7 @@ Use multiple bounded PRs. The expected sequence is:
 3. **Compatibility semantics** — R3. Accepted via PR #177 / `d3bbd49dde9129e52b7c72bff053ce82a325bc0b`.
 4. **Contract authority migration** — R4a Profile + Generation accepted via PR #179 / `3443bf390cd5ca337be62736c7764ff0f3065f49`; R4b Mailbox accepted via issue #180 / PR #181 / implementation squash `d37a512309b97e6342cf357663dec4553b7b1fb1`, provenance PR #182 / accepted `main` `a085bc58ed6e9c839e35b38c0fd42d8f1e7348d1`; R4c Coordinator accepted via issue #183 / PR #184 from exact source head `932faa9e40d503472125f44983d0e938bc8c10c4`, implementation squash `83fcb5129c81b92d5e96e9932edc8d06be182625`.
 5. **Application ownership cleanup** — R5. Accepted via PR #187 / `51719b5b0590c76fd4b18ae876b02c69e59756c8` from exact source head `1c51bf850ce6ec2cae63a086eee24411b413c2d3`.
-6. **Frontend API modularization** — R6, preferably aligned with R4 capability migrations rather than a mechanical rewrite.
+6. **Frontend API modularization** — R6. Accepted via PR #190 / `48c49349047a0a200e6d405ed1a2623ab6183d87` from exact source head `94e66d139b1b5227c9edb2981d07e529afdf72d5`.
 7. **Current documentation/security authority** — R7.
 8. **Warning/dead-code/CI hygiene** — R8.
 9. **Certification ownership cleanup** — R9.
