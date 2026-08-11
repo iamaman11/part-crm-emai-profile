@@ -111,6 +111,7 @@ DEPENDENCY_SECTIONS = ("dependencies", "dev-dependencies", "build-dependencies")
 PHASE2G_POLICY = Path("scripts/check-phase2g-realtime-boundaries.py")
 PHASE2H_POLICY = Path("scripts/check-phase2h-ui-boundaries.py")
 PHASE2I_POLICY = Path("scripts/check-phase2i-hardening.py")
+PHASE2I_OPERATIONAL_POLICY = Path("scripts/check-phase2i-operational-bounds.py")
 
 
 def dependency_names(document: dict[str, object]) -> set[str]:
@@ -193,6 +194,9 @@ def check(root: Path) -> list[str]:
         errors.extend(check_policy(root, PHASE2G_POLICY, "Phase 2G realtime"))
         errors.extend(check_policy(root, PHASE2H_POLICY, "Phase 2H UI"))
         errors.extend(check_policy(root, PHASE2I_POLICY, "Phase 2I hardening"))
+        errors.extend(
+            check_policy(root, PHASE2I_OPERATIONAL_POLICY, "Phase 2I operational bounds")
+        )
     return errors
 
 
