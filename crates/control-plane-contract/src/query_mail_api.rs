@@ -180,14 +180,19 @@ mod tests {
             let operation = &document["paths"][path]["post"];
             assert!(operation.is_object());
             assert!(operation["requestBody"].is_object());
-            assert!(operation["parameters"].as_array().is_some_and(|parameters| {
-                parameters.iter().all(|parameter| parameter["in"] == "path")
-            }));
+            assert!(
+                operation["parameters"]
+                    .as_array()
+                    .is_some_and(|parameters| {
+                        parameters.iter().all(|parameter| parameter["in"] == "path")
+                    })
+            );
         }
     }
 
     #[test]
-    fn nullable_transient_fields_remain_explicit_on_wire() -> Result<(), Box<dyn std::error::Error>> {
+    fn nullable_transient_fields_remain_explicit_on_wire() -> Result<(), Box<dyn std::error::Error>>
+    {
         let value = serde_json::to_value(ClientMailSearchInput {
             mailbox_binding_id: "binding_01JMAILQUERY".to_owned(),
             term: None,
