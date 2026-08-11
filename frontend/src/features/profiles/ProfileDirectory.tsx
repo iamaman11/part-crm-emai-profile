@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTenant } from '../../app/TenantContext';
-import { listProfiles } from '../../shared/api/endpoints';
+import { listProfiles } from './api';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 
 export function ProfileDirectory({

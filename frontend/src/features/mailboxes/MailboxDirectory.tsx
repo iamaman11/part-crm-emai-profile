@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTenant } from '../../app/TenantContext';
-import { listMailboxes } from '../../shared/api/endpoints';
+import { listMailboxes } from './api';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 
 export function MailboxDirectory() {

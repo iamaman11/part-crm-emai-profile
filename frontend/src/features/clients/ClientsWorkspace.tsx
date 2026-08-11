@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
-import { createClient, getClient, getClientHistory, listClients } from '../../shared/api/endpoints';
+import { createClient, getClient, getClientHistory, listClients } from './api';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { ClientGrantPanel } from './ClientGrantPanel';
 import { ClientHistoryPanel } from './ClientHistoryPanel';

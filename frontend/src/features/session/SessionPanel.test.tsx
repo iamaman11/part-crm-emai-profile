@@ -3,10 +3,10 @@ import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TenantProvider } from '../../app/TenantContext';
 import { ApiProblem } from '../../shared/api/client';
-import { getSession } from '../../shared/api/endpoints';
+import { getSession } from './api';
 import { SessionPanel } from './SessionPanel';
 
-vi.mock('../../shared/api/endpoints', () => ({
+vi.mock('./api', () => ({
   getSession: vi.fn(),
 }));
 

@@ -13,9 +13,9 @@ import {
   registerGeneration,
   setProfileGrant,
   verifyGeneration,
-} from '../../shared/api/endpoints';
+} from './api';
 import { newIdempotencyKey } from '../../shared/api/client';
-import type { CoordinatorResponse, GenerationProjection, ProfileProjection } from '../../shared/api/types';
+import type { CoordinatorResponse, GenerationProjection, ProfileProjection } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 
@@ -96,7 +96,7 @@ export function ProfilesWorkspace({
     onSuccess: (data) => setCoordinator(data ?? null),
   });
   const coordinatorCommand = useMutation({
-    mutationFn: (command: import('../../shared/api/types').CoordinatorCommandDto) => {
+    mutationFn: (command: import('./api').CoordinatorCommandDto) => {
       if (!coordinator) throw new Error('Load the coordinator snapshot before issuing a command.');
       return commandCoordinator(tenantId, profileId, {
         idempotency_key: newIdempotencyKey(),

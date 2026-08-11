@@ -29,6 +29,7 @@ STATIC_IMPORT_RE = re.compile(
 )
 DYNAMIC_IMPORT_RE = re.compile(r"\bimport\s*\(\s*[\"']([^\"']+)[\"']\s*\)")
 VITE_RESOLVE_RE = re.compile(r"\bresolve\s*:")
+ALLOWED_SHARED_API_ROOT_SOURCE_FILES = {"client.ts", "client.test.ts", "endpoint.ts"}
 
 
 @dataclass(frozen=True)
@@ -201,6 +202,26 @@ def inspect_feature_source(
     return violations
 
 
+def shared_api_ownership_violations(frontend_root: Path) -> list[Violation]:
+    shared_api_root = frontend_root / "src" / "shared" / "api"
+    if not shared_api_root.is_dir():
+        return [Violation(shared_api_root, "", "shared API transport root is missing")]
+
+    violations: list[Violation] = []
+    for path in sorted(shared_api_root.iterdir()):
+        if not path.is_file() or path.suffix not in SOURCE_SUFFIXES:
+            continue
+        if path.name in ALLOWED_SHARED_API_ROOT_SOURCE_FILES:
+            continue
+        violations.append(
+            Violation(
+                path,
+                path.name,
+                "shared API root may contain transport primitives only; capability endpoints/types belong to feature ownership",
+            )
+        )
+    return violations
+
 def app_route_composition_violations(
     frontend_root: Path,
     feature_names: set[str],
@@ -236,6 +257,7 @@ def scan(root: Path) -> list[Violation]:
     feature_names = {entry.name for entry in features_root.iterdir() if entry.is_dir()}
     packages = declared_packages(frontend_root)
     violations = resolver_configuration_violations(frontend_root)
+    violations.extend(shared_api_ownership_violations(frontend_root))
     violations.extend(app_route_composition_violations(frontend_root, feature_names))
 
     for source_path in sorted(features_root.rglob("*")):
@@ -308,6 +330,38 @@ def root_route_negative_self_test() -> bool:
         return False
 
 
+def shared_api_registry_negative_self_test() -> bool:
+    with tempfile.TemporaryDirectory(prefix="frontend-shared-api-ownership-") as directory:
+        root = Path(directory)
+        frontend = root / "frontend"
+        features = frontend / "src" / "features"
+        clients = features / "clients"
+        app = frontend / "src" / "app"
+        shared_api = frontend / "src" / "shared" / "api"
+        clients.mkdir(parents=True)
+        app.mkdir(parents=True)
+        shared_api.mkdir(parents=True)
+        (frontend / "package.json").write_text("{}\n", encoding="utf-8")
+        (clients / "index.ts").write_text("export const clients = true;\n", encoding="utf-8")
+        (app / "router.tsx").write_text("export const router = true;\n", encoding="utf-8")
+        (shared_api / "client.ts").write_text("export const transport = true;\n", encoding="utf-8")
+        (shared_api / "endpoint.ts").write_text("export const endpoint = true;\n", encoding="utf-8")
+        (shared_api / "endpoints.ts").write_text("export const createClient = true;\n", encoding="utf-8")
+        (shared_api / "types.ts").write_text("export type Client = {};\n", encoding="utf-8")
+
+        violations = scan(root)
+        rejected = {
+            item.path.name
+            for item in violations
+            if "shared API root may contain transport primitives only" in item.reason
+        }
+        if {"endpoints.ts", "types.ts"}.issubset(rejected):
+            print("central shared capability endpoint/type registries rejected as expected")
+            return True
+        print("central shared capability registry negative fixture was not rejected", file=sys.stderr)
+        print_violations(root, violations)
+        return False
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=REPO_ROOT)
@@ -333,6 +387,7 @@ def main() -> int:
                 "Vite alias bypass",
             ),
             root_route_negative_self_test(),
+            shared_api_registry_negative_self_test(),
         ]
         return 0 if all(results) else 1
 

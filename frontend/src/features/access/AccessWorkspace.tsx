@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
-import { acceptInvitation, createInvitation, transferOwner, updateMembershipStatus } from '../../shared/api/endpoints';
+import { acceptInvitation, createInvitation, transferOwner, updateMembershipStatus } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 

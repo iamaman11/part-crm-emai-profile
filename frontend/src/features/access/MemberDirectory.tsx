@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTenant } from '../../app/TenantContext';
-import { listMembers } from '../../shared/api/endpoints';
+import { listMembers } from './api';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 
 export function MemberDirectory() {

@@ -6,8 +6,8 @@ import {
   mergeClient,
   updateClient,
   upsertClientContact,
-} from '../../shared/api/endpoints';
-import type { ClientProjection } from '../../shared/api/types';
+} from './api';
+import type { ClientProjection } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 
