@@ -2,6 +2,7 @@
 
 pub mod client_registry_api;
 pub mod operator_query_api;
+pub mod profile_generation_api;
 pub mod public_api;
 mod routes;
 
