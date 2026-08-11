@@ -121,12 +121,13 @@ fn parse_search_input(
     body: Value,
 ) -> Result<(MailboxBindingId, SearchClientMailboxMessagesRequest), ()> {
     let object = exact_object(body, &["mailboxBindingId", "term", "cursor", "limit"])?;
-    let binding_id = MailboxBindingId::parse(required_string(object, "mailboxBindingId")?).map_err(|_| ())?;
-    let term = match nullable_string(object, "term")? {
+    let binding_id =
+        MailboxBindingId::parse(required_string(&object, "mailboxBindingId")?).map_err(|_| ())?;
+    let term = match nullable_string(&object, "term")? {
         Some(value) => Some(MailSearchTerm::parse(value).map_err(|_| ())?),
         None => None,
     };
-    let cursor = match nullable_string(object, "cursor")? {
+    let cursor = match nullable_string(&object, "cursor")? {
         Some(value) => Some(QueryCursor::parse(value).map_err(|_| ())?),
         None => None,
     };
@@ -138,8 +139,9 @@ fn parse_search_input(
 
 fn parse_message_reference(body: Value) -> Result<MailboxMessageReference, ()> {
     let object = exact_object(body, &["mailboxBindingId", "providerReference"])?;
-    let binding_id = MailboxBindingId::parse(required_string(object, "mailboxBindingId")?).map_err(|_| ())?;
-    MailboxMessageReference::new(binding_id, required_string(object, "providerReference")?)
+    let binding_id =
+        MailboxBindingId::parse(required_string(&object, "mailboxBindingId")?).map_err(|_| ())?;
+    MailboxMessageReference::new(binding_id, required_string(&object, "providerReference")?)
         .map_err(|_| ())
 }
 
@@ -233,22 +235,31 @@ mod tests {
 
     #[test]
     fn transient_inputs_reject_unknown_fields_and_control_values() {
-        assert!(parse_search_input(json!({
-            "mailboxBindingId": "binding_01JMAILQUERY",
-            "term": "subject:test",
-            "cursor": null,
-            "limit": 25,
-        })).is_ok());
-        assert!(parse_search_input(json!({
-            "mailboxBindingId": "binding_01JMAILQUERY",
-            "term": "bad\nterm",
-            "cursor": null,
-            "limit": 25,
-        })).is_err());
-        assert!(parse_message_reference(json!({
-            "mailboxBindingId": "binding_01JMAILQUERY",
-            "providerReference": "provider-message-1",
-            "unexpected": true,
-        })).is_err());
+        assert!(
+            parse_search_input(json!({
+                "mailboxBindingId": "binding_01JMAILQUERY",
+                "term": "subject:test",
+                "cursor": null,
+                "limit": 25,
+            }))
+            .is_ok()
+        );
+        assert!(
+            parse_search_input(json!({
+                "mailboxBindingId": "binding_01JMAILQUERY",
+                "term": "bad\nterm",
+                "cursor": null,
+                "limit": 25,
+            }))
+            .is_err()
+        );
+        assert!(
+            parse_message_reference(json!({
+                "mailboxBindingId": "binding_01JMAILQUERY",
+                "providerReference": "provider-message-1",
+                "unexpected": true,
+            }))
+            .is_err()
+        );
     }
 }
