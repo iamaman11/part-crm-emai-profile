@@ -29,6 +29,8 @@ pub enum RouteClass {
     ClientMergeApi,
     ClientHistoryApi,
     ClientGrantApi,
+    ClientMailSearchApi,
+    ClientMailMessageApi,
     ProfileCollectionApi,
     ProfileResourceApi,
     ProfileAssignmentApi,

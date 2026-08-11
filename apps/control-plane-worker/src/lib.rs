@@ -50,9 +50,6 @@ use worker::{
 #[event(fetch, respond_with_errors)]
 pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
     let path = request.path();
-    if client_mail_query::matches_route(request.method().as_ref(), &path) {
-        return client_mail_query::dispatch(&mut request, &env).await;
-    }
     let route = classify_route(request.method().as_ref(), &path);
     match route {
         RouteClass::HealthApi => Response::ok("control-plane-ready"),
@@ -73,6 +70,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         | RouteClass::ClientMergeApi
         | RouteClass::ClientHistoryApi
         | RouteClass::ClientGrantApi => clients::dispatch(route, &mut request, &env).await,
+        RouteClass::ClientMailSearchApi | RouteClass::ClientMailMessageApi => {
+            client_mail_query::dispatch(route, &mut request, &env).await
+        }
         RouteClass::ProfileCollectionApi if request.method() == Method::Get => {
             operator_queries::dispatch(route, &request, &env).await
         }

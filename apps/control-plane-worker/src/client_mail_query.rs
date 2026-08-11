@@ -8,6 +8,7 @@ use application_ports::query_mail_provider::{
 use cloudflare_adapters::cloud_mail_query::CloudMailboxQueryAdapter;
 use cloudflare_adapters::d1_client_mail_eligibility::D1ClientMailboxEligibilityRepository;
 use cloudflare_adapters::d1_query::D1QueryRepository;
+use control_plane_contract::RouteClass;
 use profile_platform_primitives::{ClientId, MailboxBindingId};
 use serde_json::{Map, Value, json};
 use use_cases_query::{
@@ -15,31 +16,7 @@ use use_cases_query::{
 };
 use worker::{Env, Request, Response, Result};
 
-pub fn matches_route(method: &str, path: &str) -> bool {
-    if method != "POST" {
-        return false;
-    }
-    let segments: Vec<&str> = path
-        .trim_matches('/')
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    matches!(
-        segments.as_slice(),
-        [
-            "api",
-            "v1",
-            "tenants",
-            _,
-            "clients",
-            _,
-            "mail",
-            "search" | "message"
-        ]
-    )
-}
-
-pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
+pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
     let segments: Vec<&str> = path
         .trim_matches('/')
@@ -48,7 +25,6 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         .collect();
     let tenant_id = segments.get(3).copied().unwrap_or_default();
     let client_id = segments.get(5).copied().unwrap_or_default();
-    let operation = segments.get(7).copied().unwrap_or_default();
     let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
         return neutral_not_found(&correlation_hint(request));
     };
@@ -64,8 +40,8 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
     let provider =
         CloudMailboxQueryAdapter::new(env, env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
 
-    match operation {
-        "search" => {
+    match route {
+        RouteClass::ClientMailSearchApi => {
             let body = match request.json::<Value>().await {
                 Ok(value) => value,
                 Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
@@ -92,7 +68,7 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
                 Err(error) => query_failure(actor.actor().correlation_id().as_str(), error),
             }
         }
-        "message" => {
+        RouteClass::ClientMailMessageApi => {
             let body = match request.json::<Value>().await {
                 Ok(value) => value,
                 Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
@@ -215,28 +191,8 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::{matches_route, parse_message_reference, parse_search_input};
+    use super::{parse_message_reference, parse_search_input};
     use serde_json::json;
-
-    #[test]
-    fn route_matcher_is_exact_and_post_only() {
-        assert!(matches_route(
-            "POST",
-            "/api/v1/tenants/tenant_01/clients/client_01/mail/search"
-        ));
-        assert!(matches_route(
-            "POST",
-            "/api/v1/tenants/tenant_01/clients/client_01/mail/message"
-        ));
-        assert!(!matches_route(
-            "GET",
-            "/api/v1/tenants/tenant_01/clients/client_01/mail/search"
-        ));
-        assert!(!matches_route(
-            "POST",
-            "/api/v1/tenants/tenant_01/clients/client_01/mail/unknown"
-        ));
-    }
 
     #[test]
     fn transient_inputs_reject_unknown_fields_and_control_values() {

@@ -48,6 +48,8 @@ ROUTE_SPECS = [
     ("ClientMergeApi", "clients", ["POST"], "/api/v1/tenants/{tenant_id}/clients/{client_id}/merge", "/api/v1/tenants/tenant_01/clients/client_01/merge", True),
     ("ClientHistoryApi", "clients", ["GET"], "/api/v1/tenants/{tenant_id}/clients/{client_id}/history", "/api/v1/tenants/tenant_01/clients/client_01/history", True),
     ("ClientGrantApi", "clients", ["DELETE", "PUT"], "/api/v1/tenants/{tenant_id}/clients/{client_id}/grants/{actor_id}", "/api/v1/tenants/tenant_01/clients/client_01/grants/actor_01", True),
+    ("ClientMailSearchApi", "clients", ["POST"], "/api/v1/tenants/{tenant_id}/clients/{client_id}/mail/search", "/api/v1/tenants/tenant_01/clients/client_01/mail/search", True),
+    ("ClientMailMessageApi", "clients", ["POST"], "/api/v1/tenants/{tenant_id}/clients/{client_id}/mail/message", "/api/v1/tenants/tenant_01/clients/client_01/mail/message", True),
     ("ProfileCollectionApi", "profiles", ["GET", "POST"], "/api/v1/tenants/{tenant_id}/profiles", "/api/v1/tenants/tenant_01/profiles", True),
     ("ProfileResourceApi", "profiles", ["GET"], "/api/v1/tenants/{tenant_id}/profiles/{profile_id}", "/api/v1/tenants/tenant_01/profiles/profile_01", True),
     ("ProfileAssignmentApi", "profiles", ["PUT"], "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/assignment", "/api/v1/tenants/tenant_01/profiles/profile_01/assignment", True),
