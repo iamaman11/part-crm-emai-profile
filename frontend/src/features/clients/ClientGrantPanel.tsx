@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { setClientGrant } from '../../shared/api/endpoints';
-import type { ClientProjection } from '../../shared/api/types';
+import { setClientGrant } from './api';
+import type { ClientProjection } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 

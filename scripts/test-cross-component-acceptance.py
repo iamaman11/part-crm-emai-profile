@@ -549,21 +549,34 @@ def validate_composition_surfaces() -> None:
             "mailbox job persistence application adapter",
         ),
         (
-            "frontend/src/shared/api/endpoints.ts",
-            (
-                "getSession",
-                "createClient",
-                "setClientGrant",
-                "createProfile",
-                "assignProfile",
-                "setProfileGrant",
-                "registerGeneration",
-                "changeGenerationActivation",
-                "getCoordinator",
-                "createMailboxBinding",
-                "runMailboxJob",
-            ),
-            "React endpoint composition",
+            "frontend/src/shared/api/endpoint.ts",
+            ("segment", "pagedPath", "mutate", "requestJson<MutationReceipt>"),
+            "React shared transport helpers",
+        ),
+        (
+            "frontend/src/features/session/api.ts",
+            ("getSession", "requestJson<ActorSession>"),
+            "Session frontend API ownership",
+        ),
+        (
+            "frontend/src/features/access/api.ts",
+            ("bootstrapOwner", "transferOwner", "createInvitation", "acceptInvitation", "listMembers", "updateMembershipStatus"),
+            "Access frontend API ownership",
+        ),
+        (
+            "frontend/src/features/clients/api.ts",
+            ("createClient", "setClientGrant", "searchClientMail", "getClientMailMessage"),
+            "Client frontend API ownership",
+        ),
+        (
+            "frontend/src/features/profiles/api.ts",
+            ("createProfile", "assignProfile", "setProfileGrant", "registerGeneration", "changeGenerationActivation", "getCoordinator", "commandCoordinator"),
+            "Profile frontend API ownership",
+        ),
+        (
+            "frontend/src/features/mailboxes/api.ts",
+            ("listMailboxes", "createMailboxBinding", "runMailboxJob"),
+            "Mailbox frontend API ownership",
         ),
         (
             "frontend/src/shared/api/client.ts",
@@ -587,6 +600,14 @@ def validate_composition_surfaces() -> None:
 
     if (ROOT / "apps/control-plane-worker/src/api.rs").exists():
         fail("legacy api.rs must remain removed after identity application-boundary migration")
+
+    for obsolete_frontend_facade in (
+        "frontend/src/shared/api/endpoints.ts",
+        "frontend/src/shared/api/types.ts",
+        "frontend/src/shared/api/clientMail.ts",
+    ):
+        if (ROOT / obsolete_frontend_facade).exists():
+            fail(f"central frontend capability facade must remain removed: {obsolete_frontend_facade}")
 
     forbid_all(
         read("apps/control-plane-worker/src/identity.rs"),

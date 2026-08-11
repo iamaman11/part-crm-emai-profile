@@ -1,4 +1,4 @@
-import type { ClientProjection } from '../../shared/api/types';
+import type { ClientProjection } from './api';
 
 export function ClientRegistryList({
   clients,

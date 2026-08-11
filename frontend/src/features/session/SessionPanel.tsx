@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { getSession } from '../../shared/api/endpoints';
+import { getSession } from './api';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 import { useTenant } from '../../app/TenantContext';
 

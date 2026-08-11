@@ -8,8 +8,8 @@ import {
   getMailboxJob,
   revokeMailboxBinding,
   runMailboxJob,
-} from '../../shared/api/endpoints';
-import type { MailboxBindingProjection, MailboxJobProjection } from '../../shared/api/types';
+} from './api';
+import type { MailboxBindingProjection, MailboxJobProjection } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 

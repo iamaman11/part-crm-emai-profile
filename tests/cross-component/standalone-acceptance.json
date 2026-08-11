@@ -71,7 +71,12 @@
       "expectedOutcome": "same_origin_typed_ui_projection",
       "evidence": [
         "frontend/src/shared/api/client.ts",
-        "frontend/src/shared/api/endpoints.ts",
+        "frontend/src/shared/api/endpoint.ts",
+        "frontend/src/features/session/api.ts",
+        "frontend/src/features/access/api.ts",
+        "frontend/src/features/clients/api.ts",
+        "frontend/src/features/mailboxes/api.ts",
+        "frontend/src/features/profiles/api.ts",
         "frontend/src/shared/ui/StatusMessage.test.tsx"
       ]
     }

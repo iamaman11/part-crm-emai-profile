@@ -1,8 +1,8 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
-import { getClientMailMessage, searchClientMail } from '../../shared/api/clientMail';
-import { listMailboxes } from '../../shared/api/endpoints';
+import { getClientMailMessage, searchClientMail } from './api';
+import { listMailboxes } from '../mailboxes';
 import type {
   ClientMailSearchInput,
   MailboxMessageReferenceDto,

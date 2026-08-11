@@ -1,5 +1,5 @@
 import { ProblemCodeValues } from './generated/control-plane';
-import type { ProblemCode, ProblemPayload } from './types';
+import type { ProblemCode, ProblemPayload } from './generated/control-plane';
 
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const JSON_MEDIA_TYPES = ['application/json', 'application/problem+json'];
