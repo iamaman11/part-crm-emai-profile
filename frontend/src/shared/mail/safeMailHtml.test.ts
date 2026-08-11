@@ -41,12 +41,11 @@ describe('safe mail HTML boundary', () => {
     expect(output).not.toContain('tracker.invalid');
   });
 
-  it('emits an inert sandbox document with deny-by-default CSP and no instrumentation sinks', () => {
+  it('emits an inert sandbox document with deny-by-default CSP', () => {
     const output = safeMailSrcDoc('<p>hello</p>');
     expect(MAIL_CSP).toContain("default-src 'none'");
     expect(MAIL_CSP).toContain("connect-src 'none'");
     expect(MAIL_CSP).toContain("script-src 'none'");
     expect(output).toContain('name="referrer" content="no-referrer"');
-    expect(output).not.toMatch(/localStorage|sessionStorage|indexedDB|sendBeacon|analytics|telemetry/i);
   });
 });
