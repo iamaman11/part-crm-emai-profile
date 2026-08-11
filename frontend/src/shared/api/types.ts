@@ -30,29 +30,12 @@ export type {
   MailboxProviderDto,
 } from './generated/mailbox';
 
-export interface CoordinatorProjection {
-  tenant_id: string;
-  profile_id: string;
-  status: 'idle' | 'active' | 'draining' | 'dirty' | 'uncertain';
-  version: number;
-  sequence: number;
-  next_epoch: number;
-  active_session_id: string | null;
-  active_device_id: string | null;
-  active_epoch: number | null;
-  idle_expires_at_ms: number | null;
-  hard_expires_at_ms: number | null;
-  drain_deadline_ms: number | null;
-  pending_launch_intent_id: string | null;
-  pending_intent_expires_at_ms: number | null;
-}
-
-export interface CoordinatorResponse {
-  outcome: string;
-  version: number;
-  sequence: number;
-  replayed: boolean;
-  fencing_token: string | null;
-  epoch: number | null;
-  projection: CoordinatorProjection;
-}
+export type {
+  CoordinatorCommandDto,
+  CoordinatorCommandRequestDto,
+  CoordinatorOutcomeDto,
+  CoordinatorProjectionDto as CoordinatorProjection,
+  CoordinatorReleaseDispositionDto,
+  CoordinatorResponseDto as CoordinatorResponse,
+  CoordinatorStatusDto,
+} from './generated/coordinator';
