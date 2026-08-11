@@ -4,6 +4,7 @@ import {
   useNavigate,
   useParams,
 } from '@tanstack/react-router';
+import { ProfileDirectory } from './ProfileDirectory';
 import { ProfilesWorkspace } from './ProfilesWorkspace';
 
 function useProfileSelectionNavigation() {
@@ -14,17 +15,24 @@ function useProfileSelectionNavigation() {
 }
 
 function ProfilesIndexPage() {
-  return <ProfilesWorkspace onProfileSelected={useProfileSelectionNavigation()} />;
+  const onSelect = useProfileSelectionNavigation();
+  return (
+    <div className="page-stack">
+      <ProfileDirectory onSelect={onSelect} />
+      <ProfilesWorkspace onProfileSelected={onSelect} />
+    </div>
+  );
 }
 
 function ProfileDetailPage() {
   const params = useParams({ strict: false });
   const selectedProfileId = typeof params.profileId === 'string' ? params.profileId : null;
+  const onSelect = useProfileSelectionNavigation();
   return (
-    <ProfilesWorkspace
-      selectedProfileId={selectedProfileId}
-      onProfileSelected={useProfileSelectionNavigation()}
-    />
+    <div className="page-stack">
+      <ProfileDirectory selectedProfileId={selectedProfileId} onSelect={onSelect} />
+      <ProfilesWorkspace selectedProfileId={selectedProfileId} onProfileSelected={onSelect} />
+    </div>
   );
 }
 
