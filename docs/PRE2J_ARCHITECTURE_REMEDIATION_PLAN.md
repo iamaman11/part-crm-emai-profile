@@ -2,7 +2,7 @@
 
 **Status:** ACTIVE / BLOCKING PHASE 2J  
 **Audit base:** accepted `main` at `d8b5bd07b99596d066fa2af976b263d41b5e2f3c`  
-**Current accepted base:** `48c49349047a0a200e6d405ed1a2623ab6183d87` after accepted R6 PR #190 from exact source head `94e66d139b1b5227c9edb2981d07e529afdf72d5`
+**Current accepted base:** `ab683ef25a6ebce1ce0fc9483669fe6bdcfa9676` after accepted R7 PR #193 from exact source head `22ec5da1c72681f7013d4edbdf53c4d3c6563dba`
 **Production readiness:** remains `false`  
 **Rule:** Phase 2J External evidence work must not begin while any repository-owned P1 below is open.
 
@@ -192,7 +192,9 @@ The shared `use-cases` crate genuinely owns remaining Profile/Generation/cross-r
 - adding a new CRM capability does not require editing a giant shared endpoint/type registry beyond intentionally shared transport registration;
 - root/feature boundary gate remains green with a negative fixture for cross-feature internals.
 
-### R7 — P1 — Current repository documentation is not a single truthful authority
+### R7 — P1 — Current repository documentation is not a single truthful authority — ACCEPTED
+
+**Accepted main:** squash merge `ab683ef25a6ebce1ce0fc9483669fe6bdcfa9676` via PR #193 from exact source head `22ec5da1c72681f7013d4edbdf53c4d3c6563dba`.
 
 **Finding**
 
@@ -256,7 +258,7 @@ Use multiple bounded PRs. The expected sequence is:
 4. **Contract authority migration** — R4a Profile + Generation accepted via PR #179 / `3443bf390cd5ca337be62736c7764ff0f3065f49`; R4b Mailbox accepted via issue #180 / PR #181 / implementation squash `d37a512309b97e6342cf357663dec4553b7b1fb1`, provenance PR #182 / accepted `main` `a085bc58ed6e9c839e35b38c0fd42d8f1e7348d1`; R4c Coordinator accepted via issue #183 / PR #184 from exact source head `932faa9e40d503472125f44983d0e938bc8c10c4`, implementation squash `83fcb5129c81b92d5e96e9932edc8d06be182625`.
 5. **Application ownership cleanup** — R5. Accepted via PR #187 / `51719b5b0590c76fd4b18ae876b02c69e59756c8` from exact source head `1c51bf850ce6ec2cae63a086eee24411b413c2d3`.
 6. **Frontend API modularization** — R6. Accepted via PR #190 / `48c49349047a0a200e6d405ed1a2623ab6183d87` from exact source head `94e66d139b1b5227c9edb2981d07e529afdf72d5`.
-7. **Current documentation/security authority** — R7.
+7. **Current documentation/security authority** — R7. Accepted via PR #193 / `ab683ef25a6ebce1ce0fc9483669fe6bdcfa9676` from exact source head `22ec5da1c72681f7013d4edbdf53c4d3c6563dba`.
 8. **Warning/dead-code/CI hygiene** — R8.
 9. **Certification ownership cleanup** — R9.
 10. **Final pre-2J audit closeout** — re-run full inventory, verify no repository-owned P0/P1, record accepted exact-head evidence, then and only then resume Phase 2J.
