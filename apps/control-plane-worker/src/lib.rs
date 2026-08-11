@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod access_session;
+mod client_mail_query;
 mod clients;
 mod command_evidence;
 mod composition;
@@ -48,7 +49,11 @@ use worker::{
 
 #[event(fetch, respond_with_errors)]
 pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
-    let route = classify_route(request.method().as_ref(), &request.path());
+    let path = request.path();
+    if client_mail_query::matches_route(request.method().as_ref(), &path) {
+        return client_mail_query::dispatch(&mut request, &env).await;
+    }
+    let route = classify_route(request.method().as_ref(), &path);
     match route {
         RouteClass::HealthApi => Response::ok("control-plane-ready"),
         RouteClass::BindingProbeApi => binding_probe(&env),
