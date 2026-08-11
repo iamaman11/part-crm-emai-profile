@@ -4,16 +4,20 @@ use crate::access_session::{
 use crate::command_evidence;
 use crate::composition::profile_application;
 use application_ports::profiles::ProfileStatus;
+use control_plane_contract::profile_generation_api::{
+    ProfileAssignmentRequest, ProfileCreateRequest, ProfileGrantRequest, ProfileProjectionDto,
+    ProfileStatusDto,
+};
+use control_plane_contract::public_api::MutationReceipt;
 use control_plane_contract::RouteClass;
 use profile_platform_primitives::{ActorId, AggregateVersion, AssignmentId, ClientId, ProfileId};
-use serde::{Deserialize, Serialize};
 use use_cases::profile_assignments::{
     ExecuteAssignProfileCommand, ProfileAssignmentOperationError, ProfileAssignmentOutcome,
     authorize_profile_assignment, execute_assign_profile, next_profile_assignment_version,
 };
 use use_cases::profile_grants::{
-    ExecuteProfileGrantCommand, ProfileGrantAction, ProfileGrantOperationError,
-    ProfileGrantOutcome, authorize_profile_grant, execute_profile_grant,
+    ExecuteProfileGrantCommand, ProfileGrantAction, ProfileGrantOperationError, ProfileGrantOutcome,
+    authorize_profile_grant, execute_profile_grant,
 };
 use use_cases::profiles::{
     ExecuteCreateProfileCommand, ProfileDetails, ProfileMutationOutcome, ProfileOperationError,
@@ -106,7 +110,7 @@ async fn get_profile(
     )
     .await
     {
-        Ok(profile) => Response::from_json(&ProfileResponse::from(&profile)),
+        Ok(profile) => Response::from_json(&profile_projection(&profile)),
         Err(ProfileOperationError::NotFound) => {
             neutral_not_found(actor.actor().correlation_id().as_str())
         }
@@ -128,7 +132,7 @@ async fn assign_profile(
         return assignment_failure(actor.actor().correlation_id().as_str(), error);
     }
 
-    let body = match request.json::<AssignmentRequest>().await {
+    let body = match request.json::<ProfileAssignmentRequest>().await {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
@@ -338,19 +342,11 @@ fn no_content() -> Result<Response> {
     Ok(Response::empty()?.with_status(204))
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MutationReceipt<'a> {
-    result_code: &'a str,
-    resource_id: &'a str,
-    aggregate_version: u64,
-}
-
 fn mutation_receipt(outcome: &ProfileMutationOutcome) -> Result<Response> {
     let status = if outcome.replayed() { 200 } else { 201 };
     Response::from_json(&MutationReceipt {
-        result_code: outcome.result_code(),
-        resource_id: outcome.resource_id(),
+        result_code: outcome.result_code().to_owned(),
+        resource_id: outcome.resource_id().to_owned(),
         aggregate_version: outcome.aggregate_version().value(),
     })
     .map(|response| response.with_status(status))
@@ -358,8 +354,8 @@ fn mutation_receipt(outcome: &ProfileMutationOutcome) -> Result<Response> {
 
 fn assignment_receipt(outcome: &ProfileAssignmentOutcome) -> Result<Response> {
     Response::from_json(&MutationReceipt {
-        result_code: outcome.result_code(),
-        resource_id: outcome.resource_id(),
+        result_code: outcome.result_code().to_owned(),
+        resource_id: outcome.resource_id().to_owned(),
         aggregate_version: outcome.aggregate_version().value(),
     })
     .map(|response| response.with_status(200))
@@ -367,118 +363,56 @@ fn assignment_receipt(outcome: &ProfileAssignmentOutcome) -> Result<Response> {
 
 fn profile_grant_receipt(outcome: &ProfileGrantOutcome) -> Result<Response> {
     Response::from_json(&MutationReceipt {
-        result_code: outcome.result_code(),
-        resource_id: outcome.resource_id(),
+        result_code: outcome.result_code().to_owned(),
+        resource_id: outcome.resource_id().to_owned(),
         aggregate_version: outcome.aggregate_version().value(),
     })
     .map(|response| response.with_status(200))
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileResponse<'a> {
-    profile_id: &'a str,
-    status: &'static str,
-    version: u64,
-    linked_client_id: Option<&'a str>,
-}
-
-impl<'a> From<&'a ProfileDetails> for ProfileResponse<'a> {
-    fn from(profile: &'a ProfileDetails) -> Self {
-        Self {
-            profile_id: profile.profile_id().as_str(),
-            status: match profile.status() {
-                ProfileStatus::Draft => "DRAFT",
-                ProfileStatus::Quarantined => "QUARANTINED",
-                ProfileStatus::Ready => "READY",
-                ProfileStatus::InUse => "IN_USE",
-                ProfileStatus::DirtyLocal => "DIRTY_LOCAL",
-                ProfileStatus::Syncing => "SYNCING",
-                ProfileStatus::Suspended => "SUSPENDED",
-                ProfileStatus::Deleting => "DELETING",
-                ProfileStatus::Deleted => "DELETED",
-            },
-            version: profile.version().value(),
-            linked_client_id: profile.linked_client_id().map(ClientId::as_str),
-        }
+fn profile_projection(profile: &ProfileDetails) -> ProfileProjectionDto {
+    ProfileProjectionDto {
+        profile_id: profile.profile_id().as_str().to_owned(),
+        status: profile_status(profile.status()),
+        version: profile.version().value(),
+        linked_client_id: profile.linked_client_id().map(|value| value.as_str().to_owned()),
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileCreateRequest {
-    profile_id: String,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AssignmentRequest {
-    assignment_id: String,
-    client_id: String,
-    reason: String,
-    expected_profile_version: u64,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileGrantRequest {
-    role: String,
-    reason: String,
-    expected_profile_version: u64,
-    request_digest: String,
+const fn profile_status(status: ProfileStatus) -> ProfileStatusDto {
+    match status {
+        ProfileStatus::Draft => ProfileStatusDto::Draft,
+        ProfileStatus::Quarantined => ProfileStatusDto::Quarantined,
+        ProfileStatus::Ready => ProfileStatusDto::Ready,
+        ProfileStatus::InUse => ProfileStatusDto::InUse,
+        ProfileStatus::DirtyLocal => ProfileStatusDto::DirtyLocal,
+        ProfileStatus::Syncing => ProfileStatusDto::Syncing,
+        ProfileStatus::Suspended => ProfileStatusDto::Suspended,
+        ProfileStatus::Deleting => ProfileStatusDto::Deleting,
+        ProfileStatus::Deleted => ProfileStatusDto::Deleted,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AssignmentRequest, MutationReceipt, ProfileGrantRequest, ProfileResponse};
+    use super::profile_status;
+    use application_ports::profiles::ProfileStatus;
+    use control_plane_contract::profile_generation_api::ProfileStatusDto;
 
     #[test]
-    fn transport_models_keep_camel_case_contract_field_names()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let mutation = serde_json::to_value(MutationReceipt {
-            result_code: "created",
-            resource_id: "profile_01JTRANSPORT",
-            aggregate_version: 1,
-        })?;
-        assert!(mutation.get("resultCode").is_some());
-        assert!(mutation.get("resourceId").is_some());
-        assert!(mutation.get("aggregateVersion").is_some());
-
-        let response = serde_json::to_value(ProfileResponse {
-            profile_id: "profile_01JTRANSPORT",
-            status: "DRAFT",
-            version: 1,
-            linked_client_id: Some("client_01JTRANSPORT"),
-        })?;
-        assert!(response.get("profileId").is_some());
-        assert!(response.get("linkedClientId").is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn assignment_request_preserves_legacy_unknown_field_tolerance() {
-        let payload = r#"{
-            "assignmentId":"assignment_01JTRANSPORT",
-            "clientId":"client_01JTRANSPORT",
-            "reason":"legacy-compatible",
-            "expectedProfileVersion":1,
-            "requestDigest":"request-digest-01JTRANSPORT",
-            "legacyIgnoredField":"still-tolerated"
-        }"#;
-        assert!(serde_json::from_str::<AssignmentRequest>(payload).is_ok());
-    }
-
-    #[test]
-    fn profile_grant_request_preserves_legacy_unknown_field_tolerance() {
-        let payload = r#"{
-            "role":"PROFILE_VIEWER",
-            "reason":"legacy-compatible",
-            "expectedProfileVersion":1,
-            "requestDigest":"request-digest-01JTRANSPORT",
-            "legacyIgnoredField":"still-tolerated"
-        }"#;
-        assert!(serde_json::from_str::<ProfileGrantRequest>(payload).is_ok());
+    fn domain_status_mapping_covers_every_public_profile_status() {
+        for (domain, wire) in [
+            (ProfileStatus::Draft, ProfileStatusDto::Draft),
+            (ProfileStatus::Quarantined, ProfileStatusDto::Quarantined),
+            (ProfileStatus::Ready, ProfileStatusDto::Ready),
+            (ProfileStatus::InUse, ProfileStatusDto::InUse),
+            (ProfileStatus::DirtyLocal, ProfileStatusDto::DirtyLocal),
+            (ProfileStatus::Syncing, ProfileStatusDto::Syncing),
+            (ProfileStatus::Suspended, ProfileStatusDto::Suspended),
+            (ProfileStatus::Deleting, ProfileStatusDto::Deleting),
+            (ProfileStatus::Deleted, ProfileStatusDto::Deleted),
+        ] {
+            assert_eq!(profile_status(domain), wire);
+        }
     }
 }
