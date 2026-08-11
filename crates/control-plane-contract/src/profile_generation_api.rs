@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 pub const PROFILE_STATUSES: [&str; 9] = [
     "DRAFT",
@@ -118,39 +118,7 @@ pub struct QuarantineGenerationRequest {
 #[must_use]
 pub fn openapi_fragment() -> Value {
     json!({
-        "paths": {
-            "/api/v1/tenants/{tenantId}/profiles": {
-                "post": profile_create_operation()
-            },
-            "/api/v1/tenants/{tenantId}/profiles/{profileId}": {
-                "get": profile_get_operation()
-            },
-            "/api/v1/tenants/{tenantId}/profiles/{profileId}/assignment": {
-                "put": profile_mutation_operation("assignProfile", "ProfileAssignmentRequest")
-            },
-            "/api/v1/tenants/{tenantId}/profiles/{profileId}/grants/{actorId}": {
-                "put": profile_grant_operation("setProfileGrant", false),
-                "delete": profile_grant_operation("revokeProfileGrant", true)
-            },
-            "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations": {
-                "post": generation_collection_mutation_operation("registerGeneration", "RegisterGenerationRequest", "201")
-            },
-            "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}": {
-                "get": generation_get_operation()
-            },
-            "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}/verify": {
-                "post": generation_resource_mutation_operation("verifyGeneration", "VerifyGenerationRequest", "200")
-            },
-            "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}/activate": {
-                "post": generation_resource_mutation_operation("activateGeneration", "ProfileGenerationVersionRequest", "200")
-            },
-            "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}/deactivate": {
-                "post": generation_resource_mutation_operation("deactivateGeneration", "ProfileGenerationVersionRequest", "200")
-            },
-            "/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}/quarantine": {
-                "post": generation_resource_mutation_operation("quarantineGeneration", "QuarantineGenerationRequest", "200")
-            }
-        },
+        "paths": {},
         "components": {
             "schemas": {
                 "ProfileStatusDto": string_enum(&PROFILE_STATUSES),
@@ -167,7 +135,7 @@ pub fn openapi_fragment() -> Value {
                         "linkedClientId": nullable_opaque_id_schema()
                     }
                 },
-                "ProfileCreateRequest": {
+                "ProfileCreateRequestDto": {
                     "type": "object",
                     "required": ["profileId", "requestDigest"],
                     "properties": {
@@ -186,7 +154,7 @@ pub fn openapi_fragment() -> Value {
                         "requestDigest": request_digest_schema()
                     }
                 },
-                "ProfileGrantRequest": {
+                "ProfileGrantRequestDto": {
                     "type": "object",
                     "required": ["role", "reason", "expectedProfileVersion", "requestDigest"],
                     "properties": {
@@ -251,192 +219,6 @@ pub fn openapi_fragment() -> Value {
                 }
             }
         }
-    })
-}
-
-fn profile_create_operation() -> Value {
-    let mut responses = Map::new();
-    responses.insert("200".to_owned(), mutation_response("Idempotent replay"));
-    responses.insert("201".to_owned(), mutation_response("Profile created"));
-    add_problem_responses(&mut responses, &["400", "404", "409", "500", "503"]);
-    operation(
-        "createProfile",
-        vec![tenant_parameter()],
-        Some("ProfileCreateRequest"),
-        responses,
-    )
-}
-
-fn profile_get_operation() -> Value {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response("ProfileProjectionDto", "Authorized Profile projection"),
-    );
-    add_problem_responses(&mut responses, &["404", "500", "503"]);
-    operation(
-        "getProfile",
-        vec![tenant_parameter(), path_parameter("profileId")],
-        None,
-        responses,
-    )
-}
-
-fn profile_mutation_operation(operation_id: &str, request_schema: &str) -> Value {
-    let mut responses = Map::new();
-    responses.insert("200".to_owned(), mutation_response("Mutation receipt"));
-    add_problem_responses(&mut responses, &["400", "404", "409", "500", "503"]);
-    operation(
-        operation_id,
-        vec![tenant_parameter(), path_parameter("profileId")],
-        Some(request_schema),
-        responses,
-    )
-}
-
-fn profile_grant_operation(operation_id: &str, revoke: bool) -> Value {
-    let mut responses = Map::new();
-    if revoke {
-        responses.insert("204".to_owned(), json!({"description": "Grant revoked"}));
-    } else {
-        responses.insert("200".to_owned(), mutation_response("Grant mutation receipt"));
-    }
-    add_problem_responses(&mut responses, &["400", "404", "409", "500", "503"]);
-    operation(
-        operation_id,
-        vec![
-            tenant_parameter(),
-            path_parameter("profileId"),
-            path_parameter("actorId"),
-        ],
-        Some("ProfileGrantRequest"),
-        responses,
-    )
-}
-
-fn generation_collection_mutation_operation(
-    operation_id: &str,
-    request_schema: &str,
-    success_code: &str,
-) -> Value {
-    generation_mutation_operation(
-        operation_id,
-        request_schema,
-        success_code,
-        vec![tenant_parameter(), path_parameter("profileId")],
-    )
-}
-
-fn generation_resource_mutation_operation(
-    operation_id: &str,
-    request_schema: &str,
-    success_code: &str,
-) -> Value {
-    generation_mutation_operation(
-        operation_id,
-        request_schema,
-        success_code,
-        generation_resource_parameters(),
-    )
-}
-
-fn generation_mutation_operation(
-    operation_id: &str,
-    request_schema: &str,
-    success_code: &str,
-    parameters: Vec<Value>,
-) -> Value {
-    let mut responses = Map::new();
-    responses.insert(success_code.to_owned(), mutation_response("Generation mutation receipt"));
-    add_problem_responses(&mut responses, &["400", "404", "409", "500", "503"]);
-    operation(
-        operation_id,
-        parameters,
-        Some(request_schema),
-        responses,
-    )
-}
-
-fn generation_get_operation() -> Value {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response("GenerationProjectionDto", "Authorized generation projection"),
-    );
-    add_problem_responses(&mut responses, &["404", "500", "503"]);
-    operation(
-        "getGeneration",
-        generation_resource_parameters(),
-        None,
-        responses,
-    )
-}
-
-fn generation_resource_parameters() -> Vec<Value> {
-    vec![
-        tenant_parameter(),
-        path_parameter("profileId"),
-        path_parameter("generationId"),
-    ]
-}
-
-fn operation(
-    operation_id: &str,
-    parameters: Vec<Value>,
-    request_schema: Option<&str>,
-    responses: Map<String, Value>,
-) -> Value {
-    let mut value = Map::new();
-    value.insert("operationId".to_owned(), Value::String(operation_id.to_owned()));
-    value.insert("parameters".to_owned(), Value::Array(parameters));
-    if let Some(schema) = request_schema {
-        value.insert("requestBody".to_owned(), json_request(schema));
-    }
-    value.insert("responses".to_owned(), Value::Object(responses));
-    Value::Object(value)
-}
-
-fn tenant_parameter() -> Value {
-    path_parameter("tenantId")
-}
-
-fn path_parameter(name: &str) -> Value {
-    json!({
-        "name": name,
-        "in": "path",
-        "required": true,
-        "schema": opaque_id_schema()
-    })
-}
-
-fn json_request(schema: &str) -> Value {
-    json!({
-        "required": true,
-        "content": {"application/json": {"schema": schema_ref(schema)}}
-    })
-}
-
-fn json_response(schema: &str, description: &str) -> Value {
-    json!({
-        "description": description,
-        "content": {"application/json": {"schema": schema_ref(schema)}}
-    })
-}
-
-fn mutation_response(description: &str) -> Value {
-    json_response("MutationReceipt", description)
-}
-
-fn add_problem_responses(responses: &mut Map<String, Value>, codes: &[&str]) {
-    for code in codes {
-        responses.insert((*code).to_owned(), problem_response());
-    }
-}
-
-fn problem_response() -> Value {
-    json!({
-        "description": "Problem response",
-        "content": {"application/problem+json": {"schema": {"type": "object"}}}
     })
 }
 
@@ -512,16 +294,22 @@ mod tests {
     }
 
     #[test]
-    fn fragment_covers_existing_profile_and_generation_routes_without_list_get_duplication() {
+    fn fragment_is_schema_authority_without_duplicate_operation_paths() {
         let document = openapi_fragment();
-        let profile_collection = &document["paths"]["/api/v1/tenants/{tenantId}/profiles"];
-        assert!(profile_collection["post"].is_object());
-        assert!(profile_collection.get("get").is_none());
-        assert!(document["paths"]["/api/v1/tenants/{tenantId}/profiles/{profileId}"]["get"].is_object());
-        assert!(document["paths"]["/api/v1/tenants/{tenantId}/profiles/{profileId}/generations"]["post"]["parameters"].as_array().is_some_and(|parameters| parameters.len() == 2));
-        assert!(document["paths"]["/api/v1/tenants/{tenantId}/profiles/{profileId}/generations/{generationId}/quarantine"]["post"].is_object());
-        let revoke = &document["paths"]["/api/v1/tenants/{tenantId}/profiles/{profileId}/grants/{actorId}"]["delete"];
-        assert!(revoke["responses"]["204"].is_object());
-        assert!(revoke["responses"].get("success_code").is_none());
+        assert_eq!(document["paths"], json!({}));
+        let schemas = &document["components"]["schemas"];
+        for name in [
+            "ProfileProjectionDto",
+            "ProfileCreateRequestDto",
+            "ProfileAssignmentRequest",
+            "ProfileGrantRequestDto",
+            "GenerationProjectionDto",
+            "RegisterGenerationRequest",
+            "VerifyGenerationRequest",
+            "ProfileGenerationVersionRequest",
+            "QuarantineGenerationRequest",
+        ] {
+            assert!(schemas[name].is_object(), "missing schema {name}");
+        }
     }
 }
