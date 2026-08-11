@@ -10,11 +10,11 @@ use profile_platform_primitives::{
     ActorContext, ActorId, AggregateVersion, IdentityId, InvitationId, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
-use use_cases::identity_ceremonies::{
+use use_cases_identity::identity_ceremonies::{
     ExecuteInvitationAcceptCommand, ExecuteOwnerBootstrapCommand, IdentityCeremonyOutcome,
     execute_invitation_accept, execute_owner_bootstrap,
 };
-use use_cases::identity_governance::{
+use use_cases_identity::identity_governance::{
     ExecuteInvitationCreateCommand, ExecuteMembershipStatusCommand, ExecuteOwnerTransferCommand,
     IdentityGovernanceOperationError, IdentityMutationOutcome, authorize_identity_governance,
     execute_invitation_create, execute_membership_status, execute_owner_transfer,
