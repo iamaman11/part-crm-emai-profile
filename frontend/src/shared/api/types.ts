@@ -22,23 +22,13 @@ export type {
   VerifyGenerationRequest,
 } from './generated/profile-generation';
 
-export interface MailboxBindingProjection {
-  bindingId: string;
-  provider: 'GMAIL_API' | 'IMAP' | 'BROWSER_FALLBACK';
-  status: 'ACTIVE' | 'REVOKED';
-  version: number;
-}
-
-export interface MailboxJobProjection {
-  jobId: string;
-  status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'RETRY_PENDING' | 'FAILED';
-  attempt: number;
-  maxAttempts: number;
-  nextRunAtMs: number;
-  providerStatus: string | null;
-  boundedItemCount: number;
-  version: number;
-}
+export type {
+  MailboxBindingProjectionDto as MailboxBindingProjection,
+  MailboxBindingStatusDto,
+  MailboxJobProjectionDto as MailboxJobProjection,
+  MailboxJobStatusDto,
+  MailboxProviderDto,
+} from './generated/mailbox';
 
 export interface CoordinatorProjection {
   tenant_id: string;

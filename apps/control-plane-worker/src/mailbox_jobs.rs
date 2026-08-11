@@ -3,11 +3,18 @@ use crate::access_session::{
 };
 use crate::command_evidence;
 use crate::composition::mailbox_job_application;
+use application_ports::mailbox_jobs::MailboxJobStatus;
 use cloudflare_adapters::cloud_mailbox_provider::CloudMailboxProviderRouter;
-use control_plane_contract::RouteClass;
+use control_plane_contract::{
+    RouteClass,
+    mailbox_api::{
+        CreateMailboxJobRequestDto, MailboxJobProjectionDto, MailboxJobStatusDto,
+        RunMailboxJobRequestDto,
+    },
+    public_api::MutationReceipt,
+};
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, MailboxJobId};
-use serde::{Deserialize, Serialize};
 use use_cases::mailbox_jobs::{
     ExecuteCreateMailboxJobCommand, ExecuteRunMailboxJobCommand, MailboxJobDetails,
     MailboxJobMutationOutcome, MailboxJobOperationError, authorize_mailbox_job,
@@ -69,7 +76,7 @@ async fn create_job(
     role: MembershipRole,
     binding_id: MailboxBindingId,
 ) -> Result<Response> {
-    let body = match request.json::<CreateMailboxJobRequest>().await {
+    let body = match request.json::<CreateMailboxJobRequestDto>().await {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -121,7 +128,7 @@ async fn get_job(
 ) -> Result<Response> {
     let application = mailbox_job_application(env)?;
     match get_mailbox_job(actor, role, &application, binding_id, job_id).await {
-        Ok(job) => Response::from_json(&MailboxJobResponse::from(&job)),
+        Ok(job) => Response::from_json(&mailbox_job_projection(&job)),
         Err(MailboxJobOperationError::NotFound) => {
             neutral_not_found(actor.correlation_id().as_str())
         }
@@ -137,7 +144,7 @@ async fn run_job(
     binding_id: MailboxBindingId,
     job_id: MailboxJobId,
 ) -> Result<Response> {
-    let body = match request.json::<RunMailboxJobRequest>().await {
+    let body = match request.json::<RunMailboxJobRequestDto>().await {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -213,100 +220,86 @@ fn valid_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MailboxJobResponse<'a> {
-    job_id: &'a str,
-    status: &'static str,
-    attempt: u32,
-    max_attempts: u32,
-    next_run_at_ms: u64,
-    provider_status: Option<&'a str>,
-    bounded_item_count: u32,
-    version: u64,
-}
-
-impl<'a> From<&'a MailboxJobDetails> for MailboxJobResponse<'a> {
-    fn from(job: &'a MailboxJobDetails) -> Self {
-        Self {
-            job_id: job.job_id().as_str(),
-            status: job.status().storage_value(),
-            attempt: job.attempt(),
-            max_attempts: job.max_attempts(),
-            next_run_at_ms: job.next_run_at().value(),
-            provider_status: job.provider_status(),
-            bounded_item_count: job.bounded_item_count(),
-            version: job.version().value(),
-        }
+fn mailbox_job_projection(job: &MailboxJobDetails) -> MailboxJobProjectionDto {
+    MailboxJobProjectionDto {
+        job_id: job.job_id().as_str().to_owned(),
+        status: mailbox_job_status(job.status()),
+        attempt: job.attempt(),
+        max_attempts: job.max_attempts(),
+        next_run_at_ms: job.next_run_at().value(),
+        provider_status: job.provider_status().map(str::to_owned),
+        bounded_item_count: job.bounded_item_count(),
+        version: job.version().value(),
     }
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MutationReceipt<'a> {
-    result_code: &'a str,
-    resource_id: &'a str,
-    aggregate_version: u64,
+const fn mailbox_job_status(status: MailboxJobStatus) -> MailboxJobStatusDto {
+    match status {
+        MailboxJobStatus::Scheduled => MailboxJobStatusDto::Scheduled,
+        MailboxJobStatus::Queued => MailboxJobStatusDto::Queued,
+        MailboxJobStatus::Running => MailboxJobStatusDto::Running,
+        MailboxJobStatus::RetryPending => MailboxJobStatusDto::RetryPending,
+        MailboxJobStatus::AuthRequired => MailboxJobStatusDto::AuthRequired,
+        MailboxJobStatus::Suspended => MailboxJobStatusDto::Suspended,
+        MailboxJobStatus::Succeeded => MailboxJobStatusDto::Succeeded,
+        MailboxJobStatus::Failed => MailboxJobStatusDto::Failed,
+    }
 }
 
 fn mutation_receipt(outcome: &MailboxJobMutationOutcome, status: u16) -> Result<Response> {
     Response::from_json(&MutationReceipt {
-        result_code: outcome.result_code(),
-        resource_id: outcome.resource_id(),
+        result_code: outcome.result_code().to_owned(),
+        resource_id: outcome.resource_id().to_owned(),
         aggregate_version: outcome.aggregate_version().value(),
     })
     .map(|response| response.with_status(status))
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CreateMailboxJobRequest {
-    job_id: String,
-    cursor: Option<String>,
-    delay_ms: u64,
-    max_attempts: u32,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RunMailboxJobRequest {
-    expected_job_version: u64,
-    request_digest: String,
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{CreateMailboxJobRequest, MailboxJobResponse, MutationReceipt, valid_digest};
+    use super::{mailbox_job_status, valid_digest};
+    use application_ports::mailbox_jobs::MailboxJobStatus;
+    use control_plane_contract::{
+        mailbox_api::{CreateMailboxJobRequestDto, MailboxJobProjectionDto},
+        public_api::MutationReceipt,
+    };
 
     #[test]
-    fn mailbox_job_transport_preserves_shape_and_privacy() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn mailbox_job_transport_uses_canonical_shape_and_keeps_domain_validation_order()
+    -> Result<(), Box<dyn std::error::Error>> {
         let digest = "a".repeat(64);
         let valid = format!(
             r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"{digest}"}}"#
         );
-        assert!(serde_json::from_str::<CreateMailboxJobRequest>(&valid).is_ok());
+        assert!(serde_json::from_str::<CreateMailboxJobRequestDto>(&valid).is_ok());
         let unknown = format!(
             r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":0,"maxAttempts":3,"requestDigest":"{digest}","messageBody":"forbidden"}}"#
         );
-        assert!(serde_json::from_str::<CreateMailboxJobRequest>(&unknown).is_err());
+        assert!(serde_json::from_str::<CreateMailboxJobRequestDto>(&unknown).is_err());
+        let domain_invalid_but_transport_valid = format!(
+            r#"{{"jobId":"mailjob_01JTEST","cursor":null,"delayMs":604800001,"maxAttempts":3,"requestDigest":"{digest}"}}"#
+        );
+        assert!(
+            serde_json::from_str::<CreateMailboxJobRequestDto>(&domain_invalid_but_transport_valid)
+                .is_ok(),
+            "job bounds must remain enforced by existing Worker/use-case validation sequencing"
+        );
         assert!(valid_digest(&digest));
         assert!(!valid_digest(&"A".repeat(64)));
         assert!(!valid_digest(&"a".repeat(63)));
 
         let receipt = serde_json::to_value(MutationReceipt {
-            result_code: "created",
-            resource_id: "mailjob_01JTEST",
+            result_code: "created".to_owned(),
+            resource_id: "mailjob_01JTEST".to_owned(),
             aggregate_version: 1,
         })?;
         assert!(receipt.get("resultCode").is_some());
         assert!(receipt.get("resourceId").is_some());
         assert!(receipt.get("aggregateVersion").is_some());
 
-        let response = serde_json::to_value(MailboxJobResponse {
-            job_id: "mailjob_01JTEST",
-            status: "SCHEDULED",
+        let response = serde_json::to_value(MailboxJobProjectionDto {
+            job_id: "mailjob_01JTEST".to_owned(),
+            status: mailbox_job_status(MailboxJobStatus::Scheduled),
             attempt: 0,
             max_attempts: 3,
             next_run_at_ms: 0,
@@ -326,6 +319,7 @@ mod tests {
         ] {
             assert!(response.get(key).is_some(), "missing {key}");
         }
+        assert_eq!(response["status"], "SCHEDULED");
         assert!(response.get("messageBody").is_none());
         assert!(response.get("secretHandle").is_none());
         Ok(())

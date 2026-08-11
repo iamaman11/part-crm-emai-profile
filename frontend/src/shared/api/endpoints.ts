@@ -10,6 +10,12 @@ import type {
   ClientUpdateRequest,
 } from './generated/client-registry';
 import type {
+  CreateMailboxBindingRequestDto,
+  CreateMailboxJobRequestDto,
+  RevokeMailboxBindingRequestDto,
+  RunMailboxJobRequestDto,
+} from './generated/mailbox';
+import type {
   ProfileAssignmentRequest,
   ProfileCreateRequestDto,
   ProfileGenerationVersionRequest,
@@ -48,6 +54,10 @@ export type RegisterGenerationInput = Omit<RegisterGenerationRequest, 'requestDi
 export type VerifyGenerationInput = Omit<VerifyGenerationRequest, 'requestDigest'>;
 export type ChangeGenerationActivationInput = Omit<ProfileGenerationVersionRequest, 'requestDigest'>;
 export type QuarantineGenerationInput = Omit<QuarantineGenerationRequest, 'requestDigest'>;
+export type CreateMailboxBindingInput = Omit<CreateMailboxBindingRequestDto, 'requestDigest'>;
+export type RevokeMailboxBindingInput = Omit<RevokeMailboxBindingRequestDto, 'requestDigest'>;
+export type CreateMailboxJobInput = Omit<CreateMailboxJobRequestDto, 'requestDigest'>;
+export type RunMailboxJobInput = Omit<RunMailboxJobRequestDto, 'requestDigest'>;
 
 function segment(value: string): string {
   if (!value || value.includes('/') || value.includes('\\')) {
@@ -361,7 +371,7 @@ export function getMailboxBinding(tenantId: string, bindingId: string): Promise<
 
 export function createMailboxBinding(
   tenantId: string,
-  input: { bindingId: string; provider: 'GMAIL_API' | 'IMAP' | 'BROWSER_FALLBACK'; secretHandle: string },
+  input: CreateMailboxBindingInput,
 ): Promise<MutationReceipt | undefined> {
   return mutate(`/api/v1/tenants/${segment(tenantId)}/mailboxes`, tenantId, 'POST', input);
 }
@@ -371,7 +381,8 @@ export function revokeMailboxBinding(
   bindingId: string,
   expectedBindingVersion: number,
 ): Promise<MutationReceipt | undefined> {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}/revoke`, tenantId, 'POST', { expectedBindingVersion });
+  const input: RevokeMailboxBindingInput = { expectedBindingVersion };
+  return mutate(`/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}/revoke`, tenantId, 'POST', input);
 }
 
 export function getMailboxJob(
@@ -388,7 +399,7 @@ export function getMailboxJob(
 export function createMailboxJob(
   tenantId: string,
   bindingId: string,
-  input: { jobId: string; cursor: string | null; delayMs: number; maxAttempts: number },
+  input: CreateMailboxJobInput,
 ): Promise<MutationReceipt | undefined> {
   return mutate(`/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}/jobs`, tenantId, 'POST', input);
 }
@@ -399,11 +410,12 @@ export function runMailboxJob(
   jobId: string,
   expectedJobVersion: number,
 ): Promise<MutationReceipt | undefined> {
+  const input: RunMailboxJobInput = { expectedJobVersion };
   return mutate(
     `/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}/jobs/${segment(jobId)}/run`,
     tenantId,
     'POST',
-    { expectedJobVersion },
+    input,
   );
 }
 

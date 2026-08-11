@@ -221,6 +221,12 @@ REPOSITORY_REQUIRED = {
         "MailboxBrowserExecutionBindApi",
         '"browser-execution"',
     ),
+    "crates/control-plane-contract/src/mailbox_api.rs": (
+        "pub struct BindBrowserMailboxExecutionRequestDto",
+        "profile_id: String",
+        "request_digest: String",
+        "deny_unknown_fields",
+    ),
     "apps/control-plane-worker/src/composition.rs": (
         "pub fn authenticated_device",
         "pub fn device_job_authorization",
@@ -248,10 +254,7 @@ REPOSITORY_REQUIRED = {
     "apps/control-plane-worker/src/mailbox_bindings.rs": (
         "MailboxBrowserExecutionBindApi",
         "bind_browser_execution",
-        "BindBrowserMailboxExecutionRequest",
-        "profile_id: String",
-        "request_digest: String",
-        "deny_unknown_fields",
+        "BindBrowserMailboxExecutionRequestDto",
         "browser_execution_binding_transport_is_metadata_only_and_strict",
     ),
     "apps/control-plane-worker/src/lib.rs": (
@@ -506,11 +509,12 @@ def enforce_phase2f_ordering(root: Path, errors: list[str]) -> None:
             "browser mailbox execution binding must be explicit and must not derive from client assignment"
         )
 
-    mailbox_ingress = (root / "apps/control-plane-worker/src/mailbox_bindings.rs").read_text(
+    mailbox_contract = (root / "crates/control-plane-contract/src/mailbox_api.rs").read_text(
         encoding="utf-8"
     )
-    mailbox_production = mailbox_ingress.split("#[cfg(test)]", 1)[0]
-    browser_bind_request = struct_body(mailbox_production, "BindBrowserMailboxExecutionRequest")
+    browser_bind_request = struct_body(
+        mailbox_contract, "BindBrowserMailboxExecutionRequestDto"
+    )
     if not browser_bind_request:
         errors.append("missing strict browser mailbox execution binding DTO")
     else:
