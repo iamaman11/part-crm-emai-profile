@@ -32,7 +32,7 @@ jobs:
           replacements = [
               (
                   "**Current accepted base:** `83fcb5129c81b92d5e96e9932edc8d06be182625` after accepted R4c PR #184 from exact source head `932faa9e40d503472125f44983d0e938bc8c10c4`  ",
-                  "**Current accepted base:** `51719b5b0590c76fd4b18ae876b02c69e59756c8` after accepted R5 PR #187 from exact source head `1c51bf850ce6ec2cae63a086eee24411b413c2d3`  ",
+                  "**Current accepted base:** `51719b5b0590c76fd4b18ae876b02c69e59756c8` after accepted R5 PR #187 from exact source head `1c51bf850ce6ec2cae63a086eee24411b413c2d3`",
               ),
               (
                   "### R5 — P1/P2 — Historical `use-cases` compatibility coupling is cemented by CI\n\n**Finding**",
