@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Lint v1 contract roots/fragments and reject backwards-incompatible removals."""
+"""Lint v1 contracts and reject backwards-incompatible OpenAPI/protobuf evolution."""
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 HTTP_METHODS = {"get", "put", "post", "delete", "patch", "options", "head", "trace"}
 OPENAPI_FRAGMENT_COMPONENTS = {
-    "schemas",
-    "parameters",
+    "schemas",\n    "parameters",
     "responses",
     "requestBodies",
     "headers",
@@ -22,15 +23,24 @@ OPENAPI_FRAGMENT_COMPONENTS = {
 PACKAGE_RE = re.compile(r"\bpackage\s+([A-Za-z0-9_.]+)\s*;")
 MESSAGE_RE = re.compile(r"\bmessage\s+([A-Za-z0-9_]+)\s*\{(.*?)\}", re.DOTALL)
 FIELD_RE = re.compile(
-    r"^\s*(?:repeated\s+|optional\s+)?[A-Za-z0-9_.<>]+\s+([A-Za-z0-9_]+)\s*=\s*([1-9][0-9]*)\s*;",
+    r"^\s*(?:(?P<label>repeated|optional)\s+)?"
+    r"(?P<type>[A-Za-z0-9_.<>,]+)\s+"
+    r"(?P<name>[A-Za-z0-9_]+)\s*=\s*(?P<number>[1-9][0-9]*)\s*;",
     re.MULTILINE,
 )
 
 
 @dataclass(frozen=True)
+class ProtoField:
+    name: str
+    type_name: str
+    cardinality: str
+
+
+@dataclass(frozen=True)
 class ProtoContract:
     package: str
-    messages: dict[str, dict[int, str]]
+    messages: dict[str, dict[int, ProtoField]]
 
 
 def load_json(path: Path) -> dict[str, object]:
@@ -50,9 +60,7 @@ def merge_unique_map(
 ) -> None:
     for name, value in source.items():
         if name in target:
-            raise ValueError(
-                f"{fragment_path}: duplicate {namespace} entry {name!r}"
-            )
+            raise ValueError(f"{fragment_path}: duplicate {namespace} entry {name!r}")
         target[name] = value
 
 
@@ -72,9 +80,7 @@ def merge_openapi_paths(
             raise ValueError(f"OpenAPI root path {route!r} must be an object")
         for name, value in fragment_item.items():
             if name in existing_item:
-                raise ValueError(
-                    f"{fragment_path}: duplicate path entry {route!r}.{name!r}"
-                )
+                raise ValueError(f"{fragment_path}: duplicate path entry {route!r}.{name!r}")
             existing_item[name] = value
 
 
@@ -83,9 +89,7 @@ def merge_openapi_fragment(
 ) -> None:
     unknown_keys = set(fragment) - {"paths", "components"}
     if unknown_keys:
-        raise ValueError(
-            f"{fragment_path}: unsupported top-level keys {sorted(unknown_keys)}"
-        )
+        raise ValueError(f"{fragment_path}: unsupported top-level keys {sorted(unknown_keys)}")
 
     fragment_paths = fragment.get("paths", {})
     if not isinstance(fragment_paths, dict):
@@ -101,8 +105,7 @@ def merge_openapi_fragment(
     unknown_components = set(fragment_components) - OPENAPI_FRAGMENT_COMPONENTS
     if unknown_components:
         raise ValueError(
-            f"{fragment_path}: unsupported component sections "
-            f"{sorted(unknown_components)}"
+            f"{fragment_path}: unsupported component sections {sorted(unknown_components)}"
         )
     document_components = document.setdefault("components", {})
     if not isinstance(document_components, dict):
@@ -164,6 +167,52 @@ def lint_openapi(document: dict[str, object], path: Path) -> list[str]:
     return errors
 
 
+def required_properties(schema: dict[str, object]) -> set[str]:
+    value = schema.get("required", [])
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return set()
+    return set(value)
+
+
+def compare_schema_constraints(
+    baseline: dict[str, object], current: dict[str, object], location: str
+) -> list[str]:
+    errors: list[str] = []
+    for keyword in ("$ref", "type", "format"):
+        baseline_has = keyword in baseline
+        current_has = keyword in current
+        if baseline_has and current.get(keyword) != baseline.get(keyword):
+            errors.append(f"{location}: changed {keyword}")
+        elif not baseline_has and current_has:
+            errors.append(f"{location}: added narrowing {keyword}")
+
+    baseline_enum = baseline.get("enum")
+    current_enum = current.get("enum")
+    if isinstance(baseline_enum, list):
+        if isinstance(current_enum, list):
+            removed = [value for value in baseline_enum if value not in current_enum]
+            if removed:
+                errors.append(f"{location}: removed enum values {removed}")
+        elif current_enum is not None:
+            errors.append(f"{location}: changed enum shape")
+    elif current_enum is not None:
+        errors.append(f"{location}: narrowed unconstrained value to enum")
+
+    if baseline.get("type") == "array":
+        baseline_items = baseline.get("items")
+        current_items = current.get("items")
+        if isinstance(baseline_items, dict):
+            if not isinstance(current_items, dict):
+                errors.append(f"{location}: removed array item schema")
+            else:
+                errors.extend(
+                    compare_schema_constraints(
+                        baseline_items, current_items, f"{location}.items"
+                    )
+                )
+    return errors
+
+
 def compare_openapi(
     baseline: dict[str, object], current: dict[str, object], path: Path
 ) -> list[str]:
@@ -188,15 +237,13 @@ def compare_openapi(
             if current_operation.get("operationId") != baseline_operation.get("operationId"):
                 errors.append(f"{path}: changed operationId for {method.upper()} {route}")
 
+    baseline_components = baseline.get("components")
+    current_components = current.get("components")
     baseline_schemas = (
-        baseline.get("components", {}).get("schemas", {})
-        if isinstance(baseline.get("components"), dict)
-        else {}
+        baseline_components.get("schemas", {}) if isinstance(baseline_components, dict) else {}
     )
     current_schemas = (
-        current.get("components", {}).get("schemas", {})
-        if isinstance(current.get("components"), dict)
-        else {}
+        current_components.get("schemas", {}) if isinstance(current_components, dict) else {}
     )
     if isinstance(baseline_schemas, dict) and isinstance(current_schemas, dict):
         for name, baseline_schema in baseline_schemas.items():
@@ -204,16 +251,41 @@ def compare_openapi(
             if not isinstance(baseline_schema, dict) or not isinstance(current_schema, dict):
                 errors.append(f"{path}: removed schema {name}")
                 continue
+
+            errors.extend(
+                compare_schema_constraints(
+                    baseline_schema, current_schema, f"{path}: schema {name}"
+                )
+            )
             baseline_properties = baseline_schema.get("properties", {})
             current_properties = current_schema.get("properties", {})
             if isinstance(baseline_properties, dict) and isinstance(current_properties, dict):
                 removed = set(baseline_properties) - set(current_properties)
                 if removed:
                     errors.append(f"{path}: schema {name} removed properties {sorted(removed)}")
-            baseline_required = set(baseline_schema.get("required", []))
-            current_required = set(current_schema.get("required", []))
-            if not baseline_required.issubset(current_required):
-                errors.append(f"{path}: schema {name} removed required properties")
+                for property_name, baseline_property in baseline_properties.items():
+                    current_property = current_properties.get(property_name)
+                    if isinstance(baseline_property, dict) and isinstance(current_property, dict):
+                        errors.extend(
+                            compare_schema_constraints(
+                                baseline_property,
+                                current_property,
+                                f"{path}: schema {name}.{property_name}",
+                            )
+                        )
+
+            baseline_required = required_properties(baseline_schema)
+            current_required = required_properties(current_schema)
+            removed_required = baseline_required - current_required
+            added_required = current_required - baseline_required
+            if removed_required:
+                errors.append(
+                    f"{path}: schema {name} removed required properties {sorted(removed_required)}"
+                )
+            if added_required:
+                errors.append(
+                    f"{path}: schema {name} added required properties {sorted(added_required)}"
+                )
     return errors
 
 
@@ -229,21 +301,27 @@ def parse_proto(path: Path) -> tuple[ProtoContract | None, list[str]]:
     if not package.endswith(".v1"):
         errors.append(f"{path}: package must end in .v1")
 
-    messages: dict[str, dict[int, str]] = {}
+    messages: dict[str, dict[int, ProtoField]] = {}
     for message_match in MESSAGE_RE.finditer(text):
         message_name = message_match.group(1)
-        fields: dict[int, str] = {}
+        fields: dict[int, ProtoField] = {}
         names: set[str] = set()
         for field_match in FIELD_RE.finditer(message_match.group(2)):
-            field_name = field_match.group(1)
-            field_number = int(field_match.group(2))
+            field_name = field_match.group("name")
+            field_number = int(field_match.group("number"))
+            cardinality = field_match.group("label") or "singular"
+            field = ProtoField(
+                name=field_name,
+                type_name=field_match.group("type"),
+                cardinality=cardinality,
+            )
             if field_number in fields:
                 errors.append(
                     f"{path}: message {message_name} duplicates field number {field_number}"
                 )
             if field_name in names:
                 errors.append(f"{path}: message {message_name} duplicates field {field_name}")
-            fields[field_number] = field_name
+            fields[field_number] = field
             names.add(field_name)
         messages[message_name] = fields
     if not messages:
@@ -281,10 +359,20 @@ def compare_proto(
             if current_fields is None:
                 errors.append(f"{relative_path}: removed message {message_name}")
                 continue
-            for field_number, field_name in baseline_fields.items():
-                if current_fields.get(field_number) != field_name:
+            for field_number, baseline_field in baseline_fields.items():
+                current_field = current_fields.get(field_number)
+                if current_field is None or current_field.name != baseline_field.name:
                     errors.append(
-                        f"{relative_path}: removed/renamed {message_name}.{field_name} = {field_number}"
+                        f"{relative_path}: removed/renamed {message_name}.{baseline_field.name} = {field_number}"
+                    )
+                    continue
+                if current_field.type_name != baseline_field.type_name:
+                    errors.append(
+                        f"{relative_path}: changed type of {message_name}.{baseline_field.name} = {field_number}"
+                    )
+                if current_field.cardinality != baseline_field.cardinality:
+                    errors.append(
+                        f"{relative_path}: changed cardinality of {message_name}.{baseline_field.name} = {field_number}"
                     )
     return errors
 
@@ -308,13 +396,158 @@ def check(current_root: Path, baseline_root: Path) -> list[str]:
     return errors
 
 
+def synthetic_openapi() -> dict[str, object]:
+    return {
+        "openapi": "3.1.0",
+        "info": {"title": "fixture", "version": "1.0.0"},
+        "paths": {
+            "/api/v1/widgets": {
+                "post": {"operationId": "createWidget"},
+            }
+        },
+        "components": {
+            "schemas": {
+                "Widget": {
+                    "type": "object",
+                    "required": ["id", "state"],
+                    "properties": {
+                        "id": {"type": "string", "format": "uuid"},
+                        "state": {"type": "string", "enum": ["ready", "failed"]},
+                        "owner": {"$ref": "#/components/schemas/Owner"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+                "Owner": {
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {"id": {"type": "string"}},
+                },
+            }
+        },
+    }
+
+
+def self_test() -> None:
+    baseline = synthetic_openapi()
+    path = Path("synthetic/openapi.json")
+
+    allowed_optional = copy.deepcopy(baseline)
+    widget = allowed_optional["components"]["schemas"]["Widget"]
+    widget["properties"]["description"] = {"type": "string"}
+    widget["properties"]["state"]["enum"].append("paused")
+    if compare_openapi(baseline, allowed_optional, path):
+        raise ValueError("compatible optional-field/enum widening fixture was rejected")
+
+    mutations: list[tuple[str, callable]] = [
+        (
+            "new required property",
+            lambda value: (
+                value["components"]["schemas"]["Widget"]["properties"].__setitem__(
+                    "description", {"type": "string"}
+                ),
+                value["components"]["schemas"]["Widget"]["required"].append("description"),
+            ),
+        ),
+        (
+            "property type change",
+            lambda value: value["components"]["schemas"]["Widget"]["properties"]["id"].__setitem__(
+                "type", "integer"
+            ),
+        ),
+        (
+            "property format change",
+            lambda value: value["components"]["schemas"]["Widget"]["properties"]["id"].__setitem__(
+                "format", "email"
+            ),
+        ),
+        (
+            "reference change",
+            lambda value: value["components"]["schemas"]["Widget"]["properties"]["owner"].__setitem__(
+                "$ref", "#/components/schemas/Widget"
+            ),
+        ),
+        (
+            "enum narrowing",
+            lambda value: value["components"]["schemas"]["Widget"]["properties"]["state"].__setitem__(
+                "enum", ["ready"]
+            ),
+        ),
+        (
+            "array item type change",
+            lambda value: value["components"]["schemas"]["Widget"]["properties"]["tags"]["items"].__setitem__(
+                "type", "integer"
+            ),
+        ),
+    ]
+    for label, mutate in mutations:
+        candidate = copy.deepcopy(baseline)
+        mutate(candidate)
+        if not compare_openapi(baseline, candidate, path):
+            raise ValueError(f"breaking OpenAPI fixture unexpectedly passed: {label}")
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        baseline_proto_path = root / "baseline.proto"
+        current_proto_path = root / "current.proto"
+        baseline_proto_path.write_text(
+            'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n  string id = 1;\n  repeated string tags = 2;\n}\n',
+            encoding="utf-8",
+        )
+        baseline_contract, baseline_errors = parse_proto(baseline_proto_path)
+        if baseline_contract is None or baseline_errors:
+            raise ValueError(f"protobuf self-test baseline failed to parse: {baseline_errors}")
+
+        current_proto_path.write_text(
+            'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n  string id = 1;\n  repeated string tags = 2;\n  string description = 3;\n}\n',
+            encoding="utf-8",
+        )
+        additive_contract, additive_errors = parse_proto(current_proto_path)
+        if additive_contract is None or additive_errors:
+            raise ValueError(f"protobuf additive fixture failed to parse: {additive_errors}")
+        if compare_proto(
+            {Path("fixture.proto"): baseline_contract},
+            {Path("fixture.proto"): additive_contract},
+        ):
+            raise ValueError("compatible protobuf field addition was rejected")
+
+        for label, source in [
+            (
+                "protobuf type change",
+                'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n  bytes id = 1;\n  repeated string tags = 2;\n}\n',
+            ),
+            (
+                "protobuf cardinality change",
+                'syntax = "proto3";\npackage fixture.v1;\nmessage Widget {\n  string id = 1;\n  string tags = 2;\n}\n',
+            ),
+        ]:
+            current_proto_path.write_text(source, encoding="utf-8")
+            candidate, candidate_errors = parse_proto(current_proto_path)
+            if candidate is None or candidate_errors:
+                raise ValueError(f"{label} fixture failed to parse: {candidate_errors}")
+            if not compare_proto(
+                {Path("fixture.proto"): baseline_contract},
+                {Path("fixture.proto"): candidate},
+            ):
+                raise ValueError(f"breaking fixture unexpectedly passed: {label}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--current-root", type=Path, default=Path.cwd())
     parser.add_argument(
         "--baseline-root", type=Path, default=Path.cwd() / "contracts/baseline"
     )
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
+
+    if args.self_test:
+        try:
+            self_test()
+        except (OSError, TypeError, ValueError) as error:
+            print(f"contract compatibility self-test failed: {error}", file=sys.stderr)
+            return 1
+        print("Contract compatibility positive and negative fixtures passed.")
+        return 0
 
     errors = check(args.current_root, args.baseline_root)
     if errors:
