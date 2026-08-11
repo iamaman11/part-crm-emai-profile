@@ -34,6 +34,33 @@ jobs:
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
           python .github/r7-documentation-authority.py
+          python - <<'PY'
+          from pathlib import Path
+          replacements = {
+              Path('docs/DEVELOPMENT_PLAN.md'): [
+                  ('**Status:** normative product phase plan; active pre-2J remediation overlay blocks Phase 2J  \n',
+                   '**Status:** normative product phase plan; active pre-2J remediation overlay blocks Phase 2J\n'),
+              ],
+              Path('docs/PHASE2I_THREAT_MODEL.md'): [
+                  ('**Historical accepted Phase 2I evidence.**  \n', '**Historical accepted Phase 2I evidence.**\n'),
+                  ('**Canonical current threat model: [THREAT_MODEL.md](THREAT_MODEL.md).**  \n',
+                   '**Canonical current threat model: [THREAT_MODEL.md](THREAT_MODEL.md).**\n'),
+              ],
+              Path('docs/THREAT_MODEL.md'): [
+                  ('**Status:** Canonical current repository-local threat model; Phase 2I accepted repository-local controls  \n',
+                   '**Status:** Canonical current repository-local threat model; Phase 2I accepted repository-local controls\n'),
+                  ('**Production readiness:** `production_ready=false`; Phase 2J External residual risks remain unaccepted  \n',
+                   '**Production readiness:** `production_ready=false`; Phase 2J External residual risks remain unaccepted\n'),
+              ],
+          }
+          for path, pairs in replacements.items():
+              text = path.read_text(encoding='utf-8')
+              for old, new in pairs:
+                  if text.count(old) != 1:
+                      raise SystemExit(f'R7 whitespace normalization anchor drifted in {path}: {text.count(old)}')
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding='utf-8')
+          PY
           python -m py_compile scripts/check-documentation-authority.py scripts/generate-architecture-inventory.py
           python scripts/generate-architecture-inventory.py --write
           python scripts/check-documentation-authority.py
