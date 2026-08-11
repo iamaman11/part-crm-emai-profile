@@ -23,15 +23,18 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import textwrap
 
           source = Path('.github/workflows/phase2i-governance-patch.yml').read_text(encoding='utf-8')
           marker = "          python - <<'PY'\n"
           end = "\n          PY\n"
           if source.count(marker) != 1:
               raise SystemExit('governance bootstrap patch block marker is missing or ambiguous')
-          block = source.split(marker, 1)[1].split(end, 1)[0]
-          exec(compile(textwrap.dedent(block), 'phase2i-governance-closeout', 'exec'))
+          raw_block = source.split(marker, 1)[1].split(end, 1)[0]
+          block = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in raw_block.splitlines()
+          )
+          exec(compile(block, 'phase2i-governance-closeout', 'exec'))
           PY
 
       - name: Validate governance semantics
