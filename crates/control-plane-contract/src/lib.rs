@@ -29,6 +29,8 @@ pub enum RouteClass {
     ClientMergeApi,
     ClientHistoryApi,
     ClientGrantApi,
+    ClientMailSearchApi,
+    ClientMailMessageApi,
     ProfileCollectionApi,
     ProfileResourceApi,
     ProfileAssignmentApi,
@@ -533,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn coordinator_wrong_method_never_falls_back_to_static_assets() {
+    fn coordinator_wrong_method_never_fall_back_to_static_assets() {
         assert_eq!(
             classify_route(
                 "DELETE",
