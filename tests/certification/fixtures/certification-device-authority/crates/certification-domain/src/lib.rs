@@ -43,6 +43,7 @@ impl UpdateController {
     }
 
     pub fn fail_health_and_rollback(&self) -> RollbackOutcome {
+        let _ = UpdateState::Failed;
         RollbackOutcome::NoPreviousRelease
     }
 
