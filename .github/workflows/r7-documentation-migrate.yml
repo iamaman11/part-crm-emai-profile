@@ -34,6 +34,29 @@ jobs:
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
           python .github/r7-documentation-authority.py
+          git checkout HEAD -- .github/workflows/quality-gate.yml .github/workflows/repository-quality-audit-gate.yml
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/generate-architecture-inventory.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'import re\nimport sys\n'
+          new = 'import re\nimport subprocess\nimport sys\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'generator import anchor drifted: {text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''def validate_docs() -> None:\n    index = (ROOT / "docs" / "INDEX.md").read_text(encoding="utf-8")\n'''
+          new = '''def validate_docs() -> None:\n    authority = subprocess.run(\n        [sys.executable, str(ROOT / "scripts" / "check-documentation-authority.py"), "--root", str(ROOT)],\n        cwd=ROOT,\n        text=True,\n        capture_output=True,\n        check=False,\n    )\n    if authority.returncode != 0:\n        details = "\\n".join(value.strip() for value in (authority.stdout, authority.stderr) if value.strip())\n        raise SystemExit(f"documentation authority check failed:\\n{details}")\n\n    index = (ROOT / "docs" / "INDEX.md").read_text(encoding="utf-8")\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'generator validate_docs anchor drifted: {text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''    if serialized(route) == serialized(expected):\n        raise SystemExit("route inventory self-test failed to detect deterministic drift")\n    print("Architecture inventory negative self-test passed.")\n'''
+          new = '''    if serialized(route) == serialized(expected):\n        raise SystemExit("route inventory self-test failed to detect deterministic drift")\n\n    authority = subprocess.run(\n        [sys.executable, str(ROOT / "scripts" / "check-documentation-authority.py"), "--root", str(ROOT), "--self-test"],\n        cwd=ROOT,\n        text=True,\n        capture_output=True,\n        check=False,\n    )\n    if authority.returncode != 0:\n        details = "\\n".join(value.strip() for value in (authority.stdout, authority.stderr) if value.strip())\n        raise SystemExit(f"documentation authority negative self-test failed:\\n{details}")\n    if authority.stdout.strip():\n        print(authority.stdout.strip())\n    print("Architecture inventory negative self-test passed.")\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'generator self-test anchor drifted: {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           python - <<'PY'
           from pathlib import Path
           replacements = {
@@ -71,15 +94,19 @@ jobs:
           python -m json.tool docs/status.json >/dev/null
           git diff --check
 
-      - name: Commit coherent R7 migration and remove temporary tooling
+      - name: Commit coherent R7 migration without workflow mutations
         shell: bash
         run: |
           set -euo pipefail
-          rm .github/workflows/r7-documentation-audit.yml
-          rm .github/workflows/r7-documentation-migrate.yml
           rm .github/r7-documentation-authority.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+          git reset -- .github/workflows
+          git diff --cached --name-only | grep -q .
+          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
+            echo 'workflow mutation unexpectedly staged' >&2
+            exit 1
+          fi
           git commit -m "Converge current documentation authority"
           git push origin HEAD:audit/documentation-authority
