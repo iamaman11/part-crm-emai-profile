@@ -316,7 +316,8 @@ mod tests {
     }
 
     #[test]
-    fn canonical_status_and_outcome_values_match_public_wire() -> Result<(), Box<dyn std::error::Error>> {
+    fn canonical_status_and_outcome_values_match_public_wire()
+    -> Result<(), Box<dyn std::error::Error>> {
         let response = serde_json::to_value(CoordinatorResponseDto {
             outcome: CoordinatorOutcomeDto::LaunchIntentIssued,
             version: 2,
@@ -356,7 +357,8 @@ mod tests {
             "type"
         );
         assert_eq!(
-            document["components"]["schemas"]["CoordinatorCommandDto"]["oneOf"][0]["properties"]["expires_in_ms"]["minimum"],
+            document["components"]["schemas"]["CoordinatorCommandDto"]["oneOf"][0]["properties"]["expires_in_ms"]
+                ["minimum"],
             1000
         );
         assert!(
