@@ -333,7 +333,8 @@ def compare_openapi(
             if current_operation.get("operationId") != baseline_operation.get("operationId"):
                 errors.append(f"{path}: changed operationId for {method.upper()} {route}")
 
-    usage = schema_usage_roles(baseline)
+    baseline_usage = schema_usage_roles(baseline)
+    current_usage = schema_usage_roles(current)
     baseline_components = baseline.get("components")
     current_components = current.get("components")
     baseline_schemas = (
@@ -349,7 +350,8 @@ def compare_openapi(
                 errors.append(f"{path}: removed schema {name}")
                 continue
 
-            roles = frozenset(usage.get(name, BOTH_ROLES))
+            observed_roles = baseline_usage.get(name, set()) | current_usage.get(name, set())
+            roles = frozenset(observed_roles or BOTH_ROLES)
             errors.extend(
                 compare_schema_constraints(
                     baseline_schema,
