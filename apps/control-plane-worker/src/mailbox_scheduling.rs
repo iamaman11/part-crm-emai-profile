@@ -5,7 +5,8 @@ use cloudflare_adapters::d1_mailbox_scheduling::D1MailboxSchedulingRepository;
 use cloudflare_adapters::mailbox_job_queue::{MailboxJobQueueMessage, QueueMailboxJobPublisher};
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::UnixMillis;
-use use_cases::scheduled::{
+use use_cases_mailboxes::mailbox_jobs::MailboxJobOperationError;
+use use_cases_mailboxes::scheduled::{
     ProcessScheduledMailboxJobRequest, ScheduledMailboxProcessingOutcome,
     dispatch_due_mailbox_jobs, process_scheduled_mailbox_job,
 };
@@ -92,7 +93,7 @@ fn retry_after_seconds<T>(message: &worker::Message<T>, delay_seconds: u32) {
     message.retry_with_options(&options);
 }
 
-fn operation_error(error: use_cases::mailbox_jobs::MailboxJobOperationError) -> Error {
+fn operation_error(error: MailboxJobOperationError) -> Error {
     Error::RustError(error.to_string())
 }
 

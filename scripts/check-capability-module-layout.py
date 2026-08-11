@@ -13,11 +13,12 @@ PORT_MODULES = (
     "profiles", "sessions",
 )
 MONOLITH_USE_CASE_MODULES = (
-    "client_grants", "clients", "coordinator_ingress", "error", "generations", "identity_acl",
+    "coordinator_ingress", "error", "generations", "identity_acl",
     "profile_assignments", "profile_grants", "profiles",
 )
 CLIENT_USE_CASE_MODULES = ("client_grants", "clients", "contacts", "error", "lifecycle")
-MAILBOX_USE_CASE_MODULES = ("mailbox_jobs", "mailboxes", "scheduled")
+IDENTITY_USE_CASE_MODULES = ("identity_ceremonies", "identity_governance")
+MAILBOX_USE_CASE_MODULES = ("browser_execution", "mailbox_jobs", "mailboxes", "scheduled")
 
 PORT_OWNERS = {
     "audit.rs": ("pub trait AuditPort", "pub struct AuditRecord", "pub enum AuditResult"),
@@ -57,6 +58,11 @@ IDENTITY_USE_CASE_OWNERS = {
 }
 
 MAILBOX_USE_CASE_OWNERS = {
+    "browser_execution.rs": (
+        "pub struct BindBrowserMailboxExecutionCommand",
+        "pub struct BrowserMailboxExecutionBindingOutcome",
+        "pub async fn execute_bind_browser_mailbox_execution",
+    ),
     "mailbox_jobs.rs": (
         "pub async fn execute_create_mailbox_job",
         "pub async fn get_mailbox_job",
@@ -77,9 +83,63 @@ MAILBOX_USE_CASE_OWNERS = {
     ),
 }
 
+EXTRACTED_APPLICATION_DEPENDENCIES = (
+    "use-cases-clients",
+    "use-cases-identity",
+    "use-cases-mailboxes",
+)
+FORBIDDEN_MONOLITH_COMPATIBILITY = (
+    "use_cases_clients::",
+    "use_cases_identity::",
+    "use_cases_mailboxes::",
+)
+FORBIDDEN_CLIENT_COMPATIBILITY_FILES = ("clients.rs", "client_grants.rs")
+FORBIDDEN_WORKER_COMPATIBILITY_PATHS = (
+    "use_cases::identity_ceremonies",
+    "use_cases::identity_governance",
+    "use_cases::browser_execution",
+    "use_cases::mailbox_jobs",
+    "use_cases::mailboxes",
+    "use_cases::scheduled",
+)
+
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def validate_module_set(
+    root: Path,
+    directory: Path,
+    facade: str,
+    modules: tuple[str, ...],
+    label: str,
+    errors: list[str],
+) -> None:
+    for module in modules:
+        declaration = f"pub mod {module};"
+        path = directory / f"{module}.rs"
+        if declaration not in facade:
+            errors.append(f"{label} facade missing `{declaration}`")
+        if not path.is_file() or not read(path).strip():
+            errors.append(f"missing/non-empty {label} module: {path.relative_to(root)}")
+
+
+def validate_owners(
+    owner_dir: Path,
+    facade: str,
+    owners: dict[str, tuple[str, ...]],
+    owner_label: str,
+    facade_label: str,
+    errors: list[str],
+) -> None:
+    for filename, symbols in owners.items():
+        source = read(owner_dir / filename) if (owner_dir / filename).is_file() else ""
+        for symbol in symbols:
+            if symbol not in source:
+                errors.append(f"{owner_label}/{filename} must own `{symbol}`")
+            if symbol in facade:
+                errors.append(f"{facade_label} must not implement `{symbol}`")
 
 
 def validate(root: Path) -> list[str]:
@@ -89,73 +149,53 @@ def validate(root: Path) -> list[str]:
     clients_dir = root / "crates/use-cases-clients/src"
     identity_dir = root / "crates/use-cases-identity/src"
     mailboxes_dir = root / "crates/use-cases-mailboxes/src"
+    worker_dir = root / "apps/control-plane-worker/src"
     ports_lib = read(ports_dir / "lib.rs") if (ports_dir / "lib.rs").is_file() else ""
     mono_lib = read(mono_dir / "lib.rs") if (mono_dir / "lib.rs").is_file() else ""
     clients_lib = read(clients_dir / "lib.rs") if (clients_dir / "lib.rs").is_file() else ""
     identity_lib = read(identity_dir / "lib.rs") if (identity_dir / "lib.rs").is_file() else ""
     mailboxes_lib = read(mailboxes_dir / "lib.rs") if (mailboxes_dir / "lib.rs").is_file() else ""
 
-    for module in PORT_MODULES:
-        declaration = f"pub mod {module};"
-        path = ports_dir / f"{module}.rs"
-        if declaration not in ports_lib:
-            errors.append(f"application-ports facade missing `{declaration}`")
-        if not path.is_file() or not read(path).strip():
-            errors.append(f"missing/non-empty application-ports module: {path.relative_to(root)}")
+    validate_module_set(root, ports_dir, ports_lib, PORT_MODULES, "application-ports", errors)
+    validate_module_set(root, mono_dir, mono_lib, MONOLITH_USE_CASE_MODULES, "monolith use-case", errors)
+    validate_module_set(root, clients_dir, clients_lib, CLIENT_USE_CASE_MODULES, "use-cases-clients", errors)
+    validate_module_set(root, identity_dir, identity_lib, IDENTITY_USE_CASE_MODULES, "use-cases-identity", errors)
+    validate_module_set(root, mailboxes_dir, mailboxes_lib, MAILBOX_USE_CASE_MODULES, "use-cases-mailboxes", errors)
 
-    for module in MONOLITH_USE_CASE_MODULES:
-        declaration = f"pub mod {module};"
-        path = mono_dir / f"{module}.rs"
-        if declaration not in mono_lib:
-            errors.append(f"use-cases facade missing `{declaration}`")
-        if not path.is_file() or not read(path).strip():
-            errors.append(f"missing/non-empty monolith use-case module: {path.relative_to(root)}")
+    for module in IDENTITY_USE_CASE_MODULES:
+        if f"pub mod {module};" in mono_lib or (mono_dir / f"{module}.rs").exists():
+            errors.append(f"extracted identity owner returned to monolithic use-cases: {module}")
+    for module in MAILBOX_USE_CASE_MODULES:
+        if f"pub mod {module};" in mono_lib or (mono_dir / f"{module}.rs").exists():
+            errors.append(f"extracted mailbox owner returned to monolithic use-cases: {module}")
+    for filename in FORBIDDEN_CLIENT_COMPATIBILITY_FILES:
+        if (mono_dir / filename).exists() or f"pub mod {filename[:-3]};" in mono_lib:
+            errors.append(f"historical client compatibility facade is forbidden: {filename}")
 
-    for module in CLIENT_USE_CASE_MODULES:
-        declaration = f"pub mod {module};"
-        path = clients_dir / f"{module}.rs"
-        if declaration not in clients_lib:
-            errors.append(f"use-cases-clients facade missing `{declaration}`")
-        if not path.is_file() or not read(path).strip():
-            errors.append(f"missing extracted client module: {path.relative_to(root)}")
+    for path in mono_dir.glob("*.rs"):
+        source = read(path)
+        for marker in FORBIDDEN_MONOLITH_COMPATIBILITY:
+            if marker in source:
+                errors.append(
+                    "historical application compatibility reference is forbidden in shared "
+                    f"use-cases: {path.relative_to(root)}: {marker}"
+                )
 
-    for extracted in ("identity_ceremonies", "identity_governance"):
-        if f"pub mod {extracted};" in mono_lib or (mono_dir / f"{extracted}.rs").exists():
-            errors.append(f"extracted identity owner returned to monolithic use-cases: {extracted}")
-        if f"pub mod {extracted};" not in identity_lib:
-            errors.append(f"use-cases-identity facade missing `pub mod {extracted};`")
-        path = identity_dir / f"{extracted}.rs"
-        if not path.is_file() or not read(path).strip():
-            errors.append(f"missing extracted identity module: {path.relative_to(root)}")
+    mono_manifest_path = root / "crates/use-cases/Cargo.toml"
+    mono_manifest = read(mono_manifest_path) if mono_manifest_path.is_file() else ""
+    for dependency in EXTRACTED_APPLICATION_DEPENDENCIES:
+        if f"{dependency}.workspace" in mono_manifest or f"{dependency} =" in mono_manifest:
+            errors.append(f"shared use-cases must not depend on extracted application crate: {dependency}")
 
-    for extracted in MAILBOX_USE_CASE_MODULES:
-        if f"pub mod {extracted};" in mono_lib or (mono_dir / f"{extracted}.rs").exists():
-            errors.append(f"extracted mailbox owner returned to monolithic use-cases: {extracted}")
-        if f"pub mod {extracted};" not in mailboxes_lib:
-            errors.append(f"use-cases-mailboxes facade missing `pub mod {extracted};`")
-        path = mailboxes_dir / f"{extracted}.rs"
-        if not path.is_file() or not read(path).strip():
-            errors.append(f"missing extracted mailbox module: {path.relative_to(root)}")
-
-    identity_compatibility = "pub use use_cases_identity::{identity_ceremonies, identity_governance};"
-    if identity_compatibility not in mono_lib:
-        errors.append("monolithic compatibility facade must explicitly re-export use-cases-identity")
-
-    mailbox_compatibility = "pub use use_cases_mailboxes::{mailbox_jobs, mailboxes, scheduled};"
-    if mailbox_compatibility not in mono_lib:
-        errors.append("monolithic compatibility facade must explicitly re-export use-cases-mailboxes")
-
-    client_compatibility = {
-        "clients.rs": "pub use use_cases_clients::clients::*;",
-        "client_grants.rs": "pub use use_cases_clients::client_grants::*;",
-    }
-    for filename, reexport in client_compatibility.items():
-        source = read(mono_dir / filename) if (mono_dir / filename).is_file() else ""
-        if reexport not in source:
-            errors.append(f"monolithic client compatibility facade missing `{reexport}`")
-        for symbol in CLIENT_USE_CASE_OWNERS[filename]:
-            if symbol in source:
-                errors.append(f"extracted client owner returned to monolithic use-cases: {symbol}")
+    if worker_dir.is_dir():
+        for path in worker_dir.rglob("*.rs"):
+            source = read(path)
+            for marker in FORBIDDEN_WORKER_COMPATIBILITY_PATHS:
+                if marker in source:
+                    errors.append(
+                        "Worker must import extracted application ownership directly: "
+                        f"{path.relative_to(root)}: {marker}"
+                    )
 
     for filename, symbols in PORT_OWNERS.items():
         owner = read(ports_dir / filename) if (ports_dir / filename).is_file() else ""
@@ -165,37 +205,10 @@ def validate(root: Path) -> list[str]:
             if symbol in ports_lib:
                 errors.append(f"application-ports facade must not own `{symbol}`")
 
-    for filename, symbols in MONOLITH_USE_CASE_OWNERS.items():
-        owner = read(mono_dir / filename) if (mono_dir / filename).is_file() else ""
-        for symbol in symbols:
-            if symbol not in owner:
-                errors.append(f"{filename} must own `{symbol}`")
-            if symbol in mono_lib:
-                errors.append(f"use-cases facade must not own `{symbol}`")
-
-    for filename, symbols in CLIENT_USE_CASE_OWNERS.items():
-        owner = read(clients_dir / filename) if (clients_dir / filename).is_file() else ""
-        for symbol in symbols:
-            if symbol not in owner:
-                errors.append(f"use-cases-clients/{filename} must own `{symbol}`")
-            if symbol in clients_lib:
-                errors.append(f"client application facade must not implement `{symbol}`")
-
-    for filename, symbols in IDENTITY_USE_CASE_OWNERS.items():
-        owner = read(identity_dir / filename) if (identity_dir / filename).is_file() else ""
-        for symbol in symbols:
-            if symbol not in owner:
-                errors.append(f"use-cases-identity/{filename} must own `{symbol}`")
-            if symbol in identity_lib or symbol in mono_lib:
-                errors.append(f"identity application facade must not implement `{symbol}`")
-
-    for filename, symbols in MAILBOX_USE_CASE_OWNERS.items():
-        owner = read(mailboxes_dir / filename) if (mailboxes_dir / filename).is_file() else ""
-        for symbol in symbols:
-            if symbol not in owner:
-                errors.append(f"use-cases-mailboxes/{filename} must own `{symbol}`")
-            if symbol in mailboxes_lib or symbol in mono_lib:
-                errors.append(f"mailbox application facade must not implement `{symbol}`")
+    validate_owners(mono_dir, mono_lib, MONOLITH_USE_CASE_OWNERS, "use-cases", "use-cases facade", errors)
+    validate_owners(clients_dir, clients_lib, CLIENT_USE_CASE_OWNERS, "use-cases-clients", "client application facade", errors)
+    validate_owners(identity_dir, identity_lib, IDENTITY_USE_CASE_OWNERS, "use-cases-identity", "identity application facade", errors)
+    validate_owners(mailboxes_dir, mailboxes_lib, MAILBOX_USE_CASE_OWNERS, "use-cases-mailboxes", "mailbox application facade", errors)
 
     required_port_reexports = (
         "pub use audit::{AuditPort, AuditRecord, AuditResult};",
@@ -209,7 +222,6 @@ def validate(root: Path) -> list[str]:
         "pub use sessions::ProfileCoordinatorPort;",
     )
     required_mono_reexports = (
-        "pub use clients::{CreateClientCommand, decide_create_client};",
         "pub use error::ApplicationError;",
         "pub use profiles::{OpenProfileCommand, OpenProfileDecision, decide_open_profile};",
     )
@@ -218,7 +230,7 @@ def validate(root: Path) -> list[str]:
             errors.append(f"application-ports facade missing compatibility re-export `{line}`")
     for line in required_mono_reexports:
         if line not in mono_lib:
-            errors.append(f"use-cases facade missing compatibility re-export `{line}`")
+            errors.append(f"use-cases facade missing shared-owner re-export `{line}`")
     return errors
 
 
@@ -228,34 +240,37 @@ def write_self_test_fixture(root: Path) -> None:
     clients = root / "crates/use-cases-clients/src"
     identity = root / "crates/use-cases-identity/src"
     mailboxes = root / "crates/use-cases-mailboxes/src"
-    ports.mkdir(parents=True)
-    mono.mkdir(parents=True)
-    clients.mkdir(parents=True)
-    identity.mkdir(parents=True)
-    mailboxes.mkdir(parents=True)
+    worker = root / "apps/control-plane-worker/src"
+    for directory in (ports, mono, clients, identity, mailboxes, worker):
+        directory.mkdir(parents=True)
+
     for module in PORT_MODULES:
         (ports / f"{module}.rs").write_text("// fixture\n", encoding="utf-8")
     for module in MONOLITH_USE_CASE_MODULES:
         (mono / f"{module}.rs").write_text("// fixture\n", encoding="utf-8")
     for module in CLIENT_USE_CASE_MODULES:
         (clients / f"{module}.rs").write_text("// fixture\n", encoding="utf-8")
-    for module in IDENTITY_USE_CASE_OWNERS:
-        (identity / module).write_text("// fixture\n", encoding="utf-8")
+    for module in IDENTITY_USE_CASE_MODULES:
+        (identity / f"{module}.rs").write_text("// fixture\n", encoding="utf-8")
     for module in MAILBOX_USE_CASE_MODULES:
         (mailboxes / f"{module}.rs").write_text("// fixture\n", encoding="utf-8")
+
     (ports / "lib.rs").write_text("\n".join(f"pub mod {m};" for m in PORT_MODULES), encoding="utf-8")
     (clients / "lib.rs").write_text("\n".join(f"pub mod {m};" for m in CLIENT_USE_CASE_MODULES), encoding="utf-8")
-    (identity / "lib.rs").write_text("pub mod identity_ceremonies;\npub mod identity_governance;\n", encoding="utf-8")
+    (identity / "lib.rs").write_text("\n".join(f"pub mod {m};" for m in IDENTITY_USE_CASE_MODULES), encoding="utf-8")
     (mailboxes / "lib.rs").write_text("\n".join(f"pub mod {m};" for m in MAILBOX_USE_CASE_MODULES), encoding="utf-8")
-    # Deliberate regression: old identity owner returns to the monolith.
-    (mono / "identity_governance.rs").write_text("// forbidden duplicate owner\n", encoding="utf-8")
-    (mono / "clients.rs").write_text("pub use use_cases_clients::clients::*;\n", encoding="utf-8")
-    (mono / "client_grants.rs").write_text("pub use use_cases_clients::client_grants::*;\n", encoding="utf-8")
     (mono / "lib.rs").write_text(
         "\n".join(f"pub mod {m};" for m in MONOLITH_USE_CASE_MODULES)
-        + "\npub mod identity_governance;\n"
-        + "pub use use_cases_identity::{identity_ceremonies, identity_governance};\n"
-        + "pub use use_cases_mailboxes::{mailbox_jobs, mailboxes, scheduled};\n",
+        + "\npub use use_cases_identity::{identity_ceremonies, identity_governance};\n",
+        encoding="utf-8",
+    )
+    (mono.parent / "Cargo.toml").write_text(
+        "[package]\nname = \"use-cases\"\nversion = \"0.1.0\"\n"
+        "[dependencies]\nuse-cases-mailboxes.workspace = true\n",
+        encoding="utf-8",
+    )
+    (worker / "legacy.rs").write_text(
+        "use use_cases::mailboxes::execute_create_mailbox_binding;\n",
         encoding="utf-8",
     )
 
@@ -270,10 +285,16 @@ def main() -> int:
             fixture = Path(temp_dir)
             write_self_test_fixture(fixture)
             errors = validate(fixture)
-            if not any("returned to monolithic" in error for error in errors):
-                print("negative extracted-crate fixture unexpectedly passed")
+            if not any("historical application compatibility reference is forbidden" in error for error in errors):
+                print("negative compatibility re-export fixture unexpectedly passed")
                 return 1
-            print("negative extracted-crate fixture rejected as expected")
+            if not any("shared use-cases must not depend on extracted application crate" in error for error in errors):
+                print("negative extracted dependency fixture unexpectedly passed")
+                return 1
+            if not any("Worker must import extracted application ownership directly" in error for error in errors):
+                print("negative Worker compatibility import fixture unexpectedly passed")
+                return 1
+            print("negative compatibility/dependency/Worker import fixtures rejected as expected")
             return 0
     errors = validate(args.root.resolve())
     if errors:

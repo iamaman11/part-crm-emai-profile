@@ -15,7 +15,7 @@ use control_plane_contract::{
 };
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId, MailboxJobId};
-use use_cases::mailbox_jobs::{
+use use_cases_mailboxes::mailbox_jobs::{
     ExecuteCreateMailboxJobCommand, ExecuteRunMailboxJobCommand, MailboxJobDetails,
     MailboxJobMutationOutcome, MailboxJobOperationError, authorize_mailbox_job,
     execute_create_mailbox_job, execute_run_mailbox_job, get_mailbox_job,

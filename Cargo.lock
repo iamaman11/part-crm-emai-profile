@@ -85,6 +85,8 @@ dependencies = [
  "use-cases",
  "use-cases-clients",
  "use-cases-devices",
+ "use-cases-identity",
+ "use-cases-mailboxes",
  "use-cases-notifications",
  "use-cases-query",
  "wasm-bindgen",
@@ -924,9 +926,6 @@ dependencies = [
  "profile-domain",
  "profile-platform-primitives",
  "session-domain",
- "use-cases-clients",
- "use-cases-identity",
- "use-cases-mailboxes",
 ]
 
 [[package]]
