@@ -89,11 +89,19 @@ EXTRACTED_APPLICATION_DEPENDENCIES = (
     "use-cases-mailboxes",
 )
 FORBIDDEN_MONOLITH_COMPATIBILITY = (
-    "pub use use_cases_clients::",
-    "pub use use_cases_identity::",
-    "pub use use_cases_mailboxes::",
+    "use_cases_clients::",
+    "use_cases_identity::",
+    "use_cases_mailboxes::",
 )
 FORBIDDEN_CLIENT_COMPATIBILITY_FILES = ("clients.rs", "client_grants.rs")
+FORBIDDEN_WORKER_COMPATIBILITY_PATHS = (
+    "use_cases::identity_ceremonies",
+    "use_cases::identity_governance",
+    "use_cases::browser_execution",
+    "use_cases::mailbox_jobs",
+    "use_cases::mailboxes",
+    "use_cases::scheduled",
+)
 
 
 def read(path: Path) -> str:
@@ -141,6 +149,7 @@ def validate(root: Path) -> list[str]:
     clients_dir = root / "crates/use-cases-clients/src"
     identity_dir = root / "crates/use-cases-identity/src"
     mailboxes_dir = root / "crates/use-cases-mailboxes/src"
+    worker_dir = root / "apps/control-plane-worker/src"
     ports_lib = read(ports_dir / "lib.rs") if (ports_dir / "lib.rs").is_file() else ""
     mono_lib = read(mono_dir / "lib.rs") if (mono_dir / "lib.rs").is_file() else ""
     clients_lib = read(clients_dir / "lib.rs") if (clients_dir / "lib.rs").is_file() else ""
@@ -163,15 +172,30 @@ def validate(root: Path) -> list[str]:
         if (mono_dir / filename).exists() or f"pub mod {filename[:-3]};" in mono_lib:
             errors.append(f"historical client compatibility facade is forbidden: {filename}")
 
-    for marker in FORBIDDEN_MONOLITH_COMPATIBILITY:
-        if marker in mono_lib:
-            errors.append(f"historical application compatibility re-export is forbidden: {marker}")
+    for path in mono_dir.glob("*.rs"):
+        source = read(path)
+        for marker in FORBIDDEN_MONOLITH_COMPATIBILITY:
+            if marker in source:
+                errors.append(
+                    "historical application compatibility reference is forbidden in shared "
+                    f"use-cases: {path.relative_to(root)}: {marker}"
+                )
 
     mono_manifest_path = root / "crates/use-cases/Cargo.toml"
     mono_manifest = read(mono_manifest_path) if mono_manifest_path.is_file() else ""
     for dependency in EXTRACTED_APPLICATION_DEPENDENCIES:
         if f"{dependency}.workspace" in mono_manifest or f"{dependency} =" in mono_manifest:
             errors.append(f"shared use-cases must not depend on extracted application crate: {dependency}")
+
+    if worker_dir.is_dir():
+        for path in worker_dir.rglob("*.rs"):
+            source = read(path)
+            for marker in FORBIDDEN_WORKER_COMPATIBILITY_PATHS:
+                if marker in source:
+                    errors.append(
+                        "Worker must import extracted application ownership directly: "
+                        f"{path.relative_to(root)}: {marker}"
+                    )
 
     for filename, symbols in PORT_OWNERS.items():
         owner = read(ports_dir / filename) if (ports_dir / filename).is_file() else ""
@@ -216,7 +240,8 @@ def write_self_test_fixture(root: Path) -> None:
     clients = root / "crates/use-cases-clients/src"
     identity = root / "crates/use-cases-identity/src"
     mailboxes = root / "crates/use-cases-mailboxes/src"
-    for directory in (ports, mono, clients, identity, mailboxes):
+    worker = root / "apps/control-plane-worker/src"
+    for directory in (ports, mono, clients, identity, mailboxes, worker):
         directory.mkdir(parents=True)
 
     for module in PORT_MODULES:
@@ -244,6 +269,10 @@ def write_self_test_fixture(root: Path) -> None:
         "[dependencies]\nuse-cases-mailboxes.workspace = true\n",
         encoding="utf-8",
     )
+    (worker / "legacy.rs").write_text(
+        "use use_cases::mailboxes::execute_create_mailbox_binding;\n",
+        encoding="utf-8",
+    )
 
 
 def main() -> int:
@@ -256,13 +285,16 @@ def main() -> int:
             fixture = Path(temp_dir)
             write_self_test_fixture(fixture)
             errors = validate(fixture)
-            if not any("historical application compatibility re-export is forbidden" in error for error in errors):
+            if not any("historical application compatibility reference is forbidden" in error for error in errors):
                 print("negative compatibility re-export fixture unexpectedly passed")
                 return 1
             if not any("shared use-cases must not depend on extracted application crate" in error for error in errors):
                 print("negative extracted dependency fixture unexpectedly passed")
                 return 1
-            print("negative compatibility/dependency fixture rejected as expected")
+            if not any("Worker must import extracted application ownership directly" in error for error in errors):
+                print("negative Worker compatibility import fixture unexpectedly passed")
+                return 1
+            print("negative compatibility/dependency/Worker import fixtures rejected as expected")
             return 0
     errors = validate(args.root.resolve())
     if errors:
