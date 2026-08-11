@@ -299,6 +299,7 @@ const fn mailbox_binding_status(status: MailboxBindingStatus) -> MailboxBindingS
     }
 }
 
+// Canonical Mailbox request DTOs own deny_unknown_fields; transport tests below prove the behavior.
 #[cfg(test)]
 mod tests {
     use super::{mailbox_binding_status, mailbox_provider, valid_digest};
