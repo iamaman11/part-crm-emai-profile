@@ -5,11 +5,11 @@ use application_ports::query_mailboxes::{MailboxBindingStatus, MailboxProvider};
 use application_ports::query_profiles::ProfileStatus;
 use application_ports::{QueryCursor, QueryPageRequest, QueryPageSize};
 use cloudflare_adapters::d1_query::D1QueryRepository;
-use control_plane_contract::RouteClass;
 use control_plane_contract::operator_query_api::{
     MailboxListItemDto, MailboxListPageDto, MemberListItemDto, MemberListPageDto,
     ProfileListItemDto, ProfileListPageDto,
 };
+use control_plane_contract::RouteClass;
 use identity_access_domain::{MembershipRole, MembershipStatus};
 use use_cases_query::{QueryApplicationError, list_mailboxes, list_members, list_profiles};
 use worker::{Env, Method, Request, Response, Result};
@@ -45,7 +45,7 @@ pub async fn dispatch(route: RouteClass, request: &Request, env: &Env) -> Result
 
     match route {
         RouteClass::ProfileCollectionApi => {
-            let result = list_profiles(&repository, &repository, actor.actor(), &page).await;
+            let result = list_profiles(actor.actor(), &repository, &repository, &page).await;
             match result {
                 Ok(page) => Response::from_json(&ProfileListPageDto {
                     profiles: page
@@ -69,7 +69,7 @@ pub async fn dispatch(route: RouteClass, request: &Request, env: &Env) -> Result
             }
         }
         RouteClass::MembershipCollectionApi => {
-            let result = list_members(&repository, &repository, actor.actor(), &page).await;
+            let result = list_members(actor.actor(), &repository, &repository, &page).await;
             match result {
                 Ok(page) => Response::from_json(&MemberListPageDto {
                     members: page
@@ -87,7 +87,7 @@ pub async fn dispatch(route: RouteClass, request: &Request, env: &Env) -> Result
             }
         }
         RouteClass::MailboxBindingCollectionApi => {
-            let result = list_mailboxes(&repository, &repository, actor.actor(), &page).await;
+            let result = list_mailboxes(actor.actor(), &repository, &repository, &page).await;
             match result {
                 Ok(page) => Response::from_json(&MailboxListPageDto {
                     mailboxes: page
