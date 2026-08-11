@@ -45,17 +45,29 @@ jobs:
           python scripts/check-phase2i-hardening.py
           python scripts/check-phase2i-hardening.py --self-test
 
-      - name: Prove governed tenant client profile and mailbox invariants
+      - name: Prove integrated authorization query mailbox and device invariants
         run: |
           python scripts/test-d1-schema.py
           python scripts/test-step4-identity-acl.py
           python scripts/test-step4-command-guards.py
           python scripts/test-step5-coordinator-projection.py
+          python scripts/test-phase2d-query-projections.py
           python scripts/test-mailbox-vertical-slice.py
+          python scripts/test-device-job-d1.py
+          python scripts/test-device-generation-commit-d1.py
+          python scripts/test-browser-mail-execution-d1.py
           if python scripts/test-step4-identity-acl.py --negative-fixture tests/identity-acl/fixtures/assignment-authorizes.sql; then
             echo "Assignment-derived authorization unexpectedly passed." >&2
             exit 1
           fi
+          python scripts/check-phase2d-query-boundaries.py --self-test
+
+      - name: Prove realtime UI privacy and authority negative matrix
+        run: |
+          python scripts/check-phase2g-realtime-boundaries.py
+          python scripts/check-phase2g-realtime-boundaries.py --self-test
+          python scripts/check-phase2h-ui-boundaries.py
+          python scripts/check-phase2h-ui-boundaries.py --self-test
 
       - name: Prove immutable generation registry and activation invariants
         run: |
@@ -63,8 +75,9 @@ jobs:
           python scripts/test-profile-generation-registry-edge-cases.py
           python scripts/test-profile-generation-integrity-guards.py
 
-      - name: Test typed Worker and adapter composition
+      - name: Test application Worker adapter and failure composition
         run: |
+          cargo test --locked -p application-ports -p use-cases-query -p use-cases-mailboxes -p use-cases-devices -p use-cases-notifications
           cargo test --locked -p cloudflare-adapters --lib
           cargo test --locked -p browser-profile-control-plane-worker --lib
           cargo check --locked -p browser-profile-control-plane-worker --target wasm32-unknown-unknown
