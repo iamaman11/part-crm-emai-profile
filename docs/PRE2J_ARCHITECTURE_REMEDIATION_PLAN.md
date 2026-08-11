@@ -91,7 +91,7 @@ A first remediation attempt deliberately exposed why component schemas cannot be
 
 ### R4 — P1 — Public contract authority is incomplete; handwritten frontend DTOs remain — ACTIVE
 
-**Active batch:** R4a — Profile + Generation via issue #178 / draft PR #179.
+**Active batch:** R4a — Profile + Generation via issue #178 / draft PR #179. Current branch head is tracked by PR #179 and must pass exact-head CI before acceptance.
 
 **Finding**
 
