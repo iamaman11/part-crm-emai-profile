@@ -13,9 +13,6 @@ identity-access-domain.workspace = true
 profile-domain.workspace = true
 profile-platform-primitives.workspace = true
 session-domain.workspace = true
-use-cases-clients.workspace = true
-use-cases-identity.workspace = true
-use-cases-mailboxes.workspace = true
 
 [lints]
 workspace = true
