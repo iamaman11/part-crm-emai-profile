@@ -1,0 +1,31 @@
+name: R6 Frontend API Audit Temporary
+
+on:
+  push:
+    branches:
+      - audit/frontend-api-ownership
+    paths:
+      - .github/workflows/r6-frontend-api-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inventory frontend API consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== central API imports ==='
+          grep -RInE "shared/api/(endpoints|types|clientMail)" frontend/src || true
+          echo '=== endpoint function exports ==='
+          grep -nE '^export (async )?function |^export type ' frontend/src/shared/api/endpoints.ts || true
+          echo '=== feature public APIs ==='
+          find frontend/src/features -mindepth 2 -maxdepth 2 -name 'index.ts' -print -exec cat {} \;
+          echo '=== direct generated imports from feature code ==='
+          grep -RIn "shared/api/generated" frontend/src/features || true
+          echo '=== shared api imports outside shared/api ==='
+          grep -RInE "shared/api/" frontend/src --exclude-dir=shared || true
