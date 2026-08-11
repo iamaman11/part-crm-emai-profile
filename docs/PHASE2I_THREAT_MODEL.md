@@ -1,6 +1,6 @@
 # Phase 2I Repository-Local Threat Model
 
-Status: in progress; repository-local release-candidate scope only. Production readiness remains false.
+Status: ACCEPTED for repository-local Phase 2I scope. Production readiness remains false pending Phase 2J External evidence.
 
 ## Trust boundaries
 

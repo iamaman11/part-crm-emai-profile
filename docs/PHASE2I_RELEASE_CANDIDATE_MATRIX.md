@@ -1,6 +1,6 @@
 # Phase 2I Release-Candidate Hardening Matrix
 
-**Status:** in progress — repository-local Phase 2I evidence only  
+**Status:** ACCEPTED — repository-local Phase 2I release-candidate evidence  
 **Issue:** #167  
 **Exact pre-2I base:** `0449e9f0576f7d26b1e1debd882cfecf92a50c53`  
 **Production readiness:** unchanged; `production_ready=false`
@@ -90,9 +90,6 @@ Completed in the current Phase 2I branch:
 6. allowlist-only support/evidence bundle policy;
 7. release-candidate contract/migration freeze.
 
-Still required before Phase 2I acceptance:
+Phase 2I implementation was accepted from exact source head `c1075337cfc582d0f4c00ec34b1aa7cda9ac1101` after exactly 12/12 permanent workflows succeeded with `behind_by=0`, reviews=0 and unresolved review threads=0, then guarded-squash merged as `800c634147d6300ea3989ff0cf87ade6e2387ee9`.
 
-1. complete exact-head CI validation of all repository-owned Phase 2I gates, including installed dependency license checks;
-2. confirm no unresolved repository-owned findings, `behind_by=0`, clean reviews/threads and all 12 permanent workflows successful on one unchanged head.
-
-Phase 2J remains blocked and `production_ready=false` remains unchanged until Phase 2I is accepted.
+Phase 2J is the next evidence slice only after this governance closeout reaches `main`; `production_ready=false` remains unchanged until Phase 2J accepts every mandatory External gate.
