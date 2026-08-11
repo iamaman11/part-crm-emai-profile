@@ -16,12 +16,6 @@ REQUIRED_FRAGMENTS = (
     "MatrixDigest",
     "CertificationOutcome::Prohibited",
     "required_rules",
-    "DeviceAuthorizationRegistry",
-    "DeviceGrantEvent",
-    "pub fn history(&self)",
-    "authorize_unwrap",
-    "StaleGrantVersion",
-    "GrantRevoked",
     "PreverifiedSignatureEvidence",
     "VerificationEvidenceMismatch",
     "fn approves(",
@@ -49,6 +43,15 @@ FORBIDDEN_FRAGMENTS = (
     "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct ObservationSet",
     "matrix_digest={}",
     "RollbackUnavailable",
+    "DeviceAuthorizationRegistry",
+    "DeviceGrantKey",
+    "DeviceGrantStatus",
+    "DeviceGrantSnapshot",
+    "DeviceGrantEvent",
+    "authorize_unwrap",
+    "device-authorization-summary-v1",
+    "StaleGrantVersion",
+    "GrantRevoked",
 )
 
 
