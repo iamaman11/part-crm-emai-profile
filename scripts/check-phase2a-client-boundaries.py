@@ -26,8 +26,6 @@ REQUIRED = DOMAIN_FILES + APPLICATION_FILES + (
     "crates/use-cases-clients/src/lib.rs",
     "crates/application-ports/src/clients.rs",
     "crates/primitives/src/lib.rs",
-    "crates/use-cases/src/clients.rs",
-    "crates/use-cases/src/client_grants.rs",
     "apps/control-plane-worker/src/clients.rs",
     "apps/control-plane-worker/Cargo.toml",
 )
@@ -54,6 +52,14 @@ EXPECTED_APP_DEPS = {
     "profile-platform-primitives",
     "zeroize",
 }
+FORBIDDEN_SHARED_CLIENT_FILES = (
+    "crates/use-cases/src/clients.rs",
+    "crates/use-cases/src/client_grants.rs",
+)
+FORBIDDEN_SHARED_CLIENT_MARKERS = (
+    "use_cases_clients::clients",
+    "use_cases_clients::client_grants",
+)
 
 
 def read(path: Path) -> str:
@@ -198,12 +204,15 @@ def validate(root: Path) -> list[str]:
         if marker not in lifecycle:
             errors.append(f"client lifecycle application contract missing `{marker}`")
 
-    shared_clients = read(root / "crates/use-cases/src/clients.rs")
-    shared_grants = read(root / "crates/use-cases/src/client_grants.rs")
-    if "pub use use_cases_clients::clients::*;" not in shared_clients or "pub async fn" in shared_clients:
-        errors.append("shared use-cases must be compatibility-only for client create/query")
-    if "pub use use_cases_clients::client_grants::*;" not in shared_grants or "pub async fn" in shared_grants:
-        errors.append("shared use-cases must be compatibility-only for client grants")
+    for relative in FORBIDDEN_SHARED_CLIENT_FILES:
+        if (root / relative).exists():
+            errors.append(f"historical shared Client compatibility facade is forbidden: {relative}")
+    shared_lib_path = root / "crates/use-cases/src/lib.rs"
+    if shared_lib_path.is_file():
+        shared_lib = read(shared_lib_path)
+        for marker in FORBIDDEN_SHARED_CLIENT_MARKERS:
+            if marker in shared_lib:
+                errors.append(f"shared use-cases must not re-export Client owner `{marker}`")
 
     worker = read(root / "apps/control-plane-worker/src/clients.rs")
     if "use use_cases_clients::clients" not in worker or "use use_cases_clients::client_grants" not in worker:
@@ -224,6 +233,8 @@ def write_fixture(root: Path) -> None:
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("// fixture\n", encoding="utf-8")
+    (root / "crates/use-cases/src").mkdir(parents=True, exist_ok=True)
+    (root / "crates/use-cases/src/lib.rs").write_text("pub mod profiles;\n", encoding="utf-8")
     (root / "crates/client-domain/Cargo.toml").write_text(
         "[package]\nname='client-domain'\nversion='0.1.0'\n[dependencies]\n"
         "profile-platform-primitives={}\nzeroize={}\n",
@@ -280,12 +291,6 @@ def write_fixture(root: Path) -> None:
         "decide_client_lifecycle_replay persist_client_lifecycle\n",
         encoding="utf-8",
     )
-    (root / "crates/use-cases/src/clients.rs").write_text(
-        "pub use use_cases_clients::clients::*;\n", encoding="utf-8"
-    )
-    (root / "crates/use-cases/src/client_grants.rs").write_text(
-        "pub use use_cases_clients::client_grants::*;\n", encoding="utf-8"
-    )
     (root / "apps/control-plane-worker/src/clients.rs").write_text(
         "use use_cases_clients::clients; use use_cases_clients::client_grants;\n",
         encoding="utf-8",
@@ -328,9 +333,9 @@ def self_test() -> int:
 
         write_fixture(root)
         shared = root / "crates/use-cases/src/clients.rs"
-        shared.write_text(read(shared) + "\npub async fn execute_create_client() {}\n", encoding="utf-8")
-        if not any("compatibility-only" in error for error in validate(root)):
-            print("duplicate shared ownership fixture unexpectedly passed")
+        shared.write_text("pub use use_cases_clients::clients::*;\n", encoding="utf-8")
+        if not any("compatibility facade is forbidden" in error for error in validate(root)):
+            print("historical shared Client facade fixture unexpectedly passed")
             return 1
 
     print("Phase 2A negative ownership/protection fixtures rejected as expected.")
