@@ -36,6 +36,13 @@ jobs:
             exit 1
           fi
 
+      - name: Prove certification-owned device authority fixture is rejected
+        run: |
+          if python scripts/check-step10-certification.py --root tests/certification/fixtures/certification-device-authority; then
+            echo "Certification-owned device authority fixture unexpectedly passed." >&2
+            exit 1
+          fi
+
       - name: Format
         run: cargo fmt --all -- --check
 
