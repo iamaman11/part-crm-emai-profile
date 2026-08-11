@@ -26,7 +26,16 @@ pub fn matches_route(method: &str, path: &str) -> bool {
         .collect();
     matches!(
         segments.as_slice(),
-        ["api", "v1", "tenants", _, "clients", _, "mail", "search" | "message"]
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "clients",
+            _,
+            "mail",
+            "search" | "message"
+        ]
     )
 }
 
@@ -52,10 +61,8 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
     let eligibility = D1ClientMailboxEligibilityRepository::new(
         env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
     );
-    let provider = CloudMailboxQueryAdapter::new(
-        env,
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-    );
+    let provider =
+        CloudMailboxQueryAdapter::new(env, env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
 
     match operation {
         "search" => {
@@ -134,7 +141,10 @@ fn parse_search_input(
     let limit = object.get("limit").and_then(Value::as_u64).ok_or(())?;
     let limit = u16::try_from(limit).map_err(|_| ())?;
     let page = QueryPageRequest::new(QueryPageSize::new(limit).map_err(|_| ())?, cursor);
-    Ok((binding_id, SearchClientMailboxMessagesRequest::new(term, page)))
+    Ok((
+        binding_id,
+        SearchClientMailboxMessagesRequest::new(term, page),
+    ))
 }
 
 fn parse_message_reference(body: Value) -> Result<MailboxMessageReference, ()> {
@@ -200,12 +210,7 @@ fn query_failure(correlation_id: &str, error: QueryApplicationError) -> Result<R
 }
 
 fn invalid_request(correlation_id: &str) -> Result<Response> {
-    problem(
-        correlation_id,
-        400,
-        "invalid_request",
-        "Invalid Request",
-    )
+    problem(correlation_id, 400, "invalid_request", "Invalid Request")
 }
 
 #[cfg(test)]
