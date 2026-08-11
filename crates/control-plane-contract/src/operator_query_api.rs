@@ -241,9 +241,7 @@ mod tests {
     #[test]
     fn operator_query_enum_names_are_fragment_scoped() {
         let document = openapi_fragment();
-        let schemas = document["components"]["schemas"]
-            .as_object()
-            .expect("operator-query schemas must be an object");
+        let schemas = &document["components"]["schemas"];
         for name in [
             "OperatorProfileStatus",
             "OperatorMembershipRole",
@@ -251,7 +249,7 @@ mod tests {
             "OperatorMailboxProvider",
             "OperatorMailboxStatus",
         ] {
-            assert!(schemas.contains_key(name));
+            assert!(schemas.get(name).is_some());
         }
         for globally_reserved in [
             "ProfileStatus",
@@ -260,7 +258,7 @@ mod tests {
             "MailboxProvider",
             "MailboxStatus",
         ] {
-            assert!(!schemas.contains_key(globally_reserved));
+            assert!(schemas.get(globally_reserved).is_none());
         }
     }
 
