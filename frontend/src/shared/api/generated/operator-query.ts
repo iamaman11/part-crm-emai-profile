@@ -5,8 +5,8 @@
 
 export interface MailboxListItemDto {
   bindingId: string;
-  provider: MailboxProvider;
-  status: MailboxStatus;
+  provider: OperatorMailboxProvider;
+  status: OperatorMailboxStatus;
   version: number;
 }
 
@@ -15,16 +15,10 @@ export interface MailboxListPageDto {
   nextCursor: string | null;
 }
 
-export const MailboxProviderValues = ["GMAIL_API", "IMAP", "BROWSER_FALLBACK"] as const;
-export type MailboxProvider = (typeof MailboxProviderValues)[number];
-
-export const MailboxStatusValues = ["ACTIVE", "AUTH_REQUIRED", "SUSPENDED", "REVOKED"] as const;
-export type MailboxStatus = (typeof MailboxStatusValues)[number];
-
 export interface MemberListItemDto {
   actorId: string;
-  role: MembershipRole;
-  status: MembershipStatus;
+  role: OperatorMembershipRole;
+  status: OperatorMembershipStatus;
 }
 
 export interface MemberListPageDto {
@@ -32,17 +26,26 @@ export interface MemberListPageDto {
   nextCursor: string | null;
 }
 
-export const MembershipRoleValues = ["TENANT_OWNER", "MEMBER"] as const;
-export type MembershipRole = (typeof MembershipRoleValues)[number];
+export const OperatorMailboxProviderValues = ["GMAIL_API", "IMAP", "BROWSER_FALLBACK"] as const;
+export type OperatorMailboxProvider = (typeof OperatorMailboxProviderValues)[number];
 
-export const MembershipStatusValues = ["ACTIVE", "SUSPENDED", "REVOKED"] as const;
-export type MembershipStatus = (typeof MembershipStatusValues)[number];
+export const OperatorMailboxStatusValues = ["ACTIVE", "AUTH_REQUIRED", "SUSPENDED", "REVOKED"] as const;
+export type OperatorMailboxStatus = (typeof OperatorMailboxStatusValues)[number];
+
+export const OperatorMembershipRoleValues = ["TENANT_OWNER", "MEMBER"] as const;
+export type OperatorMembershipRole = (typeof OperatorMembershipRoleValues)[number];
+
+export const OperatorMembershipStatusValues = ["ACTIVE", "SUSPENDED", "REVOKED"] as const;
+export type OperatorMembershipStatus = (typeof OperatorMembershipStatusValues)[number];
+
+export const OperatorProfileStatusValues = ["DRAFT", "QUARANTINED", "READY", "IN_USE", "DIRTY_LOCAL", "SYNCING", "SUSPENDED", "DELETING", "DELETED"] as const;
+export type OperatorProfileStatus = (typeof OperatorProfileStatusValues)[number];
 
 export interface ProfileListItemDto {
   activeGenerationId: string | null;
   linkedClientId: string | null;
   profileId: string;
-  status: ProfileStatus;
+  status: OperatorProfileStatus;
   version: number;
 }
 
@@ -50,6 +53,3 @@ export interface ProfileListPageDto {
   nextCursor: string | null;
   profiles: ReadonlyArray<ProfileListItemDto>;
 }
-
-export const ProfileStatusValues = ["DRAFT", "QUARANTINED", "READY", "IN_USE", "DIRTY_LOCAL", "SYNCING", "SUSPENDED", "DELETING", "DELETED"] as const;
-export type ProfileStatus = (typeof ProfileStatusValues)[number];
