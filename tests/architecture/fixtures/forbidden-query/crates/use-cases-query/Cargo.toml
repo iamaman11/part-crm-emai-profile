@@ -1,0 +1,11 @@
+[package]
+name = "use-cases-query"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+application-ports = "0.1.0"
+client-domain = "0.1.0"
+profile-platform-primitives = "0.1.0"
+worker = "0.8.5"
