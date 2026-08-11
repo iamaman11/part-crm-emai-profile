@@ -96,7 +96,7 @@ export function ProfilesWorkspace({
     onSuccess: (data) => setCoordinator(data ?? null),
   });
   const coordinatorCommand = useMutation({
-    mutationFn: (command: Record<string, unknown>) => {
+    mutationFn: (command: import('../../shared/api/types').CoordinatorCommandDto) => {
       if (!coordinator) throw new Error('Load the coordinator snapshot before issuing a command.');
       return commandCoordinator(tenantId, profileId, {
         idempotency_key: newIdempotencyKey(),
