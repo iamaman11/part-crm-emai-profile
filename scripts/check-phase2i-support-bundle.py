@@ -81,7 +81,7 @@ def validate_policy(root: Path, policy: object) -> list[str]:
         "phase": "Phase 2I",
         "scope": "repository-local-support-evidence",
         "productionReady": False,
-        "releaseState": "in-progress",
+        "releaseState": "accepted",
     }
     for key, expected in expected_scalars.items():
         if policy.get(key) != expected:

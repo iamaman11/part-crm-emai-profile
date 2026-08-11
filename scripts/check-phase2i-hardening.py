@@ -142,7 +142,7 @@ def validate_manifest(root: Path, manifest: object) -> list[str]:
         "schemaVersion": 1,
         "phase": "Phase 2I",
         "scope": "repository-local-release-candidate",
-        "completionState": "in-progress",
+        "completionState": "accepted",
         "productionReady": False,
         "baseSha": "0449e9f0576f7d26b1e1debd882cfecf92a50c53",
         "issue": 167,

@@ -2,7 +2,7 @@
 
 **Status:** normative post-composition execution plan  
 **Date:** 2026-08-11
-**Tracking:** Phase 1 complete; Phase 2A/2B/2C/2D/2E/2F/2G/2H accepted via #118/#137, #138/#140, #142/#143, #144/#147, #148/#152, #154/#155, #159/#160 and #163/#164; Phase 2I is the unique NEXT after this docs closeout; expert-plan refinement #133; external CRM is future development only
+**Tracking:** Phase 1 complete; Phase 2A/2B/2C/2D/2E/2F/2G/2H/2I accepted via #118/#137, #138/#140, #142/#143, #144/#147, #148/#152, #154/#155, #159/#160, #163/#164 and #167/#168; Phase 2J is the unique NEXT after this docs closeout; expert-plan refinement #133; external CRM is future development only
 **Production readiness:** unchanged; `production_ready=false` until Phase 2J accepts all mandatory real external evidence
 
 ## 1. Authority And Scope
@@ -73,7 +73,11 @@ Accepted `main` already provides strong repository-local foundations:
 - Phase 2H complete standalone operator/admin composition across the required route families, generated
   bounded profile/member/mailbox discovery, canonical client/profile detail navigation, executable
   Client Mail search/get-message transport over accepted query ownership, safe sandboxed HTML mail
-  rendering, explicit offline behavior and permanent route/generated-contract/privacy boundary checks.
+  rendering, explicit offline behavior and permanent route/generated-contract/privacy boundary checks;
+- Phase 2I integrated release-candidate hardening with executable cross-capability security/failure/recovery
+  evidence, D1/R2/coordinator/Bridge recovery drills, metadata-safe operational/capacity policy,
+  dependency/license/source controls, threat-model closure, support-bundle privacy enforcement and a
+  release-candidate contract/migration freeze.
 
 Phase 1A was accepted through issue #114 / PR #115 from exact proven source head
 `21b4bc65cd1bb117504c0a0cfe18c8c11e411f25` and guarded squash merge
@@ -115,6 +119,10 @@ Phase 2H was accepted through issue #163 / PR #164 from exact proven source head
 `9add9b94d0de255b93e5a7c24584fcf6756462a7` and guarded squash merge
 `a32768feddb3da69b872e701bc529aad3521e1b0`.
 
+Phase 2I was accepted through issue #167 / PR #168 from exact proven source head
+`c1075337cfc582d0f4c00ec34b1aa7cda9ac1101` and guarded squash merge
+`800c634147d6300ea3989ff0cf87ade6e2387ee9`.
+
 The critical path is deliberately linear:
 
 ```text
@@ -132,8 +140,8 @@ Phase 2A
   -> only then future CRM planning
 ```
 
-Exactly one implementation slice is active at a time. Phase 2I is the unique NEXT only after this
-Phase 2H docs closeout is accepted on `main`; Phase 2J remains blocked by the same linear rule.
+Exactly one implementation slice is active at a time. Phase 2J is the unique NEXT only after this
+Phase 2I docs closeout is accepted on `main`; future CRM work remains blocked by the same linear rule.
 
 ### 2.1 Critical-path rules
 
@@ -316,13 +324,13 @@ slice remain mandatory expansion work.
 | A5 | Feature-owned SPA route composition | **Accepted through Phase 2H.** Phase 2C established feature-owned public route APIs; Phase 2H expanded all required route families without returning route ownership to the app shell. | Preserve through Phase 2I. |
 | A6 | Architecture consistency gate | **Accepted.** Deterministic architecture inventory/docs checks in CI. | Expand inventory/checks whenever new governed modules/routes/contracts appear. |
 | A7 | Route classifier modularization | **Accepted.** Capability classifiers behind one fail-closed entrypoint. | New route families must add an owning classifier module; no return to monolith. |
-| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D and preserved through Phase 2H.** `use-cases-query`, capability-owned read-model ports/projections, bounded typed global search, grant-safe exact-contact lookup and provider-neutral Client Mail sequencing remain authoritative; Phase 2H exposes them through generated thin transport/UI while Phase 2G realtime only invalidates/refetches canonical paths. | Preserve through Phase 2I; do not move query policy into adapters/UI/realtime. |
+| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D and preserved through Phase 2I.** `use-cases-query`, capability-owned read-model ports/projections, bounded typed global search, grant-safe exact-contact lookup and provider-neutral Client Mail sequencing remain authoritative; Phase 2H exposes them through generated thin transport/UI while Phase 2G realtime only invalidates/refetches canonical paths. | Preserve through Phase 2I; do not move query policy into adapters/UI/realtime. |
 | 6.1 | Versioned integration event envelope | **Accepted foundation** in Phase 1A; Phase 2G adds a versioned canonical metadata-only invalidation contract instead of ad-hoc WebSocket JSON. | Reuse/extend versioned registries for later capabilities. |
-| 6.2 | Durable-before-notify | **Accepted through Phase 2H.** Phase 1B durable delivery remains canonical; Phase 2E/2F consumers preserve ordering; Phase 2G live fanout occurs only after durable `Delivered`; Phase 2H UI continues to treat realtime as invalidation/refetch rather than success authority. | Preserve through 2I. |
-| 6.3 | At-least-once consumer idempotency | **Accepted through Phase 2H.** Notification replay, mailbox/device consumers and realtime duplicate delivery preserve duplicate-neutral canonical/UI logical effects; Phase 2H does not introduce a second client-side business state authority. | Preserve for every later consumer and UI surface. |
-| 6.4 | Authorization-before-projection | **Accepted through Phase 2H.** Live membership/grants precede list/search/detail/provider access and realtime subscription/catch-up; Phase 2H operator queries and Client Mail ingress call accepted application authorization before projection/provider/body access. | Preserve through Phase 2I. |
+| 6.2 | Durable-before-notify | **Accepted through Phase 2I.** Phase 1B durable delivery remains canonical; Phase 2E/2F consumers preserve ordering; Phase 2G live fanout occurs only after durable `Delivered`; Phase 2H UI continues to treat realtime as invalidation/refetch rather than success authority. | Preserve through 2I. |
+| 6.3 | At-least-once consumer idempotency | **Accepted through Phase 2I.** Notification replay, mailbox/device consumers and realtime duplicate delivery preserve duplicate-neutral canonical/UI logical effects; Phase 2H does not introduce a second client-side business state authority. | Preserve for every later consumer and UI surface. |
+| 6.4 | Authorization-before-projection | **Accepted through Phase 2I.** Live membership/grants precede list/search/detail/provider access and realtime subscription/catch-up; Phase 2H operator queries and Client Mail ingress call accepted application authorization before projection/provider/body access. | Preserve through Phase 2I. |
 | 6.5 | PII protection boundary | **Accepted through Phase 2B.** Contact IDs are PII-independent; authoritative D1 contact storage is ciphertext-only; encryption/HMAC key domains and versions are separate; exact lookup is tenant-scoped and index-backed; rotation candidates do not require plaintext scans. | Preserve in every later client/query/mail surface; fuzzy/prefix PII search still requires a separate accepted ADR. |
-| 6.6 | Profile materialization | **Accepted repository-local through Phase 2F.** Retained writer ownership, immutable dirty-generation evolution, exact verification, fenced/CAS commit and deterministic rematerialization are composed/synthetic. | Phase 2I closes broader recovery/E2E; Phase 2J supplies real physical/provider evidence. |
+| 6.6 | Profile materialization | **Accepted repository-local through Phase 2I.** Retained writer ownership, immutable dirty-generation evolution, exact verification, fenced/CAS commit and deterministic rematerialization are composed/synthetic. | Phase 2I accepted broader repository-local recovery/E2E evidence; Phase 2J supplies real physical/provider evidence. |
 
 ## 5. Phase 0 — Architecture Convergence — ACCEPTED
 
@@ -343,7 +351,7 @@ through 2H while retaining its Phase 2D application owner.
 ## 6. Phase 1 — Durable Integration And Delivery Foundation
 
 **Goal:** complete the asynchronous reliability substrate before product expansion depends on it.
-**Status:** ACCEPTED. Phase 1 is complete; Phase 2A through Phase 2H are accepted; Phase 2I is the unique next implementation slice after this closeout.
+**Status:** ACCEPTED. Phase 1 is complete; Phase 2A through Phase 2I are accepted; Phase 2J is the unique next implementation slice after this closeout.
 
 ### Phase 1A — Durable event/outbox foundation — ACCEPTED
 
@@ -445,7 +453,7 @@ No client contact model, client merge, search, real mailbox provider, device exe
 WebSocket hub or CRM work enters Phase 1B.
 
 **Phase 1 completion gate:** ACCEPTED by the implementation merge and bounded documentation closeout.
-Phase 2A through Phase 2H are also accepted; Phase 2I is the unique NEXT and Phase 2J remains
+Phase 2A through Phase 2I are also accepted; Phase 2J is the unique NEXT and future CRM work remains
 blocked by the same linear rule.
 
 ## 7. Phase 2 — Expert Standalone Product Completion
@@ -853,7 +861,7 @@ rendering with remote active content disabled; and permanent positive/negative P
 generated-contract, Client Mail, Web Storage/telemetry and realtime-authority checks. No Phase 2I/2J
 product work entered the accepted diff and `production_ready=false` remains intentional.
 
-### Phase 2I — Standalone E2E, security, recovery and operational hardening — NEXT
+### Phase 2I — Standalone E2E, security, recovery and operational hardening — ACCEPTED
 
 **Purpose:** prove the integrated product as a release candidate before production evidence promotion.
 
@@ -880,7 +888,22 @@ product work entered the accepted diff and `production_ready=false` remains inte
 - performance/cost bounds are documented for supported scale assumptions;
 - all permanent workflows green on one exact release-candidate head.
 
-### Phase 2J — Production-readiness evidence and controlled rollout
+#### Phase 2I acceptance evidence
+
+Phase 2I was accepted through issue #167 / implementation PR #168 from exact proven source head
+`c1075337cfc582d0f4c00ec34b1aa7cda9ac1101` and guarded squash merge
+`800c634147d6300ea3989ff0cf87ade6e2387ee9`. The unchanged source head passed exactly 12/12
+permanent workflows with `behind_by=0`, reviews=0 and unresolved review threads=0. Accepted repository-
+owned scope includes integrated identity/client/profile/mailbox/device/realtime/UI release-candidate
+checks; tenant/IDOR/revocation/result-count privacy negatives; duplicate/replay/fencing/failure recovery;
+D1-compatible backup/restore and corruption rejection; immutable-generation/coordinator/Bridge recovery;
+metadata-safe operational indicators and source-backed capacity bounds; dependency source/integrity and
+installed Rust/npm license checks; threat-model closure; allowlist-only support/evidence policy; and
+release-candidate contract/migration freeze. Real provider, Camoufox, physical-device, remote R2/key,
+trusted-signing and production Cloudflare evidence remains Phase 2J External scope, and
+`production_ready=false` remains intentional.
+
+### Phase 2J — Production-readiness evidence and controlled rollout — NEXT
 
 **Purpose:** close only the real-world evidence that repository-local CI cannot prove. This is the only
 slice that may change `production_ready=false`.
@@ -1137,8 +1160,8 @@ Phase 2E mailbox-domain split + use-cases-mailboxes + cloud provider lane       
 Phase 2F device-domain + use-cases-devices + browser/Bridge mailbox lane                              ACCEPTED
 Phase 2G durable realtime notification hub                                                            ACCEPTED
 Phase 2H complete standalone UI/admin UX                                                               ACCEPTED
-Phase 2I integrated E2E/security/recovery/operations hardening                                        NEXT
-Phase 2J real production evidence + controlled rollout
+Phase 2I integrated E2E/security/recovery/operations hardening                                        ACCEPTED
+Phase 2J real production evidence + controlled rollout                                                NEXT
 ```
 
 Rules:
@@ -1176,29 +1199,28 @@ Definition of done:
 
 ## 19. Immediate Next Action
 
-After this docs-only closeout is accepted on `main`, open the bounded implementation issue and start
-**Phase 2I — standalone E2E, security, recovery and operational hardening** from the exact resulting
-pre-2I closeout `main` SHA. Do not start Phase 2I directly from the Phase 2H implementation merge
-`a32768feddb3da69b872e701bc529aad3521e1b0`; this docs/governance closeout is part of the linear gate.
+After this docs/governance closeout is accepted on `main`, open the bounded implementation/evidence issue
+and start **Phase 2J — production-readiness evidence and controlled rollout** from the exact resulting
+pre-2J closeout `main` SHA. Do not start Phase 2J directly from the Phase 2I implementation merge
+`800c634147d6300ea3989ff0cf87ade6e2387ee9`; this governance closeout is part of the linear gate.
 
-Execute Phase 2I against the accepted standalone product in this exact priority order:
+Execute Phase 2J only for real-world evidence that repository-local CI cannot prove:
 
 ```text
-full owner/member/client/profile/mailbox/device/realtime E2E
-  -> tenant/IDOR/revocation/result-count leakage negative matrix
-  -> duplicate/replay/concurrency/terminal-failure/remediation matrix
-  -> generation freshness/fencing/materialization/R2 failure/recovery matrix
-  -> mailbox outage/rate-limit/auth-expiry/device-offline/profile-busy recovery matrix
-  -> D1/R2/DO/Bridge backup/restore/disaster-recovery drills
-  -> PII-safe operational SLO indicators
-  -> bounded capacity/cost/query-plan evidence
-  -> dependency/license/security/threat-model closure
-  -> allowlist-only support/evidence bundle verification
-  -> release-candidate contract/migration freeze + exact-head cross-component acceptance
+isolated production Cloudflare resources/budgets + remote D1/R2/DO/Queue proof
+  -> trusted Windows signing/update/rollback
+  -> primary + secondary physical Windows hosts and real multi-device recovery
+  -> production device-key protection/unwrap/revoke/recovery
+  -> escrow/key restore drill
+  -> privacy/retention/product-license approval
+  -> real provider/fingerprint certification
+  -> remote backup/recovery/failure-order drills
+  -> independent security/cryptographic review where applicable
+  -> monitoring/on-call/runbook/rollout/rollback acceptance
+  -> staged rollout with explicit rollback triggers
+  -> production_ready=true only after every mandatory External gate is accepted
 ```
 
-Phase 2H UI and Phase 2G realtime remain accepted inputs during Phase 2I: UI must continue to use
-canonical server/application authority, WebSocket state remains invalidation-only, and confidential
-mail content remains transient and storage/telemetry-safe. Phase 2J production evidence does not start
-until Phase 2I is accepted and closed out. Real Gmail/IMAP, Camoufox, physical-device, remote R2/key and
-production-runtime claims remain External evidence, and `production_ready=false` remains unchanged.
+Phase 2I repository-local release-candidate evidence remains accepted input and must not be relabeled as
+production proof. Missing or failed real provider/device/signing/key/remote-runtime evidence keeps
+`production_ready=false`. External CRM remains future-only until standalone Phase 2J is accepted.

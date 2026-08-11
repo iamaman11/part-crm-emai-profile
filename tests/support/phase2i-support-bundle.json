@@ -3,7 +3,7 @@
   "phase": "Phase 2I",
   "scope": "repository-local-support-evidence",
   "productionReady": false,
-  "releaseState": "in-progress",
+  "releaseState": "accepted",
   "sections": {
     "capabilitySummary": {
       "allowedFields": ["capability_class", "result_class", "status_class"]
