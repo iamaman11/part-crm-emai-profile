@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use core::fmt;
-use profile_platform_primitives::{DeviceId, GenerationId, ProfileId, TenantId, UnixMillis};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -398,227 +397,6 @@ fn update_length_prefixed(digest: &mut Sha256, value: &[u8]) -> Result<(), Certi
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct DeviceGrantKey {
-    tenant_id: TenantId,
-    profile_id: ProfileId,
-    generation_id: GenerationId,
-    device_id: DeviceId,
-}
-
-impl DeviceGrantKey {
-    #[must_use]
-    pub const fn new(
-        tenant_id: TenantId,
-        profile_id: ProfileId,
-        generation_id: GenerationId,
-        device_id: DeviceId,
-    ) -> Self {
-        Self {
-            tenant_id,
-            profile_id,
-            generation_id,
-            device_id,
-        }
-    }
-
-    #[must_use]
-    pub const fn tenant_id(&self) -> &TenantId {
-        &self.tenant_id
-    }
-
-    #[must_use]
-    pub const fn profile_id(&self) -> &ProfileId {
-        &self.profile_id
-    }
-
-    #[must_use]
-    pub const fn generation_id(&self) -> &GenerationId {
-        &self.generation_id
-    }
-
-    #[must_use]
-    pub const fn device_id(&self) -> &DeviceId {
-        &self.device_id
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DeviceGrantStatus {
-    Active,
-    Revoked,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeviceGrantSnapshot {
-    version: u64,
-    status: DeviceGrantStatus,
-    changed_at: UnixMillis,
-}
-
-impl DeviceGrantSnapshot {
-    #[must_use]
-    pub const fn version(&self) -> u64 {
-        self.version
-    }
-
-    #[must_use]
-    pub const fn status(&self) -> DeviceGrantStatus {
-        self.status
-    }
-
-    #[must_use]
-    pub const fn changed_at(&self) -> UnixMillis {
-        self.changed_at
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeviceGrantEvent {
-    key: DeviceGrantKey,
-    snapshot: DeviceGrantSnapshot,
-}
-
-impl DeviceGrantEvent {
-    #[must_use]
-    pub const fn key(&self) -> &DeviceGrantKey {
-        &self.key
-    }
-
-    #[must_use]
-    pub const fn snapshot(&self) -> &DeviceGrantSnapshot {
-        &self.snapshot
-    }
-}
-
-#[derive(Default)]
-pub struct DeviceAuthorizationRegistry {
-    grants: BTreeMap<DeviceGrantKey, DeviceGrantSnapshot>,
-    history: Vec<DeviceGrantEvent>,
-}
-
-impl DeviceAuthorizationRegistry {
-    pub fn grant(
-        &mut self,
-        key: DeviceGrantKey,
-        expected_version: u64,
-        observed_at: UnixMillis,
-    ) -> Result<DeviceGrantSnapshot, CertificationError> {
-        let next = match self.grants.get(&key) {
-            Some(current) => {
-                if current.version != expected_version {
-                    return Err(CertificationError::StaleGrantVersion);
-                }
-                if current.status == DeviceGrantStatus::Active {
-                    return Err(CertificationError::GrantAlreadyActive);
-                }
-                if observed_at < current.changed_at {
-                    return Err(CertificationError::TimeRegression);
-                }
-                DeviceGrantSnapshot {
-                    version: current
-                        .version
-                        .checked_add(1)
-                        .ok_or(CertificationError::CounterOverflow)?,
-                    status: DeviceGrantStatus::Active,
-                    changed_at: observed_at,
-                }
-            }
-            None => {
-                if expected_version != 0 {
-                    return Err(CertificationError::StaleGrantVersion);
-                }
-                DeviceGrantSnapshot {
-                    version: 1,
-                    status: DeviceGrantStatus::Active,
-                    changed_at: observed_at,
-                }
-            }
-        };
-        self.grants.insert(key.clone(), next.clone());
-        self.history.push(DeviceGrantEvent {
-            key,
-            snapshot: next.clone(),
-        });
-        Ok(next)
-    }
-
-    pub fn revoke(
-        &mut self,
-        key: &DeviceGrantKey,
-        expected_version: u64,
-        observed_at: UnixMillis,
-    ) -> Result<DeviceGrantSnapshot, CertificationError> {
-        let current = self
-            .grants
-            .get(key)
-            .ok_or(CertificationError::MissingGrant)?;
-        if current.version != expected_version {
-            return Err(CertificationError::StaleGrantVersion);
-        }
-        if current.status == DeviceGrantStatus::Revoked {
-            return Err(CertificationError::GrantAlreadyRevoked);
-        }
-        if observed_at < current.changed_at {
-            return Err(CertificationError::TimeRegression);
-        }
-        let next = DeviceGrantSnapshot {
-            version: current
-                .version
-                .checked_add(1)
-                .ok_or(CertificationError::CounterOverflow)?,
-            status: DeviceGrantStatus::Revoked,
-            changed_at: observed_at,
-        };
-        self.grants.insert(key.clone(), next.clone());
-        self.history.push(DeviceGrantEvent {
-            key: key.clone(),
-            snapshot: next.clone(),
-        });
-        Ok(next)
-    }
-
-    #[must_use]
-    pub fn history(&self) -> &[DeviceGrantEvent] {
-        &self.history
-    }
-
-    pub fn authorize_unwrap(
-        &self,
-        key: &DeviceGrantKey,
-        grant_version: u64,
-    ) -> Result<(), CertificationError> {
-        let current = self
-            .grants
-            .get(key)
-            .ok_or(CertificationError::MissingGrant)?;
-        if current.version != grant_version {
-            return Err(CertificationError::StaleGrantVersion);
-        }
-        if current.status != DeviceGrantStatus::Active {
-            return Err(CertificationError::GrantRevoked);
-        }
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn render_metadata_only(&self) -> String {
-        let active = self
-            .grants
-            .values()
-            .filter(|grant| grant.status == DeviceGrantStatus::Active)
-            .count();
-        let revoked = self.grants.len().saturating_sub(active);
-        format!(
-            "schema=device-authorization-summary-v1\ntotal_grants={}\nactive_grants={}\nrevoked_grants={}\nhistory_events={}\n",
-            self.grants.len(),
-            active,
-            revoked,
-            self.history.len(),
-        )
-    }
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ReleaseId(String);
 
 impl ReleaseId {
@@ -957,12 +735,6 @@ pub enum CertificationError {
     DuplicateObservationSequence,
     UnknownSignal,
     CounterOverflow,
-    StaleGrantVersion,
-    GrantAlreadyActive,
-    GrantAlreadyRevoked,
-    MissingGrant,
-    GrantRevoked,
-    TimeRegression,
     InvalidContentDigest,
     InvalidReleaseVersion,
     ContentDigestMismatch,
@@ -987,12 +759,6 @@ impl fmt::Display for CertificationError {
             Self::DuplicateObservationSequence => "observation sequence is duplicated",
             Self::UnknownSignal => "observation contains an unknown signal",
             Self::CounterOverflow => "counter overflow",
-            Self::StaleGrantVersion => "device grant version is stale",
-            Self::GrantAlreadyActive => "device grant is already active",
-            Self::GrantAlreadyRevoked => "device grant is already revoked",
-            Self::MissingGrant => "device grant is missing",
-            Self::GrantRevoked => "device grant is revoked",
-            Self::TimeRegression => "time moved backwards",
             Self::InvalidContentDigest => "content digest is invalid",
             Self::InvalidReleaseVersion => "release version is invalid",
             Self::ContentDigestMismatch => "release content digest does not match",
@@ -1047,15 +813,6 @@ mod tests {
             values.push((signal("raw.secret")?, value));
         }
         ObservationSet::new(sequence, values)
-    }
-
-    fn grant_key(device: &str) -> Result<DeviceGrantKey, Box<dyn std::error::Error>> {
-        Ok(DeviceGrantKey::new(
-            TenantId::parse("tenant_01JSTEP10")?,
-            ProfileId::parse("profile_01JSTEP10")?,
-            GenerationId::parse("generation_01JSTEP10")?,
-            DeviceId::parse(device)?,
-        ))
     }
 
     fn candidate(id: &str, version: u64, byte: u8) -> Result<ReleaseCandidate, CertificationError> {
@@ -1146,52 +903,6 @@ mod tests {
         assert_eq!(
             evaluate_certification(&policy()?, &[unknown]),
             Err(CertificationError::UnknownSignal)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn device_grant_revoke_and_regrant_are_versioned() -> Result<(), Box<dyn std::error::Error>> {
-        let mut registry = DeviceAuthorizationRegistry::default();
-        let first_device = grant_key("device_01JSTEP10A")?;
-        let second_device = grant_key("device_01JSTEP10B")?;
-
-        let first = registry.grant(first_device.clone(), 0, UnixMillis::new(1))?;
-        let second = registry.grant(second_device.clone(), 0, UnixMillis::new(2))?;
-        assert_eq!(first.version(), 1);
-        assert_eq!(second.status(), DeviceGrantStatus::Active);
-        registry.authorize_unwrap(&first_device, 1)?;
-        registry.authorize_unwrap(&second_device, 1)?;
-
-        let revoked = registry.revoke(&first_device, 1, UnixMillis::new(3))?;
-        assert_eq!(revoked.version(), 2);
-        assert_eq!(
-            registry.authorize_unwrap(&first_device, 2),
-            Err(CertificationError::GrantRevoked)
-        );
-        assert!(registry.authorize_unwrap(&second_device, 1).is_ok());
-        assert_eq!(
-            registry.grant(first_device.clone(), 1, UnixMillis::new(4)),
-            Err(CertificationError::StaleGrantVersion)
-        );
-        let regranted = registry.grant(first_device.clone(), 2, UnixMillis::new(4))?;
-        assert_eq!(regranted.version(), 3);
-        registry.authorize_unwrap(&first_device, 3)?;
-        assert_eq!(registry.history().len(), 4);
-        assert_eq!(registry.history()[0].snapshot().version(), 1);
-        assert_eq!(
-            registry.history()[2].snapshot().status(),
-            DeviceGrantStatus::Revoked
-        );
-        assert_eq!(registry.history()[3].snapshot().version(), 3);
-        assert_eq!(registry.history()[3].key(), &first_device);
-        assert_eq!(
-            registry.history()[3].key().device_id(),
-            &DeviceId::parse("device_01JSTEP10A")?
-        );
-        assert_eq!(
-            registry.history()[3].snapshot().changed_at(),
-            UnixMillis::new(4)
         );
         Ok(())
     }
@@ -1290,12 +1001,6 @@ mod tests {
         assert!(!certification.contains("123456"));
         assert!(!certification.contains("raw.secret"));
         assert!(!certification.contains(&report.matrix_digest().to_hex()));
-
-        let mut registry = DeviceAuthorizationRegistry::default();
-        registry.grant(grant_key("device_01JSTEP10PRIVATE")?, 0, UnixMillis::new(1))?;
-        let device_summary = registry.render_metadata_only();
-        assert!(!device_summary.contains("device_01JSTEP10PRIVATE"));
-        assert!(!device_summary.contains("generation_01JSTEP10"));
 
         let mut controller = UpdateController::default();
         let release = candidate("release_01JSTEP10PRIVATE", 1, 0x55)?;
