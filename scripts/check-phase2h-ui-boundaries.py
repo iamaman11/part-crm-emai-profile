@@ -9,6 +9,14 @@ from pathlib import Path
 
 FILES = {
     "router": Path("frontend/src/app/router.tsx"),
+    "clients_route": Path("frontend/src/features/clients/route.tsx"),
+    "profiles_route": Path("frontend/src/features/profiles/route.tsx"),
+    "access_route": Path("frontend/src/features/access/route.tsx"),
+    "mailboxes_route": Path("frontend/src/features/mailboxes/route.tsx"),
+    "session_route": Path("frontend/src/features/session/route.tsx"),
+    "devices_route": Path("frontend/src/features/devices/route.tsx"),
+    "audit_route": Path("frontend/src/features/audit/route.tsx"),
+    "settings_route": Path("frontend/src/features/settings/route.tsx"),
     "client_mail_panel": Path("frontend/src/features/clients/ClientMailPanel.tsx"),
     "client_mail_api": Path("frontend/src/shared/api/clientMail.ts"),
     "mail_html": Path("frontend/src/shared/mail/safeMailHtml.ts"),
@@ -17,11 +25,10 @@ FILES = {
     "eligibility": Path("crates/cloudflare-adapters/src/d1_client_mail_eligibility.rs"),
     "query_mail_contract": Path("crates/control-plane-contract/src/query_mail_api.rs"),
     "query_mail_openapi": Path("openapi/v1/fragments/query-mail.json"),
-    "realtime": Path("frontend/src/shared/realtime/RealtimeQueryInvalidationBridge.tsx"),
+    "realtime": Path("frontend/src/shared/realtime/NotificationRealtimeBridge.tsx"),
 }
 
 ROUTE_MARKERS = (
-    'path: "/clients"',
     "path: '/clients'",
     "path: '/clients/$clientId'",
     "path: '/profiles'",
@@ -32,6 +39,17 @@ ROUTE_MARKERS = (
     "path: '/devices'",
     "path: '/audit'",
     "path: '/settings'",
+)
+
+ROUTE_SOURCE_KEYS = (
+    "clients_route",
+    "profiles_route",
+    "access_route",
+    "mailboxes_route",
+    "session_route",
+    "devices_route",
+    "audit_route",
+    "settings_route",
 )
 
 MAIL_PATHS = (
@@ -60,10 +78,12 @@ def load_sources(root: Path) -> dict[str, str]:
 
 def validate_sources(sources: dict[str, str]) -> list[str]:
     errors: list[str] = []
-    router = sources["router"]
+    route_sources = "\n".join(sources[key] for key in ROUTE_SOURCE_KEYS)
     for marker in ROUTE_MARKERS:
-        if marker not in router:
+        if marker not in route_sources:
             errors.append(f"standalone route marker missing: {marker}")
+
+    router = sources["router"]
     for feature_import in (
         "../features/access",
         "../features/audit",
@@ -76,6 +96,25 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
     ):
         if feature_import not in router:
             errors.append(f"root router must compose feature public API: {feature_import}")
+    for route_factory in (
+        "createAccessRoute",
+        "createAuditRoute",
+        "createClientsRoutes",
+        "createDevicesRoute",
+        "createMailboxesRoute",
+        "createProfilesRoutes",
+        "createSessionRoute",
+        "createSettingsRoute",
+    ):
+        if route_factory not in router:
+            errors.append(f"root router route factory missing: {route_factory}")
+
+    if "MemberDirectory" not in sources["access_route"]:
+        errors.append("Users route must compose the authorized member directory")
+    if "MailboxDirectory" not in sources["mailboxes_route"]:
+        errors.append("Mailboxes route must compose the authorized mailbox directory")
+    if "ProfileDirectory" not in sources["profiles_route"]:
+        errors.append("Profiles routes must compose the authorized profile directory")
 
     panel = sources["client_mail_panel"]
     for marker in ("searchClientMail", "getClientMailMessage", "SafeMailBody", "listMailboxes"):
@@ -86,10 +125,10 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
             errors.append(f"Client Mail panel contains forbidden browser sink: {sink}")
 
     api = sources["client_mail_api"]
-    for suffix in ("/mail/search`,", "/mail/message`,"):
+    for suffix in ("/mail/search", "/mail/message"):
         if suffix not in api:
             errors.append(f"Client Mail API route missing: {suffix}")
-    if "method: 'POST'" not in api or "URLSearchParams" in api:
+    if api.count("method: 'POST'") < 2 or "URLSearchParams" in api:
         errors.append("Client Mail transport must keep confidential query inputs in POST bodies")
 
     contract = sources["query_mail_contract"]
@@ -174,7 +213,7 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
 
 def self_test(sources: dict[str, str]) -> None:
     fixtures = [
-        ("route", "router", "path: '/settings'", "path: '/settings-broken'"),
+        ("route", "settings_route", "path: '/settings'", "path: '/settings-broken'"),
         ("mail execution", "client_mail_panel", "SafeMailBody", "UnsafeMailBody"),
         ("generated path", "query_mail_openapi", '"post"', '"get"'),
         ("authorization", "worker_mail", "resolve_active_request_actor", "resolve_actor_bypass"),
