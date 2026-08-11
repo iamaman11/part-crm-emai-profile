@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "phase": "Phase 2I",
+  "scope": "repository-local-release-candidate",
+  "productionReady": false,
+  "indicators": [
+    {
+      "name": "ui_api_request_duration_ms",
+      "kind": "histogram",
+      "labels": ["route_class", "method_class", "result_class"]
+    },
+    {
+      "name": "dependency_operation_duration_ms",
+      "kind": "histogram",
+      "labels": ["dependency_class", "operation_class", "result_class"]
+    },
+    {
+      "name": "queue_oldest_ready_age_ms",
+      "kind": "gauge",
+      "labels": ["operation_class", "status_class"]
+    },
+    {
+      "name": "realtime_catchup_delivery_count",
+      "kind": "histogram",
+      "labels": ["result_class", "resource_class"]
+    },
+    {
+      "name": "realtime_reconnect_total",
+      "kind": "counter",
+      "labels": ["reason_class", "result_class"]
+    },
+    {
+      "name": "mailbox_job_transition_total",
+      "kind": "counter",
+      "labels": ["provider_class", "status_class", "reason_class"]
+    },
+    {
+      "name": "device_job_transition_total",
+      "kind": "counter",
+      "labels": ["status_class", "reason_class"]
+    },
+    {
+      "name": "profile_generation_commit_total",
+      "kind": "counter",
+      "labels": ["result_class", "reason_class"]
+    },
+    {
+      "name": "recovery_drill_total",
+      "kind": "counter",
+      "labels": ["dependency_class", "result_class"]
+    }
+  ],
+  "repositoryLocalSloInvariants": [
+    {
+      "name": "sensitive_payload_technical_channel_violations",
+      "objective": "zero"
+    },
+    {
+      "name": "authorization_after_projection_violations",
+      "objective": "zero"
+    },
+    {
+      "name": "stale_fence_acceptance_violations",
+      "objective": "zero"
+    },
+    {
+      "name": "unverified_generation_activation_violations",
+      "objective": "zero"
+    },
+    {
+      "name": "recovery_integrity_violations",
+      "objective": "zero"
+    }
+  ],
+  "capacityBounds": {
+    "queryPageMax": {
+      "source": "crates/application-ports/src/query.rs",
+      "constant": "MAX_QUERY_PAGE_SIZE",
+      "value": 100
+    },
+    "claimableDeviceJobsMax": {
+      "source": "crates/use-cases-devices/src/queries.rs",
+      "constant": "MAX_CLAIMABLE_DEVICE_JOBS",
+      "value": 50
+    },
+    "realtimeAudiencePageMax": {
+      "source": "crates/use-cases-notifications/src/realtime.rs",
+      "constant": "MAX_REALTIME_AUDIENCE_PAGE_SIZE",
+      "value": 200
+    },
+    "mailboxJobAttemptsMax": {
+      "source": "crates/use-cases-mailboxes/src/mailbox_jobs.rs",
+      "constant": "MAX_JOB_ATTEMPTS",
+      "value": 10
+    },
+    "mailboxRetryDelayMaxMs": {
+      "source": "crates/use-cases-mailboxes/src/mailbox_jobs.rs",
+      "constant": "RETRY_MAX_DELAY_MS",
+      "value": 900000
+    }
+  },
+  "queryPlanEvidence": [
+    "scripts/test-phase2d-query-projections.py",
+    "scripts/test-device-job-d1.py",
+    "scripts/test-mailbox-vertical-slice.py"
+  ],
+  "externalCalibrationRequired": [
+    "production_latency_percentiles",
+    "production_error_budget",
+    "provider_rate_limit_envelope",
+    "production_cloudflare_cost_baseline",
+    "production_device_capacity"
+  ]
+}
