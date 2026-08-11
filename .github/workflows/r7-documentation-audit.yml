@@ -1,0 +1,31 @@
+name: R7 Documentation Audit Temporary
+
+on:
+  push:
+    branches:
+      - audit/documentation-authority
+    paths:
+      - .github/workflows/r7-documentation-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inventory documentation authority consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== docs/status.json consumers ==='
+          grep -RInE 'status\.json|repository_step|next_repository_step|production_ready' . \
+            --exclude-dir=.git --exclude='Cargo.lock' || true
+          echo '=== threat model references ==='
+          grep -RInE 'PHASE2I_THREAT_MODEL|THREAT_MODEL\.md' . --exclude-dir=.git || true
+          echo '=== Phase 2J current/NEXT claims ==='
+          grep -RInE 'Phase 2J.*NEXT|unique NEXT|BLOCKING PHASE 2J|blocked.*Phase 2J' README.md docs architecture scripts .github \
+            --exclude='PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md' || true
+          echo '=== documentation checks in permanent workflows ==='
+          grep -RInE 'documentation|status\.json|generate-architecture-inventory|THREAT_MODEL' .github/workflows scripts/verify-fast.py || true
