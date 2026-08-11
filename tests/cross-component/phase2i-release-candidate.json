@@ -1,0 +1,204 @@
+{
+  "schemaVersion": 1,
+  "phase": "Phase 2I",
+  "scope": "repository-local-release-candidate",
+  "completionState": "in-progress",
+  "productionReady": false,
+  "baseSha": "0449e9f0576f7d26b1e1debd882cfecf92a50c53",
+  "issue": 167,
+  "historicalAcceptance": "tests/cross-component/standalone-acceptance.json",
+  "capabilityFlows": {
+    "identity": {
+      "expectedOutcome": "active_membership_and_governed_identity_before_capability_access",
+      "evidence": [
+        "apps/control-plane-worker/src/access_session.rs",
+        "apps/control-plane-worker/src/identity.rs",
+        "crates/use-cases-identity/src/lib.rs",
+        "scripts/test-step4-identity-acl.py"
+      ]
+    },
+    "clients": {
+      "expectedOutcome": "grant_safe_client_command_query_and_detail_flow",
+      "evidence": [
+        "apps/control-plane-worker/src/clients.rs",
+        "crates/use-cases-clients/src/lib.rs",
+        "frontend/src/features/clients/ClientsWorkspace.tsx"
+      ]
+    },
+    "profiles": {
+      "expectedOutcome": "grant_safe_profile_and_immutable_generation_flow",
+      "evidence": [
+        "apps/control-plane-worker/src/profiles.rs",
+        "apps/control-plane-worker/src/profile_generations.rs",
+        "apps/profile-bridge/src/operator_flow.rs",
+        "scripts/check-step5-profile-coordinator.py"
+      ]
+    },
+    "mailboxes": {
+      "expectedOutcome": "authorized_eligible_transient_client_mail_flow",
+      "evidence": [
+        "apps/control-plane-worker/src/client_mail_query.rs",
+        "crates/use-cases-query/src/lib.rs",
+        "crates/use-cases-mailboxes/src/lib.rs",
+        "scripts/test-mailbox-vertical-slice.py",
+        "frontend/src/features/clients/ClientMailPanel.tsx"
+      ]
+    },
+    "devices": {
+      "expectedOutcome": "durable_claim_fencing_and_offline_safe_device_execution",
+      "evidence": [
+        "crates/use-cases-devices/src/lib.rs",
+        "crates/device-domain/src/lib.rs",
+        "apps/profile-bridge/src/operator_flow.rs"
+      ]
+    },
+    "realtime": {
+      "expectedOutcome": "durable_first_metadata_only_invalidation_and_catchup",
+      "evidence": [
+        "crates/use-cases-notifications/src/realtime.rs",
+        "apps/control-plane-worker/src/realtime_notifications.rs",
+        "frontend/src/shared/realtime/NotificationRealtimeBridge.tsx",
+        "scripts/check-phase2g-realtime-boundaries.py"
+      ]
+    },
+    "ui": {
+      "expectedOutcome": "feature_owned_generated_contract_standalone_operator_surface",
+      "evidence": [
+        "frontend/src/app/router.tsx",
+        "scripts/check-phase2h-ui-boundaries.py",
+        "frontend/src/shared/mail/SafeMailBody.tsx"
+      ]
+    }
+  },
+  "negativeMatrix": {
+    "tenantIsolation": {
+      "expectedOutcome": "foreign_tenant_resources_are_not_projected_or_provider_fetched",
+      "evidence": [
+        "scripts/test-step4-identity-acl.py",
+        "crates/use-cases-query/src/lib.rs"
+      ]
+    },
+    "idorNeutralDisclosure": {
+      "expectedOutcome": "missing_foreign_and_unauthorized_resources_share_neutral_disclosure",
+      "evidence": [
+        "apps/control-plane-worker/src/access_session.rs",
+        "scripts/test-step4-identity-acl.py"
+      ]
+    },
+    "revocationBeforeProjection": {
+      "expectedOutcome": "revoked_or_suspended_actor_is_denied_before_query_provider_or_realtime_exposure",
+      "evidence": [
+        "crates/use-cases-query/src/lib.rs",
+        "crates/use-cases-notifications/src/realtime.rs"
+      ]
+    },
+    "resultCountNoLeak": {
+      "expectedOutcome": "denied_queries_do_not_reveal_foreign_result_counts",
+      "evidence": [
+        "crates/use-cases-query/src/lib.rs"
+      ]
+    },
+    "mailContentNoTechnicalChannel": {
+      "expectedOutcome": "mail_content_stays_out_of_logs_audit_metrics_realtime_storage_and_support_evidence",
+      "evidence": [
+        "scripts/check-phase2h-ui-boundaries.py",
+        "scripts/check-phase2g-realtime-boundaries.py",
+        "frontend/src/shared/mail/SafeMailBody.tsx"
+      ]
+    },
+    "realtimeInvalidationOnly": {
+      "expectedOutcome": "websocket_never_becomes_business_or_query_authority",
+      "evidence": [
+        "frontend/src/shared/realtime/NotificationRealtimeBridge.tsx",
+        "scripts/check-phase2g-realtime-boundaries.py"
+      ]
+    }
+  },
+  "failureMatrix": {
+    "duplicateReplayNeutral": {
+      "expectedOutcome": "duplicate_or_replayed_delivery_has_one_logical_effect",
+      "evidence": [
+        "scripts/test-cross-component-acceptance.py",
+        "crates/use-cases-notifications/src/realtime.rs"
+      ]
+    },
+    "staleFenceRejected": {
+      "expectedOutcome": "stale_claim_generation_or_coordinator_fence_cannot_overwrite_newer_authority",
+      "evidence": [
+        "scripts/check-step5-profile-coordinator.py",
+        "crates/use-cases-devices/src/lib.rs"
+      ]
+    },
+    "terminalFailureVisible": {
+      "expectedOutcome": "terminal_failure_is_not_reported_as_empty_or_success",
+      "evidence": [
+        "crates/use-cases-mailboxes/src/lib.rs",
+        "crates/use-cases-devices/src/lib.rs"
+      ]
+    },
+    "profileBusyNoFalseSuccess": {
+      "expectedOutcome": "uncertain_or_active_writer_ownership_fails_closed",
+      "evidence": [
+        "apps/profile-bridge/src/operator_flow.rs"
+      ]
+    },
+    "deviceOfflineNoFalseSuccess": {
+      "expectedOutcome": "offline_device_lane_preserves_pending_or_remediation_state",
+      "evidence": [
+        "crates/use-cases-devices/src/lib.rs"
+      ]
+    },
+    "providerOutageClassified": {
+      "expectedOutcome": "provider_dependency_failure_maps_to_bounded_retry_auth_or_terminal_semantics",
+      "evidence": [
+        "crates/use-cases-mailboxes/src/lib.rs",
+        "apps/control-plane-worker/src/client_mail_query.rs"
+      ]
+    }
+  },
+  "recoveryMatrix": {
+    "generationFreshness": {
+      "expectedOutcome": "browser_execution_requires_current_generation_and_fencing_context",
+      "evidence": [
+        "apps/profile-bridge/src/operator_flow.rs",
+        "crates/use-cases-devices/src/lib.rs"
+      ]
+    },
+    "immutableCandidateBeforeActivation": {
+      "expectedOutcome": "dirty_state_becomes_new_verified_immutable_generation_before_authoritative_activation",
+      "evidence": [
+        "apps/profile-bridge/src/operator_flow.rs",
+        "apps/control-plane-worker/src/profile_generations.rs"
+      ]
+    },
+    "failedActivationPreservesRecovery": {
+      "expectedOutcome": "failed_remote_commit_does_not_destroy_recoverable_dirty_local_state",
+      "evidence": [
+        "apps/profile-bridge/src/operator_flow.rs"
+      ]
+    },
+    "mailboxAuthExpiryRemediation": {
+      "expectedOutcome": "auth_expiry_is_explicit_and_never_silent_success",
+      "evidence": [
+        "crates/use-cases-mailboxes/src/lib.rs"
+      ]
+    },
+    "realtimeReconnectDurableCatchup": {
+      "expectedOutcome": "reconnect_catches_up_from_durable_cursor_before_live_continuation",
+      "evidence": [
+        "crates/use-cases-notifications/src/realtime.rs",
+        "scripts/check-phase2g-realtime-boundaries.py"
+      ]
+    }
+  },
+  "externalEvidenceExcluded": [
+    "cloudflare_production_deployment",
+    "real_camoufox_execution",
+    "real_mailbox_provider_execution",
+    "production_device_key_protection",
+    "trusted_signing",
+    "physical_multi_device_acceptance",
+    "remote_r2_key_recovery",
+    "independent_cryptographic_review"
+  ]
+}
