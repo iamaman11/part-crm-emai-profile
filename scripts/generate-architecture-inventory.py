@@ -109,6 +109,13 @@ GENERATED_CONTRACTS = [
         "typescript": "frontend/src/shared/api/generated/operator-query.ts",
         "generator": "scripts/generate-frontend-contracts.py",
     },
+    {
+        "name": "profile-generation-api",
+        "canonical_source": "crates/control-plane-contract/src/profile_generation_api.rs",
+        "openapi": "openapi/v1/fragments/profile-generation.json",
+        "typescript": "frontend/src/shared/api/generated/profile-generation.ts",
+        "generator": "scripts/generate-frontend-contracts.py",
+    },
 ]
 
 REQUIRED_INDEX_LINKS = [
