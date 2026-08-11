@@ -23,6 +23,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/check-documentation-authority.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    phases = ledger.get("phases")\n'
+          new = '    phases = ledger.get("accepted_phases")\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'accepted-phase ledger reader anchor drifted: {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           python .github/r7-documentation-authority.py
           python -m py_compile scripts/check-documentation-authority.py scripts/generate-architecture-inventory.py
           python scripts/generate-architecture-inventory.py --write
