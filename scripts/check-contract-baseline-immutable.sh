@@ -60,3 +60,5 @@ PY
 else
   echo "No accepted phase provenance ledger exists on ${base_ref}; initial establishment is allowed."
 fi
+
+bash scripts/check-phase2i-release-freeze.sh
