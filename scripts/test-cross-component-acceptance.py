@@ -469,9 +469,21 @@ def validate_composition_surfaces() -> None:
             "synthetic Profile Bridge executable",
         ),
         (
-            "apps/control-plane-worker/src/mailbox_bindings.rs",
+            "crates/control-plane-contract/src/mailbox_api.rs",
             (
                 "deny_unknown_fields",
+                "pub struct CreateMailboxBindingRequestDto",
+                "pub struct BindBrowserMailboxExecutionRequestDto",
+                "pub struct CreateMailboxJobRequestDto",
+                "pub struct RunMailboxJobRequestDto",
+            ),
+            "canonical mailbox transport contract",
+        ),
+        (
+            "apps/control-plane-worker/src/mailbox_bindings.rs",
+            (
+                "CreateMailboxBindingRequestDto",
+                "BindBrowserMailboxExecutionRequestDto",
                 '"password":"forbidden"',
                 '"messageBody":"forbidden"',
                 "SecretHandle::parse",
@@ -500,7 +512,8 @@ def validate_composition_surfaces() -> None:
         (
             "apps/control-plane-worker/src/mailbox_jobs.rs",
             (
-                "deny_unknown_fields",
+                "CreateMailboxJobRequestDto",
+                "RunMailboxJobRequestDto",
                 '"messageBody":"forbidden"',
                 "execute_create_mailbox_job",
                 "get_mailbox_job",
