@@ -19,6 +19,7 @@ EXPECTED_PHASE_ORDER = (
     "Phase 2E",
     "Phase 2F",
     "Phase 2G",
+    "Phase 2H",
 )
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
