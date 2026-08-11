@@ -105,7 +105,7 @@ Migrate legacy public surfaces capability-by-capability, not into one giant cont
 - R4b will migrate Mailbox transport DTOs in a separate PR from the next accepted `main`;
 - R4c will migrate Coordinator transport DTOs in a separate PR from the next accepted `main`;
 - replace Worker-local and SPA handwritten wire DTOs with generated/canonical types while keeping domain-to-wire mapping at the transport boundary;
-- retain existing operation/security metadata ownership and avoid duplicate OpenAPI path authorities;
+- retain the accepted `openapi/v1/openapi.json` as the operation/security compatibility document while bounded Rust fragments own migrated DTO schemas and avoid duplicate path/method entries;
 - keep frontend-local view models only when they are presentation models rather than transport DTOs;
 - keep compatibility baselines additive and versioned.
 
