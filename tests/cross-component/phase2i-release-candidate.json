@@ -189,6 +189,34 @@
         "crates/use-cases-notifications/src/realtime.rs",
         "scripts/check-phase2g-realtime-boundaries.py"
       ]
+    },
+    "d1CatalogBackupRestore": {
+      "expectedOutcome": "consistent_point_in_time_catalog_backup_restores_schema_data_and_integrity",
+      "evidence": [
+        "scripts/test-phase2i-d1-backup-restore.py",
+        "scripts/test-d1-schema.py"
+      ]
+    },
+    "r2ImmutableObjectRecovery": {
+      "expectedOutcome": "immutable_generation_restore_rejects_corruption_wrong_identity_and_stale_pointer",
+      "evidence": [
+        "crates/encrypted-generation-domain/src/tests.rs",
+        "scripts/check-r2-generation-objects.py"
+      ]
+    },
+    "coordinatorReplayRecovery": {
+      "expectedOutcome": "coordinator_authority_replay_and_projection_repair_preserve_fencing_semantics",
+      "evidence": [
+        "scripts/check-step5-profile-coordinator.py",
+        "scripts/test-step5-coordinator-projection.py"
+      ]
+    },
+    "bridgeDirtyLocalRecovery": {
+      "expectedOutcome": "dirty_local_state_is_retained_until_verified_generation_commit_or_explicit_recovery",
+      "evidence": [
+        "apps/profile-bridge/src/operator_flow.rs",
+        "scripts/check-phase2f-retained-operator.py"
+      ]
     }
   },
   "externalEvidenceExcluded": [
