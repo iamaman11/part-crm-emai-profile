@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 #[path = "../query_mail_api.rs"]
 mod query_mail_api;
 
