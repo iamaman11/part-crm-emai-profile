@@ -2,6 +2,7 @@
 
 **Status:** ACTIVE / BLOCKING PHASE 2J  
 **Audit base:** accepted `main` at `d8b5bd07b99596d066fa2af976b263d41b5e2f3c`  
+**Current accepted base:** `3443bf390cd5ca337be62736c7764ff0f3065f49` after R4a Profile + Generation via PR #179  
 **Production readiness:** remains `false`  
 **Rule:** Phase 2J External evidence work must not begin while any repository-owned P1 below is open.
 
@@ -91,7 +92,9 @@ A first remediation attempt deliberately exposed why component schemas cannot be
 
 ### R4 — P1 — Public contract authority is incomplete; handwritten frontend DTOs remain — ACTIVE
 
-**Active batch:** R4a — Profile + Generation via issue #178 / draft PR #179.
+**Accepted batch:** R4a — Profile + Generation via issue #178 / PR #179; accepted `main` squash `3443bf390cd5ca337be62736c7764ff0f3065f49`.  
+**Active batch:** R4b — Mailbox via issue #180 / draft PR #181.  
+**Next batch:** R4c — Coordinator only after R4b is accepted on `main`.
 
 **Finding**
 
@@ -101,23 +104,33 @@ Rust -> OpenAPI -> generated TypeScript is canonical only for migrated surfaces.
 
 Migrate legacy public surfaces capability-by-capability, not into one giant contract file:
 
-- R4a migrates Profile + Generation transport DTOs to `crates/control-plane-contract/src/profile_generation_api.rs`, deterministic OpenAPI schema fragment and generated TypeScript;
-- R4b will migrate Mailbox transport DTOs in a separate PR from the next accepted `main`;
+- R4a migrated Profile + Generation transport DTOs to `crates/control-plane-contract/src/profile_generation_api.rs`, deterministic OpenAPI schema fragment and generated TypeScript;
+- R4b migrates Mailbox transport DTOs in a separate PR from accepted R4a `main`;
 - R4c will migrate Coordinator transport DTOs in a separate PR from the next accepted `main`;
 - replace Worker-local and SPA handwritten wire DTOs with generated/canonical types while keeping domain-to-wire mapping at the transport boundary;
 - retain the accepted `openapi/v1/openapi.json` as the operation/security compatibility document while bounded Rust fragments own migrated DTO schemas and avoid duplicate path/method entries;
 - keep frontend-local view models only when they are presentation models rather than transport DTOs;
 - keep compatibility baselines additive and versioned.
 
-**R4a progress**
+**R4a acceptance**
 
+- issue #178 / PR #179 is accepted;
+- accepted squash on `main`: `3443bf390cd5ca337be62736c7764ff0f3065f49`;
 - Rust-owned Profile/Generation request, projection and enum DTOs exist in `control-plane-contract`;
 - Worker Profile/Generation handlers use canonical DTOs and shared `MutationReceipt` rather than local transport structs;
 - Profile unknown-field tolerance and Generation fail-closed unknown-field behavior are preserved from runtime semantics;
 - deterministic schema-only OpenAPI and TypeScript artifacts are generated from the Rust source without duplicating legacy operation paths;
 - SPA Profile/Generation projections and request-body types are generated rather than handwritten;
-- architecture inventory registers the complete Rust -> OpenAPI -> TypeScript chain;
-- exact-head permanent CI and merge interlocks remain required before R4a can be accepted.
+- architecture inventory registers the complete Rust -> OpenAPI -> TypeScript chain.
+
+**R4b progress**
+
+- issue #180 / draft PR #181 owns the bounded Mailbox migration;
+- canonical Mailbox request/projection/status DTOs and schema-only generated artifacts live outside frozen `openapi/v1/**`;
+- Worker Mailbox binding/job transport is being migrated to canonical DTOs while preserving existing domain validation/error sequencing;
+- SPA Mailbox projections and request inputs are being migrated to generated DTO authority;
+- generator freshness and architecture inventory must own the complete Rust -> generated OpenAPI -> generated TypeScript chain;
+- PR #181 remains draft until the implementation is structurally complete and exact-head merge interlocks pass.
 
 **Acceptance**
 
@@ -224,7 +237,7 @@ Use multiple bounded PRs. The expected sequence is:
 1. **Guardrail integrity** — R1. Accepted via PR #173 / `88d4412084f85b3512ce28a3bec637fc6e687151`.
 2. **Canonical routing** — R2. Accepted via PR #175 / `443bd39a9589eb0fb75f305043a2acc1b93314a1`.
 3. **Compatibility semantics** — R3. Accepted via PR #177 / `d3bbd49dde9129e52b7c72bff053ce82a325bc0b`.
-4. **Contract authority migration** — R4a Profile + Generation active via issue #178 / draft PR #179; then R4b Mailbox and R4c Coordinator as separate PRs.
+4. **Contract authority migration** — R4a Profile + Generation accepted via PR #179 / `3443bf390cd5ca337be62736c7764ff0f3065f49`; R4b Mailbox active via issue #180 / draft PR #181; R4c Coordinator follows only after R4b acceptance.
 5. **Application ownership cleanup** — R5.
 6. **Frontend API modularization** — R6, preferably aligned with R4 capability migrations rather than a mechanical rewrite.
 7. **Current documentation/security authority** — R7.
@@ -257,19 +270,3 @@ Phase 2J may resume only when all of the following are true on accepted `main`:
 - current documentation and machine-readable status agree;
 - full permanent workflow set is green at the exact accepted head;
 - `production_ready` is still `false` until Phase 2J external acceptance itself is completed.
-
-## 7. Non-findings worth preserving
-
-The audit explicitly found no reason to rewrite these working foundations:
-
-- provider-neutral domain crates and dependency direction;
-- tenant-inclusive persistence keys and transactional invariants;
-- authorization-before-projection/provider sequencing and neutral denial;
-- coordinator epoch/fencing/CAS and stale-writer rejection;
-- immutable encrypted generation model and retained dirty-state recovery ownership;
-- durable outbox/catch-up before realtime invalidation;
-- metadata-only realtime refetch authority model;
-- feature-sliced frontend sibling boundary enforcement;
-- bounded metadata-only operational/support evidence.
-
-Remediation must preserve these properties rather than replacing them with a broader framework.
