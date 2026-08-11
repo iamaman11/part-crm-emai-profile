@@ -11,9 +11,9 @@ import type {
 } from './generated/client-registry';
 import type {
   ProfileAssignmentRequest,
-  ProfileCreateRequest,
+  ProfileCreateRequestDto,
   ProfileGenerationVersionRequest,
-  ProfileGrantRequest,
+  ProfileGrantRequestDto,
   QuarantineGenerationRequest,
   RegisterGenerationRequest,
   VerifyGenerationRequest,
@@ -41,9 +41,9 @@ export type ArchiveClientInput = Omit<ClientArchiveRequest, 'requestDigest'>;
 export type UpsertClientContactInput = Omit<ClientContactUpsertRequest, 'requestDigest'>;
 export type ArchiveClientContactInput = Omit<ClientContactArchiveRequest, 'requestDigest'>;
 export type MergeClientInput = Omit<ClientMergeRequest, 'requestDigest'>;
-export type CreateProfileInput = Omit<ProfileCreateRequest, 'requestDigest'>;
+export type CreateProfileInput = Omit<ProfileCreateRequestDto, 'requestDigest'>;
 export type AssignProfileInput = Omit<ProfileAssignmentRequest, 'requestDigest'>;
-export type SetProfileGrantInput = Omit<ProfileGrantRequest, 'requestDigest'>;
+export type SetProfileGrantInput = Omit<ProfileGrantRequestDto, 'requestDigest'>;
 export type RegisterGenerationInput = Omit<RegisterGenerationRequest, 'requestDigest'>;
 export type VerifyGenerationInput = Omit<VerifyGenerationRequest, 'requestDigest'>;
 export type ChangeGenerationActivationInput = Omit<ProfileGenerationVersionRequest, 'requestDigest'>;
