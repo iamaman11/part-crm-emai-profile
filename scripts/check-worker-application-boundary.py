@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed if migrated Worker surfaces regain provider/D1 orchestration."""
+"""Fail closed if migrated Worker surfaces regain provider/D1 or compatibility coupling."""
 
 from __future__ import annotations
 
@@ -45,6 +45,8 @@ REQUIRED_CLIENT_TRANSPORT_TOKENS = (
 )
 
 REQUIRED_IDENTITY_TRANSPORT_TOKENS = (
+    "use use_cases_identity::identity_ceremonies",
+    "use use_cases_identity::identity_governance",
     "RouteClass::OwnerBootstrapApi",
     "RouteClass::OwnerTransferApi",
     "RouteClass::InvitationCollectionApi",
@@ -103,8 +105,6 @@ def validate(root: Path) -> list[str]:
         client_ports_path,
         client_use_cases_path,
         client_grant_use_cases_path,
-        shared_client_facade_path,
-        shared_grant_facade_path,
         client_adapter_path,
         identity_governance_ports_path,
         identity_ceremony_ports_path,
@@ -121,6 +121,12 @@ def validate(root: Path) -> list[str]:
 
     if legacy_api_path.exists():
         errors.append("legacy api.rs must remain removed after identity application-boundary migration")
+    for path in (shared_client_facade_path, shared_grant_facade_path):
+        if path.exists():
+            errors.append(
+                "shared use-cases compatibility facade must remain removed: "
+                f"{path.relative_to(root)}"
+            )
 
     client = read(client_path)
     identity = read(identity_path)
@@ -129,8 +135,6 @@ def validate(root: Path) -> list[str]:
     client_ports = read(client_ports_path)
     client_use_cases = read(client_use_cases_path)
     client_grant_use_cases = read(client_grant_use_cases_path)
-    shared_client_facade = read(shared_client_facade_path)
-    shared_grant_facade = read(shared_grant_facade_path)
     client_adapter = read(client_adapter_path)
     identity_governance_ports = read(identity_governance_ports_path)
     identity_ceremony_ports = read(identity_ceremony_ports_path)
@@ -203,18 +207,6 @@ def validate(root: Path) -> list[str]:
             "decide_client_grant_replay",
         ),
         "extracted client grant use cases",
-        errors,
-    )
-    require_tokens(
-        shared_client_facade,
-        ("pub use use_cases_clients::clients::*;",),
-        "shared client compatibility facade",
-        errors,
-    )
-    require_tokens(
-        shared_grant_facade,
-        ("pub use use_cases_clients::client_grants::*;",),
-        "shared client grant compatibility facade",
         errors,
     )
     require_tokens(
@@ -305,11 +297,11 @@ def validate(root: Path) -> list[str]:
 def write_self_test_fixture(root: Path) -> None:
     worker = root / "apps/control-plane-worker/src"
     ports = root / "crates/application-ports/src"
-    use_cases = root / "crates/use-cases/src"
+    shared_use_cases = root / "crates/use-cases/src"
     client_use_cases = root / "crates/use-cases-clients/src"
     identity_use_cases = root / "crates/use-cases-identity/src"
     adapters = root / "crates/cloudflare-adapters/src"
-    for path in (worker, ports, use_cases, client_use_cases, identity_use_cases, adapters):
+    for path in (worker, ports, shared_use_cases, client_use_cases, identity_use_cases, adapters):
         path.mkdir(parents=True, exist_ok=True)
 
     (worker / "clients.rs").write_text(
@@ -321,6 +313,7 @@ def write_self_test_fixture(root: Path) -> None:
     )
     (worker / "identity.rs").write_text(
         "use cloudflare_adapters::d1_identity_acl::D1IdentityAclRepository;\n"
+        "use use_cases_identity::identity_ceremonies; use use_cases_identity::identity_governance;\n"
         "fn route() { RouteClass::OwnerBootstrapApi; RouteClass::OwnerTransferApi; "
         "RouteClass::InvitationCollectionApi; RouteClass::InvitationAcceptApi; "
         "RouteClass::MembershipStatusApi; execute_owner_bootstrap(); execute_owner_transfer(); "
@@ -358,10 +351,10 @@ def write_self_test_fixture(root: Path) -> None:
         "pub fn next_client_grant_version() {}\nfn replay() { decide_client_grant_replay(); }\n",
         encoding="utf-8",
     )
-    (use_cases / "clients.rs").write_text(
+    (shared_use_cases / "clients.rs").write_text(
         "pub use use_cases_clients::clients::*;\n", encoding="utf-8"
     )
-    (use_cases / "client_grants.rs").write_text(
+    (shared_use_cases / "client_grants.rs").write_text(
         "pub use use_cases_clients::client_grants::*;\n", encoding="utf-8"
     )
     (adapters / "d1_clients.rs").write_text(
@@ -419,12 +412,13 @@ def main() -> int:
             errors = validate(fixture)
             provider_rejected = any("provider token" in error for error in errors)
             legacy_rejected = any("legacy api.rs" in error for error in errors)
-            if not provider_rejected or not legacy_rejected:
+            compatibility_rejected = any("compatibility facade" in error for error in errors)
+            if not provider_rejected or not legacy_rejected or not compatibility_rejected:
                 print("negative Worker application-boundary fixture unexpectedly passed")
                 for error in errors:
                     print(error)
                 return 1
-            print("negative direct-provider and legacy Worker fixtures rejected as expected")
+            print("negative provider, legacy and compatibility fixtures rejected as expected")
             return 0
 
     errors = validate(args.root.resolve())
