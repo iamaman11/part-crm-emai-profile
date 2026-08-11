@@ -211,9 +211,7 @@ fn coordinator_projection(value: &CoordinatorProjectionSnapshot) -> CoordinatorP
         pending_launch_intent_id: value
             .pending_launch_intent_id()
             .map(|item| item.as_str().to_owned()),
-        pending_intent_expires_at_ms: value
-            .pending_intent_expires_at()
-            .map(|item| item.value()),
+        pending_intent_expires_at_ms: value.pending_intent_expires_at().map(|item| item.value()),
     }
 }
 
@@ -236,7 +234,9 @@ const fn coordinator_outcome(value: CoordinatorRuntimeOutcome) -> CoordinatorOut
         CoordinatorRuntimeOutcome::Released => CoordinatorOutcomeDto::Released,
         CoordinatorRuntimeOutcome::DrainStarted => CoordinatorOutcomeDto::DrainStarted,
         CoordinatorRuntimeOutcome::TimedOut => CoordinatorOutcomeDto::TimedOut,
-        CoordinatorRuntimeOutcome::LaunchIntentExpired => CoordinatorOutcomeDto::LaunchIntentExpired,
+        CoordinatorRuntimeOutcome::LaunchIntentExpired => {
+            CoordinatorOutcomeDto::LaunchIntentExpired
+        }
         CoordinatorRuntimeOutcome::Recovered => CoordinatorOutcomeDto::Recovered,
         CoordinatorRuntimeOutcome::NoChange => CoordinatorOutcomeDto::NoChange,
     }
@@ -268,7 +268,10 @@ mod tests {
 
     #[test]
     fn domain_and_application_enums_map_exhaustively_to_public_wire_enums() {
-        assert_eq!(coordinator_status(CoordinatorStatus::Idle), CoordinatorStatusDto::Idle);
+        assert_eq!(
+            coordinator_status(CoordinatorStatus::Idle),
+            CoordinatorStatusDto::Idle
+        );
         assert_eq!(
             coordinator_status(CoordinatorStatus::Uncertain),
             CoordinatorStatusDto::Uncertain
