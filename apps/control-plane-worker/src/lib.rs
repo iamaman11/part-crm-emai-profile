@@ -14,7 +14,6 @@ mod mailbox_bindings;
 mod mailbox_jobs;
 mod mailbox_queue_evidence;
 mod mailbox_scheduling;
-mod mutation_failure;
 mod notifications;
 mod operator_queries;
 mod profile_coordinator;

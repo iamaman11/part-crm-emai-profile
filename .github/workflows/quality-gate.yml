@@ -221,6 +221,8 @@ jobs:
           --exclude cloudflare-adapters
 
       - name: Test Cloudflare adapter logic
+        env:
+          RUSTFLAGS: -Dwarnings
         run: cargo test --locked -p cloudflare-adapters --lib
 
       - name: Check extracted identity application crate for Workers target
@@ -318,6 +320,8 @@ jobs:
         run: rustup show active-toolchain
 
       - name: Check Worker for WASM
+        env:
+          RUSTFLAGS: -Dwarnings
         run: >-
           cargo check --locked -p browser-profile-control-plane-worker
           --target wasm32-unknown-unknown

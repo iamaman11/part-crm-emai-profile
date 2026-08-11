@@ -1,5 +1,5 @@
 use crate::access_identity::VerifiedExternalIdentity;
-use crate::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
+use crate::d1_idempotency::D1IdempotencyRepository;
 use crate::d1_identity_acl::{
     BootstrapOwnerMutation, D1IdentityAclRepository, ResolvedMembershipRole,
     VerifiedBootstrapContext,

@@ -1,8 +1,7 @@
 #[cfg(target_arch = "wasm32")]
-use crate::contact_protection::WorkerCryptoNonceSource;
+use crate::contact_protection::{RustCryptoContactProtection, WorkerCryptoNonceSource};
 use crate::contact_protection::{
     ContactEncryptionRootKey, ContactLookupRootKey, ContactProtectionKeyring,
-    RustCryptoContactProtection,
 };
 use client_domain::{EncryptionKeyVersion, LookupKeyVersion};
 use serde::Deserialize;

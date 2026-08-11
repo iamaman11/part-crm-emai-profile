@@ -12,7 +12,7 @@ use application_ports::client_registry::{
     ClientRegistryContactProjection as DomainContactProjection,
     ClientRegistryHistoryProjection as DomainHistoryProjection, ClientRegistryListItem,
 };
-use client_domain::{AssignmentStatus, ClientKind, ClientStatus, ContactKind, ContactStatus};
+use client_domain::{AssignmentStatus, ClientKind, ClientStatus, ContactKind};
 use control_plane_contract::RouteClass;
 use control_plane_contract::client_registry_api::{
     ClientActivityProjection, ClientArchiveRequest, ClientAssignmentProjection,
