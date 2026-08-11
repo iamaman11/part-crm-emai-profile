@@ -6,41 +6,48 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 MANIFEST = Path("tests/cross-component/phase2i-release-candidate.json")
 
-EXPECTED_CAPABILITY_FLOWS = {
-    "identity",
-    "clients",
-    "profiles",
-    "mailboxes",
-    "devices",
-    "realtime",
-    "ui",
-}
-EXPECTED_NEGATIVE_MATRIX = {
-    "tenantIsolation",
-    "idorNeutralDisclosure",
-    "revocationBeforeProjection",
-    "resultCountNoLeak",
-    "mailContentNoTechnicalChannel",
-    "realtimeInvalidationOnly",
-}
-EXPECTED_FAILURE_MATRIX = {
-    "duplicateReplayNeutral",
-    "staleFenceRejected",
-    "terminalFailureVisible",
-    "profileBusyNoFalseSuccess",
-    "deviceOfflineNoFalseSuccess",
-    "providerOutageClassified",
-}
-EXPECTED_RECOVERY_MATRIX = {
-    "generationFreshness",
-    "immutableCandidateBeforeActivation",
-    "failedActivationPreservesRecovery",
-    "mailboxAuthExpiryRemediation",
-    "realtimeReconnectDurableCatchup",
+EXPECTED_MATRICES: dict[str, set[str]] = {
+    "capabilityFlows": {
+        "identity",
+        "clients",
+        "profiles",
+        "mailboxes",
+        "devices",
+        "realtime",
+        "ui",
+    },
+    "negativeMatrix": {
+        "tenantIsolation",
+        "idorNeutralDisclosure",
+        "revocationBeforeProjection",
+        "resultCountNoLeak",
+        "mailContentNoTechnicalChannel",
+        "realtimeInvalidationOnly",
+    },
+    "failureMatrix": {
+        "duplicateReplayNeutral",
+        "staleFenceRejected",
+        "terminalFailureVisible",
+        "profileBusyNoFalseSuccess",
+        "deviceOfflineNoFalseSuccess",
+        "providerOutageClassified",
+    },
+    "recoveryMatrix": {
+        "generationFreshness",
+        "immutableCandidateBeforeActivation",
+        "failedActivationPreservesRecovery",
+        "mailboxAuthExpiryRemediation",
+        "realtimeReconnectDurableCatchup",
+        "d1CatalogBackupRestore",
+        "r2ImmutableObjectRecovery",
+        "coordinatorReplayRecovery",
+        "bridgeDirtyLocalRecovery",
+    },
 }
 EXPECTED_EXTERNAL_EXCLUSIONS = {
     "cloudflare_production_deployment",
@@ -52,7 +59,6 @@ EXPECTED_EXTERNAL_EXCLUSIONS = {
     "remote_r2_key_recovery",
     "independent_cryptographic_review",
 }
-
 SOURCE_FILES = {
     "query": Path("crates/use-cases-query/src/lib.rs"),
     "worker_mail": Path("apps/control-plane-worker/src/client_mail_query.rs"),
@@ -62,18 +68,12 @@ SOURCE_FILES = {
     "phase2h": Path("scripts/check-phase2h-ui-boundaries.py"),
     "historical_acceptance": Path("tests/cross-component/standalone-acceptance.json"),
 }
-
 ALLOWED_EVIDENCE_ROOTS = {"apps", "crates", "frontend", "scripts", "tests"}
 FORBIDDEN_MANIFEST_KEYS = re.compile(
     r"(?:password|access.?token|oauth|cookie|message.?body|credential.?value|raw.?secret)",
     re.IGNORECASE,
 )
-FORBIDDEN_TECHNICAL_SINKS = (
-    "localStorage",
-    "sessionStorage",
-    "indexedDB",
-    "sendBeacon",
-)
+FORBIDDEN_TECHNICAL_SINKS = ("localStorage", "sessionStorage", "indexedDB", "sendBeacon")
 
 
 def walk_json(value: object, path: str = "$") -> list[str]:
@@ -107,21 +107,16 @@ def safe_evidence_path(root: Path, relative: object, label: str) -> list[str]:
     return []
 
 
-def validate_matrix(
-    root: Path,
-    matrix: object,
-    expected_keys: set[str],
-    label: str,
-) -> list[str]:
-    errors: list[str] = []
+def validate_matrix(root: Path, matrix: object, expected: set[str], label: str) -> list[str]:
     if not isinstance(matrix, dict):
         return [f"{label} must be an object"]
-    if set(matrix) != expected_keys:
-        errors.append(
+    if set(matrix) != expected:
+        return [
             f"{label} keys differ from required Phase 2I matrix: "
-            f"expected={sorted(expected_keys)} actual={sorted(matrix)}"
-        )
-        return errors
+            f"expected={sorted(expected)} actual={sorted(matrix)}"
+        ]
+
+    errors: list[str] = []
     for key, entry in matrix.items():
         if not isinstance(entry, dict) or set(entry) != {"expectedOutcome", "evidence"}:
             errors.append(f"{label}.{key} must contain exactly expectedOutcome and evidence")
@@ -139,44 +134,30 @@ def validate_matrix(
 
 
 def validate_manifest(root: Path, manifest: object) -> list[str]:
-    errors: list[str] = []
     if not isinstance(manifest, dict):
         return ["Phase 2I manifest must be an object"]
 
-    errors.extend(walk_json(manifest))
-    if manifest.get("schemaVersion") != 1:
-        errors.append("unexpected Phase 2I manifest schema version")
-    if manifest.get("phase") != "Phase 2I":
-        errors.append("Phase 2I manifest phase marker changed unexpectedly")
-    if manifest.get("scope") != "repository-local-release-candidate":
-        errors.append("Phase 2I scope must remain repository-local-release-candidate")
-    if manifest.get("completionState") != "in-progress":
-        errors.append("Phase 2I tranche must remain explicitly in-progress until final acceptance")
-    if manifest.get("productionReady") is not False:
-        errors.append("Phase 2I repository-local evidence must never promote production readiness")
-    if manifest.get("baseSha") != "0449e9f0576f7d26b1e1debd882cfecf92a50c53":
-        errors.append("Phase 2I manifest must retain exact pre-2I base SHA provenance")
-    if manifest.get("issue") != 167:
-        errors.append("Phase 2I manifest must point at bounded issue #167")
+    errors = walk_json(manifest)
+    scalar_expectations = {
+        "schemaVersion": 1,
+        "phase": "Phase 2I",
+        "scope": "repository-local-release-candidate",
+        "completionState": "in-progress",
+        "productionReady": False,
+        "baseSha": "0449e9f0576f7d26b1e1debd882cfecf92a50c53",
+        "issue": 167,
+        "historicalAcceptance": "tests/cross-component/standalone-acceptance.json",
+    }
+    for key, expected in scalar_expectations.items():
+        if manifest.get(key) != expected:
+            errors.append(f"Phase 2I manifest {key} changed unexpectedly")
 
     historical = manifest.get("historicalAcceptance")
-    if historical != "tests/cross-component/standalone-acceptance.json":
-        errors.append("historical standalone acceptance reference changed unexpectedly")
-    else:
+    if historical == scalar_expectations["historicalAcceptance"]:
         errors.extend(safe_evidence_path(root, historical, "historicalAcceptance"))
 
-    errors.extend(
-        validate_matrix(root, manifest.get("capabilityFlows"), EXPECTED_CAPABILITY_FLOWS, "capabilityFlows")
-    )
-    errors.extend(
-        validate_matrix(root, manifest.get("negativeMatrix"), EXPECTED_NEGATIVE_MATRIX, "negativeMatrix")
-    )
-    errors.extend(
-        validate_matrix(root, manifest.get("failureMatrix"), EXPECTED_FAILURE_MATRIX, "failureMatrix")
-    )
-    errors.extend(
-        validate_matrix(root, manifest.get("recoveryMatrix"), EXPECTED_RECOVERY_MATRIX, "recoveryMatrix")
-    )
+    for label, expected in EXPECTED_MATRICES.items():
+        errors.extend(validate_matrix(root, manifest.get(label), expected, label))
 
     exclusions = manifest.get("externalEvidenceExcluded")
     if not isinstance(exclusions, list) or set(exclusions) != EXPECTED_EXTERNAL_EXCLUSIONS:
@@ -191,26 +172,28 @@ def load_sources(root: Path) -> tuple[dict[str, str], list[str]]:
         path = root / relative
         if not path.is_file():
             errors.append(f"missing Phase 2I governed source: {relative}")
-            continue
-        sources[key] = path.read_text(encoding="utf-8")
+        else:
+            sources[key] = path.read_text(encoding="utf-8")
     return sources, errors
 
 
 def require_all(source: str, markers: tuple[str, ...], label: str) -> list[str]:
-    return [f"{label} missing release-candidate boundary marker: {marker}" for marker in markers if marker not in source]
+    return [
+        f"{label} missing release-candidate boundary marker: {marker}"
+        for marker in markers
+        if marker not in source
+    ]
 
 
 def validate_sources(sources: dict[str, str]) -> list[str]:
-    errors: list[str] = []
-    required_keys = set(SOURCE_FILES)
-    missing = required_keys - set(sources)
+    missing = set(SOURCE_FILES) - set(sources)
     if missing:
         return [f"Phase 2I source set incomplete: {sorted(missing)}"]
 
-    query = sources["query"]
+    errors: list[str] = []
     errors.extend(
         require_all(
-            query,
+            sources["query"],
             (
                 "if !authorize(actor, authorization, QueryCapability::Clients).await?",
                 "if !authorize(actor, authorization, QueryCapability::Profiles).await?",
@@ -255,10 +238,9 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
         if sink in realtime:
             errors.append(f"realtime bridge contains forbidden browser persistence/telemetry sink: {sink}")
 
-    bridge = sources["bridge"]
     errors.extend(
         require_all(
-            bridge,
+            sources["bridge"],
             (
                 "OperatorFlowError::CleanupRequired",
                 "OperatorFlowError::Busy",
@@ -269,19 +251,16 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
             "Profile Bridge fail-closed recovery",
         )
     )
-
-    phase2g = sources["phase2g"]
     errors.extend(
         require_all(
-            phase2g,
+            sources["phase2g"],
             ("invalidateQueries", "setQueryData", "--self-test"),
             "Phase 2G permanent negative policy",
         )
     )
-    phase2h = sources["phase2h"]
     errors.extend(
         require_all(
-            phase2h,
+            sources["phase2h"],
             ("BROWSER_PERSISTENCE_SINKS", "SafeMailBody", "--self-test"),
             "Phase 2H permanent privacy/UI policy",
         )
@@ -300,15 +279,16 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
 
 
 def self_test(root: Path, manifest: dict[str, object], sources: dict[str, str]) -> None:
-    manifest_fixtures: list[tuple[str, callable]] = [
+    manifest_fixtures: list[tuple[str, Callable[[dict[str, object]], None]]] = [
         ("production readiness promotion", lambda value: value.__setitem__("productionReady", True)),
-        (
-            "missing device flow",
-            lambda value: value["capabilityFlows"].pop("devices"),
-        ),
+        ("missing device flow", lambda value: value["capabilityFlows"].pop("devices")),  # type: ignore[union-attr]
         (
             "unsafe evidence path",
-            lambda value: value["negativeMatrix"]["tenantIsolation"]["evidence"].__setitem__(0, "../secret.txt"),
+            lambda value: value["negativeMatrix"]["tenantIsolation"]["evidence"].__setitem__(0, "../secret.txt"),  # type: ignore[index,union-attr]
+        ),
+        (
+            "missing D1 recovery drill",
+            lambda value: value["recoveryMatrix"].pop("d1CatalogBackupRestore"),  # type: ignore[union-attr]
         ),
         (
             "external evidence collapse",
@@ -342,9 +322,6 @@ def main() -> int:
     args = parser.parse_args()
 
     manifest_path = args.root / MANIFEST
-    if not manifest_path.is_file():
-        print(f"missing Phase 2I release-candidate manifest: {MANIFEST}")
-        return 1
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
