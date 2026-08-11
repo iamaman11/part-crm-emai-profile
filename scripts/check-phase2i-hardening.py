@@ -330,7 +330,7 @@ def self_test(root: Path, manifest: dict[str, object], sources: dict[str, str]) 
         if needle not in sources[key]:
             raise ValueError(f"Phase 2I self-test fixture marker missing for {label}: {needle}")
         mutated = dict(sources)
-        mutated[key] = mutated[key].replace(needle, replacement, 1)
+        mutated[key] = mutated[key].replace(needle, replacement)
         if not validate_sources(mutated):
             raise ValueError(f"Phase 2I source negative fixture was not rejected: {label}")
 
