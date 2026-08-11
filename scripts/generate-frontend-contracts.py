@@ -31,10 +31,15 @@ OPERATOR_QUERY_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "operator-
 OPERATOR_QUERY_TYPESCRIPT_PATH = (
     ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "operator-query.ts"
 )
+PROFILE_GENERATION_OPENAPI_PATH = ROOT / "openapi" / "v1" / "fragments" / "profile-generation.json"
+PROFILE_GENERATION_TYPESCRIPT_PATH = (
+    ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "profile-generation.ts"
+)
 SOURCE_PATH = "crates/control-plane-contract/src/public_api.rs"
 CLIENT_REGISTRY_SOURCE_PATH = "crates/control-plane-contract/src/client_registry_api.rs"
 QUERY_MAIL_SOURCE_PATH = "crates/control-plane-contract/src/bin/export_query_mail.rs"
 OPERATOR_QUERY_SOURCE_PATH = "crates/control-plane-contract/src/bin/export_operator_query.rs"
+PROFILE_GENERATION_SOURCE_PATH = "crates/control-plane-contract/src/profile_generation_api.rs"
 GENERATOR_PATH = "scripts/generate-frontend-contracts.py"
 
 
@@ -268,6 +273,13 @@ def main() -> int:
         source_path=OPERATOR_QUERY_SOURCE_PATH,
         support_nullable=True,
     )
+    profile_generation, _ = run_export("export_profile_generation")
+    profile_generation_openapi = compact_json(profile_generation)
+    profile_generation_typescript = render_typescript(
+        profile_generation,
+        source_path=PROFILE_GENERATION_SOURCE_PATH,
+        support_nullable=True,
+    )
 
     results = [
         check_or_write(OPENAPI_PATH, base_openapi, args.check),
@@ -288,6 +300,16 @@ def main() -> int:
         check_or_write(
             OPERATOR_QUERY_TYPESCRIPT_PATH,
             operator_query_typescript,
+            args.check,
+        ),
+        check_or_write(
+            PROFILE_GENERATION_OPENAPI_PATH,
+            profile_generation_openapi,
+            args.check,
+        ),
+        check_or_write(
+            PROFILE_GENERATION_TYPESCRIPT_PATH,
+            profile_generation_typescript,
             args.check,
         ),
     ]
