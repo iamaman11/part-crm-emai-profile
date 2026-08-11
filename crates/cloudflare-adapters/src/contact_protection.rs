@@ -279,6 +279,8 @@ impl<N> RustCryptoContactProtection<N> {
             .nonce()
             .try_into()
             .map_err(|_| ContactCryptoError::InvalidProtectedValue)?;
+        let nonce = XNonce::try_from(nonce_bytes.as_slice())
+            .map_err(|_| ContactCryptoError::InvalidProtectedValue)?;
         let aad = encryption_aad(
             tenant_id,
             contact_point_id,
@@ -287,7 +289,7 @@ impl<N> RustCryptoContactProtection<N> {
         );
         let plaintext = cipher
             .decrypt(
-                XNonce::from_slice(&nonce_bytes),
+                &nonce,
                 Payload {
                     msg: encrypted.ciphertext(),
                     aad: &aad,
@@ -337,6 +339,8 @@ impl<N: ContactNonceSource> RustCryptoContactProtection<N> {
             .map_err(|_| ContactCryptoError::InvalidKeyring)?;
         let mut nonce = [0_u8; NONCE_LENGTH];
         self.nonce_source.fill_nonce(&mut nonce)?;
+        let aead_nonce =
+            XNonce::try_from(nonce.as_slice()).map_err(|_| ContactCryptoError::EncryptionFailed)?;
         let aad = encryption_aad(
             request.tenant_id(),
             request.contact_point_id(),
@@ -345,7 +349,7 @@ impl<N: ContactNonceSource> RustCryptoContactProtection<N> {
         );
         let ciphertext = cipher
             .encrypt(
-                XNonce::from_slice(&nonce),
+                &aead_nonce,
                 Payload {
                     msg: request.normalized_value().expose().as_bytes(),
                     aad: &aad,

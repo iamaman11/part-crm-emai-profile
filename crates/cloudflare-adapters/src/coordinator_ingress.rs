@@ -34,7 +34,7 @@ use session_domain::coordinator::{
 };
 use worker::wasm_bindgen::{JsCast, JsValue};
 use worker::web_sys::WorkerGlobalScope;
-use worker::{Date, Env, Fetch, Headers, Method, Request, RequestInit};
+use worker::{Date, Env, Headers, Method, Request, RequestInit};
 
 pub struct CloudflareCoordinatorClock;
 
