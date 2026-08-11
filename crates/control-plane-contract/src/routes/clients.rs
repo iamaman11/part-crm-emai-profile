@@ -28,6 +28,93 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
         {
             Some(RouteClass::ClientGrantApi)
         }
+        ["api", "v1", "tenants", _, "clients", _, "mail", "search"] if method == "POST" => {
+            Some(RouteClass::ClientMailSearchApi)
+        }
+        ["api", "v1", "tenants", _, "clients", _, "mail", "message"] if method == "POST" => {
+            Some(RouteClass::ClientMailMessageApi)
+        }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify;
+    use crate::RouteClass;
+
+    #[test]
+    fn client_mail_routes_are_exact_and_post_only() {
+        assert_eq!(
+            classify(
+                "POST",
+                &[
+                    "api",
+                    "v1",
+                    "tenants",
+                    "tenant_01",
+                    "clients",
+                    "client_01",
+                    "mail",
+                    "search",
+                ],
+            ),
+            Some(RouteClass::ClientMailSearchApi)
+        );
+        assert_eq!(
+            classify(
+                "POST",
+                &[
+                    "api",
+                    "v1",
+                    "tenants",
+                    "tenant_01",
+                    "clients",
+                    "client_01",
+                    "mail",
+                    "message",
+                ],
+            ),
+            Some(RouteClass::ClientMailMessageApi)
+        );
+
+        for (method, operation) in [
+            ("GET", "search"),
+            ("PUT", "message"),
+            ("POST", "unknown"),
+        ] {
+            assert_eq!(
+                classify(
+                    method,
+                    &[
+                        "api",
+                        "v1",
+                        "tenants",
+                        "tenant_01",
+                        "clients",
+                        "client_01",
+                        "mail",
+                        operation,
+                    ],
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            classify(
+                "POST",
+                &[
+                    "api",
+                    "v2",
+                    "tenants",
+                    "tenant_01",
+                    "clients",
+                    "client_01",
+                    "mail",
+                    "search",
+                ],
+            ),
+            None
+        );
     }
 }
