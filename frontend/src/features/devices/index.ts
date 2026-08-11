@@ -1,0 +1,1 @@
+export { createDevicesRoute } from './route';
