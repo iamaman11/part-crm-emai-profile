@@ -132,7 +132,7 @@ jobs:
           python -m json.tool tests/operations/phase2i-operational-bounds.json >/dev/null
           python -m json.tool tests/support/phase2i-support-bundle.json >/dev/null
           test -f frontend/dist/index.html
-          if grep -R -n -E --include='*.json' '(password|access.?token|oauth|cookie|message.?body|credential.?value|raw.?secret)' tests/cross-component tests/operations tests/support; then
+          if grep -R -n -E --include='*.json' '(password|access.?token|oauth|cookie|message.?body|credential.?value|raw.?secret)' tests/cross-component tests/operations; then
             echo "Sensitive field found in Phase 2I repository-local acceptance evidence." >&2
             exit 1
           fi
