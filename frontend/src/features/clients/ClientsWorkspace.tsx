@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState, type FormEvent } from 'react';
+import { type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import { createClient, getClient, getClientHistory, listClients } from '../../shared/api/endpoints';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
@@ -13,15 +13,16 @@ function field(form: FormData, name: string): string {
   return String(form.get(name) ?? '').trim();
 }
 
-export function ClientsWorkspace() {
+export function ClientsWorkspace({
+  selectedClientId = null,
+  onClientSelected,
+}: {
+  selectedClientId?: string | null;
+  onClientSelected: (clientId: string) => void;
+}) {
   const { tenantId } = useTenant();
   const queryClient = useQueryClient();
-  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const requireTenant = tenantId.length > 0;
-
-  useEffect(() => {
-    setSelectedClientId(null);
-  }, [tenantId]);
 
   const list = useQuery({
     queryKey: ['client-registry', tenantId],
@@ -44,7 +45,7 @@ export function ClientsWorkspace() {
     onSuccess: async (receipt) => {
       await queryClient.invalidateQueries({ queryKey: ['client-registry', tenantId] });
       if (receipt?.resourceId) {
-        setSelectedClientId(receipt.resourceId);
+        onClientSelected(receipt.resourceId);
       }
     },
   });
@@ -61,7 +62,7 @@ export function ClientsWorkspace() {
       <ClientRegistryList
         clients={clients}
         selectedClientId={selectedClientId}
-        onSelect={setSelectedClientId}
+        onSelect={onClientSelected}
       />
 
       <section className="panel">

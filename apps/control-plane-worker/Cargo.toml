@@ -24,6 +24,7 @@ use-cases.workspace = true
 use-cases-clients.workspace = true
 use-cases-devices.workspace = true
 use-cases-notifications.workspace = true
+use-cases-query.workspace = true
 wasm-bindgen.workspace = true
 worker.workspace = true
 

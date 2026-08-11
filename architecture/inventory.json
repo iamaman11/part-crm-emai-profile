@@ -168,6 +168,16 @@
         "authenticated": true
       },
       {
+        "route_class": "MembershipCollectionApi",
+        "capability": "identity",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/members",
+        "example_path": "/api/v1/tenants/tenant_01/members",
+        "authenticated": true
+      },
+      {
         "route_class": "MembershipStatusApi",
         "capability": "identity",
         "methods": [
@@ -255,6 +265,7 @@
         "route_class": "ProfileCollectionApi",
         "capability": "profiles",
         "methods": [
+          "GET",
           "POST"
         ],
         "path_template": "/api/v1/tenants/{tenant_id}/profiles",
@@ -367,6 +378,7 @@
         "route_class": "MailboxBindingCollectionApi",
         "capability": "mailboxes",
         "methods": [
+          "GET",
           "POST"
         ],
         "path_template": "/api/v1/tenants/{tenant_id}/mailboxes",
@@ -555,6 +567,13 @@
       "canonical_source": "crates/control-plane-contract/src/bin/export_query_mail.rs",
       "openapi": "openapi/v1/fragments/query-mail.json",
       "typescript": "frontend/src/shared/api/generated/query-mail.ts",
+      "generator": "scripts/generate-frontend-contracts.py"
+    },
+    {
+      "name": "operator-query-api",
+      "canonical_source": "crates/control-plane-contract/src/bin/export_operator_query.rs",
+      "openapi": "openapi/v1/fragments/operator-query.json",
+      "typescript": "frontend/src/shared/api/generated/operator-query.ts",
       "generator": "scripts/generate-frontend-contracts.py"
     }
   ],

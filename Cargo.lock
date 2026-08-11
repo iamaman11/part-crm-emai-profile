@@ -86,6 +86,7 @@ dependencies = [
  "use-cases-clients",
  "use-cases-devices",
  "use-cases-notifications",
+ "use-cases-query",
  "wasm-bindgen",
  "worker",
 ]

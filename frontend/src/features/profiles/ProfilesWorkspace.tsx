@@ -30,9 +30,15 @@ interface GrantDraft {
   expectedProfileVersion: number;
 }
 
-export function ProfilesWorkspace() {
+export function ProfilesWorkspace({
+  selectedProfileId = null,
+  onProfileSelected,
+}: {
+  selectedProfileId?: string | null;
+  onProfileSelected: (profileId: string) => void;
+}) {
   const { tenantId } = useTenant();
-  const [profileId, setProfileId] = useState('');
+  const [profileId, setProfileId] = useState(selectedProfileId ?? '');
   const [profile, setProfile] = useState<ProfileProjection | null>(null);
   const [generationId, setGenerationId] = useState('');
   const [generation, setGeneration] = useState<GenerationProjection | null>(null);
@@ -42,7 +48,12 @@ export function ProfilesWorkspace() {
     mutationFn: (id: string) => getProfile(tenantId, id),
     onSuccess: (data) => setProfile(data ?? null),
   });
-  const create = useMutation({ mutationFn: (id: string) => createProfile(tenantId, id) });
+  const create = useMutation({
+    mutationFn: (id: string) => createProfile(tenantId, id),
+    onSuccess: (receipt) => {
+      if (receipt?.resourceId) onProfileSelected(receipt.resourceId);
+    },
+  });
   const assign = useMutation({
     mutationFn: (input: { assignmentId: string; clientId: string; reason: string; expectedProfileVersion: number }) =>
       assignProfile(tenantId, profileId, input),
@@ -97,8 +108,18 @@ export function ProfilesWorkspace() {
     onSuccess: (data) => setCoordinator(data ?? null),
   });
 
+  useEffect(() => {
+    const nextProfileId = selectedProfileId ?? '';
+    setProfileId(nextProfileId);
+    setProfile(null);
+    setGenerationId('');
+    setGeneration(null);
+    setCoordinator(null);
+    if (tenantId && nextProfileId) lookup.mutate(nextProfileId);
+  }, [tenantId, selectedProfileId]);
+
   const enabled = tenantId.length > 0;
-  const profileLoaded = enabled && profileId.length > 0;
+  const profileLoaded = enabled && profileId.length > 0 && profile !== null;
 
   return (
     <div className="workspace-grid">
@@ -109,19 +130,17 @@ export function ProfilesWorkspace() {
           className="stack-form"
           onSubmit={(event) => {
             event.preventDefault();
-            const id = field(new FormData(event.currentTarget), 'profileId');
-            setProfileId(id);
-            setProfile(null);
-            setGeneration(null);
-            setCoordinator(null);
-            lookup.mutate(id);
+            onProfileSelected(field(new FormData(event.currentTarget), 'profileId'));
           }}
         >
           <label htmlFor="profile-lookup-id">Profile ID</label>
           <input id="profile-lookup-id" name="profileId" placeholder="profile_..." required disabled={!enabled} />
-          <button type="submit" disabled={!enabled || lookup.isPending}>Lookup profile</button>
+          <button type="submit" disabled={!enabled || lookup.isPending}>Open profile</button>
         </form>
         <StatusMessage state={lookup.error ?? (lookup.isPending ? 'Loading profile…' : null)} />
+        {selectedProfileId && !lookup.isPending && !profile && !lookup.error && (
+          <p>The selected profile is not visible to the active actor.</p>
+        )}
         {profile && (
           <dl className="projection">
             <div><dt>ID</dt><dd>{profile.profileId}</dd></div>

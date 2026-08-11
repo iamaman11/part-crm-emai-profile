@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod client_registry_api;
+pub mod operator_query_api;
 pub mod public_api;
 mod routes;
 
@@ -19,6 +20,7 @@ pub enum RouteClass {
     OwnerTransferApi,
     InvitationCollectionApi,
     InvitationAcceptApi,
+    MembershipCollectionApi,
     MembershipStatusApi,
     ClientCollectionApi,
     ClientResourceApi,
@@ -178,6 +180,11 @@ mod tests {
                 RouteClass::InvitationAcceptApi,
             ),
             (
+                "GET",
+                "/api/v1/tenants/tenant_01/members",
+                RouteClass::MembershipCollectionApi,
+            ),
+            (
                 "PUT",
                 "/api/v1/tenants/tenant_01/members/actor_01/status",
                 RouteClass::MembershipStatusApi,
@@ -234,6 +241,11 @@ mod tests {
             ),
             (
                 "POST",
+                "/api/v1/tenants/tenant_01/profiles",
+                RouteClass::ProfileCollectionApi,
+            ),
+            (
+                "GET",
                 "/api/v1/tenants/tenant_01/profiles",
                 RouteClass::ProfileCollectionApi,
             ),
@@ -317,6 +329,11 @@ mod tests {
         let routes = [
             (
                 "POST",
+                "/api/v1/tenants/tenant_01/mailboxes",
+                RouteClass::MailboxBindingCollectionApi,
+            ),
+            (
+                "GET",
                 "/api/v1/tenants/tenant_01/mailboxes",
                 RouteClass::MailboxBindingCollectionApi,
             ),
@@ -497,7 +514,6 @@ mod tests {
                 "POST",
                 "/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01",
             ),
-            ("GET", "/api/v1/tenants/tenant_01/mailboxes"),
             ("DELETE", "/api/v1/tenants/tenant_01/mailboxes/mailbox_01"),
             (
                 "GET",

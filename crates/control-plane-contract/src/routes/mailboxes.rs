@@ -3,7 +3,7 @@ use crate::RouteClass;
 #[must_use]
 pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
     match segments {
-        ["api", "v1", "tenants", _, "mailboxes"] if method == "POST" => {
+        ["api", "v1", "tenants", _, "mailboxes"] if matches!(method, "GET" | "POST") => {
             Some(RouteClass::MailboxBindingCollectionApi)
         }
         [

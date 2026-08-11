@@ -1,6 +1,6 @@
 use crate::query::{QueryPage, QueryPageRequest, QueryPortError};
 use core::future::Future;
-use mailbox_domain::{MailboxBindingStatus, MailboxProvider};
+pub use mailbox_domain::{MailboxBindingStatus, MailboxProvider};
 use profile_platform_primitives::{ActorContext, AggregateVersion, MailboxBindingId};
 
 #[derive(Clone, Debug, Eq, PartialEq)]

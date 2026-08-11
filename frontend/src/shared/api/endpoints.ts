@@ -10,6 +10,11 @@ import type {
   ClientUpdateRequest,
 } from './generated/client-registry';
 import type {
+  MailboxListPageDto,
+  MemberListPageDto,
+  ProfileListPageDto,
+} from './generated/operator-query';
+import type {
   ActorSession,
   ClientProjection,
   CoordinatorResponse,
@@ -33,6 +38,15 @@ function segment(value: string): string {
     throw new TypeError('Opaque identifiers cannot contain path separators');
   }
   return encodeURIComponent(value);
+}
+
+function pagedPath(path: string, cursor?: string | null, limit = 50): string {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new RangeError('Query page size must be an integer between 1 and 100');
+  }
+  const search = new URLSearchParams({ limit: String(limit) });
+  if (cursor) search.set('cursor', cursor);
+  return `${path}?${search.toString()}`;
 }
 
 async function mutationBody<T extends Record<string, unknown>>(body: T): Promise<T & { requestDigest: string }> {
@@ -84,6 +98,18 @@ export function acceptInvitation(
   input: { identityId: string; actorId: string },
 ): Promise<MutationReceipt | undefined> {
   return mutate(`/api/v1/tenants/${segment(tenantId)}/invitations/${segment(invitationId)}/accept`, tenantId, 'POST', input);
+}
+
+export function listMembers(
+  tenantId: string,
+  signal?: AbortSignal,
+  cursor?: string | null,
+  limit = 50,
+): Promise<MemberListPageDto | undefined> {
+  return requestJson<MemberListPageDto>(
+    pagedPath(`/api/v1/tenants/${segment(tenantId)}/members`, cursor, limit),
+    { tenantId, signal },
+  );
 }
 
 export function updateMembershipStatus(
@@ -192,6 +218,18 @@ export function setClientGrant(
   );
 }
 
+export function listProfiles(
+  tenantId: string,
+  signal?: AbortSignal,
+  cursor?: string | null,
+  limit = 50,
+): Promise<ProfileListPageDto | undefined> {
+  return requestJson<ProfileListPageDto>(
+    pagedPath(`/api/v1/tenants/${segment(tenantId)}/profiles`, cursor, limit),
+    { tenantId, signal },
+  );
+}
+
 export function getProfile(tenantId: string, profileId: string): Promise<ProfileProjection | undefined> {
   return requestJson<ProfileProjection>(`/api/v1/tenants/${segment(tenantId)}/profiles/${segment(profileId)}`, { tenantId });
 }
@@ -283,6 +321,18 @@ export function quarantineGeneration(
     tenantId,
     'POST',
     { expectedGenerationVersion },
+  );
+}
+
+export function listMailboxes(
+  tenantId: string,
+  signal?: AbortSignal,
+  cursor?: string | null,
+  limit = 50,
+): Promise<MailboxListPageDto | undefined> {
+  return requestJson<MailboxListPageDto>(
+    pagedPath(`/api/v1/tenants/${segment(tenantId)}/mailboxes`, cursor, limit),
+    { tenantId, signal },
   );
 }
 

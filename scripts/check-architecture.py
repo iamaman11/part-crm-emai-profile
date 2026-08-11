@@ -109,6 +109,7 @@ FORBIDDEN_DEPENDENCIES = {
 
 DEPENDENCY_SECTIONS = ("dependencies", "dev-dependencies", "build-dependencies")
 PHASE2G_POLICY = Path("scripts/check-phase2g-realtime-boundaries.py")
+PHASE2H_POLICY = Path("scripts/check-phase2h-ui-boundaries.py")
 
 
 def dependency_names(document: dict[str, object]) -> set[str]:
@@ -127,13 +128,13 @@ def dependency_names(document: dict[str, object]) -> set[str]:
     return names
 
 
-def check_phase2g_policy(root: Path) -> list[str]:
-    policy = root / PHASE2G_POLICY
+def check_policy(root: Path, policy_path: Path, label: str) -> list[str]:
+    policy = root / policy_path
     if not policy.is_file():
-        return [f"missing permanent Phase 2G realtime policy: {policy}"]
+        return [f"missing permanent {label} policy: {policy}"]
 
     errors: list[str] = []
-    for extra_args, label in (((), "policy"), (("--self-test",), "negative fixtures")):
+    for extra_args, mode in (((), "policy"), (("--self-test",), "negative fixtures")):
         result = subprocess.run(
             [sys.executable, str(policy), "--root", str(root), *extra_args],
             check=False,
@@ -142,7 +143,7 @@ def check_phase2g_policy(root: Path) -> list[str]:
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()
-            errors.append(f"Phase 2G realtime {label} failed: {detail}")
+            errors.append(f"{label} {mode} failed: {detail}")
     return errors
 
 
@@ -188,7 +189,8 @@ def check(root: Path) -> list[str]:
             provenance_self_test(plan, ledger)
         except (OSError, ValueError) as error:
             errors.append(f"accepted phase provenance validation failed: {error}")
-        errors.extend(check_phase2g_policy(root))
+        errors.extend(check_policy(root, PHASE2G_POLICY, "Phase 2G realtime"))
+        errors.extend(check_policy(root, PHASE2H_POLICY, "Phase 2H UI"))
     return errors
 
 
