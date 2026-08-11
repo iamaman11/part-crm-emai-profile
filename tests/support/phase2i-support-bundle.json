@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "phase": "Phase 2I",
+  "scope": "repository-local-support-evidence",
+  "productionReady": false,
+  "releaseState": "in-progress",
+  "sections": {
+    "capabilitySummary": {
+      "allowedFields": ["capability_class", "result_class", "status_class"]
+    },
+    "failureSummary": {
+      "allowedFields": ["operation_class", "dependency_class", "reason_class", "result_class"]
+    },
+    "recoverySummary": {
+      "allowedFields": ["dependency_class", "operation_class", "result_class"]
+    },
+    "operationalSummary": {
+      "allowedFields": ["metric_class", "status_class", "result_class"]
+    }
+  },
+  "forbiddenDataClasses": [
+    "tenant_identifier",
+    "actor_identifier",
+    "identity_identifier",
+    "client_identifier",
+    "profile_identifier",
+    "mailbox_identifier",
+    "message_identifier",
+    "device_identifier",
+    "job_identifier",
+    "email_address",
+    "mail_subject",
+    "mail_body",
+    "contact_plaintext",
+    "credential_material",
+    "access_token",
+    "cookie_material",
+    "browser_storage",
+    "decrypted_generation_bytes",
+    "generation_key_material",
+    "raw_database_export"
+  ],
+  "evidenceSources": [
+    "tests/cross-component/phase2i-release-candidate.json",
+    "tests/operations/phase2i-operational-bounds.json",
+    "docs/PHASE2I_DISASTER_RECOVERY_RUNBOOK.md"
+  ]
+}
