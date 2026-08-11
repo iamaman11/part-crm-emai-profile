@@ -112,7 +112,7 @@ GENERATED_CONTRACTS = [
     {
         "name": "profile-generation-api",
         "canonical_source": "crates/control-plane-contract/src/profile_generation_api.rs",
-        "openapi": "openapi/v1/fragments/profile-generation.json",
+        "openapi": "contracts/generated/profile-generation.openapi.json",
         "typescript": "frontend/src/shared/api/generated/profile-generation.ts",
         "generator": "scripts/generate-frontend-contracts.py",
     },
