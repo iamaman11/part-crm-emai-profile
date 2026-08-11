@@ -179,7 +179,10 @@ async fn bind_browser_execution(
     role: MembershipRole,
     binding_id: MailboxBindingId,
 ) -> Result<Response> {
-    let body = match request.json::<BindBrowserMailboxExecutionRequestDto>().await {
+    let body = match request
+        .json::<BindBrowserMailboxExecutionRequestDto>()
+        .await
+    {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
@@ -373,9 +376,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let digest = "b".repeat(64);
         let valid = format!(r#"{{"profileId":"profile_01JTRANSPORT","requestDigest":"{digest}"}}"#);
-        assert!(
-            serde_json::from_str::<BindBrowserMailboxExecutionRequestDto>(&valid).is_ok()
-        );
+        assert!(serde_json::from_str::<BindBrowserMailboxExecutionRequestDto>(&valid).is_ok());
         for forbidden in [
             "deviceId",
             "generationId",
