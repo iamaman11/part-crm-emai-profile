@@ -73,6 +73,11 @@ PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
         "notification-domain",
         "application-ports",
     },
+    "use-cases-query": {
+        "profile-platform-primitives",
+        "client-domain",
+        "application-ports",
+    },
     "use-cases": {
         "profile-platform-primitives",
         "contracts",
@@ -104,6 +109,10 @@ FORBIDDEN_DEPENDENCIES = {
     "rusqlite",
 }
 DEPENDENCY_SECTIONS = ("dependencies", "dev-dependencies", "build-dependencies")
+NEGATIVE_PURE_FIXTURES = (
+    Path("tests/architecture/fixtures/forbidden-domain"),
+    Path("tests/architecture/fixtures/forbidden-query"),
+)
 PHASE2G_POLICY = Path("scripts/check-phase2g-realtime-boundaries.py")
 PHASE2H_POLICY = Path("scripts/check-phase2h-ui-boundaries.py")
 PHASE2I_POLICY = Path("scripts/check-phase2i-hardening.py")
@@ -193,6 +202,19 @@ def check(root: Path) -> list[str]:
         )
         for policy, label in policies:
             errors.extend(check_policy(root, policy, label))
+        errors.extend(check_negative_pure_fixtures(root))
+    return errors
+
+
+def check_negative_pure_fixtures(root: Path) -> list[str]:
+    errors: list[str] = []
+    for relative in NEGATIVE_PURE_FIXTURES:
+        fixture = root / relative
+        if not fixture.is_dir():
+            errors.append(f"missing architecture negative fixture: {relative}")
+            continue
+        if not check(fixture):
+            errors.append(f"architecture negative fixture unexpectedly passed: {relative}")
     return errors
 
 
