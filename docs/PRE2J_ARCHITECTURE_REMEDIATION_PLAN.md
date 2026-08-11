@@ -2,7 +2,7 @@
 
 **Status:** ACTIVE / BLOCKING PHASE 2J  
 **Audit base:** accepted `main` at `d8b5bd07b99596d066fa2af976b263d41b5e2f3c`  
-**Current accepted base:** `d37a512309b97e6342cf357663dec4553b7b1fb1` after R4b Mailbox via PR #181  
+**Current accepted base:** `a085bc58ed6e9c839e35b38c0fd42d8f1e7348d1` after R4b provenance PR #182; R4b implementation squash remains `d37a512309b97e6342cf357663dec4553b7b1fb1`  
 **Production readiness:** remains `false`  
 **Rule:** Phase 2J External evidence work must not begin while any repository-owned P1 below is open.
 
@@ -92,12 +92,12 @@ A first remediation attempt deliberately exposed why component schemas cannot be
 
 ### R4 — P1 — Public contract authority is incomplete; handwritten frontend DTOs remain — ACTIVE
 
-**Accepted batches:** R4a — Profile + Generation via issue #178 / PR #179; accepted `main` squash `3443bf390cd5ca337be62736c7764ff0f3065f49`; R4b — Mailbox via issue #180 / PR #181; accepted `main` squash `d37a512309b97e6342cf357663dec4553b7b1fb1`.  
-**Next batch:** R4c — Coordinator from accepted R4b `main` at `d37a512309b97e6342cf357663dec4553b7b1fb1`.
+**Accepted batches:** R4a — Profile + Generation via issue #178 / PR #179; accepted `main` squash `3443bf390cd5ca337be62736c7764ff0f3065f49`; R4b — Mailbox via issue #180 / PR #181; accepted implementation squash `d37a512309b97e6342cf357663dec4553b7b1fb1` from exact source head `2f961222935c38e664bb42f2cf4151574b191d23`, with provenance recorded through PR #182 at `a085bc58ed6e9c839e35b38c0fd42d8f1e7348d1`.  
+**Active batch:** R4c — Coordinator via issue #183 on `audit/coordinator-contract-authority`, branched from accepted `main` `a085bc58ed6e9c839e35b38c0fd42d8f1e7348d1`.
 
 **Finding**
 
-Rust -> OpenAPI -> generated TypeScript is canonical only for migrated surfaces. Profile, generation, mailbox and coordinator DTOs coexist as handwritten definitions in `frontend/src/shared/api/types.ts` and handwritten request shapes in the central endpoint facade. That creates multiple wire-contract authorities and will compound as Billing, Orders, Projects and other CRM capabilities are added.
+Rust -> OpenAPI -> generated TypeScript is canonical only for migrated surfaces. At the current accepted `main`, Coordinator transport DTOs remain handwritten in Worker ingress and the SPA, while the Coordinator command endpoint accepts an untyped `Record<string, unknown>`. That leaves a duplicate wire-contract authority after Profile/Generation and Mailbox have already been migrated, and will compound as Billing, Orders, Projects and other CRM capabilities are added.
 
 **Remediation**
 
@@ -105,7 +105,9 @@ Migrate legacy public surfaces capability-by-capability, not into one giant cont
 
 - R4a migrated Profile + Generation transport DTOs to `crates/control-plane-contract/src/profile_generation_api.rs`, deterministic OpenAPI schema fragment and generated TypeScript;
 - R4b migrated Mailbox transport DTOs in a separate PR from accepted R4a `main`;
-- R4c will migrate Coordinator transport DTOs in a separate PR from accepted R4b `main` at `d37a512309b97e6342cf357663dec4553b7b1fb1`;
+- R4c migrates Coordinator public ingress/egress DTOs from Worker-local/frontend handwritten authority to a bounded Rust source, deterministic schema-only OpenAPI and generated TypeScript, while keeping Durable Object/storage DTOs internal;
+- preserve Coordinator unknown-field-tolerant request parsing and existing authorization/application validation/error sequencing instead of importing Mailbox strictness;
+- generate the tagged Coordinator command union from the Rust-owned schema through a reusable deterministic discriminated-union generator primitive rather than a handwritten TypeScript escape hatch;
 - replace Worker-local and SPA handwritten wire DTOs with generated/canonical types while keeping domain-to-wire mapping at the transport boundary;
 - retain the accepted `openapi/v1/openapi.json` as the operation/security compatibility document while bounded Rust fragments own migrated DTO schemas and avoid duplicate path/method entries;
 - keep frontend-local view models only when they are presentation models rather than transport DTOs;
@@ -237,7 +239,7 @@ Use multiple bounded PRs. The expected sequence is:
 1. **Guardrail integrity** — R1. Accepted via PR #173 / `88d4412084f85b3512ce28a3bec637fc6e687151`.
 2. **Canonical routing** — R2. Accepted via PR #175 / `443bd39a9589eb0fb75f305043a2acc1b93314a1`.
 3. **Compatibility semantics** — R3. Accepted via PR #177 / `d3bbd49dde9129e52b7c72bff053ce82a325bc0b`.
-4. **Contract authority migration** — R4a Profile + Generation accepted via PR #179 / `3443bf390cd5ca337be62736c7764ff0f3065f49`; R4b Mailbox accepted via issue #180 / PR #181 / `d37a512309b97e6342cf357663dec4553b7b1fb1`; R4c Coordinator follows from accepted R4b `main`.
+4. **Contract authority migration** — R4a Profile + Generation accepted via PR #179 / `3443bf390cd5ca337be62736c7764ff0f3065f49`; R4b Mailbox accepted via issue #180 / PR #181 / implementation squash `d37a512309b97e6342cf357663dec4553b7b1fb1`, provenance PR #182 / current accepted `main` `a085bc58ed6e9c839e35b38c0fd42d8f1e7348d1`; R4c Coordinator is active via issue #183 from that exact accepted base.
 5. **Application ownership cleanup** — R5.
 6. **Frontend API modularization** — R6, preferably aligned with R4 capability migrations rather than a mechanical rewrite.
 7. **Current documentation/security authority** — R7.

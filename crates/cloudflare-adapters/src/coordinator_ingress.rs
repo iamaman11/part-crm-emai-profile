@@ -29,7 +29,8 @@ use profile_platform_primitives::{
 };
 use serde::{Deserialize, Serialize};
 use session_domain::coordinator::{
-    CoordinatorCommand, CoordinatorCommandEnvelope, ReleaseDisposition, coordinator_object_name,
+    CoordinatorCommand, CoordinatorCommandEnvelope, CoordinatorStatus, ReleaseDisposition,
+    coordinator_object_name,
 };
 use worker::wasm_bindgen::{JsCast, JsValue};
 use worker::web_sys::WorkerGlobalScope;
@@ -286,7 +287,7 @@ fn coordinator_projection(value: &CoordinatorProjectionSnapshot) -> CoordinatorP
     CoordinatorProjection {
         tenant_id: value.tenant_id().as_str().to_owned(),
         profile_id: value.profile_id().as_str().to_owned(),
-        status: value.status().to_owned(),
+        status: coordinator_status_name(value.status()).to_owned(),
         version: value.version().value(),
         sequence: value.sequence(),
         next_epoch: value.next_epoch(),
@@ -304,6 +305,16 @@ fn coordinator_projection(value: &CoordinatorProjectionSnapshot) -> CoordinatorP
             .pending_launch_intent_id()
             .map(|item| item.as_str().to_owned()),
         pending_intent_expires_at_ms: value.pending_intent_expires_at().map(UnixMillis::value),
+    }
+}
+
+const fn coordinator_status_name(value: CoordinatorStatus) -> &'static str {
+    match value {
+        CoordinatorStatus::Idle => "idle",
+        CoordinatorStatus::Active => "active",
+        CoordinatorStatus::Draining => "draining",
+        CoordinatorStatus::Dirty => "dirty",
+        CoordinatorStatus::Uncertain => "uncertain",
     }
 }
 
@@ -396,7 +407,7 @@ fn runtime_result(
             profile_platform_primitives::TenantId::parse(projection.tenant_id)
                 .map_err(|_| integrity_failure())?,
             ProfileId::parse(projection.profile_id).map_err(|_| integrity_failure())?,
-            projection.status,
+            runtime_status(&projection.status)?,
             AggregateVersion::new(projection.version).map_err(|_| integrity_failure())?,
             projection.sequence,
             projection.next_epoch,
@@ -436,6 +447,17 @@ fn runtime_outcome(value: &str) -> Result<CoordinatorRuntimeOutcome, Coordinator
         "launch_intent_expired" => Ok(CoordinatorRuntimeOutcome::LaunchIntentExpired),
         "recovered" => Ok(CoordinatorRuntimeOutcome::Recovered),
         "no_change" => Ok(CoordinatorRuntimeOutcome::NoChange),
+        _ => Err(integrity_failure()),
+    }
+}
+
+fn runtime_status(value: &str) -> Result<CoordinatorStatus, CoordinatorIngressPortError> {
+    match value {
+        "idle" => Ok(CoordinatorStatus::Idle),
+        "active" => Ok(CoordinatorStatus::Active),
+        "draining" => Ok(CoordinatorStatus::Draining),
+        "dirty" => Ok(CoordinatorStatus::Dirty),
+        "uncertain" => Ok(CoordinatorStatus::Uncertain),
         _ => Err(integrity_failure()),
     }
 }

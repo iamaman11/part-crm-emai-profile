@@ -426,7 +426,7 @@ export function getCoordinator(tenantId: string, profileId: string): Promise<Coo
 export function commandCoordinator(
   tenantId: string,
   profileId: string,
-  input: Record<string, unknown>,
+  input: import('./generated/coordinator').CoordinatorCommandRequestDto,
 ): Promise<CoordinatorResponse | undefined> {
   return requestJson<CoordinatorResponse>(
     `/api/v1/tenants/${segment(tenantId)}/profiles/${segment(profileId)}/coordinator`,

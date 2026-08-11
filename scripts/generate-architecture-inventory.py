@@ -123,6 +123,13 @@ GENERATED_CONTRACTS = [
         "typescript": "frontend/src/shared/api/generated/mailbox.ts",
         "generator": "scripts/generate-frontend-contracts.py",
     },
+    {
+        "name": "coordinator-api",
+        "canonical_source": "crates/control-plane-contract/src/coordinator_api.rs",
+        "openapi": "contracts/generated/coordinator.openapi.json",
+        "typescript": "frontend/src/shared/api/generated/coordinator.ts",
+        "generator": "scripts/generate-frontend-contracts.py",
+    },
 ]
 
 REQUIRED_INDEX_LINKS = [
@@ -162,7 +169,7 @@ def migration_files() -> list[str]:
 
 def route_class_variants() -> set[str]:
     text = CONTRACT_LIB.read_text(encoding="utf-8")
-    match = re.search(r"pub enum RouteClass\s*\{(?P<body>.*?)\n\}", text, re.DOTALL)
+    match = re.search(r"pub enum RouteClass\s*\{(?P<body>.*?)\}", text, re.DOTALL)
     if match is None:
         raise SystemExit("could not locate RouteClass enum")
     return set(re.findall(r"^\s*([A-Za-z][A-Za-z0-9_]*)\s*,\s*$", match.group("body"), re.MULTILINE))

@@ -39,12 +39,17 @@ MAILBOX_OPENAPI_PATH = ROOT / "contracts" / "generated" / "mailbox.openapi.json"
 MAILBOX_TYPESCRIPT_PATH = (
     ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "mailbox.ts"
 )
+COORDINATOR_OPENAPI_PATH = ROOT / "contracts" / "generated" / "coordinator.openapi.json"
+COORDINATOR_TYPESCRIPT_PATH = (
+    ROOT / "frontend" / "src" / "shared" / "api" / "generated" / "coordinator.ts"
+)
 SOURCE_PATH = "crates/control-plane-contract/src/public_api.rs"
 CLIENT_REGISTRY_SOURCE_PATH = "crates/control-plane-contract/src/client_registry_api.rs"
 QUERY_MAIL_SOURCE_PATH = "crates/control-plane-contract/src/bin/export_query_mail.rs"
 OPERATOR_QUERY_SOURCE_PATH = "crates/control-plane-contract/src/bin/export_operator_query.rs"
 PROFILE_GENERATION_SOURCE_PATH = "crates/control-plane-contract/src/profile_generation_api.rs"
 MAILBOX_SOURCE_PATH = "crates/control-plane-contract/src/mailbox_api.rs"
+COORDINATOR_SOURCE_PATH = "crates/control-plane-contract/src/coordinator_api.rs"
 GENERATOR_PATH = "scripts/generate-frontend-contracts.py"
 
 
@@ -88,7 +93,11 @@ def schema_type(schema: dict[str, Any], *, support_nullable: bool = False) -> st
     else:
         schema_kind = schema.get("type")
         if schema_kind == "string":
-            rendered = "string"
+            raw_values = schema.get("enum")
+            if isinstance(raw_values, list) and len(raw_values) == 1 and isinstance(raw_values[0], str):
+                rendered = json.dumps(raw_values[0], ensure_ascii=False)
+            else:
+                rendered = "string"
         elif schema_kind in {"integer", "number"}:
             rendered = "number"
         elif schema_kind == "boolean":
@@ -165,6 +174,82 @@ def render_object(
     return lines
 
 
+def render_one_of(
+    name: str,
+    schema: dict[str, Any],
+    *,
+    support_nullable: bool = False,
+) -> list[str]:
+    variants = schema.get("oneOf")
+    discriminator = schema.get("discriminator")
+    if not isinstance(variants, list) or not variants or not all(
+        isinstance(value, dict) for value in variants
+    ):
+        raise ValueError(f"oneOf schema {name} has invalid variants")
+    if not isinstance(discriminator, dict):
+        raise ValueError(f"oneOf schema {name} is missing discriminator")
+    discriminator_name = discriminator.get("propertyName")
+    if not isinstance(discriminator_name, str) or not discriminator_name:
+        raise ValueError(f"oneOf schema {name} has invalid discriminator")
+
+    lines = [f"export type {name} ="]
+    observed_values: set[str] = set()
+    for index, variant in enumerate(variants):
+        if variant.get("type") != "object":
+            raise ValueError(f"oneOf schema {name} variant {index} must be an object")
+        properties = variant.get("properties")
+        raw_required = variant.get("required", [])
+        if not isinstance(properties, dict):
+            raise ValueError(f"oneOf schema {name} variant {index} has no properties")
+        if not isinstance(raw_required, list) or not all(
+            isinstance(value, str) for value in raw_required
+        ):
+            raise ValueError(f"oneOf schema {name} variant {index} has invalid required list")
+        required = set(raw_required)
+        if discriminator_name not in required:
+            raise ValueError(
+                f"oneOf schema {name} variant {index} must require discriminator {discriminator_name}"
+            )
+        discriminator_schema = properties.get(discriminator_name)
+        if not isinstance(discriminator_schema, dict):
+            raise ValueError(
+                f"oneOf schema {name} variant {index} is missing discriminator property"
+            )
+        discriminator_values = discriminator_schema.get("enum")
+        if (
+            discriminator_schema.get("type") != "string"
+            or not isinstance(discriminator_values, list)
+            or len(discriminator_values) != 1
+            or not isinstance(discriminator_values[0], str)
+        ):
+            raise ValueError(
+                f"oneOf schema {name} variant {index} discriminator must be one string literal"
+            )
+        discriminator_value = discriminator_values[0]
+        if discriminator_value in observed_values:
+            raise ValueError(
+                f"oneOf schema {name} has duplicate discriminator value {discriminator_value}"
+            )
+        observed_values.add(discriminator_value)
+
+        fields: list[str] = []
+        for field_name in sorted(properties):
+            field_schema = properties[field_name]
+            if not isinstance(field_schema, dict):
+                raise ValueError(
+                    f"property {name} variant {index}.{field_name} has invalid schema"
+                )
+            optional = "" if field_name in required else "?"
+            fields.append(
+                f"{property_name(field_name)}{optional}: "
+                f"{schema_type(field_schema, support_nullable=support_nullable)}"
+            )
+        lines.append(f"  | {{ {'; '.join(fields)} }}")
+    lines[-1] += ";"
+    lines.append("")
+    return lines
+
+
 def render_typescript(
     document: dict[str, Any],
     *,
@@ -193,6 +278,10 @@ def render_typescript(
             raise ValueError(f"schema {name} is invalid")
         if schema.get("type") == "string" and "enum" in schema:
             lines.extend(render_enum(name, schema))
+        elif "oneOf" in schema:
+            lines.extend(
+                render_one_of(name, schema, support_nullable=support_nullable)
+            )
         elif schema.get("type") == "object":
             lines.extend(
                 render_object(name, schema, support_nullable=support_nullable)
@@ -201,6 +290,51 @@ def render_typescript(
             raise ValueError(f"top-level schema {name} is unsupported")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def self_test_discriminated_unions() -> None:
+    valid = {
+        "oneOf": [
+            {
+                "type": "object",
+                "required": ["type", "value"],
+                "properties": {
+                    "type": {"type": "string", "enum": ["alpha"]},
+                    "value": {"type": "integer"},
+                },
+            },
+            {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                    "type": {"type": "string", "enum": ["beta"]},
+                },
+            },
+        ],
+        "discriminator": {"propertyName": "type"},
+    }
+    rendered = "\n".join(render_one_of("Tagged", valid))
+    if 'type: "alpha"' not in rendered or 'type: "beta"' not in rendered:
+        raise ValueError("discriminated union self-test lost literal discriminator values")
+
+    invalid = {
+        "oneOf": [
+            {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                    "type": {"type": "string", "enum": ["alpha", "beta"]},
+                },
+            }
+        ],
+        "discriminator": {"propertyName": "type"},
+    }
+    try:
+        render_one_of("InvalidTagged", invalid)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("discriminated union negative self-test accepted a non-literal discriminator")
 
 
 def print_diff(path: Path, actual: str, expected: str) -> None:
@@ -253,6 +387,8 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="fail if committed generated files differ")
     args = parser.parse_args()
 
+    self_test_discriminated_unions()
+
     base_document, base_openapi = run_export("export_openapi")
     base_typescript = render_typescript(base_document, source_path=SOURCE_PATH)
     canonical_registry, _ = run_export("export_client_registry", "canonical")
@@ -292,6 +428,13 @@ def main() -> int:
         source_path=MAILBOX_SOURCE_PATH,
         support_nullable=True,
     )
+    coordinator, _ = run_export("export_coordinator")
+    coordinator_openapi = compact_json(coordinator)
+    coordinator_typescript = render_typescript(
+        coordinator,
+        source_path=COORDINATOR_SOURCE_PATH,
+        support_nullable=True,
+    )
 
     results = [
         check_or_write(OPENAPI_PATH, base_openapi, args.check),
@@ -326,6 +469,8 @@ def main() -> int:
         ),
         check_or_write(MAILBOX_OPENAPI_PATH, mailbox_openapi, args.check),
         check_or_write(MAILBOX_TYPESCRIPT_PATH, mailbox_typescript, args.check),
+        check_or_write(COORDINATOR_OPENAPI_PATH, coordinator_openapi, args.check),
+        check_or_write(COORDINATOR_TYPESCRIPT_PATH, coordinator_typescript, args.check),
     ]
     if not all(results):
         return 1

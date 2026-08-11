@@ -609,6 +609,13 @@
       "openapi": "contracts/generated/mailbox.openapi.json",
       "typescript": "frontend/src/shared/api/generated/mailbox.ts",
       "generator": "scripts/generate-frontend-contracts.py"
+    },
+    {
+      "name": "coordinator-api",
+      "canonical_source": "crates/control-plane-contract/src/coordinator_api.rs",
+      "openapi": "contracts/generated/coordinator.openapi.json",
+      "typescript": "frontend/src/shared/api/generated/coordinator.ts",
+      "generator": "scripts/generate-frontend-contracts.py"
     }
   ],
   "documentation_authority": {

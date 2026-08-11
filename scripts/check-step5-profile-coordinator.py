@@ -51,9 +51,11 @@ REPOSITORY_REQUIRED = {
         "pub async fn projected_sequence",
     ),
     "apps/control-plane-worker/src/profile_coordinator_ingress.rs": (
+        "control_plane_contract::coordinator_api",
+        "CoordinatorCommandRequestDto",
         "CloudflareCoordinatorIngressApplication",
         "prepare_coordinator_ingress",
-        "request.json::<CoordinatorCommandRequest>()",
+        "request.json::<CoordinatorCommandRequestDto>()",
         "execute_prepared_coordinator_ingress",
     ),
     "apps/control-plane-worker/src/profile_coordinator.rs": (
@@ -168,13 +170,13 @@ def main() -> int:
             transport = transport_path.read_text(encoding="utf-8")
             dispatch_index = transport.find("pub async fn dispatch")
             prepare_index = transport.find("prepare_coordinator_ingress(", dispatch_index)
-            body_index = transport.find("request.json::<CoordinatorCommandRequest>()", dispatch_index)
+            body_index = transport.find("request.json::<CoordinatorCommandRequestDto>()", dispatch_index)
             execute_index = transport.find("execute_prepared_coordinator_ingress(", body_index)
             if min(dispatch_index, prepare_index, body_index, execute_index) < 0 or not (
                 dispatch_index < prepare_index < body_index < execute_index
             ):
                 errors.append(
-                    "coordinator transport must complete visibility preparation before POST body parsing and execution"
+                    "coordinator transport must complete visibility preparation before canonical DTO parsing and execution"
                 )
 
         do_path = root / "apps/control-plane-worker/src/profile_coordinator.rs"

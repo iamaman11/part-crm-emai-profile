@@ -5,6 +5,7 @@ use application_ports::coordinator_ingress::{
     CoordinatorProjectionSnapshot, CoordinatorRuntimeOutcome, CoordinatorRuntimeResult,
 };
 use profile_platform_primitives::{ActorId, CorrelationId, OutboxEventId, TenantId, TenantScope};
+use session_domain::coordinator::CoordinatorStatus;
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
@@ -68,7 +69,7 @@ impl FakePort {
             CoordinatorProjectionSnapshot::new(
                 tenant_id,
                 profile_id,
-                "idle",
+                CoordinatorStatus::Idle,
                 AggregateVersion::INITIAL,
                 0,
                 0,
