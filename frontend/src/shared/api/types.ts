@@ -7,12 +7,20 @@ export type {
   ProblemPayload,
 } from './generated/control-plane';
 
-export interface ProfileProjection {
-  profileId: string;
-  status: string;
-  version: number;
-  linkedClientId: string | null;
-}
+export type {
+  GenerationProjectionDto as GenerationProjection,
+  GenerationStatusDto,
+  ProfileAssignmentRequest,
+  ProfileCreateRequestDto as ProfileCreateRequest,
+  ProfileGenerationVersionRequest,
+  ProfileGrantRequestDto as ProfileGrantRequest,
+  ProfileGrantRoleDto,
+  ProfileProjectionDto as ProfileProjection,
+  ProfileStatusDto,
+  QuarantineGenerationRequest,
+  RegisterGenerationRequest,
+  VerifyGenerationRequest,
+} from './generated/profile-generation';
 
 export interface MailboxBindingProjection {
   bindingId: string;
@@ -30,15 +38,6 @@ export interface MailboxJobProjection {
   providerStatus: string | null;
   boundedItemCount: number;
   version: number;
-}
-
-export interface GenerationProjection {
-  generationId: string;
-  metadataDigest: string;
-  containerDigest: string;
-  status: 'REGISTERED' | 'VERIFIED' | 'QUARANTINED';
-  version: number;
-  verificationReference: string | null;
 }
 
 export interface CoordinatorProjection {

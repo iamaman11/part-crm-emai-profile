@@ -10,6 +10,15 @@ import type {
   ClientUpdateRequest,
 } from './generated/client-registry';
 import type {
+  ProfileAssignmentRequest,
+  ProfileCreateRequestDto,
+  ProfileGenerationVersionRequest,
+  ProfileGrantRequestDto,
+  QuarantineGenerationRequest,
+  RegisterGenerationRequest,
+  VerifyGenerationRequest,
+} from './generated/profile-generation';
+import type {
   MailboxListPageDto,
   MemberListPageDto,
   ProfileListPageDto,
@@ -32,6 +41,13 @@ export type ArchiveClientInput = Omit<ClientArchiveRequest, 'requestDigest'>;
 export type UpsertClientContactInput = Omit<ClientContactUpsertRequest, 'requestDigest'>;
 export type ArchiveClientContactInput = Omit<ClientContactArchiveRequest, 'requestDigest'>;
 export type MergeClientInput = Omit<ClientMergeRequest, 'requestDigest'>;
+export type CreateProfileInput = Omit<ProfileCreateRequestDto, 'requestDigest'>;
+export type AssignProfileInput = Omit<ProfileAssignmentRequest, 'requestDigest'>;
+export type SetProfileGrantInput = Omit<ProfileGrantRequestDto, 'requestDigest'>;
+export type RegisterGenerationInput = Omit<RegisterGenerationRequest, 'requestDigest'>;
+export type VerifyGenerationInput = Omit<VerifyGenerationRequest, 'requestDigest'>;
+export type ChangeGenerationActivationInput = Omit<ProfileGenerationVersionRequest, 'requestDigest'>;
+export type QuarantineGenerationInput = Omit<QuarantineGenerationRequest, 'requestDigest'>;
 
 function segment(value: string): string {
   if (!value || value.includes('/') || value.includes('\\')) {
@@ -235,13 +251,14 @@ export function getProfile(tenantId: string, profileId: string): Promise<Profile
 }
 
 export function createProfile(tenantId: string, profileId: string): Promise<MutationReceipt | undefined> {
-  return mutate(`/api/v1/tenants/${segment(tenantId)}/profiles`, tenantId, 'POST', { profileId });
+  const input: CreateProfileInput = { profileId };
+  return mutate(`/api/v1/tenants/${segment(tenantId)}/profiles`, tenantId, 'POST', input);
 }
 
 export function assignProfile(
   tenantId: string,
   profileId: string,
-  input: { assignmentId: string; clientId: string; reason: string; expectedProfileVersion: number },
+  input: AssignProfileInput,
 ): Promise<MutationReceipt | undefined> {
   return mutate(`/api/v1/tenants/${segment(tenantId)}/profiles/${segment(profileId)}/assignment`, tenantId, 'PUT', input);
 }
@@ -250,7 +267,7 @@ export function setProfileGrant(
   tenantId: string,
   profileId: string,
   actorId: string,
-  input: { role: 'PROFILE_VIEWER' | 'PROFILE_OPERATOR'; reason: string; expectedProfileVersion: number },
+  input: SetProfileGrantInput,
   revoke = false,
 ): Promise<MutationReceipt | undefined> {
   return mutate(
@@ -275,7 +292,7 @@ export function getGeneration(
 export function registerGeneration(
   tenantId: string,
   profileId: string,
-  input: { generationId: string; objectKey: string; metadataDigest: string; containerDigest: string },
+  input: RegisterGenerationInput,
 ): Promise<MutationReceipt | undefined> {
   return mutate(`/api/v1/tenants/${segment(tenantId)}/profiles/${segment(profileId)}/generations`, tenantId, 'POST', input);
 }
@@ -284,7 +301,7 @@ export function verifyGeneration(
   tenantId: string,
   profileId: string,
   generationId: string,
-  input: { expectedGenerationVersion: number; verificationReference: string },
+  input: VerifyGenerationInput,
 ): Promise<MutationReceipt | undefined> {
   return mutate(
     `/api/v1/tenants/${segment(tenantId)}/profiles/${segment(profileId)}/generations/${segment(generationId)}/verify`,
@@ -302,11 +319,12 @@ export function changeGenerationActivation(
   activate: boolean,
 ): Promise<MutationReceipt | undefined> {
   const action = activate ? 'activate' : 'deactivate';
+  const input: ChangeGenerationActivationInput = { expectedProfileVersion };
   return mutate(
     `/api/v1/tenants/${segment(tenantId)}/profiles/${segment(profileId)}/generations/${segment(generationId)}/${action}`,
     tenantId,
     'POST',
-    { expectedProfileVersion },
+    input,
   );
 }
 
@@ -316,11 +334,12 @@ export function quarantineGeneration(
   generationId: string,
   expectedGenerationVersion: number,
 ): Promise<MutationReceipt | undefined> {
+  const input: QuarantineGenerationInput = { expectedGenerationVersion };
   return mutate(
     `/api/v1/tenants/${segment(tenantId)}/profiles/${segment(profileId)}/generations/${segment(generationId)}/quarantine`,
     tenantId,
     'POST',
-    { expectedGenerationVersion },
+    input,
   );
 }
 

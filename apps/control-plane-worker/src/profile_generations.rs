@@ -5,9 +5,13 @@ use crate::command_evidence;
 use crate::composition::profile_generation_application;
 use application_ports::generations::{GenerationReadModel, GenerationStatus};
 use control_plane_contract::RouteClass;
+use control_plane_contract::profile_generation_api::{
+    GenerationProjectionDto, GenerationStatusDto, ProfileGenerationVersionRequest,
+    QuarantineGenerationRequest, RegisterGenerationRequest, VerifyGenerationRequest,
+};
+use control_plane_contract::public_api::MutationReceipt;
 use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, AggregateVersion, GenerationId, ProfileId};
-use serde::{Deserialize, Serialize};
 use use_cases::generations::{
     GenerationMutationOutcome, GenerationOperationError, ProfileGenerationVersionCommand,
     QuarantineGenerationCommand, RegisterGenerationCommand, VerifyGenerationCommand,
@@ -169,7 +173,7 @@ async fn get_generation(
 ) -> Result<Response> {
     let application = profile_generation_application(env)?;
     match get_visible_generation(actor, role, &application, profile_id, generation_id).await {
-        Ok(generation) => Response::from_json(&GenerationResponse::from(&generation)),
+        Ok(generation) => Response::from_json(&generation_projection(&generation)),
         Err(GenerationOperationError::NotFound) => {
             neutral_not_found(actor.correlation_id().as_str())
         }
@@ -344,123 +348,54 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
     problem(correlation_id, 400, "invalid_request", "Invalid Request")
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GenerationResponse<'a> {
-    generation_id: &'a str,
-    metadata_digest: &'a str,
-    container_digest: &'a str,
-    status: &'static str,
-    version: u64,
-    verification_reference: Option<&'a str>,
-}
-
-impl<'a> From<&'a GenerationReadModel> for GenerationResponse<'a> {
-    fn from(generation: &'a GenerationReadModel) -> Self {
-        Self {
-            generation_id: generation.generation_id().as_str(),
-            metadata_digest: generation.metadata_digest(),
-            container_digest: generation.container_digest(),
-            status: match generation.status() {
-                GenerationStatus::Registered => "REGISTERED",
-                GenerationStatus::Verified => "VERIFIED",
-                GenerationStatus::Quarantined => "QUARANTINED",
-            },
-            version: generation.version().value(),
-            verification_reference: generation.verification_reference(),
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MutationReceipt<'a> {
-    result_code: &'a str,
-    resource_id: &'a str,
-    aggregate_version: u64,
-}
-
 fn mutation_receipt(outcome: &GenerationMutationOutcome, status: u16) -> Result<Response> {
     Response::from_json(&MutationReceipt {
-        result_code: outcome.result_code(),
-        resource_id: outcome.resource_id(),
+        result_code: outcome.result_code().to_owned(),
+        resource_id: outcome.resource_id().to_owned(),
         aggregate_version: outcome.aggregate_version().value(),
     })
     .map(|response| response.with_status(status))
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RegisterGenerationRequest {
-    generation_id: String,
-    object_key: String,
-    metadata_digest: String,
-    container_digest: String,
-    request_digest: String,
+fn generation_projection(generation: &GenerationReadModel) -> GenerationProjectionDto {
+    GenerationProjectionDto {
+        generation_id: generation.generation_id().as_str().to_owned(),
+        metadata_digest: generation.metadata_digest().to_owned(),
+        container_digest: generation.container_digest().to_owned(),
+        status: generation_status(generation.status()),
+        version: generation.version().value(),
+        verification_reference: generation.verification_reference().map(str::to_owned),
+    }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct VerifyGenerationRequest {
-    expected_generation_version: u64,
-    verification_reference: String,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ProfileGenerationVersionRequest {
-    expected_profile_version: u64,
-    request_digest: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct QuarantineGenerationRequest {
-    expected_generation_version: u64,
-    request_digest: String,
+const fn generation_status(status: GenerationStatus) -> GenerationStatusDto {
+    match status {
+        GenerationStatus::Registered => GenerationStatusDto::Registered,
+        GenerationStatus::Verified => GenerationStatusDto::Verified,
+        GenerationStatus::Quarantined => GenerationStatusDto::Quarantined,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GenerationResponse, MutationReceipt, RegisterGenerationRequest};
+    use super::generation_status;
+    use application_ports::generations::GenerationStatus;
+    use control_plane_contract::profile_generation_api::GenerationStatusDto;
 
     #[test]
-    fn generation_transport_preserves_legacy_shape_and_rejects_unknown_fields()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let valid = r#"{"generationId":"generation_01JTEST","objectKey":"profiles/v1/generation.enc","metadataDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","containerDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requestDigest":"request-digest-01JTEST"}"#;
-        assert!(serde_json::from_str::<RegisterGenerationRequest>(valid).is_ok());
-        let unknown = r#"{"generationId":"generation_01JTEST","objectKey":"profiles/v1/generation.enc","metadataDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","containerDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","requestDigest":"request-digest-01JTEST","password":"forbidden"}"#;
-        assert!(serde_json::from_str::<RegisterGenerationRequest>(unknown).is_err());
-
-        let receipt = serde_json::to_value(MutationReceipt {
-            result_code: "registered",
-            resource_id: "generation_01JTEST",
-            aggregate_version: 1,
-        })?;
-        assert!(receipt.get("resultCode").is_some());
-        assert!(receipt.get("resourceId").is_some());
-        assert!(receipt.get("aggregateVersion").is_some());
-
-        let response = serde_json::to_value(GenerationResponse {
-            generation_id: "generation_01JTEST",
-            metadata_digest: "a",
-            container_digest: "b",
-            status: "VERIFIED",
-            version: 2,
-            verification_reference: Some("review:generation_01"),
-        })?;
-        for key in [
-            "generationId",
-            "metadataDigest",
-            "containerDigest",
-            "status",
-            "version",
-            "verificationReference",
+    fn domain_status_mapping_covers_every_public_generation_status() {
+        for (domain, wire) in [
+            (
+                GenerationStatus::Registered,
+                GenerationStatusDto::Registered,
+            ),
+            (GenerationStatus::Verified, GenerationStatusDto::Verified),
+            (
+                GenerationStatus::Quarantined,
+                GenerationStatusDto::Quarantined,
+            ),
         ] {
-            assert!(response.get(key).is_some(), "missing {key}");
+            assert_eq!(generation_status(domain), wire);
         }
-        assert!(response.get("objectKey").is_none());
-        Ok(())
     }
 }

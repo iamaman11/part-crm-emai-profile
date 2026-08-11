@@ -595,6 +595,13 @@
       "openapi": "openapi/v1/fragments/operator-query.json",
       "typescript": "frontend/src/shared/api/generated/operator-query.ts",
       "generator": "scripts/generate-frontend-contracts.py"
+    },
+    {
+      "name": "profile-generation-api",
+      "canonical_source": "crates/control-plane-contract/src/profile_generation_api.rs",
+      "openapi": "contracts/generated/profile-generation.openapi.json",
+      "typescript": "frontend/src/shared/api/generated/profile-generation.ts",
+      "generator": "scripts/generate-frontend-contracts.py"
     }
   ],
   "documentation_authority": {

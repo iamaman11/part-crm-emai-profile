@@ -60,15 +60,15 @@ Client Mail ingress was dispatched before `control_plane_contract::classify_rout
 - no Client Mail route literal classifier in Worker ingress;
 - permanent route tests fail closed.
 
-### R3 — P1 — Contract compatibility gate can miss breaking OpenAPI/protobuf changes — IN PROGRESS
+### R3 — P1 — Contract compatibility gate can miss breaking OpenAPI/protobuf changes — ACCEPTED
 
-**Active PR:** #177.
+**Accepted main:** squash merge `d3bbd49dde9129e52b7c72bff053ce82a325bc0b` via PR #177.
 
 **Finding**
 
 The previous compatibility checker detected removed paths/properties but did not comprehensively protect schema directionality or protobuf field semantics. In particular, it could miss request-side required-field additions, request enum narrowing, response-side required-field removal, response enum widening, incompatible type/format/reference changes, and protobuf type/cardinality changes.
 
-A first remediation attempt deliberately exposed why component schemas cannot be judged by a direction-free rule: the accepted `Problem` schema is response-only, so adding guaranteed response fields and narrowing values the server may emit are compatible with old consumers even though the same changes would be breaking for a request schema. The permanent policy must therefore classify accepted schemas by request/response use before applying required/enum compatibility rules.
+A first remediation attempt deliberately exposed why component schemas cannot be judged by a direction-free rule: the accepted `Problem` schema is response-only, so adding guaranteed response fields and narrowing values the server may emit are compatible with old consumers even though the same changes would be breaking for a request schema. The permanent policy therefore classifies accepted schemas by request/response use before applying required/enum compatibility rules.
 
 **Remediation**
 
@@ -89,27 +89,42 @@ A first remediation attempt deliberately exposed why component schemas cannot be
 - accepted v1 baseline remains immutable;
 - compatibility gate remains deterministic and provider-independent.
 
-### R4 — P1 — Public contract authority is incomplete; handwritten frontend DTOs remain
+### R4 — P1 — Public contract authority is incomplete; handwritten frontend DTOs remain — ACTIVE
+
+**Active batch:** R4a — Profile + Generation via issue #178 / draft PR #179.
 
 **Finding**
 
-Rust -> OpenAPI -> generated TypeScript is canonical only for migrated surfaces. Profile, generation, mailbox and coordinator DTOs still coexist as handwritten definitions in `frontend/src/shared/api/types.ts` and handwritten request shapes in the central endpoint facade. That creates multiple wire-contract authorities and will compound as Billing, Orders, Projects and other CRM capabilities are added.
+Rust -> OpenAPI -> generated TypeScript is canonical only for migrated surfaces. Profile, generation, mailbox and coordinator DTOs coexist as handwritten definitions in `frontend/src/shared/api/types.ts` and handwritten request shapes in the central endpoint facade. That creates multiple wire-contract authorities and will compound as Billing, Orders, Projects and other CRM capabilities are added.
 
 **Remediation**
 
 Migrate legacy public surfaces capability-by-capability, not into one giant contract file:
 
-- add Rust-owned bounded contract modules/fragments for remaining public UI surfaces;
-- generate deterministic OpenAPI/TypeScript from those modules;
-- replace handwritten wire DTOs with generated types;
+- R4a migrates Profile + Generation transport DTOs to `crates/control-plane-contract/src/profile_generation_api.rs`, deterministic OpenAPI schema fragment and generated TypeScript;
+- R4b will migrate Mailbox transport DTOs in a separate PR from the next accepted `main`;
+- R4c will migrate Coordinator transport DTOs in a separate PR from the next accepted `main`;
+- replace Worker-local and SPA handwritten wire DTOs with generated/canonical types while keeping domain-to-wire mapping at the transport boundary;
+- retain the accepted `openapi/v1/openapi.json` as the operation/security compatibility document while bounded Rust fragments own migrated DTO schemas and avoid duplicate path/method entries;
 - keep frontend-local view models only when they are presentation models rather than transport DTOs;
 - keep compatibility baselines additive and versioned.
 
+**R4a progress**
+
+- Rust-owned Profile/Generation request, projection and enum DTOs exist in `control-plane-contract`;
+- Worker Profile/Generation handlers use canonical DTOs and shared `MutationReceipt` rather than local transport structs;
+- Profile unknown-field tolerance and Generation fail-closed unknown-field behavior are preserved from runtime semantics;
+- deterministic schema-only OpenAPI and TypeScript artifacts are generated from the Rust source without duplicating legacy operation paths;
+- SPA Profile/Generation projections and request-body types are generated rather than handwritten;
+- architecture inventory registers the complete Rust -> OpenAPI -> TypeScript chain;
+- exact-head permanent CI and merge interlocks remain required before R4a can be accepted.
+
 **Acceptance**
 
-- every public HTTP wire DTO used by the SPA has one Rust-owned contract source;
-- handwritten frontend transport interfaces for migrated surfaces are gone;
-- generated-contract freshness gate covers the full accepted public SPA surface.
+- every public HTTP wire DTO used by the SPA has one Rust-owned contract source once R4a/R4b/R4c complete;
+- handwritten frontend transport interfaces for each migrated surface are gone;
+- generated-contract freshness gate covers the full accepted public SPA surface;
+- each R4 batch passes all permanent workflows at exact head before merge.
 
 ### R5 — P1/P2 — Historical `use-cases` compatibility coupling is cemented by CI
 
@@ -208,8 +223,8 @@ Use multiple bounded PRs. The expected sequence is:
 
 1. **Guardrail integrity** — R1. Accepted via PR #173 / `88d4412084f85b3512ce28a3bec637fc6e687151`.
 2. **Canonical routing** — R2. Accepted via PR #175 / `443bd39a9589eb0fb75f305043a2acc1b93314a1`.
-3. **Compatibility semantics** — R3. In progress via PR #177.
-4. **Contract authority migration** — R4, split into multiple capability PRs if needed to keep each reviewable.
+3. **Compatibility semantics** — R3. Accepted via PR #177 / `d3bbd49dde9129e52b7c72bff053ce82a325bc0b`.
+4. **Contract authority migration** — R4a Profile + Generation active via issue #178 / draft PR #179; then R4b Mailbox and R4c Coordinator as separate PRs.
 5. **Application ownership cleanup** — R5.
 6. **Frontend API modularization** — R6, preferably aligned with R4 capability migrations rather than a mechanical rewrite.
 7. **Current documentation/security authority** — R7.
