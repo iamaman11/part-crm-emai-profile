@@ -53,7 +53,7 @@ export interface MailboxJobProjectionDto {
 export const MailboxJobStatusDtoValues = ["SCHEDULED", "QUEUED", "RUNNING", "RETRY_PENDING", "AUTH_REQUIRED", "SUSPENDED", "SUCCEEDED", "FAILED"] as const;
 export type MailboxJobStatusDto = (typeof MailboxJobStatusDtoValues)[number];
 
-export const MailboxProviderDtoValues = ["GMAIL_API", "IMAP", "BROWSER_FALLBACK"] as const;
+export const MailboxProviderDtoValues = ["GMAIL_API", "IMAP", "BROWSER_FALLBACK", "MICROSOFT_GRAPH"] as const;
 export type MailboxProviderDto = (typeof MailboxProviderDtoValues)[number];
 
 export interface RevokeMailboxBindingRequestDto {

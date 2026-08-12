@@ -1,7 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub const MAILBOX_PROVIDERS: [&str; 3] = ["GMAIL_API", "IMAP", "BROWSER_FALLBACK"];
+pub const MAILBOX_PROVIDERS: [&str; 4] = [
+    "GMAIL_API",
+    "IMAP",
+    "BROWSER_FALLBACK",
+    "MICROSOFT_GRAPH",
+];
 pub const MAILBOX_BINDING_STATUSES: [&str; 4] = ["ACTIVE", "AUTH_REQUIRED", "SUSPENDED", "REVOKED"];
 pub const MAILBOX_JOB_STATUSES: [&str; 8] = [
     "SCHEDULED",
@@ -20,6 +25,7 @@ pub enum MailboxProviderDto {
     GmailApi,
     Imap,
     BrowserFallback,
+    MicrosoftGraph,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -279,6 +285,9 @@ mod tests {
         assert_eq!(binding["provider"], "BROWSER_FALLBACK");
         assert_eq!(binding["status"], "AUTH_REQUIRED");
 
+        let graph_provider = serde_json::to_value(MailboxProviderDto::MicrosoftGraph)?;
+        assert_eq!(graph_provider, "MICROSOFT_GRAPH");
+
         let job = serde_json::to_value(MailboxJobProjectionDto {
             job_id: "mailjob_01JTEST".to_owned(),
             status: MailboxJobStatusDto::Scheduled,
@@ -298,6 +307,10 @@ mod tests {
     fn fragment_is_schema_only_and_exposes_complete_status_enums() {
         let document = openapi_fragment();
         assert_eq!(document["paths"], json!({}));
+        assert_eq!(
+            document["components"]["schemas"]["MailboxProviderDto"]["enum"],
+            json!(["GMAIL_API", "IMAP", "BROWSER_FALLBACK", "MICROSOFT_GRAPH"])
+        );
         assert_eq!(
             document["components"]["schemas"]["MailboxBindingStatusDto"]["enum"],
             json!(["ACTIVE", "AUTH_REQUIRED", "SUSPENDED", "REVOKED"])
