@@ -33,7 +33,8 @@ mod tests {
     };
 
     #[test]
-    fn client_create_contract_owns_editor_creator_grant() -> Result<(), Box<dyn std::error::Error>> {
+    fn client_create_contract_owns_editor_creator_grant() -> Result<(), Box<dyn std::error::Error>>
+    {
         let write = ClientCreateWrite::new(
             ClientRecord::create(
                 TenantId::parse("tenant_01JCREATORGRANT")?,
