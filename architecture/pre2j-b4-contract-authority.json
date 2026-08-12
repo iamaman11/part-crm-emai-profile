@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "status": "approved_pending_b4",
+  "decision_base": "14206e42c83fd6f6913e7206abd7560a6213ca55",
+  "tracking_issue": 211,
+  "parent_batch_issue": 209,
+  "umbrella_blocker_issue": 203,
+  "policy": "one_shot_additive_v1_fragment",
+  "allowed_path": "openapi/v1/fragments/mailbox-client-association.json",
+  "rules": {
+    "authority_must_be_accepted_before_use": true,
+    "authority_is_immutable_after_acceptance": true,
+    "allowed_path_must_be_absent_in_base": true,
+    "existing_v1_paths_are_immutable": true,
+    "contracts_baseline_is_immutable": true,
+    "proto_is_immutable": true,
+    "new_major_version_required_for_breaking_change": true
+  }
+}

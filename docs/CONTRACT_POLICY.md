@@ -1,7 +1,7 @@
 # Contract Compatibility Policy
 
 **Статус:** normative v1 policy  
-**Дата:** 2026-08-06
+**Дата:** 2026-08-12
 
 ## 1. Version Roots
 
@@ -106,3 +106,43 @@ Generated web/protobuf clients and rendered OpenAPI JSON are build artifacts and
 not own domain policy. Frontend, Bridge and future CRM adapters consume versioned
 contracts; domain crates remain independent of HTTP, protobuf runtime and provider
 SDK types.
+
+## 7. Pre-2J B4 one-shot additive v1 authority
+
+The Phase 2I release freeze remains the default during the active pre-2J
+product-readiness remediation. Issue #211 is the separately governed versioning
+decision required by the canonical remediation plan for Batch B4.
+
+The accepted machine authority is
+`architecture/pre2j-b4-contract-authority.json`. It permits **one** future
+absent-to-added compatible v1 fragment and nothing else:
+
+`openapi/v1/fragments/mailbox-client-association.json`
+
+This is intentionally not a general v1 thaw and not a new major version. B4 needs
+new unique mailbox-association operations; it does not reinterpret or break an
+accepted v1 operation. Creating a `/api/v2` island only for this additive capability
+would fragment the browser contract without a breaking-change requirement.
+
+Permanent rules:
+
+- the authority must first be accepted on the PR base before the fragment may be
+  added; authority establishment and consumption cannot happen in one PR;
+- once accepted, the machine-authority file is immutable;
+- the allowlisted fragment may be added only while it is absent from the accepted
+  base;
+- after that fragment exists in accepted `main`, it is immutable under this
+  exception and the one-shot authority is consumed;
+- `openapi/v1/openapi.json` and every already-accepted v1 fragment remain
+  byte-immutable during the exception;
+- `contracts/baseline/**` and `proto/**` remain byte-immutable;
+- the baseline is never rewritten merely to admit B4;
+- ordinary compatibility lint/collision checks still apply to the new fragment;
+- any breaking change still requires a new major root or another separately
+  governed migration.
+
+The B4 public surface must remain provider-neutral and must not make mailbox
+association an ACL. Browser DTOs may expose opaque relationship/client/mailbox
+identifiers and relationship version/state needed for bind, rebind and unbind, but
+must not expose credentials, provider tokens, SDK objects, assignment-derived
+permissions or raw protected mail data.

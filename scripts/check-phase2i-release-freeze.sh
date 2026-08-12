@@ -9,24 +9,25 @@ fi
 base_ref="${GITHUB_BASE_REF:?GITHUB_BASE_REF is required for pull requests}"
 git fetch --no-tags --depth=1 origin "${base_ref}"
 
-# Accepted public/versioned contract authority remains frozen throughout the
-# pre-2J product-readiness remediation. D1 is handled separately below because
-# the active remediation explicitly requires new durable authority models while
-# preserving every previously accepted migration byte-for-byte.
-contract_roots=(
-  "openapi/v1"
+# Accepted baseline/protobuf authority remains byte-frozen throughout the pre-2J
+# remediation. Web API v1 is separately checked below because accepted B4
+# authority may permit exactly one absent-to-added additive fragment after that
+# authority itself has first been accepted on the base branch.
+hard_frozen_roots=(
   "proto"
   "contracts/baseline"
 )
 
-if ! git diff --quiet "origin/${base_ref}" -- "${contract_roots[@]}"; then
-  echo "Phase 2I accepted public contract freeze was violated." >&2
-  echo "Frozen contract roots: ${contract_roots[*]}" >&2
-  git diff --stat "origin/${base_ref}" -- "${contract_roots[@]}" >&2
+if ! git diff --quiet "origin/${base_ref}" -- "${hard_frozen_roots[@]}"; then
+  echo "Phase 2I accepted hard-frozen contract authority was violated." >&2
+  echo "Frozen contract roots: ${hard_frozen_roots[*]}" >&2
+  git diff --stat "origin/${base_ref}" -- "${hard_frozen_roots[@]}" >&2
   exit 1
 fi
 
-echo "Phase 2I accepted public contract roots are unchanged."
+echo "Phase 2I accepted baseline/protobuf roots are unchanged."
+python scripts/check-pre2j-b4-contract-authority.py --self-test
+python scripts/check-pre2j-b4-contract-authority.py --base-ref "origin/${base_ref}"
 
 if git diff --quiet "origin/${base_ref}" -- migrations/d1; then
   echo "Accepted D1 migration history is unchanged."
@@ -119,4 +120,4 @@ fi
 python scripts/check-contract-compatibility.py
 python scripts/test-d1-schema.py
 
-echo "Phase 2I public contract freeze and immutable-prefix D1 migration policy are valid."
+echo "Phase 2I public contract freeze, one-shot B4 exception authority, and immutable-prefix D1 migration policy are valid."
