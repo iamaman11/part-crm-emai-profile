@@ -69,7 +69,7 @@ impl MailboxOnboardingApplicationPort for FakeOnboardingPort {
         _onboarding_id: &MailboxOnboardingId,
     ) -> impl Future<Output = Result<Option<MailboxOnboardingContext>, MailboxOnboardingPortError>>
     {
-        ready(Ok(self.context.borrow().clone()))
+        ready(Ok(self.context.borrow().as_ref().cloned()))
     }
 
     fn commit(
