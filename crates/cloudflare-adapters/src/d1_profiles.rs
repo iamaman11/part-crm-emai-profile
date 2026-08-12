@@ -6,6 +6,7 @@ use crate::d1_identity_acl::{
 };
 use crate::d1_identity_queries::{D1IdentityQueryRepository, ProfileProjection};
 use application_ports::CommandExecutionEvidence;
+use application_ports::profile_creation::ProfileCreateGrantSpec;
 use application_ports::profiles::{
     ProfileApplicationPort, ProfileAssignmentApplicationPort, ProfileAssignmentPortError,
     ProfileAssignmentPortErrorClass, ProfileAssignmentWrite, ProfileCreateWrite,
@@ -73,7 +74,12 @@ impl ProfileApplicationPort for D1ProfileApplicationRepository {
             envelope: mutation_envelope(evidence, write.event_payload_json()),
         };
         self.governed
-            .create_profile(actor, mutation)
+            .create_profile(
+                actor,
+                mutation,
+                map_profile_grant_role(write.creator_grant_role()),
+                write.creator_grant_reason(),
+            )
             .await
             .map(|_| ())
             .map_err(map_write_error)
@@ -278,6 +284,11 @@ const fn integrity_failure() -> ProfilePortError {
 }
 
 fn classify_write_failure(message: &str) -> ProfilePortErrorClass {
+    if message.contains("profile_create_membership_not_active")
+        || message.contains("profile_grant_membership_not_active")
+    {
+        return ProfilePortErrorClass::Conflict;
+    }
     if message.contains("UNIQUE constraint failed") {
         return ProfilePortErrorClass::Conflict;
     }
@@ -405,6 +416,14 @@ mod tests {
             classify_write_failure(
                 "UNIQUE constraint failed: profile_create_commands.tenant_id, profile_create_commands.command_id"
             ),
+            ProfilePortErrorClass::Conflict
+        );
+        assert_eq!(
+            classify_write_failure("profile_create_membership_not_active"),
+            ProfilePortErrorClass::Conflict
+        );
+        assert_eq!(
+            classify_write_failure("profile_grant_membership_not_active"),
             ProfilePortErrorClass::Conflict
         );
         assert_eq!(

@@ -89,12 +89,14 @@ REQUIRED_PROFILE_GRANT_APPLICATION_TOKENS = (
 )
 REQUIRED_PROFILE_ADAPTER_TOKENS = (
     "CreateProfileMutation", "AssignProfileMutation", "ProfileGrantMutation", "MutationEnvelope",
-    "create_profile(actor, mutation)", ".assign_profile(actor, mutation)",
+    "ProfileCreateGrantSpec", "map_profile_grant_role(write.creator_grant_role())",
+    "write.creator_grant_reason()", ".create_profile(", ".assign_profile(actor, mutation)",
     ".grant_profile(actor, mutation)", ".revoke_profile_grant(actor, mutation)",
 )
 REQUIRED_GOVERNED_TOKENS = (
     "owner_transfer_commands", "membership_status_commands", "invitation_create_commands",
-    "profile_create_commands", "profile_assignment_commands", "profile_grant_commands",
+    "profile_create_commands", "PROFILE_CREATOR_GRANT", "creator_grant_role.database_value()",
+    "creator_grant_reason", "profile_assignment_commands", "profile_grant_commands",
     "client_grant_commands", "self.database.batch(statements).await",
 )
 REQUIRED_ACCEPTANCE_TOKENS = (
