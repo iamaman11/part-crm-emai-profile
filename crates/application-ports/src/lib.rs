@@ -68,6 +68,7 @@ pub use integration_events::{
     IntegrationEventPortErrorClass, IntegrationEventPublisherPort, IntegrationEventSourcePort,
     NotificationEventPort,
 };
+pub use mailbox_domain::MailboxOnboardingVersion;
 pub use mailboxes::{MailboxObservation, MailboxProviderPort};
 pub use notification_realtime::{
     RealtimeNotificationAuthorizationPort, RealtimeNotificationSinkPort,
