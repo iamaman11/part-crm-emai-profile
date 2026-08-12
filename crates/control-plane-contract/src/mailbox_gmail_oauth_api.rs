@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn public_dtos_reject_credential_and_token_fields() -> Result<(), Box<dyn std::error::Error>> {
         assert!(
-            serde_json::from_str::<StartGmailOAuthRequestDto>(r#"{\"expectedVersion\":1}"#).is_ok()
+            serde_json::from_str::<StartGmailOAuthRequestDto>(r#"{"expectedVersion":1}"#).is_ok()
         );
         for forbidden in [
             "accessToken",
@@ -201,7 +201,7 @@ mod tests {
             "secretHandle",
             "gmailSendScope",
         ] {
-            let invalid = format!(r#"{{\"expectedVersion\":1,\"{forbidden}\":\"forbidden\"}}"#);
+            let invalid = format!(r#"{{"expectedVersion":1,"{forbidden}":"forbidden"}}"#);
             assert!(serde_json::from_str::<StartGmailOAuthRequestDto>(&invalid).is_err());
         }
         let _ = GmailOAuthStartReceiptDto {
