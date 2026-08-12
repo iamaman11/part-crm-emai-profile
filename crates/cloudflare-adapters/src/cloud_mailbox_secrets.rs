@@ -297,9 +297,20 @@ fn contains_imap_line_break(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImapAuthenticationMode, ImapTlsMode, MailboxCredential, map_resolver_status,
-        valid_imap_host,
+        ImapAuthenticationMode, ImapCredential, ImapTlsMode, MailboxCredential,
+        map_resolver_status, valid_imap_host,
     };
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    fn into_imap(credential: MailboxCredential) -> Result<ImapCredential, std::io::Error> {
+        match credential {
+            MailboxCredential::Imap(value) => Ok(value),
+            MailboxCredential::GmailApi(_) => Err(std::io::Error::other(
+                "expected IMAP credential in test fixture",
+            )),
+        }
+    }
 
     #[test]
     fn imap_host_validation_rejects_local_and_literal_targets() {
@@ -318,38 +329,27 @@ mod tests {
     }
 
     #[test]
-    fn password_and_xoauth2_documents_are_mutually_exclusive() {
-        let password: MailboxCredential = serde_json::from_str(
+    fn password_and_xoauth2_documents_are_mutually_exclusive() -> TestResult {
+        let password = into_imap(serde_json::from_str::<MailboxCredential>(
             r#"{"kind":"imap","host":"imap.example.com","port":993,"username":"user@example.com","password":"secret","access_token":null,"authentication_mode":null,"tls":"implicit"}"#,
-        )
-        .expect("legacy password document must parse");
-        let MailboxCredential::Imap(password) = password else {
-            panic!("expected IMAP password credential");
-        };
+        )?)?;
         assert_eq!(
             password.authentication_mode(),
             ImapAuthenticationMode::Password
         );
         assert!(password.validate());
 
-        let xoauth2: MailboxCredential = serde_json::from_str(
+        let xoauth2 = into_imap(serde_json::from_str::<MailboxCredential>(
             r#"{"kind":"imap","host":"outlook.office365.com","port":993,"username":"user@example.com","password":null,"access_token":"opaque-access-token","authentication_mode":"xoauth2","tls":"implicit"}"#,
-        )
-        .expect("XOAUTH2 document must parse");
-        let MailboxCredential::Imap(xoauth2) = xoauth2 else {
-            panic!("expected IMAP XOAUTH2 credential");
-        };
+        )?)?;
         assert_eq!(xoauth2.authentication_mode(), ImapAuthenticationMode::Xoauth2);
         assert!(xoauth2.validate());
 
-        let mixed: MailboxCredential = serde_json::from_str(
+        let mixed = into_imap(serde_json::from_str::<MailboxCredential>(
             r#"{"kind":"imap","host":"outlook.office365.com","port":993,"username":"user@example.com","password":"forbidden","access_token":"opaque-access-token","authentication_mode":"xoauth2","tls":"implicit"}"#,
-        )
-        .expect("mixed shape must parse before validation");
-        let MailboxCredential::Imap(mixed) = mixed else {
-            panic!("expected IMAP mixed credential");
-        };
+        )?)?;
         assert!(!mixed.validate());
+        Ok(())
     }
 
     #[test]
