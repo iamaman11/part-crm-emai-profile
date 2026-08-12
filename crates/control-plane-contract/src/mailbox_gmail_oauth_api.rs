@@ -5,7 +5,6 @@ use serde_json::{Value, json};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartGmailOAuthRequestDto {
     pub expected_version: u64,
-    pub request_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -73,10 +72,9 @@ pub fn openapi_fragment() -> Value {
                 "StartGmailOAuthRequestDto": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["expectedVersion", "requestDigest"],
+                    "required": ["expectedVersion"],
                     "properties": {
-                        "expectedVersion": version_schema(),
-                        "requestDigest": sha256_schema()
+                        "expectedVersion": version_schema()
                     }
                 },
                 "GmailOAuthStartReceiptDto": {
@@ -162,10 +160,6 @@ fn timestamp_schema() -> Value {
     json!({"type": "integer", "minimum": 0})
 }
 
-fn sha256_schema() -> Value {
-    json!({"type": "string", "pattern": "^[0-9a-f]{64}$"})
-}
-
 fn json_response(description: &str, schema: &str) -> Value {
     json!({
         "description": description,
@@ -192,9 +186,7 @@ mod tests {
 
     #[test]
     fn public_dtos_reject_credential_and_token_fields() -> Result<(), Box<dyn std::error::Error>> {
-        let digest = "a".repeat(64);
-        let valid = format!(r#"{{"expectedVersion":1,"requestDigest":"{digest}"}}"#);
-        assert!(serde_json::from_str::<StartGmailOAuthRequestDto>(&valid).is_ok());
+        assert!(serde_json::from_str::<StartGmailOAuthRequestDto>(r#"{"expectedVersion":1}"#).is_ok());
         for forbidden in [
             "accessToken",
             "refreshToken",
@@ -204,9 +196,7 @@ mod tests {
             "secretHandle",
             "gmailSendScope",
         ] {
-            let invalid = format!(
-                r#"{{"expectedVersion":1,"requestDigest":"{digest}","{forbidden}":"forbidden"}}"#
-            );
+            let invalid = format!(r#"{{"expectedVersion":1,"{forbidden}":"forbidden"}}"#);
             assert!(serde_json::from_str::<StartGmailOAuthRequestDto>(&invalid).is_err());
         }
         let _ = GmailOAuthStartReceiptDto {
