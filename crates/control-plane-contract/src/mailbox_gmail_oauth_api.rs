@@ -182,11 +182,16 @@ fn problem_response() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{GmailOAuthCallbackReceiptDto, GmailOAuthStartReceiptDto, StartGmailOAuthRequestDto, openapi_fragment};
+    use super::{
+        GmailOAuthCallbackReceiptDto, GmailOAuthStartReceiptDto, StartGmailOAuthRequestDto,
+        openapi_fragment,
+    };
 
     #[test]
     fn public_dtos_reject_credential_and_token_fields() -> Result<(), Box<dyn std::error::Error>> {
-        assert!(serde_json::from_str::<StartGmailOAuthRequestDto>(r#"{"expectedVersion":1}"#).is_ok());
+        assert!(
+            serde_json::from_str::<StartGmailOAuthRequestDto>(r#"{"expectedVersion":1}"#).is_ok()
+        );
         for forbidden in [
             "accessToken",
             "refreshToken",
@@ -224,7 +229,13 @@ mod tests {
         ));
         assert!(paths.contains_key("/api/v1/mailbox/gmail/oauth/callback"));
         let encoded = fragment.to_string();
-        for forbidden in ["accessToken", "refreshToken", "pkceVerifier", "clientSecret", "gmail.send"] {
+        for forbidden in [
+            "accessToken",
+            "refreshToken",
+            "pkceVerifier",
+            "clientSecret",
+            "gmail.send",
+        ] {
             assert!(!encoded.contains(forbidden), "fragment leaked {forbidden}");
         }
     }
