@@ -261,8 +261,8 @@ mod tests {
             assert!(!encoded.contains(forbidden), "fragment leaked {forbidden}");
         }
         assert_eq!(
-            fragment["components"]["schemas"]["PasswordProtocolConfigurationDto"]["properties"]
-                ["password"]["writeOnly"],
+            fragment["components"]["schemas"]["PasswordProtocolConfigurationDto"]["properties"]["password"]
+                ["writeOnly"],
             true
         );
     }
