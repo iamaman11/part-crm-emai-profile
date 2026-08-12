@@ -3,10 +3,10 @@ use crate::access_session::{
 };
 use crate::command_evidence;
 use application_ports::gmail_oauth_onboarding::{GmailOAuthAuthorizationCode, GmailOAuthState};
+use application_ports::MailboxOnboardingVersion;
 use cloudflare_adapters::d1_mailbox_onboarding::D1MailboxOnboardingApplicationRepository;
 use cloudflare_adapters::gmail_oauth_provisioning::CloudflareGmailOAuthProvisioningPort;
 use control_plane_contract::D1_CATALOG_BINDING;
-use mailbox_domain::MailboxOnboardingVersion;
 use profile_platform_primitives::MailboxOnboardingId;
 use serde::{Deserialize, Serialize};
 use use_cases_mailboxes::gmail_oauth_onboarding::{
@@ -15,7 +15,7 @@ use use_cases_mailboxes::gmail_oauth_onboarding::{
 };
 use worker::{Env, Method, Request, Response, Result};
 
-const CALLBACK_PATH: &str = "/auth/v1/mailbox/gmail/callback";
+const CALLBACK_PATH: &str = "/api/v1/mailbox/gmail/oauth/callback";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -333,10 +333,10 @@ mod tests {
         assert!(is_gmail_oauth_path(
             "/api/v1/tenants/tenant_01/mailbox-onboardings/onboarding_01/gmail-oauth"
         ));
-        assert!(is_gmail_oauth_path("/auth/v1/mailbox/gmail/callback"));
+        assert!(is_gmail_oauth_path("/api/v1/mailbox/gmail/oauth/callback"));
         for path in [
             "/api/v1/tenants/tenant_01/mailboxes/mailbox_01",
-            "/auth/v1/mailbox/gmail/callback/extra",
+            "/api/v1/mailbox/gmail/oauth/callback/extra",
             "/api/v1/tenants/tenant_01/mailbox-onboardings/onboarding_01/gmail-oauth/extra",
         ] {
             assert!(!is_gmail_oauth_path(path));
