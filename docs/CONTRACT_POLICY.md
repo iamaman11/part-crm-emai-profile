@@ -194,3 +194,55 @@ independently and gives the complete current `openapi/v1` diff to the active C2
 one-shot checker. This prevents the historical B4 exception from accidentally
 blocking a separately approved later exception without weakening immutability of
 any accepted B4 artifact.
+
+## 9. Pre-2J C3 one-shot additive v1 standards IMAP/SMTP authority
+
+Issue #221 is the separately governed versioning decision required before Batch C3
+may expose browser-visible standards-based IMAP/SMTP onboarding and credential
+rotation. C1 remains the lifecycle/CAS authority and `MAILBOX_SECRET_RESOLVER`
+remains the sole credential authority/storage boundary.
+
+The machine authority is
+`architecture/pre2j-c3-contract-authority.json`. Once that authority has first been
+accepted on the PR base, one later C3 implementation PR may add exactly one absent
+compatible v1 fragment:
+
+`openapi/v1/fragments/mailbox-imap-smtp-onboarding.json`
+
+The authority PR itself must not add that fragment. After accepted consumption the
+fragment is immutable, just like the consumed B4 and C2 fragments.
+
+C3 contract rules are deliberately capability- and authentication-explicit:
+
+- the public surface must distinguish IMAP read/search readiness from SMTP send
+  readiness; actual outbound message execution remains C6;
+- supported transport configuration must make encrypted transport explicit and
+  fail closed on plaintext. Accepted implementation modes are implicit TLS and
+  STARTTLS, with bounded SSRF-safe targets;
+- password authentication may be supported for standards servers that still accept
+  it, but password mode must never be described as Outlook.com/Microsoft 365
+  compatibility;
+- Outlook.com/Microsoft 365 support under C3 means standards-protocol IMAP/SMTP with
+  Microsoft Entra OAuth2 and SASL XOAUTH2, not Microsoft Graph;
+- delegated Microsoft OAuth2 authority is limited to
+  `https://outlook.office.com/IMAP.AccessAsUser.All`,
+  `https://outlook.office.com/SMTP.Send`, and `offline_access`; Graph `Mail.*`
+  permissions and Graph API claims are forbidden;
+- raw passwords, OAuth authorization codes, PKCE material, client secrets,
+  access/refresh tokens and SASL bearer material may cross only transient transport
+  into the resolver boundary. They must not enter D1, audit/outbox, browser storage,
+  ordinary logs, mailbox association state or ordinary domain-readable state;
+- C3 may activate only exact `PENDING` or `REAUTH_REQUIRED` C1 onboarding versions.
+  Successful provisioning returns only an opaque `SecretHandle` to C1; if C1 CAS
+  fails after provisioning, the resolver-owned credential must be discarded or
+  revoked;
+- `openapi/v1/openapi.json`, every accepted v1 fragment including consumed B4/C2,
+  `contracts/baseline/**`, and `proto/**` remain byte-immutable;
+- ordinary compatibility/collision checks remain in force and any breaking change
+  still requires a new major root or another separately governed migration.
+
+The release-freeze gate validates consumed B4 and C2 authorities/fragments in
+invariant-only mode and gives the complete current `openapi/v1` diff exclusively to
+the active C3 one-shot checker. C3 itself also ships an invariant-only mode so a
+future separately governed C4+ exception can preserve C3 immutability without
+reusing C3 as a global diff owner.
