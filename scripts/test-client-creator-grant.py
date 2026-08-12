@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "migrations" / "d1"
 CATALOG = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_catalog.rs"
 CLIENT_ADAPTER = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_clients.rs"
+IDENTITY_QUERIES = ROOT / "crates" / "cloudflare-adapters" / "src" / "d1_identity_queries.rs"
 CREATE_POLICY = ROOT / "crates" / "application-ports" / "src" / "client_creation.rs"
 
 TENANT = "tenant_A1_creator"
@@ -25,6 +26,17 @@ def raw_const(source: str, name: str) -> str:
     match = re.search(rf'const\s+{re.escape(name)}:\s*&str\s*=\s*r#"(.*?)"#;', source, re.DOTALL)
     if match is None:
         raise AssertionError(f"missing Rust SQL constant {name}")
+    return match.group(1)
+
+
+def visible_client_query() -> str:
+    source = IDENTITY_QUERIES.read_text(encoding="utf-8")
+    method = source.split("pub async fn find_visible_client", 1)
+    if len(method) != 2:
+        raise AssertionError("missing grant-safe find_visible_client query")
+    match = re.search(r'query!\(.*?r#"(.*?)"#,', method[1], re.DOTALL)
+    if match is None:
+        raise AssertionError("could not extract find_visible_client SQL")
     return match.group(1)
 
 
@@ -162,6 +174,18 @@ def assert_success(sql: dict[str, str]) -> None:
     assert count(connection, "idempotency_records", "idempotency_key", "idem_A1_success") == 1
     assert count(connection, "audit_events", "audit_event_id", "audit_A1_success") == 1
     assert count(connection, "outbox_events", "outbox_event_id", "outbox_A1_success") == 1
+
+    visibility = visible_client_query()
+    creator_row = connection.execute(
+        visibility,
+        (TENANT, "client_A1_success", 0, MEMBER),
+    ).fetchone()
+    unrelated_row = connection.execute(
+        visibility,
+        (TENANT, "client_A1_success", 0, OTHER),
+    ).fetchone()
+    assert creator_row is not None, "creator grant must make the new Client immediately visible"
+    assert unrelated_row is None, "same-tenant unrelated Member must not see creator-owned Client"
     connection.close()
 
 
@@ -244,7 +268,7 @@ def main() -> int:
     assert_success(sql)
     assert_membership_race_rolls_back(sql)
     assert_late_failure_rolls_back(sql)
-    print("A1 Client creator-grant policy and atomic D1 transaction invariants passed.")
+    print("A1 Client creator-grant policy, visibility and atomic D1 invariants passed.")
     return 0
 
 
