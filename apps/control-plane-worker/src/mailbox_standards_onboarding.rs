@@ -550,7 +550,8 @@ mod tests {
     }
 
     #[test]
-    fn callback_query_rejects_duplicate_security_parameters() -> Result<(), Box<dyn std::error::Error>> {
+    fn callback_query_rejects_duplicate_security_parameters()
+    -> Result<(), Box<dyn std::error::Error>> {
         let valid = Url::parse(
             "https://example.invalid/api/v1/mailbox/imap-smtp/microsoft-oauth/callback?state=state_0123456789abcdef&code=code",
         )?;
