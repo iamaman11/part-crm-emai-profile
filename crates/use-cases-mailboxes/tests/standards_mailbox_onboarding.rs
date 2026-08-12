@@ -29,7 +29,7 @@ use use_cases_mailboxes::standards_mailbox_onboarding::{
     start_microsoft_standards_oauth,
 };
 
-type TestResult = Result<(), Box<dyn std::error::Error>>;
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 struct FakeOnboardingPort {
     context: RefCell<Option<MailboxOnboardingContext>>,
@@ -243,7 +243,10 @@ fn password_pending_and_reauth_activate_with_only_an_opaque_handle() -> TestResu
             evidence(&format!("{suffix}_password"))?,
         ))?;
         assert_eq!(outcome.status(), MailboxOnboardingStatus::Active);
-        assert_eq!(outcome.version(), MailboxOnboardingVersion::new(version.value() + 1));
+        assert_eq!(
+            outcome.version(),
+            MailboxOnboardingVersion::new(version.value() + 1)
+        );
         assert_eq!(
             outcome.authentication_mode(),
             StandardsMailboxAuthenticationMode::Password
@@ -431,7 +434,11 @@ fn microsoft_callback_is_exactly_tenant_actor_bound_and_can_activate() -> TestRe
         MailboxOnboardingVersion::INITIAL,
     )?);
     let resolver = FakeProvisioningPort::new(target.clone())?;
-    resolver.set_receipt(StandardsMailboxAuthenticationMode::MicrosoftOAuth2, true, true)?;
+    resolver.set_receipt(
+        StandardsMailboxAuthenticationMode::MicrosoftOAuth2,
+        true,
+        true,
+    )?;
     let outcome = block_on(complete_microsoft_standards_oauth_callback(
         &actor,
         MembershipRole::TenantOwner,
