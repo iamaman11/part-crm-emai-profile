@@ -1,13 +1,13 @@
 # Pre-2J Product Readiness Remediation Plan
 
-**Status:** PROPOSED CANONICAL / ACTIVE BLOCKER FOR PHASE 2J  
+**Status:** CANONICAL / ACTIVE BLOCKER FOR PHASE 2J  
 **Tracking:** issue #203  
 **Planning base:** accepted `main` `c5feaaa3bbf640a372e5be2cb46c3b521ab1ed0d`  
 **Date:** 2026-08-12  
 **Accepted product phase:** Phase 2I  
 **Production readiness:** remains `false`  
 **Supersedes:** no accepted history; R1-R9 and the closed pre-2J architecture remediation record remain accepted history  
-**Activation rule:** this document becomes canonical current remediation authority only when Batch 0 is accepted on `main` together with the matching status/documentation-authority updates.
+**Activation rule:** Batch 0 acceptance on `main` establishes this document as canonical current remediation authority together with the matching status/documentation-authority updates.
 
 ## 1. Purpose
 
@@ -1285,16 +1285,13 @@ Those remain Phase 2J external evidence.
 
 The purpose of this remediation is to ensure Phase 2J validates an already designed and implemented product/release system rather than inventing missing product semantics or deployment/update architecture during production rollout.
 
-## 19. Immediate next action after this plan is proposed
+## 19. Immediate next action
 
-Do **not** start Batch A yet.
+Do **not** start Batch A while Batch 0 is still only a PR candidate.
 
-The immediate next action is **Batch 0**:
+Batch 0 activates this document and the matching `docs/status.json`, README/docs index/development plan,
+documentation-authority gate and generated architecture inventory as one consistent authority set.
 
-- make this document canonical current remediation authority;
-- update `docs/status.json`, README/docs index/development plan, documentation-authority gate and generated architecture inventory consistently;
-- restore a truthful machine-readable state in which Phase 2J is blocked by issue #203;
-- preserve R1-R9 accepted history and `production_ready=false`;
-- accept Batch 0 only through exact-head CI/interlocks and squash merge.
-
-After Batch 0 is accepted, begin A1 from the new accepted `main`.
+After Batch 0 is accepted on `main`, begin **A1 — Client Member create + atomic creator grant** from that
+new accepted `main`. Phase 2J remains blocked through Batch F, R1-R9 remain accepted history, and
+`production_ready=false` remains unchanged.
