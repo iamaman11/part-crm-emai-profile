@@ -6,6 +6,7 @@ use worker::{Date, Error, Request, Result};
 
 const IDEMPOTENCY_HEADER: &str = "Idempotency-Key";
 const IDEMPOTENCY_TTL_MS: u64 = 86_400_000;
+const HEX: &[u8; 16] = b"0123456789abcdef";
 
 pub fn from_request(
     request: &Request,
@@ -38,7 +39,12 @@ pub fn from_oauth_callback(
         onboarding_id.as_str(),
         state,
     );
-    let digest = format!("{:x}", Sha256::digest(material.as_bytes()));
+    let digest_bytes = Sha256::digest(material.as_bytes());
+    let mut digest = String::with_capacity(digest_bytes.len() * 2);
+    for byte in digest_bytes {
+        digest.push(HEX[usize::from(byte >> 4)] as char);
+        digest.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
     let idempotency_key = IdempotencyKey::parse(format!("oauthcb_{digest}"))
         .map_err(|error| Error::RustError(error.to_string()))?;
     evidence(actor, idempotency_key, digest)
