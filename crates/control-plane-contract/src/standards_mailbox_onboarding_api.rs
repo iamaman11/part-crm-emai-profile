@@ -236,7 +236,9 @@ mod tests {
         let valid = r#"{"expectedVersion":1,"imap":{"host":"imap.example.com","port":993,"transportSecurity":"IMPLICIT_TLS","username":"user@example.com","password":"secret"},"smtp":{"host":"smtp.example.com","port":587,"transportSecurity":"STARTTLS","username":"user@example.com","password":"secret"}}"#;
         assert!(serde_json::from_str::<ProvisionPasswordStandardsMailboxRequestDto>(valid).is_ok());
         let forbidden = r#"{"expectedVersion":1,"imap":{"host":"imap.example.com","port":993,"transportSecurity":"IMPLICIT_TLS","username":"user@example.com","password":"secret","accessToken":"forbidden"},"smtp":{"host":"smtp.example.com","port":587,"transportSecurity":"STARTTLS","username":"user@example.com","password":"secret"}}"#;
-        assert!(serde_json::from_str::<ProvisionPasswordStandardsMailboxRequestDto>(forbidden).is_err());
+        assert!(
+            serde_json::from_str::<ProvisionPasswordStandardsMailboxRequestDto>(forbidden).is_err()
+        );
     }
 
     #[test]
@@ -258,6 +260,10 @@ mod tests {
         ] {
             assert!(!encoded.contains(forbidden), "fragment leaked {forbidden}");
         }
-        assert_eq!(fragment["components"]["schemas"]["PasswordProtocolConfigurationDto"]["properties"]["password"]["writeOnly"], true);
+        assert_eq!(
+            fragment["components"]["schemas"]["PasswordProtocolConfigurationDto"]["properties"]
+                ["password"]["writeOnly"],
+            true
+        );
     }
 }
