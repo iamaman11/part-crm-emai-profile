@@ -2,7 +2,6 @@ use mailbox_domain::MailboxOnboardingVersion;
 use profile_platform_primitives::{
     ActorContext, ActorId, MailboxOnboardingId, SecretHandle, TenantId, UnixMillis,
 };
-use zeroize::Zeroize;
 
 const MAX_OAUTH_STATE_LENGTH: usize = 2_048;
 const MAX_AUTHORIZATION_CODE_LENGTH: usize = 8_192;
@@ -30,12 +29,6 @@ impl GmailOAuthState {
     }
 }
 
-impl Drop for GmailOAuthState {
-    fn drop(&mut self) {
-        self.0.zeroize();
-    }
-}
-
 #[derive(Eq, PartialEq)]
 pub struct GmailOAuthAuthorizationCode(String);
 
@@ -54,12 +47,6 @@ impl GmailOAuthAuthorizationCode {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-}
-
-impl Drop for GmailOAuthAuthorizationCode {
-    fn drop(&mut self) {
-        self.0.zeroize();
     }
 }
 
@@ -280,7 +267,7 @@ mod tests {
     use super::{GmailOAuthAuthorizationCode, GmailOAuthAuthorizationUrl, GmailOAuthState};
 
     #[test]
-    fn sensitive_callback_inputs_are_bounded_and_not_debuggable() {
+    fn callback_inputs_are_bounded_and_non_serializable() {
         assert!(GmailOAuthState::parse("state_0123456789abcdef").is_ok());
         assert!(GmailOAuthState::parse("short").is_err());
         assert!(GmailOAuthAuthorizationCode::parse("code-value").is_ok());
