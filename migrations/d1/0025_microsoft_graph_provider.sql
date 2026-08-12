@@ -288,6 +288,30 @@ INSERT INTO mailbox_onboarding_state_c3g SELECT * FROM mailbox_onboarding_state;
 INSERT INTO mailbox_onboarding_history_c3g SELECT * FROM mailbox_onboarding_history;
 INSERT INTO mailbox_onboarding_commands_c3g SELECT * FROM mailbox_onboarding_commands;
 
+-- Cross-table command/governance triggers must be removed before any rebuilt
+-- table disappears, otherwise SQLite rejects the transient schema while parsing
+-- a surviving trigger that references the temporarily absent table.
+DROP TRIGGER mailbox_binding_create_command_validate;
+DROP TRIGGER mailbox_binding_create_command_apply;
+DROP TRIGGER mailbox_binding_revoke_command_validate;
+DROP TRIGGER mailbox_binding_revoke_command_apply;
+DROP TRIGGER mailbox_job_create_command_validate;
+DROP TRIGGER mailbox_job_create_command_apply;
+DROP TRIGGER mailbox_job_run_v2_command_validate;
+DROP TRIGGER mailbox_job_run_v2_command_apply;
+DROP TRIGGER browser_mailbox_execution_bind_command_validate;
+DROP TRIGGER browser_mailbox_execution_bind_command_apply;
+DROP TRIGGER mailbox_client_association_command_validate;
+DROP TRIGGER mailbox_client_association_command_apply;
+DROP TRIGGER mailbox_client_association_state_insert_governed;
+DROP TRIGGER mailbox_client_association_state_update_governed;
+DROP TRIGGER mailbox_client_association_history_insert_governed;
+DROP TRIGGER mailbox_onboarding_command_validate;
+DROP TRIGGER mailbox_onboarding_command_apply;
+DROP TRIGGER mailbox_onboarding_state_insert_governed;
+DROP TRIGGER mailbox_onboarding_state_update_governed;
+DROP TRIGGER mailbox_onboarding_history_insert_governed;
+
 -- Remove every old child before its RESTRICT parent. DROP TABLE does not execute
 -- the governed DELETE triggers; no application mutation semantics are invoked.
 DROP TABLE mailbox_job_queue_dispatches;
@@ -335,7 +359,6 @@ CREATE INDEX mailbox_onboarding_state_status_lookup
     ON mailbox_onboarding_state(tenant_id, lifecycle_status, provider, onboarding_id);
 
 -- The create command is the only accepted provider admission gate that must widen.
-DROP TRIGGER mailbox_binding_create_command_validate;
 CREATE TRIGGER mailbox_binding_create_command_validate
 BEFORE INSERT ON mailbox_binding_create_commands
 FOR EACH ROW
@@ -355,6 +378,278 @@ BEGIN
     SELECT RAISE(ABORT, 'mailbox_binding_create_secret_handle_invalid')
     WHERE length(NEW.secret_handle) NOT BETWEEN 8 AND 96
        OR NEW.secret_handle GLOB '*[^A-Za-z0-9_-]*';
+END;
+
+-- Restore every surviving command trigger byte-equivalent to its accepted
+-- pre-C3G semantics, except the provider allowlist above.
+CREATE TRIGGER mailbox_binding_create_command_apply
+AFTER INSERT ON mailbox_binding_create_commands
+FOR EACH ROW
+BEGIN
+    INSERT INTO mailbox_bindings (
+        tenant_id, binding_id, provider, secret_handle, status, version,
+        created_by_actor_id, updated_by_actor_id, created_at_ms, updated_at_ms
+    ) VALUES (
+        NEW.tenant_id, NEW.binding_id, NEW.provider, NEW.secret_handle, 'ACTIVE', 1,
+        NEW.command_actor_id, NEW.command_actor_id, NEW.executed_at_ms, NEW.executed_at_ms
+    );
+END;
+
+CREATE TRIGGER mailbox_binding_revoke_command_validate
+BEFORE INSERT ON mailbox_binding_revoke_commands
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'mailbox_binding_revoke_owner_required')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM memberships
+        WHERE tenant_id = NEW.tenant_id
+          AND actor_id = NEW.command_actor_id
+          AND role = 'TENANT_OWNER'
+          AND status = 'ACTIVE'
+    );
+    SELECT RAISE(ABORT, 'mailbox_binding_missing')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM mailbox_bindings
+        WHERE tenant_id = NEW.tenant_id AND binding_id = NEW.binding_id
+    );
+    SELECT RAISE(ABORT, 'mailbox_binding_already_revoked')
+    WHERE EXISTS (
+        SELECT 1 FROM mailbox_bindings
+        WHERE tenant_id = NEW.tenant_id
+          AND binding_id = NEW.binding_id
+          AND status = 'REVOKED'
+    );
+    SELECT RAISE(ABORT, 'mailbox_binding_version_mismatch')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM mailbox_bindings
+        WHERE tenant_id = NEW.tenant_id
+          AND binding_id = NEW.binding_id
+          AND status = 'ACTIVE'
+          AND version = NEW.expected_binding_version
+    );
+    SELECT RAISE(ABORT, 'mailbox_time_regression')
+    WHERE EXISTS (
+        SELECT 1 FROM mailbox_bindings
+        WHERE tenant_id = NEW.tenant_id
+          AND binding_id = NEW.binding_id
+          AND NEW.executed_at_ms < updated_at_ms
+    );
+END;
+
+CREATE TRIGGER mailbox_binding_revoke_command_apply
+AFTER INSERT ON mailbox_binding_revoke_commands
+FOR EACH ROW
+BEGIN
+    UPDATE mailbox_bindings
+    SET status = 'REVOKED',
+        version = version + 1,
+        updated_by_actor_id = NEW.command_actor_id,
+        updated_at_ms = NEW.executed_at_ms
+    WHERE tenant_id = NEW.tenant_id AND binding_id = NEW.binding_id;
+END;
+
+CREATE TRIGGER mailbox_job_create_command_validate
+BEFORE INSERT ON mailbox_job_create_commands
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'mailbox_job_create_owner_required')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM memberships
+        WHERE tenant_id = NEW.tenant_id
+          AND actor_id = NEW.command_actor_id
+          AND role = 'TENANT_OWNER'
+          AND status = 'ACTIVE'
+    );
+    SELECT RAISE(ABORT, 'mailbox_binding_missing')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM mailbox_bindings
+        WHERE tenant_id = NEW.tenant_id AND binding_id = NEW.binding_id
+    );
+    SELECT RAISE(ABORT, 'mailbox_binding_revoked')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM mailbox_bindings
+        WHERE tenant_id = NEW.tenant_id
+          AND binding_id = NEW.binding_id
+          AND status = 'ACTIVE'
+    );
+    SELECT RAISE(ABORT, 'mailbox_cursor_too_long')
+    WHERE NEW.cursor IS NOT NULL AND length(NEW.cursor) > 512;
+    SELECT RAISE(ABORT, 'mailbox_time_regression')
+    WHERE NEW.scheduled_at_ms < NEW.executed_at_ms;
+END;
+
+CREATE TRIGGER mailbox_job_create_command_apply
+AFTER INSERT ON mailbox_job_create_commands
+FOR EACH ROW
+BEGIN
+    INSERT INTO mailbox_jobs (
+        tenant_id, binding_id, job_id, cursor, status, attempt, max_attempts,
+        next_run_at_ms, bounded_item_count, version,
+        created_by_actor_id, updated_by_actor_id, created_at_ms, updated_at_ms
+    ) VALUES (
+        NEW.tenant_id, NEW.binding_id, NEW.job_id, NEW.cursor, 'PENDING', 0, NEW.max_attempts,
+        NEW.scheduled_at_ms, 0, 1,
+        NEW.command_actor_id, NEW.command_actor_id, NEW.executed_at_ms, NEW.executed_at_ms
+    );
+END;
+
+CREATE TRIGGER mailbox_job_run_v2_command_validate
+BEFORE INSERT ON mailbox_job_run_commands_v2
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'mailbox_job_run_owner_required')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM memberships
+        WHERE tenant_id = NEW.tenant_id
+          AND actor_id = NEW.command_actor_id
+          AND role = 'TENANT_OWNER'
+          AND status = 'ACTIVE'
+    );
+    SELECT RAISE(ABORT, 'mailbox_binding_missing')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM mailbox_bindings
+        WHERE tenant_id = NEW.tenant_id AND binding_id = NEW.binding_id
+    );
+    SELECT RAISE(ABORT, 'mailbox_binding_not_executable')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM mailbox_bindings
+        WHERE tenant_id = NEW.tenant_id
+          AND binding_id = NEW.binding_id
+          AND status = 'ACTIVE'
+          AND execution_status = 'ACTIVE'
+    );
+    SELECT RAISE(ABORT, 'mailbox_job_missing')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM mailbox_jobs
+        WHERE tenant_id = NEW.tenant_id
+          AND binding_id = NEW.binding_id
+          AND job_id = NEW.job_id
+    );
+    SELECT RAISE(ABORT, 'mailbox_job_version_mismatch')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM mailbox_jobs
+        WHERE tenant_id = NEW.tenant_id
+          AND binding_id = NEW.binding_id
+          AND job_id = NEW.job_id
+          AND lifecycle_status IN ('SCHEDULED', 'RETRY_PENDING')
+          AND version = NEW.expected_job_version
+    );
+    SELECT RAISE(ABORT, 'mailbox_job_not_due')
+    WHERE EXISTS (
+        SELECT 1 FROM mailbox_jobs
+        WHERE tenant_id = NEW.tenant_id
+          AND binding_id = NEW.binding_id
+          AND job_id = NEW.job_id
+          AND NEW.executed_at_ms < next_run_at_ms
+    );
+    SELECT RAISE(ABORT, 'mailbox_job_attempts_exhausted')
+    WHERE EXISTS (
+        SELECT 1 FROM mailbox_jobs
+        WHERE tenant_id = NEW.tenant_id
+          AND binding_id = NEW.binding_id
+          AND job_id = NEW.job_id
+          AND attempt >= max_attempts
+    );
+    SELECT RAISE(ABORT, 'mailbox_job_version_overflow')
+    WHERE NEW.expected_job_version > 9223372036854775804;
+    SELECT RAISE(ABORT, 'mailbox_provider_status_invalid')
+    WHERE length(NEW.provider_status) NOT BETWEEN 1 AND 64
+       OR NEW.provider_status GLOB '*[^A-Za-z0-9_.-]*';
+    SELECT RAISE(ABORT, 'mailbox_cursor_too_long')
+    WHERE NEW.next_cursor IS NOT NULL AND length(NEW.next_cursor) > 512;
+    SELECT RAISE(ABORT, 'mailbox_retry_time_invalid')
+    WHERE (NEW.outcome_status = 'RETRY_PENDING' AND (
+              NEW.retry_at_ms IS NULL OR NEW.retry_at_ms <= NEW.executed_at_ms
+          ))
+       OR (NEW.outcome_status <> 'RETRY_PENDING' AND NEW.retry_at_ms IS NOT NULL);
+    SELECT RAISE(ABORT, 'mailbox_time_regression')
+    WHERE EXISTS (
+        SELECT 1 FROM mailbox_jobs
+        WHERE tenant_id = NEW.tenant_id
+          AND binding_id = NEW.binding_id
+          AND job_id = NEW.job_id
+          AND NEW.executed_at_ms < updated_at_ms
+    );
+END;
+
+CREATE TRIGGER mailbox_job_run_v2_command_apply
+AFTER INSERT ON mailbox_job_run_commands_v2
+FOR EACH ROW
+BEGIN
+    UPDATE mailbox_jobs
+    SET lifecycle_status = NEW.outcome_status,
+        status = CASE NEW.outcome_status
+            WHEN 'RETRY_PENDING' THEN 'RETRY_PENDING'
+            WHEN 'SUCCEEDED' THEN 'SUCCEEDED'
+            WHEN 'FAILED' THEN 'FAILED'
+            ELSE 'PENDING'
+        END,
+        attempt = attempt + 1,
+        cursor = CASE WHEN NEW.outcome_status = 'SUCCEEDED' THEN NEW.next_cursor ELSE cursor END,
+        provider_status = NEW.provider_status,
+        bounded_item_count = NEW.bounded_item_count,
+        next_run_at_ms = CASE
+            WHEN NEW.outcome_status = 'RETRY_PENDING' THEN NEW.retry_at_ms
+            ELSE next_run_at_ms
+        END,
+        version = version + 3,
+        updated_by_actor_id = NEW.command_actor_id,
+        updated_at_ms = NEW.executed_at_ms
+    WHERE tenant_id = NEW.tenant_id
+      AND binding_id = NEW.binding_id
+      AND job_id = NEW.job_id;
+
+    UPDATE mailbox_bindings
+    SET execution_status = NEW.outcome_status,
+        version = version + 1,
+        updated_by_actor_id = NEW.command_actor_id,
+        updated_at_ms = NEW.executed_at_ms
+    WHERE tenant_id = NEW.tenant_id
+      AND binding_id = NEW.binding_id
+      AND status = 'ACTIVE'
+      AND execution_status = 'ACTIVE'
+      AND NEW.outcome_status IN ('AUTH_REQUIRED', 'SUSPENDED');
+END;
+
+CREATE TRIGGER browser_mailbox_execution_bind_command_validate
+BEFORE INSERT ON browser_mailbox_execution_bind_commands
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(ABORT, 'browser_mailbox_execution_bind_owner_required')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM memberships
+        WHERE tenant_id = NEW.tenant_id
+          AND actor_id = NEW.command_actor_id
+          AND role = 'TENANT_OWNER'
+          AND status = 'ACTIVE'
+    );
+    SELECT RAISE(ABORT, 'browser_mailbox_binding_not_executable')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM mailbox_bindings
+        WHERE tenant_id = NEW.tenant_id
+          AND binding_id = NEW.binding_id
+          AND provider = 'BROWSER_FALLBACK'
+          AND status = 'ACTIVE'
+          AND execution_status = 'ACTIVE'
+    );
+    SELECT RAISE(ABORT, 'browser_mailbox_profile_missing')
+    WHERE NOT EXISTS (
+        SELECT 1 FROM browser_profiles
+        WHERE tenant_id = NEW.tenant_id
+          AND profile_id = NEW.profile_id
+    );
+END;
+
+CREATE TRIGGER browser_mailbox_execution_bind_command_apply
+AFTER INSERT ON browser_mailbox_execution_bind_commands
+FOR EACH ROW
+BEGIN
+    INSERT INTO browser_mailbox_execution_bindings (
+        tenant_id, binding_id, profile_id, created_by_actor_id, created_at_ms
+    ) VALUES (
+        NEW.tenant_id, NEW.binding_id, NEW.profile_id,
+        NEW.command_actor_id, NEW.executed_at_ms
+    );
 END;
 
 -- Recreate table-owned guards exactly at their final pre-C3G semantics.
