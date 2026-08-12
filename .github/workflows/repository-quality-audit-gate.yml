@@ -47,6 +47,7 @@ jobs:
           python -m py_compile scripts/test-mailbox-client-associations.py
           python -m py_compile scripts/test-mailbox-client-association-surface.py
           python -m py_compile scripts/test-mailbox-onboarding-lifecycle.py
+          python -m py_compile scripts/test-gmail-oauth-onboarding.py
           python -m py_compile scripts/check-phase2b-client-boundaries.py
           python -m py_compile scripts/test-phase2b-client-contacts.py
           python -m py_compile scripts/check-phase2c-client-boundaries.py
@@ -98,6 +99,17 @@ jobs:
 
       - name: Prove Pre-2J C1 mailbox onboarding lifecycle authority
         run: python scripts/test-mailbox-onboarding-lifecycle.py
+
+      - name: Prove Pre-2J C2 Gmail OAuth onboarding boundaries
+        run: python scripts/test-gmail-oauth-onboarding.py
+
+      - name: Prove C2 Gmail OAuth fragment is deterministically generated
+        shell: bash
+        run: |
+          set -euo pipefail
+          generated="$(cargo run --locked --quiet -p control-plane-contract --bin export_mailbox_gmail_oauth)"
+          accepted="$(cat openapi/v1/fragments/mailbox-gmail-oauth.json)"
+          test "$generated" = "$accepted"
 
       - name: Enforce Phase 2B protected client-contact D1 boundaries
         run: python scripts/check-phase2b-client-boundaries.py
