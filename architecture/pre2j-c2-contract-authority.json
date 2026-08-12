@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "status": "approved_pending_c2",
+  "decision_base": "57325cf29983b9064ce36d333ea46e626387ad3d",
+  "tracking_issue": 217,
+  "parent_batch_issue": 214,
+  "umbrella_blocker_issue": 203,
+  "policy": "one_shot_additive_v1_fragment",
+  "allowed_path": "openapi/v1/fragments/mailbox-gmail-oauth.json",
+  "credential_boundary": "MAILBOX_SECRET_RESOLVER",
+  "scope_policy": {
+    "c2_default": "https://www.googleapis.com/auth/gmail.readonly",
+    "future_send": "https://www.googleapis.com/auth/gmail.send",
+    "c2_must_not_pregrant_future_send": true
+  },
+  "rules": {
+    "authority_must_be_accepted_before_use": true,
+    "authority_is_immutable_after_acceptance": true,
+    "allowed_path_must_be_absent_in_base": true,
+    "existing_v1_paths_are_immutable": true,
+    "contracts_baseline_is_immutable": true,
+    "proto_is_immutable": true,
+    "new_major_version_required_for_breaking_change": true
+  }
+}

@@ -146,3 +146,51 @@ association an ACL. Browser DTOs may expose opaque relationship/client/mailbox
 identifiers and relationship version/state needed for bind, rebind and unbind, but
 must not expose credentials, provider tokens, SDK objects, assignment-derived
 permissions or raw protected mail data.
+
+## 8. Pre-2J C2 one-shot additive v1 Gmail OAuth authority
+
+Issue #217 is the separately governed versioning decision required before Batch C2
+may expose a browser-visible Gmail OAuth onboarding ceremony. The accepted C1
+provider-neutral lifecycle and existing Gmail execution/query adapters remain
+separate authorities; this exception governs only the new browser protocol surface.
+
+The machine authority is
+`architecture/pre2j-c2-contract-authority.json`. Once that authority has first been
+accepted on the PR base, it may permit exactly one absent-to-added compatible v1
+fragment:
+
+`openapi/v1/fragments/mailbox-gmail-oauth.json`
+
+The authority PR itself must not add that fragment. The later C2 implementation PR
+may consume the exception once; after accepted consumption the fragment becomes
+immutable under the same release-freeze discipline.
+
+C2 contract rules are deliberately narrower than a general OAuth or mailbox API
+thaw:
+
+- only authenticated Owner-facing initiation plus the fixed OAuth callback/result
+  surface required to complete an exact C1 onboarding/re-authorization ceremony
+  may be added;
+- browser responses may contain a short-lived authorization URL and bounded
+  machine-safe ceremony/result metadata, but never access/refresh tokens,
+  authorization codes in response bodies, PKCE verifier material, OAuth client
+  secret, raw mailbox credentials, provider SDK objects or secret-store internals;
+- `MAILBOX_SECRET_RESOLVER` remains the single credential boundary. Google code
+  exchange, refresh-token persistence/rotation and access-token refresh stay behind
+  that boundary; C1/D1/domain-readable state receives only an opaque `SecretHandle`;
+- callback/state handling must be short-lived, replay-safe and fail closed, and
+  transient OAuth material must not enter D1, audit/outbox, browser storage,
+  ordinary logs or mailbox association state;
+- C2 requests only the Gmail read scope needed by the already accepted read/query
+  capability. Future Gmail send consent belongs to C5 and must not be silently
+  pre-granted by C2; later send consent is an explicit incremental capability;
+- `openapi/v1/openapi.json`, every accepted v1 fragment including the consumed B4
+  fragment, `contracts/baseline/**` and `proto/**` remain byte-immutable;
+- ordinary compatibility/collision checks remain in force, and a breaking change
+  still requires a new major root or another separately governed migration.
+
+The release-freeze gate verifies the already consumed B4 authority/fragment
+independently and gives the complete current `openapi/v1` diff to the active C2
+one-shot checker. This prevents the historical B4 exception from accidentally
+blocking a separately approved later exception without weakening immutability of
+any accepted B4 artifact.
