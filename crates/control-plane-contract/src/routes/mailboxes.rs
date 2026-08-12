@@ -3,11 +3,15 @@ use crate::RouteClass;
 #[must_use]
 pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
     match segments {
-        ["api", "v1", "tenants", _, "mailbox-onboardings", _, "gmail-oauth"]
-            if method == "POST" =>
-        {
-            Some(RouteClass::MailboxBindingResourceApi)
-        }
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "mailbox-onboardings",
+            _,
+            "gmail-oauth",
+        ] if method == "POST" => Some(RouteClass::MailboxBindingResourceApi),
         ["api", "v1", "mailbox", "gmail", "oauth", "callback"] if method == "GET" => {
             Some(RouteClass::MailboxBindingResourceApi)
         }
