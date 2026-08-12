@@ -100,11 +100,7 @@ pub(crate) fn is_request(path: &str) -> bool {
         || path.ends_with(MICROSOFT_START_SUFFIX)
 }
 
-pub(crate) async fn handle(
-    mut request: Request,
-    env: &Env,
-    route: RouteClass,
-) -> Result<Response> {
+pub(crate) async fn handle(mut request: Request, env: &Env, route: RouteClass) -> Result<Response> {
     if route != RouteClass::MailboxBindingResourceApi {
         return problem(
             StatusCode::NOT_FOUND,
@@ -247,7 +243,8 @@ async fn provision_password(request: &mut Request, env: &Env) -> Result<Response
 }
 
 async fn start_microsoft(request: &mut Request, env: &Env) -> Result<Response> {
-    let (tenant_id, onboarding_id) = match onboarding_target(request.path(), MICROSOFT_START_SUFFIX) {
+    let (tenant_id, onboarding_id) = match onboarding_target(request.path(), MICROSOFT_START_SUFFIX)
+    {
         Ok(value) => value,
         Err(_) => {
             return problem(
@@ -312,7 +309,8 @@ async fn callback(request: &Request, env: &Env) -> Result<Response> {
     let state = MicrosoftStandardsOAuthState::parse(state_raw.clone())
         .map_err(|_| Error::RustError("invalid standards mailbox OAuth state".to_owned()))?;
     let provisioning_port = CloudflareStandardsMailboxProvisioningPort::new(env);
-    let target = match inspect_microsoft_standards_oauth_callback(&provisioning_port, &state).await {
+    let target = match inspect_microsoft_standards_oauth_callback(&provisioning_port, &state).await
+    {
         Ok(value) => value,
         Err(error) => return onboarding_problem(error),
     };
@@ -388,16 +386,28 @@ fn activation_response(
 
 fn onboarding_target(path: &str, suffix: &str) -> Result<(TenantId, MailboxOnboardingId)> {
     if !path.ends_with(suffix) {
-        return Err(Error::RustError("standards mailbox path mismatch".to_owned()));
+        return Err(Error::RustError(
+            "standards mailbox path mismatch".to_owned(),
+        ));
     }
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
-    let ["api", "v1", "tenants", tenant, "mailbox-onboardings", onboarding, "imap-smtp", _] =
-        segments.as_slice()
+    let [
+        "api",
+        "v1",
+        "tenants",
+        tenant,
+        "mailbox-onboardings",
+        onboarding,
+        "imap-smtp",
+        _,
+    ] = segments.as_slice()
     else {
-        return Err(Error::RustError("standards mailbox path shape invalid".to_owned()));
+        return Err(Error::RustError(
+            "standards mailbox path shape invalid".to_owned(),
+        ));
     };
-    let tenant_id =
-        TenantId::parse((*tenant).to_owned()).map_err(|error| Error::RustError(error.to_string()))?;
+    let tenant_id = TenantId::parse((*tenant).to_owned())
+        .map_err(|error| Error::RustError(error.to_string()))?;
     let onboarding_id = MailboxOnboardingId::parse((*onboarding).to_owned())
         .map_err(|error| Error::RustError(error.to_string()))?;
     Ok((tenant_id, onboarding_id))
