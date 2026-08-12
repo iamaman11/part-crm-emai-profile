@@ -161,8 +161,8 @@ external-evidence claim.
 
 ### Batch A — Member Client/Profile creation
 
-- **A1:** ACTIVE Member Client creation + atomic creator grant.
-- **A2:** ACTIVE Member Profile creation + atomic creator grant.
+- A1 — Client ACTIVE Member create + atomic creator grant.
+- A2 — Profile ACTIVE Member create + atomic creator grant.
 
 Owner-only administration remains distinct from ordinary Member creation. Creation does not create
 tenant-wide visibility.
