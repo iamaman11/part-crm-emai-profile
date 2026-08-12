@@ -8,6 +8,7 @@ use crate::d1_identity_acl::{
 };
 use crate::d1_identity_queries::{ClientProjection, D1IdentityQueryRepository};
 use application_ports::CommandExecutionEvidence;
+use application_ports::client_creation::ClientCreateGrantSpec;
 use application_ports::clients::{
     ClientApplicationPort, ClientCreateWrite, ClientGrantApplicationPort, ClientGrantPortError,
     ClientGrantPortErrorClass, ClientGrantRole, ClientGrantWrite, ClientPortError,
@@ -18,8 +19,6 @@ use identity_access_domain::MembershipRole;
 use profile_platform_primitives::{ActorContext, ActorId, AggregateVersion, ClientId, TenantScope};
 use worker::Error;
 use worker::d1::D1Database;
-
-const CLIENT_CREATOR_GRANT_REASON: &str = "client creator access";
 
 pub struct D1ClientApplicationRepository {
     catalog: D1CatalogRepository,
@@ -76,8 +75,8 @@ impl ClientApplicationPort for D1ClientApplicationRepository {
             client_id: write.client().client_id(),
             kind: catalog_kind(write.client().kind()),
             display_name: write.requested_display_name(),
-            creator_grant_role: CatalogClientGrantRole::Editor,
-            creator_grant_reason: CLIENT_CREATOR_GRANT_REASON,
+            creator_grant_role: catalog_creator_grant_role(write.creator_grant_role()),
+            creator_grant_reason: write.creator_grant_reason(),
             idempotency_key: evidence.idempotency_key(),
             request_digest: evidence.request_digest(),
             audit_event_id: evidence.audit_event_id(),
@@ -203,6 +202,13 @@ const fn catalog_kind(kind: ClientKind) -> CatalogClientKind {
     match kind {
         ClientKind::Person => CatalogClientKind::Person,
         ClientKind::Organization => CatalogClientKind::Organization,
+    }
+}
+
+const fn catalog_creator_grant_role(role: ClientGrantRole) -> CatalogClientGrantRole {
+    match role {
+        ClientGrantRole::Viewer => CatalogClientGrantRole::Viewer,
+        ClientGrantRole::Editor => CatalogClientGrantRole::Editor,
     }
 }
 
