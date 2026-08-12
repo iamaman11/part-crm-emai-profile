@@ -4,6 +4,7 @@ mod binding;
 mod client_association;
 mod job;
 mod observation;
+mod onboarding;
 mod runtime_lane;
 
 use core::fmt;
@@ -17,6 +18,10 @@ pub use job::{MailboxJob, MailboxJobRestore, MailboxJobStatus, validate_cursor};
 pub use observation::{
     MailboxFailureDisposition, MailboxObservation, MailboxProviderFailure,
     MailboxProviderFailureClass, validate_bounded_item_count, validate_provider_status,
+};
+pub use onboarding::{
+    MailboxOnboarding, MailboxOnboardingAction, MailboxOnboardingError, MailboxOnboardingStatus,
+    MailboxOnboardingStatusMetadata, MailboxOnboardingVersion,
 };
 pub use runtime_lane::{MailboxProvider, MailboxRuntimeLane};
 
