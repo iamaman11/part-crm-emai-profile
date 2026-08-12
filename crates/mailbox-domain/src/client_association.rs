@@ -201,15 +201,17 @@ mod tests {
     }
 
     #[test]
-    fn stale_same_target_and_repeat_unbind_fail_closed()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn stale_same_target_and_repeat_unbind_fail_closed() -> Result<(), Box<dyn std::error::Error>> {
         let mut relationship = association()?;
         let client = ClientId::parse("client_01JMAILCLIENTA")?;
         assert_eq!(
             relationship.associate(MailboxClientAssociationVersion::new(1), client.clone()),
             Err(MailboxClientAssociationError::VersionConflict)
         );
-        relationship.associate(MailboxClientAssociationVersion::NEVER_ASSOCIATED, client.clone())?;
+        relationship.associate(
+            MailboxClientAssociationVersion::NEVER_ASSOCIATED,
+            client.clone(),
+        )?;
         assert_eq!(
             relationship.associate(MailboxClientAssociationVersion::new(1), client),
             Err(MailboxClientAssociationError::AlreadyAssociated)
