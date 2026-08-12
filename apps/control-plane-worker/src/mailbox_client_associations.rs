@@ -53,7 +53,15 @@ pub fn is_client_association_path(path: &str) -> bool {
         .collect();
     matches!(
         segments.as_slice(),
-        ["api", "v1", "tenants", _, "mailboxes", _, "client-association"]
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "mailboxes",
+            _,
+            "client-association"
+        ]
     )
 }
 
@@ -133,11 +141,9 @@ async fn change_association(
             expected_version,
             evidence,
         ),
-        None => ExecuteMailboxClientAssociationCommand::unbind(
-            binding_id,
-            expected_version,
-            evidence,
-        ),
+        None => {
+            ExecuteMailboxClientAssociationCommand::unbind(binding_id, expected_version, evidence)
+        }
     };
     let application = mailbox_client_association_application(env)?;
     match execute_mailbox_client_association(actor, role, &application, command).await {
@@ -247,9 +253,7 @@ mod tests {
     fn change_wire_requires_explicit_client_id_and_rejects_sensitive_or_unknown_fields()
     -> Result<(), Box<dyn std::error::Error>> {
         let digest = "a".repeat(64);
-        let missing = format!(
-            r#"{{"expectedRelationshipVersion":0,"requestDigest":"{digest}"}}"#
-        );
+        let missing = format!(r#"{{"expectedRelationshipVersion":0,"requestDigest":"{digest}"}}"#);
         assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequest>(&missing).is_err());
         let unbind = format!(
             r#"{{"clientId":null,"expectedRelationshipVersion":0,"requestDigest":"{digest}"}}"#
