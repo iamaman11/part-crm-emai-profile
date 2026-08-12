@@ -374,7 +374,9 @@ const fn map_provisioning_error(
     error: StandardsMailboxProvisioningError,
 ) -> StandardsMailboxOnboardingError {
     match error.class() {
-        StandardsMailboxProvisioningErrorClass::NotFound => StandardsMailboxOnboardingError::NotFound,
+        StandardsMailboxProvisioningErrorClass::NotFound => {
+            StandardsMailboxOnboardingError::NotFound
+        }
         StandardsMailboxProvisioningErrorClass::Expired => StandardsMailboxOnboardingError::Expired,
         StandardsMailboxProvisioningErrorClass::ReplayRejected => {
             StandardsMailboxOnboardingError::ReplayRejected
@@ -382,7 +384,9 @@ const fn map_provisioning_error(
         StandardsMailboxProvisioningErrorClass::ProviderDenied => {
             StandardsMailboxOnboardingError::ProviderDenied
         }
-        StandardsMailboxProvisioningErrorClass::Conflict => StandardsMailboxOnboardingError::Conflict,
+        StandardsMailboxProvisioningErrorClass::Conflict => {
+            StandardsMailboxOnboardingError::Conflict
+        }
         StandardsMailboxProvisioningErrorClass::DependencyUnavailable => {
             StandardsMailboxOnboardingError::DependencyUnavailable
         }
@@ -403,7 +407,9 @@ const fn map_onboarding_error(
         MailboxOnboardingOperationError::VersionConflict => {
             StandardsMailboxOnboardingError::VersionConflict
         }
-        MailboxOnboardingOperationError::InvalidState => StandardsMailboxOnboardingError::InvalidState,
+        MailboxOnboardingOperationError::InvalidState => {
+            StandardsMailboxOnboardingError::InvalidState
+        }
         MailboxOnboardingOperationError::Conflict => StandardsMailboxOnboardingError::Conflict,
         MailboxOnboardingOperationError::IntegrityFailure => {
             StandardsMailboxOnboardingError::IntegrityFailure
@@ -426,7 +432,9 @@ const fn map_onboarding_port_error(
         MailboxOnboardingPortErrorClass::VersionConflict => {
             StandardsMailboxOnboardingError::VersionConflict
         }
-        MailboxOnboardingPortErrorClass::InvalidState => StandardsMailboxOnboardingError::InvalidState,
+        MailboxOnboardingPortErrorClass::InvalidState => {
+            StandardsMailboxOnboardingError::InvalidState
+        }
         MailboxOnboardingPortErrorClass::Conflict => StandardsMailboxOnboardingError::Conflict,
         MailboxOnboardingPortErrorClass::IntegrityFailure => {
             StandardsMailboxOnboardingError::IntegrityFailure
