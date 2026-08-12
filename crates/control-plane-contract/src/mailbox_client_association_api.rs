@@ -181,7 +181,13 @@ mod tests {
         );
         assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&bind).is_ok());
         assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&unbind).is_ok());
-        for forbidden in ["secretHandle", "password", "accessToken", "providerToken", "profileId"] {
+        for forbidden in [
+            "secretHandle",
+            "password",
+            "accessToken",
+            "providerToken",
+            "profileId",
+        ] {
             let invalid = format!(
                 r#"{{"clientId":null,"expectedRelationshipVersion":2,"requestDigest":"{digest}","{forbidden}":"forbidden"}}"#
             );
@@ -213,8 +219,14 @@ mod tests {
         let document = openapi_fragment();
         let resource = &document["paths"]
             ["/api/v1/tenants/{tenantId}/mailboxes/{bindingId}/client-association"];
-        assert_eq!(resource["get"]["operationId"], "getMailboxClientAssociation");
-        assert_eq!(resource["post"]["operationId"], "changeMailboxClientAssociation");
+        assert_eq!(
+            resource["get"]["operationId"],
+            "getMailboxClientAssociation"
+        );
+        assert_eq!(
+            resource["post"]["operationId"],
+            "changeMailboxClientAssociation"
+        );
         assert!(resource.get("put").is_none());
         assert!(resource.get("delete").is_none());
     }
