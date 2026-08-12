@@ -26,7 +26,9 @@ echo "Phase 2I accepted baseline/protobuf roots are unchanged."
 python scripts/check-pre2j-b4-contract-authority.py --self-test
 python scripts/check-pre2j-b4-contract-authority.py --authority-only --base-ref "origin/${base_ref}"
 python scripts/check-pre2j-c2-contract-authority.py --self-test
-python scripts/check-pre2j-c2-contract-authority.py --base-ref "origin/${base_ref}"
+python scripts/check-pre2j-c2-contract-authority.py --authority-only --base-ref "origin/${base_ref}"
+python scripts/check-pre2j-c3-contract-authority.py --self-test
+python scripts/check-pre2j-c3-contract-authority.py --base-ref "origin/${base_ref}"
 
 if git diff --quiet "origin/${base_ref}" -- migrations/d1; then
   echo "Accepted D1 migration history is unchanged."
@@ -121,4 +123,4 @@ fi
 python scripts/check-contract-compatibility.py
 python scripts/test-d1-schema.py
 
-echo "Phase 2I public contract freeze, immutable consumed B4 authority, pending C2 one-shot authority, and immutable-prefix D1 migration policy are valid."
+echo "Phase 2I public contract freeze, immutable consumed B4/C2 authorities, pending C3 one-shot authority, and immutable-prefix D1 migration policy are valid."

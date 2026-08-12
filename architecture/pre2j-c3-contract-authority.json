@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "status": "approved_pending_c3",
+  "decision_base": "97453acc0cdec17ee919f9305f3e1bc252674e32",
+  "tracking_issue": 221,
+  "parent_batch_issue": 214,
+  "umbrella_blocker_issue": 203,
+  "policy": "one_shot_additive_v1_fragment",
+  "allowed_path": "openapi/v1/fragments/mailbox-imap-smtp-onboarding.json",
+  "credential_boundary": "MAILBOX_SECRET_RESOLVER",
+  "capability_policy": {
+    "mailbox_provider": "IMAP",
+    "imap_read_search": true,
+    "smtp_send_readiness": true,
+    "smtp_send_execution_in_c3": false,
+    "microsoft_graph_forbidden": true,
+    "password_auth_outlook_claim_forbidden": true
+  },
+  "authentication_policy": {
+    "password": "standards_servers_only",
+    "microsoft_oauth2": "entra_xoauth2_imap_smtp",
+    "microsoft_oauth2_scopes": [
+      "https://outlook.office.com/IMAP.AccessAsUser.All",
+      "https://outlook.office.com/SMTP.Send",
+      "offline_access"
+    ]
+  },
+  "transport_policy": {
+    "plaintext_forbidden": true,
+    "supported_modes": [
+      "IMPLICIT_TLS",
+      "STARTTLS"
+    ],
+    "targets_must_be_bounded_and_ssrf_safe": true
+  },
+  "rules": {
+    "authority_must_be_accepted_before_use": true,
+    "authority_is_immutable_after_acceptance": true,
+    "allowed_path_must_be_absent_in_base": true,
+    "existing_v1_paths_are_immutable": true,
+    "contracts_baseline_is_immutable": true,
+    "proto_is_immutable": true,
+    "new_major_version_required_for_breaking_change": true
+  }
+}
