@@ -1,6 +1,4 @@
-use crate::cloud_mailbox_secrets::{
-    ImapAuthenticationMode, ImapCredential, ImapTlsMode,
-};
+use crate::cloud_mailbox_secrets::{ImapAuthenticationMode, ImapCredential, ImapTlsMode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use worker::{SecureTransport, Socket};
 use zeroize::Zeroize;
@@ -112,9 +110,7 @@ impl ImapSession {
         login.zeroize();
         match result?.status() {
             ImapTaggedStatus::Ok => Ok(()),
-            ImapTaggedStatus::No | ImapTaggedStatus::Bad => {
-                Err(ImapTransportError::Authentication)
-            }
+            ImapTaggedStatus::No | ImapTaggedStatus::Bad => Err(ImapTransportError::Authentication),
         }
     }
 
@@ -319,13 +315,9 @@ fn base64_standard(input: &[u8]) -> Result<String, ImapTransportError> {
         let b = if remaining > 1 { input[offset + 1] } else { 0 };
         let c = if remaining > 2 { input[offset + 2] } else { 0 };
         output.push(BASE64_ALPHABET[usize::from(a >> 2)] as char);
-        output.push(
-            BASE64_ALPHABET[usize::from(((a & 0x03) << 4) | (b >> 4))] as char,
-        );
+        output.push(BASE64_ALPHABET[usize::from(((a & 0x03) << 4) | (b >> 4))] as char);
         if remaining > 1 {
-            output.push(
-                BASE64_ALPHABET[usize::from(((b & 0x0f) << 2) | (c >> 6))] as char,
-            );
+            output.push(BASE64_ALPHABET[usize::from(((b & 0x0f) << 2) | (c >> 6))] as char);
         } else {
             output.push('=');
         }
