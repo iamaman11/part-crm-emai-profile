@@ -21,7 +21,6 @@ const CALLBACK_PATH: &str = "/api/v1/mailbox/gmail/oauth/callback";
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StartGmailOAuthRequest {
     expected_version: u64,
-    request_digest: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,7 +97,7 @@ async fn start(request: &mut Request, env: &Env) -> Result<Response> {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    if body.expected_version == 0 || !valid_digest(&body.request_digest) {
+    if body.expected_version == 0 {
         return invalid_request(actor.actor().correlation_id().as_str());
     }
 
@@ -317,16 +316,9 @@ fn no_store(mut response: Response) -> Result<Response> {
     Ok(response)
 }
 
-fn valid_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{CallbackQuery, is_gmail_oauth_path, valid_digest};
+    use super::{CallbackQuery, is_gmail_oauth_path};
 
     #[test]
     fn gmail_oauth_routes_are_exact() {
@@ -341,13 +333,6 @@ mod tests {
         ] {
             assert!(!is_gmail_oauth_path(path));
         }
-    }
-
-    #[test]
-    fn start_digest_is_lowercase_sha256() {
-        assert!(valid_digest(&"a".repeat(64)));
-        assert!(!valid_digest(&"A".repeat(64)));
-        assert!(!valid_digest("short"));
     }
 
     #[test]
