@@ -18,6 +18,7 @@ pub mod identity;
 pub mod identity_ceremonies;
 pub mod identity_governance;
 pub mod integration_events;
+pub mod mailbox_client_associations;
 pub mod mailbox_jobs;
 pub mod mailbox_scheduling;
 pub mod mailboxes;
