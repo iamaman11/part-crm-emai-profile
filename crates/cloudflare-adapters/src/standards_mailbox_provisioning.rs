@@ -3,14 +3,14 @@ use application_ports::standards_mailbox_onboarding::{
     MicrosoftStandardsOAuthAuthorizationCode, MicrosoftStandardsOAuthAuthorizationUrl,
     MicrosoftStandardsOAuthCallbackTarget, MicrosoftStandardsOAuthCeremonyId,
     MicrosoftStandardsOAuthStartReceipt, MicrosoftStandardsOAuthState,
-    StandardsMailEndpoint, StandardsMailboxAuthenticationMode, StandardsMailboxProvisioningError,
+    StandardsMailboxAuthenticationMode, StandardsMailboxProvisioningError,
     StandardsMailboxProvisioningErrorClass, StandardsMailboxProvisioningPort,
     StandardsMailboxProvisioningReceipt, StandardsPasswordMailboxConfiguration,
     StandardsPasswordProtocolCredential,
 };
 use mailbox_domain::MailboxOnboardingVersion;
 use profile_platform_primitives::{
-    ActorContext, ActorId, MailboxOnboardingId, SecretHandle, TenantId, UnixMillis,
+    ActorContext, ActorId, IdempotencyKey, MailboxOnboardingId, SecretHandle, TenantId, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
 use worker::wasm_bindgen::JsValue;
@@ -49,11 +49,17 @@ impl StandardsMailboxProvisioningPort for CloudflareStandardsMailboxProvisioning
         actor: &ActorContext,
         onboarding_id: &MailboxOnboardingId,
         expected_version: MailboxOnboardingVersion,
+        idempotency_key: &IdempotencyKey,
         configuration: StandardsPasswordMailboxConfiguration,
     ) -> Result<StandardsMailboxProvisioningReceipt, StandardsMailboxProvisioningError> {
         let headers = base_onboarding_headers(actor, onboarding_id, expected_version)?;
         set_header(&headers, "content-type", "application/json")?;
         set_header(&headers, "x-profile-mailbox-authentication-mode", "PASSWORD")?;
+        set_header(
+            &headers,
+            "x-profile-idempotency-key",
+            idempotency_key.as_str(),
+        )?;
         let document = PasswordProvisionDocument::from(configuration);
         let mut body = serde_json::to_string(&document).map_err(|_| integrity_error())?;
         drop(document);
@@ -463,16 +469,12 @@ mod tests {
     fn callback_replay_and_expiry_fail_closed() {
         assert!(map_status(200, Operation::Callback).is_ok());
         assert_eq!(
-            map_status(409, Operation::Callback)
-                .expect_err("callback replay must fail")
-                .class(),
-            StandardsMailboxProvisioningErrorClass::ReplayRejected
+            map_status(409, Operation::Callback).map_err(|error| error.class()),
+            Err(StandardsMailboxProvisioningErrorClass::ReplayRejected)
         );
         assert_eq!(
-            map_status(410, Operation::Callback)
-                .expect_err("expired callback must fail")
-                .class(),
-            StandardsMailboxProvisioningErrorClass::Expired
+            map_status(410, Operation::Callback).map_err(|error| error.class()),
+            Err(StandardsMailboxProvisioningErrorClass::Expired)
         );
     }
 }
