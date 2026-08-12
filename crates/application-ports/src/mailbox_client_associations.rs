@@ -184,13 +184,27 @@ impl MailboxClientAssociationPortError {
 impl fmt::Display for MailboxClientAssociationPortError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self.class {
-            MailboxClientAssociationPortErrorClass::NotFound => "mailbox/client relationship target not found",
-            MailboxClientAssociationPortErrorClass::VersionConflict => "mailbox/client relationship version conflict",
-            MailboxClientAssociationPortErrorClass::InvalidState => "mailbox/client relationship state is invalid",
-            MailboxClientAssociationPortErrorClass::Conflict => "mailbox/client relationship command conflict",
-            MailboxClientAssociationPortErrorClass::IntegrityFailure => "mailbox/client relationship integrity failure",
-            MailboxClientAssociationPortErrorClass::InternalFailure => "mailbox/client relationship internal failure",
-            MailboxClientAssociationPortErrorClass::DependencyUnavailable => "mailbox/client relationship dependency unavailable",
+            MailboxClientAssociationPortErrorClass::NotFound => {
+                "mailbox/client relationship target not found"
+            }
+            MailboxClientAssociationPortErrorClass::VersionConflict => {
+                "mailbox/client relationship version conflict"
+            }
+            MailboxClientAssociationPortErrorClass::InvalidState => {
+                "mailbox/client relationship state is invalid"
+            }
+            MailboxClientAssociationPortErrorClass::Conflict => {
+                "mailbox/client relationship command conflict"
+            }
+            MailboxClientAssociationPortErrorClass::IntegrityFailure => {
+                "mailbox/client relationship integrity failure"
+            }
+            MailboxClientAssociationPortErrorClass::InternalFailure => {
+                "mailbox/client relationship internal failure"
+            }
+            MailboxClientAssociationPortErrorClass::DependencyUnavailable => {
+                "mailbox/client relationship dependency unavailable"
+            }
         })
     }
 }
