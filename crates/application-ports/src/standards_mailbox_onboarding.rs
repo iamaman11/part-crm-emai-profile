@@ -1,6 +1,6 @@
 use mailbox_domain::MailboxOnboardingVersion;
 use profile_platform_primitives::{
-    ActorContext, ActorId, MailboxOnboardingId, SecretHandle, TenantId, UnixMillis,
+    ActorContext, ActorId, IdempotencyKey, MailboxOnboardingId, SecretHandle, TenantId, UnixMillis,
 };
 
 const MAX_HOST_LENGTH: usize = 253;
@@ -140,16 +140,17 @@ pub struct StandardsPasswordProtocolCredential {
 }
 
 impl StandardsPasswordProtocolCredential {
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         endpoint: StandardsMailEndpoint,
         username: StandardsMailboxUsername,
         password: StandardsMailboxPassword,
-    ) -> Result<Self, StandardsMailboxInputError> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             endpoint,
             username,
             password,
-        })
+        }
     }
 
     #[must_use]
@@ -515,6 +516,7 @@ pub trait StandardsMailboxProvisioningPort {
         actor: &ActorContext,
         onboarding_id: &MailboxOnboardingId,
         expected_version: MailboxOnboardingVersion,
+        idempotency_key: &IdempotencyKey,
         configuration: StandardsPasswordMailboxConfiguration,
     ) -> impl core::future::Future<
         Output = Result<StandardsMailboxProvisioningReceipt, StandardsMailboxProvisioningError>,
