@@ -319,3 +319,53 @@ issue #203 product-readiness remediation
 
 Throughout the repository-owned remediation, `production_ready=false` remains immutable and no Phase 2J
 external-evidence acceptance claim is permitted.
+
+## Immutable Accepted Phase Provenance
+
+These records are a compact projection of `architecture/accepted-phases.json`. They are retained in the
+normative plan because the permanent architecture gate verifies that accepted product history cannot be
+silently rewritten while current remediation authority changes.
+
+Phase 1A was accepted through issue #114 / implementation PR #115; exact proven source head
+`21b4bc65cd1bb117504c0a0cfe18c8c11e411f25`; guarded squash merge
+`0186b780f7fed4b7c5e7f212c2fe437cbc46a5e5`.
+
+Phase 1B was accepted through issue #120 / implementation PR #135; exact proven source head
+`22b2ef36a943d07d22755bf467ec6e7c27ef081d`; guarded squash merge
+`f081e0709481d6bbaa150f5518ec8552124c78de`.
+
+Phase 2A was accepted through issue #118 / implementation PR #137; exact proven source head
+`2d80ee74bc8d05657414ea4e75dcf6f41c723926`; guarded squash merge
+`a1eb2833a74d9156bce8f4b1c6e92815cc0d55bc`.
+
+Phase 2B was accepted through issue #138 / implementation PR #140; exact proven source head
+`895594e35b77ddd86395300b1644e9df6a712123`; guarded squash merge
+`298062ea443c31c69212cb03b3988265b6bbcd48`.
+
+Phase 2C was accepted through issue #142 / implementation PR #143; exact proven source head
+`d3ad2e774a98ad5fed2565ba410ba9923062d170`; guarded squash merge
+`042d0dc72fa37e99f971d61d21544609a69c6e31`.
+
+Phase 2D was accepted through issue #144 / implementation PR #147; exact proven source head
+`ad491e2f0c9ba9f79130923fdde6fe1407af4dc5`; guarded squash merge
+`26f8fa82bdad02a5a0867b0d36748b915579ef1c`.
+
+Phase 2E was accepted through issue #148 / implementation PR #152; exact proven source head
+`0cefa67abe810db079102462f33ec28fcfc73f69`; guarded squash merge
+`6c6ba4564de88b40d282081e701a2d24f1611cc2`.
+
+Phase 2F was accepted through issue #154 / implementation PR #155; exact proven source head
+`c36df418f9fa877c5143327e97b60087c33ffd02`; guarded squash merge
+`42b26dc0c78c0c65dcea2bc90bb5ce6a3bd4b02b`.
+
+Phase 2G was accepted through issue #159 / implementation PR #160; exact proven source head
+`85ca77b430e7d184204082aea7d51a08fdd72cf9`; guarded squash merge
+`48e24f1f365d87a07bf97322c81099dd6a89f046`.
+
+Phase 2H was accepted through issue #163 / implementation PR #164; exact proven source head
+`9add9b94d0de255b93e5a7c24584fcf6756462a7`; guarded squash merge
+`a32768feddb3da69b872e701bc529aad3521e1b0`.
+
+Phase 2I was accepted through issue #167 / implementation PR #168; exact proven source head
+`c1075337cfc582d0f4c00ec34b1aa7cda9ac1101`; guarded squash merge
+`800c634147d6300ea3989ff0cf87ade6e2387ee9`.
