@@ -625,7 +625,7 @@
     "ui_target": "docs/UI_ARCHITECTURE.md",
     "accepted_capabilities": "docs/DEVELOPER_CAPABILITY_MATRIX.md",
     "index": "docs/INDEX.md",
-    "pre2j_execution_blocker": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+    "pre2j_closeout": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
     "readiness": "docs/status.json",
     "security": "docs/THREAT_MODEL.md",
     "accepted_phase_ledger": "architecture/accepted-phases.json"

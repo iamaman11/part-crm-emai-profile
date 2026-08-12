@@ -228,13 +228,18 @@ def validate_docs() -> None:
     matrix = (ROOT / "docs" / "DEVELOPER_CAPABILITY_MATRIX.md").read_text(encoding="utf-8")
     next_sections = re.findall(r"^### (Phase [^\n]+?) — NEXT\s*$", plan, re.MULTILINE)
     if next_sections:
-        raise SystemExit(f"no product Phase ... — NEXT section is allowed while pre-2J remediation is active: {next_sections}")
-    blocked_phase2j = "Phase 2J — Production-readiness evidence and controlled rollout — BLOCKED / NEXT AFTER PRE-2J"
-    if blocked_phase2j not in plan:
-        raise SystemExit("DEVELOPMENT_PLAN.md must keep Phase 2J blocked behind pre-2J closure")
+        raise SystemExit(f"no bare product Phase ... — NEXT section is allowed; use an explicit accepted/blocked/unblocked status: {next_sections}")
+    unblocked_phase2j = "Phase 2J — Production-readiness evidence and controlled rollout — UNBLOCKED / NOT STARTED"
+    if unblocked_phase2j not in plan:
+        raise SystemExit("DEVELOPMENT_PLAN.md must keep Phase 2J unblocked but not started after pre-2J closure")
     immediate = plan.split("## 19. Immediate Next Action", 1)
-    if len(immediate) != 2 or "PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md" not in immediate[1] or "Do not start Phase 2J" not in immediate[1]:
-        raise SystemExit("Immediate Next Action must enforce the active pre-2J blocker")
+    if (
+        len(immediate) != 2
+        or "Phase 2J is unblocked but not started" not in immediate[1]
+        or "separate bounded work batch" not in immediate[1]
+        or "`production_ready=false`" not in immediate[1]
+    ):
+        raise SystemExit("Immediate Next Action must preserve post-closeout Phase 2J and production-readiness boundaries")
 
     required_plan_markers = (
         "Phase 2D — CQRS read models, global search and client-mail query contract — ACCEPTED",
@@ -243,7 +248,7 @@ def validate_docs() -> None:
         "Phase 2G — Durable realtime notification hub — ACCEPTED",
         "Phase 2H — Complete standalone UI and administration UX — ACCEPTED",
         "Phase 2I — Standalone E2E, security, recovery and operational hardening — ACCEPTED",
-        "Phase 2J — Production-readiness evidence and controlled rollout — BLOCKED / NEXT AFTER PRE-2J",
+        "Phase 2J — Production-readiness evidence and controlled rollout — UNBLOCKED / NOT STARTED",
         "`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`",
         "Phase 2I was accepted through issue #167 / PR #168",
         "`c1075337cfc582d0f4c00ec34b1aa7cda9ac1101`",
@@ -272,6 +277,7 @@ def validate_docs() -> None:
     )
     stale_plan_markers = (
         "Phase 2J — Production-readiness evidence and controlled rollout — NEXT",
+        "Phase 2J — Production-readiness evidence and controlled rollout — BLOCKED / NEXT AFTER PRE-2J",
         "Phase 2J is the unique NEXT",
         "Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — NEXT",
         "Phase 2F — Durable device jobs, browser mailbox lane and materialization integration — NEXT",
@@ -416,7 +422,7 @@ def build_inventory() -> dict[str, object]:
             "ui_target": "docs/UI_ARCHITECTURE.md",
             "accepted_capabilities": "docs/DEVELOPER_CAPABILITY_MATRIX.md",
             "index": "docs/INDEX.md",
-            "pre2j_execution_blocker": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+            "pre2j_closeout": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
             "readiness": "docs/status.json",
             "security": "docs/THREAT_MODEL.md",
             "accepted_phase_ledger": "architecture/accepted-phases.json",

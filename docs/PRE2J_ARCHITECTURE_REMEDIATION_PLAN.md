@@ -1,10 +1,10 @@
 # Pre-2J Architecture Remediation Plan
 
-**Status:** ACTIVE / BLOCKING PHASE 2J  
-**Audit base:** accepted `main` at `d8b5bd07b99596d066fa2af976b263d41b5e2f3c`  
-**Current accepted base:** `602ab60fe1e679ce5bff7a0558d9190925b378d2` after accepted R9 issue #198 / PR #199 from exact source head `81af1111fb3ca5ca5fce286def20e2dc748f497b`
+**Status:** CLOSED / PHASE 2J UNBLOCKED  
+**Initial audit base:** accepted `main` at `d8b5bd07b99596d066fa2af976b263d41b5e2f3c`  
+**Final closeout audit base:** accepted `main` at `6eccf265d31a0bfe30c3e982daa16417b7f62f44` after R9 provenance PR #200  
 **Production readiness:** remains `false`  
-**Rule:** Phase 2J External evidence work must not begin while any repository-owned P1 below is open.
+**Rule:** Phase 2J may start only from accepted `main` containing this closeout; this closeout does not itself accept Phase 2J or production readiness.
 
 ## 1. Purpose
 
@@ -14,9 +14,9 @@ The target is not maximal abstraction. The target is a boring, explicit architec
 
 ## 2. Audit verdict
 
-At the audit base, no P0 correctness/security blocker was found. The foundation is materially strong in domain purity, tenant scoping, authorization-before-projection/provider access, fencing/CAS, durable outbox/realtime sequencing, encrypted immutable generations, Bridge recovery ownership and negative CI evidence.
+At the initial audit base, no P0 correctness/security blocker was found. The foundation was materially strong in domain purity, tenant scoping, authorization-before-projection/provider access, fencing/CAS, durable outbox/realtime sequencing, encrypted immutable generations, Bridge recovery ownership and negative CI evidence, but repository-owned P1/P2 guardrail, authority, maintainability and documentation defects still blocked Phase 2J.
 
-However, accepted green CI is not yet sufficient for a 10/10 foundation because several P1 guardrail/authority/documentation defects remain. Phase 2J therefore stays frozen until this plan reaches the closure rule in section 6.
+The final repository-owned closeout audit at accepted `main` `6eccf265d31a0bfe30c3e982daa16417b7f62f44` found **repository-owned P0 = 0** and **repository-owned P1 = 0**. R1–R9 remain accepted and regression-protected. The retained Repository Quality Audit overlap from R8 is explicitly non-blocking because it preserves independent negative/regression evidence without hidden correctness, security or contract risk. Historical Repository Step 10 synthetic device-authority labels remain provenance only; current production device authorization belongs to `device-domain`, application/use-case orchestration and D1/persistence composition, and certification-owned runtime-like device authority remains forbidden. Phase 2J is unblocked but not started, and `production_ready=false` remains mandatory until Phase 2J external acceptance.
 
 ## 3. Findings and remediation sequence
 
@@ -236,7 +236,7 @@ Native workspace clippy already uses `-D warnings`, but Cloudflare adapter tests
 
 ### R9 — P2 — Certification domain contains a second device-authorization model — ACCEPTED
 
-**Accepted main:** squash merge `602ab60fe1e679ce5bff7a0558d9190925b378d2` via issue #198 / PR #199 from exact source head `81af1111fb3ca5ca5fce286def20e2dc748f497b`.
+**Accepted main:** squash merge `602ab60fe1e679ce5bff7a0558d9190925b378d2` via issue #198 / PR #199 from exact source head `81af1111fb3ca5ca5fce286def20e2dc748f497b`. Accepted provenance was recorded by PR #200, producing `main` `6eccf265d31a0bfe30c3e982daa16417b7f62f44`.
 
 **Finding**
 
@@ -256,12 +256,12 @@ Native workspace clippy already uses `-D warnings`, but Cloudflare adapter tests
 - exact implementation source head is `81af1111fb3ca5ca5fce286def20e2dc748f497b` and accepted squash on `main` is `602ab60fe1e679ce5bff7a0558d9190925b378d2`;
 - certification-domain owns no runtime-like device authorization registry/grant/revoke/unwrap authority;
 - permanent policy fails closed on reintroduction of certification-owned device authority;
-- one production device-authorization owner remains outside certification-domain;
-- all 12 permanent workflows completed successfully as real jobs on the exact implementation source head before merge, with `production_ready=false` and Phase 2J blocked.
+- one production device-authorization authority chain remains outside certification-domain;
+- all 12 permanent workflows completed successfully as real jobs on the exact implementation source head before merge, with `production_ready=false` and Phase 2J blocked at R9 implementation acceptance.
 
 ## 4. PR strategy
 
-Use multiple bounded PRs. The expected sequence is:
+The bounded remediation sequence was:
 
 1. **Guardrail integrity** — R1. Accepted via PR #173 / `88d4412084f85b3512ce28a3bec637fc6e687151`.
 2. **Canonical routing** — R2. Accepted via PR #175 / `443bd39a9589eb0fb75f305043a2acc1b93314a1`.
@@ -271,31 +271,37 @@ Use multiple bounded PRs. The expected sequence is:
 6. **Frontend API modularization** — R6. Accepted via PR #190 / `48c49349047a0a200e6d405ed1a2623ab6183d87` from exact source head `94e66d139b1b5227c9edb2981d07e529afdf72d5`.
 7. **Current documentation/security authority** — R7. Accepted via PR #193 / `ab683ef25a6ebce1ce0fc9483669fe6bdcfa9676` from exact source head `22ec5da1c72681f7013d4edbdf53c4d3c6563dba`.
 8. **Warning/dead-code/CI hygiene** — R8. Accepted via issue #195 / PR #196 / `a6b9889b646a253faf70704f67a2e07ec1cf90ab` from exact source head `1eebc773d6e2cd864890e7f3d330f3b97424bf39`; retained Repository Quality Audit overlap is evidence-preserving and non-blocking.
-9. **Certification ownership cleanup** — R9. Accepted via issue #198 / PR #199 / `602ab60fe1e679ce5bff7a0558d9190925b378d2` from exact source head `81af1111fb3ca5ca5fce286def20e2dc748f497b`.
-10. **Final pre-2J audit closeout** — re-run full inventory, verify no repository-owned P0/P1, record accepted exact-head evidence, then and only then resume Phase 2J.
+9. **Certification ownership cleanup** — R9. Accepted via issue #198 / PR #199 / `602ab60fe1e679ce5bff7a0558d9190925b378d2` from exact source head `81af1111fb3ca5ca5fce286def20e2dc748f497b`; provenance accepted via PR #200 / `6eccf265d31a0bfe30c3e982daa16417b7f62f44`.
+10. **Final pre-2J audit closeout** — issue #201; bounded current-authority closeout from exact accepted R9-provenance `main` `6eccf265d31a0bfe30c3e982daa16417b7f62f44`.
 
-R4/R6 may require more than one PR because public contract migration should be capability-bounded. A single mega-PR is explicitly rejected for this remediation because it would weaken reviewability and exact-head evidence.
+R4/R6 were capability-bounded rather than merged into a mega-PR. The final closeout likewise contains no Phase 2J implementation, no frozen contract mutation and no temporary workflow artifact.
 
-## 5. Rules for every remediation PR
+## 5. Rules retained after remediation
 
-- branch from the latest accepted `main` after the previous remediation merges;
-- one coherent architectural risk per PR; no unrelated cleanup;
-- preserve `production_ready=false` and Phase 2J External evidence state;
-- update tests/negative fixtures with the implementation, not later;
+- implementation branches start from the latest accepted `main`;
+- one coherent architectural/product risk per PR; no unrelated cleanup;
+- preserve `production_ready=false` until Phase 2J External acceptance;
+- update tests/negative fixtures with implementation changes, not later;
 - require all permanent workflows green at the exact source head;
 - require `behind_by=0`, no unresolved review threads and no unaddressed review findings before merge;
 - prefer deleting compatibility/dead code over adding another facade;
 - add a new abstraction only when it has a concrete current owner/use case and reduces coupling;
 - do not split crates/modules mechanically for line count alone.
 
-## 6. Closure rule before Phase 2J
+## 6. Final closeout result before Phase 2J
 
-Phase 2J may resume only when all of the following are true on accepted `main`:
+The final repository-owned closeout found:
 
 - repository-owned P0 = 0;
 - repository-owned P1 = 0;
-- all R1-R9 findings are closed with permanent regression evidence;
-- remaining P2 items are either closed or explicitly documented as non-blocking with no hidden correctness/security/contract risk;
-- current documentation and machine-readable status agree;
-- full permanent workflow set is green at the exact accepted head;
-- `production_ready` is still `false` until Phase 2J external acceptance itself is completed.
+- R1–R9 remain accepted and regression-protected;
+- remaining P2 = retained evidence-preserving Repository Quality Audit overlap only, explicitly non-blocking with no hidden correctness/security/contract risk;
+- no resurrected compatibility facade or duplicate production authority was found;
+- no obsolete `mutation_failure.rs` runtime path or certification-owned device authority was found;
+- frozen `openapi/v1/**` remains unchanged by the closeout;
+- README/docs/status/threat-model authority is reconciled, while `architecture/accepted-phases.json` correctly remains accepted through Phase 2I because Phase 2J has not started or been accepted;
+- historical Step 10 synthetic device evidence is preserved as history and explicitly separated from current production device-authorization ownership;
+- the permanent workflow inventory remains exactly 12 workflows and no temporary workflow artifact is part of the closeout;
+- `production_ready=false` remains unchanged.
+
+Phase 2J is unblocked but not started on accepted `main` containing this closeout. Phase 2J must be a separate work batch and may promote production readiness only after mandatory real external evidence is accepted. Exact-head CI/review/interlock evidence for the closeout PR is an acceptance precondition and is not transferable across candidate heads.

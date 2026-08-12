@@ -9,10 +9,10 @@ privacy boundaries.
 
 - **Accepted repository-local product phase: Phase 2I.** The immutable acceptance ledger is
   [`architecture/accepted-phases.json`](architecture/accepted-phases.json).
-- **Pre-2J remediation: ACTIVE / BLOCKING PHASE 2J.** The active repository-owned closeout is
+- **Pre-2J remediation: CLOSED / PHASE 2J UNBLOCKED.** The accepted repository-owned closeout record is
   [`docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md).
-- **Phase 2J has not started.** Real production evidence and controlled rollout remain blocked until
-  the pre-2J closure rule is satisfied on accepted `main`.
+- **Phase 2J has not started.** The repository-owned pre-2J blocker is closed; real production evidence
+  and controlled rollout remain a separate external-evidence phase and are not yet accepted.
 - **Production readiness:** `production_ready=false`. The machine-readable projection is
   [`docs/status.json`](docs/status.json).
 
@@ -25,7 +25,7 @@ accepted evidence remains in [`docs/DELIVERY_ROADMAP.md`](docs/DELIVERY_ROADMAP.
 Start with [`docs/INDEX.md`](docs/INDEX.md). The main current sources are:
 
 - [`docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) —
-  temporary pre-2J blocker and closure rule while its status is ACTIVE;
+  accepted R1–R9 remediation and final repository-owned pre-2J closeout record;
 - [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — normative product phase plan;
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) + accepted ADRs — stable architecture invariants;
 - [`docs/DEVELOPER_CAPABILITY_MATRIX.md`](docs/DEVELOPER_CAPABILITY_MATRIX.md) — accepted capability
@@ -48,6 +48,8 @@ historical evidence file or phase-specific closeout document.
 - the React SPA uses feature-owned routes and feature-owned capability API modules; shared API code is
   transport/generated-contract infrastructure only;
 - governed public DTOs are Rust-owned and generated deterministically to OpenAPI/TypeScript;
+- production device authorization is owned by `device-domain`, application/use-case orchestration and
+  D1/persistence composition; `certification-domain` is not a device-authorization authority;
 - authorization, neutral disclosure, idempotency, fencing, privacy and recovery boundaries are backed
   by permanent positive and negative CI evidence.
 
