@@ -465,6 +465,50 @@ fn microsoft_callback_is_exactly_tenant_actor_bound_and_can_activate() -> TestRe
 }
 
 #[test]
+fn microsoft_reauth_required_can_complete_and_reactivate() -> TestResult {
+    let actor = actor("tenant_C3_ms_reauth", "actor_C3_owner")?;
+    let onboarding_id = MailboxOnboardingId::parse("onboarding_C3_ms_reauth")?;
+    let version = MailboxOnboardingVersion::new(7);
+    let state = input(
+        MicrosoftStandardsOAuthState::parse("state_C3_reauth_0123456789abcdef"),
+        "invalid OAuth state",
+    )?;
+    let target = callback_target(&actor, onboarding_id.clone(), version);
+    let onboarding_port = FakeOnboardingPort::new(onboarding(
+        &actor,
+        onboarding_id,
+        MailboxProvider::Imap,
+        MailboxOnboardingStatus::ReauthRequired,
+        version,
+    )?);
+    let resolver = FakeProvisioningPort::new(target.clone())?;
+    resolver.set_receipt(
+        StandardsMailboxAuthenticationMode::MicrosoftOAuth2,
+        true,
+        true,
+    )?;
+    let outcome = block_on(complete_microsoft_standards_oauth_callback(
+        &actor,
+        MembershipRole::TenantOwner,
+        &onboarding_port,
+        &resolver,
+        &target,
+        &state,
+        authorization_code()?,
+        evidence("microsoft_reauth_complete")?,
+    ))?;
+    assert_eq!(outcome.status(), MailboxOnboardingStatus::Active);
+    assert_eq!(outcome.version(), MailboxOnboardingVersion::new(8));
+    assert_eq!(
+        outcome.authentication_mode(),
+        StandardsMailboxAuthenticationMode::MicrosoftOAuth2
+    );
+    assert_eq!(resolver.complete_calls.get(), 1);
+    assert!(resolver.discarded_handles.borrow().is_empty());
+    Ok(())
+}
+
+#[test]
 fn invalid_readiness_or_failed_c1_commit_discards_resolver_handle() -> TestResult {
     let actor = actor("tenant_C3_discard", "actor_C3_owner")?;
     let onboarding_id = MailboxOnboardingId::parse("onboarding_C3_discard")?;
@@ -579,7 +623,7 @@ fn callback_target(
 }
 
 fn password_configuration() -> TestResult<StandardsPasswordMailboxConfiguration> {
-    Ok(input(
+    input(
         StandardsPasswordMailboxConfiguration::new(
             StandardsPasswordProtocolCredential::new(
                 input(
@@ -621,7 +665,7 @@ fn password_configuration() -> TestResult<StandardsPasswordMailboxConfiguration>
             ),
         ),
         "invalid standards mailbox configuration",
-    )?)
+    )
 }
 
 fn provisioning_receipt(
