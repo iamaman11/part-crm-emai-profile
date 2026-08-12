@@ -9,10 +9,14 @@ privacy boundaries.
 
 - **Accepted repository-local product phase: Phase 2I.** The immutable acceptance ledger is
   [`architecture/accepted-phases.json`](architecture/accepted-phases.json).
-- **Pre-2J remediation: CLOSED / PHASE 2J UNBLOCKED.** The accepted repository-owned closeout record is
-  [`docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md).
-- **Phase 2J has not started.** The repository-owned pre-2J blocker is closed; real production evidence
-  and controlled rollout remain a separate external-evidence phase and are not yet accepted.
+- **R1–R9 pre-2J architecture remediation: CLOSED / ACCEPTED HISTORY.** The accepted closeout record is
+  [`docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md); it is not
+  reopened by the current follow-up.
+- **Pre-2J product-readiness remediation: ACTIVE / BLOCKING Phase 2J.** Current execution authority is
+  [`docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`](docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md),
+  tracked by issue #203. Initial repository-owned findings are P0=0, P1=5, P2=1.
+- **Phase 2J is blocked and has not started.** Repository-owned remediation #203 must be accepted through
+  Batch F before Phase 2J can return to unblocked/not-started and external production evidence may begin.
 - **Production readiness:** `production_ready=false`. The machine-readable projection is
   [`docs/status.json`](docs/status.json).
 
@@ -24,8 +28,10 @@ accepted evidence remains in [`docs/DELIVERY_ROADMAP.md`](docs/DELIVERY_ROADMAP.
 
 Start with [`docs/INDEX.md`](docs/INDEX.md). The main current sources are:
 
+- [`docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`](docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md) —
+  current pre-2J product-readiness remediation authority, issue #203;
 - [`docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) —
-  accepted R1–R9 remediation and final repository-owned pre-2J closeout record;
+  historical accepted R1–R9 remediation and closeout record;
 - [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — normative product phase plan;
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) + accepted ADRs — stable architecture invariants;
 - [`docs/DEVELOPER_CAPABILITY_MATRIX.md`](docs/DEVELOPER_CAPABILITY_MATRIX.md) — accepted capability
@@ -70,5 +76,6 @@ head, zero blocking reviews/unresolved threads, `behind_by=0` and a guarded squa
 - Product intent: [`docs/PRODUCT.md`](docs/PRODUCT.md)
 - Future CRM boundary: [`docs/FUTURE_DEVELOPMENT.md`](docs/FUTURE_DEVELOPMENT.md)
 
-Phase 2J External evidence cannot be substituted with repository-local/synthetic proof and cannot set
-`production_ready=true` before every mandatory external acceptance gate is reviewed and accepted.
+Phase 2J External evidence cannot be collected or claimed while issue #203 remains the active
+repository-owned blocker. `production_ready=true` remains forbidden until Phase 2J is later unblocked,
+executed, and every mandatory external acceptance gate is reviewed and accepted.

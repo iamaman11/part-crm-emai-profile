@@ -13,8 +13,17 @@
       "repository_owned_p1": 0,
       "closed_findings": ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"]
     },
+    "pre2j_product_readiness_remediation": {
+      "status": "active_blocking",
+      "plan": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
+      "tracking_issue": 203,
+      "repository_owned_p0": 0,
+      "repository_owned_p1": 5,
+      "repository_owned_p2": 1
+    },
     "phase_2j": {
-      "status": "unblocked_not_started",
+      "status": "blocked_pending_repository_remediation",
+      "blocked_by_issue": 203,
       "plan": "docs/DEVELOPMENT_PLAN.md",
       "production_ready_may_change_only_after_acceptance": true
     },
@@ -47,8 +56,10 @@
   },
   "next_repository_step": {
     "number": null,
-    "name": "Phase 2J external production evidence",
-    "status": "unblocked_not_started"
+    "name": "Pre-2J product-readiness remediation",
+    "status": "active_blocking",
+    "tracking_issue": 203,
+    "authority": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md"
   },
   "accepted_steps": [
     {
@@ -168,6 +179,7 @@
     "composition_epic": "accepted_epic_43_repository_local_complete",
     "repository_local_product_phase": "accepted_phase_2i",
     "pre2j_architecture_remediation": "closed_r1_r9",
+    "pre2j_product_readiness_remediation": "active_issue_203",
     "application_ownership": "r5_accepted_capability_owners_without_compatibility_facades",
     "frontend_api_ownership": "r6_accepted_feature_owned_capability_api"
   },
