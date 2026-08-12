@@ -81,7 +81,7 @@ mod tests {
     }
 
     #[test]
-    fn Gmail_oauth_routes_are_exact_and_wrong_methods_fail_closed() {
+    fn gmail_oauth_routes_are_exact_and_wrong_methods_fail_closed() {
         let start = [
             "api",
             "v1",
