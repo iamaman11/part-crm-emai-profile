@@ -2,8 +2,8 @@ use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
 use crate::command_evidence;
-use application_ports::gmail_oauth_onboarding::{GmailOAuthAuthorizationCode, GmailOAuthState};
 use application_ports::MailboxOnboardingVersion;
+use application_ports::gmail_oauth_onboarding::{GmailOAuthAuthorizationCode, GmailOAuthState};
 use cloudflare_adapters::d1_mailbox_onboarding::D1MailboxOnboardingApplicationRepository;
 use cloudflare_adapters::gmail_oauth_provisioning::CloudflareGmailOAuthProvisioningPort;
 use control_plane_contract::D1_CATALOG_BINDING;
@@ -141,12 +141,8 @@ async fn callback(request: &Request, env: &Env) -> Result<Response> {
         Ok(value) => value,
         Err(error) => return operation_failure(&correlation_hint(request), error),
     };
-    let Some(actor) = resolve_active_request_actor(
-        request,
-        env,
-        Some(target.tenant_id().as_str()),
-    )
-    .await?
+    let Some(actor) =
+        resolve_active_request_actor(request, env, Some(target.tenant_id().as_str())).await?
     else {
         return not_found(&correlation_hint(request));
     };
@@ -156,14 +152,8 @@ async fn callback(request: &Request, env: &Env) -> Result<Response> {
         if query.authorization_code.is_some() {
             return invalid_request(actor.actor().correlation_id().as_str());
         }
-        match deny_gmail_oauth_callback(
-            actor.actor(),
-            role,
-            &provisioning_port,
-            &target,
-            &state,
-        )
-        .await
+        match deny_gmail_oauth_callback(actor.actor(), role, &provisioning_port, &target, &state)
+            .await
         {
             Ok(()) => {
                 return json_no_store(&GmailOAuthCallbackReceipt {
@@ -312,7 +302,9 @@ fn json_no_store<T: Serialize>(value: &T) -> Result<Response> {
 fn no_store(mut response: Response) -> Result<Response> {
     response.headers_mut().set("cache-control", "no-store")?;
     response.headers_mut().set("pragma", "no-cache")?;
-    response.headers_mut().set("referrer-policy", "no-referrer")?;
+    response
+        .headers_mut()
+        .set("referrer-policy", "no-referrer")?;
     Ok(response)
 }
 
