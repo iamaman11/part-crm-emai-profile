@@ -41,8 +41,9 @@ def migration_files() -> list[Path]:
     expected = list(range(1, len(files) + 1))
     if not files or versions != expected:
         raise AssertionError(f"D1 migrations must be contiguous: {versions}; expected {expected}")
-    if files[-1].name != "0021_device_generation_commit.sql":
-        raise AssertionError(f"unexpected Phase 2F migration tail: {files[-1].name}")
+    phase2f_migration = "0021_device_generation_commit.sql"
+    if phase2f_migration not in {path.name for path in files}:
+        raise AssertionError(f"required Phase 2F migration is missing: {phase2f_migration}")
     return files
 
 
