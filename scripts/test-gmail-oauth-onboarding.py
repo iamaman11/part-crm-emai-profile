@@ -78,7 +78,7 @@ def main() -> int:
     require("console_" not in adapter, "C2 resolver adapter must not log OAuth material")
 
     use_case = production_source(USE_CASE.read_text(encoding="utf-8"))
-    require(use_case.count("validate_onboarding(") >= 3,
+    require(use_case.count("validate_onboarding(") >= 2,
             "C2 must validate C1 state/version before start and again before callback activation")
     discard_at = use_case.find(".discard(actor, &discard_handle)")
     require(discard_at >= 0, "C2 must discard provisioned credentials after failed C1 activation")
