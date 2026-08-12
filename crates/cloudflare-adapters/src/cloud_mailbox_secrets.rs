@@ -342,7 +342,10 @@ mod tests {
         let xoauth2 = into_imap(serde_json::from_str::<MailboxCredential>(
             r#"{"kind":"imap","host":"outlook.office365.com","port":993,"username":"user@example.com","password":null,"access_token":"opaque-access-token","authentication_mode":"xoauth2","tls":"implicit"}"#,
         )?)?;
-        assert_eq!(xoauth2.authentication_mode(), ImapAuthenticationMode::Xoauth2);
+        assert_eq!(
+            xoauth2.authentication_mode(),
+            ImapAuthenticationMode::Xoauth2
+        );
         assert!(xoauth2.validate());
 
         let mixed = into_imap(serde_json::from_str::<MailboxCredential>(
