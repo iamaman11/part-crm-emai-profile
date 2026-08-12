@@ -52,9 +52,8 @@ impl MailboxOnboardingApplicationPort for FakeOnboardingPort {
         _actor: &ActorContext,
         _command_name: &str,
         _evidence: &CommandExecutionEvidence,
-    ) -> impl Future<
-        Output = Result<MailboxOnboardingReplayDecision, MailboxOnboardingPortError>,
-    > {
+    ) -> impl Future<Output = Result<MailboxOnboardingReplayDecision, MailboxOnboardingPortError>>
+    {
         ready(Ok(MailboxOnboardingReplayDecision::Miss))
     }
 
@@ -190,7 +189,10 @@ fn pending_and_reauth_start_are_owner_only_and_versioned() -> TestResult {
         pending_id,
         MailboxOnboardingVersion::INITIAL,
     ))?;
-    assert_eq!(pending.expected_version(), MailboxOnboardingVersion::INITIAL);
+    assert_eq!(
+        pending.expected_version(),
+        MailboxOnboardingVersion::INITIAL
+    );
     assert_eq!(pending_provisioning.start_calls.get(), 1);
 
     let reauth_id = MailboxOnboardingId::parse("onboarding_C2_reauth")?;
@@ -202,11 +204,8 @@ fn pending_and_reauth_start_are_owner_only_and_versioned() -> TestResult {
         MailboxOnboardingStatus::ReauthRequired,
         reauth_version,
     )?);
-    let reauth_provisioning = FakeProvisioningPort::new(callback_target(
-        &actor,
-        reauth_id.clone(),
-        reauth_version,
-    ))?;
+    let reauth_provisioning =
+        FakeProvisioningPort::new(callback_target(&actor, reauth_id.clone(), reauth_version))?;
     let reauth = block_on(start_gmail_oauth_onboarding(
         &actor,
         MembershipRole::TenantOwner,
@@ -315,11 +314,8 @@ fn invalid_provider_and_terminal_or_active_states_never_touch_resolver() -> Test
             status,
             version,
         )?);
-        let provisioning = FakeProvisioningPort::new(callback_target(
-            &actor,
-            onboarding_id.clone(),
-            version,
-        ))?;
+        let provisioning =
+            FakeProvisioningPort::new(callback_target(&actor, onboarding_id.clone(), version))?;
         assert_eq!(
             block_on(start_gmail_oauth_onboarding(
                 &actor,
@@ -385,11 +381,7 @@ fn callback_is_bound_to_exact_tenant_and_starter_actor() -> TestResult {
     );
     assert_eq!(other_actor_provisioning.deny_calls.get(), 0);
 
-    let exact_target = callback_target(
-        &actor,
-        onboarding_id,
-        MailboxOnboardingVersion::INITIAL,
-    );
+    let exact_target = callback_target(&actor, onboarding_id, MailboxOnboardingVersion::INITIAL);
     let exact_provisioning = FakeProvisioningPort::new(exact_target.clone())?;
     block_on(deny_gmail_oauth_callback(
         &actor,
@@ -474,7 +466,10 @@ fn completion_activates_exact_version_and_discards_handle_after_failed_commit() 
     assert_eq!(failed_provisioning.complete_calls.get(), 1);
     let discarded = failed_provisioning.discarded_handles.borrow();
     assert_eq!(discarded.len(), 1);
-    assert_eq!(discarded.first().map(SecretHandle::as_str), Some("secret_C2_new"));
+    assert_eq!(
+        discarded.first().map(SecretHandle::as_str),
+        Some("secret_C2_new")
+    );
     Ok(())
 }
 
