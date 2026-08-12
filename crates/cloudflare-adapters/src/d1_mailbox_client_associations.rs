@@ -12,7 +12,7 @@ use mailbox_domain::MailboxClientAssociationAction;
 use profile_platform_primitives::{ActorContext, ClientId, MailboxBindingId, TenantScope};
 use serde::Deserialize;
 use worker::d1::{D1Database, D1PreparedStatement};
-use worker::{Error, query};
+use worker::{query, Error};
 
 const ASSOCIATION_COMMAND: &str = r#"
 INSERT INTO mailbox_client_association_commands (
@@ -121,7 +121,8 @@ impl MailboxClientAssociationApplicationPort for D1MailboxClientAssociationAppli
         .await
         .map_err(|_| dependency_error())?;
 
-        row.map(|row| map_context(scope, binding_id, row)).transpose()
+        row.map(|row| map_context(scope, binding_id, row))
+            .transpose()
     }
 
     async fn change_association(
