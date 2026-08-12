@@ -25,6 +25,7 @@ pub mod notification_realtime;
 pub mod notification_realtime_audience;
 pub mod notifications;
 pub mod profile_assignment_context;
+pub mod profile_creation;
 pub mod profiles;
 pub mod query;
 pub mod query_clients;
