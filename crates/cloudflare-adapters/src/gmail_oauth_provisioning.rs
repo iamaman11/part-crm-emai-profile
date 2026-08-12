@@ -43,7 +43,11 @@ impl GmailOAuthProvisioningPort for CloudflareGmailOAuthProvisioningPort<'_> {
         expected_version: MailboxOnboardingVersion,
     ) -> Result<GmailOAuthStartReceipt, GmailOAuthProvisioningError> {
         let headers = base_actor_headers(actor)?;
-        set_header(&headers, "x-profile-mailbox-onboarding-id", onboarding_id.as_str())?;
+        set_header(
+            &headers,
+            "x-profile-mailbox-onboarding-id",
+            onboarding_id.as_str(),
+        )?;
         set_header(
             &headers,
             "x-profile-mailbox-onboarding-version",
@@ -52,8 +56,8 @@ impl GmailOAuthProvisioningPort for CloudflareGmailOAuthProvisioningPort<'_> {
         set_header(&headers, "x-profile-oauth-scope", GMAIL_READONLY_SCOPE)?;
         let response = fetch(self.env, START_ENDPOINT, headers, StartStatus::Start).await?;
         let document: StartDocument = parse_json(response).await?;
-        let ceremony_id = GmailOAuthCeremonyId::parse(document.ceremony_id)
-            .map_err(|_| integrity_error())?;
+        let ceremony_id =
+            GmailOAuthCeremonyId::parse(document.ceremony_id).map_err(|_| integrity_error())?;
         let authorization_url = GmailOAuthAuthorizationUrl::parse(document.authorization_url)
             .map_err(|_| integrity_error())?;
         Ok(GmailOAuthStartReceipt::new(
@@ -185,21 +189,16 @@ fn set_header(
     headers.set(name, value).map_err(|_| integrity_error())
 }
 
-fn map_status(
-    status: u16,
-    operation: StartStatus,
-) -> Result<(), GmailOAuthProvisioningError> {
+fn map_status(status: u16, operation: StartStatus) -> Result<(), GmailOAuthProvisioningError> {
     match status {
         200 | 204 => Ok(()),
         404 | 401 | 403 => Err(not_found_error()),
         410 => Err(GmailOAuthProvisioningError::new(
             GmailOAuthProvisioningErrorClass::Expired,
         )),
-        409 | 412 if matches!(operation, StartStatus::Callback) => {
-            Err(GmailOAuthProvisioningError::new(
-                GmailOAuthProvisioningErrorClass::ReplayRejected,
-            ))
-        }
+        409 | 412 if matches!(operation, StartStatus::Callback) => Err(
+            GmailOAuthProvisioningError::new(GmailOAuthProvisioningErrorClass::ReplayRejected),
+        ),
         409 | 412 => Err(GmailOAuthProvisioningError::new(
             GmailOAuthProvisioningErrorClass::Conflict,
         )),
@@ -228,7 +227,10 @@ fn response_content_length_exceeds(
     response: &worker::Response,
     maximum: usize,
 ) -> Result<bool, GmailOAuthProvisioningError> {
-    let value = response.headers().get("content-length").map_err(|_| integrity_error())?;
+    let value = response
+        .headers()
+        .get("content-length")
+        .map_err(|_| integrity_error())?;
     let Some(value) = value else {
         return Ok(false);
     };
