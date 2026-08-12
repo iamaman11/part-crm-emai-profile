@@ -142,6 +142,7 @@ REQUIRED_INDEX_LINKS = [
     "accepted-phases.json",
     "REALTIME_NOTIFICATIONS.md",
     "PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+    "PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
     "status.json",
     "THREAT_MODEL.md",
 ]
@@ -228,41 +229,36 @@ def validate_docs() -> None:
     matrix = (ROOT / "docs" / "DEVELOPER_CAPABILITY_MATRIX.md").read_text(encoding="utf-8")
     next_sections = re.findall(r"^### (Phase [^\n]+?) — NEXT\s*$", plan, re.MULTILINE)
     if next_sections:
-        raise SystemExit(f"no bare product Phase ... — NEXT section is allowed; use an explicit accepted/blocked/unblocked status: {next_sections}")
-    unblocked_phase2j = "Phase 2J — Production-readiness evidence and controlled rollout — UNBLOCKED / NOT STARTED"
-    if unblocked_phase2j not in plan:
-        raise SystemExit("DEVELOPMENT_PLAN.md must keep Phase 2J unblocked but not started after pre-2J closure")
-    immediate = plan.split("## 19. Immediate Next Action", 1)
+        raise SystemExit(f"no bare product Phase ... — NEXT section is allowed; use an explicit accepted/blocked status: {next_sections}")
+
+    blocked_phase2j = "Phase 2J — Production-readiness evidence and controlled rollout — BLOCKED / PENDING REPOSITORY REMEDIATION"
+    if blocked_phase2j not in plan:
+        raise SystemExit("DEVELOPMENT_PLAN.md must keep Phase 2J blocked while issue #203 remediation is active")
+    immediate = plan.split("## 13. Immediate Next Action", 1)
     if (
         len(immediate) != 2
-        or "Phase 2J is unblocked but not started" not in immediate[1]
-        or "separate bounded work batch" not in immediate[1]
+        or "issue #203" not in immediate[1]
+        or "Batch 0" not in immediate[1]
+        or "Do not begin Batch A" not in immediate[1]
+        or "Do not begin Phase 2J" not in immediate[1]
         or "`production_ready=false`" not in immediate[1]
     ):
-        raise SystemExit("Immediate Next Action must preserve post-closeout Phase 2J and production-readiness boundaries")
+        raise SystemExit("Immediate Next Action must preserve #203, Batch 0 and Phase 2J blocking boundaries")
 
     required_plan_markers = (
-        "Phase 2D — CQRS read models, global search and client-mail query contract — ACCEPTED",
-        "Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — ACCEPTED",
-        "Phase 2F — Durable device jobs, browser mailbox lane and materialization integration — ACCEPTED",
-        "Phase 2G — Durable realtime notification hub — ACCEPTED",
-        "Phase 2H — Complete standalone UI and administration UX — ACCEPTED",
-        "Phase 2I — Standalone E2E, security, recovery and operational hardening — ACCEPTED",
-        "Phase 2J — Production-readiness evidence and controlled rollout — UNBLOCKED / NOT STARTED",
+        "Phase 2I remains the last accepted repository-local product phase",
+        "pre-2J product-readiness remediation #203                     ACTIVE / BLOCKING",
+        "Phase 2J real production evidence + controlled rollout        BLOCKED / PENDING REPOSITORY REMEDIATION",
+        "`PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`",
         "`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`",
-        "Phase 2I was accepted through issue #167 / PR #168",
-        "`c1075337cfc582d0f4c00ec34b1aa7cda9ac1101`",
-        "`800c634147d6300ea3989ff0cf87ade6e2387ee9`",
-        "`crates/use-cases` remains the canonical application owner for Profile Catalog and Profile Generation Registry workflows",
-        "| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D and preserved through Phase 2I.**",
-        "| 6.2 | Durable-before-notify | **Accepted through Phase 2I.**",
-        "| 6.3 | At-least-once consumer idempotency | **Accepted through Phase 2I.**",
-        "| 6.4 | Authorization-before-projection | **Accepted through Phase 2I.**",
-        "| 6.6 | Profile materialization | **Accepted repository-local through Phase 2I.**",
-        "`BrowserIdentityManifest`",
-        "`NetworkIdentityPolicy` + `NetworkIdentityObservation`",
-        "PID alone is never sufficient ownership proof",
-        "blanket `PRAGMA integrity_check`",
+        "P0=0, P1=5, P2=1",
+        "A1 — Client ACTIVE Member create + atomic creator grant",
+        "A2 — Profile ACTIVE Member create + atomic creator grant",
+        "Workers Static Assets",
+        "compose/reply/reply-all/forward/send",
+        "protected production promotion",
+        "last-known-good rollback",
+        "`production_ready=false`",
     )
     required_architecture_markers = (
         "### 11.1 Browser Runtime Identity, Network Policy And Writer Recovery",
@@ -277,27 +273,11 @@ def validate_docs() -> None:
     )
     stale_plan_markers = (
         "Phase 2J — Production-readiness evidence and controlled rollout — NEXT",
-        "Phase 2J — Production-readiness evidence and controlled rollout — BLOCKED / NEXT AFTER PRE-2J",
+        "Phase 2J — Production-readiness evidence and controlled rollout — UNBLOCKED / NOT STARTED",
         "Phase 2J is the unique NEXT",
-        "Phase 2E — Mailbox domain decomposition and real cloud mailbox lane — NEXT",
-        "Phase 2F — Durable device jobs, browser mailbox lane and materialization integration — NEXT",
-        "Phase 2G — Durable realtime notification hub — NEXT",
-        "Phase 2H — Complete standalone UI and administration UX — NEXT",
-        "Phase 2I — Standalone E2E, security, recovery and operational hardening — NEXT",
-        "Phase 2I is the unique NEXT",
-        "Phase 2H is the unique NEXT",
-        "Phase 2E issue #148 is the unique NEXT",
-        "Phase 2D issue #144 is the unique next implementation slice",
-        "| A8 | Query-side/CQRS read-model boundary | **Open.**",
-        "| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D.**",
-        "| A8 | Query-side/CQRS read-model boundary | **Accepted in Phase 2D and preserved through Phase 2G.**",
-        "| 6.2 | Durable-before-notify | **Accepted through Phase 2F repository-owned consumers.**",
-        "| 6.2 | Durable-before-notify | **Accepted through Phase 2G.**",
-        "| 6.3 | At-least-once consumer idempotency | **Accepted through Phase 2G.**",
-        "| 6.4 | Authorization-before-projection | **Accepted through Phase 2D query/read-model scope.**",
-        "| 6.4 | Authorization-before-projection | **Accepted through Phase 2G.**",
-        "| 6.6 | Profile materialization | **Library/Synthetic foundation.**",
-        "2D read/search/provider query; 2G realtime subscriptions",
+        "Phase 2J is the unique next product phase",
+        "Phase 2J is unblocked but not started",
+        "Phase 2J is the next product phase but is unblocked/not started",
     )
     required_matrix_markers = (
         "| Client contact protection | Composed |",
@@ -359,10 +339,10 @@ def validate_docs() -> None:
     )
     for marker in required_plan_markers:
         if marker not in plan:
-            raise SystemExit(f"DEVELOPMENT_PLAN.md is missing accepted-phase semantic marker: {marker}")
+            raise SystemExit(f"DEVELOPMENT_PLAN.md is missing current/remediation semantic marker: {marker}")
     for marker in stale_plan_markers:
         if marker in plan:
-            raise SystemExit(f"DEVELOPMENT_PLAN.md contains stale accepted-phase marker: {marker}")
+            raise SystemExit(f"DEVELOPMENT_PLAN.md contains stale Phase 2J marker: {marker}")
     for marker in required_architecture_markers:
         if marker not in architecture:
             raise SystemExit(f"ARCHITECTURE.md is missing Phase 2F accepted architecture marker: {marker}")
@@ -380,8 +360,15 @@ def validate_docs() -> None:
                 raise SystemExit(f"generated contract {contract['name']} references missing {key}: {relative_path}")
 
     status = json.loads((ROOT / "docs" / "status.json").read_text(encoding="utf-8"))
+    current = status.get("current", {})
+    followup = current.get("pre2j_product_readiness_remediation", {})
+    phase2j = current.get("phase_2j", {})
     if status.get("production_ready") is not False:
         raise SystemExit("docs/status.json must remain production_ready=false until external gates pass")
+    if followup.get("status") != "active_blocking" or followup.get("tracking_issue") != 203:
+        raise SystemExit("docs/status.json must retain active issue #203 product-readiness remediation")
+    if phase2j.get("status") != "blocked_pending_repository_remediation" or phase2j.get("blocked_by_issue") != 203:
+        raise SystemExit("docs/status.json must retain Phase 2J blocked by issue #203")
     if "`production_ready=false`" not in plan:
         raise SystemExit("DEVELOPMENT_PLAN.md must preserve the production_ready=false claim")
 
@@ -422,7 +409,8 @@ def build_inventory() -> dict[str, object]:
             "ui_target": "docs/UI_ARCHITECTURE.md",
             "accepted_capabilities": "docs/DEVELOPER_CAPABILITY_MATRIX.md",
             "index": "docs/INDEX.md",
-            "pre2j_closeout": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+            "pre2j_current_product_readiness": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
+            "pre2j_historical_architecture_closeout": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
             "readiness": "docs/status.json",
             "security": "docs/THREAT_MODEL.md",
             "accepted_phase_ledger": "architecture/accepted-phases.json",
@@ -464,18 +452,23 @@ def self_test(expected: dict[str, object]) -> None:
     if serialized(route) == serialized(expected):
         raise SystemExit("route inventory self-test failed to detect deterministic drift")
 
-    authority = subprocess.run(
+    authority = copy.deepcopy(expected)
+    authority["documentation_authority"]["pre2j_current_product_readiness"] = "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md"
+    if serialized(authority) == serialized(expected):
+        raise SystemExit("inventory self-test failed to distinguish current and historical pre-2J authority")
+
+    documentation = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "check-documentation-authority.py"), "--root", str(ROOT), "--self-test"],
         cwd=ROOT,
         text=True,
         capture_output=True,
         check=False,
     )
-    if authority.returncode != 0:
-        details = "\n".join(value.strip() for value in (authority.stdout, authority.stderr) if value.strip())
+    if documentation.returncode != 0:
+        details = "\n".join(value.strip() for value in (documentation.stdout, documentation.stderr) if value.strip())
         raise SystemExit(f"documentation authority negative self-test failed:\n{details}")
-    if authority.stdout.strip():
-        print(authority.stdout.strip())
+    if documentation.stdout.strip():
+        print(documentation.stdout.strip())
     print("Architecture inventory negative self-test passed.")
 
 
