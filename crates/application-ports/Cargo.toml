@@ -15,6 +15,7 @@ notification-domain.workspace = true
 profile-domain.workspace = true
 profile-platform-primitives.workspace = true
 session-domain.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
