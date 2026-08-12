@@ -39,7 +39,7 @@ impl QueryAuthorizationPort for FakeAuthorization {
         capability: QueryCapability,
     ) -> Result<bool, QueryPortError> {
         self.calls.set(self.calls.get() + 1);
-        assert_eq!(capability, QueryCapability::Mail);
+        assert_eq!(capability, QueryCapability::Clients);
         Ok(self.allowed)
     }
 }

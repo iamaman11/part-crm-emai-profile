@@ -35,6 +35,7 @@ pub mod d1_identity_queries;
 pub mod d1_integration_events;
 pub mod d1_invitation_acceptance;
 pub mod d1_mailbox_bindings;
+pub mod d1_mailbox_client_associations;
 pub mod d1_mailbox_jobs;
 pub mod d1_mailbox_scheduling;
 pub mod d1_mailboxes;

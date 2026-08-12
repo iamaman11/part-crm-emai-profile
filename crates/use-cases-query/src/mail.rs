@@ -20,7 +20,10 @@ where
     E: ClientMailboxEligibilityPort,
     P: ClientMailProviderQueryPort,
 {
-    if !authorize(actor, authorization, QueryCapability::Mail).await? {
+    // Client Mail is a resource-scoped Client operation. The coarse Clients gate
+    // proves an ACTIVE membership; exact Owner-or-Client-grant, mailbox association,
+    // mailbox lifecycle and provider-lane authority remain in the eligibility port.
+    if !authorize(actor, authorization, QueryCapability::Clients).await? {
         return Ok(QueryPage::empty());
     }
     if !eligibility
@@ -49,7 +52,7 @@ where
     E: ClientMailboxEligibilityPort,
     P: ClientMailProviderQueryPort,
 {
-    if !authorize(actor, authorization, QueryCapability::Mail).await? {
+    if !authorize(actor, authorization, QueryCapability::Clients).await? {
         return Ok(None);
     }
     if !eligibility

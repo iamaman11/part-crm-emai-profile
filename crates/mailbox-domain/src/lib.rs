@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod binding;
+mod client_association;
 mod job;
 mod observation;
 mod runtime_lane;
@@ -8,6 +9,10 @@ mod runtime_lane;
 use core::fmt;
 
 pub use binding::{MailboxBinding, MailboxBindingStatus};
+pub use client_association::{
+    MailboxClientAssociation, MailboxClientAssociationAction, MailboxClientAssociationError,
+    MailboxClientAssociationVersion,
+};
 pub use job::{MailboxJob, MailboxJobRestore, MailboxJobStatus, validate_cursor};
 pub use observation::{
     MailboxFailureDisposition, MailboxObservation, MailboxProviderFailure,
