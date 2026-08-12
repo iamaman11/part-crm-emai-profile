@@ -1,20 +1,21 @@
 # Browser Profile Platform — Development Plan
 
-**Status:** normative product phase plan; active pre-2J remediation overlay blocks Phase 2J
-**Date:** 2026-08-11
-**Tracking:** Phase 1 complete; Phase 2A/2B/2C/2D/2E/2F/2G/2H/2I accepted via #118/#137, #138/#140, #142/#143, #144/#147, #148/#152, #154/#155, #159/#160, #163/#164 and #167/#168; Phase 2J is the next product phase but is blocked by the active `PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md` closure; expert-plan refinement #133; external CRM is future development only
+**Status:** normative product phase plan; pre-2J repository-owned remediation is closed
+**Date:** 2026-08-12
+**Tracking:** Phase 1 complete; Phase 2A/2B/2C/2D/2E/2F/2G/2H/2I accepted via #118/#137, #138/#140, #142/#143, #144/#147, #148/#152, #154/#155, #159/#160, #163/#164 and #167/#168; pre-2J R1–R9 remediation and final repository-owned closeout are complete; Phase 2J is the next product phase but is unblocked/not started; expert-plan refinement #133; external CRM is future development only
 **Production readiness:** unchanged; `production_ready=false` until Phase 2J accepts all mandatory real external evidence
 
 ## 1. Authority And Scope
 
-This document is the **normative product phase plan**. While `PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`
-is ACTIVE / BLOCKING PHASE 2J, that accepted remediation plan is the temporary execution blocker and
-closure rule. This document continues to define the product critical path, architecture ownership,
-mandatory prerequisites, bounded phase scope and acceptance conditions.
+This document is the **normative product phase plan**. `PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md` is the
+accepted R1–R9 remediation and final repository-owned closeout record; its CLOSED state no longer
+blocks Phase 2J and does not itself constitute Phase 2J acceptance. This document defines the product
+critical path, architecture ownership, mandatory prerequisites, bounded phase scope and acceptance
+conditions.
 
 Authority is intentionally separated:
 
-- `PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md` — temporary execution blocker/closure rule while ACTIVE;
+- `PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md` — accepted repository-owned remediation/closeout record;
 - `DEVELOPMENT_PLAN.md` — product phase order, slice ownership and acceptance;
 - `ARCHITECTURE.md` + accepted ADRs — stable architecture/security invariants;
 - `DATA_CLASSIFICATION.md` — data sensitivity, persistence and disclosure rules;
@@ -23,10 +24,10 @@ Authority is intentionally separated:
 - `DELIVERY_ROADMAP.md` — historical Repository Steps 0–10 and their acceptance record;
 - `FUTURE_DEVELOPMENT.md` — post-standalone evolution only, including external CRM integration.
 
-While the pre-2J remediation plan is ACTIVE, it may block the next product phase and wins on the
-question of whether Phase 2J may start. Outside that temporary blocker, this document controls product
-phase order. Accepted ADR/security/data invariants always win and this plan must be corrected before
-implementation continues when they conflict.
+The accepted pre-2J closeout controls only whether repository-owned remediation is complete; it does
+not advance the accepted product-phase ledger beyond Phase 2I and cannot substitute for Phase 2J
+External evidence. Accepted ADR/security/data invariants always win and this plan must be corrected
+before implementation continues when they conflict.
 
 A planned item is never an implementation claim. A branch or PR is never accepted capability until
 it is merged under the exact-head acceptance discipline defined below.
@@ -142,9 +143,9 @@ Phase 2A
   -> only then future CRM planning
 ```
 
-No product phase is implementation-active while the pre-2J remediation plan is ACTIVE. Phase 2J
-remains the next product phase only after the remediation closure rule is satisfied on accepted `main`;
-future CRM work remains blocked by the same linear rule.
+Pre-2J remediation is closed; Phase 2J is the next product phase but is not yet implementation-active.
+It must start in a separate bounded work batch from the exact accepted closeout `main`; future CRM work
+remains blocked by the same linear rule until Phase 2J is accepted.
 
 ### 2.1 Critical-path rules
 
@@ -456,8 +457,8 @@ No client contact model, client merge, search, real mailbox provider, device exe
 WebSocket hub or CRM work enters Phase 1B.
 
 **Phase 1 completion gate:** ACCEPTED by the implementation merge and bounded documentation closeout.
-Phase 2A through Phase 2I are also accepted; Phase 2J is next only after the active pre-2J
-remediation closure is accepted, and future CRM work remains blocked by the same linear rule.
+Phase 2A through Phase 2I are also accepted; the pre-2J repository-owned remediation is closed and
+Phase 2J is the next product phase, while future CRM work remains blocked by the same linear rule.
 
 ## 7. Phase 2 — Expert Standalone Product Completion
 
@@ -906,7 +907,7 @@ release-candidate contract/migration freeze. Real provider, Camoufox, physical-d
 trusted-signing and production Cloudflare evidence remains Phase 2J External scope, and
 `production_ready=false` remains intentional.
 
-### Phase 2J — Production-readiness evidence and controlled rollout — BLOCKED / NEXT AFTER PRE-2J
+### Phase 2J — Production-readiness evidence and controlled rollout — UNBLOCKED / NOT STARTED
 
 **Purpose:** close only the real-world evidence that repository-local CI cannot prove. This is the only
 slice that may change `production_ready=false`.
@@ -1164,15 +1165,15 @@ Phase 2F device-domain + use-cases-devices + browser/Bridge mailbox lane        
 Phase 2G durable realtime notification hub                                                            ACCEPTED
 Phase 2H complete standalone UI/admin UX                                                               ACCEPTED
 Phase 2I integrated E2E/security/recovery/operations hardening                                        ACCEPTED
-Phase 2J real production evidence + controlled rollout                                                BLOCKED / NEXT AFTER PRE-2J
+Phase 2J real production evidence + controlled rollout                                                UNBLOCKED / NOT STARTED
 ```
 
 Rules:
 
-1. no product phase is implementation-active while `PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md` is ACTIVE;
+1. Phase 2J is the unique next product phase but must begin in its own bounded work batch from accepted closeout `main`;
 2. each phase may use bounded sub-PRs only when they preserve the listed internal order and the phase
    itself does not close until every listed outcome is accepted;
-3. Phase 2J starts only after the pre-2J closure rule plus implementation acceptance/guarded closeout are satisfied;
+3. Phase 2J acceptance requires the mandatory real External evidence listed above and cannot inherit repository-local proof as production evidence;
 4. no queued branch is allowed to bypass this order;
 5. future CRM is outside this sequence.
 
@@ -1202,10 +1203,10 @@ Definition of done:
 
 ## 19. Immediate Next Action
 
-Do not start Phase 2J while `PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md` remains ACTIVE. The immediate
-repository action is to complete its exact accepted closure rule, including R1-R7 closure and explicit
-classification of any remaining P2 findings. Only after that accepted pre-2J closeout may a bounded
-Phase 2J evidence issue start from the exact resulting `main` SHA.
+The repository-owned pre-2J closeout is complete. Phase 2J is unblocked but not started and must begin
+only in the next separate bounded work batch from the exact accepted closeout `main` SHA. Do not reuse
+pre-2J repository-local/synthetic evidence as External acceptance, and do not change
+`production_ready=false` before every mandatory Phase 2J gate is accepted.
 
 Execute Phase 2J only for real-world evidence that repository-local CI cannot prove:
 
