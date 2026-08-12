@@ -2,7 +2,7 @@
 
 **Status:** ACTIVE / BLOCKING PHASE 2J  
 **Audit base:** accepted `main` at `d8b5bd07b99596d066fa2af976b263d41b5e2f3c`  
-**Current accepted base:** `a6b9889b646a253faf70704f67a2e07ec1cf90ab` after accepted R8 issue #195 / PR #196 from exact source head `1eebc773d6e2cd864890e7f3d330f3b97424bf39`
+**Current accepted base:** `602ab60fe1e679ce5bff7a0558d9190925b378d2` after accepted R9 issue #198 / PR #199 from exact source head `81af1111fb3ca5ca5fce286def20e2dc748f497b`
 **Production readiness:** remains `false`  
 **Rule:** Phase 2J External evidence work must not begin while any repository-owned P1 below is open.
 
@@ -234,22 +234,30 @@ Native workspace clippy already uses `-D warnings`, but Cloudflare adapter tests
 - CI reduction is evidence-preserving, not gate weakening;
 - retained Repository Quality Audit overlap is explicitly non-blocking because it preserves independent fail-closed negative/regression evidence and introduces no hidden correctness, security or contract risk.
 
-### R9 — P2 — Certification domain contains a second device-authorization model
+### R9 — P2 — Certification domain contains a second device-authorization model — ACCEPTED
+
+**Accepted main:** squash merge `602ab60fe1e679ce5bff7a0558d9190925b378d2` via issue #198 / PR #199 from exact source head `81af1111fb3ca5ca5fce286def20e2dc748f497b`.
 
 **Finding**
 
-`certification-domain` contains an in-memory `DeviceAuthorizationRegistry` with grant/revoke/version/unwrap semantics while production device authorization is separately owned by `device-domain` plus D1/application layers. Repository search found this registry only in certification-domain tests. Two domain meanings called device authorization are unnecessary ambiguity.
+`certification-domain` contained an in-memory `DeviceAuthorizationRegistry` with grant/revoke/version/unwrap semantics while production device authorization is separately owned by `device-domain` plus D1/application layers. Repository search found this registry only in certification-domain tests. Two domain meanings called device authorization were unnecessary ambiguity.
 
 **Remediation**
 
-- verify no production/runtime consumer exists;
-- either remove the obsolete synthetic registry or isolate/rename it as certification-only evidence with no production-authority semantics;
-- keep actual device authorization ownership exclusively in `device-domain`/application persistence.
+- removed the obsolete certification-owned `DeviceAuthorizationRegistry`, grant/revoke/version/history/`authorize_unwrap` authority model and related runtime-like errors/tests;
+- removed the no-longer-needed direct `profile-platform-primitives` dependency from `certification-domain`;
+- changed permanent Step 10 policy from requiring the obsolete authority fragments to failing closed if certification-owned device authority is reintroduced;
+- added a dedicated `tests/certification/fixtures/certification-device-authority/` negative fixture and permanent Certification Gate rejection proof;
+- kept production device authorization ownership exclusively in `device-domain`, application/use-case layers and D1/persistence composition.
 
 **Acceptance**
 
-- one production device-authorization domain owner;
-- certification evidence cannot be mistaken for runtime authorization state.
+- issue #198 is closed `completed` and PR #199 is merged;
+- exact implementation source head is `81af1111fb3ca5ca5fce286def20e2dc748f497b` and accepted squash on `main` is `602ab60fe1e679ce5bff7a0558d9190925b378d2`;
+- certification-domain owns no runtime-like device authorization registry/grant/revoke/unwrap authority;
+- permanent policy fails closed on reintroduction of certification-owned device authority;
+- one production device-authorization owner remains outside certification-domain;
+- all 12 permanent workflows completed successfully as real jobs on the exact implementation source head before merge, with `production_ready=false` and Phase 2J blocked.
 
 ## 4. PR strategy
 
@@ -263,7 +271,7 @@ Use multiple bounded PRs. The expected sequence is:
 6. **Frontend API modularization** — R6. Accepted via PR #190 / `48c49349047a0a200e6d405ed1a2623ab6183d87` from exact source head `94e66d139b1b5227c9edb2981d07e529afdf72d5`.
 7. **Current documentation/security authority** — R7. Accepted via PR #193 / `ab683ef25a6ebce1ce0fc9483669fe6bdcfa9676` from exact source head `22ec5da1c72681f7013d4edbdf53c4d3c6563dba`.
 8. **Warning/dead-code/CI hygiene** — R8. Accepted via issue #195 / PR #196 / `a6b9889b646a253faf70704f67a2e07ec1cf90ab` from exact source head `1eebc773d6e2cd864890e7f3d330f3b97424bf39`; retained Repository Quality Audit overlap is evidence-preserving and non-blocking.
-9. **Certification ownership cleanup** — R9.
+9. **Certification ownership cleanup** — R9. Accepted via issue #198 / PR #199 / `602ab60fe1e679ce5bff7a0558d9190925b378d2` from exact source head `81af1111fb3ca5ca5fce286def20e2dc748f497b`.
 10. **Final pre-2J audit closeout** — re-run full inventory, verify no repository-owned P0/P1, record accepted exact-head evidence, then and only then resume Phase 2J.
 
 R4/R6 may require more than one PR because public contract migration should be capability-bounded. A single mega-PR is explicitly rejected for this remediation because it would weaken reviewability and exact-head evidence.
@@ -286,7 +294,7 @@ Phase 2J may resume only when all of the following are true on accepted `main`:
 
 - repository-owned P0 = 0;
 - repository-owned P1 = 0;
-- all R1-R8 findings are closed with permanent regression evidence;
+- all R1-R9 findings are closed with permanent regression evidence;
 - remaining P2 items are either closed or explicitly documented as non-blocking with no hidden correctness/security/contract risk;
 - current documentation and machine-readable status agree;
 - full permanent workflow set is green at the exact accepted head;
