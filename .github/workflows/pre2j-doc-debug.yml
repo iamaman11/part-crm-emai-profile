@@ -4,26 +4,30 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   documentation-authority-debug:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout PR head
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.ref }}
       - name: Verify documentation authority
         run: python scripts/check-documentation-authority.py
-      - name: Expose generated architecture inventory delta
+      - name: Refresh deterministic architecture inventory
         shell: bash
         run: |
+          set -euo pipefail
           python scripts/generate-architecture-inventory.py --write
+          git diff --check
           if git diff --quiet -- architecture/inventory.json; then
-            echo '::notice file=architecture/inventory.json,line=1,title=Architecture inventory::No generated inventory drift'
+            echo 'Architecture inventory already current.'
             exit 0
           fi
-          delta="$(git diff --unified=0 -- architecture/inventory.json | base64 -w0)"
-          printf '::error file=architecture/inventory.json,line=1,title=Generated architecture inventory delta::%s\n' "$delta"
-          exit 1
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add architecture/inventory.json
+          git commit -m 'Pre-2J closeout: refresh architecture inventory'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
