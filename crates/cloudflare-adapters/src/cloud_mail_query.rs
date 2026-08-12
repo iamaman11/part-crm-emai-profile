@@ -68,6 +68,7 @@ impl ClientMailProviderQueryPort for CloudMailboxQueryAdapter<'_> {
                 (MailboxProvider::Imap, MailboxCredential::Imap(credential)) => {
                     search_imap_messages(&binding, request, &credential).await
                 }
+                (MailboxProvider::MicrosoftGraph, _) => Err(dependency_unavailable()),
                 (MailboxProvider::BrowserFallback, _)
                 | (MailboxProvider::GmailApi, MailboxCredential::Imap(_))
                 | (MailboxProvider::Imap, MailboxCredential::GmailApi(_)) => {
@@ -105,6 +106,7 @@ impl ClientMailProviderQueryPort for CloudMailboxQueryAdapter<'_> {
                 (MailboxProvider::Imap, MailboxCredential::Imap(credential)) => {
                     get_imap_message(&binding, reference.provider_reference(), &credential).await
                 }
+                (MailboxProvider::MicrosoftGraph, _) => Err(dependency_unavailable()),
                 (MailboxProvider::BrowserFallback, _)
                 | (MailboxProvider::GmailApi, MailboxCredential::Imap(_))
                 | (MailboxProvider::Imap, MailboxCredential::GmailApi(_)) => {
