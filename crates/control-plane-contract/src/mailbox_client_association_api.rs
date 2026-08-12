@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -14,6 +14,7 @@ pub struct MailboxClientAssociationProjectionDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChangeMailboxClientAssociationRequestDto {
+    #[serde(deserialize_with = "required_nullable_string")]
     pub client_id: Option<String>,
     pub expected_relationship_version: u64,
     pub request_digest: String,
@@ -27,6 +28,13 @@ pub struct MailboxClientAssociationMutationReceiptDto {
     pub client_id: Option<String>,
     pub relationship_version: u64,
     pub replayed: bool,
+}
+
+fn required_nullable_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
 }
 
 #[must_use]
@@ -179,8 +187,12 @@ mod tests {
         let unbind = format!(
             r#"{{"clientId":null,"expectedRelationshipVersion":2,"requestDigest":"{digest}"}}"#
         );
+        let missing = format!(
+            r#"{{"expectedRelationshipVersion":2,"requestDigest":"{digest}"}}"#
+        );
         assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&bind).is_ok());
         assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&unbind).is_ok());
+        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&missing).is_err());
         for forbidden in [
             "secretHandle",
             "password",
