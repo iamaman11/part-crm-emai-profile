@@ -613,7 +613,9 @@ fn valid_dns_label(value: &str) -> bool {
 }
 
 fn contains_control_or_line_break(value: &str) -> bool {
-    value.bytes().any(|byte| byte == b'\0' || byte.is_ascii_control())
+    value
+        .bytes()
+        .any(|byte| byte == b'\0' || byte.is_ascii_control())
 }
 
 #[cfg(test)]
