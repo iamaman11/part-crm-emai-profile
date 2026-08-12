@@ -140,7 +140,16 @@ pub async fn execute_mailbox_client_association<P: MailboxClientAssociationAppli
     {
         MailboxClientAssociationReplayDecision::Miss => {}
         MailboxClientAssociationReplayDecision::Replay(receipt) => {
-            return replay_outcome(command.binding_id, command.next_client_id, command.expected_version, &receipt);
+            let next_version = command
+                .expected_version
+                .next()
+                .map_err(map_domain_error)?;
+            return replay_outcome(
+                command.binding_id,
+                command.next_client_id,
+                next_version,
+                &receipt,
+            );
         }
         MailboxClientAssociationReplayDecision::Conflict => {
             return Err(MailboxClientAssociationOperationError::Conflict);
