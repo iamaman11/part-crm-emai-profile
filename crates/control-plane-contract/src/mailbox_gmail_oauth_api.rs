@@ -52,7 +52,7 @@ pub fn openapi_fragment() -> Value {
                     }
                 }
             },
-            "/auth/v1/mailbox/gmail/callback": {
+            "/api/v1/mailbox/gmail/oauth/callback": {
                 "get": {
                     "operationId": "completeGmailOAuthOnboarding",
                     "parameters": callback_parameters(),
@@ -232,7 +232,7 @@ mod tests {
         assert!(paths.contains_key(
             "/api/v1/tenants/{tenantId}/mailbox-onboardings/{onboardingId}/gmail-oauth"
         ));
-        assert!(paths.contains_key("/auth/v1/mailbox/gmail/callback"));
+        assert!(paths.contains_key("/api/v1/mailbox/gmail/oauth/callback"));
         let encoded = fragment.to_string();
         for forbidden in ["accessToken", "refreshToken", "pkceVerifier", "clientSecret", "gmail.send"] {
             assert!(!encoded.contains(forbidden), "fragment leaked {forbidden}");
