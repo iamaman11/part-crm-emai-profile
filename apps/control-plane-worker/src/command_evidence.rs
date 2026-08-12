@@ -79,6 +79,18 @@ fn oauth_callback_evidence(
     state: &str,
     namespace: &str,
 ) -> Result<CommandExecutionEvidence> {
+    let digest = oauth_callback_digest(actor, onboarding_id, state, namespace);
+    let idempotency_key = IdempotencyKey::parse(format!("oauthcb_{digest}"))
+        .map_err(|error| Error::RustError(error.to_string()))?;
+    evidence(actor, idempotency_key, digest)
+}
+
+fn oauth_callback_digest(
+    actor: &ActorContext,
+    onboarding_id: &MailboxOnboardingId,
+    state: &str,
+    namespace: &str,
+) -> String {
     let material = format!(
         "{namespace}\n{}\n{}\n{}\n{}",
         actor.tenant_scope().tenant_id().as_str(),
@@ -86,10 +98,7 @@ fn oauth_callback_evidence(
         onboarding_id.as_str(),
         state,
     );
-    let digest = hex_digest(material.as_bytes());
-    let idempotency_key = IdempotencyKey::parse(format!("oauthcb_{digest}"))
-        .map_err(|error| Error::RustError(error.to_string()))?;
-    evidence(actor, idempotency_key, digest)
+    hex_digest(material.as_bytes())
 }
 
 fn hex_digest(material: &[u8]) -> String {
@@ -133,7 +142,7 @@ fn evidence(
 
 #[cfg(test)]
 mod tests {
-    use super::{hex_digest, oauth_callback_evidence};
+    use super::{hex_digest, oauth_callback_digest};
     use profile_platform_primitives::{
         ActorContext, ActorId, CorrelationId, MailboxOnboardingId, TenantId, TenantScope,
     };
@@ -146,20 +155,21 @@ mod tests {
             CorrelationId::parse("corr_C3_evidence")?,
         );
         let onboarding_id = MailboxOnboardingId::parse("onboarding_C3_evidence")?;
-        let gmail = oauth_callback_evidence(
+        let gmail = oauth_callback_digest(
             &actor,
             &onboarding_id,
             "opaque-state",
             "gmail-oauth-callback",
-        )?;
-        let standards = oauth_callback_evidence(
+        );
+        let standards = oauth_callback_digest(
             &actor,
             &onboarding_id,
             "opaque-state",
             "microsoft-standards-oauth-callback",
-        )?;
-        assert_ne!(gmail.idempotency_key(), standards.idempotency_key());
-        assert_ne!(gmail.request_digest(), standards.request_digest());
+        );
+        assert_ne!(gmail, standards);
+        assert_eq!(gmail.len(), 64);
+        assert_eq!(standards.len(), 64);
         assert_eq!(hex_digest(b"stable").len(), 64);
         Ok(())
     }
