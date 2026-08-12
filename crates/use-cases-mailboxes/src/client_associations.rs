@@ -140,10 +140,7 @@ pub async fn execute_mailbox_client_association<P: MailboxClientAssociationAppli
     {
         MailboxClientAssociationReplayDecision::Miss => {}
         MailboxClientAssociationReplayDecision::Replay(receipt) => {
-            let next_version = command
-                .expected_version
-                .next()
-                .map_err(map_domain_error)?;
+            let next_version = command.expected_version.next().map_err(map_domain_error)?;
             return replay_outcome(
                 command.binding_id,
                 command.next_client_id,
@@ -302,7 +299,7 @@ const fn map_port_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{authorize_mailbox_client_association, MailboxClientAssociationOperationError};
+    use super::{MailboxClientAssociationOperationError, authorize_mailbox_client_association};
     use identity_access_domain::MembershipRole;
 
     #[test]
