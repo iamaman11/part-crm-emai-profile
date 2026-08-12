@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "status": "approved_pending_c3g",
+  "decision_base": "7392581fb4ea0eb40bf2317c34b8fb7f151ca669",
+  "tracking_issue": 226,
+  "implementation_issue": 225,
+  "parent_batch_issue": 214,
+  "umbrella_blocker_issue": 203,
+  "policy": "governed_preproduction_provider_enum_migration_plus_one_fragment",
+  "credential_boundary": "MAILBOX_SECRET_RESOLVER",
+  "existing_fragment_migration": {
+    "path": "openapi/v1/fragments/mailboxes.json",
+    "schema": "MailboxProviderDto",
+    "accepted_values": [
+      "GMAIL_API",
+      "IMAP",
+      "BROWSER_FALLBACK"
+    ],
+    "single_added_value": "MICROSOFT_GRAPH",
+    "compatibility_class": "response_enum_widening_governed_preproduction_migration"
+  },
+  "allowed_new_fragment": "openapi/v1/fragments/mailbox-microsoft-graph-onboarding.json",
+  "scope_policy": {
+    "provider": "MICROSOFT_GRAPH",
+    "graph_read": true,
+    "graph_send_in_c3g": false,
+    "delegated_permissions": [
+      "https://graph.microsoft.com/Mail.Read",
+      "offline_access"
+    ],
+    "c3g_must_not_pregrant_mail_send": true,
+    "c3_imap_smtp_remains_separate": true
+  },
+  "rules": {
+    "authority_must_be_accepted_before_use": true,
+    "authority_is_immutable_after_acceptance": true,
+    "migration_is_one_shot": true,
+    "historical_baseline_is_immutable": true,
+    "proto_is_immutable": true,
+    "existing_provider_meanings_are_immutable": true,
+    "all_other_v1_artifacts_are_immutable": true,
+    "production_ready_must_remain_false": true,
+    "phase_2j_must_remain_blocked": true
+  }
+}
