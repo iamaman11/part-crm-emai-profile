@@ -50,6 +50,14 @@
 | Malicious archive/path escape | safe paths, streaming/bounded extraction and deterministic inventory | runtime bundle/materialization gates |
 | Browser/runtime command abuse | typed bounded IPC/capability allowlists; no generic privileged command channel | Bridge/runtime contract gates |
 
+### Current device-authorization authority
+
+Production device authorization is owned by `device-domain`, application/use-case orchestration and D1/persistence composition.
+`certification-domain` is explicitly not a production device-authorization authority. Historical Repository Step 10 synthetic
+device-authorization evidence remains provenance only and cannot authorize runtime operations or define current production
+ownership. Permanent Certification Gate policy fails closed if certification-owned runtime-like grant/revoke/unwrap authority
+is reintroduced.
+
 ## 4. Fail-closed rules
 
 - Unknown membership, grant, device, runtime, mailbox or generation state denies access.
