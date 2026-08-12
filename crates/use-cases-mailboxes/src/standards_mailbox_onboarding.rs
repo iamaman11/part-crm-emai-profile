@@ -138,7 +138,13 @@ where
     authorize_owner(role)?;
     validate_onboarding(actor, onboarding_port, &onboarding_id, expected_version).await?;
     let receipt = provisioning_port
-        .provision_password(actor, &onboarding_id, expected_version, configuration)
+        .provision_password(
+            actor,
+            &onboarding_id,
+            expected_version,
+            evidence.idempotency_key(),
+            configuration,
+        )
         .await
         .map_err(map_provisioning_error)?;
     activate_provisioned(
