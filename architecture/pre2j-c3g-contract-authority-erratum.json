@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "status": "approved_pending_c3g",
+  "decision_base": "cf07db195db9a85e5e3ae3a0346528e3eacd39bb",
+  "tracking_issue": 228,
+  "accepted_authority_issue": 226,
+  "accepted_authority_pr": 227,
+  "implementation_issue": 225,
+  "correction": {
+    "path": "openapi/v1/fragments/mailboxes.json",
+    "authority_schema": "MailboxProviderDto",
+    "actual_fragment_schema": "MailboxProvider",
+    "single_added_value": "MICROSOFT_GRAPH",
+    "correction_class": "schema_key_erratum_only"
+  },
+  "rules": {
+    "accepted_authority_record_is_immutable": true,
+    "substantive_provider_migration_decision_is_unchanged": true,
+    "openapi_v1_change_in_erratum_pr_is_forbidden": true,
+    "d1_change_in_erratum_pr_is_forbidden": true,
+    "runtime_graph_change_in_erratum_pr_is_forbidden": true,
+    "erratum_must_be_accepted_before_migration_use": true,
+    "erratum_is_immutable_after_acceptance": true,
+    "production_ready_must_remain_false": true,
+    "phase_2j_must_remain_blocked": true
+  }
+}
