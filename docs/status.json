@@ -1,19 +1,30 @@
 {
   "schema_version": 2,
-  "as_of": "2026-08-11",
+  "as_of": "2026-08-12",
   "current": {
     "accepted_product_phase": "Phase 2I",
     "accepted_phase_ledger": "architecture/accepted-phases.json",
     "documentation_index": "docs/INDEX.md",
     "security_authority": "docs/THREAT_MODEL.md",
     "pre2j_remediation": {
-      "status": "active_blocking_phase_2j",
-      "plan": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md"
+      "status": "closed",
+      "plan": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+      "repository_owned_p0": 0,
+      "repository_owned_p1": 0,
+      "closed_findings": ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"]
     },
     "phase_2j": {
-      "status": "blocked_pre2j_closure",
+      "status": "unblocked_not_started",
       "plan": "docs/DEVELOPMENT_PLAN.md",
       "production_ready_may_change_only_after_acceptance": true
+    },
+    "device_authorization_ownership": {
+      "production_authority": [
+        "device-domain",
+        "application/use-case layer",
+        "D1/persistence composition"
+      ],
+      "certification_domain_authority": "forbidden"
     }
   },
   "repository_step": {
@@ -36,8 +47,8 @@
   },
   "next_repository_step": {
     "number": null,
-    "name": "Phase 2J external production evidence after pre-2J closure",
-    "status": "blocked_pre2j_closure"
+    "name": "Phase 2J external production evidence",
+    "status": "unblocked_not_started"
   },
   "accepted_steps": [
     {
@@ -132,6 +143,7 @@
     }
   ],
   "historical_status_note": "repository_step, accepted_steps and legacy evidence fields preserve historical Repository Steps 0-10 and earlier repository-local evidence; current phase authority is current + architecture/accepted-phases.json",
+  "historical_device_authority_note": "synthetic_device_authorization, synthetic_device_grant_journal and synthetic_two_device_contract are historical Repository Step 10 evidence labels for the removed certification-local model; they are not current production authority. Current ownership is current.device_authorization_ownership.",
   "product": {
     "name": "Browser Profile Platform",
     "primary_capability": "governed browser profile lifecycle",
@@ -155,7 +167,7 @@
     "cross_component_acceptance": "accepted_phase_2i_integrated_repository_local",
     "composition_epic": "accepted_epic_43_repository_local_complete",
     "repository_local_product_phase": "accepted_phase_2i",
-    "pre2j_architecture_remediation": "active_blocking_phase_2j",
+    "pre2j_architecture_remediation": "closed_r1_r9",
     "application_ownership": "r5_accepted_capability_owners_without_compatibility_facades",
     "frontend_api_ownership": "r6_accepted_feature_owned_capability_api"
   },
