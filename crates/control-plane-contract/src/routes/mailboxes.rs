@@ -13,6 +13,15 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
             _,
             "mailboxes",
             _,
+            "client-association",
+        ] if matches!(method, "GET" | "POST") => Some(RouteClass::MailboxBindingResourceApi),
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "mailboxes",
+            _,
             "browser-execution",
         ] if method == "POST" => Some(RouteClass::MailboxBrowserExecutionBindApi),
         ["api", "v1", "tenants", _, "mailboxes", _, "revoke"] if method == "POST" => {
@@ -31,5 +40,35 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
             Some(RouteClass::MailboxBindingResourceApi)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify;
+    use crate::RouteClass;
+
+    #[test]
+    fn association_subresource_uses_mailbox_resource_family_and_is_method_fail_closed() {
+        let segments = [
+            "api",
+            "v1",
+            "tenants",
+            "tenant_01",
+            "mailboxes",
+            "mailbox_01",
+            "client-association",
+        ];
+        assert_eq!(
+            classify("GET", &segments),
+            Some(RouteClass::MailboxBindingResourceApi)
+        );
+        assert_eq!(
+            classify("POST", &segments),
+            Some(RouteClass::MailboxBindingResourceApi)
+        );
+        for method in ["PUT", "PATCH", "DELETE"] {
+            assert_eq!(classify(method, &segments), None);
+        }
     }
 }
