@@ -3,6 +3,7 @@
 pub mod audit;
 pub mod browser_mail_execution;
 pub mod client_contact_lookup;
+pub mod client_creation;
 pub mod client_merge;
 pub mod client_registry;
 pub mod clients;
