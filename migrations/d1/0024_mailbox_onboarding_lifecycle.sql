@@ -198,18 +198,23 @@ BEGIN
     INSERT INTO mailbox_onboarding_state (
         tenant_id, onboarding_id, provider, lifecycle_status, credential_handle,
         status_metadata, version, updated_by_actor_id, updated_at_ms
-    ) VALUES (
+    )
+    SELECT
         NEW.tenant_id, NEW.onboarding_id, NEW.provider, NEW.next_status,
         NEW.next_credential_handle, NEW.status_metadata, NEW.next_version,
         NEW.command_actor_id, NEW.executed_at_ms
-    )
-    ON CONFLICT (tenant_id, onboarding_id) DO UPDATE SET
-        lifecycle_status = excluded.lifecycle_status,
-        credential_handle = excluded.credential_handle,
-        status_metadata = excluded.status_metadata,
-        version = excluded.version,
-        updated_by_actor_id = excluded.updated_by_actor_id,
-        updated_at_ms = excluded.updated_at_ms;
+    WHERE NEW.operation = 'START';
+
+    UPDATE mailbox_onboarding_state
+    SET lifecycle_status = NEW.next_status,
+        credential_handle = NEW.next_credential_handle,
+        status_metadata = NEW.status_metadata,
+        version = NEW.next_version,
+        updated_by_actor_id = NEW.command_actor_id,
+        updated_at_ms = NEW.executed_at_ms
+    WHERE tenant_id = NEW.tenant_id
+      AND onboarding_id = NEW.onboarding_id
+      AND NEW.operation <> 'START';
 
     INSERT INTO mailbox_onboarding_history (
         tenant_id, onboarding_id, version, operation, provider,
