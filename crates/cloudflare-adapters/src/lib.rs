@@ -37,6 +37,7 @@ pub mod d1_invitation_acceptance;
 pub mod d1_mailbox_bindings;
 pub mod d1_mailbox_client_associations;
 pub mod d1_mailbox_jobs;
+pub mod d1_mailbox_onboarding;
 pub mod d1_mailbox_scheduling;
 pub mod d1_mailboxes;
 pub mod d1_notification_operations;

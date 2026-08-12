@@ -20,6 +20,7 @@ pub mod identity_governance;
 pub mod integration_events;
 pub mod mailbox_client_associations;
 pub mod mailbox_jobs;
+pub mod mailbox_onboarding;
 pub mod mailbox_scheduling;
 pub mod mailboxes;
 pub mod notification_realtime;
