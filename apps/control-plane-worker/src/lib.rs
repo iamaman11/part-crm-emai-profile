@@ -94,7 +94,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         RouteClass::MailboxBindingCollectionApi if request.method() == Method::Get => {
             operator_queries::dispatch(route, &request, &env).await
         }
-        RouteClass::MailboxBindingResourceApi if mailbox_gmail_oauth::is_gmail_oauth_path(&path) => {
+        RouteClass::MailboxBindingResourceApi
+            if mailbox_gmail_oauth::is_gmail_oauth_path(&path) =>
+        {
             mailbox_gmail_oauth::dispatch(&mut request, &env).await
         }
         RouteClass::MailboxBindingResourceApi
