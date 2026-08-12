@@ -14,13 +14,18 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           persist-credentials: false
-      - name: Expose documentation authority diagnostics
+      - name: Verify documentation authority
+        run: python scripts/check-documentation-authority.py
+      - name: Expose generated architecture inventory delta
         shell: bash
         run: |
-          set +e
-          python scripts/check-documentation-authority.py >diagnostics.txt 2>&1
-          rc=$?
+          python scripts/generate-architecture-inventory.py --write
+          if git diff --quiet -- architecture/inventory.json; then
+            echo '::notice title=Architecture inventory::No generated inventory drift'
+            exit 0
+          fi
+          git diff --unified=0 -- architecture/inventory.json >inventory.diff
           while IFS= read -r line; do
-            printf '::error title=Pre-2J documentation authority::%s\n' "$line"
-          done < diagnostics.txt
-          exit "$rc"
+            printf '::error title=Generated architecture inventory delta::%s\n' "$line"
+          done < inventory.diff
+          exit 1
