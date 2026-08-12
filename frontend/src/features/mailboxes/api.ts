@@ -79,9 +79,13 @@ export async function changeMailboxClientAssociation(
   bindingId: string,
   input: ChangeMailboxClientAssociationInput,
 ): Promise<MailboxClientAssociationMutationReceipt | undefined> {
+  const command = {
+    clientId: input.clientId,
+    expectedRelationshipVersion: input.expectedRelationshipVersion,
+  };
   const payload: ChangeMailboxClientAssociationRequestDto = {
-    ...input,
-    requestDigest: await sha256Hex(input),
+    ...command,
+    requestDigest: await sha256Hex(command),
   };
   return requestJson<MailboxClientAssociationMutationReceipt>(
     `/api/v1/tenants/${segment(tenantId)}/mailboxes/${segment(bindingId)}/client-association`,
