@@ -8,15 +8,15 @@ across multiple roadmaps.
 
 - Accepted repository-local product phase: **Phase 2I**, proven by
   [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json).
-- Phase 2J remains blocked while the pre-2J remediation plan is ACTIVE.
+- Pre-2J repository-owned remediation is **CLOSED**; Phase 2J is unblocked but not started.
 - Machine-readable readiness authority: [`status.json`](status.json), with `production_ready=false`.
 - Canonical current repository-local security authority: [`THREAT_MODEL.md`](THREAT_MODEL.md).
 
 ## Authority hierarchy
 
-1. While [`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) is
-   **ACTIVE / BLOCKING PHASE 2J**, it is the temporary execution blocker and closure rule. It may stop
-   the next product phase but does not redefine product scope.
+1. [`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) is the accepted
+   R1–R9 remediation and final repository-owned pre-2J closeout record. Its closed state no longer blocks
+   the next product phase and does not itself constitute Phase 2J acceptance.
 2. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) defines product phase order, ownership and acceptance.
 3. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs and [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md)
    define stable architecture/security/privacy invariants.
