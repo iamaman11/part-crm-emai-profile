@@ -66,8 +66,9 @@ export function ClientsWorkspace({
       />
 
       <section className="panel">
-        <span className="eyebrow">Owner-governed mutation</span>
+        <span className="eyebrow">Member self-service · explicit creator grant</span>
         <h2>Create client</h2>
+        <p>Active members may create a client. Access is granted only to the creator; this does not make the client tenant-wide.</p>
         <form
           className="stack-form"
           onSubmit={(event: FormEvent<HTMLFormElement>) => {

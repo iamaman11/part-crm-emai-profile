@@ -1,4 +1,6 @@
-use crate::d1_catalog::{CatalogClientKind, CreateClientMutation, D1CatalogRepository};
+use crate::d1_catalog::{
+    CatalogClientGrantRole, CatalogClientKind, CreateClientMutation, D1CatalogRepository,
+};
 use crate::d1_governed_commands::D1GovernedCommandRepository;
 use crate::d1_idempotency::{D1IdempotencyRepository, IdempotencyDecision};
 use crate::d1_identity_acl::{
@@ -6,6 +8,7 @@ use crate::d1_identity_acl::{
 };
 use crate::d1_identity_queries::{ClientProjection, D1IdentityQueryRepository};
 use application_ports::CommandExecutionEvidence;
+use application_ports::client_creation::ClientCreateGrantSpec;
 use application_ports::clients::{
     ClientApplicationPort, ClientCreateWrite, ClientGrantApplicationPort, ClientGrantPortError,
     ClientGrantPortErrorClass, ClientGrantRole, ClientGrantWrite, ClientPortError,
@@ -72,6 +75,8 @@ impl ClientApplicationPort for D1ClientApplicationRepository {
             client_id: write.client().client_id(),
             kind: catalog_kind(write.client().kind()),
             display_name: write.requested_display_name(),
+            creator_grant_role: catalog_creator_grant_role(write.creator_grant_role()),
+            creator_grant_reason: write.creator_grant_reason(),
             idempotency_key: evidence.idempotency_key(),
             request_digest: evidence.request_digest(),
             audit_event_id: evidence.audit_event_id(),
@@ -200,6 +205,13 @@ const fn catalog_kind(kind: ClientKind) -> CatalogClientKind {
     }
 }
 
+const fn catalog_creator_grant_role(role: ClientGrantRole) -> CatalogClientGrantRole {
+    match role {
+        ClientGrantRole::Viewer => CatalogClientGrantRole::Viewer,
+        ClientGrantRole::Editor => CatalogClientGrantRole::Editor,
+    }
+}
+
 const fn resolved_role(role: MembershipRole) -> ResolvedMembershipRole {
     match role {
         MembershipRole::TenantOwner => ResolvedMembershipRole::TenantOwner,
@@ -249,6 +261,9 @@ const fn integrity_failure() -> ClientPortError {
 }
 
 fn classify_write_failure(message: &str) -> ClientPortErrorClass {
+    if message.contains("client_grant_membership_not_active") {
+        return ClientPortErrorClass::Conflict;
+    }
     if message.contains("UNIQUE constraint failed") {
         return ClientPortErrorClass::Conflict;
     }
@@ -322,6 +337,10 @@ mod tests {
             classify_write_failure(
                 "UNIQUE constraint failed: clients.tenant_id, clients.client_id"
             ),
+            ClientPortErrorClass::Conflict
+        );
+        assert_eq!(
+            classify_write_failure("client_grant_membership_not_active"),
             ClientPortErrorClass::Conflict
         );
         assert_eq!(

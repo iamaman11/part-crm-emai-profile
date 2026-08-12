@@ -184,11 +184,9 @@ impl fmt::Display for ClientOperationError {
 
 impl std::error::Error for ClientOperationError {}
 
-pub fn authorize_client_create(role: MembershipRole) -> Result<(), ClientOperationError> {
-    if role == MembershipRole::TenantOwner {
-        Ok(())
-    } else {
-        Err(ClientOperationError::NotFound)
+pub const fn authorize_client_create(role: MembershipRole) -> Result<(), ClientOperationError> {
+    match role {
+        MembershipRole::TenantOwner | MembershipRole::Member => Ok(()),
     }
 }
 
@@ -310,8 +308,8 @@ fn map_client_error(error: ClientError) -> ApplicationError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClientOperationError, ExecuteCreateClientCommand, authorize_client_create,
-        execute_create_client, get_visible_client,
+        ExecuteCreateClientCommand, authorize_client_create, execute_create_client,
+        get_visible_client,
     };
     use application_ports::CommandExecutionEvidence;
     use application_ports::clients::{
@@ -419,12 +417,26 @@ mod tests {
     }
 
     #[test]
-    fn create_authorization_is_disclosure_neutral() {
+    fn create_authorization_accepts_owner_and_member_roles() {
         assert_eq!(authorize_client_create(MembershipRole::TenantOwner), Ok(()));
-        assert_eq!(
-            authorize_client_create(MembershipRole::Member),
-            Err(ClientOperationError::NotFound)
-        );
+        assert_eq!(authorize_client_create(MembershipRole::Member), Ok(()));
+    }
+
+    #[test]
+    fn member_create_reaches_the_single_atomic_write_boundary()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let port = FakeClientPort::new(vec![ClientReplayDecision::Miss]);
+        let outcome = block_on(execute_create_client(
+            &actor()?,
+            MembershipRole::Member,
+            &port,
+            command()?,
+        ))?;
+        assert!(!outcome.replayed());
+        assert_eq!(outcome.resource_id(), "client_01JCLIENTAPP");
+        assert_eq!(outcome.aggregate_version(), AggregateVersion::INITIAL);
+        assert_eq!(port.create_calls.get(), 1);
+        Ok(())
     }
 
     #[test]
@@ -434,7 +446,7 @@ mod tests {
         )]);
         let outcome = block_on(execute_create_client(
             &actor()?,
-            MembershipRole::TenantOwner,
+            MembershipRole::Member,
             &port,
             command()?,
         ))?;

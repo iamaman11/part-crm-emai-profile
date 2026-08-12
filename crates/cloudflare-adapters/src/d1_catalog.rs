@@ -12,6 +12,12 @@ INSERT INTO clients (
 ) VALUES (?, ?, ?, ?, 'ACTIVE', 1, ?, ?, ?, ?)
 "#;
 
+const CLIENT_CREATOR_GRANT: &str = r#"
+INSERT INTO client_grants (
+    tenant_id, actor_id, client_id, role, granted_by_actor_id, reason, created_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+"#;
+
 const IDEMPOTENCY_CREATE: &str = r#"
 INSERT INTO idempotency_records (
     tenant_id, actor_id, idempotency_key, command_name, request_digest,
@@ -60,10 +66,28 @@ impl CatalogClientKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CatalogClientGrantRole {
+    Viewer,
+    Editor,
+}
+
+impl CatalogClientGrantRole {
+    #[must_use]
+    pub const fn database_value(self) -> &'static str {
+        match self {
+            Self::Viewer => "CLIENT_VIEWER",
+            Self::Editor => "CLIENT_EDITOR",
+        }
+    }
+}
+
 pub struct CreateClientMutation<'a> {
     pub client_id: &'a ClientId,
     pub kind: CatalogClientKind,
     pub display_name: &'a str,
+    pub creator_grant_role: CatalogClientGrantRole,
+    pub creator_grant_reason: &'a str,
     pub idempotency_key: &'a IdempotencyKey,
     pub request_digest: &'a str,
     pub audit_event_id: &'a AuditEventId,
@@ -138,6 +162,17 @@ impl D1CatalogRepository {
                 actor_id,
                 actor_id,
                 now,
+                now
+            )?,
+            query!(
+                &self.database,
+                CLIENT_CREATOR_GRANT,
+                tenant_id,
+                actor_id,
+                mutation.client_id.as_str(),
+                mutation.creator_grant_role.database_value(),
+                actor_id,
+                mutation.creator_grant_reason,
                 now
             )?,
             query!(
