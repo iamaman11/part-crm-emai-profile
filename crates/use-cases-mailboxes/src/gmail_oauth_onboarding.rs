@@ -113,13 +113,7 @@ where
     P: GmailOAuthProvisioningPort,
 {
     authorize_owner(role)?;
-    validate_onboarding(
-        actor,
-        onboarding_port,
-        &onboarding_id,
-        expected_version,
-    )
-    .await?;
+    validate_onboarding(actor, onboarding_port, &onboarding_id, expected_version).await?;
     let receipt = provisioning_port
         .start(actor, &onboarding_id, expected_version)
         .await
@@ -271,8 +265,12 @@ const fn map_provisioning_error(error: GmailOAuthProvisioningError) -> GmailOAut
     match error.class() {
         GmailOAuthProvisioningErrorClass::NotFound => GmailOAuthOnboardingError::NotFound,
         GmailOAuthProvisioningErrorClass::Expired => GmailOAuthOnboardingError::Expired,
-        GmailOAuthProvisioningErrorClass::ReplayRejected => GmailOAuthOnboardingError::ReplayRejected,
-        GmailOAuthProvisioningErrorClass::ProviderDenied => GmailOAuthOnboardingError::ProviderDenied,
+        GmailOAuthProvisioningErrorClass::ReplayRejected => {
+            GmailOAuthOnboardingError::ReplayRejected
+        }
+        GmailOAuthProvisioningErrorClass::ProviderDenied => {
+            GmailOAuthOnboardingError::ProviderDenied
+        }
         GmailOAuthProvisioningErrorClass::Conflict => GmailOAuthOnboardingError::Conflict,
         GmailOAuthProvisioningErrorClass::DependencyUnavailable => {
             GmailOAuthOnboardingError::DependencyUnavailable
@@ -280,18 +278,26 @@ const fn map_provisioning_error(error: GmailOAuthProvisioningError) -> GmailOAut
         GmailOAuthProvisioningErrorClass::IntegrityFailure => {
             GmailOAuthOnboardingError::IntegrityFailure
         }
-        GmailOAuthProvisioningErrorClass::InternalFailure => GmailOAuthOnboardingError::InternalFailure,
+        GmailOAuthProvisioningErrorClass::InternalFailure => {
+            GmailOAuthOnboardingError::InternalFailure
+        }
     }
 }
 
 const fn map_onboarding_error(error: MailboxOnboardingOperationError) -> GmailOAuthOnboardingError {
     match error {
         MailboxOnboardingOperationError::NotFound => GmailOAuthOnboardingError::NotFound,
-        MailboxOnboardingOperationError::VersionConflict => GmailOAuthOnboardingError::VersionConflict,
+        MailboxOnboardingOperationError::VersionConflict => {
+            GmailOAuthOnboardingError::VersionConflict
+        }
         MailboxOnboardingOperationError::InvalidState => GmailOAuthOnboardingError::InvalidState,
         MailboxOnboardingOperationError::Conflict => GmailOAuthOnboardingError::Conflict,
-        MailboxOnboardingOperationError::IntegrityFailure => GmailOAuthOnboardingError::IntegrityFailure,
-        MailboxOnboardingOperationError::InternalFailure => GmailOAuthOnboardingError::InternalFailure,
+        MailboxOnboardingOperationError::IntegrityFailure => {
+            GmailOAuthOnboardingError::IntegrityFailure
+        }
+        MailboxOnboardingOperationError::InternalFailure => {
+            GmailOAuthOnboardingError::InternalFailure
+        }
         MailboxOnboardingOperationError::DependencyUnavailable => {
             GmailOAuthOnboardingError::DependencyUnavailable
         }
@@ -304,11 +310,17 @@ const fn map_onboarding_port_error(
     use application_ports::mailbox_onboarding::MailboxOnboardingPortErrorClass;
     match class {
         MailboxOnboardingPortErrorClass::NotFound => GmailOAuthOnboardingError::NotFound,
-        MailboxOnboardingPortErrorClass::VersionConflict => GmailOAuthOnboardingError::VersionConflict,
+        MailboxOnboardingPortErrorClass::VersionConflict => {
+            GmailOAuthOnboardingError::VersionConflict
+        }
         MailboxOnboardingPortErrorClass::InvalidState => GmailOAuthOnboardingError::InvalidState,
         MailboxOnboardingPortErrorClass::Conflict => GmailOAuthOnboardingError::Conflict,
-        MailboxOnboardingPortErrorClass::IntegrityFailure => GmailOAuthOnboardingError::IntegrityFailure,
-        MailboxOnboardingPortErrorClass::InternalFailure => GmailOAuthOnboardingError::InternalFailure,
+        MailboxOnboardingPortErrorClass::IntegrityFailure => {
+            GmailOAuthOnboardingError::IntegrityFailure
+        }
+        MailboxOnboardingPortErrorClass::InternalFailure => {
+            GmailOAuthOnboardingError::InternalFailure
+        }
         MailboxOnboardingPortErrorClass::DependencyUnavailable => {
             GmailOAuthOnboardingError::DependencyUnavailable
         }
