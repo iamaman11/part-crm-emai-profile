@@ -229,11 +229,7 @@ mod tests {
                 .get("/api/v1/tenants/{tenantId}/mailbox-onboardings/{onboardingId}/gmail-oauth")
                 .is_some()
         );
-        assert!(
-            paths
-                .get("/api/v1/mailbox/gmail/oauth/callback")
-                .is_some()
-        );
+        assert!(paths.get("/api/v1/mailbox/gmail/oauth/callback").is_some());
         let encoded = fragment.to_string();
         for forbidden in [
             "accessToken",
