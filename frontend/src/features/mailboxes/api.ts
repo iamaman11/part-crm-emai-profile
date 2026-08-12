@@ -14,7 +14,10 @@ import type {
   RevokeMailboxBindingRequestDto,
   RunMailboxJobRequestDto,
 } from '../../shared/api/generated/mailbox';
-import type { MailboxListPageDto } from '../../shared/api/generated/operator-query';
+import type {
+  MailboxListItemDto,
+  MailboxListPageDto,
+} from '../../shared/api/generated/operator-query';
 
 export type CreateMailboxBindingInput = Omit<CreateMailboxBindingRequestDto, 'requestDigest'>;
 export type RevokeMailboxBindingInput = Omit<RevokeMailboxBindingRequestDto, 'requestDigest'>;
@@ -29,6 +32,16 @@ export type MailboxJobProjection = MailboxJobProjectionDto;
 export type MailboxClientAssociationProjection = MailboxClientAssociationProjectionDto;
 export type MailboxClientAssociationMutationReceipt = MailboxClientAssociationMutationReceiptDto;
 
+export interface MailboxRelationshipOverviewItem {
+  mailbox: MailboxListItemDto;
+  association: MailboxClientAssociationProjection;
+}
+
+export interface MailboxRelationshipOverviewPage {
+  items: ReadonlyArray<MailboxRelationshipOverviewItem>;
+  nextCursor: string | null;
+}
+
 export function listMailboxes(
   tenantId: string,
   signal?: AbortSignal,
@@ -39,6 +52,25 @@ export function listMailboxes(
     pagedPath(`/api/v1/tenants/${segment(tenantId)}/mailboxes`, cursor, limit),
     { tenantId, signal },
   );
+}
+
+export async function listMailboxRelationshipOverview(
+  tenantId: string,
+  cursor?: string | null,
+  limit = 25,
+): Promise<MailboxRelationshipOverviewPage | undefined> {
+  const page = await listMailboxes(tenantId, undefined, cursor, limit);
+  if (!page) return undefined;
+  const items = await Promise.all(
+    page.mailboxes.map(async (mailbox) => {
+      const association = await getMailboxClientAssociation(tenantId, mailbox.bindingId);
+      if (!association) {
+        throw new Error('Mailbox Client association projection is missing.');
+      }
+      return { mailbox, association };
+    }),
+  );
+  return { items, nextCursor: page.nextCursor };
 }
 
 export function getMailboxBinding(tenantId: string, bindingId: string): Promise<MailboxBindingProjection | undefined> {
