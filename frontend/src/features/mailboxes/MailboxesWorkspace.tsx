@@ -8,6 +8,7 @@ import {
   getMailboxBinding,
   getMailboxClientAssociation,
   getMailboxJob,
+  listMailboxRelationshipOverview,
   revokeMailboxBinding,
   runMailboxJob,
 } from './api';
@@ -15,6 +16,7 @@ import type {
   MailboxBindingProjection,
   MailboxClientAssociationProjection,
   MailboxJobProjection,
+  MailboxRelationshipOverviewItem,
 } from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
@@ -28,6 +30,10 @@ export function MailboxesWorkspace() {
   const [bindingId, setBindingId] = useState('');
   const [binding, setBinding] = useState<MailboxBindingProjection | null>(null);
   const [association, setAssociation] = useState<MailboxClientAssociationProjection | null>(null);
+  const [overviewItems, setOverviewItems] = useState<ReadonlyArray<MailboxRelationshipOverviewItem>>([]);
+  const [overviewCursor, setOverviewCursor] = useState<string | null>(null);
+  const [relationshipFilter, setRelationshipFilter] = useState<'ALL' | 'UNASSIGNED' | 'ASSIGNED'>('ALL');
+  const [clientFilter, setClientFilter] = useState('');
   const [jobId, setJobId] = useState('');
   const [job, setJob] = useState<MailboxJobProjection | null>(null);
 
@@ -38,6 +44,14 @@ export function MailboxesWorkspace() {
   const bindingLookup = useMutation({
     mutationFn: (id: string) => getMailboxBinding(tenantId, id),
     onSuccess: (data) => setBinding(data ?? null),
+  });
+  const relationshipOverview = useMutation({
+    mutationFn: (cursor: string | null) => listMailboxRelationshipOverview(tenantId, cursor),
+    onSuccess: (data, cursor) => {
+      if (!data) return;
+      setOverviewItems((current) => (cursor ? [...current, ...data.items] : data.items));
+      setOverviewCursor(data.nextCursor);
+    },
   });
   const bindingCreate = useMutation({
     mutationFn: (input: { bindingId: string; provider: 'GMAIL_API' | 'IMAP' | 'BROWSER_FALLBACK'; secretHandle: string }) => createMailboxBinding(tenantId, input),
@@ -51,7 +65,11 @@ export function MailboxesWorkspace() {
         clientId: input.clientId,
         expectedRelationshipVersion: input.expectedRelationshipVersion,
       }),
-    onSuccess: (_data, variables) => associationLookup.mutate(variables.bindingId),
+    onSuccess: (_data, variables) => {
+      associationLookup.mutate(variables.bindingId);
+      relationshipOverview.mutate(null);
+    },
+    onError: (_error, variables) => associationLookup.mutate(variables.bindingId),
   });
   const jobLookup = useMutation({
     mutationFn: (input: { bindingId: string; jobId: string }) => getMailboxJob(tenantId, input.bindingId, input.jobId),
@@ -66,6 +84,14 @@ export function MailboxesWorkspace() {
 
   const enabled = tenantId.length > 0;
   const bindingLoaded = enabled && bindingId.length > 0;
+  const exactClientFilter = clientFilter.trim();
+  const visibleOverview = overviewItems.filter(({ association: itemAssociation }) => {
+    const relationshipMatches = relationshipFilter === 'ALL'
+      || (relationshipFilter === 'UNASSIGNED' && itemAssociation.clientId === null)
+      || (relationshipFilter === 'ASSIGNED' && itemAssociation.clientId !== null);
+    const clientMatches = exactClientFilter.length === 0 || itemAssociation.clientId === exactClientFilter;
+    return relationshipMatches && clientMatches;
+  });
 
   const lookupBinding = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -78,8 +104,60 @@ export function MailboxesWorkspace() {
     associationLookup.mutate(id);
   };
 
+  const manageOverviewItem = (item: MailboxRelationshipOverviewItem) => {
+    const id = item.mailbox.bindingId;
+    setBindingId(id);
+    setBinding(null);
+    setAssociation(item.association);
+    setJob(null);
+    bindingLookup.mutate(id);
+    associationLookup.mutate(id);
+  };
+
   return (
     <div className="workspace-grid">
+      <section className="panel full-span">
+        <span className="eyebrow">Mailbox → Client relationship overview</span>
+        <h2>Assigned and unassigned mailboxes</h2>
+        <p>The list combines the existing bounded Owner mailbox projection with the exact association projection for each binding. Association is business ownership metadata, not a Client ACL.</p>
+        <div className="split-grid">
+          <div className="stack-form">
+            <label>
+              Relationship
+              <select value={relationshipFilter} onChange={(event) => setRelationshipFilter(event.target.value as 'ALL' | 'UNASSIGNED' | 'ASSIGNED')} disabled={!enabled}>
+                <option value="ALL">All</option>
+                <option value="UNASSIGNED">Unassigned</option>
+                <option value="ASSIGNED">Assigned</option>
+              </select>
+            </label>
+            <label>Exact Client ID<input value={clientFilter} onChange={(event) => setClientFilter(event.target.value)} placeholder="client_..." disabled={!enabled} /></label>
+          </div>
+          <div className="stack-form">
+            <button type="button" onClick={() => relationshipOverview.mutate(null)} disabled={!enabled || relationshipOverview.isPending}>Load / refresh relationships</button>
+            <button type="button" onClick={() => relationshipOverview.mutate(overviewCursor)} disabled={!enabled || relationshipOverview.isPending || overviewCursor === null}>Load next page</button>
+          </div>
+        </div>
+        <StatusMessage state={relationshipOverview.error ?? (relationshipOverview.isPending ? 'Loading mailbox relationships…' : null)} />
+        {overviewItems.length > 0 && visibleOverview.length === 0 && (
+          <p>No mailbox on the loaded pages matches the current relationship filter.</p>
+        )}
+        <div className="split-grid">
+          {visibleOverview.map((item) => (
+            <article className="generation-card" key={item.mailbox.bindingId}>
+              <dl className="projection">
+                <div><dt>Binding</dt><dd>{item.mailbox.bindingId}</dd></div>
+                <div><dt>Provider</dt><dd>{item.mailbox.provider}</dd></div>
+                <div><dt>Mailbox status</dt><dd>{item.mailbox.status}</dd></div>
+                <div><dt>Client</dt><dd>{item.association.clientId ?? 'Unassigned'}</dd></div>
+                <div><dt>Relationship version</dt><dd>{item.association.relationshipVersion}</dd></div>
+                <div><dt>Executable</dt><dd>{item.association.mailboxExecutable ? 'Yes' : 'No'}</dd></div>
+              </dl>
+              <button type="button" onClick={() => manageOverviewItem(item)} disabled={bindingLookup.isPending || associationLookup.isPending}>Manage relationship</button>
+            </article>
+          ))}
+        </div>
+      </section>
+
       <section className="panel">
         <span className="eyebrow">Owner-only metadata projection</span>
         <h2>Mailbox binding</h2>
@@ -149,6 +227,9 @@ export function MailboxesWorkspace() {
           </>
         )}
         <StatusMessage state={associationChange.error ?? (associationChange.data ? `${associationChange.data.resultCode}: relationship v${associationChange.data.relationshipVersion}` : null)} />
+        {associationChange.error && association && (
+          <p>Current relationship after the failed command: {association.clientId ?? 'Unassigned'} at version {association.relationshipVersion}. The projection is refreshed after conflicts.</p>
+        )}
       </section>
 
       <section className="panel">
