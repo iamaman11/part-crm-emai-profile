@@ -14,6 +14,7 @@ pub mod device_generation_commit;
 pub mod device_jobs;
 pub mod generation_objects;
 pub mod generations;
+pub mod gmail_oauth_onboarding;
 pub mod identity;
 pub mod identity_ceremonies;
 pub mod identity_governance;
@@ -67,6 +68,7 @@ pub use integration_events::{
     IntegrationEventPortErrorClass, IntegrationEventPublisherPort, IntegrationEventSourcePort,
     NotificationEventPort,
 };
+pub use mailbox_domain::MailboxOnboardingVersion;
 pub use mailboxes::{MailboxObservation, MailboxProviderPort};
 pub use notification_realtime::{
     RealtimeNotificationAuthorizationPort, RealtimeNotificationSinkPort,

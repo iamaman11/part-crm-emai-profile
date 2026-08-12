@@ -3,6 +3,18 @@ use crate::RouteClass;
 #[must_use]
 pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
     match segments {
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "mailbox-onboardings",
+            _,
+            "gmail-oauth",
+        ] if method == "POST" => Some(RouteClass::MailboxBindingResourceApi),
+        ["api", "v1", "mailbox", "gmail", "oauth", "callback"] if method == "GET" => {
+            Some(RouteClass::MailboxBindingResourceApi)
+        }
         ["api", "v1", "tenants", _, "mailboxes"] if matches!(method, "GET" | "POST") => {
             Some(RouteClass::MailboxBindingCollectionApi)
         }
@@ -69,6 +81,34 @@ mod tests {
         );
         for method in ["PUT", "PATCH", "DELETE"] {
             assert_eq!(classify(method, &segments), None);
+        }
+    }
+
+    #[test]
+    fn gmail_oauth_routes_are_exact_and_wrong_methods_fail_closed() {
+        let start = [
+            "api",
+            "v1",
+            "tenants",
+            "tenant_01",
+            "mailbox-onboardings",
+            "onboarding_01",
+            "gmail-oauth",
+        ];
+        let callback = ["api", "v1", "mailbox", "gmail", "oauth", "callback"];
+        assert_eq!(
+            classify("POST", &start),
+            Some(RouteClass::MailboxBindingResourceApi)
+        );
+        assert_eq!(
+            classify("GET", &callback),
+            Some(RouteClass::MailboxBindingResourceApi)
+        );
+        for method in ["GET", "PUT", "PATCH", "DELETE"] {
+            assert_eq!(classify(method, &start), None);
+        }
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            assert_eq!(classify(method, &callback), None);
         }
     }
 }
