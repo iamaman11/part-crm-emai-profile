@@ -39,7 +39,8 @@ impl MailboxProviderPort for CloudMailboxProviderRouter<'_> {
                 (MailboxProvider::Imap, MailboxCredential::Imap(credential)) => {
                     check_imap_mailbox(binding, &credential).await
                 }
-                (MailboxProvider::BrowserFallback, _)
+                (MailboxProvider::MicrosoftGraph, _)
+                | (MailboxProvider::BrowserFallback, _)
                 | (MailboxProvider::GmailApi, MailboxCredential::Imap(_))
                 | (MailboxProvider::Imap, MailboxCredential::GmailApi(_)) => {
                     Err(MailboxProviderPortError::IntegrityFailure)
