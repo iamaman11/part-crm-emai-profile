@@ -16,12 +16,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
       - name: Verify documentation authority
         run: python scripts/check-documentation-authority.py
-      - name: Refresh deterministic architecture inventory
+      - name: Generate deterministic architecture inventory
+        run: python scripts/generate-architecture-inventory.py --write
+      - name: Verify generated inventory diff hygiene
+        run: git diff --check -- architecture/inventory.json
+      - name: Commit generated architecture inventory
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/generate-architecture-inventory.py --write
-          git diff --check
           if git diff --quiet -- architecture/inventory.json; then
             echo 'Architecture inventory already current.'
             exit 0
@@ -30,4 +32,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add architecture/inventory.json
           git commit -m 'Pre-2J closeout: refresh architecture inventory'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+      - name: Push generated architecture inventory
+        run: git push origin HEAD:${{ github.event.pull_request.head.ref }}
