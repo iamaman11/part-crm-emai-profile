@@ -19,14 +19,10 @@ use zeroize::Zeroize;
 
 const PASSWORD_PROVISION_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/standards/password/provision";
-const MICROSOFT_START_ENDPOINT: &str =
-    "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/standards/microsoft/oauth/start";
-const MICROSOFT_INSPECT_ENDPOINT: &str =
-    "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/standards/microsoft/oauth/inspect";
-const MICROSOFT_COMPLETE_ENDPOINT: &str =
-    "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/standards/microsoft/oauth/complete";
-const MICROSOFT_DENY_ENDPOINT: &str =
-    "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/standards/microsoft/oauth/deny";
+const MICROSOFT_START_ENDPOINT: &str = "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/standards/microsoft/oauth/start";
+const MICROSOFT_INSPECT_ENDPOINT: &str = "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/standards/microsoft/oauth/inspect";
+const MICROSOFT_COMPLETE_ENDPOINT: &str = "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/standards/microsoft/oauth/complete";
+const MICROSOFT_DENY_ENDPOINT: &str = "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/standards/microsoft/oauth/deny";
 const DISCARD_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/discard";
 const MICROSOFT_SCOPES: &str = "https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access";
@@ -54,7 +50,11 @@ impl StandardsMailboxProvisioningPort for CloudflareStandardsMailboxProvisioning
     ) -> Result<StandardsMailboxProvisioningReceipt, StandardsMailboxProvisioningError> {
         let headers = base_onboarding_headers(actor, onboarding_id, expected_version)?;
         set_header(&headers, "content-type", "application/json")?;
-        set_header(&headers, "x-profile-mailbox-authentication-mode", "PASSWORD")?;
+        set_header(
+            &headers,
+            "x-profile-mailbox-authentication-mode",
+            "PASSWORD",
+        )?;
         set_header(
             &headers,
             "x-profile-idempotency-key",
@@ -162,8 +162,11 @@ impl StandardsMailboxProvisioningPort for CloudflareStandardsMailboxProvisioning
             None,
         )
         .await?;
-        parse_provisioning_receipt(response, StandardsMailboxAuthenticationMode::MicrosoftOAuth2)
-            .await
+        parse_provisioning_receipt(
+            response,
+            StandardsMailboxAuthenticationMode::MicrosoftOAuth2,
+        )
+        .await
     }
 
     async fn deny_microsoft_oauth(
@@ -333,21 +336,18 @@ fn set_header(
     headers.set(name, value).map_err(|_| integrity_error())
 }
 
-fn map_status(
-    status: u16,
-    operation: Operation,
-) -> Result<(), StandardsMailboxProvisioningError> {
+fn map_status(status: u16, operation: Operation) -> Result<(), StandardsMailboxProvisioningError> {
     match status {
         200 | 204 => Ok(()),
         404 | 401 | 403 => Err(not_found_error()),
         410 => Err(StandardsMailboxProvisioningError::new(
             StandardsMailboxProvisioningErrorClass::Expired,
         )),
-        409 | 412 if matches!(operation, Operation::Callback) => Err(
-            StandardsMailboxProvisioningError::new(
+        409 | 412 if matches!(operation, Operation::Callback) => {
+            Err(StandardsMailboxProvisioningError::new(
                 StandardsMailboxProvisioningErrorClass::ReplayRejected,
-            ),
-        ),
+            ))
+        }
         409 | 412 => Err(StandardsMailboxProvisioningError::new(
             StandardsMailboxProvisioningErrorClass::Conflict,
         )),
@@ -385,7 +385,8 @@ async fn parse_provisioning_receipt(
     if mode != expected_mode || !document.imap_read_search_ready || !document.smtp_send_ready {
         return Err(integrity_error());
     }
-    let secret_handle = SecretHandle::parse(document.secret_handle).map_err(|_| integrity_error())?;
+    let secret_handle =
+        SecretHandle::parse(document.secret_handle).map_err(|_| integrity_error())?;
     Ok(StandardsMailboxProvisioningReceipt::new(
         secret_handle,
         mode,
