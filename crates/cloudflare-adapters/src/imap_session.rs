@@ -125,8 +125,8 @@ impl ImapSession {
     ) -> Result<(), ImapTransportError> {
         if username.is_empty()
             || access_token.is_empty()
-            || username.bytes().any(u8::is_ascii_control)
-            || access_token.bytes().any(u8::is_ascii_control)
+            || username.bytes().any(|byte| byte.is_ascii_control())
+            || access_token.bytes().any(|byte| byte.is_ascii_control())
         {
             return Err(ImapTransportError::IntegrityFailure);
         }
@@ -141,16 +141,13 @@ impl ImapSession {
         wire.push_str(" AUTHENTICATE XOAUTH2 ");
         wire.push_str(&initial_response);
         wire.push_str("\r\n");
-        self.socket
-            .write_all(wire.as_bytes())
-            .await
-            .map_err(|_| ImapTransportError::DependencyUnavailable)?;
-        self.socket
-            .flush()
-            .await
-            .map_err(|_| ImapTransportError::DependencyUnavailable)?;
+        let write_result = match self.socket.write_all(wire.as_bytes()).await {
+            Ok(()) => self.socket.flush().await,
+            Err(error) => Err(error),
+        };
         wire.zeroize();
         initial_response.zeroize();
+        write_result.map_err(|_| ImapTransportError::DependencyUnavailable)?;
 
         let first = read_until_line(&mut self.socket, MAX_XOAUTH2_RESPONSE_BYTES).await?;
         if let Some(status) = tagged_status(&first, &tag) {
@@ -300,9 +297,9 @@ fn xoauth2_initial_response(
     payload.push_str(access_token);
     payload.push('\u{1}');
     payload.push('\u{1}');
-    let encoded = base64_standard(payload.as_bytes())?;
+    let encoded = base64_standard(payload.as_bytes());
     payload.zeroize();
-    Ok(encoded)
+    encoded
 }
 
 fn base64_standard(input: &[u8]) -> Result<String, ImapTransportError> {
