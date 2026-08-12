@@ -13,11 +13,14 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
             "imap-smtp",
             "password" | "microsoft-oauth",
         ] if method == "POST" => Some(RouteClass::MailboxBindingResourceApi),
-        ["api", "v1", "mailbox", "imap-smtp", "microsoft-oauth", "callback"]
-            if method == "GET" =>
-        {
-            Some(RouteClass::MailboxBindingResourceApi)
-        }
+        [
+            "api",
+            "v1",
+            "mailbox",
+            "imap-smtp",
+            "microsoft-oauth",
+            "callback",
+        ] if method == "GET" => Some(RouteClass::MailboxBindingResourceApi),
         [
             "api",
             "v1",
