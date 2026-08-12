@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -26,6 +27,14 @@ def require(text: str, needle: str, where: str) -> None:
 def reject(text: str, needle: str, where: str) -> None:
     if needle in text:
         raise SystemExit(f"{where}: forbidden B4 boundary leakage detected: {needle}")
+
+
+def rust_struct_fields(text: str, name: str, *, public: bool) -> set[str]:
+    match = re.search(rf"struct\s+{re.escape(name)}\s*\{{(?P<body>.*?)\n\}}", text, re.S)
+    if match is None:
+        raise SystemExit(f"Rust struct {name} is missing")
+    prefix = r"pub\s+" if public else ""
+    return set(re.findall(rf"^\s+{prefix}([a-z][a-z0-9_]*)\s*:", match.group("body"), re.M))
 
 
 def main() -> int:
@@ -62,10 +71,29 @@ def main() -> int:
         raise SystemExit("B4 relationship version must preserve never-associated version zero")
 
     contract = CONTRACT.read_text(encoding="utf-8")
+    contract_request_fields = rust_struct_fields(
+        contract,
+        "ChangeMailboxClientAssociationRequestDto",
+        public=True,
+    )
+    if contract_request_fields != {"client_id", "expected_relationship_version", "request_digest"}:
+        raise SystemExit(f"B4 canonical request field set drifted: {sorted(contract_request_fields)}")
+    require(
+        contract,
+        'deserialize_with = "required_nullable_string"',
+        str(CONTRACT.relative_to(ROOT)),
+    )
     for forbidden in ["secret_handle", "access_token", "provider_token", "profile_id"]:
         reject(contract.lower(), forbidden, str(CONTRACT.relative_to(ROOT)))
 
     worker = WORKER.read_text(encoding="utf-8")
+    worker_request_fields = rust_struct_fields(
+        worker,
+        "ChangeMailboxClientAssociationRequest",
+        public=False,
+    )
+    if worker_request_fields != {"client_id", "expected_relationship_version", "request_digest"}:
+        raise SystemExit(f"B4 Worker request field set drifted: {sorted(worker_request_fields)}")
     require(worker, "execute_mailbox_client_association", str(WORKER.relative_to(ROOT)))
     require(worker, "get_mailbox_client_association", str(WORKER.relative_to(ROOT)))
     require(worker, "client_id: Value", str(WORKER.relative_to(ROOT)))
@@ -90,12 +118,24 @@ def main() -> int:
     )
 
     frontend_api = FRONTEND_API.read_text(encoding="utf-8")
-    require(frontend_api, "getMailboxClientAssociation", str(FRONTEND_API.relative_to(ROOT)))
-    require(frontend_api, "changeMailboxClientAssociation", str(FRONTEND_API.relative_to(ROOT)))
-    require(frontend_api, "expectedRelationshipVersion", str(FRONTEND_API.relative_to(ROOT)))
+    for needle in [
+        "getMailboxClientAssociation",
+        "changeMailboxClientAssociation",
+        "expectedRelationshipVersion",
+        "listMailboxRelationshipOverview",
+        "Promise.all",
+    ]:
+        require(frontend_api, needle, str(FRONTEND_API.relative_to(ROOT)))
 
     frontend_ui = FRONTEND_UI.read_text(encoding="utf-8")
     for needle in [
+        "Assigned and unassigned mailboxes",
+        "relationshipFilter",
+        "UNASSIGNED",
+        "ASSIGNED",
+        "Exact Client ID",
+        "Mailbox status",
+        "Manage relationship",
         "Explicit mailbox → Client relationship",
         "association.clientId ?? 'Unassigned'",
         "association.relationshipVersion",
@@ -105,6 +145,7 @@ def main() -> int:
         "Rebind Client",
         "unbind Client",
         "profile assignment is not used as authorization",
+        "Current relationship after the failed command",
     ]:
         require(frontend_ui, needle, str(FRONTEND_UI.relative_to(ROOT)))
     for forbidden in ["ProfileAssignment", "profileAssignmentId", "assignedProfileId"]:
