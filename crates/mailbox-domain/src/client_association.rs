@@ -17,7 +17,7 @@ impl MailboxClientAssociationVersion {
         self.0
     }
 
-    fn next(self) -> Result<Self, MailboxClientAssociationError> {
+    pub fn next(self) -> Result<Self, MailboxClientAssociationError> {
         self.0
             .checked_add(1)
             .map(Self)
