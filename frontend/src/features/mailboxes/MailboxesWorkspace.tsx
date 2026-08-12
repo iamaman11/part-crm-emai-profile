@@ -2,14 +2,20 @@ import { useMutation } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
 import {
+  changeMailboxClientAssociation,
   createMailboxBinding,
   createMailboxJob,
   getMailboxBinding,
+  getMailboxClientAssociation,
   getMailboxJob,
   revokeMailboxBinding,
   runMailboxJob,
 } from './api';
-import type { MailboxBindingProjection, MailboxJobProjection } from './api';
+import type {
+  MailboxBindingProjection,
+  MailboxClientAssociationProjection,
+  MailboxJobProjection,
+} from './api';
 import { ConfirmAction } from '../../shared/ui/ConfirmAction';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
 
@@ -21,9 +27,14 @@ export function MailboxesWorkspace() {
   const { tenantId } = useTenant();
   const [bindingId, setBindingId] = useState('');
   const [binding, setBinding] = useState<MailboxBindingProjection | null>(null);
+  const [association, setAssociation] = useState<MailboxClientAssociationProjection | null>(null);
   const [jobId, setJobId] = useState('');
   const [job, setJob] = useState<MailboxJobProjection | null>(null);
 
+  const associationLookup = useMutation({
+    mutationFn: (id: string) => getMailboxClientAssociation(tenantId, id),
+    onSuccess: (data) => setAssociation(data ?? null),
+  });
   const bindingLookup = useMutation({
     mutationFn: (id: string) => getMailboxBinding(tenantId, id),
     onSuccess: (data) => setBinding(data ?? null),
@@ -33,6 +44,14 @@ export function MailboxesWorkspace() {
   });
   const bindingRevoke = useMutation({
     mutationFn: (version: number) => revokeMailboxBinding(tenantId, bindingId, version),
+  });
+  const associationChange = useMutation({
+    mutationFn: (input: { bindingId: string; clientId: string | null; expectedRelationshipVersion: number }) =>
+      changeMailboxClientAssociation(tenantId, input.bindingId, {
+        clientId: input.clientId,
+        expectedRelationshipVersion: input.expectedRelationshipVersion,
+      }),
+    onSuccess: (_data, variables) => associationLookup.mutate(variables.bindingId),
   });
   const jobLookup = useMutation({
     mutationFn: (input: { bindingId: string; jobId: string }) => getMailboxJob(tenantId, input.bindingId, input.jobId),
@@ -53,8 +72,10 @@ export function MailboxesWorkspace() {
     const id = field(new FormData(event.currentTarget), 'bindingId');
     setBindingId(id);
     setBinding(null);
+    setAssociation(null);
     setJob(null);
     bindingLookup.mutate(id);
+    associationLookup.mutate(id);
   };
 
   return (
@@ -64,7 +85,7 @@ export function MailboxesWorkspace() {
         <h2>Mailbox binding</h2>
         <form className="stack-form" onSubmit={lookupBinding}>
           <label>Binding ID<input name="bindingId" placeholder="mailbox_..." required disabled={!enabled} /></label>
-          <button type="submit" disabled={!enabled || bindingLookup.isPending}>Lookup binding</button>
+          <button type="submit" disabled={!enabled || bindingLookup.isPending || associationLookup.isPending}>Lookup binding</button>
         </form>
         <StatusMessage state={bindingLookup.error ?? (bindingLookup.isPending ? 'Loading mailbox binding…' : null)} />
         {binding && (
@@ -84,6 +105,50 @@ export function MailboxesWorkspace() {
           </>
         )}
         <StatusMessage state={bindingRevoke.error ?? (bindingRevoke.data ? `${bindingRevoke.data.resultCode}: ${bindingRevoke.data.resourceId}` : null)} />
+      </section>
+
+      <section className="panel">
+        <span className="eyebrow">Explicit mailbox → Client relationship</span>
+        <h2>Client association</h2>
+        <p>Association controls which Client this mailbox belongs to. It does not grant Client access and profile assignment is not used as authorization.</p>
+        <StatusMessage state={associationLookup.error ?? (associationLookup.isPending ? 'Loading Client association…' : null)} />
+        {association && (
+          <>
+            <dl className="projection">
+              <div><dt>Client</dt><dd>{association.clientId ?? 'Unassigned'}</dd></div>
+              <div><dt>Relationship version</dt><dd>{association.relationshipVersion}</dd></div>
+              <div><dt>Mailbox executable</dt><dd>{association.mailboxExecutable ? 'Yes' : 'No'}</dd></div>
+              <div><dt>Can manage</dt><dd>{association.canManage ? 'Yes' : 'No'}</dd></div>
+            </dl>
+            <form className="stack-form" onSubmit={(event) => {
+              event.preventDefault();
+              const clientId = field(new FormData(event.currentTarget), 'clientId');
+              associationChange.mutate({
+                bindingId: association.bindingId,
+                clientId,
+                expectedRelationshipVersion: association.relationshipVersion,
+              });
+            }}>
+              <label>Client ID<input name="clientId" placeholder="client_..." required disabled={!association.canManage || !association.mailboxExecutable || associationChange.isPending} /></label>
+              <button type="submit" disabled={!association.canManage || !association.mailboxExecutable || associationChange.isPending}>
+                {association.clientId === null ? 'Bind Client' : 'Rebind Client'}
+              </button>
+            </form>
+            {association.clientId !== null && (
+              <ConfirmAction
+                label="unbind Client"
+                consequence="The mailbox will become unassigned and immediately ineligible for Client Mail until explicitly bound again. Client grants are unchanged."
+                disabled={!association.canManage || !association.mailboxExecutable || associationChange.isPending}
+                onConfirm={() => associationChange.mutateAsync({
+                  bindingId: association.bindingId,
+                  clientId: null,
+                  expectedRelationshipVersion: association.relationshipVersion,
+                }).then(() => undefined)}
+              />
+            )}
+          </>
+        )}
+        <StatusMessage state={associationChange.error ?? (associationChange.data ? `${associationChange.data.resultCode}: relationship v${associationChange.data.relationshipVersion}` : null)} />
       </section>
 
       <section className="panel">
