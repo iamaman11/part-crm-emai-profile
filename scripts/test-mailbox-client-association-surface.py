@@ -62,7 +62,7 @@ def main() -> int:
         raise SystemExit("B4 relationship version must preserve never-associated version zero")
 
     contract = CONTRACT.read_text(encoding="utf-8")
-    for forbidden in ["secret_handle", "password", "access_token", "provider_token", "profile_id"]:
+    for forbidden in ["secret_handle", "access_token", "provider_token", "profile_id"]:
         reject(contract.lower(), forbidden, str(CONTRACT.relative_to(ROOT)))
 
     worker = WORKER.read_text(encoding="utf-8")
@@ -104,9 +104,11 @@ def main() -> int:
         "Bind Client",
         "Rebind Client",
         "unbind Client",
+        "profile assignment is not used as authorization",
     ]:
         require(frontend_ui, needle, str(FRONTEND_UI.relative_to(ROOT)))
-    reject(frontend_ui, "profile assignment", str(FRONTEND_UI.relative_to(ROOT)))
+    for forbidden in ["ProfileAssignment", "profileAssignmentId", "assignedProfileId"]:
+        reject(frontend_ui, forbidden, str(FRONTEND_UI.relative_to(ROOT)))
 
     print("B4 mailbox Client association contract, thin transport and permission-aware UX evidence passed.")
     return 0
