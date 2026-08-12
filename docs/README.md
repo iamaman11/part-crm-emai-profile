@@ -7,10 +7,13 @@ current-authority hierarchy live in [`docs/INDEX.md`](INDEX.md).
 
 - **Accepted repository-local product phase: Phase 2I.** Acceptance provenance:
   [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json).
-- **Pre-2J remediation: CLOSED / PHASE 2J UNBLOCKED.** Accepted closeout record:
+- **R1–R9 pre-2J architecture remediation: CLOSED / ACCEPTED HISTORY.** Accepted closeout record:
   [`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md).
-- **Phase 2J is unblocked but not started.** Repository-local remediation is closed; External evidence
-  remains unaccepted and cannot be replaced by synthetic/repository-local proof.
+- **Pre-2J product-readiness remediation: ACTIVE / BLOCKING Phase 2J.** Current execution authority:
+  [`PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`](PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md), tracked by
+  issue #203, with initial repository-owned P0=0, P1=5 and P2=1.
+- **Phase 2J is blocked and not started.** It may return to unblocked/not-started only after accepted
+  Batch F; External evidence remains unaccepted and cannot be replaced by synthetic/repository-local proof.
 - **Production readiness:** `production_ready=false`; machine-readable projection:
   [`status.json`](status.json).
 
@@ -20,9 +23,11 @@ and [`evidence/`](evidence/) only for historical provenance, not to decide curre
 ## Current normative sources
 
 - [`INDEX.md`](INDEX.md) — documentation authority/governance;
+- [`PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`](PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md) — current
+  pre-2J remediation execution authority, issue #203;
 - [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) — product phase order and acceptance rules;
-- [`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) — accepted R1–R9
-  remediation and final repository-owned pre-2J closeout record;
+- [`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) — historical accepted
+  R1–R9 remediation and final repository-owned closeout record;
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) and accepted ADRs — architecture invariants;
 - [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md) — data/privacy classes;
 - [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) — standalone UI target;
