@@ -126,11 +126,9 @@ impl fmt::Display for ProfileOperationError {
 
 impl std::error::Error for ProfileOperationError {}
 
-pub fn authorize_profile_create(role: MembershipRole) -> Result<(), ProfileOperationError> {
-    if role == MembershipRole::TenantOwner {
-        Ok(())
-    } else {
-        Err(ProfileOperationError::NotFound)
+pub const fn authorize_profile_create(role: MembershipRole) -> Result<(), ProfileOperationError> {
+    match role {
+        MembershipRole::TenantOwner | MembershipRole::Member => Ok(()),
     }
 }
 
@@ -303,8 +301,8 @@ pub fn decide_open_profile(
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecuteCreateProfileCommand, OpenProfileCommand, ProfileOperationError,
-        authorize_profile_create, decide_open_profile, execute_create_profile, get_visible_profile,
+        ExecuteCreateProfileCommand, OpenProfileCommand, authorize_profile_create,
+        decide_open_profile, execute_create_profile, get_visible_profile,
     };
     use crate::error::ApplicationError;
     use application_ports::CommandExecutionEvidence;
@@ -429,15 +427,12 @@ mod tests {
     }
 
     #[test]
-    fn create_authorization_is_disclosure_neutral() {
+    fn create_authorization_accepts_owner_and_member_roles() {
         assert_eq!(
             authorize_profile_create(MembershipRole::TenantOwner),
             Ok(())
         );
-        assert_eq!(
-            authorize_profile_create(MembershipRole::Member),
-            Err(ProfileOperationError::NotFound)
-        );
+        assert_eq!(authorize_profile_create(MembershipRole::Member), Ok(()));
     }
 
     #[test]
@@ -458,20 +453,20 @@ mod tests {
     }
 
     #[test]
-    fn member_create_is_neutral_and_never_reads_replay_or_writes()
+    fn member_create_reaches_the_single_atomic_write_boundary()
     -> Result<(), Box<dyn std::error::Error>> {
         let port = FakeProfilePort::new(vec![ProfileReplayDecision::Miss]);
-        assert_eq!(
-            block_on(execute_create_profile(
-                &actor()?,
-                MembershipRole::Member,
-                &port,
-                create_command()?,
-            )),
-            Err(ProfileOperationError::NotFound)
-        );
-        assert_eq!(port.replay_calls.get(), 0);
-        assert_eq!(port.create_calls.get(), 0);
+        let outcome = block_on(execute_create_profile(
+            &actor()?,
+            MembershipRole::Member,
+            &port,
+            create_command()?,
+        ))?;
+        assert_eq!(outcome.result_code(), "created");
+        assert!(!outcome.replayed());
+        assert_eq!(outcome.aggregate_version(), AggregateVersion::INITIAL);
+        assert_eq!(port.replay_calls.get(), 1);
+        assert_eq!(port.create_calls.get(), 1);
         Ok(())
     }
 
@@ -482,7 +477,7 @@ mod tests {
         )]);
         let outcome = block_on(execute_create_profile(
             &actor()?,
-            MembershipRole::TenantOwner,
+            MembershipRole::Member,
             &port,
             create_command()?,
         ))?;
@@ -505,7 +500,7 @@ mod tests {
         port.create_error.set(Some(ProfilePortErrorClass::Conflict));
         let outcome = block_on(execute_create_profile(
             &actor()?,
-            MembershipRole::TenantOwner,
+            MembershipRole::Member,
             &port,
             create_command()?,
         ))?;
