@@ -44,6 +44,7 @@ jobs:
           python -m py_compile scripts/check-phase2a-client-boundaries.py
           python -m py_compile scripts/test-client-creator-grant.py
           python -m py_compile scripts/test-profile-creator-grant.py
+          python -m py_compile scripts/test-mailbox-client-associations.py
           python -m py_compile scripts/check-phase2b-client-boundaries.py
           python -m py_compile scripts/test-phase2b-client-contacts.py
           python -m py_compile scripts/check-phase2c-client-boundaries.py
@@ -86,6 +87,9 @@ jobs:
 
       - name: Prove A2 Profile creator grant policy and atomic D1 transaction
         run: python scripts/test-profile-creator-grant.py
+
+      - name: Prove Batch B mailbox Client relationship and Client Mail eligibility
+        run: python scripts/test-mailbox-client-associations.py
 
       - name: Enforce Phase 2B protected client-contact D1 boundaries
         run: python scripts/check-phase2b-client-boundaries.py
