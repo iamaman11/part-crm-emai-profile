@@ -297,8 +297,9 @@ Phase 2I remains the last accepted repository-local product phase. The historica
 closed and must not be reopened. The active repository work is issue #203 under
 `PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`.
 
-Complete and accept **Batch 0** first. Do not begin Batch A and do not begin Phase 2J before Batch 0 is
-merged under exact-head discipline. After Batch 0, start A1 from the resulting accepted `main`.
+Complete and accept **Batch 0** first. Do not begin Batch A before Batch 0 is merged under exact-head
+discipline. Do not begin Phase 2J while issue #203 remains active/blocking. After Batch 0, start A1 from
+the resulting accepted `main`.
 
 Until accepted Batch F explicitly clears the repository blocker:
 
