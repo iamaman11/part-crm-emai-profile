@@ -270,10 +270,9 @@ mod tests {
     #[test]
     fn fragment_matches_the_accepted_generated_artifact_byte_for_byte() {
         let generated = openapi_fragment().to_string();
-        let accepted = include_str!(
-            "../../../openapi/v1/fragments/mailbox-imap-smtp-onboarding.json"
-        )
-        .trim_end();
+        let accepted =
+            include_str!("../../../openapi/v1/fragments/mailbox-imap-smtp-onboarding.json")
+                .trim_end();
         assert_eq!(generated, accepted);
     }
 }
