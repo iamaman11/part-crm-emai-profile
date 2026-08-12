@@ -152,8 +152,9 @@ export function ProfilesWorkspace({
       </section>
 
       <section className="panel">
-        <span className="eyebrow">Owner-governed mutation</span>
+        <span className="eyebrow">Member self-service · explicit creator grant</span>
         <h2>Create profile</h2>
+        <p>Active members may create a profile. Access is granted only to the creator; client assignment does not grant profile access.</p>
         <form className="stack-form" onSubmit={(event) => {
           event.preventDefault();
           create.mutate(field(new FormData(event.currentTarget), 'profileId'));
