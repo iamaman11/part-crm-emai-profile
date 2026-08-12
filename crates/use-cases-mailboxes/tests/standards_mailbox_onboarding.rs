@@ -9,8 +9,9 @@ use application_ports::standards_mailbox_onboarding::{
     MicrosoftStandardsOAuthStartReceipt, MicrosoftStandardsOAuthState, StandardsMailEndpoint,
     StandardsMailProtocol, StandardsMailTransportSecurity, StandardsMailboxAuthenticationMode,
     StandardsMailboxInputError, StandardsMailboxPassword, StandardsMailboxProvisioningError,
-    StandardsMailboxProvisioningPort, StandardsMailboxProvisioningReceipt, StandardsMailboxUsername,
-    StandardsPasswordMailboxConfiguration, StandardsPasswordProtocolCredential,
+    StandardsMailboxProvisioningPort, StandardsMailboxProvisioningReceipt,
+    StandardsMailboxUsername, StandardsPasswordMailboxConfiguration,
+    StandardsPasswordProtocolCredential,
 };
 use identity_access_domain::MembershipRole;
 use mailbox_domain::{
@@ -150,8 +151,9 @@ impl StandardsMailboxProvisioningPort for FakeProvisioningPort {
         _expected_version: MailboxOnboardingVersion,
         _idempotency_key: &IdempotencyKey,
         _configuration: StandardsPasswordMailboxConfiguration,
-    ) -> impl Future<Output = Result<StandardsMailboxProvisioningReceipt, StandardsMailboxProvisioningError>>
-    {
+    ) -> impl Future<
+        Output = Result<StandardsMailboxProvisioningReceipt, StandardsMailboxProvisioningError>,
+    > {
         self.provision_calls.set(self.provision_calls.get() + 1);
         ready(Ok(self.receipt.borrow().clone()))
     }
@@ -161,8 +163,9 @@ impl StandardsMailboxProvisioningPort for FakeProvisioningPort {
         _actor: &ActorContext,
         _onboarding_id: &MailboxOnboardingId,
         _expected_version: MailboxOnboardingVersion,
-    ) -> impl Future<Output = Result<MicrosoftStandardsOAuthStartReceipt, StandardsMailboxProvisioningError>>
-    {
+    ) -> impl Future<
+        Output = Result<MicrosoftStandardsOAuthStartReceipt, StandardsMailboxProvisioningError>,
+    > {
         self.start_calls.set(self.start_calls.get() + 1);
         ready(Ok(self.start_receipt.clone()))
     }
@@ -170,8 +173,9 @@ impl StandardsMailboxProvisioningPort for FakeProvisioningPort {
     fn inspect_microsoft_oauth(
         &self,
         _state: &MicrosoftStandardsOAuthState,
-    ) -> impl Future<Output = Result<MicrosoftStandardsOAuthCallbackTarget, StandardsMailboxProvisioningError>>
-    {
+    ) -> impl Future<
+        Output = Result<MicrosoftStandardsOAuthCallbackTarget, StandardsMailboxProvisioningError>,
+    > {
         ready(Ok(self.target.clone()))
     }
 
@@ -180,8 +184,9 @@ impl StandardsMailboxProvisioningPort for FakeProvisioningPort {
         _actor: &ActorContext,
         _state: &MicrosoftStandardsOAuthState,
         _authorization_code: MicrosoftStandardsOAuthAuthorizationCode,
-    ) -> impl Future<Output = Result<StandardsMailboxProvisioningReceipt, StandardsMailboxProvisioningError>>
-    {
+    ) -> impl Future<
+        Output = Result<StandardsMailboxProvisioningReceipt, StandardsMailboxProvisioningError>,
+    > {
         self.complete_calls.set(self.complete_calls.get() + 1);
         ready(Ok(self.receipt.borrow().clone()))
     }
@@ -651,10 +656,7 @@ fn evidence(suffix: &str) -> TestResult<CommandExecutionEvidence> {
     ))
 }
 
-fn input<T>(
-    result: Result<T, StandardsMailboxInputError>,
-    message: &'static str,
-) -> TestResult<T> {
+fn input<T>(result: Result<T, StandardsMailboxInputError>, message: &'static str) -> TestResult<T> {
     match result {
         Ok(value) => Ok(value),
         Err(_) => Err(std::io::Error::other(message).into()),
