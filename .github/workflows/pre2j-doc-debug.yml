@@ -1,0 +1,26 @@
+name: TEMP Pre2J Documentation Debug
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  documentation-authority-debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          persist-credentials: false
+      - name: Expose documentation authority diagnostics
+        shell: bash
+        run: |
+          set +e
+          python scripts/check-documentation-authority.py >diagnostics.txt 2>&1
+          rc=$?
+          while IFS= read -r line; do
+            printf '::error title=Pre-2J documentation authority::%s\n' "$line"
+          done < diagnostics.txt
+          exit "$rc"
