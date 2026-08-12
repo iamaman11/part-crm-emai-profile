@@ -287,7 +287,7 @@ def validate(root: Path) -> list[str]:
             "issue #203",
             "Phase 2I remains the last accepted repository-local product phase",
             "`production_ready=false`",
-            "## 19. Immediate Next Action",
+            "## 13. Immediate Next Action",
         ),
         "DEVELOPMENT_PLAN.md",
         errors,
