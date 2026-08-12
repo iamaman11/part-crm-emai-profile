@@ -1,15 +1,17 @@
-use crate::{command_evidence, parse_request_evidence, resolve_active_request_actor};
+use crate::access_session::{
+    correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
+};
+use crate::command_evidence;
+use application_ports::MailboxOnboardingVersion;
 use application_ports::standards_mailbox_onboarding::{
     MicrosoftStandardsOAuthAuthorizationCode, MicrosoftStandardsOAuthState, StandardsMailEndpoint,
     StandardsMailProtocol, StandardsMailTransportSecurity, StandardsMailboxPassword,
     StandardsMailboxUsername, StandardsPasswordMailboxConfiguration,
     StandardsPasswordProtocolCredential,
 };
-use cloudflare_adapters::d1_mailbox_onboarding::D1MailboxOnboardingApplicationPort;
+use cloudflare_adapters::d1_mailbox_onboarding::D1MailboxOnboardingApplicationRepository;
 use cloudflare_adapters::standards_mailbox_provisioning::CloudflareStandardsMailboxProvisioningPort;
-use control_plane_contract::RouteClass;
-use identity_access_domain::MembershipRole;
-use mailbox_domain::MailboxOnboardingVersion;
+use control_plane_contract::{D1_CATALOG_BINDING, RouteClass};
 use profile_platform_primitives::{MailboxOnboardingId, TenantId};
 use serde::{Deserialize, Serialize};
 use use_cases_mailboxes::standards_mailbox_onboarding::{
@@ -19,7 +21,6 @@ use use_cases_mailboxes::standards_mailbox_onboarding::{
     start_microsoft_standards_oauth,
 };
 use worker::{Env, Error, Request, Response, Result, Url};
-use worker_shared::{ProblemDetails, ProblemType, StatusCode};
 
 const PASSWORD_SUFFIX: &str = "/imap-smtp/password";
 const MICROSOFT_START_SUFFIX: &str = "/imap-smtp/microsoft-oauth";
@@ -94,19 +95,40 @@ struct MicrosoftStartReceiptDto {
     expires_at_ms: u64,
 }
 
+struct CallbackQuery {
+    state: String,
+    authorization_code: Option<String>,
+    provider_error: Option<String>,
+}
+
+#[must_use]
 pub(crate) fn is_request(path: &str) -> bool {
-    path == MICROSOFT_CALLBACK_PATH
-        || path.ends_with(PASSWORD_SUFFIX)
-        || path.ends_with(MICROSOFT_START_SUFFIX)
+    if path == MICROSOFT_CALLBACK_PATH {
+        return true;
+    }
+    let segments: Vec<&str> = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    matches!(
+        segments.as_slice(),
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "mailbox-onboardings",
+            _,
+            "imap-smtp",
+            "password" | "microsoft-oauth"
+        ]
+    )
 }
 
 pub(crate) async fn handle(mut request: Request, env: &Env, route: RouteClass) -> Result<Response> {
     if route != RouteClass::MailboxBindingResourceApi {
-        return problem(
-            StatusCode::NOT_FOUND,
-            ProblemType::NotFound,
-            "standards mailbox onboarding route not found",
-        );
+        return not_found(&correlation_hint(&request));
     }
     let path = request.path();
     if path == MICROSOFT_CALLBACK_PATH {
@@ -118,46 +140,31 @@ pub(crate) async fn handle(mut request: Request, env: &Env, route: RouteClass) -
     if path.ends_with(MICROSOFT_START_SUFFIX) {
         return start_microsoft(&mut request, env).await;
     }
-    problem(
-        StatusCode::NOT_FOUND,
-        ProblemType::NotFound,
-        "standards mailbox onboarding route not found",
-    )
+    not_found(&correlation_hint(&request))
 }
 
 async fn provision_password(request: &mut Request, env: &Env) -> Result<Response> {
-    let (tenant_id, onboarding_id) = match onboarding_target(request.path(), PASSWORD_SUFFIX) {
+    let path = request.path();
+    let (tenant_id, onboarding_id) = match onboarding_target(&path, PASSWORD_SUFFIX) {
         Ok(value) => value,
-        Err(_) => {
-            return problem(
-                StatusCode::NOT_FOUND,
-                ProblemType::NotFound,
-                "standards mailbox onboarding target not found",
-            );
-        }
+        Err(()) => return not_found(&correlation_hint(request)),
     };
-    let request_evidence = parse_request_evidence(request)?;
-    let resolved = resolve_active_request_actor(env, &tenant_id, &request_evidence).await?;
-    let role = resolved.membership().role();
-    let actor = resolved.into_actor();
+    let Some(resolved) =
+        resolve_active_request_actor(request, env, Some(tenant_id.as_str())).await?
+    else {
+        return not_found(&correlation_hint(request));
+    };
+    let role = membership_role(&resolved);
+    let actor = resolved.actor();
     let body: ProvisionPasswordRequestDto = match request.json().await {
         Ok(value) => value,
-        Err(_) => {
-            return problem(
-                StatusCode::BAD_REQUEST,
-                ProblemType::InvalidRequest,
-                "invalid standards mailbox password request",
-            );
-        }
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let expected_version = MailboxOnboardingVersion::new(body.expected_version);
     if expected_version.value() == 0 {
-        return problem(
-            StatusCode::BAD_REQUEST,
-            ProblemType::InvalidRequest,
-            "invalid mailbox onboarding version",
-        );
+        return invalid_request(actor.correlation_id().as_str());
     }
+
     let imap_transport = body.imap.transport_security;
     let smtp_transport = body.smtp.transport_security;
     let imap_endpoint = match StandardsMailEndpoint::parse(
@@ -167,15 +174,15 @@ async fn provision_password(request: &mut Request, env: &Env) -> Result<Response
         imap_transport.application(),
     ) {
         Ok(value) => value,
-        Err(_) => return invalid_configuration(),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let imap_username = match StandardsMailboxUsername::parse(body.imap.username) {
         Ok(value) => value,
-        Err(_) => return invalid_configuration(),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let imap_password = match StandardsMailboxPassword::parse(body.imap.password) {
         Ok(value) => value,
-        Err(_) => return invalid_configuration(),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let smtp_endpoint = match StandardsMailEndpoint::parse(
         StandardsMailProtocol::Smtp,
@@ -184,19 +191,19 @@ async fn provision_password(request: &mut Request, env: &Env) -> Result<Response
         smtp_transport.application(),
     ) {
         Ok(value) => value,
-        Err(_) => return invalid_configuration(),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let smtp_username = match StandardsMailboxUsername::parse(body.smtp.username) {
         Ok(value) => value,
-        Err(_) => return invalid_configuration(),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let smtp_password = match StandardsMailboxPassword::parse(body.smtp.password) {
         Ok(value) => value,
-        Err(_) => return invalid_configuration(),
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let evidence = match command_evidence::from_standards_password_onboarding(
         request,
-        &actor,
+        actor,
         &onboarding_id,
         expected_version.value(),
         imap_endpoint.host(),
@@ -209,24 +216,17 @@ async fn provision_password(request: &mut Request, env: &Env) -> Result<Response
         smtp_username.as_str(),
     ) {
         Ok(value) => value,
-        Err(_) => {
-            return problem(
-                StatusCode::BAD_REQUEST,
-                ProblemType::InvalidRequest,
-                "missing or invalid idempotency key",
-            );
-        }
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let configuration = StandardsPasswordMailboxConfiguration::new(
         StandardsPasswordProtocolCredential::new(imap_endpoint, imap_username, imap_password),
         StandardsPasswordProtocolCredential::new(smtp_endpoint, smtp_username, smtp_password),
     )
     .map_err(|_| Error::RustError("validated protocol pairing was rejected".to_owned()))?;
-    let database = env.d1("PROFILE_DB")?;
-    let onboarding_port = D1MailboxOnboardingApplicationPort::new(&database);
+    let onboarding_port = onboarding_repository(env)?;
     let provisioning_port = CloudflareStandardsMailboxProvisioningPort::new(env);
     match provision_password_standards_mailbox(
-        &actor,
+        actor,
         role,
         &onboarding_port,
         &provisioning_port,
@@ -238,49 +238,35 @@ async fn provision_password(request: &mut Request, env: &Env) -> Result<Response
     .await
     {
         Ok(outcome) => activation_response(&outcome, "activated"),
-        Err(error) => onboarding_problem(error),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
 
 async fn start_microsoft(request: &mut Request, env: &Env) -> Result<Response> {
-    let (tenant_id, onboarding_id) = match onboarding_target(request.path(), MICROSOFT_START_SUFFIX)
-    {
+    let path = request.path();
+    let (tenant_id, onboarding_id) = match onboarding_target(&path, MICROSOFT_START_SUFFIX) {
         Ok(value) => value,
-        Err(_) => {
-            return problem(
-                StatusCode::NOT_FOUND,
-                ProblemType::NotFound,
-                "standards mailbox onboarding target not found",
-            );
-        }
+        Err(()) => return not_found(&correlation_hint(request)),
     };
-    let request_evidence = parse_request_evidence(request)?;
-    let resolved = resolve_active_request_actor(env, &tenant_id, &request_evidence).await?;
-    let role = resolved.membership().role();
-    let actor = resolved.into_actor();
+    let Some(resolved) =
+        resolve_active_request_actor(request, env, Some(tenant_id.as_str())).await?
+    else {
+        return not_found(&correlation_hint(request));
+    };
+    let role = membership_role(&resolved);
+    let actor = resolved.actor();
     let body: StartMicrosoftOAuthRequestDto = match request.json().await {
         Ok(value) => value,
-        Err(_) => {
-            return problem(
-                StatusCode::BAD_REQUEST,
-                ProblemType::InvalidRequest,
-                "invalid Microsoft standards OAuth start request",
-            );
-        }
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let expected_version = MailboxOnboardingVersion::new(body.expected_version);
     if expected_version.value() == 0 {
-        return problem(
-            StatusCode::BAD_REQUEST,
-            ProblemType::InvalidRequest,
-            "invalid mailbox onboarding version",
-        );
+        return invalid_request(actor.correlation_id().as_str());
     }
-    let database = env.d1("PROFILE_DB")?;
-    let onboarding_port = D1MailboxOnboardingApplicationPort::new(&database);
+    let onboarding_port = onboarding_repository(env)?;
     let provisioning_port = CloudflareStandardsMailboxProvisioningPort::new(env);
     match start_microsoft_standards_oauth(
-        &actor,
+        actor,
         role,
         &onboarding_port,
         &provisioning_port,
@@ -289,7 +275,7 @@ async fn start_microsoft(request: &mut Request, env: &Env) -> Result<Response> {
     )
     .await
     {
-        Ok(outcome) => response(&MicrosoftStartReceiptDto {
+        Ok(outcome) => json_no_store(&MicrosoftStartReceiptDto {
             onboarding_id: outcome.onboarding_id().as_str().to_owned(),
             expected_version: outcome.expected_version().value(),
             authentication_mode: "MICROSOFT_OAUTH2",
@@ -297,31 +283,39 @@ async fn start_microsoft(request: &mut Request, env: &Env) -> Result<Response> {
             authorization_url: outcome.receipt().authorization_url().as_str().to_owned(),
             expires_at_ms: outcome.receipt().expires_at().value(),
         }),
-        Err(error) => onboarding_problem(error),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
 }
 
 async fn callback(request: &Request, env: &Env) -> Result<Response> {
-    let url = request.url()?;
-    let state_raw = query_parameter(&url, "state").ok_or_else(|| {
-        Error::RustError("standards mailbox OAuth callback state missing".to_owned())
-    })?;
-    let state = MicrosoftStandardsOAuthState::parse(state_raw.clone())
-        .map_err(|_| Error::RustError("invalid standards mailbox OAuth state".to_owned()))?;
+    let query = match callback_query(request) {
+        Ok(value) => value,
+        Err(()) => return invalid_request(&correlation_hint(request)),
+    };
+    let state = match MicrosoftStandardsOAuthState::parse(query.state.clone()) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(&correlation_hint(request)),
+    };
     let provisioning_port = CloudflareStandardsMailboxProvisioningPort::new(env);
     let target = match inspect_microsoft_standards_oauth_callback(&provisioning_port, &state).await
     {
         Ok(value) => value,
-        Err(error) => return onboarding_problem(error),
+        Err(error) => return operation_failure(&correlation_hint(request), error),
     };
-    let request_evidence = parse_request_evidence(request)?;
-    let resolved = resolve_active_request_actor(env, target.tenant_id(), &request_evidence).await?;
-    let role = resolved.membership().role();
-    let actor = resolved.into_actor();
+    let Some(resolved) =
+        resolve_active_request_actor(request, env, Some(target.tenant_id().as_str())).await?
+    else {
+        return not_found(&correlation_hint(request));
+    };
+    let role = membership_role(&resolved);
+    let actor = resolved.actor();
 
-    if query_parameter(&url, "error").is_some() {
+    if query.provider_error.is_some() {
+        if query.authorization_code.is_some() {
+            return invalid_request(actor.correlation_id().as_str());
+        }
         return match deny_microsoft_standards_oauth_callback(
-            &actor,
+            actor,
             role,
             &provisioning_port,
             &target,
@@ -329,7 +323,7 @@ async fn callback(request: &Request, env: &Env) -> Result<Response> {
         )
         .await
         {
-            Ok(()) => response(&ActivationReceiptDto {
+            Ok(()) => json_no_store(&ActivationReceiptDto {
                 result_code: "denied",
                 onboarding_id: target.onboarding_id().as_str().to_owned(),
                 onboarding_version: target.expected_version().value(),
@@ -337,24 +331,28 @@ async fn callback(request: &Request, env: &Env) -> Result<Response> {
                 imap_read_search_ready: false,
                 smtp_send_ready: false,
             }),
-            Err(error) => onboarding_problem(error),
+            Err(error) => operation_failure(actor.correlation_id().as_str(), error),
         };
     }
 
-    let code_raw = query_parameter(&url, "code").ok_or_else(|| {
-        Error::RustError("standards mailbox OAuth callback code missing".to_owned())
-    })?;
-    let authorization_code = MicrosoftStandardsOAuthAuthorizationCode::parse(code_raw)
-        .map_err(|_| Error::RustError("invalid standards mailbox OAuth code".to_owned()))?;
-    let evidence = command_evidence::from_standards_oauth_callback(
-        &actor,
+    let Some(code) = query.authorization_code else {
+        return invalid_request(actor.correlation_id().as_str());
+    };
+    let authorization_code = match MicrosoftStandardsOAuthAuthorizationCode::parse(code) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let evidence = match command_evidence::from_standards_oauth_callback(
+        actor,
         target.onboarding_id(),
-        &state_raw,
-    )?;
-    let database = env.d1("PROFILE_DB")?;
-    let onboarding_port = D1MailboxOnboardingApplicationPort::new(&database);
+        &query.state,
+    ) {
+        Ok(value) => value,
+        Err(_) => return invalid_request(actor.correlation_id().as_str()),
+    };
+    let onboarding_port = onboarding_repository(env)?;
     match complete_microsoft_standards_oauth_callback(
-        &actor,
+        actor,
         role,
         &onboarding_port,
         &provisioning_port,
@@ -366,15 +364,22 @@ async fn callback(request: &Request, env: &Env) -> Result<Response> {
     .await
     {
         Ok(outcome) => activation_response(&outcome, "activated"),
-        Err(error) => onboarding_problem(error),
+        Err(error) => operation_failure(actor.correlation_id().as_str(), error),
     }
+}
+
+fn onboarding_repository(env: &Env) -> Result<D1MailboxOnboardingApplicationRepository> {
+    Ok(D1MailboxOnboardingApplicationRepository::new(
+        env.d1(D1_CATALOG_BINDING)?,
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
 }
 
 fn activation_response(
     outcome: &StandardsMailboxActivationOutcome,
     result_code: &'static str,
 ) -> Result<Response> {
-    response(&ActivationReceiptDto {
+    json_no_store(&ActivationReceiptDto {
         result_code,
         onboarding_id: outcome.onboarding_id().as_str().to_owned(),
         onboarding_version: outcome.version().value(),
@@ -384,13 +389,18 @@ fn activation_response(
     })
 }
 
-fn onboarding_target(path: &str, suffix: &str) -> Result<(TenantId, MailboxOnboardingId)> {
+fn onboarding_target(
+    path: &str,
+    suffix: &str,
+) -> core::result::Result<(TenantId, MailboxOnboardingId), ()> {
     if !path.ends_with(suffix) {
-        return Err(Error::RustError(
-            "standards mailbox path mismatch".to_owned(),
-        ));
+        return Err(());
     }
-    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    let segments: Vec<&str> = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
     let [
         "api",
         "v1",
@@ -399,101 +409,160 @@ fn onboarding_target(path: &str, suffix: &str) -> Result<(TenantId, MailboxOnboa
         "mailbox-onboardings",
         onboarding,
         "imap-smtp",
-        _,
+        operation,
     ] = segments.as_slice()
     else {
-        return Err(Error::RustError(
-            "standards mailbox path shape invalid".to_owned(),
-        ));
+        return Err(());
     };
-    let tenant_id = TenantId::parse((*tenant).to_owned())
-        .map_err(|error| Error::RustError(error.to_string()))?;
-    let onboarding_id = MailboxOnboardingId::parse((*onboarding).to_owned())
-        .map_err(|error| Error::RustError(error.to_string()))?;
+    let expected_operation = if suffix == PASSWORD_SUFFIX {
+        "password"
+    } else if suffix == MICROSOFT_START_SUFFIX {
+        "microsoft-oauth"
+    } else {
+        return Err(());
+    };
+    if operation != &expected_operation {
+        return Err(());
+    }
+    let tenant_id = TenantId::parse((*tenant).to_owned()).map_err(|_| ())?;
+    let onboarding_id = MailboxOnboardingId::parse((*onboarding).to_owned()).map_err(|_| ())?;
     Ok((tenant_id, onboarding_id))
 }
 
-fn query_parameter(url: &Url, name: &str) -> Option<String> {
-    url.query_pairs()
-        .find(|(key, _)| key == name)
-        .map(|(_, value)| value.into_owned())
+fn callback_query(request: &Request) -> core::result::Result<CallbackQuery, ()> {
+    let url = request.url().map_err(|_| ())?;
+    parse_callback_query(&url)
 }
 
-fn invalid_configuration() -> Result<Response> {
-    problem(
-        StatusCode::BAD_REQUEST,
-        ProblemType::InvalidRequest,
-        "invalid encrypted IMAP/SMTP configuration",
-    )
+fn parse_callback_query(url: &Url) -> core::result::Result<CallbackQuery, ()> {
+    let mut state = None;
+    let mut authorization_code = None;
+    let mut provider_error = None;
+    for (name, value) in url.query_pairs() {
+        match name.as_ref() {
+            "state" if state.is_none() => state = Some(value.into_owned()),
+            "code" if authorization_code.is_none() => authorization_code = Some(value.into_owned()),
+            "error" if provider_error.is_none() => {
+                let value = value.into_owned();
+                if value.len() > 128 || value.chars().any(char::is_control) {
+                    return Err(());
+                }
+                provider_error = Some(value);
+            }
+            "state" | "code" | "error" => return Err(()),
+            _ => {}
+        }
+    }
+    Ok(CallbackQuery {
+        state: state.ok_or(())?,
+        authorization_code,
+        provider_error,
+    })
 }
 
-fn onboarding_problem(error: StandardsMailboxOnboardingError) -> Result<Response> {
-    let (status, problem_type, detail) = match error {
-        StandardsMailboxOnboardingError::NotFound => (
-            StatusCode::NOT_FOUND,
-            ProblemType::NotFound,
-            "standards mailbox onboarding target not found",
-        ),
-        StandardsMailboxOnboardingError::VersionConflict => (
-            StatusCode::CONFLICT,
-            ProblemType::VersionConflict,
-            "standards mailbox onboarding version conflict",
-        ),
-        StandardsMailboxOnboardingError::InvalidState
-        | StandardsMailboxOnboardingError::Conflict => (
-            StatusCode::CONFLICT,
-            ProblemType::InvalidState,
-            "standards mailbox onboarding conflict",
-        ),
-        StandardsMailboxOnboardingError::Expired => (
-            StatusCode::GONE,
-            ProblemType::InvalidState,
-            "standards mailbox OAuth ceremony expired",
-        ),
-        StandardsMailboxOnboardingError::ReplayRejected => (
-            StatusCode::CONFLICT,
-            ProblemType::ReplayRejected,
-            "standards mailbox OAuth callback replay rejected",
-        ),
-        StandardsMailboxOnboardingError::ProviderDenied => (
-            StatusCode::BAD_REQUEST,
-            ProblemType::InvalidRequest,
-            "standards mailbox provider denied authorization",
-        ),
-        StandardsMailboxOnboardingError::DependencyUnavailable => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            ProblemType::DependencyUnavailable,
-            "standards mailbox dependency unavailable",
-        ),
-        StandardsMailboxOnboardingError::IntegrityFailure => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            ProblemType::IntegrityFailure,
-            "standards mailbox integrity failure",
-        ),
-        StandardsMailboxOnboardingError::InternalFailure => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            ProblemType::InternalFailure,
-            "standards mailbox internal failure",
-        ),
+fn operation_failure(
+    correlation_id: &str,
+    error: StandardsMailboxOnboardingError,
+) -> Result<Response> {
+    let response = match error {
+        StandardsMailboxOnboardingError::NotFound => neutral_not_found(correlation_id)?,
+        StandardsMailboxOnboardingError::VersionConflict => {
+            problem(correlation_id, 409, "version_conflict", "Version Conflict")?
+        }
+        StandardsMailboxOnboardingError::InvalidState => {
+            problem(correlation_id, 409, "invalid_state", "Invalid State")?
+        }
+        StandardsMailboxOnboardingError::Conflict => {
+            problem(correlation_id, 409, "conflict", "Conflict")?
+        }
+        StandardsMailboxOnboardingError::Expired => {
+            problem(correlation_id, 410, "invalid_state", "Expired")?
+        }
+        StandardsMailboxOnboardingError::ReplayRejected => {
+            problem(correlation_id, 409, "replay_rejected", "Replay Rejected")?
+        }
+        StandardsMailboxOnboardingError::ProviderDenied => {
+            problem(correlation_id, 409, "invalid_state", "Authorization Denied")?
+        }
+        StandardsMailboxOnboardingError::DependencyUnavailable => problem(
+            correlation_id,
+            503,
+            "dependency_unavailable",
+            "Dependency Unavailable",
+        )?,
+        StandardsMailboxOnboardingError::IntegrityFailure => problem(
+            correlation_id,
+            500,
+            "integrity_failure",
+            "Integrity Failure",
+        )?,
+        StandardsMailboxOnboardingError::InternalFailure => {
+            problem(correlation_id, 500, "internal_failure", "Internal Failure")?
+        }
     };
-    problem(status, problem_type, detail)
+    no_store(response)
 }
 
-fn response<T: Serialize>(value: &T) -> Result<Response> {
-    let response = Response::from_json(value)?.with_status(StatusCode::OK.as_u16());
-    secure_response(response)
+fn invalid_request(correlation_id: &str) -> Result<Response> {
+    let response = problem(correlation_id, 400, "invalid_request", "Invalid Request")?;
+    no_store(response)
 }
 
-fn problem(status: StatusCode, problem_type: ProblemType, detail: &str) -> Result<Response> {
-    let response = Response::from_json(&ProblemDetails::new(problem_type, detail))?
-        .with_status(status.as_u16());
-    secure_response(response)
+fn not_found(correlation_id: &str) -> Result<Response> {
+    let response = neutral_not_found(correlation_id)?;
+    no_store(response)
 }
 
-fn secure_response(response: Response) -> Result<Response> {
-    let headers = response.headers();
-    headers.set("cache-control", "no-store")?;
-    headers.set("pragma", "no-cache")?;
-    headers.set("referrer-policy", "no-referrer")?;
+fn json_no_store<T: Serialize>(value: &T) -> Result<Response> {
+    no_store(Response::from_json(value)?)
+}
+
+fn no_store(mut response: Response) -> Result<Response> {
+    response.headers_mut().set("cache-control", "no-store")?;
+    response.headers_mut().set("pragma", "no-cache")?;
+    response
+        .headers_mut()
+        .set("referrer-policy", "no-referrer")?;
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MICROSOFT_CALLBACK_PATH, is_request, parse_callback_query};
+    use worker::Url;
+
+    #[test]
+    fn standards_onboarding_routes_are_exact() {
+        assert!(is_request(
+            "/api/v1/tenants/tenant_01/mailbox-onboardings/onboarding_01/imap-smtp/password"
+        ));
+        assert!(is_request(
+            "/api/v1/tenants/tenant_01/mailbox-onboardings/onboarding_01/imap-smtp/microsoft-oauth"
+        ));
+        assert!(is_request(MICROSOFT_CALLBACK_PATH));
+        for path in [
+            "/api/v1/tenants/tenant_01/mailboxes/mailbox_01",
+            "/api/v1/mailbox/imap-smtp/microsoft-oauth/callback/extra",
+            "/api/v1/tenants/tenant_01/mailbox-onboardings/onboarding_01/imap-smtp/password/extra",
+        ] {
+            assert!(!is_request(path));
+        }
+    }
+
+    #[test]
+    fn callback_query_rejects_duplicate_security_parameters() -> Result<(), Box<dyn std::error::Error>> {
+        let valid = Url::parse(
+            "https://example.invalid/api/v1/mailbox/imap-smtp/microsoft-oauth/callback?state=state_0123456789abcdef&code=code",
+        )?;
+        assert!(parse_callback_query(&valid).is_ok());
+        for query in [
+            "state=state_0123456789abcdef&state=other&code=code",
+            "state=state_0123456789abcdef&code=one&code=two",
+            "state=state_0123456789abcdef&error=denied&error=again",
+        ] {
+            let url = Url::parse(&format!("https://example.invalid/callback?{query}"))?;
+            assert!(parse_callback_query(&url).is_err());
+        }
+        Ok(())
+    }
 }
