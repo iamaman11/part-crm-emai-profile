@@ -1,6 +1,7 @@
 use crate::request_evidence::{audit_event_id, outbox_event_id};
 use application_ports::CommandExecutionEvidence;
-use profile_platform_primitives::{ActorContext, IdempotencyKey, UnixMillis};
+use profile_platform_primitives::{ActorContext, IdempotencyKey, MailboxOnboardingId, UnixMillis};
+use sha2::{Digest, Sha256};
 use worker::{Date, Error, Request, Result};
 
 const IDEMPOTENCY_HEADER: &str = "Idempotency-Key";
@@ -22,6 +23,32 @@ pub fn from_request(
         .ok_or_else(|| Error::RustError("idempotency key missing".to_owned()))?;
     let idempotency_key =
         IdempotencyKey::parse(key).map_err(|error| Error::RustError(error.to_string()))?;
+    evidence(actor, idempotency_key, request_digest)
+}
+
+pub fn from_oauth_callback(
+    actor: &ActorContext,
+    onboarding_id: &MailboxOnboardingId,
+    state: &str,
+) -> Result<CommandExecutionEvidence> {
+    let material = format!(
+        "gmail-oauth-callback\n{}\n{}\n{}\n{}",
+        actor.tenant_scope().tenant_id().as_str(),
+        actor.actor_id().as_str(),
+        onboarding_id.as_str(),
+        state,
+    );
+    let digest = format!("{:x}", Sha256::digest(material.as_bytes()));
+    let idempotency_key = IdempotencyKey::parse(format!("oauthcb_{digest}"))
+        .map_err(|error| Error::RustError(error.to_string()))?;
+    evidence(actor, idempotency_key, digest)
+}
+
+fn evidence(
+    actor: &ActorContext,
+    idempotency_key: IdempotencyKey,
+    request_digest: String,
+) -> Result<CommandExecutionEvidence> {
     let audit_event_id = audit_event_id(
         actor.tenant_scope().tenant_id(),
         actor.actor_id(),
