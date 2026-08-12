@@ -10,6 +10,21 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
             _,
             "mailbox-onboardings",
             _,
+            "imap-smtp",
+            "password" | "microsoft-oauth",
+        ] if method == "POST" => Some(RouteClass::MailboxBindingResourceApi),
+        ["api", "v1", "mailbox", "imap-smtp", "microsoft-oauth", "callback"]
+            if method == "GET" =>
+        {
+            Some(RouteClass::MailboxBindingResourceApi)
+        }
+        [
+            "api",
+            "v1",
+            "tenants",
+            _,
+            "mailbox-onboardings",
+            _,
             "gmail-oauth",
         ] if method == "POST" => Some(RouteClass::MailboxBindingResourceApi),
         ["api", "v1", "mailbox", "gmail", "oauth", "callback"] if method == "GET" => {
@@ -59,6 +74,44 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
 mod tests {
     use super::classify;
     use crate::RouteClass;
+
+    #[test]
+    fn c3_routes_are_exact_and_wrong_methods_fail_closed() {
+        for final_segment in ["password", "microsoft-oauth"] {
+            let start = [
+                "api",
+                "v1",
+                "tenants",
+                "tenant_01",
+                "mailbox-onboardings",
+                "onboarding_01",
+                "imap-smtp",
+                final_segment,
+            ];
+            assert_eq!(
+                classify("POST", &start),
+                Some(RouteClass::MailboxBindingResourceApi)
+            );
+            for method in ["GET", "PUT", "PATCH", "DELETE"] {
+                assert_eq!(classify(method, &start), None);
+            }
+        }
+        let callback = [
+            "api",
+            "v1",
+            "mailbox",
+            "imap-smtp",
+            "microsoft-oauth",
+            "callback",
+        ];
+        assert_eq!(
+            classify("GET", &callback),
+            Some(RouteClass::MailboxBindingResourceApi)
+        );
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            assert_eq!(classify(method, &callback), None);
+        }
+    }
 
     #[test]
     fn association_subresource_uses_mailbox_resource_family_and_is_method_fail_closed() {
