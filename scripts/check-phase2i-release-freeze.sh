@@ -9,10 +9,6 @@ fi
 base_ref="${GITHUB_BASE_REF:?GITHUB_BASE_REF is required for pull requests}"
 git fetch --no-tags --depth=1 origin "${base_ref}"
 
-# Accepted baseline/protobuf authority remains byte-frozen throughout the pre-2J
-# remediation. Web API v1 is separately checked below because accepted B4
-# authority may permit exactly one absent-to-added additive fragment after that
-# authority itself has first been accepted on the base branch.
 hard_frozen_roots=(
   "proto"
   "contracts/baseline"
@@ -26,8 +22,11 @@ if ! git diff --quiet "origin/${base_ref}" -- "${hard_frozen_roots[@]}"; then
 fi
 
 echo "Phase 2I accepted baseline/protobuf roots are unchanged."
+
 python scripts/check-pre2j-b4-contract-authority.py --self-test
-python scripts/check-pre2j-b4-contract-authority.py --base-ref "origin/${base_ref}"
+python scripts/check-pre2j-b4-contract-authority.py --authority-only --base-ref "origin/${base_ref}"
+python scripts/check-pre2j-c2-contract-authority.py --self-test
+python scripts/check-pre2j-c2-contract-authority.py --base-ref "origin/${base_ref}"
 
 if git diff --quiet "origin/${base_ref}" -- migrations/d1; then
   echo "Accepted D1 migration history is unchanged."
@@ -90,8 +89,10 @@ current_files = sorted(
     for path in (root / "migrations/d1").glob("[0-9][0-9][0-9][0-9]_*.sql")
 )
 
+
 def versions(paths: list[str]) -> list[int]:
     return [int(Path(path).name.split("_", 1)[0]) for path in paths]
+
 
 base_versions = versions(base_files)
 current_versions = versions(current_files)
@@ -120,4 +121,4 @@ fi
 python scripts/check-contract-compatibility.py
 python scripts/test-d1-schema.py
 
-echo "Phase 2I public contract freeze, one-shot B4 exception authority, and immutable-prefix D1 migration policy are valid."
+echo "Phase 2I public contract freeze, immutable consumed B4 authority, pending C2 one-shot authority, and immutable-prefix D1 migration policy are valid."
