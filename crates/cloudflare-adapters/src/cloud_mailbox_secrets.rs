@@ -14,7 +14,7 @@ const MAX_IMAP_HOST_LENGTH: usize = 253;
 const MAX_IMAP_USERNAME_LENGTH: usize = 512;
 const MAX_CREDENTIAL_VALUE_LENGTH: usize = 8 * 1024;
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MailboxCredential {
     GmailApi(GmailApiCredential),
@@ -31,7 +31,7 @@ impl MailboxCredential {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GmailApiCredential {
     access_token: String,
@@ -61,13 +61,22 @@ pub enum ImapTlsMode {
     StartTls,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImapAuthenticationMode {
+    Password,
+    Xoauth2,
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImapCredential {
     host: String,
     port: u16,
     username: String,
-    password: String,
+    password: Option<String>,
+    access_token: Option<String>,
+    authentication_mode: Option<ImapAuthenticationMode>,
     tls: ImapTlsMode,
 }
 
@@ -88,8 +97,21 @@ impl ImapCredential {
     }
 
     #[must_use]
-    pub fn password(&self) -> &str {
-        &self.password
+    pub fn password(&self) -> Option<&str> {
+        self.password.as_deref()
+    }
+
+    #[must_use]
+    pub fn access_token(&self) -> Option<&str> {
+        self.access_token.as_deref()
+    }
+
+    #[must_use]
+    pub const fn authentication_mode(&self) -> ImapAuthenticationMode {
+        match self.authentication_mode {
+            Some(value) => value,
+            None => ImapAuthenticationMode::Password,
+        }
     }
 
     #[must_use]
@@ -105,17 +127,32 @@ impl ImapCredential {
             )
             && !self.username.is_empty()
             && self.username.len() <= MAX_IMAP_USERNAME_LENGTH
-            && !self.password.is_empty()
-            && self.password.len() <= MAX_CREDENTIAL_VALUE_LENGTH
             && !contains_imap_line_break(&self.username)
-            && !contains_imap_line_break(&self.password)
+            && match self.authentication_mode() {
+                ImapAuthenticationMode::Password => {
+                    self.access_token.is_none()
+                        && self.password.as_deref().is_some_and(valid_credential_value)
+                }
+                ImapAuthenticationMode::Xoauth2 => {
+                    self.password.is_none()
+                        && self
+                            .access_token
+                            .as_deref()
+                            .is_some_and(valid_credential_value)
+                }
+            }
     }
 }
 
 impl Drop for ImapCredential {
     fn drop(&mut self) {
         self.username.zeroize();
-        self.password.zeroize();
+        if let Some(password) = self.password.as_mut() {
+            password.zeroize();
+        }
+        if let Some(access_token) = self.access_token.as_mut() {
+            access_token.zeroize();
+        }
     }
 }
 
@@ -219,20 +256,25 @@ pub fn provider_error(class: MailboxProviderFailureClass) -> MailboxProviderPort
     }
 }
 
+fn valid_credential_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_CREDENTIAL_VALUE_LENGTH
+        && !contains_imap_line_break(value)
+}
+
 fn valid_imap_host(value: &str) -> bool {
     if value.is_empty()
         || value.len() > MAX_IMAP_HOST_LENGTH
         || value.eq_ignore_ascii_case("localhost")
         || value.ends_with(".local")
+        || value.ends_with(".localhost")
+        || value.ends_with(".internal")
         || value.parse::<std::net::IpAddr>().is_ok()
     {
         return false;
     }
-    let mut labels = value.split('.');
-    let Some(first) = labels.next() else {
-        return false;
-    };
-    valid_dns_label(first) && labels.all(valid_dns_label)
+    let labels: Vec<&str> = value.split('.').collect();
+    labels.len() >= 2 && labels.into_iter().all(valid_dns_label)
 }
 
 fn valid_dns_label(value: &str) -> bool {
@@ -253,7 +295,21 @@ fn contains_imap_line_break(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImapTlsMode, map_resolver_status, valid_imap_host};
+    use super::{
+        ImapAuthenticationMode, ImapCredential, ImapTlsMode, MailboxCredential,
+        map_resolver_status, valid_imap_host,
+    };
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    fn into_imap(credential: MailboxCredential) -> Result<ImapCredential, std::io::Error> {
+        match credential {
+            MailboxCredential::Imap(value) => Ok(value),
+            MailboxCredential::GmailApi(_) => Err(std::io::Error::other(
+                "expected IMAP credential in test fixture",
+            )),
+        }
+    }
 
     #[test]
     fn imap_host_validation_rejects_local_and_literal_targets() {
@@ -261,6 +317,9 @@ mod tests {
             "",
             "localhost",
             "mail.local",
+            "mail.localhost",
+            "mail.internal",
+            "singlelabel",
             "127.0.0.1",
             "::1",
             "-bad.example",
@@ -269,6 +328,33 @@ mod tests {
         }
         assert!(valid_imap_host("imap.example.com"));
         assert_eq!(ImapTlsMode::Implicit, ImapTlsMode::Implicit);
+    }
+
+    #[test]
+    fn password_and_xoauth2_documents_are_mutually_exclusive() -> TestResult {
+        let password = into_imap(serde_json::from_str::<MailboxCredential>(
+            r#"{"kind":"imap","host":"imap.example.com","port":993,"username":"user@example.com","password":"secret","access_token":null,"authentication_mode":null,"tls":"implicit"}"#,
+        )?)?;
+        assert_eq!(
+            password.authentication_mode(),
+            ImapAuthenticationMode::Password
+        );
+        assert!(password.validate());
+
+        let xoauth2 = into_imap(serde_json::from_str::<MailboxCredential>(
+            r#"{"kind":"imap","host":"outlook.office365.com","port":993,"username":"user@example.com","password":null,"access_token":"opaque-access-token","authentication_mode":"xoauth2","tls":"implicit"}"#,
+        )?)?;
+        assert_eq!(
+            xoauth2.authentication_mode(),
+            ImapAuthenticationMode::Xoauth2
+        );
+        assert!(xoauth2.validate());
+
+        let mixed = into_imap(serde_json::from_str::<MailboxCredential>(
+            r#"{"kind":"imap","host":"outlook.office365.com","port":993,"username":"user@example.com","password":"forbidden","access_token":"opaque-access-token","authentication_mode":"xoauth2","tls":"implicit"}"#,
+        )?)?;
+        assert!(!mixed.validate());
+        Ok(())
     }
 
     #[test]

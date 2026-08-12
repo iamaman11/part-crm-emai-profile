@@ -1,11 +1,14 @@
-use crate::cloud_mailbox_secrets::{ImapCredential, ImapTlsMode};
+use crate::cloud_mailbox_secrets::{ImapAuthenticationMode, ImapCredential, ImapTlsMode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use worker::{SecureTransport, Socket};
 use zeroize::Zeroize;
 
 const MAX_GREETING_BYTES: usize = 8 * 1024;
+const MAX_XOAUTH2_RESPONSE_BYTES: usize = 16 * 1024;
 const MAX_COMMAND_TAG: u32 = 999_999;
 const MAX_COMMAND_LITERAL_BYTES: usize = 4 * 1024;
+const BASE64_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImapTransportError {
@@ -78,20 +81,97 @@ impl ImapSession {
         }
 
         if !preauthenticated {
-            let mut login = String::from("LOGIN ");
-            push_imap_quoted(&mut login, credential.username());
-            login.push(' ');
-            push_imap_quoted(&mut login, credential.password());
-            let result = session.execute(&login, MAX_GREETING_BYTES).await;
-            login.zeroize();
-            match result?.status() {
-                ImapTaggedStatus::Ok => {}
-                ImapTaggedStatus::No | ImapTaggedStatus::Bad => {
-                    return Err(ImapTransportError::Authentication);
+            match credential.authentication_mode() {
+                ImapAuthenticationMode::Password => {
+                    let password = credential
+                        .password()
+                        .ok_or(ImapTransportError::IntegrityFailure)?;
+                    session.login(credential.username(), password).await?;
+                }
+                ImapAuthenticationMode::Xoauth2 => {
+                    let access_token = credential
+                        .access_token()
+                        .ok_or(ImapTransportError::IntegrityFailure)?;
+                    session
+                        .authenticate_xoauth2(credential.username(), access_token)
+                        .await?;
                 }
             }
         }
         Ok(session)
+    }
+
+    async fn login(&mut self, username: &str, password: &str) -> Result<(), ImapTransportError> {
+        let mut login = String::from("LOGIN ");
+        push_imap_quoted(&mut login, username);
+        login.push(' ');
+        push_imap_quoted(&mut login, password);
+        let result = self.execute(&login, MAX_GREETING_BYTES).await;
+        login.zeroize();
+        match result?.status() {
+            ImapTaggedStatus::Ok => Ok(()),
+            ImapTaggedStatus::No | ImapTaggedStatus::Bad => Err(ImapTransportError::Authentication),
+        }
+    }
+
+    async fn authenticate_xoauth2(
+        &mut self,
+        username: &str,
+        access_token: &str,
+    ) -> Result<(), ImapTransportError> {
+        if username.is_empty()
+            || access_token.is_empty()
+            || username.bytes().any(|byte| byte.is_ascii_control())
+            || access_token.bytes().any(|byte| byte.is_ascii_control())
+        {
+            return Err(ImapTransportError::IntegrityFailure);
+        }
+        let tag = self.next_command_tag()?;
+        let mut initial_response = xoauth2_initial_response(username, access_token)?;
+        if initial_response.len() > MAX_XOAUTH2_RESPONSE_BYTES {
+            initial_response.zeroize();
+            return Err(ImapTransportError::ProviderPolicy);
+        }
+        let mut wire = String::with_capacity(tag.len() + initial_response.len() + 24);
+        wire.push_str(&tag);
+        wire.push_str(" AUTHENTICATE XOAUTH2 ");
+        wire.push_str(&initial_response);
+        wire.push_str("\r\n");
+        let write_result = match self.socket.write_all(wire.as_bytes()).await {
+            Ok(()) => self.socket.flush().await,
+            Err(error) => Err(error),
+        };
+        wire.zeroize();
+        initial_response.zeroize();
+        write_result.map_err(|_| ImapTransportError::DependencyUnavailable)?;
+
+        let first = read_until_line(&mut self.socket, MAX_XOAUTH2_RESPONSE_BYTES).await?;
+        if let Some(status) = tagged_status(&first, &tag) {
+            return match status {
+                ImapTaggedStatus::Ok => Ok(()),
+                ImapTaggedStatus::No | ImapTaggedStatus::Bad => {
+                    Err(ImapTransportError::Authentication)
+                }
+            };
+        }
+        if !continuation_requested(&first) {
+            return Err(ImapTransportError::IntegrityFailure);
+        }
+
+        self.socket
+            .write_all(b"\r\n")
+            .await
+            .map_err(|_| ImapTransportError::DependencyUnavailable)?;
+        self.socket
+            .flush()
+            .await
+            .map_err(|_| ImapTransportError::DependencyUnavailable)?;
+        let final_response =
+            read_until_tag(&mut self.socket, &tag, MAX_XOAUTH2_RESPONSE_BYTES).await?;
+        match tagged_status(&final_response, &tag).ok_or(ImapTransportError::IntegrityFailure)? {
+            ImapTaggedStatus::No | ImapTaggedStatus::Bad => Err(ImapTransportError::Authentication),
+            ImapTaggedStatus::Ok => Err(ImapTransportError::IntegrityFailure),
+        }
     }
 
     pub(crate) async fn execute(
@@ -194,6 +274,61 @@ fn invalid_command(command: &str) -> bool {
         || command
             .bytes()
             .any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
+}
+
+fn xoauth2_initial_response(
+    username: &str,
+    access_token: &str,
+) -> Result<String, ImapTransportError> {
+    let capacity = username
+        .len()
+        .checked_add(access_token.len())
+        .and_then(|value| value.checked_add(20))
+        .ok_or(ImapTransportError::IntegrityFailure)?;
+    let mut payload = String::with_capacity(capacity);
+    payload.push_str("user=");
+    payload.push_str(username);
+    payload.push('\u{1}');
+    payload.push_str("auth=Bearer ");
+    payload.push_str(access_token);
+    payload.push('\u{1}');
+    payload.push('\u{1}');
+    let encoded = base64_standard(payload.as_bytes());
+    payload.zeroize();
+    encoded
+}
+
+fn base64_standard(input: &[u8]) -> Result<String, ImapTransportError> {
+    let groups = input
+        .len()
+        .checked_add(2)
+        .and_then(|value| value.checked_div(3))
+        .ok_or(ImapTransportError::IntegrityFailure)?;
+    let capacity = groups
+        .checked_mul(4)
+        .ok_or(ImapTransportError::IntegrityFailure)?;
+    let mut output = String::with_capacity(capacity);
+    let mut offset = 0;
+    while offset < input.len() {
+        let remaining = input.len() - offset;
+        let a = input[offset];
+        let b = if remaining > 1 { input[offset + 1] } else { 0 };
+        let c = if remaining > 2 { input[offset + 2] } else { 0 };
+        output.push(BASE64_ALPHABET[usize::from(a >> 2)] as char);
+        output.push(BASE64_ALPHABET[usize::from(((a & 0x03) << 4) | (b >> 4))] as char);
+        if remaining > 1 {
+            output.push(BASE64_ALPHABET[usize::from(((b & 0x0f) << 2) | (c >> 6))] as char);
+        } else {
+            output.push('=');
+        }
+        if remaining > 2 {
+            output.push(BASE64_ALPHABET[usize::from(c & 0x3f)] as char);
+        } else {
+            output.push('=');
+        }
+        offset += 3;
+    }
+    Ok(output)
 }
 
 fn literal_command_prefix(
@@ -304,9 +439,11 @@ pub(crate) fn push_imap_quoted(output: &mut String, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImapTaggedStatus, continuation_requested, literal_command_prefix, push_imap_quoted,
-        tagged_status,
+        ImapTaggedStatus, base64_standard, continuation_requested, literal_command_prefix,
+        push_imap_quoted, tagged_status, xoauth2_initial_response,
     };
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
 
     #[test]
     fn tagged_status_is_case_insensitive_and_tag_scoped() {
@@ -326,8 +463,32 @@ mod tests {
     }
 
     #[test]
-    fn synchronizing_literal_prefix_is_ascii_bounded_and_counted()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn standard_base64_matches_rfc_4648_vectors() -> TestResult {
+        for (plain, encoded) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64_standard(plain.as_bytes())?, encoded);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn xoauth2_initial_response_is_encoded_and_contains_no_raw_bearer() -> TestResult {
+        let encoded = xoauth2_initial_response("user@example.com", "opaque-test-token")?;
+        assert!(!encoded.is_empty());
+        assert!(!encoded.contains("user@example.com"));
+        assert!(!encoded.contains("opaque-test-token"));
+        Ok(())
+    }
+
+    #[test]
+    fn synchronizing_literal_prefix_is_ascii_bounded_and_counted() -> TestResult {
         assert_eq!(
             literal_command_prefix("p000001", "UID SEARCH CHARSET UTF-8 UID 1:500 TEXT", 6,)?,
             "p000001 UID SEARCH CHARSET UTF-8 UID 1:500 TEXT {6}\r\n"

@@ -63,6 +63,7 @@ pub mod mailbox_provider;
 pub mod profile_coordinator;
 pub mod r2_generation_objects;
 pub mod r2_generation_upload_capability;
+pub mod standards_mailbox_provisioning;
 
 pub use mailbox_domain::MailboxProvider;
 

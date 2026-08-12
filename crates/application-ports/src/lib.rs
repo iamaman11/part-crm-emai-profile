@@ -39,6 +39,7 @@ pub mod query_mailboxes;
 pub mod query_members;
 pub mod query_profiles;
 pub mod sessions;
+pub mod standards_mailbox_onboarding;
 
 pub use audit::{AuditPort, AuditRecord, AuditResult};
 pub use clients::ClientRepository;
