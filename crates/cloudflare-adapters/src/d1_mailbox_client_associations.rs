@@ -12,7 +12,7 @@ use mailbox_domain::MailboxClientAssociationAction;
 use profile_platform_primitives::{ActorContext, ClientId, MailboxBindingId, TenantScope};
 use serde::Deserialize;
 use worker::d1::{D1Database, D1PreparedStatement};
-use worker::{query, Error};
+use worker::{Error, query};
 
 const ASSOCIATION_COMMAND: &str = r#"
 INSERT INTO mailbox_client_association_commands (
