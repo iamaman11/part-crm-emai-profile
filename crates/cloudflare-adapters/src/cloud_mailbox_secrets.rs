@@ -267,15 +267,14 @@ fn valid_imap_host(value: &str) -> bool {
         || value.len() > MAX_IMAP_HOST_LENGTH
         || value.eq_ignore_ascii_case("localhost")
         || value.ends_with(".local")
+        || value.ends_with(".localhost")
+        || value.ends_with(".internal")
         || value.parse::<std::net::IpAddr>().is_ok()
     {
         return false;
     }
-    let mut labels = value.split('.');
-    let Some(first) = labels.next() else {
-        return false;
-    };
-    valid_dns_label(first) && labels.all(valid_dns_label)
+    let labels: Vec<&str> = value.split('.').collect();
+    labels.len() >= 2 && labels.into_iter().all(valid_dns_label)
 }
 
 fn valid_dns_label(value: &str) -> bool {
@@ -318,6 +317,9 @@ mod tests {
             "",
             "localhost",
             "mail.local",
+            "mail.localhost",
+            "mail.internal",
+            "singlelabel",
             "127.0.0.1",
             "::1",
             "-bad.example",
