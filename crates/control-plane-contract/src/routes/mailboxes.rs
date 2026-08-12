@@ -8,7 +8,7 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
         {
             Some(RouteClass::MailboxBindingResourceApi)
         }
-        ["auth", "v1", "mailbox", "gmail", "callback"] if method == "GET" => {
+        ["api", "v1", "mailbox", "gmail", "oauth", "callback"] if method == "GET" => {
             Some(RouteClass::MailboxBindingResourceApi)
         }
         ["api", "v1", "tenants", _, "mailboxes"] if matches!(method, "GET" | "POST") => {
@@ -91,7 +91,7 @@ mod tests {
             "onboarding_01",
             "gmail-oauth",
         ];
-        let callback = ["auth", "v1", "mailbox", "gmail", "callback"];
+        let callback = ["api", "v1", "mailbox", "gmail", "oauth", "callback"];
         assert_eq!(
             classify("POST", &start),
             Some(RouteClass::MailboxBindingResourceApi)
