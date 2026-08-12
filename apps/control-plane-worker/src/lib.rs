@@ -11,6 +11,8 @@ mod device_jobs;
 mod identity;
 mod integration_events;
 mod mailbox_bindings;
+mod mailbox_client_association_composition;
+mod mailbox_client_associations;
 mod mailbox_jobs;
 mod mailbox_queue_evidence;
 mod mailbox_scheduling;
@@ -90,6 +92,11 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         }
         RouteClass::MailboxBindingCollectionApi if request.method() == Method::Get => {
             operator_queries::dispatch(route, &request, &env).await
+        }
+        RouteClass::MailboxBindingResourceApi
+            if mailbox_client_associations::is_client_association_path(&path) =>
+        {
+            mailbox_client_associations::dispatch(&mut request, &env).await
         }
         RouteClass::MailboxBindingCollectionApi
         | RouteClass::MailboxBindingResourceApi
