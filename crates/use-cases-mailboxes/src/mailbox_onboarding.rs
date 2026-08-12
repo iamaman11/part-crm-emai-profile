@@ -203,14 +203,13 @@ pub async fn execute_mailbox_onboarding<P: MailboxOnboardingApplicationPort>(
         MailboxOnboardingReplayDecision::Replay(receipt) => {
             let provider = match &command {
                 ExecuteMailboxOnboardingCommand::Start { provider, .. } => *provider,
-                _ => {
-                    port.load_context(actor.tenant_scope(), command.onboarding_id())
-                        .await
-                        .map_err(map_port_error)?
-                        .ok_or(MailboxOnboardingOperationError::NotFound)?
-                        .onboarding()
-                        .provider()
-                }
+                _ => port
+                    .load_context(actor.tenant_scope(), command.onboarding_id())
+                    .await
+                    .map_err(map_port_error)?
+                    .ok_or(MailboxOnboardingOperationError::NotFound)?
+                    .onboarding()
+                    .provider(),
             };
             return replay_outcome(&command, &receipt, provider);
         }
