@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn public_dtos_reject_credential_and_token_fields() -> Result<(), Box<dyn std::error::Error>> {
         assert!(
-            serde_json::from_str::<StartGmailOAuthRequestDto>(r#"{"expectedVersion":1}"#).is_ok()
+            serde_json::from_str::<StartGmailOAuthRequestDto>(r#"{\"expectedVersion\":1}"#).is_ok()
         );
         for forbidden in [
             "accessToken",
@@ -201,7 +201,7 @@ mod tests {
             "secretHandle",
             "gmailSendScope",
         ] {
-            let invalid = format!(r#"{{"expectedVersion":1,"{forbidden}":"forbidden"}}"#);
+            let invalid = format!(r#"{{\"expectedVersion\":1,\"{forbidden}\":\"forbidden\"}}"#);
             assert!(serde_json::from_str::<StartGmailOAuthRequestDto>(&invalid).is_err());
         }
         let _ = GmailOAuthStartReceiptDto {
@@ -222,12 +222,18 @@ mod tests {
     #[test]
     fn fragment_contains_only_start_and_fixed_callback_surfaces() {
         let fragment = openapi_fragment();
-        let paths = fragment["paths"].as_object().expect("paths must be object");
-        assert_eq!(paths.len(), 2);
-        assert!(paths.contains_key(
-            "/api/v1/tenants/{tenantId}/mailbox-onboardings/{onboardingId}/gmail-oauth"
-        ));
-        assert!(paths.contains_key("/api/v1/mailbox/gmail/oauth/callback"));
+        let paths = &fragment["paths"];
+        assert!(paths.as_object().is_some_and(|value| value.len() == 2));
+        assert!(
+            paths
+                .get("/api/v1/tenants/{tenantId}/mailbox-onboardings/{onboardingId}/gmail-oauth")
+                .is_some()
+        );
+        assert!(
+            paths
+                .get("/api/v1/mailbox/gmail/oauth/callback")
+                .is_some()
+        );
         let encoded = fragment.to_string();
         for forbidden in [
             "accessToken",
