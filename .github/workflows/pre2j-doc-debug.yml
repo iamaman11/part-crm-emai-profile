@@ -21,11 +21,9 @@ jobs:
         run: |
           python scripts/generate-architecture-inventory.py --write
           if git diff --quiet -- architecture/inventory.json; then
-            echo '::notice title=Architecture inventory::No generated inventory drift'
+            echo '::notice file=architecture/inventory.json,line=1,title=Architecture inventory::No generated inventory drift'
             exit 0
           fi
-          git diff --unified=0 -- architecture/inventory.json >inventory.diff
-          while IFS= read -r line; do
-            printf '::error title=Generated architecture inventory delta::%s\n' "$line"
-          done < inventory.diff
+          delta="$(git diff --unified=0 -- architecture/inventory.json | base64 -w0)"
+          printf '::error file=architecture/inventory.json,line=1,title=Generated architecture inventory delta::%s\n' "$delta"
           exit 1
