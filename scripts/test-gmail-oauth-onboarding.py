@@ -14,7 +14,8 @@ ADAPTER = ROOT / "crates/cloudflare-adapters/src/gmail_oauth_provisioning.rs"
 WORKER = ROOT / "apps/control-plane-worker/src/mailbox_gmail_oauth.rs"
 ROUTES = ROOT / "crates/control-plane-contract/src/routes/mailboxes.rs"
 CONTRACT = ROOT / "crates/control-plane-contract/src/mailbox_gmail_oauth_api.rs"
-MIGRATIONS = ROOT / "migrations/d1"
+ONBOARDING_D1_ADAPTER = ROOT / "crates/cloudflare-adapters/src/d1_mailbox_onboarding.rs"
+ONBOARDING_MIGRATION = ROOT / "migrations/d1/0024_mailbox_onboarding_lifecycle.sql"
 
 FORBIDDEN_PUBLIC_FIELDS = {
     "accessToken",
@@ -76,6 +77,8 @@ def main() -> int:
     for operation in ["/oauth/start", "/oauth/inspect", "/oauth/complete", "/oauth/deny", "/discard"]:
         require(operation in adapter, f"secret-resolver C2 operation missing: {operation}")
     require("console_" not in adapter, "C2 resolver adapter must not log OAuth material")
+    require("worker::D1" not in adapter and ".prepare(" not in adapter,
+            "C2 resolver adapter must not acquire direct D1 persistence ownership")
 
     use_case = production_source(USE_CASE.read_text(encoding="utf-8"))
     require(use_case.count("validate_onboarding(") >= 2,
@@ -106,9 +109,16 @@ def main() -> int:
     require("mailbox-onboardings" in routes and '"api", "v1", "mailbox", "gmail", "oauth", "callback"' in routes,
             "C2 routes must be exact and versioned by the canonical router")
 
-    migrations = "\n".join(path.read_text(encoding="utf-8").lower() for path in sorted(MIGRATIONS.glob("*.sql")))
+    onboarding_storage = (
+        ONBOARDING_MIGRATION.read_text(encoding="utf-8")
+        + "\n"
+        + production_source(ONBOARDING_D1_ADAPTER.read_text(encoding="utf-8"))
+    ).lower()
     for term in FORBIDDEN_D1_TERMS:
-        require(term not in migrations, f"OAuth credential material must not be persisted in D1: {term}")
+        require(term not in onboarding_storage,
+                f"C1 onboarding authority must not persist OAuth credential material: {term}")
+    require("credential_handle" in onboarding_storage,
+            "C1 onboarding storage must retain only the opaque credential-handle seam")
 
     print("Pre-2J C2 Gmail OAuth onboarding fail-closed regression passed.")
     return 0
