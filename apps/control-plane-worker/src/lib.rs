@@ -95,7 +95,9 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         RouteClass::MailboxBindingCollectionApi if request.method() == Method::Get => {
             operator_queries::dispatch(route, &request, &env).await
         }
-        RouteClass::MailboxBindingResourceApi if mailbox_standards_onboarding::is_request(&path) => {
+        RouteClass::MailboxBindingResourceApi
+            if mailbox_standards_onboarding::is_request(&path) =>
+        {
             mailbox_standards_onboarding::handle(request, &env, route).await
         }
         RouteClass::MailboxBindingResourceApi
