@@ -187,12 +187,12 @@ mod tests {
         let unbind = format!(
             r#"{{"clientId":null,"expectedRelationshipVersion":2,"requestDigest":"{digest}"}}"#
         );
-        let missing = format!(
-            r#"{{"expectedRelationshipVersion":2,"requestDigest":"{digest}"}}"#
-        );
+        let missing = format!(r#"{{"expectedRelationshipVersion":2,"requestDigest":"{digest}"}}"#);
         assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&bind).is_ok());
         assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&unbind).is_ok());
-        assert!(serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&missing).is_err());
+        assert!(
+            serde_json::from_str::<ChangeMailboxClientAssociationRequestDto>(&missing).is_err()
+        );
         for forbidden in [
             "secretHandle",
             "password",
@@ -229,8 +229,7 @@ mod tests {
     #[test]
     fn public_fragment_is_one_resource_with_get_and_unified_change_command() {
         let document = openapi_fragment();
-        let resource = &document["paths"]
-            ["/api/v1/tenants/{tenantId}/mailboxes/{bindingId}/client-association"];
+        let resource = &document["paths"]["/api/v1/tenants/{tenantId}/mailboxes/{bindingId}/client-association"];
         assert_eq!(
             resource["get"]["operationId"],
             "getMailboxClientAssociation"
