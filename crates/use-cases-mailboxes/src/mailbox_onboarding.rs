@@ -86,12 +86,18 @@ impl ExecuteMailboxOnboardingCommand {
     fn replay_version(&self) -> Result<MailboxOnboardingVersion, MailboxOnboardingOperationError> {
         match self {
             Self::Start { .. } => Ok(MailboxOnboardingVersion::INITIAL),
-            Self::Activate { expected_version, .. }
-            | Self::RequireReauth { expected_version, .. }
-            | Self::Disable { expected_version, .. }
-            | Self::MarkConfigError { expected_version, .. } => {
-                expected_version.next().map_err(map_domain_error)
+            Self::Activate {
+                expected_version, ..
             }
+            | Self::RequireReauth {
+                expected_version, ..
+            }
+            | Self::Disable {
+                expected_version, ..
+            }
+            | Self::MarkConfigError {
+                expected_version, ..
+            } => expected_version.next().map_err(map_domain_error),
         }
     }
 
@@ -118,15 +124,29 @@ pub struct MailboxOnboardingOutcome {
 
 impl MailboxOnboardingOutcome {
     #[must_use]
-    pub const fn onboarding_id(&self) -> &MailboxOnboardingId { &self.onboarding_id }
+    pub const fn onboarding_id(&self) -> &MailboxOnboardingId {
+        &self.onboarding_id
+    }
+
     #[must_use]
-    pub const fn provider(&self) -> MailboxProvider { self.provider }
+    pub const fn provider(&self) -> MailboxProvider {
+        self.provider
+    }
+
     #[must_use]
-    pub const fn status(&self) -> MailboxOnboardingStatus { self.status }
+    pub const fn status(&self) -> MailboxOnboardingStatus {
+        self.status
+    }
+
     #[must_use]
-    pub const fn version(&self) -> MailboxOnboardingVersion { self.version }
+    pub const fn version(&self) -> MailboxOnboardingVersion {
+        self.version
+    }
+
     #[must_use]
-    pub const fn replayed(&self) -> bool { self.replayed }
+    pub const fn replayed(&self) -> bool {
+        self.replayed
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -156,7 +176,9 @@ impl fmt::Display for MailboxOnboardingOperationError {
 
 impl std::error::Error for MailboxOnboardingOperationError {}
 
-pub fn authorize_mailbox_onboarding(role: MembershipRole) -> Result<(), MailboxOnboardingOperationError> {
+pub fn authorize_mailbox_onboarding(
+    role: MembershipRole,
+) -> Result<(), MailboxOnboardingOperationError> {
     if role == MembershipRole::TenantOwner {
         Ok(())
     } else {
@@ -181,13 +203,14 @@ pub async fn execute_mailbox_onboarding<P: MailboxOnboardingApplicationPort>(
         MailboxOnboardingReplayDecision::Replay(receipt) => {
             let provider = match &command {
                 ExecuteMailboxOnboardingCommand::Start { provider, .. } => *provider,
-                _ => port
-                    .load_context(actor.tenant_scope(), command.onboarding_id())
-                    .await
-                    .map_err(map_port_error)?
-                    .ok_or(MailboxOnboardingOperationError::NotFound)?
-                    .onboarding()
-                    .provider(),
+                _ => {
+                    port.load_context(actor.tenant_scope(), command.onboarding_id())
+                        .await
+                        .map_err(map_port_error)?
+                        .ok_or(MailboxOnboardingOperationError::NotFound)?
+                        .onboarding()
+                        .provider()
+                }
             };
             return replay_outcome(&command, &receipt, provider);
         }
@@ -209,7 +232,8 @@ pub async fn execute_mailbox_onboarding<P: MailboxOnboardingApplicationPort>(
                     validate_receipt(write.action(), write.onboarding_id(), &receipt)?;
                     Ok(outcome_from_write(&write, true))
                 }
-                MailboxOnboardingReplayDecision::Miss | MailboxOnboardingReplayDecision::Conflict => {
+                MailboxOnboardingReplayDecision::Miss
+                | MailboxOnboardingReplayDecision::Conflict => {
                     Err(MailboxOnboardingOperationError::Conflict)
                 }
             }
@@ -265,37 +289,73 @@ async fn prepare_write<P: MailboxOnboardingApplicationPort>(
             credential_handle,
             status_metadata,
             evidence,
-        } => prepare_transition(
-            actor, port, onboarding_id, expected_version, MailboxOnboardingAction::Activate,
-            Some(credential_handle), status_metadata, evidence,
-        ).await,
+        } => {
+            prepare_transition(
+                actor,
+                port,
+                onboarding_id,
+                expected_version,
+                MailboxOnboardingAction::Activate,
+                Some(credential_handle),
+                status_metadata,
+                evidence,
+            )
+            .await
+        }
         ExecuteMailboxOnboardingCommand::RequireReauth {
             onboarding_id,
             expected_version,
             status_metadata,
             evidence,
-        } => prepare_transition(
-            actor, port, onboarding_id, expected_version, MailboxOnboardingAction::RequireReauth,
-            None, status_metadata, evidence,
-        ).await,
+        } => {
+            prepare_transition(
+                actor,
+                port,
+                onboarding_id,
+                expected_version,
+                MailboxOnboardingAction::RequireReauth,
+                None,
+                status_metadata,
+                evidence,
+            )
+            .await
+        }
         ExecuteMailboxOnboardingCommand::Disable {
             onboarding_id,
             expected_version,
             status_metadata,
             evidence,
-        } => prepare_transition(
-            actor, port, onboarding_id, expected_version, MailboxOnboardingAction::Disable,
-            None, status_metadata, evidence,
-        ).await,
+        } => {
+            prepare_transition(
+                actor,
+                port,
+                onboarding_id,
+                expected_version,
+                MailboxOnboardingAction::Disable,
+                None,
+                status_metadata,
+                evidence,
+            )
+            .await
+        }
         ExecuteMailboxOnboardingCommand::MarkConfigError {
             onboarding_id,
             expected_version,
             status_metadata,
             evidence,
-        } => prepare_transition(
-            actor, port, onboarding_id, expected_version, MailboxOnboardingAction::MarkConfigError,
-            None, status_metadata, evidence,
-        ).await,
+        } => {
+            prepare_transition(
+                actor,
+                port,
+                onboarding_id,
+                expected_version,
+                MailboxOnboardingAction::MarkConfigError,
+                None,
+                status_metadata,
+                evidence,
+            )
+            .await
+        }
     }
 }
 
@@ -320,7 +380,12 @@ async fn prepare_transition<P: MailboxOnboardingApplicationPort>(
     let previous_status = onboarding.status();
     let previous_credential_handle = onboarding.credential_handle().cloned();
     onboarding
-        .transition(expected_version, action, credential_handle, status_metadata.clone())
+        .transition(
+            expected_version,
+            action,
+            credential_handle,
+            status_metadata.clone(),
+        )
         .map_err(map_domain_error)?;
     Ok(MailboxOnboardingWrite::new(
         onboarding_id,
@@ -406,23 +471,36 @@ const fn map_domain_error(error: MailboxOnboardingError) -> MailboxOnboardingOpe
 const fn map_port_error(error: MailboxOnboardingPortError) -> MailboxOnboardingOperationError {
     match error.class() {
         MailboxOnboardingPortErrorClass::NotFound => MailboxOnboardingOperationError::NotFound,
-        MailboxOnboardingPortErrorClass::VersionConflict => MailboxOnboardingOperationError::VersionConflict,
-        MailboxOnboardingPortErrorClass::InvalidState => MailboxOnboardingOperationError::InvalidState,
+        MailboxOnboardingPortErrorClass::VersionConflict => {
+            MailboxOnboardingOperationError::VersionConflict
+        }
+        MailboxOnboardingPortErrorClass::InvalidState => {
+            MailboxOnboardingOperationError::InvalidState
+        }
         MailboxOnboardingPortErrorClass::Conflict => MailboxOnboardingOperationError::Conflict,
-        MailboxOnboardingPortErrorClass::IntegrityFailure => MailboxOnboardingOperationError::IntegrityFailure,
-        MailboxOnboardingPortErrorClass::InternalFailure => MailboxOnboardingOperationError::InternalFailure,
-        MailboxOnboardingPortErrorClass::DependencyUnavailable => MailboxOnboardingOperationError::DependencyUnavailable,
+        MailboxOnboardingPortErrorClass::IntegrityFailure => {
+            MailboxOnboardingOperationError::IntegrityFailure
+        }
+        MailboxOnboardingPortErrorClass::InternalFailure => {
+            MailboxOnboardingOperationError::InternalFailure
+        }
+        MailboxOnboardingPortErrorClass::DependencyUnavailable => {
+            MailboxOnboardingOperationError::DependencyUnavailable
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{authorize_mailbox_onboarding, MailboxOnboardingOperationError};
+    use super::{MailboxOnboardingOperationError, authorize_mailbox_onboarding};
     use identity_access_domain::MembershipRole;
 
     #[test]
     fn onboarding_administration_is_owner_only_and_neutral() {
-        assert_eq!(authorize_mailbox_onboarding(MembershipRole::TenantOwner), Ok(()));
+        assert_eq!(
+            authorize_mailbox_onboarding(MembershipRole::TenantOwner),
+            Ok(())
+        );
         assert_eq!(
             authorize_mailbox_onboarding(MembershipRole::Member),
             Err(MailboxOnboardingOperationError::NotFound)

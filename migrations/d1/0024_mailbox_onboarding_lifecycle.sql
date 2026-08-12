@@ -257,12 +257,10 @@ BEGIN
         SELECT 1 FROM mailbox_onboarding_commands AS command
         WHERE command.tenant_id = OLD.tenant_id
           AND command.onboarding_id = OLD.onboarding_id
-          AND command.provider = OLD.provider
+          AND command.provider = NEW.provider
           AND command.expected_version = OLD.version
           AND command.next_version = NEW.version
-          AND command.previous_status = OLD.lifecycle_status
           AND command.next_status = NEW.lifecycle_status
-          AND command.previous_credential_handle IS OLD.credential_handle
           AND command.next_credential_handle IS NEW.credential_handle
           AND command.status_metadata IS NEW.status_metadata
           AND command.command_actor_id = NEW.updated_by_actor_id

@@ -98,8 +98,7 @@ impl MailboxOnboardingStatusMetadata {
         if value.is_empty()
             || value.len() > MAX_STATUS_METADATA_LEN
             || !value.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric()
-                    || matches!(byte, b'_' | b'-' | b'.' | b':' | b'/')
+                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':' | b'/')
             })
         {
             return Err(MailboxOnboardingError::InvalidStatusMetadata);
@@ -132,7 +131,9 @@ impl fmt::Display for MailboxOnboardingError {
             Self::InvalidStatus => "mailbox onboarding status is invalid",
             Self::InvalidStatusMetadata => "mailbox onboarding status metadata is invalid",
             Self::InvalidTransition => "mailbox onboarding transition is invalid",
-            Self::CredentialHandleRequired => "mailbox onboarding activation requires a credential handle",
+            Self::CredentialHandleRequired => {
+                "mailbox onboarding activation requires a credential handle"
+            }
             Self::CredentialHandleChangeNotAllowed => {
                 "mailbox onboarding credential handle may only change on activation"
             }
@@ -249,8 +250,8 @@ impl MailboxOnboarding {
                     MailboxOnboardingStatus::Pending | MailboxOnboardingStatus::ReauthRequired
                 ) =>
             {
-                let handle = credential_handle
-                    .ok_or(MailboxOnboardingError::CredentialHandleRequired)?;
+                let handle =
+                    credential_handle.ok_or(MailboxOnboardingError::CredentialHandleRequired)?;
                 (MailboxOnboardingStatus::Active, Some(handle))
             }
             MailboxOnboardingAction::RequireReauth
@@ -275,7 +276,10 @@ impl MailboxOnboarding {
                 if credential_handle.is_some() {
                     return Err(MailboxOnboardingError::CredentialHandleChangeNotAllowed);
                 }
-                (MailboxOnboardingStatus::Disabled, self.credential_handle.clone())
+                (
+                    MailboxOnboardingStatus::Disabled,
+                    self.credential_handle.clone(),
+                )
             }
             MailboxOnboardingAction::MarkConfigError
                 if matches!(
@@ -333,7 +337,9 @@ mod tests {
             MailboxOnboardingVersion::INITIAL,
             MailboxOnboardingAction::Activate,
             Some(SecretHandle::parse("secret_C1")?),
-            Some(MailboxOnboardingStatusMetadata::parse("credential.accepted")?),
+            Some(MailboxOnboardingStatusMetadata::parse(
+                "credential.accepted",
+            )?),
         )?;
         assert_eq!(onboarding.status(), MailboxOnboardingStatus::Active);
         assert_eq!(onboarding.version().value(), 2);
@@ -346,7 +352,9 @@ mod tests {
             MailboxOnboardingVersion::new(2),
             MailboxOnboardingAction::RequireReauth,
             None,
-            Some(MailboxOnboardingStatusMetadata::parse("credential.expired")?),
+            Some(MailboxOnboardingStatusMetadata::parse(
+                "credential.expired",
+            )?),
         )?;
         onboarding.transition(
             MailboxOnboardingVersion::new(3),
@@ -417,7 +425,9 @@ mod tests {
             MailboxOnboardingVersion::INITIAL,
             MailboxOnboardingAction::MarkConfigError,
             None,
-            Some(MailboxOnboardingStatusMetadata::parse("provider.config_invalid")?),
+            Some(MailboxOnboardingStatusMetadata::parse(
+                "provider.config_invalid",
+            )?),
         )?;
         assert_eq!(onboarding.status(), MailboxOnboardingStatus::ConfigError);
         assert_eq!(

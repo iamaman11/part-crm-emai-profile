@@ -134,7 +134,9 @@ impl D1MailboxOnboardingApplicationRepository {
         let expires_at = sqlite_integer(evidence.idempotency_expires_at().value())?;
         let expected_version = sqlite_integer(write.expected_version().value())?;
         let next_version = sqlite_integer(write.next_version().value())?;
-        let previous_status = write.previous_status().map(MailboxOnboardingStatus::storage_value);
+        let previous_status = write
+            .previous_status()
+            .map(MailboxOnboardingStatus::storage_value);
         let previous_handle = write.previous_credential_handle().map(SecretHandle::as_str);
         let next_handle = write.next_credential_handle().map(SecretHandle::as_str);
         let status_metadata = write
@@ -255,12 +257,12 @@ fn map_context(
 fn map_replay_decision(decision: IdempotencyDecision) -> MailboxOnboardingReplayDecision {
     match decision {
         IdempotencyDecision::Miss => MailboxOnboardingReplayDecision::Miss,
-        IdempotencyDecision::Replay(receipt) => MailboxOnboardingReplayDecision::Replay(
-            MailboxOnboardingReplayReceipt::new(
+        IdempotencyDecision::Replay(receipt) => {
+            MailboxOnboardingReplayDecision::Replay(MailboxOnboardingReplayReceipt::new(
                 receipt.result_code().to_owned(),
                 receipt.result_reference().map(str::to_owned),
-            ),
-        ),
+            ))
+        }
         IdempotencyDecision::Conflict => MailboxOnboardingReplayDecision::Conflict,
     }
 }

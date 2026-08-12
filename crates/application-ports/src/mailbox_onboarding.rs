@@ -3,9 +3,7 @@ pub use mailbox_domain::{
     MailboxOnboarding, MailboxOnboardingAction, MailboxOnboardingStatus,
     MailboxOnboardingStatusMetadata, MailboxOnboardingVersion, MailboxProvider,
 };
-use profile_platform_primitives::{
-    ActorContext, MailboxOnboardingId, SecretHandle, TenantScope,
-};
+use profile_platform_primitives::{ActorContext, MailboxOnboardingId, SecretHandle, TenantScope};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MailboxOnboardingContext {
