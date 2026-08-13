@@ -1,12 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub const MAILBOX_PROVIDERS: [&str; 4] = [
-    "GMAIL_API",
-    "IMAP",
-    "BROWSER_FALLBACK",
-    "MICROSOFT_GRAPH",
-];
+pub const MAILBOX_PROVIDERS: [&str; 4] =
+    ["GMAIL_API", "IMAP", "BROWSER_FALLBACK", "MICROSOFT_GRAPH"];
 pub const MAILBOX_BINDING_STATUSES: [&str; 4] = ["ACTIVE", "AUTH_REQUIRED", "SUSPENDED", "REVOKED"];
 pub const MAILBOX_JOB_STATUSES: [&str; 8] = [
     "SCHEDULED",
