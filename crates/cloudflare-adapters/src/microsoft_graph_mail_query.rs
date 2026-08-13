@@ -9,9 +9,7 @@ use serde::Deserialize;
 use worker::{Fetch, Headers, Method, Request, RequestInit};
 use zeroize::Zeroize;
 
-use crate::cloud_mailbox_secrets::{
-    MicrosoftGraphCredential, refresh_microsoft_graph_credential,
-};
+use crate::cloud_mailbox_secrets::{MicrosoftGraphCredential, refresh_microsoft_graph_credential};
 use crate::microsoft_graph_authorization::D1MicrosoftGraphAuthorization;
 use crate::microsoft_graph_cursor::{resolve_query_cursor, store_query_cursor};
 
@@ -217,7 +215,8 @@ async fn graph_json_get(
     {
         return Err(dependency_unavailable());
     }
-    let mut response = send_graph_get(endpoint, credential.access_token(), prefer_text_body).await?;
+    let mut response =
+        send_graph_get(endpoint, credential.access_token(), prefer_text_body).await?;
     if response.status_code() == 401 {
         let refreshed = refresh_microsoft_graph_credential(env, binding)
             .await
@@ -323,7 +322,9 @@ fn summary_from_graph(
     ))
 }
 
-fn graph_body(body: Option<GraphItemBody>) -> Result<(Option<String>, Option<String>), QueryPortError> {
+fn graph_body(
+    body: Option<GraphItemBody>,
+) -> Result<(Option<String>, Option<String>), QueryPortError> {
     let Some(body) = body else {
         return Ok((None, None));
     };
@@ -429,7 +430,11 @@ fn split_time_offset(value: &str) -> Result<(&str, i64), QueryPortError> {
     if offset.len() != 6 || offset.as_bytes().get(3) != Some(&b':') {
         return Err(integrity_failure());
     }
-    let sign = if offset.starts_with('+') { 1_i64 } else { -1_i64 };
+    let sign = if offset.starts_with('+') {
+        1_i64
+    } else {
+        -1_i64
+    };
     let hours = offset[1..3]
         .parse::<i64>()
         .map_err(|_| integrity_failure())?;
@@ -524,7 +529,9 @@ fn response_content_length_exceeds(
     Ok(length > maximum)
 }
 
-fn map_provider_error(error: application_ports::mailboxes::MailboxProviderPortError) -> QueryPortError {
+fn map_provider_error(
+    error: application_ports::mailboxes::MailboxProviderPortError,
+) -> QueryPortError {
     match error {
         application_ports::mailboxes::MailboxProviderPortError::IntegrityFailure => {
             integrity_failure()
@@ -573,21 +580,16 @@ mod tests {
     #[test]
     fn search_expression_is_quoted_and_percent_encoding_is_deterministic() {
         assert_eq!(graph_search_expression("subject:test"), "\"subject:test\"");
-        assert_eq!(
-            graph_search_expression("a\"b"),
-            "\"a\\\"b\""
-        );
+        assert_eq!(graph_search_expression("a\"b"), "\"a\\\"b\"");
         let mut encoded = String::new();
         push_percent_encoded(&mut encoded, "\"subject:test\"");
         assert_eq!(encoded, "%22subject%3Atest%22");
     }
 
     #[test]
-    fn graph_datetime_parser_handles_utc_fraction_and_offset() -> Result<(), Box<dyn std::error::Error>> {
-        assert_eq!(
-            parse_rfc3339_millis("1970-01-01T00:00:00Z")?.value(),
-            0
-        );
+    fn graph_datetime_parser_handles_utc_fraction_and_offset()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(parse_rfc3339_millis("1970-01-01T00:00:00Z")?.value(), 0);
         assert_eq!(
             parse_rfc3339_millis("1970-01-01T00:00:00.123Z")?.value(),
             123
