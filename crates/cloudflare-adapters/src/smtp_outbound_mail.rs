@@ -60,17 +60,12 @@ impl OutboundMailProviderPort for CloudflareSmtpOutboundMailProvider<'_> {
             Ok(sender) => sender,
             Err(_) => return Ok(OutboundMailProviderOutcome::Rejected),
         };
-        let source = match source::resolve_source_context(
-            self.env,
-            &binding,
-            intent,
-            sender.as_str(),
-        )
-        .await
-        {
-            Ok(source) => source,
-            Err(error) => return Ok(preparation_failure_outcome(error)),
-        };
+        let source =
+            match source::resolve_source_context(self.env, &binding, intent, sender.as_str()).await
+            {
+                Ok(source) => source,
+                Err(error) => return Ok(preparation_failure_outcome(error)),
+            };
         let recipients = match (&source, intent.operation()) {
             (Some(source), _) => &source.recipients,
             (None, OutboundMailOperation::New { recipients })
