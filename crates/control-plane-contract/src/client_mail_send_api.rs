@@ -183,8 +183,8 @@ mod tests {
     use serde_json::Value;
 
     #[test]
-    fn request_contract_rejects_unknown_secret_surfaces()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn request_contract_rejects_unknown_secret_surfaces() -> Result<(), Box<dyn std::error::Error>>
+    {
         let request = ClientMailSendRequestDto {
             mailbox_binding_id: "binding_01JMAILSEND".to_owned(),
             operation: ClientMailSendOperationDto::New,
