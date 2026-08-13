@@ -225,8 +225,16 @@ fn split_address_tokens(value: &str) -> Result<Vec<&str>, PreparationFailure> {
         match character {
             '\\' if quoted => escaped = true,
             '"' => quoted = !quoted,
-            '<' if !quoted => angle_depth = angle_depth.saturating_add(1),
-            '>' if !quoted => angle_depth = angle_depth.saturating_sub(1),
+            '<' if !quoted => {
+                angle_depth = angle_depth
+                    .checked_add(1)
+                    .ok_or(PreparationFailure::Rejected)?;
+            }
+            '>' if !quoted => {
+                angle_depth = angle_depth
+                    .checked_sub(1)
+                    .ok_or(PreparationFailure::Rejected)?;
+            }
             ',' if !quoted && angle_depth == 0 => {
                 output.push(&value[start..index]);
                 start = index + 1;
