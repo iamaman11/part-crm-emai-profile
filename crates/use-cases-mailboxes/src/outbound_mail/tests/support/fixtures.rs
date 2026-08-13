@@ -7,9 +7,9 @@ use profile_platform_primitives::{
     OutboxEventId, TenantId, TenantScope, UnixMillis,
 };
 
-pub(super) type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+pub(crate) type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
-pub(super) fn actor() -> TestResult<ActorContext> {
+pub(crate) fn actor() -> TestResult<ActorContext> {
     Ok(ActorContext::new(
         TenantScope::new(TenantId::parse("tenant_c4_outbound")?),
         ActorId::parse("actor_c4_outbound")?,
@@ -17,7 +17,7 @@ pub(super) fn actor() -> TestResult<ActorContext> {
     ))
 }
 
-pub(super) fn intent() -> TestResult<OutboundMailIntent> {
+pub(crate) fn intent() -> TestResult<OutboundMailIntent> {
     let recipients = MailRecipients::new(
         vec![MailAddress::parse("client@example.com")?],
         Vec::new(),
@@ -32,7 +32,7 @@ pub(super) fn intent() -> TestResult<OutboundMailIntent> {
     ))
 }
 
-pub(super) fn evidence(
+pub(crate) fn evidence(
     key: &str,
     digest: &str,
     suffix: &str,
