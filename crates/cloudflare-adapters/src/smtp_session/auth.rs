@@ -162,8 +162,7 @@ mod tests {
     #[test]
     fn standard_base64_is_padded() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(
-            base64_standard(b"hello")
-                .map_err(|_| std::io::Error::other("base64 failed"))?,
+            base64_standard(b"hello").map_err(|_| std::io::Error::other("base64 failed"))?,
             "aGVsbG8="
         );
         Ok(())
