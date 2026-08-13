@@ -42,6 +42,7 @@ pub mod d1_mailbox_scheduling;
 pub mod d1_mailboxes;
 pub mod d1_notification_operations;
 pub mod d1_notifications;
+pub mod d1_outbound_mail_intents;
 pub mod d1_profile_application;
 pub mod d1_profile_coordinator;
 pub mod d1_profile_generation_application;
@@ -70,6 +71,8 @@ pub mod microsoft_graph_mail_query;
 pub mod microsoft_graph_oauth_provisioning;
 #[cfg(test)]
 mod microsoft_graph_translation_evidence;
+#[cfg(test)]
+mod outbound_mail_evidence;
 pub mod profile_coordinator;
 pub mod r2_generation_objects;
 pub mod r2_generation_upload_capability;
