@@ -126,17 +126,14 @@ fn push_subject_header(
 }
 
 fn push_encoded_word(output: &mut String, chunk: &str, line_length: &mut usize) {
-    let encoded = encode_base64(
-        chunk.as_bytes(),
-        Base64Alphabet::Standard,
-        true,
-        false,
-    );
+    let encoded = encode_base64(chunk.as_bytes(), Base64Alphabet::Standard, true, false);
     let mut word = String::with_capacity(encoded.len() + 12);
     word.push_str("=?UTF-8?B?");
     word.push_str(&encoded);
     word.push_str("?=");
-    if *line_length > 9 && line_length.saturating_add(1 + word.len()) > HEADER_SOFT_LIMIT {
+    if *line_length > 9
+        && (*line_length).saturating_add(1 + word.len()) > HEADER_SOFT_LIMIT
+    {
         output.push_str("\r\n ");
         *line_length = 1;
     } else if *line_length > 9 {
@@ -144,7 +141,7 @@ fn push_encoded_word(output: &mut String, chunk: &str, line_length: &mut usize) 
         *line_length += 1;
     }
     output.push_str(&word);
-    *line_length = line_length.saturating_add(word.len());
+    *line_length = (*line_length).saturating_add(word.len());
 }
 
 fn push_safe_header(
@@ -183,8 +180,7 @@ fn encode_base64(
         }
     };
     let encoded_length = bytes.len().saturating_add(2) / 3 * 4;
-    let mut output =
-        String::with_capacity(encoded_length.saturating_add(encoded_length / 76 * 2));
+    let mut output = String::with_capacity(encoded_length.saturating_add(encoded_length / 76 * 2));
     let mut column = 0_usize;
     let mut index = 0_usize;
     while index + 3 <= bytes.len() {
@@ -220,17 +216,42 @@ fn encode_base64(
     let remaining = bytes.len() - index;
     if remaining == 1 {
         let block = u32::from(bytes[index]) << 16;
-        push_symbol(&mut output, symbols[((block >> 18) & 0x3f) as usize], &mut column, wrap_lines);
-        push_symbol(&mut output, symbols[((block >> 12) & 0x3f) as usize], &mut column, wrap_lines);
+        push_symbol(
+            &mut output,
+            symbols[((block >> 18) & 0x3f) as usize],
+            &mut column,
+            wrap_lines,
+        );
+        push_symbol(
+            &mut output,
+            symbols[((block >> 12) & 0x3f) as usize],
+            &mut column,
+            wrap_lines,
+        );
         if padding {
             push_symbol(&mut output, b'=', &mut column, wrap_lines);
             push_symbol(&mut output, b'=', &mut column, wrap_lines);
         }
     } else if remaining == 2 {
         let block = (u32::from(bytes[index]) << 16) | (u32::from(bytes[index + 1]) << 8);
-        push_symbol(&mut output, symbols[((block >> 18) & 0x3f) as usize], &mut column, wrap_lines);
-        push_symbol(&mut output, symbols[((block >> 12) & 0x3f) as usize], &mut column, wrap_lines);
-        push_symbol(&mut output, symbols[((block >> 6) & 0x3f) as usize], &mut column, wrap_lines);
+        push_symbol(
+            &mut output,
+            symbols[((block >> 18) & 0x3f) as usize],
+            &mut column,
+            wrap_lines,
+        );
+        push_symbol(
+            &mut output,
+            symbols[((block >> 12) & 0x3f) as usize],
+            &mut column,
+            wrap_lines,
+        );
+        push_symbol(
+            &mut output,
+            symbols[((block >> 6) & 0x3f) as usize],
+            &mut column,
+            wrap_lines,
+        );
         if padding {
             push_symbol(&mut output, b'=', &mut column, wrap_lines);
         }
@@ -251,9 +272,7 @@ fn push_symbol(output: &mut String, byte: u8, column: &mut usize, wrap_lines: bo
 mod tests {
     use super::{encode_base64url_unpadded, render_mime};
     use crate::gmail_outbound_mail::source::GmailMessageContext;
-    use application_ports::outbound_mail::{
-        MailAddress, MailBody, MailRecipients, MailSubject,
-    };
+    use application_ports::outbound_mail::{MailAddress, MailBody, MailRecipients, MailSubject};
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
