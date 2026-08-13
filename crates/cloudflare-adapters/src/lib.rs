@@ -62,6 +62,8 @@ pub mod mailbox_job_queue;
 pub mod mailbox_provider;
 pub mod microsoft_graph_authorization;
 pub mod microsoft_graph_cursor;
+pub mod microsoft_graph_delta;
+pub mod microsoft_graph_delta_cursor;
 pub mod microsoft_graph_mail_query;
 pub mod microsoft_graph_oauth_provisioning;
 pub mod profile_coordinator;

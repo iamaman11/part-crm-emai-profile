@@ -51,7 +51,11 @@ pub async fn consume_one<T>(
     let application = mailbox_job_application(env)?;
     let scheduling =
         D1MailboxSchedulingRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
-    let mut provider = CloudMailboxProviderRouter::new(env);
+    let mut provider = CloudMailboxProviderRouter::new(
+        env,
+        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
+        &actor,
+    );
     let request = ProcessScheduledMailboxJobRequest::new(
         &actor,
         MembershipRole::TenantOwner,

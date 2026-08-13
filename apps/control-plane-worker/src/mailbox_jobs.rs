@@ -163,7 +163,11 @@ async fn run_job(
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let application = mailbox_job_application(env)?;
-    let mut provider = CloudMailboxProviderRouter::new(env);
+    let mut provider = CloudMailboxProviderRouter::new(
+        env,
+        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
+        actor,
+    );
     match execute_run_mailbox_job(
         actor,
         role,
