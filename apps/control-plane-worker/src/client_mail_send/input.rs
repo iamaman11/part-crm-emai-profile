@@ -13,7 +13,8 @@ pub(super) fn build_intent(
     request: &ClientMailSendRequestDto,
 ) -> Result<OutboundMailIntent, ()> {
     let binding_id = MailboxBindingId::parse(request.mailbox_binding_id.clone()).map_err(|_| ())?;
-    let body = MailBody::new(request.text_body.clone(), request.html_body.clone()).map_err(|_| ())?;
+    let body =
+        MailBody::new(request.text_body.clone(), request.html_body.clone()).map_err(|_| ())?;
     let subject = request
         .subject
         .clone()
@@ -120,7 +121,8 @@ mod tests {
     }
 
     #[test]
-    fn new_and_forward_require_explicit_recipient_intent() -> Result<(), Box<dyn std::error::Error>> {
+    fn new_and_forward_require_explicit_recipient_intent() -> Result<(), Box<dyn std::error::Error>>
+    {
         let client_id = ClientId::parse("client_01JMAILSEND")?;
         assert!(build_intent(&client_id, &request(ClientMailSendOperationDto::New)).is_ok());
 
@@ -145,8 +147,8 @@ mod tests {
     }
 
     #[test]
-    fn explicit_recipients_are_validated_and_deduplicated_across_fields(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn explicit_recipients_are_validated_and_deduplicated_across_fields()
+    -> Result<(), Box<dyn std::error::Error>> {
         let client_id = ClientId::parse("client_01JMAILSEND")?;
         let mut compose = request(ClientMailSendOperationDto::New);
         compose.to = vec!["person@example.test".to_owned()];
