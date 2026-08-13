@@ -4,20 +4,20 @@ use application_ports::client_mail_access::{
 use profile_platform_primitives::{ActorContext, ClientId, MailboxBindingId};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub(super) struct FakeAccess {
+pub(crate) struct FakeAccess {
     allowed: bool,
     calls: AtomicUsize,
 }
 
 impl FakeAccess {
-    pub(super) const fn new(allowed: bool) -> Self {
+    pub(crate) const fn new(allowed: bool) -> Self {
         Self {
             allowed,
             calls: AtomicUsize::new(0),
         }
     }
 
-    pub(super) fn calls(&self) -> usize {
+    pub(crate) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
 }
