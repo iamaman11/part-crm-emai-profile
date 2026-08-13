@@ -29,8 +29,8 @@ fn persisted_states_are_provider_neutral() -> Result<(), Box<dyn std::error::Err
 }
 
 #[test]
-fn only_confirmed_sent_outcome_carries_provider_reference()
--> Result<(), Box<dyn std::error::Error>> {
+fn only_confirmed_sent_outcome_carries_provider_reference() -> Result<(), Box<dyn std::error::Error>>
+{
     let reference = ProviderMessageReference::parse("provider-message-01")?;
     let sent = OutboundMailProviderOutcome::Sent {
         provider_message_reference: Some(reference),

@@ -1,5 +1,7 @@
 use super::super::{OutboundMailOperationError, execute_outbound_mail};
-use super::support::{FakeAccess, FakeProvider, FakeStore, TestResult, actor, block_on, evidence, intent};
+use super::support::{
+    FakeAccess, FakeProvider, FakeStore, TestResult, actor, block_on, evidence, intent,
+};
 use application_ports::outbound_mail::{
     OutboundMailIntentState, OutboundMailProviderOutcome, OutboundMailProviderPortError,
     ProviderMessageReference,
