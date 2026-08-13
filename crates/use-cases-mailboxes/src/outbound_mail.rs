@@ -4,9 +4,9 @@ use application_ports::client_mail_access::{
 };
 use application_ports::outbound_mail::{
     OutboundMailClaimDecision, OutboundMailInputError, OutboundMailIntent,
-    OutboundMailIntentApplicationPort, OutboundMailIntentPortError, OutboundMailIntentPortErrorClass,
-    OutboundMailIntentReceipt, OutboundMailIntentState, OutboundMailProviderOutcome,
-    OutboundMailProviderPort, OutboundMailReserveDecision,
+    OutboundMailIntentApplicationPort, OutboundMailIntentPortError,
+    OutboundMailIntentPortErrorClass, OutboundMailIntentReceipt, OutboundMailIntentState,
+    OutboundMailProviderOutcome, OutboundMailProviderPort, OutboundMailReserveDecision,
 };
 use core::fmt;
 use profile_platform_primitives::{ActorContext, OutboxEventId};
@@ -89,9 +89,7 @@ where
         return Err(OutboundMailOperationError::NotFound);
     }
 
-    intent
-        .validate_source_binding()
-        .map_err(map_input_error)?;
+    intent.validate_source_binding().map_err(map_input_error)?;
 
     let reserve = store
         .reserve_intent(actor, intent, evidence)
