@@ -4,10 +4,8 @@ mod exact_adapter_source {
     include!("microsoft_graph_mail_query.rs");
 
     use application_ports::query::{QueryPageRequest, QueryPageSize};
-    use application_ports::query_mail_provider::{
-        MailSearchTerm, SearchClientMailboxMessagesRequest,
-    };
-    use mailbox_domain::{MailboxBinding, MailboxProvider};
+    use application_ports::query_mail_provider::MailSearchTerm;
+    use mailbox_domain::MailboxProvider;
     use profile_platform_primitives::{MailboxBindingId, SecretHandle, TenantId};
 
     fn graph_binding() -> Result<MailboxBinding, Box<dyn std::error::Error>> {
