@@ -9,6 +9,8 @@ use zeroize::Zeroize;
 pub const MAILBOX_SECRET_RESOLVER_BINDING: &str = "MAILBOX_SECRET_RESOLVER";
 const MAILBOX_SECRET_RESOLVER_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/resolve";
+const MICROSOFT_GRAPH_REFRESH_ENDPOINT: &str =
+    "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/refresh";
 const MAX_SECRET_DOCUMENT_BYTES: usize = 16 * 1024;
 const MAX_IMAP_HOST_LENGTH: usize = 253;
 const MAX_IMAP_USERNAME_LENGTH: usize = 512;
@@ -19,6 +21,7 @@ const MAX_CREDENTIAL_VALUE_LENGTH: usize = 8 * 1024;
 pub enum MailboxCredential {
     GmailApi(GmailApiCredential),
     Imap(ImapCredential),
+    MicrosoftGraph(MicrosoftGraphCredential),
 }
 
 impl MailboxCredential {
@@ -27,6 +30,7 @@ impl MailboxCredential {
         match self {
             Self::GmailApi(_) => MailboxProvider::GmailApi,
             Self::Imap(_) => MailboxProvider::Imap,
+            Self::MicrosoftGraph(_) => MailboxProvider::MicrosoftGraph,
         }
     }
 }
@@ -44,11 +48,34 @@ impl GmailApiCredential {
     }
 
     fn validate(&self) -> bool {
-        !self.access_token.is_empty() && self.access_token.len() <= MAX_CREDENTIAL_VALUE_LENGTH
+        valid_credential_value(&self.access_token)
     }
 }
 
 impl Drop for GmailApiCredential {
+    fn drop(&mut self) {
+        self.access_token.zeroize();
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MicrosoftGraphCredential {
+    access_token: String,
+}
+
+impl MicrosoftGraphCredential {
+    #[must_use]
+    pub fn access_token(&self) -> &str {
+        &self.access_token
+    }
+
+    fn validate(&self) -> bool {
+        valid_credential_value(&self.access_token)
+    }
+}
+
+impl Drop for MicrosoftGraphCredential {
     fn drop(&mut self) {
         self.access_token.zeroize();
     }
@@ -160,9 +187,39 @@ pub async fn resolve_mailbox_credential(
     env: &Env,
     binding: &MailboxBinding,
 ) -> Result<MailboxCredential, MailboxProviderPortError> {
-    let resolver = env
-        .service(MAILBOX_SECRET_RESOLVER_BINDING)
-        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
+    let headers = resolver_headers(binding)?;
+    let mut response = resolver_fetch(env, MAILBOX_SECRET_RESOLVER_ENDPOINT, headers).await?;
+    map_resolver_status(response.status_code())?;
+    let credential = parse_secret_document::<MailboxCredential>(&mut response).await?;
+    let valid = match &credential {
+        MailboxCredential::GmailApi(value) => value.validate(),
+        MailboxCredential::Imap(value) => value.validate(),
+        MailboxCredential::MicrosoftGraph(value) => value.validate(),
+    };
+    if !valid {
+        return Err(provider_error(MailboxProviderFailureClass::ProviderPolicy));
+    }
+    Ok(credential)
+}
+
+pub async fn refresh_microsoft_graph_credential(
+    env: &Env,
+    binding: &MailboxBinding,
+) -> Result<MicrosoftGraphCredential, MailboxProviderPortError> {
+    if binding.provider() != MailboxProvider::MicrosoftGraph {
+        return Err(MailboxProviderPortError::IntegrityFailure);
+    }
+    let headers = resolver_headers(binding)?;
+    let mut response = resolver_fetch(env, MICROSOFT_GRAPH_REFRESH_ENDPOINT, headers).await?;
+    map_resolver_status(response.status_code())?;
+    let credential = parse_secret_document::<MicrosoftGraphCredential>(&mut response).await?;
+    if !credential.validate() {
+        return Err(provider_error(MailboxProviderFailureClass::ProviderPolicy));
+    }
+    Ok(credential)
+}
+
+fn resolver_headers(binding: &MailboxBinding) -> Result<Headers, MailboxProviderPortError> {
     let headers = Headers::new();
     headers
         .set("accept", "application/json")
@@ -185,18 +242,31 @@ pub async fn resolve_mailbox_credential(
             binding.provider().storage_value(),
         )
         .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
+    Ok(headers)
+}
 
+async fn resolver_fetch(
+    env: &Env,
+    endpoint: &str,
+    headers: Headers,
+) -> Result<worker::Response, MailboxProviderPortError> {
+    let resolver = env
+        .service(MAILBOX_SECRET_RESOLVER_BINDING)
+        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
     let mut init = RequestInit::new();
     init.with_method(Method::Post).with_headers(headers);
-    let mut response = resolver
-        .fetch(MAILBOX_SECRET_RESOLVER_ENDPOINT, Some(init))
+    resolver
+        .fetch(endpoint, Some(init))
         .await
-        .map_err(|_| provider_error(MailboxProviderFailureClass::TransientDependency))?;
-    map_resolver_status(response.status_code())?;
-    if response_content_length_exceeds(&response, MAX_SECRET_DOCUMENT_BYTES)? {
+        .map_err(|_| provider_error(MailboxProviderFailureClass::TransientDependency))
+}
+
+async fn parse_secret_document<T: for<'de> Deserialize<'de>>(
+    response: &mut worker::Response,
+) -> Result<T, MailboxProviderPortError> {
+    if response_content_length_exceeds(response, MAX_SECRET_DOCUMENT_BYTES)? {
         return Err(provider_error(MailboxProviderFailureClass::ProviderPolicy));
     }
-
     let mut document = response
         .bytes()
         .await
@@ -205,18 +275,9 @@ pub async fn resolve_mailbox_credential(
         document.zeroize();
         return Err(provider_error(MailboxProviderFailureClass::ProviderPolicy));
     }
-    let parsed = serde_json::from_slice::<MailboxCredential>(&document);
+    let parsed = serde_json::from_slice::<T>(&document);
     document.zeroize();
-    let credential =
-        parsed.map_err(|_| provider_error(MailboxProviderFailureClass::ProviderPolicy))?;
-    let valid = match &credential {
-        MailboxCredential::GmailApi(value) => value.validate(),
-        MailboxCredential::Imap(value) => value.validate(),
-    };
-    if !valid {
-        return Err(provider_error(MailboxProviderFailureClass::ProviderPolicy));
-    }
-    Ok(credential)
+    parsed.map_err(|_| provider_error(MailboxProviderFailureClass::ProviderPolicy))
 }
 
 fn map_resolver_status(status: u16) -> Result<(), MailboxProviderPortError> {
@@ -297,7 +358,7 @@ fn contains_imap_line_break(value: &str) -> bool {
 mod tests {
     use super::{
         ImapAuthenticationMode, ImapCredential, ImapTlsMode, MailboxCredential,
-        map_resolver_status, valid_imap_host,
+        MicrosoftGraphCredential, map_resolver_status, valid_imap_host,
     };
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -305,9 +366,9 @@ mod tests {
     fn into_imap(credential: MailboxCredential) -> Result<ImapCredential, std::io::Error> {
         match credential {
             MailboxCredential::Imap(value) => Ok(value),
-            MailboxCredential::GmailApi(_) => Err(std::io::Error::other(
-                "expected IMAP credential in test fixture",
-            )),
+            MailboxCredential::GmailApi(_) | MailboxCredential::MicrosoftGraph(_) => Err(
+                std::io::Error::other("expected IMAP credential in test fixture"),
+            ),
         }
     }
 
@@ -354,6 +415,28 @@ mod tests {
             r#"{"kind":"imap","host":"outlook.office365.com","port":993,"username":"user@example.com","password":"forbidden","access_token":"opaque-access-token","authentication_mode":"xoauth2","tls":"implicit"}"#,
         )?)?;
         assert!(!mixed.validate());
+        Ok(())
+    }
+
+    #[test]
+    fn graph_credential_is_access_token_only_and_strict() -> TestResult {
+        let credential = serde_json::from_str::<MailboxCredential>(
+            r#"{"kind":"microsoft_graph","access_token":"opaque-access-token"}"#,
+        )?;
+        assert_eq!(
+            credential.provider(),
+            mailbox_domain::MailboxProvider::MicrosoftGraph
+        );
+        let direct = serde_json::from_str::<MicrosoftGraphCredential>(
+            r#"{"access_token":"opaque-access-token"}"#,
+        )?;
+        assert!(direct.validate());
+        assert!(
+            serde_json::from_str::<MicrosoftGraphCredential>(
+                r#"{"access_token":"opaque","refresh_token":"forbidden"}"#
+            )
+            .is_err()
+        );
         Ok(())
     }
 

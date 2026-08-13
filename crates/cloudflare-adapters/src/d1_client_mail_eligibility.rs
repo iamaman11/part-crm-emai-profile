@@ -40,7 +40,10 @@ impl ClientMailboxEligibilityPort for D1ClientMailboxEligibilityRepository {
               AND client.status = 'ACTIVE'
               AND binding.status = 'ACTIVE'
               AND binding.execution_status = 'ACTIVE'
-              AND binding.provider IN ('GMAIL_API', 'IMAP')
+              AND (
+                  binding.provider IN ('GMAIL_API', 'IMAP')
+                  OR binding.provider = 'MICROSOFT_GRAPH'
+              )
               AND EXISTS (
                   SELECT 1
                   FROM memberships AS requester

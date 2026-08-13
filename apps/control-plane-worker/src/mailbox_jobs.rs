@@ -2,7 +2,7 @@ use crate::access_session::{
     correlation_hint, membership_role, neutral_not_found, problem, resolve_active_request_actor,
 };
 use crate::command_evidence;
-use crate::composition::mailbox_job_application;
+use crate::composition::{mailbox_job_application, microsoft_graph_mailbox_authorization};
 use application_ports::mailbox_jobs::MailboxJobStatus;
 use cloudflare_adapters::cloud_mailbox_provider::CloudMailboxProviderRouter;
 use control_plane_contract::{
@@ -163,7 +163,8 @@ async fn run_job(
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let application = mailbox_job_application(env)?;
-    let mut provider = CloudMailboxProviderRouter::new(env);
+    let mut provider = CloudMailboxProviderRouter::new(env)
+        .with_microsoft_graph_authorization(microsoft_graph_mailbox_authorization(env)?, actor);
     match execute_run_mailbox_job(
         actor,
         role,

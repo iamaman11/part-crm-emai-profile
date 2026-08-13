@@ -287,6 +287,7 @@ const fn mailbox_provider(provider: MailboxProvider) -> MailboxProviderDto {
         MailboxProvider::GmailApi => MailboxProviderDto::GmailApi,
         MailboxProvider::Imap => MailboxProviderDto::Imap,
         MailboxProvider::BrowserFallback => MailboxProviderDto::BrowserFallback,
+        MailboxProvider::MicrosoftGraph => MailboxProviderDto::MicrosoftGraph,
     }
 }
 
@@ -369,6 +370,15 @@ mod tests {
         assert_eq!(response["status"], "ACTIVE");
         assert!(response.get("version").is_some());
         assert!(response.get("secretHandle").is_none());
+
+        let graph_response = serde_json::to_value(MailboxBindingProjectionDto {
+            binding_id: "mailbox_01JGRAPH".to_owned(),
+            provider: mailbox_provider(MailboxProvider::MicrosoftGraph),
+            status: mailbox_binding_status(MailboxBindingStatus::Active),
+            version: 1,
+        })?;
+        assert_eq!(graph_response["provider"], "MICROSOFT_GRAPH");
+        assert!(graph_response.get("secretHandle").is_none());
         Ok(())
     }
 

@@ -128,7 +128,7 @@
       "MailboxMutationAccepted": {"description": "Mailbox metadata mutation accepted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/MutationReceipt"}}}}
     },
     "schemas": {
-      "MailboxProvider": {"type": "string", "enum": ["GMAIL_API", "IMAP", "BROWSER_FALLBACK"]},
+      "MailboxProvider": {"type": "string", "enum": ["GMAIL_API", "IMAP", "BROWSER_FALLBACK", "MICROSOFT_GRAPH"]},
       "MailboxSecretHandle": {"type": "string", "minLength": 8, "maxLength": 96, "pattern": "^[A-Za-z0-9_-]+$", "description": "Opaque reference to credential material stored outside the mailbox catalog. Raw credentials and authorization tokens are prohibited."},
       "MailboxCursor": {"type": "string", "maxLength": 512, "description": "Opaque bounded provider cursor. It is accepted for scheduling but omitted from support-safe read responses."},
       "CreateMailboxBindingRequest": {

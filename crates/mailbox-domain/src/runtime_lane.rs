@@ -11,6 +11,7 @@ pub enum MailboxProvider {
     GmailApi,
     Imap,
     BrowserFallback,
+    MicrosoftGraph,
 }
 
 impl MailboxProvider {
@@ -20,6 +21,7 @@ impl MailboxProvider {
             Self::GmailApi => "GMAIL_API",
             Self::Imap => "IMAP",
             Self::BrowserFallback => "BROWSER_FALLBACK",
+            Self::MicrosoftGraph => "MICROSOFT_GRAPH",
         }
     }
 
@@ -28,6 +30,7 @@ impl MailboxProvider {
             "GMAIL_API" => Ok(Self::GmailApi),
             "IMAP" => Ok(Self::Imap),
             "BROWSER_FALLBACK" => Ok(Self::BrowserFallback),
+            "MICROSOFT_GRAPH" => Ok(Self::MicrosoftGraph),
             _ => Err(MailboxError::InvalidProvider),
         }
     }
@@ -35,7 +38,7 @@ impl MailboxProvider {
     #[must_use]
     pub const fn runtime_lane(self) -> MailboxRuntimeLane {
         match self {
-            Self::GmailApi | Self::Imap => MailboxRuntimeLane::Cloud,
+            Self::GmailApi | Self::Imap | Self::MicrosoftGraph => MailboxRuntimeLane::Cloud,
             Self::BrowserFallback => MailboxRuntimeLane::Browser,
         }
     }
@@ -51,7 +54,7 @@ mod tests {
     use super::{MailboxProvider, MailboxRuntimeLane};
 
     #[test]
-    fn only_approved_phase2e_providers_are_cloud_lane() {
+    fn runtime_lanes_preserve_browser_and_phase2e_boundaries() {
         assert_eq!(
             MailboxProvider::GmailApi.runtime_lane(),
             MailboxRuntimeLane::Cloud
@@ -61,11 +64,29 @@ mod tests {
             MailboxRuntimeLane::Cloud
         );
         assert_eq!(
+            MailboxProvider::MicrosoftGraph.runtime_lane(),
+            MailboxRuntimeLane::Cloud
+        );
+        assert_eq!(
             MailboxProvider::BrowserFallback.runtime_lane(),
             MailboxRuntimeLane::Browser
         );
         assert!(MailboxProvider::GmailApi.is_phase2e_cloud_supported());
         assert!(MailboxProvider::Imap.is_phase2e_cloud_supported());
+        assert!(!MailboxProvider::MicrosoftGraph.is_phase2e_cloud_supported());
         assert!(!MailboxProvider::BrowserFallback.is_phase2e_cloud_supported());
+    }
+
+    #[test]
+    fn microsoft_graph_has_a_distinct_durable_discriminator() {
+        assert_eq!(
+            MailboxProvider::MicrosoftGraph.storage_value(),
+            "MICROSOFT_GRAPH"
+        );
+        assert_eq!(
+            MailboxProvider::parse_storage("MICROSOFT_GRAPH"),
+            Ok(MailboxProvider::MicrosoftGraph)
+        );
+        assert_ne!(MailboxProvider::MicrosoftGraph, MailboxProvider::Imap);
     }
 }
