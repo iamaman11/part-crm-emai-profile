@@ -210,9 +210,9 @@ impl OutboundMailOperation {
     pub const fn source(&self) -> Option<&OutboundMailSourceReference> {
         match self {
             Self::New { .. } => None,
-            Self::Reply { source }
-            | Self::ReplyAll { source }
-            | Self::Forward { source, .. } => Some(source),
+            Self::Reply { source } | Self::ReplyAll { source } | Self::Forward { source, .. } => {
+                Some(source)
+            }
         }
     }
 
@@ -515,8 +515,8 @@ mod tests {
     use profile_platform_primitives::{ClientId, MailboxBindingId};
 
     #[test]
-    fn content_inputs_are_bounded_without_debug_surfaces()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn content_inputs_are_bounded_without_debug_surfaces() -> Result<(), Box<dyn std::error::Error>>
+    {
         assert!(matches!(
             MailAddress::parse("bad address@example.com"),
             Err(OutboundMailInputError::InvalidAddress)
