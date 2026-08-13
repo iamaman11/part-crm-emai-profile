@@ -29,6 +29,9 @@ jobs:
       - name: Prove sibling feature internals are rejected
         run: python scripts/check-frontend-feature-boundaries.py --self-test
 
+      - name: Verify generated C7 client mail contract
+        run: python scripts/generate-c7-contracts.py --check
+
       - name: Set up Node 24 LTS
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
