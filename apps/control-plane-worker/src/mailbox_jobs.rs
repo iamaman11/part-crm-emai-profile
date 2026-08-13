@@ -163,10 +163,8 @@ async fn run_job(
         Err(_) => return invalid_request(actor.correlation_id().as_str()),
     };
     let application = mailbox_job_application(env)?;
-    let mut provider = CloudMailboxProviderRouter::new(env).with_microsoft_graph_authorization(
-        microsoft_graph_mailbox_authorization(env)?,
-        actor,
-    );
+    let mut provider = CloudMailboxProviderRouter::new(env)
+        .with_microsoft_graph_authorization(microsoft_graph_mailbox_authorization(env)?, actor);
     match execute_run_mailbox_job(
         actor,
         role,
