@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
-pub(super) fn block_on<F: Future>(future: F) -> F::Output {
+pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
     let waker = Waker::noop();
     let mut context = Context::from_waker(waker);
     let mut future = Box::pin(future);
