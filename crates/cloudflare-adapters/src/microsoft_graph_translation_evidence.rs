@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+#[allow(dead_code)]
 mod exact_adapter_source {
     include!("microsoft_graph_mail_query.rs");
 
