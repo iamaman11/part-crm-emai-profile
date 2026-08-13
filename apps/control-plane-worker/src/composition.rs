@@ -176,9 +176,7 @@ pub fn mailbox_job_application(env: &Env) -> Result<D1MailboxJobApplicationRepos
     ))
 }
 
-pub fn microsoft_graph_mailbox_authorization(
-    env: &Env,
-) -> Result<D1MicrosoftGraphAuthorization> {
+pub fn microsoft_graph_mailbox_authorization(env: &Env) -> Result<D1MicrosoftGraphAuthorization> {
     Ok(D1MicrosoftGraphAuthorization::new(
         env.d1(D1_CATALOG_BINDING)?,
     ))
