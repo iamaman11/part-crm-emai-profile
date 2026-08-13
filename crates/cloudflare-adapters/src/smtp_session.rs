@@ -43,11 +43,13 @@ impl SmtpReply {
             let Some(first) = tokens.next() else {
                 return false;
             };
-            first
-                .strip_prefix(b"AUTH=")
-                .is_some_and(|value| value.eq_ignore_ascii_case(wanted))
-                || (first.eq_ignore_ascii_case(b"AUTH")
-                    && tokens.any(|token| token.eq_ignore_ascii_case(wanted)))
+            if let Some(first_mechanism) = first.strip_prefix(b"AUTH=") {
+                first_mechanism.eq_ignore_ascii_case(wanted)
+                    || tokens.any(|token| token.eq_ignore_ascii_case(wanted))
+            } else {
+                first.eq_ignore_ascii_case(b"AUTH")
+                    && tokens.any(|token| token.eq_ignore_ascii_case(wanted))
+            }
         })
     }
 }
@@ -113,8 +115,7 @@ impl SmtpSession {
         {
             return Err(SmtpSendFailure::IntegrityFailure);
         }
-        let requires_smtp_utf8 =
-            !envelope_from.is_ascii() || recipients.iter().any(|recipient| !recipient.is_ascii());
+        let requires_smtp_utf8 = requires_smtp_utf8(envelope_from, recipients);
         if requires_smtp_utf8 && !self.ehlo.capability("SMTPUTF8") {
             return Err(SmtpSendFailure::Rejected);
         }
@@ -177,6 +178,10 @@ const fn classify_pre_acceptance(code: u16) -> SmtpSendFailure {
         500..=599 => SmtpSendFailure::Rejected,
         _ => SmtpSendFailure::IntegrityFailure,
     }
+}
+
+fn requires_smtp_utf8(envelope_from: &str, recipients: &[String]) -> bool {
+    !envelope_from.is_ascii() || recipients.iter().any(|recipient| !recipient.is_ascii())
 }
 
 fn mail_from_command(envelope_from: &str, requires_smtp_utf8: bool) -> String {
@@ -302,7 +307,7 @@ fn invalid_path(value: &str) -> bool {
 mod tests {
     use super::{
         SmtpReply, SmtpSendFailure, classify_pre_acceptance, complete_reply_code,
-        dot_stuffed_message, mail_from_command,
+        dot_stuffed_message, mail_from_command, requires_smtp_utf8,
     };
 
     #[test]
@@ -321,15 +326,37 @@ mod tests {
     }
 
     #[test]
+    fn authentication_capability_accepts_standard_and_legacy_forms() {
+        let standard = SmtpReply {
+            code: 250,
+            bytes: b"250-example.test\r\n250 AUTH PLAIN LOGIN XOAUTH2\r\n".to_vec(),
+        };
+        assert!(standard.auth_mechanism("PLAIN"));
+        assert!(standard.auth_mechanism("LOGIN"));
+        assert!(standard.auth_mechanism("XOAUTH2"));
+
+        let legacy = SmtpReply {
+            code: 250,
+            bytes: b"250-example.test\r\n250 AUTH=PLAIN LOGIN\r\n".to_vec(),
+        };
+        assert!(legacy.auth_mechanism("PLAIN"));
+        assert!(legacy.auth_mechanism("LOGIN"));
+        Ok::<(), Box<dyn std::error::Error>>(())
+            .expect("infallible capability evidence should stay infallible");
+    }
+
+    #[test]
     fn smtp_utf8_capability_and_mail_from_are_explicit() {
         let ehlo = SmtpReply {
             code: 250,
             bytes: b"250-example.test\r\n250-SMTPUTF8\r\n250 AUTH PLAIN\r\n".to_vec(),
         };
         assert!(ehlo.capability("SMTPUTF8"));
+        let non_ascii_sender = "m\u{fc}ller@example.com";
+        assert!(requires_smtp_utf8(non_ascii_sender, &[]));
         assert_eq!(
-            mail_from_command("user+utf8@example.com", true),
-            "MAIL FROM:<user+utf8@example.com> SMTPUTF8"
+            mail_from_command(non_ascii_sender, true),
+            format!("MAIL FROM:<{non_ascii_sender}> SMTPUTF8")
         );
         assert_eq!(
             mail_from_command("user@example.com", false),
