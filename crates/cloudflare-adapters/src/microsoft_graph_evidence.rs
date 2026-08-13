@@ -33,7 +33,9 @@ fn c3g_microsoft_graph_boundaries_are_permanent_and_fail_closed() {
 
     let oauth = include_str!("microsoft_graph_oauth_provisioning.rs");
     let oauth_production = oauth.split("#[cfg(test)]").next().unwrap_or(oauth);
-    assert!(oauth_production.contains("openid offline_access https://graph.microsoft.com/Mail.Read"));
+    assert!(
+        oauth_production.contains("openid offline_access https://graph.microsoft.com/Mail.Read")
+    );
     assert!(oauth_production.contains("const PKCE_METHOD: &str = \"S256\""));
     assert!(!oauth_production.contains("Mail.Send"));
     assert!(!oauth_production.contains("refresh_token"));
