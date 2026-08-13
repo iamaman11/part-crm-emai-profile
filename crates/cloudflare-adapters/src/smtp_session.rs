@@ -113,12 +113,13 @@ impl SmtpSession {
         {
             return Err(SmtpSendFailure::IntegrityFailure);
         }
-        let reply = send_command(
-            &mut self.socket,
-            &format!("MAIL FROM:<{envelope_from}>"),
-            false,
-        )
-        .await?;
+        let requires_smtp_utf8 = !envelope_from.is_ascii()
+            || recipients.iter().any(|recipient| !recipient.is_ascii());
+        if requires_smtp_utf8 && !self.ehlo.capability("SMTPUTF8") {
+            return Err(SmtpSendFailure::Rejected);
+        }
+        let mail_from = mail_from_command(envelope_from, requires_smtp_utf8);
+        let reply = send_command(&mut self.socket, &mail_from, false).await?;
         if reply.code != 250 {
             return Err(classify_pre_acceptance(reply.code));
         }
@@ -178,6 +179,14 @@ const fn classify_pre_acceptance(code: u16) -> SmtpSendFailure {
     }
 }
 
+fn mail_from_command(envelope_from: &str, requires_smtp_utf8: bool) -> String {
+    if requires_smtp_utf8 {
+        format!("MAIL FROM:<{envelope_from}> SMTPUTF8")
+    } else {
+        format!("MAIL FROM:<{envelope_from}>")
+    }
+}
+
 pub(super) async fn send_command(
     socket: &mut Socket,
     command: &str,
@@ -189,7 +198,11 @@ pub(super) async fn send_command(
     {
         return Err(SmtpSendFailure::IntegrityFailure);
     }
-    let mut wire = String::with_capacity(command.len() + 2);
+    let capacity = command
+        .len()
+        .checked_add(2)
+        .ok_or(SmtpSendFailure::IntegrityFailure)?;
+    let mut wire = String::with_capacity(capacity);
     wire.push_str(command);
     wire.push_str("\r\n");
     let write = socket.write_all(wire.as_bytes()).await;
@@ -221,7 +234,8 @@ async fn read_reply_inner(
     let mut buffer = [0_u8; 4096];
     loop {
         let read = socket.read(&mut buffer).await.map_err(|_| io_failure)?;
-        if read == 0 || output.len().saturating_add(read) > MAX_REPLY_BYTES {
+        let next_length = output.len().checked_add(read).ok_or(io_failure)?;
+        if read == 0 || next_length > MAX_REPLY_BYTES {
             return Err(io_failure);
         }
         output.extend_from_slice(&buffer[..read]);
@@ -257,7 +271,11 @@ fn dot_stuffed_message(message: &[u8]) -> Result<Vec<u8>, SmtpSendFailure> {
     if message.contains(&b'\0') {
         return Err(SmtpSendFailure::IntegrityFailure);
     }
-    let mut output = Vec::with_capacity(message.len().saturating_add(16));
+    let capacity = message
+        .len()
+        .checked_add(16)
+        .ok_or(SmtpSendFailure::IntegrityFailure)?;
+    let mut output = Vec::with_capacity(capacity);
     let mut line_start = true;
     for byte in message.iter().copied() {
         if line_start && byte == b'.' {
@@ -283,7 +301,8 @@ fn invalid_path(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        SmtpSendFailure, classify_pre_acceptance, complete_reply_code, dot_stuffed_message,
+        SmtpReply, SmtpSendFailure, classify_pre_acceptance, complete_reply_code,
+        dot_stuffed_message, mail_from_command,
     };
 
     #[test]
@@ -299,6 +318,23 @@ mod tests {
             SmtpSendFailure::RetryableNotSent
         );
         assert_eq!(classify_pre_acceptance(550), SmtpSendFailure::Rejected);
+    }
+
+    #[test]
+    fn smtp_utf8_capability_and_mail_from_are_explicit() {
+        let ehlo = SmtpReply {
+            code: 250,
+            bytes: b"250-example.test\r\n250-SMTPUTF8\r\n250 AUTH PLAIN\r\n".to_vec(),
+        };
+        assert!(ehlo.capability("SMTPUTF8"));
+        assert_eq!(
+            mail_from_command("user+utf8@example.com", true),
+            "MAIL FROM:<user+utf8@example.com> SMTPUTF8"
+        );
+        assert_eq!(
+            mail_from_command("user@example.com", false),
+            "MAIL FROM:<user@example.com>"
+        );
     }
 
     #[test]
