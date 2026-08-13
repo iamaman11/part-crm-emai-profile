@@ -64,6 +64,8 @@ pub mod microsoft_graph_authorization;
 pub mod microsoft_graph_cursor;
 pub mod microsoft_graph_delta;
 pub mod microsoft_graph_delta_cursor;
+#[cfg(test)]
+mod microsoft_graph_evidence;
 pub mod microsoft_graph_mail_query;
 pub mod microsoft_graph_oauth_provisioning;
 pub mod profile_coordinator;
