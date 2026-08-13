@@ -9,6 +9,7 @@ use profile_platform_primitives::ActorContext;
 pub(super) enum ClientMailProvider<'a> {
     Gmail(CloudflareGmailOutboundMailProvider<'a>),
     Smtp(CloudflareSmtpOutboundMailProvider<'a>),
+    Unsupported,
 }
 
 impl OutboundMailProviderPort for ClientMailProvider<'_> {
@@ -20,6 +21,7 @@ impl OutboundMailProviderPort for ClientMailProvider<'_> {
         match self {
             Self::Gmail(provider) => provider.send(actor, intent).await,
             Self::Smtp(provider) => provider.send(actor, intent).await,
+            Self::Unsupported => Ok(OutboundMailProviderOutcome::Rejected),
         }
     }
 }
