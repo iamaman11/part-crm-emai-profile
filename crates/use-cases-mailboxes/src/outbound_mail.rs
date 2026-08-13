@@ -194,10 +194,7 @@ where
     }
 }
 
-fn outcome_from_receipt(
-    receipt: OutboundMailIntentReceipt,
-    replayed: bool,
-) -> OutboundMailOutcome {
+fn outcome_from_receipt(receipt: OutboundMailIntentReceipt, replayed: bool) -> OutboundMailOutcome {
     OutboundMailOutcome {
         intent_id: receipt.intent_id().clone(),
         state: receipt.state(),

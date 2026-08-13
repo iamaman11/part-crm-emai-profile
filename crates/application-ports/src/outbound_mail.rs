@@ -1,8 +1,6 @@
 use crate::CommandExecutionEvidence;
 use core::fmt;
-use profile_platform_primitives::{
-    ActorContext, ClientId, MailboxBindingId, OutboxEventId,
-};
+use profile_platform_primitives::{ActorContext, ClientId, MailboxBindingId, OutboxEventId};
 
 const MAX_MAIL_ADDRESS_BYTES: usize = 320;
 const MAX_MAIL_RECIPIENTS: usize = 100;
@@ -18,9 +16,9 @@ impl MailAddress {
         let value = value.into();
         let value = value.trim();
         let valid_bounds = (3..=MAX_MAIL_ADDRESS_BYTES).contains(&value.len());
-        let valid_chars = !value.chars().any(|character| {
-            character.is_control() || character.is_whitespace()
-        });
+        let valid_chars = !value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace());
         let valid_shape = value
             .rsplit_once('@')
             .is_some_and(|(local, domain)| !local.is_empty() && !domain.is_empty());
@@ -102,18 +100,16 @@ pub struct MailBody {
 }
 
 impl MailBody {
-    pub fn new(
-        text: Option<String>,
-        html: Option<String>,
-    ) -> Result<Self, OutboundMailInputError> {
+    pub fn new(text: Option<String>, html: Option<String>) -> Result<Self, OutboundMailInputError> {
         let has_text = text.as_ref().is_some_and(|value| !value.is_empty());
         let has_html = html.as_ref().is_some_and(|value| !value.is_empty());
         if !has_text && !has_html {
             return Err(OutboundMailInputError::BodyRequired);
         }
 
-        let total = text.as_ref().map_or(0, String::len)
-            .saturating_add(html.as_ref().map_or(0, String::len));
+        let text_len = text.as_ref().map_or(0, String::len);
+        let html_len = html.as_ref().map_or(0, String::len);
+        let total = text_len.saturating_add(html_len);
         if total > MAX_OUTBOUND_MAIL_BODY_BYTES {
             return Err(OutboundMailInputError::BodyTooLarge);
         }
@@ -512,14 +508,15 @@ pub trait OutboundMailProviderPort {
 #[cfg(test)]
 mod tests {
     use super::{
-        MailAddress, MailBody, MailRecipients, OutboundMailInputError, OutboundMailIntent,
-        OutboundMailOperation, OutboundMailSourceReference, ProviderMessageReference,
-        MAX_OUTBOUND_MAIL_BODY_BYTES,
+        MAX_OUTBOUND_MAIL_BODY_BYTES, MailAddress, MailBody, MailRecipients,
+        OutboundMailInputError, OutboundMailIntent, OutboundMailOperation,
+        OutboundMailSourceReference, ProviderMessageReference,
     };
     use profile_platform_primitives::{ClientId, MailboxBindingId};
 
     #[test]
-    fn content_inputs_are_bounded_without_debug_surfaces() -> Result<(), Box<dyn std::error::Error>> {
+    fn content_inputs_are_bounded_without_debug_surfaces()
+    -> Result<(), Box<dyn std::error::Error>> {
         assert!(matches!(
             MailAddress::parse("bad address@example.com"),
             Err(OutboundMailInputError::InvalidAddress)
