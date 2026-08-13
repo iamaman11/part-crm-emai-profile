@@ -39,12 +39,14 @@ fn c4_outbound_mail_boundaries_are_permanent_and_retry_safe() {
     assert!(use_case.contains("Err(_) => OutboundMailProviderOutcome::Ambiguous"));
     assert!(use_case.contains("MAX_OUTBOUND_MAIL_DISPATCH_ATTEMPTS: u8 = 3"));
 
-    let adapter = include_str!("d1_outbound_mail_intents.rs");
-    assert!(adapter.contains("OUTBOUND_EVENT_PAYLOAD: &str = \"{}\""));
-    assert!(adapter.contains("mail.outbound_intent_reserved.v1"));
-    assert!(adapter.contains("outbound_mail_dispatch_claims"));
-    assert!(adapter.contains("outbound_mail_dispatch_completions"));
-    assert!(adapter.contains("outbound_mail_ambiguity_marks"));
+    let adapter_facade = include_str!("d1_outbound_mail_intents.rs");
+    assert!(adapter_facade.contains("pub use repository::D1OutboundMailIntentRepository"));
+    let adapter_sql = include_str!("d1_outbound_mail_intents/sql.rs");
+    assert!(adapter_sql.contains("OUTBOUND_EVENT_PAYLOAD: &str = \"{}\""));
+    assert!(adapter_sql.contains("mail.outbound_intent_reserved.v1"));
+    assert!(adapter_sql.contains("outbound_mail_dispatch_claims"));
+    assert!(adapter_sql.contains("outbound_mail_dispatch_completions"));
+    assert!(adapter_sql.contains("outbound_mail_ambiguity_marks"));
 
     let migration = include_str!("../../../migrations/d1/0026_outbound_mail_intents.sql");
     for required in [
