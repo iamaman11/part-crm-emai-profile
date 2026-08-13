@@ -11,5 +11,8 @@ identity-access-domain.workspace = true
 mailbox-domain.workspace = true
 profile-platform-primitives.workspace = true
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
 [lints]
 workspace = true

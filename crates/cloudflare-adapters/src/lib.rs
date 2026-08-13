@@ -71,6 +71,8 @@ pub mod microsoft_graph_mail_query;
 pub mod microsoft_graph_oauth_provisioning;
 #[cfg(test)]
 mod microsoft_graph_translation_evidence;
+#[cfg(test)]
+mod outbound_mail_evidence;
 pub mod profile_coordinator;
 pub mod r2_generation_objects;
 pub mod r2_generation_upload_capability;

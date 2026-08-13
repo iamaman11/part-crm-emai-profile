@@ -23,7 +23,10 @@ WHERE client.tenant_id = ?
   AND client.status = 'ACTIVE'
   AND binding.status = 'ACTIVE'
   AND binding.execution_status = 'ACTIVE'
-  AND binding.provider IN ('GMAIL_API', 'IMAP', 'MICROSOFT_GRAPH')
+  AND (
+      binding.provider IN ('GMAIL_API', 'IMAP')
+      OR binding.provider = 'MICROSOFT_GRAPH'
+  )
   AND EXISTS (
       SELECT 1
       FROM memberships AS requester
@@ -131,6 +134,8 @@ mod tests {
         assert!(CLIENT_MAILBOX_ACCESS.contains("requester.role = 'TENANT_OWNER'"));
         assert!(CLIENT_MAILBOX_ACCESS.contains("requester.role = 'MEMBER'"));
         assert!(CLIENT_MAILBOX_ACCESS.contains("client_grants AS grant_row"));
+        assert!(CLIENT_MAILBOX_ACCESS.contains("binding.provider IN ('GMAIL_API', 'IMAP')"));
+        assert!(CLIENT_MAILBOX_ACCESS.contains("OR binding.provider = 'MICROSOFT_GRAPH'"));
         assert!(!CLIENT_MAILBOX_ACCESS.contains("BROWSER_FALLBACK"));
     }
 }
