@@ -1,7 +1,7 @@
 use application_ports::query::{QueryCursor, QueryPortError, QueryPortErrorClass};
 use mailbox_domain::MailboxBinding;
 use serde::Deserialize;
-use wasm_bindgen::JsValue;
+use worker::wasm_bindgen::JsValue;
 use worker::{Env, Headers, Method, RequestInit};
 use zeroize::Zeroize;
 
