@@ -13,9 +13,7 @@ use application_ports::query_mail_provider::{
     SearchClientMailboxMessagesRequest,
 };
 use mailbox_domain::{MailboxBinding, MailboxProvider};
-use profile_platform_primitives::{
-    ActorContext, ClientId, MailboxBindingId, TenantScope,
-};
+use profile_platform_primitives::{ActorContext, ClientId, MailboxBindingId, TenantScope};
 use worker::Env;
 use worker::d1::D1Database;
 
