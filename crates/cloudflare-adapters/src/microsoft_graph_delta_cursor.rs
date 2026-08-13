@@ -9,8 +9,7 @@ use crate::cloud_mailbox_secrets::{MAILBOX_SECRET_RESOLVER_BINDING, provider_err
 
 const CURSOR_STORE_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/cursors/store";
-const CURSOR_RESOLVE_ENDPOINT: &str =
-    "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/cursors/resolve";
+const CURSOR_RESOLVE_ENDPOINT: &str = "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/cursors/resolve";
 const DELTA_CURSOR_PREFIX: &str = "graph-delta:";
 const MAX_CURSOR_HANDLE_LENGTH: usize = 192;
 const MAX_PROVIDER_CURSOR_LENGTH: usize = 16 * 1024;
@@ -62,9 +61,9 @@ pub async fn resolve_delta_cursor(
         200 => {}
         400 | 404 | 410 => return Err(MicrosoftGraphDeltaCursorError::Stale),
         status => {
-            return Err(MicrosoftGraphDeltaCursorError::Provider(
-                status_error(status),
-            ));
+            return Err(MicrosoftGraphDeltaCursorError::Provider(status_error(
+                status,
+            )));
         }
     }
     let document: ResolveCursorDocument = parse_json(response)
@@ -127,9 +126,7 @@ fn map_store_status(status: u16) -> Result<(), MailboxProviderPortError> {
 
 fn status_error(status: u16) -> MailboxProviderPortError {
     match status {
-        408 | 425 | 500..=599 => {
-            provider_error(MailboxProviderFailureClass::TransientDependency)
-        }
+        408 | 425 | 500..=599 => provider_error(MailboxProviderFailureClass::TransientDependency),
         429 => provider_error(MailboxProviderFailureClass::RateLimited),
         401 | 403 | 409 | 422 => provider_error(MailboxProviderFailureClass::ProviderPolicy),
         _ => MailboxProviderPortError::IntegrityFailure,

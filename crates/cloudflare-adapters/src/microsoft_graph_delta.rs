@@ -1,6 +1,4 @@
-use application_ports::mailboxes::{
-    MailboxObservation, MailboxProviderPortError,
-};
+use application_ports::mailboxes::{MailboxObservation, MailboxProviderPortError};
 use mailbox_domain::{
     MailboxBinding, MailboxJob, MailboxProviderFailure, MailboxProviderFailureClass,
 };
@@ -10,9 +8,7 @@ use serde_json::Value;
 use worker::{Date, Fetch, Headers, Method, Request, RequestInit};
 use zeroize::Zeroize;
 
-use crate::cloud_mailbox_secrets::{
-    MicrosoftGraphCredential, refresh_microsoft_graph_credential,
-};
+use crate::cloud_mailbox_secrets::{MicrosoftGraphCredential, refresh_microsoft_graph_credential};
 use crate::microsoft_graph_authorization::D1MicrosoftGraphAuthorization;
 use crate::microsoft_graph_delta_cursor::{
     MicrosoftGraphDeltaCursorError, resolve_delta_cursor, store_delta_cursor,
@@ -94,8 +90,18 @@ pub async fn check_microsoft_graph_mailbox(
             )
             .map_err(|_| MailboxProviderPortError::IntegrityFailure);
         }
-        401 => return Err(provider_failure(MailboxProviderFailureClass::Authentication, None)),
-        403 => return Err(provider_failure(MailboxProviderFailureClass::ProviderPolicy, None)),
+        401 => {
+            return Err(provider_failure(
+                MailboxProviderFailureClass::Authentication,
+                None,
+            ));
+        }
+        403 => {
+            return Err(provider_failure(
+                MailboxProviderFailureClass::ProviderPolicy,
+                None,
+            ));
+        }
         429 => {
             let retry_at = retry_after_hint(&response, now);
             return Err(provider_failure(
@@ -116,7 +122,12 @@ pub async fn check_microsoft_graph_mailbox(
             ));
         }
         400 => return Err(MailboxProviderPortError::IntegrityFailure),
-        _ => return Err(provider_failure(MailboxProviderFailureClass::Permanent, None)),
+        _ => {
+            return Err(provider_failure(
+                MailboxProviderFailureClass::Permanent,
+                None,
+            ));
+        }
     }
 
     if response_content_length_exceeds(&response, MAX_GRAPH_DELTA_RESPONSE_BYTES)? {
@@ -164,7 +175,9 @@ async fn authorized_graph_get(
     authorization: &D1MicrosoftGraphAuthorization,
     actor: &ActorContext,
 ) -> Result<worker::Response, MailboxProviderPortError> {
-    authorization.recheck_job(actor, binding.binding_id()).await?;
+    authorization
+        .recheck_job(actor, binding.binding_id())
+        .await?;
     let credential = refreshed.as_ref().unwrap_or(initial_credential);
     let mut response = send_graph_get(endpoint, credential.access_token()).await?;
     if response.status_code() != 401 || refreshed.is_some() {
@@ -175,7 +188,9 @@ async fn authorized_graph_get(
         .await
         .map_err(map_refresh_failure)?;
     *refreshed = Some(replacement);
-    authorization.recheck_job(actor, binding.binding_id()).await?;
+    authorization
+        .recheck_job(actor, binding.binding_id())
+        .await?;
     let credential = refreshed
         .as_ref()
         .ok_or(MailboxProviderPortError::IntegrityFailure)?;

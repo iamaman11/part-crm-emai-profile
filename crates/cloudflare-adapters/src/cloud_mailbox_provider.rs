@@ -8,8 +8,8 @@ use application_ports::mailboxes::{
 };
 use mailbox_domain::{MailboxBinding, MailboxJob, MailboxProvider};
 use profile_platform_primitives::ActorContext;
-use worker::d1::D1Database;
 use worker::Env;
+use worker::d1::D1Database;
 
 pub struct CloudMailboxProviderRouter<'a> {
     env: &'a Env,
