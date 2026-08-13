@@ -16,14 +16,12 @@ const START_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/oauth/start";
 const INSPECT_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/oauth/inspect";
-const COMPLETE_ENDPOINT: &str =
-    "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/oauth/complete";
+const COMPLETE_ENDPOINT: &str = "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/oauth/complete";
 const DENY_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/oauth/deny";
 const DISCARD_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/discard";
-const GRAPH_DELEGATED_SCOPES: &str =
-    "openid offline_access https://graph.microsoft.com/Mail.Read";
+const GRAPH_DELEGATED_SCOPES: &str = "openid offline_access https://graph.microsoft.com/Mail.Read";
 const PKCE_METHOD: &str = "S256";
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
 
@@ -176,7 +174,9 @@ fn common_headers() -> Result<Headers, MicrosoftGraphOAuthProvisioningError> {
     Ok(headers)
 }
 
-fn base_actor_headers(actor: &ActorContext) -> Result<Headers, MicrosoftGraphOAuthProvisioningError> {
+fn base_actor_headers(
+    actor: &ActorContext,
+) -> Result<Headers, MicrosoftGraphOAuthProvisioningError> {
     let headers = common_headers()?;
     set_header(
         &headers,
@@ -205,11 +205,11 @@ fn map_status(
         410 => Err(MicrosoftGraphOAuthProvisioningError::new(
             MicrosoftGraphOAuthProvisioningErrorClass::Expired,
         )),
-        409 | 412 if matches!(operation, StartStatus::Callback) => Err(
-            MicrosoftGraphOAuthProvisioningError::new(
+        409 | 412 if matches!(operation, StartStatus::Callback) => {
+            Err(MicrosoftGraphOAuthProvisioningError::new(
                 MicrosoftGraphOAuthProvisioningErrorClass::ReplayRejected,
-            ),
-        ),
+            ))
+        }
         409 | 412 => Err(MicrosoftGraphOAuthProvisioningError::new(
             MicrosoftGraphOAuthProvisioningErrorClass::Conflict,
         )),
