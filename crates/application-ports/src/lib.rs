@@ -24,6 +24,7 @@ pub mod mailbox_jobs;
 pub mod mailbox_onboarding;
 pub mod mailbox_scheduling;
 pub mod mailboxes;
+pub mod microsoft_graph_oauth_onboarding;
 pub mod notification_realtime;
 pub mod notification_realtime_audience;
 pub mod notifications;

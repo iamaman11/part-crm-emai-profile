@@ -15,6 +15,7 @@ mod mailbox_client_association_composition;
 mod mailbox_client_associations;
 mod mailbox_gmail_oauth;
 mod mailbox_jobs;
+mod mailbox_microsoft_graph_oauth;
 mod mailbox_queue_evidence;
 mod mailbox_scheduling;
 mod mailbox_standards_onboarding;
@@ -104,6 +105,11 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
             if mailbox_gmail_oauth::is_gmail_oauth_path(&path) =>
         {
             mailbox_gmail_oauth::dispatch(&mut request, &env).await
+        }
+        RouteClass::MailboxBindingResourceApi
+            if mailbox_microsoft_graph_oauth::is_microsoft_graph_oauth_path(&path) =>
+        {
+            mailbox_microsoft_graph_oauth::dispatch(&mut request, &env).await
         }
         RouteClass::MailboxBindingResourceApi
             if mailbox_client_associations::is_client_association_path(&path) =>

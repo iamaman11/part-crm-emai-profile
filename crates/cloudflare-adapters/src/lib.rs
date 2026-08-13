@@ -60,6 +60,7 @@ mod imap_session;
 pub mod integration_event_queue;
 pub mod mailbox_job_queue;
 pub mod mailbox_provider;
+pub mod microsoft_graph_oauth_provisioning;
 pub mod profile_coordinator;
 pub mod r2_generation_objects;
 pub mod r2_generation_upload_capability;
