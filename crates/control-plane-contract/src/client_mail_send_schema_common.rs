@@ -12,3 +12,11 @@ pub(crate) fn path_parameter(name: &str) -> Value {
         "schema": {"type": "string", "minLength": 8, "maxLength": 96}
     })
 }
+
+pub(crate) fn address_array() -> Value {
+    json!({
+        "type": "array",
+        "maxItems": 100,
+        "items": {"type": "string", "minLength": 3, "maxLength": 320}
+    })
+}
