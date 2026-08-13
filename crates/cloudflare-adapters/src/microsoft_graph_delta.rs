@@ -226,6 +226,15 @@ async fn send_graph_get(
 fn map_refresh_failure(error: MailboxProviderPortError) -> MailboxProviderPortError {
     match error {
         MailboxProviderPortError::IntegrityFailure => MailboxProviderPortError::IntegrityFailure,
+        MailboxProviderPortError::Failure(failure)
+            if matches!(
+                failure.class(),
+                MailboxProviderFailureClass::TransientDependency
+                    | MailboxProviderFailureClass::RateLimited
+            ) =>
+        {
+            MailboxProviderPortError::Failure(failure)
+        }
         MailboxProviderPortError::Failure(_) => {
             provider_failure(MailboxProviderFailureClass::Authentication, None)
         }
