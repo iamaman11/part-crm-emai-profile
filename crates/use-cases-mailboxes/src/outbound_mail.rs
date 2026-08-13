@@ -127,7 +127,7 @@ where
             let receipt = store
                 .mark_ambiguous(actor, evidence)
                 .await
-                .unwrap_or(receipt);
+                .map_err(map_store_error)?;
             Ok(outcome_from_receipt(receipt, true))
         }
         OutboundMailIntentState::Sent
@@ -153,19 +153,19 @@ where
         .await
         .map_err(map_store_error)?;
 
-    let attempt = match claim {
-        OutboundMailClaimDecision::Claimed { attempt } => attempt,
+    match claim {
+        OutboundMailClaimDecision::Claimed { .. } => {}
         OutboundMailClaimDecision::Existing(receipt) => {
             if receipt.state() == OutboundMailIntentState::Dispatching {
                 let receipt = store
                     .mark_ambiguous(actor, evidence)
                     .await
-                    .unwrap_or(receipt);
+                    .map_err(map_store_error)?;
                 return Ok(outcome_from_receipt(receipt, true));
             }
             return Ok(outcome_from_receipt(receipt, true));
         }
-    };
+    }
 
     let provider_outcome = match provider.send(actor, intent).await {
         Ok(outcome) => outcome,
@@ -178,16 +178,11 @@ where
     {
         Ok(receipt) => Ok(outcome_from_receipt(receipt, replayed)),
         Err(_) => {
-            let fallback = store.mark_ambiguous(actor, evidence).await.ok();
-            Ok(fallback.map_or_else(
-                || OutboundMailOutcome {
-                    intent_id: evidence.outbox_event_id().clone(),
-                    state: OutboundMailIntentState::Ambiguous,
-                    attempt_count: attempt,
-                    replayed,
-                },
-                |receipt| outcome_from_receipt(receipt, replayed),
-            ))
+            let receipt = store
+                .mark_ambiguous(actor, evidence)
+                .await
+                .map_err(map_store_error)?;
+            Ok(outcome_from_receipt(receipt, replayed))
         }
     }
 }
