@@ -1,4 +1,4 @@
-use crate::composition::mailbox_job_application;
+use crate::composition::{mailbox_job_application, microsoft_graph_mailbox_authorization};
 use crate::mailbox_queue_evidence::actor_and_evidence;
 use cloudflare_adapters::cloud_mailbox_provider::CloudMailboxProviderRouter;
 use cloudflare_adapters::d1_mailbox_scheduling::D1MailboxSchedulingRepository;
@@ -51,9 +51,8 @@ pub async fn consume_one<T>(
     let application = mailbox_job_application(env)?;
     let scheduling =
         D1MailboxSchedulingRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
-    let mut provider = CloudMailboxProviderRouter::new(
-        env,
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
+    let mut provider = CloudMailboxProviderRouter::new(env).with_microsoft_graph_authorization(
+        microsoft_graph_mailbox_authorization(env)?,
         &actor,
     );
     let request = ProcessScheduledMailboxJobRequest::new(

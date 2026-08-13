@@ -9,26 +9,32 @@ use application_ports::mailboxes::{
 use mailbox_domain::{MailboxBinding, MailboxJob, MailboxProvider};
 use profile_platform_primitives::ActorContext;
 use worker::Env;
-use worker::d1::D1Database;
 
 pub struct CloudMailboxProviderRouter<'a> {
     env: &'a Env,
-    graph_authorization: D1MicrosoftGraphAuthorization,
-    actor: &'a ActorContext,
+    graph_authorization: Option<D1MicrosoftGraphAuthorization>,
+    actor: Option<&'a ActorContext>,
 }
 
 impl<'a> CloudMailboxProviderRouter<'a> {
     #[must_use]
-    pub const fn new(
-        env: &'a Env,
-        authorization_database: D1Database,
-        actor: &'a ActorContext,
-    ) -> Self {
+    pub const fn new(env: &'a Env) -> Self {
         Self {
             env,
-            graph_authorization: D1MicrosoftGraphAuthorization::new(authorization_database),
-            actor,
+            graph_authorization: None,
+            actor: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_microsoft_graph_authorization(
+        mut self,
+        authorization: D1MicrosoftGraphAuthorization,
+        actor: &'a ActorContext,
+    ) -> Self {
+        self.graph_authorization = Some(authorization);
+        self.actor = Some(actor);
+        self
     }
 }
 
@@ -59,13 +65,20 @@ impl MailboxProviderPort for CloudMailboxProviderRouter<'_> {
                     MailboxProvider::MicrosoftGraph,
                     MailboxCredential::MicrosoftGraph(credential),
                 ) => {
+                    let authorization = self
+                        .graph_authorization
+                        .as_ref()
+                        .ok_or(MailboxProviderPortError::IntegrityFailure)?;
+                    let actor = self
+                        .actor
+                        .ok_or(MailboxProviderPortError::IntegrityFailure)?;
                     check_microsoft_graph_mailbox(
                         self.env,
                         binding,
                         job,
                         &credential,
-                        &self.graph_authorization,
-                        self.actor,
+                        authorization,
+                        actor,
                     )
                     .await
                 }

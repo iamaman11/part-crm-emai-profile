@@ -31,6 +31,7 @@ use cloudflare_adapters::d1_mailbox_bindings::D1MailboxBindingApplicationReposit
 use cloudflare_adapters::d1_mailbox_jobs::D1MailboxJobApplicationRepository;
 use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
 use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
+use cloudflare_adapters::microsoft_graph_authorization::D1MicrosoftGraphAuthorization;
 use cloudflare_adapters::r2_generation_objects::R2GenerationObjects;
 use cloudflare_adapters::r2_generation_upload_capability::{
     R2GenerationUploadCapabilitySigner, R2SigV4Credentials,
@@ -171,6 +172,14 @@ pub fn browser_mailbox_execution_application(
 pub fn mailbox_job_application(env: &Env) -> Result<D1MailboxJobApplicationRepository> {
     Ok(D1MailboxJobApplicationRepository::new(
         env.d1(D1_CATALOG_BINDING)?,
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
+}
+
+pub fn microsoft_graph_mailbox_authorization(
+    env: &Env,
+) -> Result<D1MicrosoftGraphAuthorization> {
+    Ok(D1MicrosoftGraphAuthorization::new(
         env.d1(D1_CATALOG_BINDING)?,
     ))
 }
