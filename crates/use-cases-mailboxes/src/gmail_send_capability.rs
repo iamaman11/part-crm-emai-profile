@@ -176,7 +176,9 @@ const fn map_provisioning_error(
     error: GmailSendAuthorizationError,
 ) -> GmailSendAuthorizationOperationError {
     match error.class() {
-        GmailSendAuthorizationErrorClass::NotFound => GmailSendAuthorizationOperationError::NotFound,
+        GmailSendAuthorizationErrorClass::NotFound => {
+            GmailSendAuthorizationOperationError::NotFound
+        }
         GmailSendAuthorizationErrorClass::Expired => GmailSendAuthorizationOperationError::Expired,
         GmailSendAuthorizationErrorClass::ReplayRejected => {
             GmailSendAuthorizationOperationError::ReplayRejected
@@ -184,7 +186,9 @@ const fn map_provisioning_error(
         GmailSendAuthorizationErrorClass::ProviderDenied => {
             GmailSendAuthorizationOperationError::ProviderDenied
         }
-        GmailSendAuthorizationErrorClass::Conflict => GmailSendAuthorizationOperationError::Conflict,
+        GmailSendAuthorizationErrorClass::Conflict => {
+            GmailSendAuthorizationOperationError::Conflict
+        }
         GmailSendAuthorizationErrorClass::DependencyUnavailable => {
             GmailSendAuthorizationOperationError::DependencyUnavailable
         }
