@@ -4,7 +4,7 @@ pub mod browser_execution;
 pub mod client_association_queries;
 pub mod client_associations;
 pub mod gmail_oauth_onboarding;
-pub mod gmail_send_authorization;
+pub mod gmail_send_capability;
 pub mod mailbox_jobs;
 pub mod mailbox_onboarding;
 pub mod mailboxes;
