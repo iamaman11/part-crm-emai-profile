@@ -1,4 +1,4 @@
-#[allow(dead_code)]
+#[allow(dead_code, clippy::expect_used)]
 #[path = "../client_mail_send_api.rs"]
 mod client_mail_send_api;
 
