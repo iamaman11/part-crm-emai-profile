@@ -219,11 +219,7 @@ mod tests {
             &document["paths"]["/api/v1/tenants/{tenantId}/clients/{clientId}/mail/send"]["post"];
         let parameters = operation["parameters"].as_array().expect("path parameters");
         assert_eq!(parameters.len(), 2);
-        assert!(
-            parameters
-                .iter()
-                .all(|parameter| parameter["in"] == "path")
-        );
+        assert!(parameters.iter().all(|parameter| parameter["in"] == "path"));
         assert!(operation["requestBody"].is_object());
     }
 }
