@@ -25,13 +25,8 @@ pub(super) async fn is_accessible(
         Err(_) => return Ok(false),
     };
     let authorization = D1QueryRepository::new(catalog(env)?);
-    let provider = CloudMailboxQueryAdapter::new(
-        env,
-        catalog(env)?,
-        catalog(env)?,
-        actor,
-        client_id,
-    );
+    let provider =
+        CloudMailboxQueryAdapter::new(env, catalog(env)?, catalog(env)?, actor, client_id);
     Ok(matches!(
         get_client_mailbox_message(
             actor,
