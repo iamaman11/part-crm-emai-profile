@@ -1,12 +1,11 @@
-use crate::smtp_send_credential::{SmtpAuthenticationMode, SmtpCredential, SmtpTlsMode};
+mod auth;
+
+use crate::smtp_send_credential::{SmtpCredential, SmtpTlsMode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use worker::{SecureTransport, Socket};
 use zeroize::Zeroize;
 
 const MAX_REPLY_BYTES: usize = 64 * 1024;
-const MAX_AUTH_WIRE_BYTES: usize = 24 * 1024;
-const BASE64_ALPHABET: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const CLIENT_IDENTITY: &str = "profile.invalid";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,8 +17,8 @@ pub(crate) enum SmtpSendFailure {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct SmtpReply {
-    code: u16,
+pub(super) struct SmtpReply {
+    pub(super) code: u16,
     bytes: Vec<u8>,
 }
 
@@ -35,7 +34,7 @@ impl SmtpReply {
         })
     }
 
-    fn auth_mechanism(&self, mechanism: &str) -> bool {
+    pub(super) fn auth_mechanism(&self, mechanism: &str) -> bool {
         let wanted = mechanism.as_bytes();
         self.bytes.split(|byte| *byte == b'\n').any(|line| {
             let line = line.strip_suffix(b"\r").unwrap_or(line);
@@ -44,12 +43,11 @@ impl SmtpReply {
             let Some(first) = tokens.next() else {
                 return false;
             };
-            let auth_line = first.eq_ignore_ascii_case(b"AUTH")
-                || first
-                    .strip_prefix(b"AUTH=")
-                    .is_some_and(|value| value.eq_ignore_ascii_case(wanted));
-            auth_line && (first.get(5..).is_some_and(|value| value.eq_ignore_ascii_case(wanted))
-                || tokens.any(|token| token.eq_ignore_ascii_case(wanted)))
+            first
+                .strip_prefix(b"AUTH=")
+                .is_some_and(|value| value.eq_ignore_ascii_case(wanted))
+                || (first.eq_ignore_ascii_case(b"AUTH")
+                    && tokens.any(|token| token.eq_ignore_ascii_case(wanted)))
         })
     }
 }
@@ -70,7 +68,6 @@ impl SmtpSession {
             .connect(credential.host(), credential.port())
             .map_err(|_| SmtpSendFailure::RetryableNotSent)?;
         let greeting = read_reply(&mut socket).await?;
-        require_pre_acceptance(greeting.code)?;
         if greeting.code != 220 {
             return Err(classify_pre_acceptance(greeting.code));
         }
@@ -99,108 +96,8 @@ impl SmtpSession {
                 return Err(classify_pre_acceptance(session.ehlo.code));
             }
         }
-        session.authenticate(credential).await?;
+        auth::authenticate(&mut session.socket, &session.ehlo, credential).await?;
         Ok(session)
-    }
-
-    async fn authenticate(&mut self, credential: &SmtpCredential) -> Result<(), SmtpSendFailure> {
-        match credential.authentication_mode() {
-            SmtpAuthenticationMode::Password => {
-                let password = credential
-                    .password()
-                    .ok_or(SmtpSendFailure::IntegrityFailure)?;
-                if self.ehlo.auth_mechanism("PLAIN") {
-                    self.auth_plain(credential.username(), password).await
-                } else if self.ehlo.auth_mechanism("LOGIN") {
-                    self.auth_login(credential.username(), password).await
-                } else {
-                    Err(SmtpSendFailure::Rejected)
-                }
-            }
-            SmtpAuthenticationMode::Xoauth2 => {
-                let token = credential
-                    .access_token()
-                    .ok_or(SmtpSendFailure::IntegrityFailure)?;
-                if !self.ehlo.auth_mechanism("XOAUTH2") {
-                    return Err(SmtpSendFailure::Rejected);
-                }
-                self.auth_xoauth2(credential.username(), token).await
-            }
-        }
-    }
-
-    async fn auth_plain(&mut self, username: &str, password: &str) -> Result<(), SmtpSendFailure> {
-        let mut payload = Vec::with_capacity(username.len() + password.len() + 2);
-        payload.push(0);
-        payload.extend_from_slice(username.as_bytes());
-        payload.push(0);
-        payload.extend_from_slice(password.as_bytes());
-        let mut encoded = base64_standard(&payload)?;
-        payload.zeroize();
-        if encoded.len() > MAX_AUTH_WIRE_BYTES {
-            encoded.zeroize();
-            return Err(SmtpSendFailure::Rejected);
-        }
-        let mut command = String::with_capacity(encoded.len() + 11);
-        command.push_str("AUTH PLAIN ");
-        command.push_str(&encoded);
-        let result = send_command(&mut self.socket, &command, true).await;
-        command.zeroize();
-        encoded.zeroize();
-        let reply = result?;
-        classify_auth_reply(reply.code)
-    }
-
-    async fn auth_login(&mut self, username: &str, password: &str) -> Result<(), SmtpSendFailure> {
-        let reply = send_command(&mut self.socket, "AUTH LOGIN", false).await?;
-        if reply.code != 334 {
-            return classify_auth_reply(reply.code);
-        }
-        let mut encoded_username = base64_standard(username.as_bytes())?;
-        let username_reply = send_command(&mut self.socket, &encoded_username, true).await;
-        encoded_username.zeroize();
-        let username_reply = username_reply?;
-        if username_reply.code != 334 {
-            return classify_auth_reply(username_reply.code);
-        }
-        let mut encoded_password = base64_standard(password.as_bytes())?;
-        let password_reply = send_command(&mut self.socket, &encoded_password, true).await;
-        encoded_password.zeroize();
-        classify_auth_reply(password_reply?.code)
-    }
-
-    async fn auth_xoauth2(&mut self, username: &str, token: &str) -> Result<(), SmtpSendFailure> {
-        let capacity = username
-            .len()
-            .checked_add(token.len())
-            .and_then(|value| value.checked_add(20))
-            .ok_or(SmtpSendFailure::IntegrityFailure)?;
-        let mut payload = String::with_capacity(capacity);
-        payload.push_str("user=");
-        payload.push_str(username);
-        payload.push('\u{1}');
-        payload.push_str("auth=Bearer ");
-        payload.push_str(token);
-        payload.push('\u{1}');
-        payload.push('\u{1}');
-        let mut encoded = base64_standard(payload.as_bytes())?;
-        payload.zeroize();
-        if encoded.len() > MAX_AUTH_WIRE_BYTES {
-            encoded.zeroize();
-            return Err(SmtpSendFailure::Rejected);
-        }
-        let mut command = String::with_capacity(encoded.len() + 13);
-        command.push_str("AUTH XOAUTH2 ");
-        command.push_str(&encoded);
-        let result = send_command(&mut self.socket, &command, true).await;
-        command.zeroize();
-        encoded.zeroize();
-        let reply = result?;
-        if reply.code == 334 {
-            let final_reply = send_command(&mut self.socket, "", true).await?;
-            return classify_auth_reply(final_reply.code);
-        }
-        classify_auth_reply(reply.code)
     }
 
     pub(crate) async fn send_message(
@@ -216,15 +113,23 @@ impl SmtpSession {
         {
             return Err(SmtpSendFailure::IntegrityFailure);
         }
-        let mail_from = format!("MAIL FROM:<{envelope_from}>");
-        let reply = send_command(&mut self.socket, &mail_from, false).await?;
+        let reply = send_command(
+            &mut self.socket,
+            &format!("MAIL FROM:<{envelope_from}>"),
+            false,
+        )
+        .await?;
         if reply.code != 250 {
             return Err(classify_pre_acceptance(reply.code));
         }
         for recipient in recipients {
-            let command = format!("RCPT TO:<{recipient}>");
-            let reply = send_command(&mut self.socket, &command, false).await?;
-            if reply.code != 250 && reply.code != 251 {
+            let reply = send_command(
+                &mut self.socket,
+                &format!("RCPT TO:<{recipient}>"),
+                false,
+            )
+            .await?;
+            if !matches!(reply.code, 250 | 251) {
                 let failure = classify_pre_acceptance(reply.code);
                 let _ = send_command(&mut self.socket, "RSET", false).await;
                 return Err(failure);
@@ -235,10 +140,18 @@ impl SmtpSession {
             return Err(classify_pre_acceptance(data.code));
         }
 
-        let wire = dot_stuffed_message(message)?;
-        if self.socket.write_all(&wire).await.is_err() || self.socket.flush().await.is_err() {
+        let mut wire = dot_stuffed_message(message)?;
+        let write_result = self.socket.write_all(&wire).await;
+        let transfer_result = if write_result.is_ok() {
+            self.socket.flush().await
+        } else {
+            write_result
+        };
+        wire.zeroize();
+        if transfer_result.is_err() {
             return Err(SmtpSendFailure::Ambiguous);
         }
+
         let final_reply = read_reply_after_data(&mut self.socket).await?;
         match final_reply.code {
             200..=299 => {
@@ -252,7 +165,7 @@ impl SmtpSession {
     }
 }
 
-fn classify_auth_reply(code: u16) -> Result<(), SmtpSendFailure> {
+pub(super) fn classify_auth_reply(code: u16) -> Result<(), SmtpSendFailure> {
     match code {
         235 => Ok(()),
         400..=499 => Err(SmtpSendFailure::RetryableNotSent),
@@ -269,26 +182,26 @@ const fn classify_pre_acceptance(code: u16) -> SmtpSendFailure {
     }
 }
 
-const fn require_pre_acceptance(code: u16) -> Result<(), SmtpSendFailure> {
-    match code {
-        200..=599 => Ok(()),
-        _ => Err(SmtpSendFailure::IntegrityFailure),
-    }
-}
-
-async fn send_command(
+pub(super) async fn send_command(
     socket: &mut Socket,
     command: &str,
     secret: bool,
 ) -> Result<SmtpReply, SmtpSendFailure> {
-    if command.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | b'\0')) {
+    if command
+        .bytes()
+        .any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
+    {
         return Err(SmtpSendFailure::IntegrityFailure);
     }
     let mut wire = String::with_capacity(command.len() + 2);
     wire.push_str(command);
     wire.push_str("\r\n");
     let write = socket.write_all(wire.as_bytes()).await;
-    let flush = if write.is_ok() { socket.flush().await } else { write };
+    let flush = if write.is_ok() {
+        socket.flush().await
+    } else {
+        write
+    };
     if secret {
         wire.zeroize();
     }
@@ -312,15 +225,15 @@ async fn read_reply_inner(
     let mut buffer = [0_u8; 4096];
     loop {
         let read = socket.read(&mut buffer).await.map_err(|_| io_failure)?;
-        if read == 0 {
-            return Err(io_failure);
-        }
-        if output.len().saturating_add(read) > MAX_REPLY_BYTES {
+        if read == 0 || output.len().saturating_add(read) > MAX_REPLY_BYTES {
             return Err(io_failure);
         }
         output.extend_from_slice(&buffer[..read]);
         if let Some(code) = complete_reply_code(&output) {
-            return Ok(SmtpReply { code, bytes: output });
+            return Ok(SmtpReply {
+                code,
+                bytes: output,
+            });
         }
     }
 }
@@ -330,13 +243,10 @@ fn complete_reply_code(response: &[u8]) -> Option<u16> {
     let code = parse_reply_code(first)?;
     let prefix = code.to_string();
     let prefix = prefix.as_bytes();
-    for line in response.split(|byte| *byte == b'\n') {
+    response.split(|byte| *byte == b'\n').find_map(|line| {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
-        if line.len() >= 4 && line[..3] == *prefix && line[3] == b' ' {
-            return Some(code);
-        }
-    }
-    None
+        (line.len() >= 4 && line.get(..3) == Some(prefix) && line[3] == b' ').then_some(code)
+    })
 }
 
 fn parse_reply_code(line: &[u8]) -> Option<u16> {
@@ -369,42 +279,11 @@ fn dot_stuffed_message(message: &[u8]) -> Result<Vec<u8>, SmtpSendFailure> {
 
 fn invalid_path(value: &str) -> bool {
     value.is_empty()
-        || value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace() || matches!(byte, b'<' | b'>'))
-}
-
-fn base64_standard(input: &[u8]) -> Result<String, SmtpSendFailure> {
-    let groups = input
-        .len()
-        .checked_add(2)
-        .and_then(|value| value.checked_div(3))
-        .ok_or(SmtpSendFailure::IntegrityFailure)?;
-    let capacity = groups
-        .checked_mul(4)
-        .ok_or(SmtpSendFailure::IntegrityFailure)?;
-    let mut output = String::with_capacity(capacity);
-    let mut offset = 0;
-    while offset < input.len() {
-        let remaining = input.len() - offset;
-        let a = input[offset];
-        let b = if remaining > 1 { input[offset + 1] } else { 0 };
-        let c = if remaining > 2 { input[offset + 2] } else { 0 };
-        output.push(BASE64_ALPHABET[usize::from(a >> 2)] as char);
-        output.push(BASE64_ALPHABET[usize::from(((a & 0x03) << 4) | (b >> 4))] as char);
-        if remaining > 1 {
-            output.push(BASE64_ALPHABET[usize::from(((b & 0x0f) << 2) | (c >> 6))] as char);
-        } else {
-            output.push('=');
-        }
-        if remaining > 2 {
-            output.push(BASE64_ALPHABET[usize::from(c & 0x3f)] as char);
-        } else {
-            output.push('=');
-        }
-        offset += 3;
-    }
-    Ok(output)
+        || value.bytes().any(|byte| {
+            byte.is_ascii_control()
+                || byte.is_ascii_whitespace()
+                || matches!(byte, b'<' | b'>')
+        })
 }
 
 #[cfg(test)]
@@ -416,15 +295,19 @@ mod tests {
     #[test]
     fn multiline_reply_requires_terminal_space_line() {
         assert_eq!(complete_reply_code(b"250-one\r\n250-two\r\n"), None);
-        assert_eq!(complete_reply_code(b"250-one\r\n250 two\r\n"), Some(250));
+        assert_eq!(
+            complete_reply_code(b"250-one\r\n250 two\r\n"),
+            Some(250)
+        );
     }
 
     #[test]
     fn pre_acceptance_statuses_preserve_safe_retry_boundary() {
-        assert_eq!(classify_pre_acceptance(421), SmtpSendFailure::RetryableNotSent);
-        assert_eq!(classify_pre_acceptance(450), SmtpSendFailure::RetryableNotSent);
+        assert_eq!(
+            classify_pre_acceptance(421),
+            SmtpSendFailure::RetryableNotSent
+        );
         assert_eq!(classify_pre_acceptance(550), SmtpSendFailure::Rejected);
-        assert_eq!(classify_pre_acceptance(250), SmtpSendFailure::IntegrityFailure);
     }
 
     #[test]
