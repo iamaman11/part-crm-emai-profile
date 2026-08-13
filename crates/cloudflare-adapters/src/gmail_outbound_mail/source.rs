@@ -22,6 +22,14 @@ pub(super) enum PreparationFailure {
     Rejected,
 }
 
+impl core::fmt::Display for PreparationFailure {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("Gmail outbound message preparation failed")
+    }
+}
+
+impl std::error::Error for PreparationFailure {}
+
 pub(super) struct GmailMessageContext {
     pub(super) from: MailAddress,
     pub(super) recipients: MailRecipients,
@@ -207,7 +215,7 @@ async fn gmail_json_get(
         200 => {}
         404 if not_found_is_none => return Ok(None),
         401 | 403 => return Err(PreparationFailure::ReauthRequired),
-        408 | 425 | 429 | 500..=599 => return Err(PreparationFailure::RetryableNotSent),
+        408 | 425 | 429 | 500..=59I => return Err(PreparationFailure::RetryableNotSent),
         _ => return Err(PreparationFailure::Rejected),
     }
     if response_content_length_exceeds(&response, maximum_bytes)? {
@@ -387,19 +395,13 @@ fn push_percent_encoded(output: &mut String, value: &str) {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct GmailProfile {
     email_address: String,
-    #[serde(default)]
-    messages_total: u64,
-    #[serde(default)]
-    threads_total: u64,
-    #[serde(default)]
-    history_id: String,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct SourceMetadata {
     id: String,
     thread_id: String,
@@ -424,14 +426,12 @@ impl SourceMetadata {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SourcePayload {
     #[serde(default)]
     headers: Vec<SourceHeader>,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SourceHeader {
     name: String,
     value: String,
@@ -442,21 +442,26 @@ mod tests {
     use super::{PreparationFailure, parse_address_list, parse_gmail_reference};
     use application_ports::outbound_mail::ProviderMessageReference;
 
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
     #[test]
-    fn provider_reference_is_exact_and_bounded() -> Result<(), Box<dyn std::error::Error>> {
+    fn provider_reference_is_exact_and_bounded() -> TestResult {
         let reference = ProviderMessageReference::parse("gmail:abc123")?;
         assert_eq!(parse_gmail_reference(&reference), Ok("abc123"));
         let foreign = ProviderMessageReference::parse("graph:abc123")?;
-        assert_eq!(parse_gmail_reference(&foreign), Err(PreparationFailure::Rejected));
+        assert_eq!(
+            parse_gmail_reference(&foreign),
+            Err(PreparationFailure::Rejected)
+        );
         Ok(())
     }
 
     #[test]
-    fn address_parser_accepts_common_display_names_and_rejects_injection() {
-        let parsed = parse_address_list("Alice <alice@example.com>, bob@example.com")
-            .expect("valid fixture");
+    fn address_parser_accepts_common_display_names_and_rejects_controls() -> TestResult {
+        let parsed = parse_address_list("Alice <alice@example.com>, bob@example.com")?;
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].as_str(), "alice@example.com");
-        assert!(parse_address_list("alice@example.com\r\nBcc: x@example.com").is_err());
+        assert!(parse_address_list("alice@example.com\r\nx@example.com").is_err());
+        Ok(())
     }
 }
