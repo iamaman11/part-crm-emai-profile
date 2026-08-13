@@ -79,6 +79,9 @@ mod outbound_mail_evidence;
 pub mod profile_coordinator;
 pub mod r2_generation_objects;
 pub mod r2_generation_upload_capability;
+pub mod smtp_outbound_mail;
+mod smtp_send_credential;
+mod smtp_session;
 pub mod standards_mailbox_provisioning;
 
 pub use mailbox_domain::MailboxProvider;
