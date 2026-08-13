@@ -1,4 +1,6 @@
-use super::{SourceHeaders, parse_addresses, reference_chain, reply_all_recipients, reply_recipients};
+use super::{
+    SourceHeaders, parse_addresses, reference_chain, reply_all_recipients, reply_recipients,
+};
 
 fn source_headers() -> SourceHeaders {
     SourceHeaders {
@@ -37,10 +39,9 @@ fn reply_all_fixture_excludes_sender_and_deduplicates() -> Result<(), Box<dyn st
 
 #[test]
 fn parser_and_reference_chain_are_bounded_and_stable() -> Result<(), Box<dyn std::error::Error>> {
-    let values = parse_addresses(
-        "\"Doe, Jane\" <jane@example.com>, bob@example.com, jane@example.com",
-    )
-    .map_err(|_| std::io::Error::other("parse"))?;
+    let values =
+        parse_addresses("\"Doe, Jane\" <jane@example.com>, bob@example.com, jane@example.com")
+            .map_err(|_| std::io::Error::other("parse"))?;
     assert_eq!(values.len(), 2);
     let references = reference_chain(Some("<root@example.com>"), "<source@example.com>")
         .map_err(|_| std::io::Error::other("refs"))?;
