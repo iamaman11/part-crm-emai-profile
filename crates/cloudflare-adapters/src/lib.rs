@@ -68,6 +68,8 @@ pub mod microsoft_graph_delta_cursor;
 mod microsoft_graph_evidence;
 pub mod microsoft_graph_mail_query;
 pub mod microsoft_graph_oauth_provisioning;
+#[cfg(test)]
+mod microsoft_graph_translation_evidence;
 pub mod profile_coordinator;
 pub mod r2_generation_objects;
 pub mod r2_generation_upload_capability;
