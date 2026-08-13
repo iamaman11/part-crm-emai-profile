@@ -113,8 +113,8 @@ impl SmtpSession {
         {
             return Err(SmtpSendFailure::IntegrityFailure);
         }
-        let requires_smtp_utf8 = !envelope_from.is_ascii()
-            || recipients.iter().any(|recipient| !recipient.is_ascii());
+        let requires_smtp_utf8 =
+            !envelope_from.is_ascii() || recipients.iter().any(|recipient| !recipient.is_ascii());
         if requires_smtp_utf8 && !self.ehlo.capability("SMTPUTF8") {
             return Err(SmtpSendFailure::Rejected);
         }
