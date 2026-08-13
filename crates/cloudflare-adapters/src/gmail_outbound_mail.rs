@@ -2,18 +2,16 @@ mod mime;
 mod source;
 
 use crate::d1_mailboxes::D1MailboxRepository;
-use crate::gmail_send_credential::{
-    GmailSendCredential, GmailSendCredentialError, resolve_gmail_send_credential,
-};
+use crate::gmail_send_credential::{GmailSendCredential, GmailSendCredentialError};
 use application_ports::outbound_mail::{
     OutboundMailIntent, OutboundMailProviderOutcome, OutboundMailProviderPort,
     OutboundMailProviderPortError, ProviderMessageReference,
 };
 use mailbox_domain::MailboxProvider;
-use mime::{encode_base64url_unpadded, render_mime};
+use mime::encode_base64url_unpadded;
 use profile_platform_primitives::ActorContext;
 use serde::{Deserialize, Serialize};
-use source::{PreparationFailure, resolve_message_context};
+use source::PreparationFailure;
 use worker::d1::D1Database;
 use worker::{Env, Fetch, Headers, Method, Request, RequestInit};
 use zeroize::Zeroize;
@@ -59,15 +57,18 @@ impl OutboundMailProviderPort for CloudflareGmailOutboundMailProvider<'_> {
             return Ok(OutboundMailProviderOutcome::Rejected);
         }
 
-        let credential = match resolve_gmail_send_credential(self.env, &binding).await {
-            Ok(credential) => credential,
-            Err(error) => return Ok(credential_failure_outcome(error)),
-        };
-        let context = match resolve_message_context(intent, &credential).await {
+        let credential =
+            match crate::gmail_send_credential::resolve_gmail_send_credential(self.env, &binding)
+                .await
+            {
+                Ok(credential) => credential,
+                Err(error) => return Ok(credential_failure_outcome(error)),
+            };
+        let context = match source::resolve_message_context(intent, &credential).await {
             Ok(context) => context,
             Err(error) => return Ok(preparation_failure_outcome(error)),
         };
-        let mime = match render_mime(&context, intent.body()) {
+        let mime = match mime::render_mime(&context, intent.body()) {
             Ok(mime) => mime,
             Err(error) => return Ok(preparation_failure_outcome(error)),
         };
@@ -83,9 +84,7 @@ const fn credential_failure_outcome(
     error: GmailSendCredentialError,
 ) -> OutboundMailProviderOutcome {
     match error {
-        GmailSendCredentialError::RetryableNotSent => {
-            OutboundMailProviderOutcome::RetryableNotSent
-        }
+        GmailSendCredentialError::RetryableNotSent => OutboundMailProviderOutcome::RetryableNotSent,
         GmailSendCredentialError::ReauthRequired
         | GmailSendCredentialError::Rejected
         | GmailSendCredentialError::IntegrityFailure => OutboundMailProviderOutcome::Rejected,

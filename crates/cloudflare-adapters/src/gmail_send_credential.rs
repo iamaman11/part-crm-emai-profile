@@ -107,11 +107,7 @@ fn resolver_headers(binding: &MailboxBinding) -> Result<Headers, GmailSendCreden
     Ok(headers)
 }
 
-fn set_header(
-    headers: &Headers,
-    name: &str,
-    value: &str,
-) -> Result<(), GmailSendCredentialError> {
+fn set_header(headers: &Headers, name: &str, value: &str) -> Result<(), GmailSendCredentialError> {
     headers
         .set(name, value)
         .map_err(|_| GmailSendCredentialError::IntegrityFailure)

@@ -131,9 +131,7 @@ fn push_encoded_word(output: &mut String, chunk: &str, line_length: &mut usize) 
     word.push_str("=?UTF-8?B?");
     word.push_str(&encoded);
     word.push_str("?=");
-    if *line_length > 9
-        && (*line_length).saturating_add(1 + word.len()) > HEADER_SOFT_LIMIT
-    {
+    if *line_length > 9 && (*line_length).saturating_add(1 + word.len()) > HEADER_SOFT_LIMIT {
         output.push_str("\r\n ");
         *line_length = 1;
     } else if *line_length > 9 {

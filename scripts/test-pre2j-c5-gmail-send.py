@@ -43,12 +43,15 @@ require(credential, "x-profile-mailbox-capability", "credential capability marke
 require(credential, '"SEND"', "send capability")
 
 provider = read("crates/cloudflare-adapters/src/gmail_outbound_mail.rs")
+marker = "impl OutboundMailProviderPort"
+require(provider, marker, "Gmail provider implementation")
+send_impl = provider.split(marker, 1)[1]
 positions = [
-    provider.find("find_binding"),
-    provider.find("resolve_gmail_send_credential"),
-    provider.find("resolve_message_context"),
-    provider.find("render_mime"),
-    provider.find("send_gmail_message"),
+    send_impl.find("find_binding"),
+    send_impl.find("resolve_gmail_send_credential"),
+    send_impl.find("resolve_message_context"),
+    send_impl.find("render_mime"),
+    send_impl.find("send_gmail_message"),
 ]
 if any(position < 0 for position in positions) or positions != sorted(positions):
     raise SystemExit("Gmail provider execution ordering drifted")

@@ -114,8 +114,8 @@ fn build_reply_context(
     }
     remove_address(&mut to, &from);
     remove_duplicates_against(&mut cc, &to);
-    let recipients = MailRecipients::new(to, cc, Vec::new())
-        .map_err(|_| PreparationFailure::Rejected)?;
+    let recipients =
+        MailRecipients::new(to, cc, Vec::new()).map_err(|_| PreparationFailure::Rejected)?;
 
     let references = match metadata.header("References")? {
         Some(existing) if !existing.is_empty() => {
@@ -157,7 +157,8 @@ async fn load_source_metadata(
     credential: &GmailSendCredential,
 ) -> Result<SourceMetadata, PreparationFailure> {
     let message_id = parse_gmail_reference(reference)?;
-    let mut endpoint = String::with_capacity(GMAIL_MESSAGES_ENDPOINT.len() + message_id.len() + 180);
+    let mut endpoint =
+        String::with_capacity(GMAIL_MESSAGES_ENDPOINT.len() + message_id.len() + 180);
     endpoint.push_str(GMAIL_MESSAGES_ENDPOINT);
     endpoint.push('/');
     push_percent_encoded(&mut endpoint, message_id);
@@ -215,7 +216,7 @@ async fn gmail_json_get(
         200 => {}
         404 if not_found_is_none => return Ok(None),
         401 | 403 => return Err(PreparationFailure::ReauthRequired),
-        408 | 425 | 429 | 500..=59I => return Err(PreparationFailure::RetryableNotSent),
+        408 | 425 | 429 | 500..=599 => return Err(PreparationFailure::RetryableNotSent),
         _ => return Err(PreparationFailure::Rejected),
     }
     if response_content_length_exceeds(&response, maximum_bytes)? {
@@ -231,9 +232,7 @@ async fn gmail_json_get(
     Ok(Some(bytes))
 }
 
-fn parse_gmail_reference(
-    reference: &ProviderMessageReference,
-) -> Result<&str, PreparationFailure> {
+fn parse_gmail_reference(reference: &ProviderMessageReference) -> Result<&str, PreparationFailure> {
     let token = reference
         .as_str()
         .strip_prefix(GMAIL_REFERENCE_PREFIX)
@@ -266,7 +265,9 @@ fn validate_reply_reference(value: &str) -> Result<(), PreparationFailure> {
 }
 
 fn parse_address_list(value: &str) -> Result<Vec<MailAddress>, PreparationFailure> {
-    if value.is_empty() || value.len() > MAX_HEADER_VALUE_BYTES || value.chars().any(char::is_control)
+    if value.is_empty()
+        || value.len() > MAX_HEADER_VALUE_BYTES
+        || value.chars().any(char::is_control)
     {
         return Err(PreparationFailure::Rejected);
     }
@@ -324,7 +325,8 @@ fn push_address_token(
         (None, None) => token,
         _ => return Err(PreparationFailure::Rejected),
     };
-    let address = MailAddress::parse(mailbox.to_owned()).map_err(|_| PreparationFailure::Rejected)?;
+    let address =
+        MailAddress::parse(mailbox.to_owned()).map_err(|_| PreparationFailure::Rejected)?;
     if !output
         .iter()
         .any(|existing| existing.as_str().eq_ignore_ascii_case(address.as_str()))

@@ -54,11 +54,7 @@ impl GmailSendAuthorizationPort for CloudflareGmailSendAuthorizationPort<'_> {
             &expected_version.value().to_string(),
         )?;
         set_header(&headers, "x-profile-oauth-scope", GMAIL_SEND_SCOPE)?;
-        set_header(
-            &headers,
-            "x-profile-oauth-include-granted-scopes",
-            "true",
-        )?;
+        set_header(&headers, "x-profile-oauth-include-granted-scopes", "true")?;
         let response = fetch(self.env, START_ENDPOINT, headers, Operation::Start).await?;
         let document: StartDocument = parse_json(response).await?;
         let ceremony_id =
