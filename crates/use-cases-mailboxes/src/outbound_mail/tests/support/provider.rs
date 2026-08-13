@@ -7,13 +7,13 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub(super) struct FakeProvider {
+pub(crate) struct FakeProvider {
     outcomes: Mutex<VecDeque<Result<OutboundMailProviderOutcome, OutboundMailProviderPortError>>>,
     calls: AtomicUsize,
 }
 
 impl FakeProvider {
-    pub(super) fn new(
+    pub(crate) fn new(
         outcomes: impl IntoIterator<
             Item = Result<OutboundMailProviderOutcome, OutboundMailProviderPortError>,
         >,
@@ -24,7 +24,7 @@ impl FakeProvider {
         }
     }
 
-    pub(super) fn calls(&self) -> usize {
+    pub(crate) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
 }
@@ -44,6 +44,6 @@ impl OutboundMailProviderPort for FakeProvider {
     }
 }
 
-pub(super) const fn provider_failure() -> OutboundMailProviderPortError {
+pub(crate) const fn provider_failure() -> OutboundMailProviderPortError {
     OutboundMailProviderPortError::new(OutboundMailProviderPortErrorClass::DependencyUnavailable)
 }
