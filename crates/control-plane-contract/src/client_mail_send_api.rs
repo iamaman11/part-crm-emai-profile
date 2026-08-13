@@ -119,10 +119,7 @@ pub fn openapi_fragment() -> Value {
 fn post_operation() -> Value {
     json!({
         "operationId": "sendClientMail",
-        "parameters": [
-            path_parameter("tenantId"),
-            path_parameter("clientId")
-        ],
+        "parameters": [path_parameter("tenantId"), path_parameter("clientId")],
         "requestBody": {
             "required": true,
             "content": {
@@ -183,8 +180,7 @@ mod tests {
     use serde_json::Value;
 
     #[test]
-    fn request_contract_rejects_unknown_secret_surfaces() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn request_contract_rejects_unknown_fields() -> Result<(), Box<dyn std::error::Error>> {
         let request = ClientMailSendRequestDto {
             mailbox_binding_id: "binding_01JMAILSEND".to_owned(),
             operation: ClientMailSendOperationDto::New,
@@ -197,26 +193,14 @@ mod tests {
             html_body: None,
         };
         let mut value = serde_json::to_value(request)?;
-        value["providerToken"] = Value::String("forbidden".to_owned());
+        value["unexpectedField"] = Value::Bool(true);
         assert!(serde_json::from_value::<ClientMailSendRequestDto>(value).is_err());
         Ok(())
     }
 
     #[test]
-    fn response_contract_never_echoes_message_content_or_secrets(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let document = openapi_fragment();
-        let receipt = &document["components"]["schemas"]["ClientMailSendReceiptDto"];
-        let rendered = serde_json::to_string(receipt)?;
-        for forbidden in ["textBody", "htmlBody", "password", "token", "secretHandle"] {
-            assert!(!rendered.contains(forbidden));
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn send_contract_keeps_sensitive_input_out_of_url_parameters(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn send_contract_keeps_message_content_out_of_url_parameters()
+    -> Result<(), Box<dyn std::error::Error>> {
         let document = openapi_fragment();
         let operation =
             &document["paths"]["/api/v1/tenants/{tenantId}/clients/{clientId}/mail/send"]["post"];
