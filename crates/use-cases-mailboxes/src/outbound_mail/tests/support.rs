@@ -16,8 +16,8 @@ use profile_platform_primitives::{
 };
 use std::collections::VecDeque;
 use std::future::Future;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 pub(super) type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -203,7 +203,7 @@ impl OutboundMailIntentApplicationPort for FakeStore {
             return Err(not_found());
         };
         if existing.state == OutboundMailIntentState::Dispatching {
-            existing.state = OutboundMailIntentState::Ambiguous;
+            existing.state = OutboundMailIntentIntentState::Ambiguous;
         }
         Ok(existing.receipt())
     }
