@@ -152,17 +152,17 @@ mod tests {
 
     #[test]
     fn adapter_preserves_c4_outcome_taxonomy() {
-        assert_eq!(
+        assert!(matches!(
             transport_failure_outcome(SmtpSendFailure::RetryableNotSent),
             OutboundMailProviderOutcome::RetryableNotSent
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             transport_failure_outcome(SmtpSendFailure::Rejected),
             OutboundMailProviderOutcome::Rejected
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             transport_failure_outcome(SmtpSendFailure::Ambiguous),
             OutboundMailProviderOutcome::Ambiguous
-        );
+        ));
     }
 }
