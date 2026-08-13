@@ -37,8 +37,13 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
     let eligibility = D1ClientMailboxEligibilityRepository::new(
         env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
     );
-    let provider =
-        CloudMailboxQueryAdapter::new(env, env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
+    let provider = CloudMailboxQueryAdapter::new(
+        env,
+        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
+        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
+        actor.actor(),
+        &client_id,
+    );
 
     match route {
         RouteClass::ClientMailSearchApi => {

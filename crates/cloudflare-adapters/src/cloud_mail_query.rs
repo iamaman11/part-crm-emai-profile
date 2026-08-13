@@ -2,6 +2,10 @@ use crate::cloud_mailbox_secrets::{MailboxCredential, resolve_mailbox_credential
 use crate::d1_mailboxes::D1MailboxRepository;
 use crate::gmail_mail_query::{get_gmail_message, search_gmail_messages};
 use crate::imap_query::{get_imap_message, search_imap_messages};
+use crate::microsoft_graph_authorization::D1MicrosoftGraphAuthorization;
+use crate::microsoft_graph_mail_query::{
+    get_microsoft_graph_message, search_microsoft_graph_messages,
+};
 use application_ports::mailboxes::MailboxProviderPortError;
 use application_ports::query::{QueryPage, QueryPortError, QueryPortErrorClass};
 use application_ports::query_mail_provider::{
@@ -9,21 +13,35 @@ use application_ports::query_mail_provider::{
     SearchClientMailboxMessagesRequest,
 };
 use mailbox_domain::{MailboxBinding, MailboxProvider};
-use profile_platform_primitives::{MailboxBindingId, TenantScope};
+use profile_platform_primitives::{
+    ActorContext, ClientId, MailboxBindingId, TenantScope,
+};
 use worker::Env;
 use worker::d1::D1Database;
 
 pub struct CloudMailboxQueryAdapter<'a> {
     env: &'a Env,
     mailboxes: D1MailboxRepository,
+    graph_authorization: D1MicrosoftGraphAuthorization,
+    actor: &'a ActorContext,
+    client_id: &'a ClientId,
 }
 
 impl<'a> CloudMailboxQueryAdapter<'a> {
     #[must_use]
-    pub const fn new(env: &'a Env, database: D1Database) -> Self {
+    pub const fn new(
+        env: &'a Env,
+        mailbox_database: D1Database,
+        authorization_database: D1Database,
+        actor: &'a ActorContext,
+        client_id: &'a ClientId,
+    ) -> Self {
         Self {
             env,
-            mailboxes: D1MailboxRepository::new(database),
+            mailboxes: D1MailboxRepository::new(mailbox_database),
+            graph_authorization: D1MicrosoftGraphAuthorization::new(authorization_database),
+            actor,
+            client_id,
         }
     }
 
@@ -52,7 +70,9 @@ impl ClientMailProviderQueryPort for CloudMailboxQueryAdapter<'_> {
             let Some(binding) = self.load_executable_binding(scope, binding_id).await? else {
                 return Ok(QueryPage::empty());
             };
-            if !binding.provider().is_phase2e_cloud_supported() {
+            if binding.provider() != MailboxProvider::MicrosoftGraph
+                && !binding.provider().is_phase2e_cloud_supported()
+            {
                 return Err(dependency_unavailable());
             }
             let credential = resolve_mailbox_credential(self.env, &binding)
@@ -68,10 +88,28 @@ impl ClientMailProviderQueryPort for CloudMailboxQueryAdapter<'_> {
                 (MailboxProvider::Imap, MailboxCredential::Imap(credential)) => {
                     search_imap_messages(&binding, request, &credential).await
                 }
-                (MailboxProvider::MicrosoftGraph, _) => Err(dependency_unavailable()),
+                (
+                    MailboxProvider::MicrosoftGraph,
+                    MailboxCredential::MicrosoftGraph(credential),
+                ) => {
+                    search_microsoft_graph_messages(
+                        self.env,
+                        &binding,
+                        request,
+                        &credential,
+                        &self.graph_authorization,
+                        self.actor,
+                        self.client_id,
+                    )
+                    .await
+                }
                 (MailboxProvider::BrowserFallback, _)
                 | (MailboxProvider::GmailApi, MailboxCredential::Imap(_))
-                | (MailboxProvider::Imap, MailboxCredential::GmailApi(_)) => {
+                | (MailboxProvider::GmailApi, MailboxCredential::MicrosoftGraph(_))
+                | (MailboxProvider::Imap, MailboxCredential::GmailApi(_))
+                | (MailboxProvider::Imap, MailboxCredential::MicrosoftGraph(_))
+                | (MailboxProvider::MicrosoftGraph, MailboxCredential::GmailApi(_))
+                | (MailboxProvider::MicrosoftGraph, MailboxCredential::Imap(_)) => {
                     Err(integrity_failure())
                 }
             }
@@ -90,7 +128,9 @@ impl ClientMailProviderQueryPort for CloudMailboxQueryAdapter<'_> {
             else {
                 return Ok(None);
             };
-            if !binding.provider().is_phase2e_cloud_supported() {
+            if binding.provider() != MailboxProvider::MicrosoftGraph
+                && !binding.provider().is_phase2e_cloud_supported()
+            {
                 return Err(dependency_unavailable());
             }
             let credential = resolve_mailbox_credential(self.env, &binding)
@@ -106,10 +146,28 @@ impl ClientMailProviderQueryPort for CloudMailboxQueryAdapter<'_> {
                 (MailboxProvider::Imap, MailboxCredential::Imap(credential)) => {
                     get_imap_message(&binding, reference.provider_reference(), &credential).await
                 }
-                (MailboxProvider::MicrosoftGraph, _) => Err(dependency_unavailable()),
+                (
+                    MailboxProvider::MicrosoftGraph,
+                    MailboxCredential::MicrosoftGraph(credential),
+                ) => {
+                    get_microsoft_graph_message(
+                        self.env,
+                        &binding,
+                        reference.provider_reference(),
+                        &credential,
+                        &self.graph_authorization,
+                        self.actor,
+                        self.client_id,
+                    )
+                    .await
+                }
                 (MailboxProvider::BrowserFallback, _)
                 | (MailboxProvider::GmailApi, MailboxCredential::Imap(_))
-                | (MailboxProvider::Imap, MailboxCredential::GmailApi(_)) => {
+                | (MailboxProvider::GmailApi, MailboxCredential::MicrosoftGraph(_))
+                | (MailboxProvider::Imap, MailboxCredential::GmailApi(_))
+                | (MailboxProvider::Imap, MailboxCredential::MicrosoftGraph(_))
+                | (MailboxProvider::MicrosoftGraph, MailboxCredential::GmailApi(_))
+                | (MailboxProvider::MicrosoftGraph, MailboxCredential::Imap(_)) => {
                     Err(integrity_failure())
                 }
             }
@@ -124,10 +182,10 @@ fn map_secret_error(error: MailboxProviderPortError) -> QueryPortError {
     }
 }
 
-fn integrity_failure() -> QueryPortError {
+const fn integrity_failure() -> QueryPortError {
     QueryPortError::new(QueryPortErrorClass::IntegrityFailure)
 }
 
-fn dependency_unavailable() -> QueryPortError {
+const fn dependency_unavailable() -> QueryPortError {
     QueryPortError::new(QueryPortErrorClass::DependencyUnavailable)
 }
