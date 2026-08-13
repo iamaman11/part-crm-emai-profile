@@ -63,23 +63,31 @@ pub(super) fn render_mime(
             output.push_str("\"\r\n\r\n");
             output.push_str("--");
             output.push_str(&boundary);
-            output.push_str("\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n");
+            output.push_str(
+                "\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
+            );
             push_normalized_body(&mut output, text);
             output.push_str("\r\n--");
             output.push_str(&boundary);
-            output.push_str("\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n");
+            output.push_str(
+                "\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
+            );
             push_normalized_body(&mut output, html);
             output.push_str("\r\n--");
             output.push_str(&boundary);
             output.push_str("--\r\n");
         }
         (Some(text), _) if !text.is_empty() => {
-            output.push_str("Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n");
+            output.push_str(
+                "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
+            );
             push_normalized_body(&mut output, text);
             output.push_str("\r\n");
         }
         (_, Some(html)) if !html.is_empty() => {
-            output.push_str("Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n");
+            output.push_str(
+                "Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
+            );
             push_normalized_body(&mut output, html);
             output.push_str("\r\n");
         }
@@ -116,7 +124,9 @@ fn envelope_recipients(recipients: &MailRecipients) -> Result<Vec<String>, ()> {
     Ok(output)
 }
 
-fn addresses(input: &[application_ports::outbound_mail::MailAddress]) -> Result<Vec<String>, ()> {
+fn addresses(
+    input: &[application_ports::outbound_mail::MailAddress],
+) -> Result<Vec<String>, ()> {
     input
         .iter()
         .map(|address| {
@@ -139,7 +149,10 @@ fn validate_address(value: &str) -> Result<(), ()> {
 }
 
 fn validate_header_value(value: &str) -> Result<(), ()> {
-    if value.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | b'\0')) {
+    if value
+        .bytes()
+        .any(|byte| matches!(byte, b'\r' | b'\n' | b'\0'))
+    {
         Err(())
     } else {
         Ok(())
@@ -223,10 +236,14 @@ mod tests {
     }
 
     #[test]
-    fn multipart_render_is_deterministic_and_bcc_is_envelope_only() -> Result<(), Box<dyn std::error::Error>> {
+    fn multipart_render_is_deterministic_and_bcc_is_envelope_only()
+    -> Result<(), Box<dyn std::error::Error>> {
         let recipients = recipients()?;
         let subject = MailSubject::parse("Subject")?;
-        let body = MailBody::new(Some("hello\nworld".to_owned()), Some("<b>hello</b>".to_owned()))?;
+        let body = MailBody::new(
+            Some("hello\nworld".to_owned()),
+            Some("<b>hello</b>".to_owned()),
+        )?;
         let context = RenderContext {
             sender: "sender@example.com",
             recipients: &recipients,
@@ -235,8 +252,10 @@ mod tests {
             in_reply_to: Some("<source@example.com>"),
             references: Some("<root@example.com> <source@example.com>"),
         };
-        let first = render_mime(&context, &body).map_err(|()| std::io::Error::other("render failed"))?;
-        let second = render_mime(&context, &body).map_err(|()| std::io::Error::other("render failed"))?;
+        let first = render_mime(&context, &body)
+            .map_err(|()| std::io::Error::other("render failed"))?;
+        let second = render_mime(&context, &body)
+            .map_err(|()| std::io::Error::other("render failed"))?;
         assert_eq!(first.bytes, second.bytes);
         let text = String::from_utf8(first.bytes)?;
         assert!(text.contains("\r\n"));
