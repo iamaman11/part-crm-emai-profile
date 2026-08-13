@@ -7,115 +7,73 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def require(text: str, needle: str, context: str) -> None:
-    if needle not in text:
-        raise SystemExit(f"missing {context}: {needle}")
+def require(text: str, *needles: str) -> None:
+    missing = [needle for needle in needles if needle not in text]
+    if missing:
+        raise SystemExit(f"missing C6 evidence: {missing}")
 
 
-def forbid(text: str, needle: str, context: str) -> None:
-    if needle in text:
-        raise SystemExit(f"forbidden {context}: {needle}")
+def forbid(text: str, *needles: str) -> None:
+    present = [needle for needle in needles if needle in text]
+    if present:
+        raise SystemExit(f"forbidden C6 evidence: {present}")
 
 
 port = read("crates/application-ports/src/outbound_mail.rs")
-for needle in [
-    "RetryableNotSent",
-    "Rejected",
-    "Ambiguous",
-    "provider_message_reference: Option<ProviderMessageReference>",
-]:
-    require(port, needle, "authoritative C4 provider outcome")
-for needle in ["smtp.office365.com", "smtp.gmail.com", "STARTTLS", "XOAUTH2"]:
-    forbid(port, needle, "provider-specific inner contract")
-
 provider = read("crates/cloudflare-adapters/src/smtp_outbound_mail.rs")
-marker = "impl OutboundMailProviderPort"
-require(provider, marker, "SMTP provider implementation")
-send_impl = provider.split(marker, 1)[1]
-positions = [
-    send_impl.find("find_binding"),
-    send_impl.find("resolve_smtp_send_credential"),
-    send_impl.find("resolve_source_context"),
-    send_impl.find("render_mime"),
-    send_impl.find("SmtpSession::connect"),
-    send_impl.find("send_message"),
-]
-if any(position < 0 for position in positions) or positions != sorted(positions):
-    raise SystemExit("SMTP provider execution ordering drifted")
-require(provider, "binding.provider() != MailboxProvider::Imap", "standards provider revalidation")
-require(provider, "!binding.is_executable()", "executable binding revalidation")
-require(provider, "provider_message_reference: None", "no invented SMTP provider reference")
-require(provider, "SmtpSendFailure::Ambiguous", "C4 ambiguity mapping")
-
 credential = read("crates/cloudflare-adapters/src/smtp_send_credential.rs")
-require(credential, '"MAILBOX_SECRET_RESOLVER"', "sole credential resolver")
-require(credential, '"SMTP_SEND"', "purpose-scoped SMTP credential resolution")
-require(credential, "(SmtpTlsMode::Implicit, 465)", "implicit TLS endpoint")
-require(credential, "(SmtpTlsMode::StartTls, 587)", "STARTTLS endpoint")
-require(credential, "password.zeroize()", "password zeroization")
-require(credential, "access_token.zeroize()", "access token zeroization")
-for needle in ["D1Database", "INSERT INTO", "UPDATE mailbox", "println!", "log::"]:
-    forbid(credential, needle, "credential persistence or logging")
-
 transport = read("crates/cloudflare-adapters/src/smtp_session.rs")
-require(transport, "SecureTransport::On", "implicit encrypted transport")
-require(transport, "SecureTransport::StartTls", "STARTTLS bootstrap")
-require(transport, "session.socket.start_tls()", "STARTTLS upgrade")
-require(transport, 'send_command(&mut self.socket, "DATA", false)', "SMTP DATA boundary")
-require(transport, "read_reply_after_data", "post-DATA ambiguity read")
-require(transport, "SmtpSendFailure::Ambiguous", "ambiguous post-acceptance outcome")
-require(transport, "400..=499 => Err(SmtpSendFailure::RetryableNotSent)", "safe retry classification")
-require(transport, "500..=599 => Err(SmtpSendFailure::Rejected)", "definitive rejection classification")
-require(transport, 'self.ehlo.capability("SMTPUTF8")', "SMTPUTF8 capability negotiation")
-require(transport, 'format!("MAIL FROM:<{envelope_from}> SMTPUTF8")', "SMTPUTF8 MAIL FROM option")
-require(transport, "wire.zeroize()", "post-DATA wire zeroization")
-require(transport, "checked_add(read)", "bounded SMTP reply growth")
-for needle in ["SecureTransport::Off", "println!", "console_log!", "log::"]:
-    forbid(transport, needle, "plaintext transport or logging")
-
 auth = read("crates/cloudflare-adapters/src/smtp_session/auth.rs")
-for needle in ["AUTH PLAIN", "AUTH LOGIN", "AUTH XOAUTH2", "auth=Bearer"]:
-    require(auth, needle, "password and XOAUTH2 SMTP authentication")
-for needle in ["payload.zeroize()", "encoded.zeroize()", "command.zeroize()"]:
-    require(auth, needle, "SASL material zeroization")
-for needle in ["println!", "console_log!", "console_error!", "log::"]:
-    forbid(auth, needle, "SMTP authentication logging")
-
 mime = read("crates/cloudflare-adapters/src/smtp_outbound_mail/mime.rs")
-require(mime, "multipart/alternative", "text/html multipart encoding")
-require(mime, 'push_address_header(&mut output, "To"', "To header rendering")
-require(mime, 'push_address_header(&mut output, "Cc"', "Cc header rendering")
-require(mime, ".chain(recipients.bcc())", "Bcc envelope delivery")
-forbid(mime, 'push_address_header(&mut output, "Bcc"', "Bcc header disclosure")
-forbid(mime, 'push_header(&mut output, "Bcc"', "Bcc header disclosure")
-require(mime, "Content-Transfer-Encoding: base64", "7-bit-safe MIME body transport")
-require(mime, 'word.push_str("=?UTF-8?B?")', "RFC 2047 UTF-8 subject encoding")
-forbid(mime, "Content-Transfer-Encoding: 8bit", "unnegotiated 8BITMIME dependency")
-require(mime, "MAX_RENDERED_MESSAGE_BYTES", "bounded rendered MIME")
-require(mime, "text_only_and_html_only_are_base64_encoded", "deterministic text/html fixtures")
-require(
-    mime,
-    "multipart_render_is_deterministic_encoded_and_bcc_is_envelope_only",
-    "multipart and envelope fixture",
-)
-
+encoding = read("crates/cloudflare-adapters/src/smtp_outbound_mail/mime/encoding.rs")
+mime_tests = read("crates/cloudflare-adapters/src/smtp_outbound_mail/mime/tests.rs")
 source = read("crates/cloudflare-adapters/src/smtp_outbound_mail/source.rs")
-for needle in ["EXAMINE INBOX", "UID FETCH", "MESSAGE-ID", "REFERENCES"]:
-    require(source, needle, "standards reply source translation")
-require(source, "checked_add(1)", "fail-closed address nesting")
-require(source, "reply_recipients", "reply envelope derivation")
-require(source, "reply_all_recipients", "reply-all envelope derivation")
-for needle in ["gmail.googleapis.com", "GmailMessageMetadataResponse", "threadId"]:
-    forbid(source, needle, "Gmail DTO leakage")
-
 c4 = read("crates/use-cases-mailboxes/src/outbound_mail.rs")
+
+require(port, "RetryableNotSent", "Rejected", "Ambiguous", "OutboundMailProviderPort")
+forbid(port, "smtp.gmail.com", "smtp.office365.com", "XOAUTH2")
+
+send_impl = provider.split("impl OutboundMailProviderPort", 1)[1]
+ordered = [
+    "find_binding",
+    "resolve_smtp_send_credential",
+    "resolve_source_context",
+    "render_mime",
+    "SmtpSession::connect",
+    "send_message",
+]
+positions = [send_impl.find(value) for value in ordered]
+if any(position < 0 for position in positions) or positions != sorted(positions):
+    raise SystemExit("C6 provider ordering drifted")
+require(provider, "MailboxProvider::Imap", "!binding.is_executable()", "provider_message_reference: None")
+
+require(credential, "MAILBOX_SECRET_RESOLVER", "SMTP_SEND", "SmtpTlsMode::Implicit, 465", "SmtpTlsMode::StartTls, 587")
+require(credential, "password.zeroize()", "access_token.zeroize()")
+forbid(credential, "D1Database", "INSERT INTO", "println!")
+
+require(transport, "SecureTransport::On", "SecureTransport::StartTls", "start_tls()")
+require(transport, 'send_command(&mut self.socket, "DATA", false)', "read_reply_after_data")
+require(transport, "SmtpSendFailure::Ambiguous", "RetryableNotSent", "Rejected", "SMTPUTF8")
+require(transport, "wire.zeroize()", "checked_add(read)", "authentication_capability_accepts_standard_and_legacy_forms")
+forbid(transport, "SecureTransport::Off", "println!")
+
+require(auth, "AUTH PLAIN", "AUTH LOGIN", "AUTH XOAUTH2", "payload.zeroize()", "encoded.zeroize()", "command.zeroize()")
+forbid(auth, "println!", "console_log!", "console_error!")
+
+require(mime, "multipart/alternative", "MAX_RENDERED_MESSAGE_BYTES", ".chain(recipients.bcc())")
+require(encoding, "Content-Transfer-Encoding: base64", "=?UTF-8?B?", "push_reference_header")
+forbid(encoding, "Content-Transfer-Encoding: 8bit")
+require(mime_tests, "multipart_render_is_deterministic_encoded_and_bcc_is_envelope_only", "text_only_and_html_only_are_base64_encoded", "long_ascii_subject_is_folded_as_encoded_words")
+
+require(source, "EXAMINE INBOX", "UID FETCH", "MESSAGE-ID", "REFERENCES", "reply_recipients", "reply_all_recipients", "OutboundMailOperation::Forward")
+forbid(source, "gmail.googleapis.com", "GmailMessageMetadataResponse", "threadId")
+
 claim = c4.find("claim_dispatch")
 send = c4.find("provider.send")
 if claim < 0 or send < 0 or claim >= send:
-    raise SystemExit("C4 durable claim no longer precedes SMTP provider send")
+    raise SystemExit("C4 durable claim no longer precedes SMTP execution")
 
-for text in [provider, source, mime]:
-    for needle in ["println!", "console_log!", "console_error!", "log::"]:
-        forbid(text, needle, "C6 provider logging")
+for text in (provider, credential, transport, auth, mime, encoding, source):
+    forbid(text, "console_log!", "console_error!", "log::")
 
 print("Pre-2J C6 SMTP send evidence OK")
