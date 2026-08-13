@@ -39,7 +39,7 @@ impl<'a> CloudflareGmailOutboundMailProvider<'a> {
 
 impl OutboundMailProviderPort for CloudflareGmailOutboundMailProvider<'_> {
     async fn send(
-        &mut self,
+        &self,
         actor: &ActorContext,
         intent: &OutboundMailIntent,
     ) -> Result<OutboundMailProviderOutcome, OutboundMailProviderPortError> {
@@ -135,7 +135,12 @@ async fn send_gmail_message(
         SendStatus::Rejected => return Ok(OutboundMailProviderOutcome::Rejected),
         SendStatus::Ambiguous => return Ok(OutboundMailProviderOutcome::Ambiguous),
     }
-    if response_content_length_exceeds(&response, MAX_SEND_RESPONSE_BYTES).unwrap_or(true) {
+    let response_too_large =
+        match response_content_length_exceeds(&response, MAX_SEND_RESPONSE_BYTES) {
+            Ok(value) => value,
+            Err(()) => true,
+        };
+    if response_too_large {
         return Ok(OutboundMailProviderOutcome::Ambiguous);
     }
     let bytes = match response.bytes().await {
@@ -228,6 +233,7 @@ struct GmailSendResponse {
 #[cfg(test)]
 mod tests {
     use super::{SendStatus, classify_send_status, provider_reference};
+    use application_ports::outbound_mail::ProviderMessageReference;
 
     #[test]
     fn send_statuses_preserve_ambiguity_boundary() {
