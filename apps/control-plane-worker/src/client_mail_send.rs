@@ -9,7 +9,7 @@ use crate::command_evidence;
 use application_ports::client_mail_access::{
     ClientMailboxAccessPort, ClientMailboxAccessPortErrorClass,
 };
-use application_ports::outbound_mail::{OutboundMailIntentState, OutboundMailProviderOutcome};
+use application_ports::outbound_mail::OutboundMailIntentState;
 use cloudflare_adapters::MailboxProvider;
 use cloudflare_adapters::d1_client_mail_eligibility::D1ClientMailboxEligibilityRepository;
 use cloudflare_adapters::d1_mailboxes::D1MailboxRepository;
@@ -21,7 +21,6 @@ use control_plane_contract::client_mail_send_api::{
 };
 use profile_platform_primitives::{ActorContext, ClientId};
 use provider::ClientMailProvider;
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use use_cases_mailboxes::outbound_mail::{
     OutboundMailOperationError, OutboundMailOutcome, execute_outbound_mail,
@@ -79,10 +78,7 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         Ok(true) => {}
         Ok(false) => return neutral_not_found(actor.actor().correlation_id().as_str()),
         Err(error) => {
-            return access_failure(
-                actor.actor().correlation_id().as_str(),
-                error.class(),
-            );
+            return access_failure(actor.actor().correlation_id().as_str(), error.class());
         }
     }
     if !source::is_accessible(env, actor.actor(), &client_id, &eligibility, &intent).await? {
@@ -123,16 +119,19 @@ async fn provider_for<'a>(
     binding_id: &profile_platform_primitives::MailboxBindingId,
 ) -> Result<Option<ClientMailProvider<'a>>> {
     let repository = D1MailboxRepository::new(catalog(env)?);
-    let Some(binding) = repository.find_binding(actor.tenant_scope(), binding_id).await? else {
+    let Some(binding) = repository
+        .find_binding(actor.tenant_scope(), binding_id)
+        .await?
+    else {
         return Ok(None);
     };
     let provider = match binding.provider() {
-        MailboxProvider::GmailApi => ClientMailProvider::Gmail(
-            CloudflareGmailOutboundMailProvider::new(env, catalog(env)?),
-        ),
-        MailboxProvider::Imap => ClientMailProvider::Smtp(
-            CloudflareSmtpOutboundMailProvider::new(env, catalog(env)?),
-        ),
+        MailboxProvider::GmailApi => {
+            ClientMailProvider::Gmail(CloudflareGmailOutboundMailProvider::new(env, catalog(env)?))
+        }
+        MailboxProvider::Imap => {
+            ClientMailProvider::Smtp(CloudflareSmtpOutboundMailProvider::new(env, catalog(env)?))
+        }
         MailboxProvider::BrowserFallback | MailboxProvider::MicrosoftGraph => {
             ClientMailProvider::Unsupported
         }
@@ -175,7 +174,10 @@ const fn state(value: OutboundMailIntentState) -> ClientMailSendStateDto {
     }
 }
 
-fn access_failure(correlation_id: &str, class: ClientMailboxAccessPortErrorClass) -> Result<Response> {
+fn access_failure(
+    correlation_id: &str,
+    class: ClientMailboxAccessPortErrorClass,
+) -> Result<Response> {
     match class {
         ClientMailboxAccessPortErrorClass::IntegrityFailure => problem(
             correlation_id,
@@ -228,6 +230,7 @@ fn catalog(env: &Env) -> Result<worker::d1::D1Database> {
 #[cfg(test)]
 mod tests {
     use super::{hex_digest, is_request};
+    use application_ports::outbound_mail::OutboundMailProviderOutcome;
     use worker::Method;
 
     #[test]
@@ -250,6 +253,9 @@ mod tests {
     #[test]
     fn provider_outcome_import_remains_provider_neutral() {
         let outcome = OutboundMailProviderOutcome::RetryableNotSent;
-        assert!(matches!(outcome, OutboundMailProviderOutcome::RetryableNotSent));
+        assert!(matches!(
+            outcome,
+            OutboundMailProviderOutcome::RetryableNotSent
+        ));
     }
 }
