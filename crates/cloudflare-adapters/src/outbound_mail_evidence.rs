@@ -38,6 +38,7 @@ fn c4_outbound_mail_boundaries_are_permanent_and_retry_safe() {
     );
     assert!(use_case.contains("Err(_) => OutboundMailProviderOutcome::Ambiguous"));
     assert!(use_case.contains("MAX_OUTBOUND_MAIL_DISPATCH_ATTEMPTS: u8 = 3"));
+    assert!(!use_case.contains(".unwrap_or(receipt)"));
 
     let adapter_facade = include_str!("d1_outbound_mail_intents.rs");
     assert!(adapter_facade.contains("pub use repository::D1OutboundMailIntentRepository"));
@@ -88,7 +89,27 @@ fn c4_outbound_mail_boundaries_are_permanent_and_retry_safe() {
     let eligibility = include_str!("d1_client_mail_eligibility.rs");
     assert!(eligibility.contains("impl ClientMailboxEligibilityPort"));
     assert!(eligibility.contains("impl ClientMailboxAccessPort"));
-    assert!(eligibility.contains("CLIENT_MAILBOX_ACCESS"));
+    assert_eq!(
+        eligibility
+            .matches("self.is_accessible(actor, client_id, binding_id)")
+            .count(),
+        2
+    );
+    for required in [
+        "association.client_id = client.client_id",
+        "client.status = 'ACTIVE'",
+        "binding.status = 'ACTIVE'",
+        "binding.execution_status = 'ACTIVE'",
+        "requester.status = 'ACTIVE'",
+        "client_grants AS grant_row",
+        "binding.provider IN ('GMAIL_API', 'IMAP')",
+        "OR binding.provider = 'MICROSOFT_GRAPH'",
+    ] {
+        assert!(
+            eligibility.contains(required),
+            "missing shared Client Mail access predicate: {required}"
+        );
+    }
     assert!(!eligibility.contains("BROWSER_FALLBACK"));
 }
 

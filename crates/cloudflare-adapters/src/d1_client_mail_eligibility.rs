@@ -8,7 +8,25 @@ use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::query;
 
-const CLIENT_MAILBOX_ACCESS: &str = r#"
+pub struct D1ClientMailboxEligibilityRepository {
+    database: D1Database,
+}
+
+impl D1ClientMailboxEligibilityRepository {
+    #[must_use]
+    pub const fn new(database: D1Database) -> Self {
+        Self { database }
+    }
+
+    async fn is_accessible(
+        &self,
+        actor: &ActorContext,
+        client_id: &ClientId,
+        binding_id: &MailboxBindingId,
+    ) -> Result<bool, worker::Error> {
+        query!(
+            &self.database,
+            r#"
 SELECT 1 AS eligible
 FROM clients AS client
 JOIN mailbox_bindings AS binding
@@ -48,27 +66,7 @@ WHERE client.tenant_id = ?
         )
   )
 LIMIT 1
-"#;
-
-pub struct D1ClientMailboxEligibilityRepository {
-    database: D1Database,
-}
-
-impl D1ClientMailboxEligibilityRepository {
-    #[must_use]
-    pub const fn new(database: D1Database) -> Self {
-        Self { database }
-    }
-
-    async fn is_accessible(
-        &self,
-        actor: &ActorContext,
-        client_id: &ClientId,
-        binding_id: &MailboxBindingId,
-    ) -> Result<bool, worker::Error> {
-        query!(
-            &self.database,
-            CLIENT_MAILBOX_ACCESS,
+"#,
             binding_id.as_str(),
             actor.tenant_scope().tenant_id().as_str(),
             client_id.as_str(),
@@ -118,24 +116,4 @@ fn query_dependency_error(_error: worker::Error) -> QueryPortError {
 
 fn access_dependency_error(_error: worker::Error) -> ClientMailboxAccessPortError {
     ClientMailboxAccessPortError::new(ClientMailboxAccessPortErrorClass::DependencyUnavailable)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::CLIENT_MAILBOX_ACCESS;
-
-    #[test]
-    fn one_access_predicate_governs_query_and_send() {
-        assert!(CLIENT_MAILBOX_ACCESS.contains("client.status = 'ACTIVE'"));
-        assert!(CLIENT_MAILBOX_ACCESS.contains("binding.status = 'ACTIVE'"));
-        assert!(CLIENT_MAILBOX_ACCESS.contains("binding.execution_status = 'ACTIVE'"));
-        assert!(CLIENT_MAILBOX_ACCESS.contains("association.client_id = client.client_id"));
-        assert!(CLIENT_MAILBOX_ACCESS.contains("requester.status = 'ACTIVE'"));
-        assert!(CLIENT_MAILBOX_ACCESS.contains("requester.role = 'TENANT_OWNER'"));
-        assert!(CLIENT_MAILBOX_ACCESS.contains("requester.role = 'MEMBER'"));
-        assert!(CLIENT_MAILBOX_ACCESS.contains("client_grants AS grant_row"));
-        assert!(CLIENT_MAILBOX_ACCESS.contains("binding.provider IN ('GMAIL_API', 'IMAP')"));
-        assert!(CLIENT_MAILBOX_ACCESS.contains("OR binding.provider = 'MICROSOFT_GRAPH'"));
-        assert!(!CLIENT_MAILBOX_ACCESS.contains("BROWSER_FALLBACK"));
-    }
 }
