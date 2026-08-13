@@ -11,7 +11,10 @@ fn c4_outbound_mail_boundaries_are_permanent_and_retry_safe() {
         "OutboundMailIntentApplicationPort",
         "OutboundMailProviderPort",
     ] {
-        assert!(port.contains(required), "missing outbound contract: {required}");
+        assert!(
+            port.contains(required),
+            "missing outbound contract: {required}"
+        );
     }
     for forbidden in ["Gmail", "SMTP", "MicrosoftGraph", "Mail.Send"] {
         assert!(
@@ -21,14 +24,18 @@ fn c4_outbound_mail_boundaries_are_permanent_and_retry_safe() {
     }
 
     let use_case = include_str!("../../use-cases-mailboxes/src/outbound_mail.rs");
-    let access = use_case
-        .find("is_mailbox_accessible")
-        .unwrap_or(usize::MAX);
+    let access = use_case.find("is_mailbox_accessible").unwrap_or(usize::MAX);
     let reserve = use_case.find("reserve_intent").unwrap_or(0);
     let claim = use_case.find("claim_dispatch").unwrap_or(0);
     let send = use_case.find("provider.send").unwrap_or(0);
-    assert!(access < reserve, "live Client/mailbox access must precede reserve");
-    assert!(claim < send, "durable dispatch claim must precede provider send");
+    assert!(
+        access < reserve,
+        "live Client/mailbox access must precede reserve"
+    );
+    assert!(
+        claim < send,
+        "durable dispatch claim must precede provider send"
+    );
     assert!(use_case.contains("Err(_) => OutboundMailProviderOutcome::Ambiguous"));
     assert!(use_case.contains("MAX_OUTBOUND_MAIL_DISPATCH_ATTEMPTS: u8 = 3"));
 
@@ -53,7 +60,10 @@ fn c4_outbound_mail_boundaries_are_permanent_and_retry_safe() {
         "binding.status = 'ACTIVE'",
         "binding.execution_status = 'ACTIVE'",
     ] {
-        assert!(required_in(migration, required), "missing C4 D1 invariant: {required}");
+        assert!(
+            required_in(migration, required),
+            "missing C4 D1 invariant: {required}"
+        );
     }
     for forbidden_column in [
         "body_text",
