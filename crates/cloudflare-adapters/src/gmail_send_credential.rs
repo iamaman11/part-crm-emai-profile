@@ -74,18 +74,18 @@ pub async fn resolve_gmail_send_credential(
     let parsed = serde_json::from_slice::<CredentialDocument>(&bytes);
     bytes.zeroize();
     let document = parsed.map_err(|_| GmailSendCredentialError::Rejected)?;
-    if document.access_token.is_empty()
-        || document.access_token.len() > MAX_CREDENTIAL_VALUE_LENGTH
-        || document
-            .access_token
-            .chars()
-            .any(|character| character.is_control())
-    {
+    if !valid_credential_value(&document.access_token) {
         return Err(GmailSendCredentialError::Rejected);
     }
     Ok(GmailSendCredential {
-        access_token: document.access_token,
+        access_token: document.into_access_token(),
     })
+}
+
+fn valid_credential_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_CREDENTIAL_VALUE_LENGTH
+        && !value.chars().any(char::is_control)
 }
 
 fn resolver_headers(binding: &MailboxBinding) -> Result<Headers, GmailSendCredentialError> {
@@ -138,4 +138,16 @@ fn response_content_length_exceeds(
 #[serde(deny_unknown_fields)]
 struct CredentialDocument {
     access_token: String,
+}
+
+impl CredentialDocument {
+    fn into_access_token(mut self) -> String {
+        core::mem::take(&mut self.access_token)
+    }
+}
+
+impl Drop for CredentialDocument {
+    fn drop(&mut self) {
+        self.access_token.zeroize();
+    }
 }
