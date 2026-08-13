@@ -29,20 +29,20 @@ impl StoredIntent {
     }
 }
 
-pub(super) struct FakeStore {
+pub(crate) struct FakeStore {
     stored: Mutex<Option<StoredIntent>>,
     reserve_calls: AtomicUsize,
 }
 
 impl FakeStore {
-    pub(super) const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             stored: Mutex::new(None),
             reserve_calls: AtomicUsize::new(0),
         }
     }
 
-    pub(super) fn reserve_calls(&self) -> usize {
+    pub(crate) fn reserve_calls(&self) -> usize {
         self.reserve_calls.load(Ordering::SeqCst)
     }
 }
