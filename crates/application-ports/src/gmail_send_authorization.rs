@@ -102,9 +102,7 @@ pub trait GmailSendAuthorizationPort {
         actor: &ActorContext,
         binding_id: &MailboxBindingId,
         expected_version: AggregateVersion,
-    ) -> impl core::future::Future<
-        Output = Result<GmailOAuthStartReceipt, GmailSendAuthorizationError>,
-    >;
+    ) -> impl core::future::Future<Output = Result<GmailOAuthStartReceipt, GmailSendAuthorizationError>>;
 
     fn inspect(
         &self,
