@@ -42,7 +42,9 @@ impl MailboxProviderPort for CloudMailboxProviderRouter<'_> {
                 (MailboxProvider::MicrosoftGraph, _)
                 | (MailboxProvider::BrowserFallback, _)
                 | (MailboxProvider::GmailApi, MailboxCredential::Imap(_))
-                | (MailboxProvider::Imap, MailboxCredential::GmailApi(_)) => {
+                | (MailboxProvider::GmailApi, MailboxCredential::MicrosoftGraph(_))
+                | (MailboxProvider::Imap, MailboxCredential::GmailApi(_))
+                | (MailboxProvider::Imap, MailboxCredential::MicrosoftGraph(_)) => {
                     Err(MailboxProviderPortError::IntegrityFailure)
                 }
             }
