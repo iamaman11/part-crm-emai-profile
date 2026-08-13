@@ -9,10 +9,7 @@ fn recipients() -> Result<MailRecipients, Box<dyn std::error::Error>> {
     )?)
 }
 
-fn render(
-    body: MailBody,
-    subject: &MailSubject,
-) -> Result<super::RenderedMessage, std::io::Error> {
+fn render(body: MailBody, subject: &MailSubject) -> Result<super::RenderedMessage, std::io::Error> {
     let recipients = recipients().map_err(|_| std::io::Error::other("recipients"))?;
     let context = RenderContext {
         sender: "sender@example.com",
