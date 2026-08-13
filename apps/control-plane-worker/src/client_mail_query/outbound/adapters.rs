@@ -1,0 +1,2 @@
+use cloudflare_adapters::gmail_outbound_mail::CloudflareGmailOutboundMailProvider;
+use cloudflare_adapters::smtp_outbound_mail::CloudflareSmtpOutboundMailProvider;
