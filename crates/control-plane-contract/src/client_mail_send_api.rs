@@ -203,23 +203,29 @@ mod tests {
     }
 
     #[test]
-    fn response_contract_never_echoes_message_content_or_secrets() {
+    fn response_contract_never_echoes_message_content_or_secrets(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let document = openapi_fragment();
         let receipt = &document["components"]["schemas"]["ClientMailSendReceiptDto"];
-        let rendered = serde_json::to_string(receipt).expect("receipt schema must serialize");
+        let rendered = serde_json::to_string(receipt)?;
         for forbidden in ["textBody", "htmlBody", "password", "token", "secretHandle"] {
             assert!(!rendered.contains(forbidden));
         }
+        Ok(())
     }
 
     #[test]
-    fn send_contract_keeps_sensitive_input_out_of_url_parameters() {
+    fn send_contract_keeps_sensitive_input_out_of_url_parameters(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let document = openapi_fragment();
         let operation =
             &document["paths"]["/api/v1/tenants/{tenantId}/clients/{clientId}/mail/send"]["post"];
-        let parameters = operation["parameters"].as_array().expect("path parameters");
+        let Some(parameters) = operation["parameters"].as_array() else {
+            return Err(std::io::Error::other("path parameters missing").into());
+        };
         assert_eq!(parameters.len(), 2);
         assert!(parameters.iter().all(|parameter| parameter["in"] == "path"));
         assert!(operation["requestBody"].is_object());
+        Ok(())
     }
 }
