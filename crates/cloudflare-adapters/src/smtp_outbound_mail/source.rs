@@ -286,10 +286,7 @@ fn parse_headers(bytes: &[u8]) -> Result<Headers, PreparationFailure> {
     })
 }
 
-fn value(
-    headers: &[(String, String)],
-    name: &str,
-) -> Result<Option<String>, PreparationFailure> {
+fn value(headers: &[(String, String)], name: &str) -> Result<Option<String>, PreparationFailure> {
     let result = headers
         .iter()
         .find(|(candidate, _)| candidate == name)
@@ -336,9 +333,7 @@ fn parse_reference(reference: &str) -> Result<(u64, u64), PreparationFailure> {
     let value = reference
         .strip_prefix("imap:")
         .ok_or(PreparationFailure::Rejected)?;
-    let (validity, uid) = value
-        .split_once(':')
-        .ok_or(PreparationFailure::Rejected)?;
+    let (validity, uid) = value.split_once(':').ok_or(PreparationFailure::Rejected)?;
     let validity = validity
         .parse::<u64>()
         .ok()
@@ -427,16 +422,12 @@ mod tests {
 
     #[test]
     fn source_translation_is_bounded_and_stable() -> Result<(), Box<dyn std::error::Error>> {
-        let values = parse_addresses(
-            "\"Doe, Jane\" <jane@example.com>, bob@example.com, jane@example.com",
-        )
-        .map_err(|_| std::io::Error::other("parse"))?;
+        let values =
+            parse_addresses("\"Doe, Jane\" <jane@example.com>, bob@example.com, jane@example.com")
+                .map_err(|_| std::io::Error::other("parse"))?;
         assert_eq!(values.len(), 2);
-        let references = reference_chain(
-            Some("<root@example.com>"),
-            "<source@example.com>",
-        )
-        .map_err(|_| std::io::Error::other("refs"))?;
+        let references = reference_chain(Some("<root@example.com>"), "<source@example.com>")
+            .map_err(|_| std::io::Error::other("refs"))?;
         assert_eq!(references, "<root@example.com> <source@example.com>");
         Ok(())
     }
