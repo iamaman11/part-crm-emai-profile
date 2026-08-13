@@ -132,9 +132,7 @@ fn parse_reference(reference: &str) -> Result<(u64, u64), PreparationFailure> {
     let value = reference
         .strip_prefix("imap:")
         .ok_or(PreparationFailure::Rejected)?;
-    let (uid_validity, uid) = value
-        .split_once(':')
-        .ok_or(PreparationFailure::Rejected)?;
+    let (uid_validity, uid) = value.split_once(':').ok_or(PreparationFailure::Rejected)?;
     let uid_validity = uid_validity
         .parse::<u64>()
         .ok()
@@ -160,9 +158,7 @@ fn first_literal(response: &[u8]) -> Result<Option<&[u8]>, PreparationFailure> {
     let Some(open) = response.iter().position(|byte| *byte == b'{') else {
         return Ok(None);
     };
-    let after_open = open
-        .checked_add(1)
-        .ok_or(PreparationFailure::Rejected)?;
+    let after_open = open.checked_add(1).ok_or(PreparationFailure::Rejected)?;
     let relative_close = response
         .get(after_open..)
         .and_then(|tail| tail.iter().position(|byte| *byte == b'}'))
@@ -178,9 +174,7 @@ fn first_literal(response: &[u8]) -> Result<Option<&[u8]>, PreparationFailure> {
     .ok()
     .and_then(|value| value.parse::<usize>().ok())
     .ok_or(PreparationFailure::Rejected)?;
-    let mut data_start = close
-        .checked_add(1)
-        .ok_or(PreparationFailure::Rejected)?;
+    let mut data_start = close.checked_add(1).ok_or(PreparationFailure::Rejected)?;
     let tail = response
         .get(data_start..)
         .ok_or(PreparationFailure::Rejected)?;
