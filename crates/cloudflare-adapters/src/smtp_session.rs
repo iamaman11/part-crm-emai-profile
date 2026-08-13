@@ -224,24 +224,41 @@ pub(super) async fn send_command(
 }
 
 async fn read_reply(socket: &mut Socket) -> Result<SmtpReply, SmtpSendFailure> {
-    read_reply_inner(socket, SmtpSendFailure::RetryableNotSent).await
+    read_reply_inner(
+        socket,
+        SmtpSendFailure::RetryableNotSent,
+        SmtpSendFailure::IntegrityFailure,
+    )
+    .await
 }
 
 async fn read_reply_after_data(socket: &mut Socket) -> Result<SmtpReply, SmtpSendFailure> {
-    read_reply_inner(socket, SmtpSendFailure::Ambiguous).await
+    read_reply_inner(
+        socket,
+        SmtpSendFailure::Ambiguous,
+        SmtpSendFailure::Ambiguous,
+    )
+    .await
 }
 
 async fn read_reply_inner(
     socket: &mut Socket,
     io_failure: SmtpSendFailure,
+    protocol_failure: SmtpSendFailure,
 ) -> Result<SmtpReply, SmtpSendFailure> {
     let mut output = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
         let read = socket.read(&mut buffer).await.map_err(|_| io_failure)?;
-        let next_length = output.len().checked_add(read).ok_or(io_failure)?;
-        if read == 0 || next_length > MAX_REPLY_BYTES {
+        if read == 0 {
             return Err(io_failure);
+        }
+        let next_length = output
+            .len()
+            .checked_add(read)
+            .ok_or(protocol_failure)?;
+        if next_length > MAX_REPLY_BYTES {
+            return Err(protocol_failure);
         }
         output.extend_from_slice(&buffer[..read]);
         if let Some(code) = complete_reply_code(&output) {
@@ -341,8 +358,6 @@ mod tests {
         };
         assert!(legacy.auth_mechanism("PLAIN"));
         assert!(legacy.auth_mechanism("LOGIN"));
-        Ok::<(), Box<dyn std::error::Error>>(())
-            .expect("infallible capability evidence should stay infallible");
     }
 
     #[test]
