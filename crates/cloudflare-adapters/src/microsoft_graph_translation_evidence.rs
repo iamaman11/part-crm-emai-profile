@@ -40,7 +40,10 @@ mod exact_adapter_source {
         assert_eq!(page.value.len(), 1);
 
         let summary = summary_from_graph(&graph_binding()?, &page.value[0])?;
-        assert_eq!(summary.reference().binding_id().as_str(), "mailbox_01JC3GGRAPH");
+        assert_eq!(
+            summary.reference().binding_id().as_str(),
+            "mailbox_01JC3GGRAPH"
+        );
         assert_eq!(
             summary.reference().provider_reference(),
             "graph:AAMk-fixture-list"
