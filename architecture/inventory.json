@@ -55,7 +55,8 @@
       "migrations/d1/0021_device_generation_commit.sql",
       "migrations/d1/0022_profile_creator_grant.sql",
       "migrations/d1/0023_mailbox_client_associations.sql",
-      "migrations/d1/0024_mailbox_onboarding_lifecycle.sql"
+      "migrations/d1/0024_mailbox_onboarding_lifecycle.sql",
+      "migrations/d1/0025_microsoft_graph_provider.sql"
     ]
   },
   "routing": {
