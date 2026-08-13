@@ -9,8 +9,7 @@ use crate::cloud_mailbox_secrets::MAILBOX_SECRET_RESOLVER_BINDING;
 
 const CURSOR_STORE_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/cursors/store";
-const CURSOR_RESOLVE_ENDPOINT: &str =
-    "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/cursors/resolve";
+const CURSOR_RESOLVE_ENDPOINT: &str = "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/cursors/resolve";
 const QUERY_CURSOR_PREFIX: &str = "graph-page:";
 const MAX_CURSOR_HANDLE_LENGTH: usize = 192;
 const MAX_PROVIDER_CURSOR_LENGTH: usize = 16 * 1024;
@@ -84,7 +83,10 @@ async fn resolver_post(
         .set("x-profile-tenant-id", binding.tenant_id().as_str())
         .map_err(|_| integrity_failure())?;
     headers
-        .set("x-profile-mailbox-binding-id", binding.binding_id().as_str())
+        .set(
+            "x-profile-mailbox-binding-id",
+            binding.binding_id().as_str(),
+        )
         .map_err(|_| integrity_failure())?;
 
     let mut body = body.to_owned();
