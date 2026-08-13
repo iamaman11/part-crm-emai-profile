@@ -123,12 +123,8 @@ impl SmtpSession {
             return Err(classify_pre_acceptance(reply.code));
         }
         for recipient in recipients {
-            let reply = send_command(
-                &mut self.socket,
-                &format!("RCPT TO:<{recipient}>"),
-                false,
-            )
-            .await?;
+            let reply =
+                send_command(&mut self.socket, &format!("RCPT TO:<{recipient}>"), false).await?;
             if !matches!(reply.code, 250 | 251) {
                 let failure = classify_pre_acceptance(reply.code);
                 let _ = send_command(&mut self.socket, "RSET", false).await;
@@ -280,9 +276,7 @@ fn dot_stuffed_message(message: &[u8]) -> Result<Vec<u8>, SmtpSendFailure> {
 fn invalid_path(value: &str) -> bool {
     value.is_empty()
         || value.bytes().any(|byte| {
-            byte.is_ascii_control()
-                || byte.is_ascii_whitespace()
-                || matches!(byte, b'<' | b'>')
+            byte.is_ascii_control() || byte.is_ascii_whitespace() || matches!(byte, b'<' | b'>')
         })
 }
 
@@ -295,10 +289,7 @@ mod tests {
     #[test]
     fn multiline_reply_requires_terminal_space_line() {
         assert_eq!(complete_reply_code(b"250-one\r\n250-two\r\n"), None);
-        assert_eq!(
-            complete_reply_code(b"250-one\r\n250 two\r\n"),
-            Some(250)
-        );
+        assert_eq!(complete_reply_code(b"250-one\r\n250 two\r\n"), Some(250));
     }
 
     #[test]
