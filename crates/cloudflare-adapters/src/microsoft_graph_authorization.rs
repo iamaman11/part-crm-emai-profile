@@ -1,12 +1,12 @@
 use application_ports::mailboxes::MailboxProviderPortError;
 use application_ports::query::{QueryPortError, QueryPortErrorClass};
+use mailbox_domain::MailboxProviderFailureClass;
 use profile_platform_primitives::{ActorContext, ClientId, MailboxBindingId};
 use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::query;
 
 use crate::cloud_mailbox_secrets::provider_error;
-use mailbox_domain::MailboxProviderFailureClass;
 
 pub struct D1MicrosoftGraphAuthorization {
     database: D1Database,
@@ -72,19 +72,14 @@ impl D1MicrosoftGraphAuthorization {
               AND association.client_id IS NOT NULL
               AND client.status = 'ACTIVE'
               AND requester.status = 'ACTIVE'
+              AND requester.role IN ('TENANT_OWNER', 'MEMBER')
               AND (? IS NULL OR client.client_id = ?)
-              AND (
-                  requester.role = 'TENANT_OWNER'
-                  OR (
-                      requester.role = 'MEMBER'
-                      AND EXISTS (
-                          SELECT 1
-                          FROM client_grants AS grant_row
-                          WHERE grant_row.tenant_id = client.tenant_id
-                            AND grant_row.client_id = client.client_id
-                            AND grant_row.actor_id = requester.actor_id
-                      )
-                  )
+              AND EXISTS (
+                  SELECT 1
+                  FROM client_grants AS grant_row
+                  WHERE grant_row.tenant_id = client.tenant_id
+                    AND grant_row.client_id = client.client_id
+                    AND grant_row.actor_id = requester.actor_id
               )
             LIMIT 1
             "#,
