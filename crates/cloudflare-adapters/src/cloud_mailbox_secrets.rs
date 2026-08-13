@@ -423,7 +423,10 @@ mod tests {
         let credential = serde_json::from_str::<MailboxCredential>(
             r#"{"kind":"microsoft_graph","access_token":"opaque-access-token"}"#,
         )?;
-        assert_eq!(credential.provider(), mailbox_domain::MailboxProvider::MicrosoftGraph);
+        assert_eq!(
+            credential.provider(),
+            mailbox_domain::MailboxProvider::MicrosoftGraph
+        );
         let direct = serde_json::from_str::<MicrosoftGraphCredential>(
             r#"{"access_token":"opaque-access-token"}"#,
         )?;
