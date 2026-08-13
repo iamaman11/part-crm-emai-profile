@@ -5,9 +5,9 @@ use application_ports::mailbox_onboarding::{
 };
 use application_ports::microsoft_graph_oauth_onboarding::{
     MicrosoftGraphOAuthAuthorizationCode, MicrosoftGraphOAuthAuthorizationUrl,
-    MicrosoftGraphOAuthCallbackTarget, MicrosoftGraphOAuthCeremonyId, MicrosoftGraphOAuthInputError,
-    MicrosoftGraphOAuthProvisioningError, MicrosoftGraphOAuthProvisioningPort,
-    MicrosoftGraphOAuthStartReceipt, MicrosoftGraphOAuthState,
+    MicrosoftGraphOAuthCallbackTarget, MicrosoftGraphOAuthCeremonyId,
+    MicrosoftGraphOAuthInputError, MicrosoftGraphOAuthProvisioningError,
+    MicrosoftGraphOAuthProvisioningPort, MicrosoftGraphOAuthStartReceipt, MicrosoftGraphOAuthState,
 };
 use identity_access_domain::MembershipRole;
 use mailbox_domain::{
@@ -122,8 +122,9 @@ impl MicrosoftGraphOAuthProvisioningPort for FakeProvisioningPort {
         _actor: &ActorContext,
         _onboarding_id: &MailboxOnboardingId,
         _expected_version: MailboxOnboardingVersion,
-    ) -> impl Future<Output = Result<MicrosoftGraphOAuthStartReceipt, MicrosoftGraphOAuthProvisioningError>>
-    {
+    ) -> impl Future<
+        Output = Result<MicrosoftGraphOAuthStartReceipt, MicrosoftGraphOAuthProvisioningError>,
+    > {
         self.start_calls.set(self.start_calls.get() + 1);
         ready(Ok(self.receipt.clone()))
     }
@@ -131,8 +132,9 @@ impl MicrosoftGraphOAuthProvisioningPort for FakeProvisioningPort {
     fn inspect(
         &self,
         _state: &MicrosoftGraphOAuthState,
-    ) -> impl Future<Output = Result<MicrosoftGraphOAuthCallbackTarget, MicrosoftGraphOAuthProvisioningError>>
-    {
+    ) -> impl Future<
+        Output = Result<MicrosoftGraphOAuthCallbackTarget, MicrosoftGraphOAuthProvisioningError>,
+    > {
         ready(Ok(self.target.clone()))
     }
 
@@ -521,7 +523,8 @@ fn callback_target(
     )
 }
 
-fn authorization_code() -> Result<MicrosoftGraphOAuthAuthorizationCode, Box<dyn std::error::Error>> {
+fn authorization_code() -> Result<MicrosoftGraphOAuthAuthorizationCode, Box<dyn std::error::Error>>
+{
     oauth_input(
         MicrosoftGraphOAuthAuthorizationCode::parse("code_C3G_transient"),
         "invalid authorization code",
