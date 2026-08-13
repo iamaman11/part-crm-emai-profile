@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 #[path = "../src/client_mail_send_api.rs"]
 mod client_mail_send_api;
 
