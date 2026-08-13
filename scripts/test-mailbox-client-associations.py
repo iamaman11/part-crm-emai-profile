@@ -43,9 +43,9 @@ def raw_const(source: str, name: str) -> str:
 def eligibility_sql() -> str:
     source = ELIGIBILITY_ADAPTER.read_text(encoding="utf-8")
     match = re.search(r'query!\(\s*&self\.database,\s*r#"(.*?)"#,', source, re.DOTALL)
-    if match is not None:
-        return match.group(1)
-    return raw_const(source, "CLIENT_MAILBOX_ACCESS")
+    if match is None:
+        raise AssertionError("could not extract Client Mail eligibility SQL")
+    return match.group(1)
 
 
 def load_schema(connection: sqlite3.Connection) -> None:
@@ -69,12 +69,12 @@ def create_tenant(connection: sqlite3.Connection, tenant: str, owner: str) -> No
         (identity, f"{owner}@example.invalid", NOW),
     )
     connection.execute(
-        "INSERT INTO tenant_owners VALUES (?, ?, ?, 1, ?, ?)",
+        """
+        INSERT INTO memberships(
+            tenant_id, actor_id, identity_id, role, status, version, created_at_ms, updated_at_ms
+        ) VALUES (?, ?, ?, 'TENANT_OWNER', 'ACTIVE', 1, ?, ?)
+        """,
         (tenant, owner, identity, NOW, NOW),
-    )
-    connection.execute(
-        "INSERT INTO memberships VALUES (?, ?, 'TENANT_OWNER', 'ACTIVE', 1, ?, ?, ?)",
-        (tenant, owner, identity, NOW, NOW, NOW),
     )
 
 
@@ -85,217 +85,475 @@ def create_member(connection: sqlite3.Connection, actor: str) -> None:
         (identity, f"{actor}@example.invalid", NOW),
     )
     connection.execute(
-        "INSERT INTO memberships VALUES (?, ?, 'MEMBER', 'ACTIVE', 1, ?, ?, ?)",
-        (TENANT, actor, identity, NOW, NOW, NOW),
-    )
-
-
-def create_client(connection: sqlite3.Connection, tenant: str, client: str) -> None:
-    connection.execute(
-        "INSERT INTO clients VALUES (?, ?, ?, 'ACTIVE', 1, ?, ?)",
-        (tenant, client, client, NOW, NOW),
-    )
-
-
-def create_mailbox(
-    connection: sqlite3.Connection,
-    tenant: str,
-    mailbox: str,
-    provider: str,
-    status: str = "ACTIVE",
-) -> None:
-    connection.execute(
         """
-        INSERT INTO mailbox_bindings(
-            tenant_id, binding_id, provider, profile_id, status, version,
-            secret_handle, secret_fingerprint, execution_status, created_at_ms, updated_at_ms
-        ) VALUES (?, ?, ?, NULL, ?, 1, ?, ?, 'ACTIVE', ?, ?)
+        INSERT INTO memberships(
+            tenant_id, actor_id, identity_id, role, status, version, created_at_ms, updated_at_ms
+        ) VALUES (?, ?, ?, 'MEMBER', 'ACTIVE', 1, ?, ?)
         """,
-        (
-            tenant,
-            mailbox,
-            provider,
-            status,
-            f"secret://{mailbox}",
-            f"fingerprint_{mailbox}",
-            NOW,
-            NOW,
-        ),
+        (TENANT, actor, identity, NOW, NOW),
     )
 
 
-def grant_client(connection: sqlite3.Connection, actor: str, client: str) -> None:
-    connection.execute(
-        "INSERT INTO client_grants VALUES (?, ?, ?, ?, ?)",
-        (TENANT, client, actor, NOW, OWNER),
-    )
-
-
-def seed(connection: sqlite3.Connection) -> None:
+def seed(connection: sqlite3.Connection, catalog_sql: dict[str, str]) -> None:
     create_tenant(connection, TENANT, OWNER)
     create_tenant(connection, OTHER_TENANT, OTHER_OWNER)
     create_member(connection, MEMBER)
     create_member(connection, UNRELATED)
-    create_client(connection, TENANT, CLIENT_A)
-    create_client(connection, TENANT, CLIENT_B)
-    create_client(connection, OTHER_TENANT, OTHER_CLIENT)
-    create_mailbox(connection, TENANT, MAILBOX_A, "GMAIL_API")
-    create_mailbox(connection, TENANT, MAILBOX_B, "IMAP")
-    create_mailbox(connection, TENANT, MAILBOX_UNASSIGNED, "GMAIL_API")
-    create_mailbox(connection, TENANT, MAILBOX_BROWSER, "BROWSER_FALLBACK")
-    create_mailbox(connection, TENANT, MAILBOX_REVOKED, "IMAP", "REVOKED")
-    grant_client(connection, MEMBER, CLIENT_A)
+
+    for tenant, client, creator in (
+        (TENANT, CLIENT_A, OWNER),
+        (TENANT, CLIENT_B, OWNER),
+        (OTHER_TENANT, OTHER_CLIENT, OTHER_OWNER),
+    ):
+        connection.execute(
+            catalog_sql["CLIENT_CREATE"],
+            (tenant, client, "PERSON", client, creator, creator, NOW, NOW),
+        )
+
+    connection.execute(
+        catalog_sql["CLIENT_CREATOR_GRANT"],
+        (TENANT, MEMBER, CLIENT_A, "CLIENT_VIEWER", OWNER, "Batch B member read grant", NOW),
+    )
+
+    for binding, provider in (
+        (MAILBOX_A, "GMAIL_API"),
+        (MAILBOX_B, "IMAP"),
+        (MAILBOX_UNASSIGNED, "GMAIL_API"),
+        (MAILBOX_BROWSER, "BROWSER_FALLBACK"),
+        (MAILBOX_REVOKED, "GMAIL_API"),
+    ):
+        connection.execute(
+            """
+            INSERT INTO mailbox_binding_create_commands(
+                tenant_id, command_id, command_actor_id, binding_id,
+                provider, secret_handle, executed_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (TENANT, f"cmd_create_{binding}", OWNER, binding, provider, f"secret_{binding}", NOW),
+        )
+
+    connection.execute(
+        """
+        INSERT INTO mailbox_binding_revoke_commands(
+            tenant_id, command_id, command_actor_id, binding_id,
+            expected_binding_version, executed_at_ms
+        ) VALUES (?, 'cmd_revoke_B_mailbox', ?, ?, 1, ?)
+        """,
+        (TENANT, OWNER, MAILBOX_REVOKED, NOW + 1),
+    )
+    connection.commit()
 
 
-def bind(
+def sql_contract() -> dict[str, str]:
+    association = ASSOCIATION_ADAPTER.read_text(encoding="utf-8")
+    catalog = CATALOG.read_text(encoding="utf-8")
+    return {
+        "ASSOCIATION_COMMAND": raw_const(association, "ASSOCIATION_COMMAND"),
+        "IDEMPOTENCY_CREATE": raw_const(association, "IDEMPOTENCY_CREATE"),
+        "AUDIT_CREATE": raw_const(association, "AUDIT_CREATE"),
+        "OUTBOX_CREATE": raw_const(association, "OUTBOX_CREATE"),
+        "CLIENT_CREATE": raw_const(catalog, "CLIENT_CREATE"),
+        "CLIENT_CREATOR_GRANT": raw_const(catalog, "CLIENT_CREATOR_GRANT"),
+    }
+
+
+def change(
     connection: sqlite3.Connection,
-    mailbox: str,
-    client: str,
-    actor: str = OWNER,
-    association_id: str | None = None,
-) -> str:
-    association_id = association_id or f"assoc_{mailbox}_{client}"
+    sql: dict[str, str],
+    *,
+    binding: str,
+    expected: int,
+    next_version: int,
+    operation: str,
+    previous_client: str | None,
+    next_client: str | None,
+    suffix: str,
+    at: int,
+) -> None:
+    result = {"BIND": "bound", "REBIND": "rebound", "UNBIND": "unbound"}[operation]
+    action = {
+        "BIND": "mailbox.client_bind",
+        "REBIND": "mailbox.client_rebind",
+        "UNBIND": "mailbox.client_unbind",
+    }[operation]
+    event = {
+        "BIND": "mailbox.client_bound.v1",
+        "REBIND": "mailbox.client_rebound.v1",
+        "UNBIND": "mailbox.client_unbound.v1",
+    }[operation]
     connection.execute(
-        """
-        INSERT INTO mailbox_client_associations(
-            tenant_id, association_id, binding_id, client_id, state, version,
-            bound_at_ms, bound_by_actor_id, released_at_ms, released_by_actor_id
-        ) VALUES (?, ?, ?, ?, 'ACTIVE', 1, ?, ?, NULL, NULL)
-        """,
-        (TENANT, association_id, mailbox, client, NOW, actor),
+        sql["ASSOCIATION_COMMAND"],
+        (
+            TENANT,
+            f"cmd_assoc_{suffix}",
+            OWNER,
+            binding,
+            expected,
+            next_version,
+            operation,
+            previous_client,
+            next_client,
+            at,
+        ),
     )
-    return association_id
-
-
-def release(connection: sqlite3.Connection, association_id: str, version: int = 1) -> None:
     connection.execute(
-        """
-        UPDATE mailbox_client_associations
-        SET state = 'RELEASED', version = ?, released_at_ms = ?, released_by_actor_id = ?
-        WHERE tenant_id = ? AND association_id = ? AND version = ?
-        """,
-        (version + 1, NOW + version, OWNER, TENANT, association_id, version),
+        sql["IDEMPOTENCY_CREATE"],
+        (
+            TENANT,
+            OWNER,
+            f"idem_assoc_{suffix}",
+            "mailbox.client_association_change",
+            f"digest_assoc_{suffix}_0123456789abcdef",
+            result,
+            binding,
+            at,
+            EXPIRES + at,
+        ),
+    )
+    connection.execute(
+        sql["AUDIT_CREATE"],
+        (
+            TENANT,
+            f"audit_assoc_{suffix}",
+            f"corr_assoc_{suffix}",
+            OWNER,
+            action,
+            "mailbox_client_association",
+            binding,
+            result,
+            at,
+        ),
+    )
+    connection.execute(
+        sql["OUTBOX_CREATE"],
+        (
+            TENANT,
+            f"outbox_assoc_{suffix}",
+            "mailbox_client_association",
+            binding,
+            next_version,
+            event,
+            "{}",
+            at,
+        ),
     )
 
 
-def eligible(connection: sqlite3.Connection, actor: str, client: str, mailbox: str) -> bool:
+def eligible(connection: sqlite3.Connection, actor: str, client: str, binding: str) -> bool:
     row = connection.execute(
         eligibility_sql(),
-        (mailbox, TENANT, client, actor),
+        (binding, TENANT, client, actor),
     ).fetchone()
     return row is not None
 
 
-def assert_relationship_and_eligibility(sql: str) -> None:
+def state(connection: sqlite3.Connection, binding: str) -> tuple[str | None, int] | None:
+    row = connection.execute(
+        """
+        SELECT client_id, version
+        FROM mailbox_client_association_state
+        WHERE tenant_id = ? AND binding_id = ?
+        """,
+        (TENANT, binding),
+    ).fetchone()
+    return None if row is None else (row[0], int(row[1]))
+
+
+def history(connection: sqlite3.Connection, binding: str) -> list[tuple[object, ...]]:
+    return connection.execute(
+        """
+        SELECT version, operation, previous_client_id, next_client_id
+        FROM mailbox_client_association_history
+        WHERE tenant_id = ? AND binding_id = ?
+        ORDER BY version
+        """,
+        (TENANT, binding),
+    ).fetchall()
+
+
+def assert_architecture_markers() -> None:
+    domain = RELATIONSHIP_DOMAIN.read_text(encoding="utf-8")
+    eligibility = ELIGIBILITY_ADAPTER.read_text(encoding="utf-8")
+    mail_use_case = MAIL_USE_CASE.read_text(encoding="utf-8")
+
+    for forbidden in ("GMAIL", "IMAP", "BROWSER_FALLBACK", "D1Database", "worker::"):
+        assert forbidden not in domain, f"provider/storage concern leaked into relationship domain: {forbidden}"
+    for required in (
+        "MailboxClientAssociationVersion",
+        "MailboxClientAssociationAction::Bind",
+        "MailboxClientAssociationAction::Rebind",
+        "MailboxClientAssociationAction::Unbind",
+        "VersionConflict",
+    ):
+        assert required in domain
+    for required in (
+        "mailbox_client_association_state",
+        "client_grants",
+        "requester.status = 'ACTIVE'",
+        "client.status = 'ACTIVE'",
+        "binding.status = 'ACTIVE'",
+        "binding.execution_status = 'ACTIVE'",
+        "binding.provider IN ('GMAIL_API', 'IMAP')",
+        "association.client_id = client.client_id",
+    ):
+        assert required in eligibility, f"eligibility missing {required!r}"
+    assert "profile_client_assignments" not in eligibility, "Profile assignment must never substitute for Client Mail ACL"
+    assert "QueryCapability::Mail" not in mail_use_case, "Client Mail must not retain the Owner-only coarse Mail gate"
+    assert mail_use_case.count("QueryCapability::Clients") == 2
+
+
+def assert_relationship_and_eligibility(sql: dict[str, str]) -> None:
     connection = sqlite3.connect(":memory:")
     load_schema(connection)
-    seed(connection)
+    seed(connection, sql)
 
-    association_a = bind(connection, MAILBOX_A, CLIENT_A)
-    assert eligible(connection, OWNER, CLIENT_A, MAILBOX_A)
-    assert eligible(connection, MEMBER, CLIENT_A, MAILBOX_A)
-    assert not eligible(connection, UNRELATED, CLIENT_A, MAILBOX_A)
-    assert not eligible(connection, OWNER, CLIENT_B, MAILBOX_A)
+    assert state(connection, MAILBOX_A) is None
+    assert state(connection, MAILBOX_UNASSIGNED) is None
     assert not eligible(connection, OWNER, CLIENT_A, MAILBOX_UNASSIGNED)
-    assert not eligible(connection, OWNER, CLIENT_A, MAILBOX_BROWSER)
+
+    with connection:
+        change(
+            connection,
+            sql,
+            binding=MAILBOX_A,
+            expected=0,
+            next_version=1,
+            operation="BIND",
+            previous_client=None,
+            next_client=CLIENT_A,
+            suffix="bind_a",
+            at=1100,
+        )
+        change(
+            connection,
+            sql,
+            binding=MAILBOX_B,
+            expected=0,
+            next_version=1,
+            operation="BIND",
+            previous_client=None,
+            next_client=CLIENT_A,
+            suffix="bind_b",
+            at=1110,
+        )
+        change(
+            connection,
+            sql,
+            binding=MAILBOX_BROWSER,
+            expected=0,
+            next_version=1,
+            operation="BIND",
+            previous_client=None,
+            next_client=CLIENT_A,
+            suffix="bind_browser",
+            at=1120,
+        )
+
+    assert state(connection, MAILBOX_A) == (CLIENT_A, 1)
+    assert state(connection, MAILBOX_B) == (CLIENT_A, 1)
+    assert eligible(connection, MEMBER, CLIENT_A, MAILBOX_A)
+    assert eligible(connection, MEMBER, CLIENT_A, MAILBOX_B)
+    assert eligible(connection, OWNER, CLIENT_A, MAILBOX_A)
+    assert not eligible(connection, UNRELATED, CLIENT_A, MAILBOX_A)
+    assert not eligible(connection, MEMBER, CLIENT_A, MAILBOX_BROWSER)
     assert not eligible(connection, OWNER, CLIENT_A, MAILBOX_REVOKED)
 
-    connection.execute(
-        "UPDATE mailbox_bindings SET execution_status = 'BLOCKED' WHERE tenant_id = ? AND binding_id = ?",
-        (TENANT, MAILBOX_A),
-    )
+    with connection:
+        change(
+            connection,
+            sql,
+            binding=MAILBOX_A,
+            expected=1,
+            next_version=2,
+            operation="REBIND",
+            previous_client=CLIENT_A,
+            next_client=CLIENT_B,
+            suffix="rebind_a",
+            at=1200,
+        )
+    assert state(connection, MAILBOX_A) == (CLIENT_B, 2)
+    assert history(connection, MAILBOX_A) == [
+        (1, "BIND", None, CLIENT_A),
+        (2, "REBIND", CLIENT_A, CLIENT_B),
+    ]
     assert not eligible(connection, OWNER, CLIENT_A, MAILBOX_A)
-    connection.execute(
-        "UPDATE mailbox_bindings SET execution_status = 'ACTIVE' WHERE tenant_id = ? AND binding_id = ?",
-        (TENANT, MAILBOX_A),
-    )
-
-    release(connection, association_a)
-    assert not eligible(connection, OWNER, CLIENT_A, MAILBOX_A)
-    association_b = bind(connection, MAILBOX_A, CLIENT_B, association_id="assoc_rebound")
     assert eligible(connection, OWNER, CLIENT_B, MAILBOX_A)
-    assert not eligible(connection, OWNER, CLIENT_A, MAILBOX_A)
+    assert not eligible(connection, MEMBER, CLIENT_B, MAILBOX_A), "Client A grant must not authorize Client B"
 
-    try:
-        bind(connection, MAILBOX_A, CLIENT_A, association_id="assoc_conflict")
-    except sqlite3.IntegrityError:
-        pass
-    else:
-        raise AssertionError("one active Client per mailbox invariant was not enforced")
+    connection.execute(
+        "UPDATE clients SET status = 'ARCHIVED' WHERE tenant_id = ? AND client_id = ?",
+        (TENANT, CLIENT_B),
+    )
+    connection.commit()
+    assert not eligible(connection, OWNER, CLIENT_B, MAILBOX_A)
+    connection.rollback()
+
+    connection.execute(
+        "UPDATE memberships SET status = 'SUSPENDED' WHERE tenant_id = ? AND actor_id = ?",
+        (TENANT, MEMBER),
+    )
+    connection.commit()
+    assert not eligible(connection, MEMBER, CLIENT_A, MAILBOX_B)
+    connection.execute(
+        "UPDATE memberships SET status = 'ACTIVE' WHERE tenant_id = ? AND actor_id = ?",
+        (TENANT, MEMBER),
+    )
+    connection.commit()
+
+    with connection:
+        change(
+            connection,
+            sql,
+            binding=MAILBOX_B,
+            expected=1,
+            next_version=2,
+            operation="UNBIND",
+            previous_client=CLIENT_A,
+            next_client=None,
+            suffix="unbind_b",
+            at=1300,
+        )
+    assert state(connection, MAILBOX_B) == (None, 2)
+    assert not eligible(connection, OWNER, CLIENT_A, MAILBOX_B)
+    assert history(connection, MAILBOX_B)[-1] == (2, "UNBIND", CLIENT_A, None)
+    connection.close()
+
+
+def assert_fail_closed_cas_cross_tenant_and_raw_writes(sql: dict[str, str]) -> None:
+    connection = sqlite3.connect(":memory:")
+    load_schema(connection)
+    seed(connection, sql)
+    with connection:
+        change(
+            connection,
+            sql,
+            binding=MAILBOX_A,
+            expected=0,
+            next_version=1,
+            operation="BIND",
+            previous_client=None,
+            next_client=CLIENT_A,
+            suffix="baseline",
+            at=1100,
+        )
+
+    for values, expected_error in (
+        ((MAILBOX_A, 0, 1, "REBIND", CLIENT_A, CLIENT_B, "stale"), "version_mismatch"),
+        ((MAILBOX_UNASSIGNED, 0, 1, "BIND", None, OTHER_CLIENT, "cross"), "target_not_active"),
+    ):
+        binding, expected, next_version, operation, previous, next_client, suffix = values
+        try:
+            with connection:
+                change(
+                    connection,
+                    sql,
+                    binding=binding,
+                    expected=expected,
+                    next_version=next_version,
+                    operation=operation,
+                    previous_client=previous,
+                    next_client=next_client,
+                    suffix=suffix,
+                    at=1400,
+                )
+        except sqlite3.IntegrityError as exc:
+            assert expected_error in str(exc), str(exc)
+        else:
+            raise AssertionError(f"{suffix} relationship mutation unexpectedly committed")
 
     try:
         connection.execute(
             """
-            INSERT INTO mailbox_client_associations(
-                tenant_id, association_id, binding_id, client_id, state, version,
-                bound_at_ms, bound_by_actor_id, released_at_ms, released_by_actor_id
-            ) VALUES (?, 'assoc_cross_tenant', ?, ?, 'ACTIVE', 1, ?, ?, NULL, NULL)
+            UPDATE mailbox_client_association_state
+            SET client_id = ?, version = version + 1
+            WHERE tenant_id = ? AND binding_id = ?
             """,
-            (OTHER_TENANT, MAILBOX_B, OTHER_CLIENT, NOW, OTHER_OWNER),
+            (CLIENT_B, TENANT, MAILBOX_A),
         )
-    except sqlite3.IntegrityError:
-        pass
+    except sqlite3.IntegrityError as exc:
+        assert "not_governed" in str(exc)
     else:
-        raise AssertionError("cross-tenant mailbox association was accepted")
-
-    release(connection, association_b)
-    assert not eligible(connection, OWNER, CLIENT_B, MAILBOX_A)
-    assert "mailbox_client_association_state" in sql
-    assert "CREATE UNIQUE INDEX mailbox_client_one_active_client" in sql
+        raise AssertionError("raw relationship state update unexpectedly succeeded")
+    connection.rollback()
+    assert state(connection, MAILBOX_A) == (CLIENT_A, 1)
     connection.close()
 
 
-def assert_history_and_version_guards() -> None:
+def assert_late_evidence_failure_rolls_back(sql: dict[str, str]) -> None:
     connection = sqlite3.connect(":memory:")
     load_schema(connection)
-    seed(connection)
-    association_id = bind(connection, MAILBOX_A, CLIENT_A)
-    release(connection, association_id)
-    row = connection.execute(
-        "SELECT state, version, released_at_ms FROM mailbox_client_associations WHERE association_id = ?",
-        (association_id,),
-    ).fetchone()
-    assert row is not None
-    assert row[0] == "RELEASED"
-    assert row[1] == 2
-    assert row[2] is not None
+    seed(connection, sql)
+    connection.execute(
+        """
+        INSERT INTO audit_events(
+            tenant_id, audit_event_id, correlation_id, actor_id, action,
+            resource_type, resource_id, result_code, occurred_at_ms
+        ) VALUES (?, 'audit_assoc_late', 'corr_assoc_fixture', ?, 'fixture',
+                  'mailbox_client_association', ?, 'fixture', ?)
+        """,
+        (TENANT, OWNER, MAILBOX_A, NOW),
+    )
+    connection.commit()
 
     try:
-        connection.execute(
-            "DELETE FROM mailbox_client_associations WHERE tenant_id = ? AND association_id = ?",
-            (TENANT, association_id),
-        )
-    except sqlite3.IntegrityError:
-        pass
+        with connection:
+            connection.execute(
+                sql["ASSOCIATION_COMMAND"],
+                (TENANT, "cmd_assoc_late", OWNER, MAILBOX_A, 0, 1, "BIND", None, CLIENT_A, 1500),
+            )
+            connection.execute(
+                sql["IDEMPOTENCY_CREATE"],
+                (
+                    TENANT,
+                    OWNER,
+                    "idem_assoc_late",
+                    "mailbox.client_association_change",
+                    "digest_assoc_late_0123456789abcdef",
+                    "bound",
+                    MAILBOX_A,
+                    1500,
+                    EXPIRES + 1500,
+                ),
+            )
+            connection.execute(
+                sql["AUDIT_CREATE"],
+                (
+                    TENANT,
+                    "audit_assoc_late",
+                    "corr_assoc_late",
+                    OWNER,
+                    "mailbox.client_bind",
+                    "mailbox_client_association",
+                    MAILBOX_A,
+                    "bound",
+                    1500,
+                ),
+            )
+    except sqlite3.IntegrityError as exc:
+        assert "UNIQUE constraint failed" in str(exc)
     else:
-        raise AssertionError("association history deletion was accepted")
+        raise AssertionError("late evidence collision unexpectedly committed relationship state")
 
+    assert state(connection, MAILBOX_A) is None
+    assert history(connection, MAILBOX_A) == []
+    assert connection.execute(
+        "SELECT COUNT(*) FROM mailbox_client_association_commands WHERE tenant_id = ? AND binding_id = ?",
+        (TENANT, MAILBOX_A),
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        "SELECT COUNT(*) FROM idempotency_records WHERE tenant_id = ? AND idempotency_key = 'idem_assoc_late'",
+        (TENANT,),
+    ).fetchone()[0] == 0
     connection.close()
-
-
-def assert_adapter_and_domain_boundaries() -> None:
-    association_adapter = ASSOCIATION_ADAPTER.read_text(encoding="utf-8")
-    eligibility_adapter = ELIGIBILITY_ADAPTER.read_text(encoding="utf-8")
-    mail_use_case = MAIL_USE_CASE.read_text(encoding="utf-8")
-    relationship_domain = RELATIONSHIP_DOMAIN.read_text(encoding="utf-8")
-
-    assert "MailboxClientAssociationPort" in association_adapter
-    assert "mailbox_client_association_state" in eligibility_adapter
-    assert "ClientMailboxEligibilityPort" in eligibility_adapter
-    assert "is_mailbox_eligible" in mail_use_case
-    assert "profile_assignment" not in eligibility_adapter.lower()
-    assert "mailbox_client" in relationship_domain.lower()
 
 
 def main() -> int:
-    migration_sql = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted(MIGRATIONS.glob("[0-9][0-9][0-9][0-9]_*.sql"))
-    )
-    assert_relationship_and_eligibility(migration_sql)
-    assert_history_and_version_guards()
-    assert_adapter_and_domain_boundaries()
-    print("Batch B mailbox Client relationship, authorization, history and eligibility invariants passed.")
+    assert_architecture_markers()
+    sql = sql_contract()
+    assert_relationship_and_eligibility(sql)
+    assert_fail_closed_cas_cross_tenant_and_raw_writes(sql)
+    assert_late_evidence_failure_rolls_back(sql)
+    print("Batch B mailbox Client relationship and Client Mail eligibility invariants passed.")
     return 0
 
 
