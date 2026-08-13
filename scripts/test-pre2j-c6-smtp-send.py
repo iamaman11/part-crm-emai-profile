@@ -66,7 +66,10 @@ require(transport, "read_reply_after_data", "post-DATA ambiguity read")
 require(transport, "SmtpSendFailure::Ambiguous", "ambiguous post-acceptance outcome")
 require(transport, "400..=499 => Err(SmtpSendFailure::RetryableNotSent)", "safe retry classification")
 require(transport, "500..=599 => Err(SmtpSendFailure::Rejected)", "definitive rejection classification")
+require(transport, 'self.ehlo.capability("SMTPUTF8")', "SMTPUTF8 capability negotiation")
+require(transport, 'format!("MAIL FROM:<{envelope_from}> SMTPUTF8")', "SMTPUTF8 MAIL FROM option")
 require(transport, "wire.zeroize()", "post-DATA wire zeroization")
+require(transport, "checked_add(read)", "bounded SMTP reply growth")
 for needle in ["SecureTransport::Off", "println!", "console_log!", "log::"]:
     forbid(transport, needle, "plaintext transport or logging")
 
@@ -80,15 +83,28 @@ for needle in ["println!", "console_log!", "console_error!", "log::"]:
 
 mime = read("crates/cloudflare-adapters/src/smtp_outbound_mail/mime.rs")
 require(mime, "multipart/alternative", "text/html multipart encoding")
-require(mime, 'push_header(&mut output, "To"', "To header rendering")
-require(mime, 'push_header(&mut output, "Cc"', "Cc header rendering")
+require(mime, 'push_address_header(&mut output, "To"', "To header rendering")
+require(mime, 'push_address_header(&mut output, "Cc"', "Cc header rendering")
 require(mime, ".chain(recipients.bcc())", "Bcc envelope delivery")
+forbid(mime, 'push_address_header(&mut output, "Bcc"', "Bcc header disclosure")
 forbid(mime, 'push_header(&mut output, "Bcc"', "Bcc header disclosure")
+require(mime, "Content-Transfer-Encoding: base64", "7-bit-safe MIME body transport")
+require(mime, 'word.push_str("=?UTF-8?B?")', "RFC 2047 UTF-8 subject encoding")
+forbid(mime, "Content-Transfer-Encoding: 8bit", "unnegotiated 8BITMIME dependency")
 require(mime, "MAX_RENDERED_MESSAGE_BYTES", "bounded rendered MIME")
+require(mime, "text_only_and_html_only_are_base64_encoded", "deterministic text/html fixtures")
+require(
+    mime,
+    "multipart_render_is_deterministic_encoded_and_bcc_is_envelope_only",
+    "multipart and envelope fixture",
+)
 
 source = read("crates/cloudflare-adapters/src/smtp_outbound_mail/source.rs")
 for needle in ["EXAMINE INBOX", "UID FETCH", "MESSAGE-ID", "REFERENCES"]:
     require(source, needle, "standards reply source translation")
+require(source, "checked_add(1)", "fail-closed address nesting")
+require(source, "reply_recipients", "reply envelope derivation")
+require(source, "reply_all_recipients", "reply-all envelope derivation")
 for needle in ["gmail.googleapis.com", "GmailMessageMetadataResponse", "threadId"]:
     forbid(source, needle, "Gmail DTO leakage")
 
