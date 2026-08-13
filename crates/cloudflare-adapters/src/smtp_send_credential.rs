@@ -254,11 +254,15 @@ mod tests {
     };
 
     #[test]
-    fn smtp_projection_accepts_only_governed_encrypted_endpoints() -> Result<(), Box<dyn std::error::Error>> {
+    fn smtp_projection_accepts_only_governed_encrypted_endpoints()
+    -> Result<(), Box<dyn std::error::Error>> {
         let password = serde_json::from_str::<SmtpCredential>(
             r#"{"host":"smtp.example.com","port":587,"username":"user@example.com","password":"secret","access_token":null,"authentication_mode":"password","tls":"start_tls"}"#,
         )?;
-        assert_eq!(password.authentication_mode(), SmtpAuthenticationMode::Password);
+        assert_eq!(
+            password.authentication_mode(),
+            SmtpAuthenticationMode::Password
+        );
         assert_eq!(password.tls(), SmtpTlsMode::StartTls);
         assert!(password.validate());
 
@@ -279,8 +283,17 @@ mod tests {
     #[test]
     fn resolver_statuses_distinguish_safe_retry_from_rejection() {
         assert!(classify_resolver_status(200).is_ok());
-        assert_eq!(classify_resolver_status(429), Err(super::SmtpCredentialError::RetryableNotSent));
-        assert_eq!(classify_resolver_status(503), Err(super::SmtpCredentialError::RetryableNotSent));
-        assert_eq!(classify_resolver_status(401), Err(super::SmtpCredentialError::Rejected));
+        assert_eq!(
+            classify_resolver_status(429),
+            Err(super::SmtpCredentialError::RetryableNotSent)
+        );
+        assert_eq!(
+            classify_resolver_status(503),
+            Err(super::SmtpCredentialError::RetryableNotSent)
+        );
+        assert_eq!(
+            classify_resolver_status(401),
+            Err(super::SmtpCredentialError::Rejected)
+        );
     }
 }
