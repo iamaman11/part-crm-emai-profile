@@ -11,12 +11,19 @@ fn c3g_microsoft_graph_boundaries_are_permanent_and_fail_closed() {
     assert!(migration.contains("'MICROSOFT_GRAPH'"));
     assert!(migration.contains("PRAGMA defer_foreign_keys = ON"));
 
-    let browser = include_str!("../../../migrations/d1/0020_browser_mailbox_execution_bindings.sql");
+    let browser =
+        include_str!("../../../migrations/d1/0020_browser_mailbox_execution_bindings.sql");
     assert!(browser.contains("provider = 'BROWSER_FALLBACK'"));
     assert!(!browser.contains("MICROSOFT_GRAPH"));
 
-    let oauth_port = include_str!("../../application-ports/src/microsoft_graph_oauth_onboarding.rs");
-    for forbidden in ["access_token", "refresh_token", "code_verifier", "code_challenge"] {
+    let oauth_port =
+        include_str!("../../application-ports/src/microsoft_graph_oauth_onboarding.rs");
+    for forbidden in [
+        "access_token",
+        "refresh_token",
+        "code_verifier",
+        "code_challenge",
+    ] {
         assert!(
             !oauth_port.contains(forbidden),
             "Graph OAuth application port leaked {forbidden}"
@@ -45,12 +52,16 @@ fn c3g_microsoft_graph_boundaries_are_permanent_and_fail_closed() {
         "binding.execution_status = 'ACTIVE'",
         "client.status = 'ACTIVE'",
         "requester.status = 'ACTIVE'",
-        "requester.role = 'TENANT_OWNER'",
-        "requester.role = 'MEMBER'",
+        "requester.role IN ('TENANT_OWNER', 'MEMBER')",
         "FROM client_grants AS grant_row",
+        "grant_row.client_id = client.client_id",
+        "grant_row.actor_id = requester.actor_id",
         "mailbox_client_association_state AS association",
     ] {
-        assert!(authorization.contains(required), "missing Graph authorization invariant: {required}");
+        assert!(
+            authorization.contains(required),
+            "missing Graph authorization invariant: {required}"
+        );
     }
 
     let eligibility = include_str!("d1_client_mail_eligibility.rs");
@@ -73,9 +84,14 @@ fn c3g_microsoft_graph_boundaries_are_permanent_and_fail_closed() {
     let delta = include_str!("microsoft_graph_delta.rs");
     assert!(delta.contains("/mailFolders/inbox/messages/delta"));
     assert!(delta.contains("$select=id&$top=100"));
-    assert!(delta.contains("response.status_code() == 401") || delta.contains("response.status_code() != 401"));
+    assert!(
+        delta.contains("response.status_code() == 401")
+            || delta.contains("response.status_code() != 401")
+    );
     assert!(delta.contains("refresh_microsoft_graph_credential"));
     assert!(delta.contains("recheck_job"));
+    assert!(delta.contains("MailboxProviderFailureClass::TransientDependency"));
+    assert!(delta.contains("MailboxProviderFailureClass::RateLimited"));
     assert!(delta.contains("429"));
     assert!(delta.contains("retry_after_hint"));
     assert!(delta.contains("400 | 410"));
@@ -87,7 +103,8 @@ fn c3g_microsoft_graph_boundaries_are_permanent_and_fail_closed() {
     assert!(delta_cursor.contains("CURSOR_RESOLVE_ENDPOINT"));
     assert!(delta_cursor.contains("body.zeroize()"));
 
-    let worker = include_str!("../../../apps/control-plane-worker/src/mailbox_microsoft_graph_oauth.rs");
+    let worker =
+        include_str!("../../../apps/control-plane-worker/src/mailbox_microsoft_graph_oauth.rs");
     assert!(worker.contains("/api/v1/mailbox/microsoft-graph/oauth/callback"));
     assert!(worker.contains("cache-control\", \"no-store"));
     assert!(worker.contains("referrer-policy\", \"no-referrer"));
@@ -95,10 +112,19 @@ fn c3g_microsoft_graph_boundaries_are_permanent_and_fail_closed() {
     assert!(!worker.contains("refresh_token"));
     assert!(!worker.contains("code_verifier"));
 
-    let openapi = include_str!("../../../openapi/v1/fragments/mailbox-microsoft-graph-onboarding.json");
+    let openapi =
+        include_str!("../../../openapi/v1/fragments/mailbox-microsoft-graph-onboarding.json");
     assert!(openapi.contains("microsoft-graph-oauth"));
     assert!(openapi.contains("/api/v1/mailbox/microsoft-graph/oauth/callback"));
-    for forbidden in ["accessToken", "refreshToken", "codeVerifier", "clientSecret"] {
-        assert!(!openapi.contains(forbidden), "Graph public contract leaked {forbidden}");
+    for forbidden in [
+        "accessToken",
+        "refreshToken",
+        "codeVerifier",
+        "clientSecret",
+    ] {
+        assert!(
+            !openapi.contains(forbidden),
+            "Graph public contract leaked {forbidden}"
+        );
     }
 }
