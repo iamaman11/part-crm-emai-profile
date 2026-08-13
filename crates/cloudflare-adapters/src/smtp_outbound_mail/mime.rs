@@ -124,9 +124,7 @@ fn envelope_recipients(recipients: &MailRecipients) -> Result<Vec<String>, ()> {
     Ok(output)
 }
 
-fn addresses(
-    input: &[application_ports::outbound_mail::MailAddress],
-) -> Result<Vec<String>, ()> {
+fn addresses(input: &[application_ports::outbound_mail::MailAddress]) -> Result<Vec<String>, ()> {
     input
         .iter()
         .map(|address| {
@@ -252,10 +250,10 @@ mod tests {
             in_reply_to: Some("<source@example.com>"),
             references: Some("<root@example.com> <source@example.com>"),
         };
-        let first = render_mime(&context, &body)
-            .map_err(|()| std::io::Error::other("render failed"))?;
-        let second = render_mime(&context, &body)
-            .map_err(|()| std::io::Error::other("render failed"))?;
+        let first =
+            render_mime(&context, &body).map_err(|()| std::io::Error::other("render failed"))?;
+        let second =
+            render_mime(&context, &body).map_err(|()| std::io::Error::other("render failed"))?;
         assert_eq!(first.bytes, second.bytes);
         let text = String::from_utf8(first.bytes)?;
         assert!(text.contains("\r\n"));
