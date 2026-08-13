@@ -253,10 +253,7 @@ async fn read_reply_inner(
         if read == 0 {
             return Err(io_failure);
         }
-        let next_length = output
-            .len()
-            .checked_add(read)
-            .ok_or(protocol_failure)?;
+        let next_length = output.len().checked_add(read).ok_or(protocol_failure)?;
         if next_length > MAX_REPLY_BYTES {
             return Err(protocol_failure);
         }
