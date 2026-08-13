@@ -43,7 +43,11 @@ impl GmailSendAuthorizationPort for CloudflareGmailSendAuthorizationPort<'_> {
         expected_version: AggregateVersion,
     ) -> Result<GmailOAuthStartReceipt, GmailSendAuthorizationError> {
         let headers = base_actor_headers(actor)?;
-        set_header(&headers, "x-profile-mailbox-binding-id", binding_id.as_str())?;
+        set_header(
+            &headers,
+            "x-profile-mailbox-binding-id",
+            binding_id.as_str(),
+        )?;
         set_header(
             &headers,
             "x-profile-mailbox-binding-version",
@@ -257,16 +261,12 @@ mod tests {
     #[test]
     fn callback_replay_and_provider_denial_are_distinct() {
         assert_eq!(
-            map_status(409, Operation::Callback)
-                .expect_err("replay must fail")
-                .class(),
-            GmailSendAuthorizationErrorClass::ReplayRejected
+            map_status(409, Operation::Callback).map_err(|error| error.class()),
+            Err(GmailSendAuthorizationErrorClass::ReplayRejected)
         );
         assert_eq!(
-            map_status(400, Operation::Callback)
-                .expect_err("provider denial must fail")
-                .class(),
-            GmailSendAuthorizationErrorClass::ProviderDenied
+            map_status(400, Operation::Callback).map_err(|error| error.class()),
+            Err(GmailSendAuthorizationErrorClass::ProviderDenied)
         );
     }
 }
