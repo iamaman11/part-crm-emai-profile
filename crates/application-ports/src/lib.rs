@@ -16,6 +16,7 @@ pub mod device_jobs;
 pub mod generation_objects;
 pub mod generations;
 pub mod gmail_oauth_onboarding;
+pub mod gmail_send_authorization;
 pub mod identity;
 pub mod identity_ceremonies;
 pub mod identity_governance;
