@@ -46,6 +46,7 @@ jobs:
           scripts/test-phase2d-query-projections.py
           scripts/generate-frontend-contracts.py
           scripts/generate-architecture-inventory.py
+          scripts/cloudflare-deploy-config.py
           scripts/test-d1-schema.py
           scripts/test-step4-identity-acl.py
           scripts/test-step4-command-guards.py
@@ -141,6 +142,12 @@ jobs:
 
       - name: Prove architecture inventory drift is detected
         run: python scripts/generate-architecture-inventory.py --self-test
+
+      - name: Verify canonical Cloudflare deployment configuration
+        run: python scripts/cloudflare-deploy-config.py --check
+
+      - name: Prove Cloudflare environment configuration fails closed
+        run: python scripts/cloudflare-deploy-config.py --self-test
 
       - name: Test D1 schema and transaction invariants
         run: python scripts/test-d1-schema.py
