@@ -128,7 +128,9 @@ mod tests {
         ) -> Result<Option<MailMessageBody>, QueryPortError> {
             self.get_calls.set(self.get_calls.get() + 1);
             if self.dependency_failure {
-                Err(QueryPortError::new(QueryPortErrorClass::DependencyUnavailable))
+                Err(QueryPortError::new(
+                    QueryPortErrorClass::DependencyUnavailable,
+                ))
             } else {
                 Ok(None)
             }
@@ -161,7 +163,8 @@ mod tests {
     }
 
     #[test]
-    fn wrong_client_source_never_reaches_provider_query() -> Result<(), Box<dyn std::error::Error>> {
+    fn wrong_client_source_never_reaches_provider_query() -> Result<(), Box<dyn std::error::Error>>
+    {
         let allowed_client = ClientId::parse("client_01JC7SOURCE")?;
         let requested_client = ClientId::parse("client_02JC7SOURCE")?;
         let binding_id = MailboxBindingId::parse("binding_01JC7SOURCE")?;
