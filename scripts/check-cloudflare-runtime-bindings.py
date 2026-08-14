@@ -11,6 +11,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "deploy" / "cloudflare" / "wrangler.jsonc"
+RUNTIME_RUST_ROOTS = (
+    ROOT / "apps" / "control-plane-worker" / "src",
+    ROOT / "crates" / "cloudflare-adapters" / "src",
+    ROOT / "crates" / "control-plane-contract" / "src",
+)
 
 SOURCE_CONSTANTS = {
     "asset": (
@@ -84,7 +89,14 @@ class BindingInventoryError(ValueError):
     pass
 
 
-def rust_constant(relative_path: str, symbol: str) -> str:
+def production_rust_text() -> str:
+    files = sorted(path for root in RUNTIME_RUST_ROOTS for path in root.rglob("*.rs"))
+    if not files:
+        raise BindingInventoryError("runtime Rust source inventory is empty")
+    return "\n".join(path.read_text(encoding="utf-8") for path in files)
+
+
+def rust_constant(relative_path: str, symbol: str, runtime_text: str) -> str:
     path = ROOT / relative_path
     text = path.read_text(encoding="utf-8")
     match = re.search(
@@ -94,17 +106,18 @@ def rust_constant(relative_path: str, symbol: str) -> str:
     if match is None:
         raise BindingInventoryError(f"runtime binding constant {symbol} is missing from {relative_path}")
     value = match.group(1)
-    if text.count(symbol) < 2:
-        raise BindingInventoryError(f"runtime binding constant {symbol} is no longer used by {relative_path}")
+    if runtime_text.count(symbol) < 2:
+        raise BindingInventoryError(f"runtime binding constant {symbol} is defined but no longer used")
     return value
 
 
 def source_inventory() -> dict[str, str]:
+    runtime_text = production_rust_text()
     values = {
-        key: rust_constant(path, symbol)
+        key: rust_constant(path, symbol, runtime_text)
         for key, (path, symbol) in SOURCE_CONSTANTS.items()
     }
-    if len(values.values()) != len(set(values.values())):
+    if len(values) != len(set(values.values())):
         duplicates = sorted(
             value for value in set(values.values()) if list(values.values()).count(value) > 1
         )
