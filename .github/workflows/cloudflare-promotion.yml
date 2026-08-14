@@ -1,0 +1,450 @@
+name: Cloudflare Promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact accepted main source SHA to promote
+        required: true
+        type: string
+      quality_run_id:
+        description: Successful main-push Quality Gate run that built the release
+        required: true
+        type: string
+      artifact_id:
+        description: Exact D2 immutable release artifact ID from that Quality Gate run
+        required: true
+        type: string
+      artifact_sha256:
+        description: Exact SHA-256 of the raw D2 release tar
+        required: true
+        type: string
+      release_id:
+        description: Exact immutable D2 release identifier
+        required: true
+        type: string
+      confirmation:
+        description: Re-enter the exact release_id to authorize the protected promotion request
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  deployments: write
+
+concurrency:
+  group: cloudflare-promotion-${{ inputs.release_id }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Accepted Release And Environment Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout promotion authority from main
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact accepted release and protected environments
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/cloudflare-promotion.py github-preflight
+          --release-sha "${{ inputs.release_sha }}"
+          --quality-run-id "${{ inputs.quality_run_id }}"
+          --artifact-id "${{ inputs.artifact_id }}"
+          --artifact-sha256 "${{ inputs.artifact_sha256 }}"
+          --release-id "${{ inputs.release_id }}"
+          --confirmation "${{ inputs.confirmation }}"
+          --repository "$GITHUB_REPOSITORY"
+          --workflow-ref "$GITHUB_REF"
+          --workflow-sha "$GITHUB_SHA"
+          --api-url "$GITHUB_API_URL"
+
+  staging-deploy:
+    name: Staging Deploy Exact Release
+    needs: [preflight]
+    environment: staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+    steps:
+      - name: Checkout exact accepted release source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ inputs.release_sha }}
+          persist-credentials: false
+
+      - name: Download exact immutable release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          run-id: ${{ inputs.quality_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: artifacts/promotion-input
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Locate exact raw release tar
+        id: release-file
+        run: |
+          mapfile -t files < <(find artifacts/promotion-input -type f -print)
+          test "${#files[@]}" -eq 1
+          echo "archive=${files[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize environment manifest without logging values
+        run: |
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/cloudflare-staging-manifest.json"
+
+      - name: Prepare exact artifact and ephemeral staging config
+        id: prepare
+        run: >-
+          python scripts/cloudflare-promotion.py prepare
+          --archive "${{ steps.release-file.outputs.archive }}"
+          --artifact-sha256 "${{ inputs.artifact_sha256 }}"
+          --release-sha "${{ inputs.release_sha }}"
+          --release-id "${{ inputs.release_id }}"
+          --repository "$GITHUB_REPOSITORY"
+          --environment staging
+          --environment-manifest "$RUNNER_TEMP/cloudflare-staging-manifest.json"
+
+      - name: Move ephemeral config beside canonical Wrangler authority
+        run: mv "${{ steps.prepare.outputs.config }}" deploy/cloudflare/wrangler.promotion.json
+
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce pinned Node and npm
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Verify staging D1 is already exact before D4
+        run: |
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB \
+            --remote \
+            --env staging \
+            --config deploy/cloudflare/wrangler.promotion.json \
+            --command "SELECT name FROM d1_migrations ORDER BY id;" \
+            --json > "$RUNNER_TEMP/staging-d1-migrations.json"
+          python scripts/cloudflare-promotion.py verify-remote-d1 \
+            --release-manifest "${{ steps.prepare.outputs.release_manifest }}" \
+            --query-json "$RUNNER_TEMP/staging-d1-migrations.json"
+
+      - name: Deploy exact accepted release to staging
+        run: >-
+          npx --yes wrangler@4.94.0 deploy
+          --env staging
+          --config deploy/cloudflare/wrangler.promotion.json
+          --experimental-provision=false
+          --experimental-auto-create=false
+
+  staging-verify:
+    name: Staging Smoke And Attestation
+    needs: [staging-deploy]
+    environment: staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+      CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
+      CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
+    steps:
+      - name: Checkout exact accepted release source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ inputs.release_sha }}
+          persist-credentials: false
+
+      - name: Download exact immutable release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          run-id: ${{ inputs.quality_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: artifacts/promotion-input
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Locate exact raw release tar
+        id: release-file
+        run: |
+          mapfile -t files < <(find artifacts/promotion-input -type f -print)
+          test "${#files[@]}" -eq 1
+          echo "archive=${files[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize environment manifest without logging values
+        run: |
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/cloudflare-staging-manifest.json"
+
+      - name: Prepare exact artifact and ephemeral staging config
+        id: prepare
+        run: >-
+          python scripts/cloudflare-promotion.py prepare
+          --archive "${{ steps.release-file.outputs.archive }}"
+          --artifact-sha256 "${{ inputs.artifact_sha256 }}"
+          --release-sha "${{ inputs.release_sha }}"
+          --release-id "${{ inputs.release_id }}"
+          --repository "$GITHUB_REPOSITORY"
+          --environment staging
+          --environment-manifest "$RUNNER_TEMP/cloudflare-staging-manifest.json"
+
+      - name: Move ephemeral config beside canonical Wrangler authority
+        run: mv "${{ steps.prepare.outputs.config }}" deploy/cloudflare/wrangler.promotion.json
+
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce pinned Node and npm
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Read actual staging deployment status
+        run: >-
+          npx --yes wrangler@4.94.0 deployments status
+          --env staging
+          --config deploy/cloudflare/wrangler.promotion.json
+          --json > "$RUNNER_TEMP/staging-deployment-status.json"
+
+      - name: Smoke staging custom domain through Cloudflare Access
+        run: |
+          test -n "$CLOUDFLARE_ACCESS_CLIENT_ID"
+          test -n "$CLOUDFLARE_ACCESS_CLIENT_SECRET"
+          curl --fail --silent --show-error --location --retry 3 \
+            --header "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" \
+            --header "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" \
+            "https://${{ steps.prepare.outputs.custom_domain }}/" \
+            --output "$RUNNER_TEMP/staging-smoke-body"
+          test -s "$RUNNER_TEMP/staging-smoke-body"
+
+      - name: Record exact staging attestation
+        id: attestation
+        run: >-
+          python scripts/cloudflare-promotion.py attest
+          --environment staging
+          --release-manifest "${{ steps.prepare.outputs.release_manifest }}"
+          --artifact-sha256 "${{ inputs.artifact_sha256 }}"
+          --workflow-run-id "$GITHUB_RUN_ID"
+          --workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
+          --deployment-status-json "$RUNNER_TEMP/staging-deployment-status.json"
+          --smoke-body "$RUNNER_TEMP/staging-smoke-body"
+
+      - name: Upload staging promotion attestation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          path: ${{ steps.attestation.outputs.attestation }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 90
+
+  production-deploy:
+    name: Protected Production Deploy Exact Release
+    needs: [staging-verify]
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+    steps:
+      - name: Checkout exact accepted release source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ inputs.release_sha }}
+          persist-credentials: false
+
+      - name: Download exact immutable release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          run-id: ${{ inputs.quality_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: artifacts/promotion-input
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Locate exact raw release tar
+        id: release-file
+        run: |
+          mapfile -t files < <(find artifacts/promotion-input -type f -print)
+          test "${#files[@]}" -eq 1
+          echo "archive=${files[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize environment manifest without logging values
+        run: |
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/cloudflare-production-manifest.json"
+
+      - name: Prepare exact artifact and ephemeral production config
+        id: prepare
+        run: >-
+          python scripts/cloudflare-promotion.py prepare
+          --archive "${{ steps.release-file.outputs.archive }}"
+          --artifact-sha256 "${{ inputs.artifact_sha256 }}"
+          --release-sha "${{ inputs.release_sha }}"
+          --release-id "${{ inputs.release_id }}"
+          --repository "$GITHUB_REPOSITORY"
+          --environment production
+          --environment-manifest "$RUNNER_TEMP/cloudflare-production-manifest.json"
+
+      - name: Move ephemeral config beside canonical Wrangler authority
+        run: mv "${{ steps.prepare.outputs.config }}" deploy/cloudflare/wrangler.promotion.json
+
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce pinned Node and npm
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Verify production D1 is already exact before D4
+        run: |
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB \
+            --remote \
+            --env production \
+            --config deploy/cloudflare/wrangler.promotion.json \
+            --command "SELECT name FROM d1_migrations ORDER BY id;" \
+            --json > "$RUNNER_TEMP/production-d1-migrations.json"
+          python scripts/cloudflare-promotion.py verify-remote-d1 \
+            --release-manifest "${{ steps.prepare.outputs.release_manifest }}" \
+            --query-json "$RUNNER_TEMP/production-d1-migrations.json"
+
+      - name: Deploy exact accepted release to protected production
+        run: >-
+          npx --yes wrangler@4.94.0 deploy
+          --env production
+          --config deploy/cloudflare/wrangler.promotion.json
+          --experimental-provision=false
+          --experimental-auto-create=false
+
+  production-verify:
+    name: Production Verification And Attestation
+    needs: [production-deploy]
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+      CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
+      CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
+    steps:
+      - name: Checkout exact accepted release source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ inputs.release_sha }}
+          persist-credentials: false
+
+      - name: Download exact immutable release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          run-id: ${{ inputs.quality_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: artifacts/promotion-input
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Locate exact raw release tar
+        id: release-file
+        run: |
+          mapfile -t files < <(find artifacts/promotion-input -type f -print)
+          test "${#files[@]}" -eq 1
+          echo "archive=${files[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Materialize environment manifest without logging values
+        run: |
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/cloudflare-production-manifest.json"
+
+      - name: Prepare exact artifact and ephemeral production config
+        id: prepare
+        run: >-
+          python scripts/cloudflare-promotion.py prepare
+          --archive "${{ steps.release-file.outputs.archive }}"
+          --artifact-sha256 "${{ inputs.artifact_sha256 }}"
+          --release-sha "${{ inputs.release_sha }}"
+          --release-id "${{ inputs.release_id }}"
+          --repository "$GITHUB_REPOSITORY"
+          --environment production
+          --environment-manifest "$RUNNER_TEMP/cloudflare-production-manifest.json"
+
+      - name: Move ephemeral config beside canonical Wrangler authority
+        run: mv "${{ steps.prepare.outputs.config }}" deploy/cloudflare/wrangler.promotion.json
+
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce pinned Node and npm
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Read actual production deployment status
+        run: >-
+          npx --yes wrangler@4.94.0 deployments status
+          --env production
+          --config deploy/cloudflare/wrangler.promotion.json
+          --json > "$RUNNER_TEMP/production-deployment-status.json"
+
+      - name: Smoke production custom domain through Cloudflare Access
+        run: |
+          test -n "$CLOUDFLARE_ACCESS_CLIENT_ID"
+          test -n "$CLOUDFLARE_ACCESS_CLIENT_SECRET"
+          curl --fail --silent --show-error --location --retry 3 \
+            --header "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" \
+            --header "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" \
+            "https://${{ steps.prepare.outputs.custom_domain }}/" \
+            --output "$RUNNER_TEMP/production-smoke-body"
+          test -s "$RUNNER_TEMP/production-smoke-body"
+
+      - name: Record exact production attestation
+        id: attestation
+        run: >-
+          python scripts/cloudflare-promotion.py attest
+          --environment production
+          --release-manifest "${{ steps.prepare.outputs.release_manifest }}"
+          --artifact-sha256 "${{ inputs.artifact_sha256 }}"
+          --workflow-run-id "$GITHUB_RUN_ID"
+          --workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
+          --deployment-status-json "$RUNNER_TEMP/production-deployment-status.json"
+          --smoke-body "$RUNNER_TEMP/production-smoke-body"
+
+      - name: Upload production promotion attestation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          path: ${{ steps.attestation.outputs.attestation }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 90
