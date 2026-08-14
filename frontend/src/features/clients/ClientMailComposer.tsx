@@ -109,7 +109,7 @@ function receiptMessage(receipt: ClientMailSendReceiptDto | undefined): string |
     case 'AMBIGUOUS':
       return 'Delivery is uncertain. Do not resend from this screen; verify delivery or reconcile the mailbox first.';
     case 'REJECTED':
-      return 'The send was rejected. Review the mailbox and message fields before creating a new attempt.';
+      return 'The send was rejected. Change the mailbox or message fields before creating a new protected attempt.';
   }
 }
 
@@ -189,7 +189,13 @@ export function ClientMailComposer({
   const receipt = send.data;
   const canRetryReceipt = receipt?.state === 'RETRYABLE' && attempt !== null;
   const canRetryTransport = send.isError && attempt !== null;
-  const terminal = receipt?.state === 'SENT' || receipt?.state === 'AMBIGUOUS' || receipt?.state === 'REJECTED';
+  const lockedAttempt =
+    receipt?.state === 'PENDING' ||
+    receipt?.state === 'DISPATCHING' ||
+    receipt?.state === 'SENT' ||
+    receipt?.state === 'AMBIGUOUS';
+  const rejectedNeedsEdit = receipt?.state === 'REJECTED';
+  const fieldsDisabled = send.isPending || lockedAttempt;
 
   return (
     <section className="mail-message-detail" aria-labelledby="client-mail-compose-title">
@@ -216,7 +222,7 @@ export function ClientMailComposer({
           id="client-mail-compose-from"
           value={mailboxBindingId}
           required
-          disabled={isSourceOperation(operation) || send.isPending || terminal}
+          disabled={isSourceOperation(operation) || fieldsDisabled}
           onChange={(event) => {
             setMailboxBindingId(event.currentTarget.value);
             invalidateAttempt();
@@ -237,7 +243,7 @@ export function ClientMailComposer({
               id="client-mail-compose-to"
               value={to}
               autoComplete="off"
-              disabled={send.isPending || terminal}
+              disabled={fieldsDisabled}
               onChange={(event) => {
                 setTo(event.currentTarget.value);
                 invalidateAttempt();
@@ -249,7 +255,7 @@ export function ClientMailComposer({
               id="client-mail-compose-cc"
               value={cc}
               autoComplete="off"
-              disabled={send.isPending || terminal}
+              disabled={fieldsDisabled}
               onChange={(event) => {
                 setCc(event.currentTarget.value);
                 invalidateAttempt();
@@ -260,7 +266,7 @@ export function ClientMailComposer({
               id="client-mail-compose-bcc"
               value={bcc}
               autoComplete="off"
-              disabled={send.isPending || terminal}
+              disabled={fieldsDisabled}
               onChange={(event) => {
                 setBcc(event.currentTarget.value);
                 invalidateAttempt();
@@ -279,7 +285,7 @@ export function ClientMailComposer({
               id="client-mail-compose-subject"
               value={subject}
               maxLength={998}
-              disabled={send.isPending || terminal}
+              disabled={fieldsDisabled}
               onChange={(event) => {
                 setSubject(event.currentTarget.value);
                 invalidateAttempt();
@@ -294,7 +300,7 @@ export function ClientMailComposer({
           value={textBody}
           maxLength={1_048_576}
           required
-          disabled={send.isPending || terminal}
+          disabled={fieldsDisabled}
           onChange={(event) => {
             setTextBody(event.currentTarget.value);
             invalidateAttempt();
@@ -304,7 +310,13 @@ export function ClientMailComposer({
 
         <button
           type="submit"
-          disabled={send.isPending || terminal || mailboxes.length === 0 || !sourceEligible}
+          disabled={
+            send.isPending ||
+            lockedAttempt ||
+            rejectedNeedsEdit ||
+            mailboxes.length === 0 ||
+            !sourceEligible
+          }
         >
           {send.isPending ? 'Sending protected attempt…' : 'Send'}
         </button>
