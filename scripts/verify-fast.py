@@ -45,6 +45,7 @@ def main() -> int:
         "check-frontend-feature-boundaries.py",
         "check-documentation-authority.py",
         "check-phase1a-event-boundaries.py",
+        "check-phase2e-mailbox-boundaries.py",
         "check-pre2j-d3-resolver-bootstrap-authority.py",
         "check-pre2j-d3-resolver-bootstrap-implementation.py",
     ]

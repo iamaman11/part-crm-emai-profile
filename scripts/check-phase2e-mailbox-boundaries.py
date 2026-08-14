@@ -186,9 +186,9 @@ def enforce(root: Path) -> None:
         (
             'MAILBOX_SECRET_RESOLVER_BINDING: &str = "MAILBOX_SECRET_RESOLVER"',
             ".service(MAILBOX_SECRET_RESOLVER_BINDING)",
-            '"x-profile-tenant-id"',
-            '"x-profile-mailbox-secret-handle"',
-            '"x-profile-mailbox-provider"',
+            "signed_resolver_request(",
+            '"secretHandle"',
+            '"provider"',
             "MAX_SECRET_DOCUMENT_BYTES",
             ".zeroize()",
         ),
@@ -196,7 +196,36 @@ def enforce(root: Path) -> None:
     assert_absent(
         "cloud_mailbox_secrets.rs",
         secret_resolver,
-        ("secret_store(handle", "env.secret(handle", "env.var(handle"),
+        (
+            "secret_store(handle",
+            "env.secret(handle",
+            "env.var(handle",
+            '"x-profile-tenant-id"',
+            '"x-profile-mailbox-secret-handle"',
+            '"x-profile-mailbox-provider"',
+        ),
+    )
+
+    signed_resolver = read(adapters / "resolver_request.rs")
+    assert_contains(
+        "resolver_request.rs",
+        signed_resolver,
+        (
+            "Hmac<Sha256>",
+            "serde_json::to_string",
+            '"x-resolver-signature-version"',
+            '"x-resolver-body-sha256"',
+            '"x-resolver-timestamp-ms"',
+            '"x-resolver-nonce"',
+            '"x-resolver-signature"',
+            "MAX_REQUEST_BYTES",
+            ".zeroize()",
+        ),
+    )
+    assert_absent(
+        "resolver_request.rs",
+        production_source(signed_resolver),
+        ('"x-profile-', "println!(", "eprintln!(", "dbg!(", "console_"),
     )
 
     cloud_query = read(adapters / "cloud_mail_query.rs")

@@ -86,6 +86,7 @@ ALLOWED_IMPLEMENTATION_PATHS = {
     "scripts/check-cloudflare-runtime-bindings.py",
     "scripts/cloudflare-deploy-config.py",
     "scripts/check-phase2i-release-freeze.sh",
+    "scripts/check-phase2e-mailbox-boundaries.py",
     "scripts/mailbox-secret-resolver-promotion.py",
     "scripts/mailbox-secret-resolver-release.py",
     "scripts/verify-fast.py",
