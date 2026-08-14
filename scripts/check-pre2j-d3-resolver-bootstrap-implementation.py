@@ -83,6 +83,7 @@ ALLOWED_IMPLEMENTATION_PATHS = {
     "deploy/cloudflare/wrangler.jsonc",
     "scripts/check-pre2j-d3-resolver-bootstrap-implementation.py",
     "scripts/check-d1-boundary.py",
+    "scripts/check-cloudflare-runtime-bindings.py",
     "scripts/cloudflare-deploy-config.py",
     "scripts/check-phase2i-release-freeze.sh",
     "scripts/mailbox-secret-resolver-promotion.py",
