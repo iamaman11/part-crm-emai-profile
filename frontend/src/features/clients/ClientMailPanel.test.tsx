@@ -82,6 +82,9 @@ describe('ClientMailPanel mailbox scoping', () => {
     renderPanel();
 
     const searchMailbox = await screen.findByLabelText('Current-client mailbox');
+    await waitFor(() => {
+      expect(within(searchMailbox).getByRole('option', { name: 'binding_current · GMAIL_API' })).toBeTruthy();
+    });
     const options = within(searchMailbox).getAllByRole('option').map((option) => option.textContent);
     expect(options).toEqual(['Select mailbox', 'binding_current · GMAIL_API']);
     expect(screen.queryByText(/binding_foreign/u)).toBeNull();
@@ -94,6 +97,6 @@ describe('ClientMailPanel mailbox scoping', () => {
     const from = screen.getByLabelText('From');
     const fromOptions = within(from).getAllByRole('option').map((option) => option.textContent);
     expect(fromOptions).toEqual(['Select eligible mailbox', 'binding_current · GMAIL_API']);
-    await waitFor(() => expect(mockedListMailboxes).toHaveBeenCalledTimes(1));
+    expect(mockedListMailboxes).toHaveBeenCalledTimes(1);
   });
 });
