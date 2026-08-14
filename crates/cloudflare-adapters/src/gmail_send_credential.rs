@@ -1,7 +1,9 @@
 use crate::cloud_mailbox_secrets::MAILBOX_SECRET_RESOLVER_BINDING;
+use crate::resolver_request::signed_resolver_request;
 use mailbox_domain::{MailboxBinding, MailboxProvider};
 use serde::Deserialize;
-use worker::{Env, Headers, Method, RequestInit};
+use serde_json::{Map, Value};
+use worker::Env;
 use zeroize::Zeroize;
 
 const RESOLVE_ENDPOINT: &str =
@@ -41,12 +43,29 @@ pub async fn resolve_gmail_send_credential(
     if binding.provider() != MailboxProvider::GmailApi || !binding.is_executable() {
         return Err(GmailSendCredentialError::Rejected);
     }
-    let headers = resolver_headers(binding)?;
     let resolver = env
         .service(MAILBOX_SECRET_RESOLVER_BINDING)
         .map_err(|_| GmailSendCredentialError::IntegrityFailure)?;
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post).with_headers(headers);
+    let payload = Map::from_iter([
+        (
+            "mailboxBindingId".to_owned(),
+            Value::String(binding.binding_id().as_str().to_owned()),
+        ),
+        (
+            "secretHandle".to_owned(),
+            Value::String(binding.secret_handle().as_str().to_owned()),
+        ),
+        ("provider".to_owned(), Value::String("GMAIL_API".to_owned())),
+        ("capability".to_owned(), Value::String("SEND".to_owned())),
+    ]);
+    let init = signed_resolver_request(
+        env,
+        RESOLVE_ENDPOINT,
+        binding.tenant_id().as_str(),
+        "gmail_send",
+        payload,
+    )
+    .map_err(|_| GmailSendCredentialError::IntegrityFailure)?;
     let mut response = resolver
         .fetch(RESOLVE_ENDPOINT, Some(init))
         .await
@@ -86,31 +105,6 @@ fn valid_credential_value(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_CREDENTIAL_VALUE_LENGTH
         && !value.chars().any(char::is_control)
-}
-
-fn resolver_headers(binding: &MailboxBinding) -> Result<Headers, GmailSendCredentialError> {
-    let headers = Headers::new();
-    set_header(&headers, "accept", "application/json")?;
-    set_header(&headers, "cache-control", "no-store")?;
-    set_header(
-        &headers,
-        "x-profile-tenant-id",
-        binding.tenant_id().as_str(),
-    )?;
-    set_header(
-        &headers,
-        "x-profile-mailbox-secret-handle",
-        binding.secret_handle().as_str(),
-    )?;
-    set_header(&headers, "x-profile-mailbox-provider", "GMAIL_API")?;
-    set_header(&headers, "x-profile-mailbox-capability", "SEND")?;
-    Ok(headers)
-}
-
-fn set_header(headers: &Headers, name: &str, value: &str) -> Result<(), GmailSendCredentialError> {
-    headers
-        .set(name, value)
-        .map_err(|_| GmailSendCredentialError::IntegrityFailure)
 }
 
 fn response_content_length_exceeds(

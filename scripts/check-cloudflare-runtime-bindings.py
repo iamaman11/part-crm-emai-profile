@@ -66,6 +66,10 @@ SOURCE_CONSTANTS = {
         "apps/control-plane-worker/src/composition.rs",
         "CLIENT_CONTACT_PROTECTION_KEYRING_BINDING",
     ),
+    "mailbox_resolver_caller_auth": (
+        "crates/cloudflare-adapters/src/resolver_request.rs",
+        "CALLER_AUTH_SECRET",
+    ),
     "r2_account_id": (
         "apps/control-plane-worker/src/composition.rs",
         "R2_GENERATION_ACCOUNT_ID_BINDING",
@@ -177,6 +181,7 @@ def validate_config(document: dict[str, object], source: dict[str, str]) -> None
     }
     expected_secrets = {
         source["contact_keyring"],
+        source["mailbox_resolver_caller_auth"],
         source["r2_access_key_id"],
         source["r2_secret_access_key"],
     }

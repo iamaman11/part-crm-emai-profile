@@ -45,6 +45,7 @@
       "secrets": {
         "required": [
           "CLIENT_CONTACT_PROTECTION_KEYRING",
+          "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
           "R2_GENERATION_ACCESS_KEY_ID",
           "R2_GENERATION_SECRET_ACCESS_KEY"
         ]
@@ -129,6 +130,7 @@
       "secrets": {
         "required": [
           "CLIENT_CONTACT_PROTECTION_KEYRING",
+          "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
           "R2_GENERATION_ACCESS_KEY_ID",
           "R2_GENERATION_SECRET_ACCESS_KEY"
         ]

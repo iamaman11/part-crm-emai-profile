@@ -45,6 +45,9 @@ def main() -> int:
         "check-frontend-feature-boundaries.py",
         "check-documentation-authority.py",
         "check-phase1a-event-boundaries.py",
+        "check-phase2e-mailbox-boundaries.py",
+        "check-pre2j-d3-resolver-bootstrap-authority.py",
+        "check-pre2j-d3-resolver-bootstrap-implementation.py",
     ]
     for script in scripts:
         run(script, [sys.executable, str(ROOT / "scripts" / script)])
@@ -64,6 +67,14 @@ def main() -> int:
     run(
         "architecture inventory negative proof",
         [sys.executable, str(ROOT / "scripts" / "test-architecture-inventory-negative.py")],
+    )
+    run(
+        "resolver release negative provenance",
+        [sys.executable, str(ROOT / "scripts" / "mailbox-secret-resolver-release.py"), "self-test"],
+    )
+    run(
+        "resolver promotion secret and same-bits policy",
+        [sys.executable, str(ROOT / "scripts" / "mailbox-secret-resolver-promotion.py"), "self-test"],
     )
 
     status_path = ROOT / "docs" / "status.json"
@@ -93,6 +104,22 @@ def main() -> int:
         run(
             "Worker native check",
             ["cargo", "check", "--locked", "-p", "browser-profile-control-plane-worker"],
+        )
+        run(
+            "Mailbox resolver native check",
+            ["cargo", "check", "--locked", "-p", "mailbox-secret-resolver-worker"],
+        )
+        run(
+            "Mailbox resolver WASM check",
+            [
+                "cargo",
+                "check",
+                "--locked",
+                "-p",
+                "mailbox-secret-resolver-worker",
+                "--target",
+                "wasm32-unknown-unknown",
+            ],
         )
         run(
             "Pure crates WASM check",

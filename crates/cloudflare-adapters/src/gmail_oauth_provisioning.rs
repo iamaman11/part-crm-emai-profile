@@ -9,7 +9,10 @@ use profile_platform_primitives::{
     ActorContext, ActorId, MailboxOnboardingId, SecretHandle, TenantId, UnixMillis,
 };
 use serde::Deserialize;
-use worker::{Env, Headers, Method, RequestInit};
+use serde_json::{Map, Value};
+use worker::Env;
+
+use crate::resolver_request::{oauth_callback_tenant, signed_resolver_request};
 
 const START_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/gmail/oauth/start";
@@ -42,19 +45,24 @@ impl GmailOAuthProvisioningPort for CloudflareGmailOAuthProvisioningPort<'_> {
         onboarding_id: &MailboxOnboardingId,
         expected_version: MailboxOnboardingVersion,
     ) -> Result<GmailOAuthStartReceipt, GmailOAuthProvisioningError> {
-        let headers = base_actor_headers(actor)?;
-        set_header(
-            &headers,
-            "x-profile-mailbox-onboarding-id",
-            onboarding_id.as_str(),
-        )?;
-        set_header(
-            &headers,
-            "x-profile-mailbox-onboarding-version",
-            &expected_version.value().to_string(),
-        )?;
-        set_header(&headers, "x-profile-oauth-scope", GMAIL_READONLY_SCOPE)?;
-        let response = fetch(self.env, START_ENDPOINT, headers, StartStatus::Start).await?;
+        let payload = Map::from_iter([
+            actor_field(actor),
+            string_field("mailboxOnboardingId", onboarding_id.as_str()),
+            (
+                "mailboxOnboardingVersion".to_owned(),
+                Value::from(expected_version.value()),
+            ),
+            string_field("oauthScope", GMAIL_READONLY_SCOPE),
+        ]);
+        let response = fetch(
+            self.env,
+            START_ENDPOINT,
+            actor.tenant_scope().tenant_id().as_str(),
+            "gmail_read_oauth",
+            payload,
+            StartStatus::Start,
+        )
+        .await?;
         let document: StartDocument = parse_json(response).await?;
         let ceremony_id =
             GmailOAuthCeremonyId::parse(document.ceremony_id).map_err(|_| integrity_error())?;
@@ -71,9 +79,17 @@ impl GmailOAuthProvisioningPort for CloudflareGmailOAuthProvisioningPort<'_> {
         &self,
         state: &GmailOAuthState,
     ) -> Result<GmailOAuthCallbackTarget, GmailOAuthProvisioningError> {
-        let headers = common_headers()?;
-        set_header(&headers, "x-profile-oauth-state", state.as_str())?;
-        let response = fetch(self.env, INSPECT_ENDPOINT, headers, StartStatus::Callback).await?;
+        let tenant_id = oauth_callback_tenant(state.as_str()).map_err(|_| integrity_error())?;
+        let payload = Map::from_iter([string_field("oauthState", state.as_str())]);
+        let response = fetch(
+            self.env,
+            INSPECT_ENDPOINT,
+            tenant_id,
+            "gmail_read_oauth",
+            payload,
+            StartStatus::Callback,
+        )
+        .await?;
         let document: InspectDocument = parse_json(response).await?;
         let tenant_id = TenantId::parse(document.tenant_id).map_err(|_| integrity_error())?;
         let onboarding_id =
@@ -95,14 +111,21 @@ impl GmailOAuthProvisioningPort for CloudflareGmailOAuthProvisioningPort<'_> {
         state: &GmailOAuthState,
         authorization_code: GmailOAuthAuthorizationCode,
     ) -> Result<SecretHandle, GmailOAuthProvisioningError> {
-        let headers = base_actor_headers(actor)?;
-        set_header(&headers, "x-profile-oauth-state", state.as_str())?;
-        set_header(
-            &headers,
-            "x-profile-oauth-authorization-code",
-            authorization_code.as_str(),
-        )?;
-        let response = fetch(self.env, COMPLETE_ENDPOINT, headers, StartStatus::Callback).await?;
+        require_actor_state_tenant(actor, state.as_str())?;
+        let payload = Map::from_iter([
+            actor_field(actor),
+            string_field("oauthState", state.as_str()),
+            string_field("oauthAuthorizationCode", authorization_code.as_str()),
+        ]);
+        let response = fetch(
+            self.env,
+            COMPLETE_ENDPOINT,
+            actor.tenant_scope().tenant_id().as_str(),
+            "gmail_read_oauth",
+            payload,
+            StartStatus::Callback,
+        )
+        .await?;
         let document: CompletionDocument = parse_json(response).await?;
         SecretHandle::parse(document.secret_handle).map_err(|_| integrity_error())
     }
@@ -112,11 +135,21 @@ impl GmailOAuthProvisioningPort for CloudflareGmailOAuthProvisioningPort<'_> {
         actor: &ActorContext,
         state: &GmailOAuthState,
     ) -> Result<(), GmailOAuthProvisioningError> {
-        let headers = base_actor_headers(actor)?;
-        set_header(&headers, "x-profile-oauth-state", state.as_str())?;
-        fetch(self.env, DENY_ENDPOINT, headers, StartStatus::Callback)
-            .await
-            .map(|_| ())
+        require_actor_state_tenant(actor, state.as_str())?;
+        let payload = Map::from_iter([
+            actor_field(actor),
+            string_field("oauthState", state.as_str()),
+        ]);
+        fetch(
+            self.env,
+            DENY_ENDPOINT,
+            actor.tenant_scope().tenant_id().as_str(),
+            "gmail_read_oauth",
+            payload,
+            StartStatus::Callback,
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn discard(
@@ -124,16 +157,21 @@ impl GmailOAuthProvisioningPort for CloudflareGmailOAuthProvisioningPort<'_> {
         actor: &ActorContext,
         secret_handle: &SecretHandle,
     ) -> Result<(), GmailOAuthProvisioningError> {
-        let headers = base_actor_headers(actor)?;
-        set_header(
-            &headers,
-            "x-profile-mailbox-secret-handle",
-            secret_handle.as_str(),
-        )?;
-        set_header(&headers, "x-profile-mailbox-provider", "GMAIL_API")?;
-        fetch(self.env, DISCARD_ENDPOINT, headers, StartStatus::Discard)
-            .await
-            .map(|_| ())
+        let payload = Map::from_iter([
+            actor_field(actor),
+            string_field("secretHandle", secret_handle.as_str()),
+            string_field("provider", "GMAIL_API"),
+        ]);
+        fetch(
+            self.env,
+            DISCARD_ENDPOINT,
+            actor.tenant_scope().tenant_id().as_str(),
+            "credential_discard",
+            payload,
+            StartStatus::Discard,
+        )
+        .await
+        .map(|_| ())
     }
 }
 
@@ -147,14 +185,16 @@ enum StartStatus {
 async fn fetch(
     env: &Env,
     endpoint: &str,
-    headers: Headers,
+    tenant_id: &str,
+    purpose: &str,
+    payload: Map<String, Value>,
     operation: StartStatus,
 ) -> Result<worker::Response, GmailOAuthProvisioningError> {
     let resolver = env
         .service(MAILBOX_SECRET_RESOLVER_BINDING)
         .map_err(|_| integrity_error())?;
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post).with_headers(headers);
+    let init = signed_resolver_request(env, endpoint, tenant_id, purpose, payload)
+        .map_err(|_| integrity_error())?;
     let response = resolver
         .fetch(endpoint, Some(init))
         .await
@@ -163,30 +203,24 @@ async fn fetch(
     Ok(response)
 }
 
-fn common_headers() -> Result<Headers, GmailOAuthProvisioningError> {
-    let headers = Headers::new();
-    set_header(&headers, "accept", "application/json")?;
-    set_header(&headers, "cache-control", "no-store")?;
-    Ok(headers)
+fn actor_field(actor: &ActorContext) -> (String, Value) {
+    string_field("actorId", actor.actor_id().as_str())
 }
 
-fn base_actor_headers(actor: &ActorContext) -> Result<Headers, GmailOAuthProvisioningError> {
-    let headers = common_headers()?;
-    set_header(
-        &headers,
-        "x-profile-tenant-id",
-        actor.tenant_scope().tenant_id().as_str(),
-    )?;
-    set_header(&headers, "x-profile-actor-id", actor.actor_id().as_str())?;
-    Ok(headers)
+fn string_field(name: &str, value: &str) -> (String, Value) {
+    (name.to_owned(), Value::String(value.to_owned()))
 }
 
-fn set_header(
-    headers: &Headers,
-    name: &str,
-    value: &str,
+fn require_actor_state_tenant(
+    actor: &ActorContext,
+    state: &str,
 ) -> Result<(), GmailOAuthProvisioningError> {
-    headers.set(name, value).map_err(|_| integrity_error())
+    if oauth_callback_tenant(state).map_err(|_| integrity_error())?
+        != actor.tenant_scope().tenant_id().as_str()
+    {
+        return Err(integrity_error());
+    }
+    Ok(())
 }
 
 fn map_status(status: u16, operation: StartStatus) -> Result<(), GmailOAuthProvisioningError> {

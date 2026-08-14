@@ -1,11 +1,11 @@
 use application_ports::mailboxes::MailboxProviderPortError;
 use mailbox_domain::{MailboxBinding, MailboxProviderFailureClass};
 use serde::Deserialize;
-use worker::wasm_bindgen::JsValue;
-use worker::{Env, Headers, Method, RequestInit};
-use zeroize::Zeroize;
+use serde_json::{Map, Value};
+use worker::Env;
 
 use crate::cloud_mailbox_secrets::{MAILBOX_SECRET_RESOLVER_BINDING, provider_error};
+use crate::resolver_request::signed_resolver_request;
 
 const CURSOR_STORE_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/cursors/store";
@@ -31,7 +31,7 @@ pub async fn store_delta_cursor(
         env,
         binding,
         CURSOR_STORE_ENDPOINT,
-        &serde_json::json!({"providerCursor": provider_cursor}).to_string(),
+        cursor_payload(binding, "providerCursor", provider_cursor),
     )
     .await?;
     map_store_status(response.status_code())?;
@@ -53,7 +53,7 @@ pub async fn resolve_delta_cursor(
         env,
         binding,
         CURSOR_RESOLVE_ENDPOINT,
-        &serde_json::json!({"cursorHandle": handle}).to_string(),
+        cursor_payload(binding, "cursorHandle", handle),
     )
     .await
     .map_err(MicrosoftGraphDeltaCursorError::Provider)?;
@@ -78,42 +78,33 @@ async fn resolver_post(
     env: &Env,
     binding: &MailboxBinding,
     endpoint: &str,
-    body: &str,
+    payload: Map<String, Value>,
 ) -> Result<worker::Response, MailboxProviderPortError> {
     let resolver = env
         .service(MAILBOX_SECRET_RESOLVER_BINDING)
         .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    let headers = Headers::new();
-    headers
-        .set("accept", "application/json")
-        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    headers
-        .set("content-type", "application/json")
-        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    headers
-        .set("cache-control", "no-store")
-        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    headers
-        .set("x-profile-tenant-id", binding.tenant_id().as_str())
-        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    headers
-        .set(
-            "x-profile-mailbox-binding-id",
-            binding.binding_id().as_str(),
-        )
-        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-
-    let mut body = body.to_owned();
-    let js_body = JsValue::from_str(&body);
-    body.zeroize();
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post)
-        .with_headers(headers)
-        .with_body(Some(js_body));
+    let init = signed_resolver_request(
+        env,
+        endpoint,
+        binding.tenant_id().as_str(),
+        "microsoft_graph_cursor",
+        payload,
+    )
+    .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
     resolver
         .fetch(endpoint, Some(init))
         .await
         .map_err(|_| provider_error(MailboxProviderFailureClass::TransientDependency))
+}
+
+fn cursor_payload(binding: &MailboxBinding, name: &str, value: &str) -> Map<String, Value> {
+    Map::from_iter([
+        (
+            "mailboxBindingId".to_owned(),
+            Value::String(binding.binding_id().as_str().to_owned()),
+        ),
+        (name.to_owned(), Value::String(value.to_owned())),
+    ])
 }
 
 fn map_store_status(status: u16) -> Result<(), MailboxProviderPortError> {

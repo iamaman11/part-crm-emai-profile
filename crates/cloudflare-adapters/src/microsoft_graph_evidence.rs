@@ -81,7 +81,7 @@ fn c3g_microsoft_graph_boundaries_are_permanent_and_fail_closed() {
     assert!(query_cursor.contains("const QUERY_CURSOR_PREFIX: &str = \"graph-page:\""));
     assert!(query_cursor.contains("CURSOR_STORE_ENDPOINT"));
     assert!(query_cursor.contains("CURSOR_RESOLVE_ENDPOINT"));
-    assert!(query_cursor.contains("body.zeroize()"));
+    assert!(query_cursor.contains("signed_resolver_request"));
 
     let delta = include_str!("microsoft_graph_delta.rs");
     assert!(delta.contains("/mailFolders/inbox/messages/delta"));
@@ -103,7 +103,11 @@ fn c3g_microsoft_graph_boundaries_are_permanent_and_fail_closed() {
     assert!(delta_cursor.contains("const DELTA_CURSOR_PREFIX: &str = \"graph-delta:\""));
     assert!(delta_cursor.contains("CURSOR_STORE_ENDPOINT"));
     assert!(delta_cursor.contains("CURSOR_RESOLVE_ENDPOINT"));
-    assert!(delta_cursor.contains("body.zeroize()"));
+    assert!(delta_cursor.contains("signed_resolver_request"));
+
+    let resolver_request = include_str!("resolver_request.rs");
+    assert!(resolver_request.contains("zeroize_map(&mut payload)"));
+    assert!(resolver_request.contains("body.zeroize()"));
 
     let worker =
         include_str!("../../../apps/control-plane-worker/src/mailbox_microsoft_graph_oauth.rs");
