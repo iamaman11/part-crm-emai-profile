@@ -26,6 +26,7 @@ RELEASE_ROOT = Path("artifacts/mailbox-secret-resolver-release")
 MANIFEST_NAME = "release-manifest.json"
 RELEASE_PREFIX = "mailbox-secret-resolver-v1-sha256-"
 WORKER_FILES = ("index.js", "index_bg.wasm", "worker/shim.mjs")
+GENERATED_METADATA_FILES = {".gitignore", "index.d.ts", "package.json"}
 IDENTITY_FIELDS = (
     "release_id",
     "source_commit_sha",
@@ -120,7 +121,7 @@ def worker_digest(directory: Path) -> str:
         for path in directory.rglob("*")
         if path.is_file()
         and path.relative_to(directory).parts[0] != ".tmp"
-        and path.name not in {"package.json", "index.d.ts"}
+        and path.name not in GENERATED_METADATA_FILES
     )
     if actual != sorted(WORKER_FILES):
         fail(f"resolver Worker runtime inventory drifted: {actual}")
@@ -387,6 +388,7 @@ def fixture_root(root: Path) -> None:
     (worker / "index.js").write_text("import wasm from './index_bg.wasm';\n", encoding="utf-8")
     (worker / "index_bg.wasm").write_bytes(b"\x00asmfixture")
     (worker / "worker" / "shim.mjs").write_text("export * from '../index.js';\n", encoding="utf-8")
+    (worker / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
     (root / MIGRATIONS).mkdir(parents=True)
     (root / MIGRATIONS / "0001_fixture.sql").write_text("SELECT 1;\n", encoding="utf-8")
     (root / CONFIG).parent.mkdir(parents=True)
@@ -447,6 +449,13 @@ def self_test() -> None:
         )
         if first != second or first_archive.read_bytes() != second_archive.read_bytes():
             fail("identical resolver inputs produced different immutable releases")
+        unexpected_worker_file = root / WORKER_BUILD / "unexpected.js"
+        unexpected_worker_file.write_text("export {};\n", encoding="utf-8")
+        expect_rejected(
+            "unexpected Worker build file",
+            lambda: worker_digest(root / WORKER_BUILD),
+        )
+        unexpected_worker_file.unlink()
         release_directory = first_archive.parent / first["release_id"]
         worker = release_directory / "worker" / "index_bg.wasm"
         original = worker.read_bytes()

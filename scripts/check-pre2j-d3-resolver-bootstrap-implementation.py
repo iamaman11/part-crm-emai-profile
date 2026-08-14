@@ -394,6 +394,7 @@ def release_script_errors() -> list[str]:
         "resolver_migration_manifest_sha256",
         "resolver_config_sha256",
         "build_toolchain",
+        "GENERATED_METADATA_FILES",
         "deterministic_tar",
         "safe_extract",
     ):
