@@ -81,6 +81,10 @@
         "module": "crates/control-plane-contract/src/routes/clients.rs"
       },
       {
+        "capability": "client_mail",
+        "module": "crates/control-plane-contract/src/routes/client_mail.rs"
+      },
+      {
         "capability": "profiles",
         "module": "crates/control-plane-contract/src/routes/profiles.rs"
       },
@@ -284,6 +288,16 @@
         ],
         "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/mail/message",
         "example_path": "/api/v1/tenants/tenant_01/clients/client_01/mail/message",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientMailSendApi",
+        "capability": "client_mail",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/mail/send",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/mail/send",
         "authenticated": true
       },
       {
