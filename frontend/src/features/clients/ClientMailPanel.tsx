@@ -1,30 +1,84 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTenant } from '../../app/TenantContext';
-import { getClientMailMessage, searchClientMail } from './api';
-import { listMailboxes } from '../mailboxes';
+import type { ClientMailSendOperationDto } from '../../shared/api/generated/client-mail-send';
+import type { MailboxClientAssociationProjectionDto } from '../../shared/api/generated/mailbox-client-association';
+import type { MailboxListItemDto } from '../../shared/api/generated/operator-query';
 import type {
   ClientMailSearchInput,
+  MailMessageBodyDto,
   MailboxMessageReferenceDto,
 } from '../../shared/api/generated/query-mail';
 import { SafeMailBody } from '../../shared/mail/SafeMailBody';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
+import { getMailboxClientAssociation, listMailboxes } from '../mailboxes';
+import { getClientMailMessage, searchClientMail } from './api';
+import {
+  ClientMailComposer,
+  type ClientMailComposerMailbox,
+} from './ClientMailComposer';
 
 type Props = {
   clientId: string;
 };
 
+type RelatedMailbox = {
+  mailbox: MailboxListItemDto;
+  association: MailboxClientAssociationProjectionDto;
+};
+
+type ComposerState = {
+  operation: ClientMailSendOperationDto;
+  source: MailMessageBodyDto | null;
+};
+
+const MAX_MAILBOX_PAGES = 10;
+const MAILBOX_PAGE_SIZE = 100;
+
 function field(form: FormData, name: string): string {
   return String(form.get(name) ?? '').trim();
+}
+
+async function loadRelatedMailboxes(
+  tenantId: string,
+  clientId: string,
+  signal: AbortSignal,
+): Promise<RelatedMailbox[]> {
+  const mailboxes: MailboxListItemDto[] = [];
+  let cursor: string | null = null;
+
+  for (let pageNumber = 0; pageNumber < MAX_MAILBOX_PAGES; pageNumber += 1) {
+    const page = await listMailboxes(tenantId, signal, cursor, MAILBOX_PAGE_SIZE);
+    if (!page) break;
+    mailboxes.push(...page.mailboxes);
+    cursor = page.nextCursor;
+    if (!cursor) break;
+    if (pageNumber === MAX_MAILBOX_PAGES - 1) {
+      throw new Error('Mailbox list exceeded the bounded Client Mail read window.');
+    }
+  }
+
+  const cloudMailboxes = mailboxes.filter(
+    (mailbox) => mailbox.provider === 'GMAIL_API' || mailbox.provider === 'IMAP',
+  );
+  const related = await Promise.all(
+    cloudMailboxes.map(async (mailbox) => {
+      const association = await getMailboxClientAssociation(tenantId, mailbox.bindingId);
+      if (!association || association.clientId !== clientId) return null;
+      return { mailbox, association } satisfies RelatedMailbox;
+    }),
+  );
+  return related.filter((item): item is RelatedMailbox => item !== null);
 }
 
 export function ClientMailPanel({ clientId }: Props) {
   const { tenantId } = useTenant();
   const [lastInput, setLastInput] = useState<ClientMailSearchInput | null>(null);
+  const [composer, setComposer] = useState<ComposerState | null>(null);
   const mailboxQuery = useQuery({
-    queryKey: ['operator-query', tenantId, 'mailboxes'],
-    queryFn: ({ signal }) => listMailboxes(tenantId, signal),
-    enabled: tenantId.length > 0,
+    queryKey: ['client-mail', tenantId, clientId, 'mailboxes'],
+    queryFn: ({ signal }) => loadRelatedMailboxes(tenantId, clientId, signal),
+    enabled: tenantId.length > 0 && clientId.length > 0,
   });
   const search = useMutation({
     mutationFn: (input: ClientMailSearchInput) => searchClientMail(tenantId, clientId, input),
@@ -34,9 +88,17 @@ export function ClientMailPanel({ clientId }: Props) {
       getClientMailMessage(tenantId, clientId, reference),
   });
 
-  const cloudMailboxes = (mailboxQuery.data?.mailboxes ?? []).filter(
-    (mailbox) => mailbox.status === 'ACTIVE' && mailbox.provider !== 'BROWSER_FALLBACK',
+  const relatedMailboxes = mailboxQuery.data ?? [];
+  const eligibleMailboxes = relatedMailboxes.filter(
+    ({ mailbox, association }) => mailbox.status === 'ACTIVE' && association.mailboxExecutable,
   );
+  const authRequiredMailboxes = relatedMailboxes.filter(
+    ({ mailbox }) => mailbox.status === 'AUTH_REQUIRED',
+  );
+  const composerMailboxes: ClientMailComposerMailbox[] = eligibleMailboxes.map(({ mailbox }) => ({
+    bindingId: mailbox.bindingId,
+    provider: mailbox.provider,
+  }));
   const page = search.data;
 
   function execute(input: ClientMailSearchInput) {
@@ -45,16 +107,54 @@ export function ClientMailPanel({ clientId }: Props) {
     search.mutate(input);
   }
 
+  function openComposer(operation: ClientMailSendOperationDto, source: MailMessageBodyDto | null) {
+    setComposer({ operation, source });
+  }
+
   return (
     <section className="panel full-span" aria-labelledby="client-mail-title">
       <span className="eyebrow">Client → Mail</span>
-      <h2 id="client-mail-title">Authorized mailbox query</h2>
+      <h2 id="client-mail-title">Mail</h2>
       <p>
-        Searches and full message bodies are transient. The browser sends confidential search terms
-        and provider references in authenticated POST bodies rather than URLs, and does not persist
-        them in Web Storage or telemetry.
+        Search, message bodies, and drafts remain transient in browser memory. Confidential terms,
+        provider references, and message content are sent only in authenticated request bodies and
+        are not persisted in Web Storage or telemetry.
       </p>
+
       <StatusMessage state={mailboxQuery.error ?? null} />
+      <button
+        type="button"
+        disabled={mailboxQuery.isPending || composerMailboxes.length === 0}
+        onClick={() => openComposer('NEW', null)}
+      >
+        Compose
+      </button>
+
+      {authRequiredMailboxes.length > 0 && (
+        <p className="muted">
+          {authRequiredMailboxes.length} mailbox{authRequiredMailboxes.length === 1 ? '' : 'es'} associated with this client require re-authentication. Restore authorization in{' '}
+          <a href="/mailboxes">Mailboxes</a>; credentials and secret handles are never shown here.
+        </p>
+      )}
+
+      {!mailboxQuery.isPending && composerMailboxes.length === 0 && (
+        <p className="muted">
+          No active Gmail API or IMAP mailbox is executable for this client. Browser-fallback mailbox execution remains device/Bridge-owned rather than being impersonated by this web operator surface.
+        </p>
+      )}
+
+      {composer && (
+        <ClientMailComposer
+          key={`${composer.operation}:${composer.source?.summary.reference.providerReference ?? 'new'}`}
+          tenantId={tenantId}
+          clientId={clientId}
+          operation={composer.operation}
+          source={composer.source}
+          mailboxes={composerMailboxes}
+          onClose={() => setComposer(null)}
+        />
+      )}
+
       <form
         className="stack-form"
         onSubmit={(event: FormEvent<HTMLFormElement>) => {
@@ -68,15 +168,15 @@ export function ClientMailPanel({ clientId }: Props) {
           });
         }}
       >
-        <label htmlFor="client-mail-binding">Active cloud mailbox</label>
+        <label htmlFor="client-mail-binding">Current-client mailbox</label>
         <select
           id="client-mail-binding"
           name="mailboxBindingId"
           required
-          disabled={mailboxQuery.isPending || cloudMailboxes.length === 0}
+          disabled={mailboxQuery.isPending || eligibleMailboxes.length === 0}
         >
           <option value="">Select mailbox</option>
-          {cloudMailboxes.map((mailbox) => (
+          {eligibleMailboxes.map(({ mailbox }) => (
             <option key={mailbox.bindingId} value={mailbox.bindingId}>
               {mailbox.bindingId} · {mailbox.provider}
             </option>
@@ -84,17 +184,11 @@ export function ClientMailPanel({ clientId }: Props) {
         </select>
         <label htmlFor="client-mail-term">Search term</label>
         <input id="client-mail-term" name="term" maxLength={200} autoComplete="off" />
-        <button type="submit" disabled={search.isPending || cloudMailboxes.length === 0}>
+        <button type="submit" disabled={search.isPending || eligibleMailboxes.length === 0}>
           {search.isPending ? 'Searching…' : 'Search mailbox'}
         </button>
       </form>
 
-      {!mailboxQuery.isPending && cloudMailboxes.length === 0 && (
-        <p className="muted">
-          No active Gmail API or IMAP mailbox is visible. Browser-fallback mailbox execution remains
-          device/Bridge-owned rather than being impersonated by this web operator surface.
-        </p>
-      )}
       <StatusMessage state={search.error ?? message.error ?? null} />
 
       {page && page.messages.length === 0 && <p>No authorized messages matched this bounded query.</p>}
@@ -148,6 +242,17 @@ export function ClientMailPanel({ clientId }: Props) {
             {message.data.summary.sender ?? 'Unknown sender'} ·{' '}
             {new Date(message.data.summary.receivedAtMs).toLocaleString()}
           </p>
+          <div>
+            <button type="button" onClick={() => openComposer('REPLY', message.data ?? null)}>
+              Reply
+            </button>{' '}
+            <button type="button" onClick={() => openComposer('REPLY_ALL', message.data ?? null)}>
+              Reply all
+            </button>{' '}
+            <button type="button" onClick={() => openComposer('FORWARD', message.data ?? null)}>
+              Forward
+            </button>
+          </div>
           <SafeMailBody
             textBody={message.data.textBody}
             htmlBody={message.data.htmlBody}

@@ -1,2 +1,2 @@
-export { listMailboxes } from './api';
+export { getMailboxClientAssociation, listMailboxes } from './api';
 export { createMailboxesRoute } from './route';

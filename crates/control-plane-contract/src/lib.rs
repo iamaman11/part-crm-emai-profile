@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod client_mail_send_api;
 pub mod client_registry_api;
 pub mod coordinator_api;
 pub mod mailbox_api;
@@ -34,6 +35,7 @@ pub enum RouteClass {
     ClientGrantApi,
     ClientMailSearchApi,
     ClientMailMessageApi,
+    ClientMailSendApi,
     ProfileCollectionApi,
     ProfileResourceApi,
     ProfileAssignmentApi,

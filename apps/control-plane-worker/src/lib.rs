@@ -2,6 +2,7 @@
 
 mod access_session;
 mod client_mail_query;
+mod client_mail_send;
 mod clients;
 mod command_evidence;
 mod composition;
@@ -77,6 +78,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         RouteClass::ClientMailSearchApi | RouteClass::ClientMailMessageApi => {
             client_mail_query::dispatch(route, &mut request, &env).await
         }
+        RouteClass::ClientMailSendApi => client_mail_send::dispatch(&mut request, &env).await,
         RouteClass::ProfileCollectionApi if request.method() == Method::Get => {
             operator_queries::dispatch(route, &request, &env).await
         }

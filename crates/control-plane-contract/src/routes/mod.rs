@@ -1,3 +1,4 @@
+mod client_mail;
 mod clients;
 mod devices;
 mod foundation;
@@ -27,6 +28,9 @@ pub(super) fn classify(method: &str, path: &str) -> RouteClass {
     let segments = segments.as_slice();
 
     if let Some(route) = identity::classify(method, segments) {
+        return route;
+    }
+    if let Some(route) = client_mail::classify(method, segments) {
         return route;
     }
     if let Some(route) = clients::classify(method, segments) {
