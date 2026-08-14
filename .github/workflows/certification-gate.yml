@@ -23,8 +23,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Compile Step 10 policy
-        run: python -m py_compile scripts/check-step10-certification.py
+      - name: Compile certification and D3 promotion policy
+        run: |
+          python -m py_compile scripts/check-step10-certification.py
+          python -m py_compile scripts/cloudflare-promotion.py
 
       - name: Enforce Step 10 certification boundary
         run: python scripts/check-step10-certification.py
@@ -42,6 +44,12 @@ jobs:
             echo "Certification-owned device authority fixture unexpectedly passed." >&2
             exit 1
           fi
+
+      - name: Enforce D3 controlled promotion boundary
+        run: python scripts/cloudflare-promotion.py check
+
+      - name: Prove D3 promotion boundary fails closed
+        run: python scripts/cloudflare-promotion.py self-test
 
       - name: Format
         run: cargo fmt --all -- --check
