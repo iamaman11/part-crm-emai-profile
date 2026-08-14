@@ -402,7 +402,7 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Build and verify immutable release package
+      - name: Build immutable release package
         id: release
         env:
           RELEASE_AUTHORITY: ${{ steps.source.outputs.authority }}
@@ -415,6 +415,11 @@ jobs:
             --source-event "$GITHUB_EVENT_NAME" \
             --authority "$RELEASE_AUTHORITY" \
             --github-output
+
+      - name: Verify immutable release archive against exact source
+        env:
+          RELEASE_AUTHORITY: ${{ steps.source.outputs.authority }}
+        run: |
           python scripts/cloudflare-release.py verify-archive \
             --archive "${{ steps.release.outputs.archive }}" \
             --expected-source-sha "$SOURCE_SHA" \
