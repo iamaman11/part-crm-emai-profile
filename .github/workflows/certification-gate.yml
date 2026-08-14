@@ -48,6 +48,16 @@ jobs:
       - name: Enforce D3 controlled promotion boundary
         run: python scripts/cloudflare-promotion.py check
 
+      - name: Enforce exact-bit and least-privilege promotion flags
+        run: |
+          workflow=.github/workflows/cloudflare-promotion.yml
+          test "$(grep -c -- '--no-bundle' "$workflow")" -eq 2
+          test "$(grep -c -- '--strict' "$workflow")" -eq 2
+          test "$(grep -c -- '--message "release=' "$workflow")" -eq 2
+          test "$(grep -c -- 'deployments: write' "$workflow")" -eq 4
+          test "$(grep -c -- '--experimental-provision=false' "$workflow")" -eq 6
+          test "$(grep -c -- '--experimental-auto-create=false' "$workflow")" -eq 6
+
       - name: Prove D3 promotion boundary fails closed
         run: python scripts/cloudflare-promotion.py self-test
 
