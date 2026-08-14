@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "status": "approved_pending_implementation",
+  "decision_base": "65550585baa471c8fb3c452c85ee5db7e79d9b5b",
+  "tracking_issue": 256,
+  "parent_issue": 251,
+  "umbrella_blocker_issue": 203,
+  "implementation_marker": "architecture/pre2j-d3-resolver-bootstrap-implementation.json",
+  "service": {
+    "binding": "MAILBOX_SECRET_RESOLVER",
+    "entrypoint_root": "apps/mailbox-secret-resolver-worker",
+    "deployment_config": "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc",
+    "staging_worker": "mailbox-secret-resolver-staging",
+    "production_worker": "mailbox-secret-resolver-production",
+    "public_route": false,
+    "transport": "service_binding_http",
+    "caller_authentication": "hmac_sha256_signed_request_v1"
+  },
+  "resolver_storage": {
+    "type": "dedicated_d1_application_encrypted",
+    "binding": "RESOLVER_DB",
+    "migration_root": "migrations/resolver-d1",
+    "business_catalog_forbidden": true,
+    "cipher": "AES-256-GCM",
+    "nonce_bytes": 12,
+    "handle_lookup": "HMAC-SHA-256",
+    "staging_production_isolation_required": true
+  },
+  "resolver_release": {
+    "source_authority": "accepted_main",
+    "artifact_identity_fields": [
+      "release_id",
+      "source_commit_sha",
+      "resolver_worker_sha256",
+      "resolver_migration_manifest_sha256",
+      "resolver_config_sha256",
+      "build_toolchain"
+    ],
+    "build_once": true,
+    "same_bits_staging_production": true,
+    "release_workflow": ".github/workflows/mailbox-secret-resolver-release.yml",
+    "promotion_workflow": ".github/workflows/mailbox-secret-resolver-promotion.yml",
+    "rebuild_during_provisioning_forbidden": true,
+    "unreviewed_source_deploy_forbidden": true
+  },
+  "control_plane_required_secrets": [
+    "CLIENT_CONTACT_PROTECTION_KEYRING",
+    "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
+    "R2_GENERATION_ACCESS_KEY_ID",
+    "R2_GENERATION_SECRET_ACCESS_KEY"
+  ],
+  "resolver_required_secrets": [
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
+    "MAILBOX_RESOLVER_ENCRYPTION_KEYRING",
+    "MAILBOX_RESOLVER_HANDLE_HMAC_KEY",
+    "MICROSOFT_OAUTH_CLIENT_SECRET"
+  ],
+  "resolver_required_vars": [
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_REDIRECT_URI",
+    "MICROSOFT_OAUTH_CLIENT_ID",
+    "MICROSOFT_OAUTH_REDIRECT_URI"
+  ],
+  "github_environment_secret_names": [
+    "CLOUDFLARE_ACCESS_CLIENT_ID",
+    "CLOUDFLARE_ACCESS_CLIENT_SECRET",
+    "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON",
+    "CLOUDFLARE_DEPLOY_MANIFEST_JSON",
+    "CLOUDFLARE_RESOLVER_SECRETS_JSON"
+  ],
+  "resolver_endpoints": [
+    "/v1/mailbox-credentials/discard",
+    "/v1/mailbox-credentials/gmail/oauth/complete",
+    "/v1/mailbox-credentials/gmail/oauth/deny",
+    "/v1/mailbox-credentials/gmail/oauth/inspect",
+    "/v1/mailbox-credentials/gmail/oauth/start",
+    "/v1/mailbox-credentials/gmail/send/oauth/complete",
+    "/v1/mailbox-credentials/gmail/send/oauth/deny",
+    "/v1/mailbox-credentials/gmail/send/oauth/inspect",
+    "/v1/mailbox-credentials/gmail/send/oauth/start",
+    "/v1/mailbox-credentials/gmail/send/resolve",
+    "/v1/mailbox-credentials/microsoft-graph/cursors/resolve",
+    "/v1/mailbox-credentials/microsoft-graph/cursors/store",
+    "/v1/mailbox-credentials/microsoft-graph/oauth/complete",
+    "/v1/mailbox-credentials/microsoft-graph/oauth/deny",
+    "/v1/mailbox-credentials/microsoft-graph/oauth/inspect",
+    "/v1/mailbox-credentials/microsoft-graph/oauth/start",
+    "/v1/mailbox-credentials/microsoft-graph/refresh",
+    "/v1/mailbox-credentials/resolve",
+    "/v1/mailbox-credentials/standards/microsoft/oauth/complete",
+    "/v1/mailbox-credentials/standards/microsoft/oauth/deny",
+    "/v1/mailbox-credentials/standards/microsoft/oauth/inspect",
+    "/v1/mailbox-credentials/standards/microsoft/oauth/start",
+    "/v1/mailbox-credentials/standards/password/provision"
+  ],
+  "staging_creation_order": [
+    "accepted_resolver_release_artifact",
+    "dedicated_resolver_d1",
+    "catalog_d1_and_d3a_bootstrap",
+    "profile_r2_and_queues",
+    "r2_s3_credentials",
+    "resolver_worker_with_secrets",
+    "access_application_service_auth_policy_and_token",
+    "github_staging_environment_inputs",
+    "d3_control_plane_first_deploy_with_secrets_and_custom_domain",
+    "d3_staging_smoke_and_attestation"
+  ],
+  "token_profiles": {
+    "bootstrap_permission_names": [
+      "Access: Apps and Policies Write",
+      "Access: Service Tokens Write",
+      "API Tokens Write",
+      "D1 Write",
+      "Queues Write",
+      "Workers R2 Storage Write",
+      "Workers Routes Write",
+      "Workers Scripts Write"
+    ],
+    "steady_state_deploy_permission_names": [
+      "D1 Read",
+      "Queues Read",
+      "Workers R2 Storage Read",
+      "Workers Routes Write",
+      "Workers Scripts Write"
+    ],
+    "environment_resource_scope_required": true,
+    "cross_environment_tokens_forbidden": true
+  },
+  "rules": {
+    "authority_must_be_accepted_before_implementation": true,
+    "authority_is_immutable_after_acceptance": true,
+    "same_pr_implementation_forbidden": true,
+    "staging_first": true,
+    "control_plane_first_deploy_must_be_d3_exact_artifact": true,
+    "production_forbidden_before_accepted_staging_evidence": true,
+    "automatic_resource_provisioning_forbidden": true,
+    "placeholder_worker_or_secret_forbidden": true,
+    "bootstrap_token_as_deploy_token_forbidden": true,
+    "shared_environment_credentials_forbidden": true,
+    "secret_values_in_git_logs_artifacts_or_manifests_forbidden": true,
+    "openapi_v1_changes_forbidden": true,
+    "production_ready_must_remain_false": true
+  }
+}
