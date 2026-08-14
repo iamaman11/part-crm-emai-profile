@@ -28,25 +28,9 @@ use use_cases_mailboxes::outbound_mail::{
     OutboundMailOperationError, OutboundMailOutcome, execute_outbound_mail,
 };
 use use_cases_query::QueryApplicationError;
-use worker::{Env, Method, Request, Response, Result};
+use worker::{Env, Request, Response, Result};
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
-
-#[must_use]
-pub fn is_request(method: Method, path: &str) -> bool {
-    if method != Method::Post {
-        return false;
-    }
-    let segments: Vec<&str> = path
-        .trim_matches('/')
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    matches!(
-        segments.as_slice(),
-        ["api", "v1", "tenants", _, "clients", _, "mail", "send"]
-    )
-}
 
 pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
     let path = request.path();
@@ -280,17 +264,8 @@ fn invalid_request(correlation_id: &str) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::{hex_digest, is_request};
+    use super::hex_digest;
     use application_ports::outbound_mail::OutboundMailProviderOutcome;
-    use worker::Method;
-
-    #[test]
-    fn route_match_is_exact_and_post_only() {
-        let path = "/api/v1/tenants/tenant_01/clients/client_01/mail/send";
-        assert!(is_request(Method::Post, path));
-        assert!(!is_request(Method::Get, path));
-        assert!(!is_request(Method::Post, &format!("{path}/extra")));
-    }
 
     #[test]
     fn digest_is_stable_and_content_is_not_retained() {
