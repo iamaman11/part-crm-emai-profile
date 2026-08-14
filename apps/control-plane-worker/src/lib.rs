@@ -205,7 +205,7 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let notification_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _notification_operations_repository =
         D1NotificationOperationsRepository::new(notification_catalog);
-    let idempotency_catalog = env.d1(D1_ATALOG_BINDING)?;
+    let idempotency_catalog = env.d1(D1_CATALOG_BINDING)?;
     let _idempotency_repository = D1IdempotencyRepository::new(idempotency_catalog);
     let profile_objects = env.bucket(R2_PROFILES_BINDING)?;
     let _generation_upload_signer = composition::generation_upload_capability_signer(env)?;
