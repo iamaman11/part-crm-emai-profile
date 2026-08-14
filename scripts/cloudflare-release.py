@@ -18,7 +18,7 @@ import tarfile
 import tempfile
 import tomllib
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_REPOSITORY = "iamaman11/part-crm-emai-profile"
@@ -26,10 +26,14 @@ SCHEMA_VERSION = 1
 CONTRACT_VERSION = "v1"
 RELEASE_DIR = ROOT / "artifacts" / "cloudflare-release"
 FRONTEND_DIST = Path("frontend/dist")
-WORKER_DIST = Path("apps/control-plane-worker/build/worker")
+WORKER_BUILD_DIR = Path("apps/control-plane-worker/build")
+# worker-build 0.8.5 emits the deployable module closure at the build root while
+# retaining build/worker/shim.mjs as the Wrangler-compatible entrypoint alias.
+# Do not hash .tmp/intermediate files or non-runtime package/type metadata.
+WORKER_RUNTIME_FILES = ("index.js", "index_bg.wasm", "worker/shim.mjs")
+WORKER_ENTRYPOINT = "worker/shim.mjs"
 MANIFEST_NAME = "release-manifest.json"
 RELEASE_PREFIX = "cloudflare-v1-sha256-"
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SEMVER_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 MIGRATION_RE = re.compile(r"^(?P<number>[0-9]{4})_[a-z0-9_]+\.sql$")
@@ -84,9 +88,33 @@ def require_directory(path: Path, label: str) -> None:
         fail(f"{label} must be a real directory: {path}")
 
 
+def inventory_entries(directory: Path, relative_paths: Sequence[str]) -> dict[str, Any]:
+    require_directory(directory, "artifact directory")
+    entries: list[dict[str, Any]] = []
+    observed: set[str] = set()
+    for relative in sorted(relative_paths):
+        pure = PurePosixPath(relative)
+        if pure.is_absolute() or ".." in pure.parts or not pure.parts:
+            fail(f"invalid artifact path: {relative!r}")
+        normalized = pure.as_posix()
+        if normalized in observed:
+            fail(f"duplicate artifact path: {normalized}")
+        observed.add(normalized)
+        path = directory.joinpath(*pure.parts)
+        require_regular_file(path, "artifact file")
+        entries.append({"path": normalized, "size": path.stat().st_size, "sha256": sha256_file(path)})
+    if not entries:
+        fail("artifact inventory must not be empty")
+    return {
+        "file_count": len(entries),
+        "sha256": sha256_bytes(canonical_compact(entries)),
+        "files": entries,
+    }
+
+
 def inventory_directory(directory: Path) -> dict[str, Any]:
     require_directory(directory, "artifact directory")
-    files: list[dict[str, Any]] = []
+    relative_paths: list[str] = []
     for path in sorted(directory.rglob("*"), key=lambda candidate: candidate.as_posix()):
         if path.is_symlink():
             fail(f"release artifacts must not contain symlinks: {path}")
@@ -94,17 +122,8 @@ def inventory_directory(directory: Path) -> dict[str, Any]:
             continue
         if not path.is_file():
             fail(f"release artifacts contain unsupported filesystem entry: {path}")
-        relative = path.relative_to(directory).as_posix()
-        if not relative or relative.startswith("../"):
-            fail(f"invalid artifact path: {relative!r}")
-        files.append({"path": relative, "size": path.stat().st_size, "sha256": sha256_file(path)})
-    if not files:
-        fail(f"artifact directory is empty: {directory}")
-    return {
-        "file_count": len(files),
-        "sha256": sha256_bytes(canonical_compact(files)),
-        "files": files,
-    }
+        relative_paths.append(path.relative_to(directory).as_posix())
+    return inventory_entries(directory, relative_paths)
 
 
 def inventory_repo_files(root: Path, files: Iterable[Path]) -> dict[str, Any]:
@@ -207,8 +226,7 @@ def load_toolchain_identity(root: Path) -> dict[str, Any]:
     if package.get("packageManager") != f"npm@{npm}":
         fail("frontend packageManager must match the exact npm engine pin")
 
-    wrangler_text = wrangler_path.read_text(encoding="utf-8")
-    wrangler = json.loads(wrangler_text)
+    wrangler = json.loads(wrangler_path.read_text(encoding="utf-8"))
     build = wrangler.get("build")
     if not isinstance(build, dict):
         fail("canonical Wrangler authority must define the Worker build")
@@ -222,6 +240,10 @@ def load_toolchain_identity(root: Path) -> dict[str, Any]:
     worker_build = worker_match.group(1)
     if "worker-build --release" not in build_command:
         fail("canonical Worker build must produce a release artifact")
+
+    main = wrangler.get("main")
+    if main != "../../apps/control-plane-worker/build/worker/shim.mjs":
+        fail("canonical Wrangler authority must use worker-build's shim.mjs entrypoint")
 
     return {
         "rust": {
@@ -241,6 +263,8 @@ def load_toolchain_identity(root: Path) -> dict[str, Any]:
             "worker_build": worker_build,
             "build_command": build_command,
             "build_cwd": build_cwd,
+            "entrypoint": WORKER_ENTRYPOINT,
+            "runtime_files": list(WORKER_RUNTIME_FILES),
             "wrangler_authority_sha256": sha256_file(wrangler_path),
         },
     }
@@ -308,9 +332,19 @@ def validate_frontend_shape(directory: Path) -> None:
 
 
 def validate_worker_shape(directory: Path) -> None:
-    require_regular_file(directory / "shim.mjs", "Worker shim")
-    if not any(path.is_file() and path.suffix == ".wasm" for path in directory.rglob("*")):
-        fail("Worker release directory must contain a WASM artifact")
+    for relative in WORKER_RUNTIME_FILES:
+        require_regular_file(directory.joinpath(*PurePosixPath(relative).parts), "Worker runtime file")
+    shim = (directory / "worker" / "shim.mjs").read_text(encoding="utf-8")
+    if "../index.js" not in shim:
+        fail("Worker shim must retain worker-build's ../index.js runtime alias")
+    index = (directory / "index.js").read_text(encoding="utf-8")
+    if "./index_bg.wasm" not in index:
+        fail("Worker index.js must reference the packaged index_bg.wasm module")
+
+
+def worker_runtime_inventory(directory: Path) -> dict[str, Any]:
+    validate_worker_shape(directory)
+    return inventory_entries(directory, WORKER_RUNTIME_FILES)
 
 
 def validate_manifest_has_no_sensitive_authority(manifest: Any, path: str = "manifest") -> None:
@@ -337,13 +371,16 @@ def build_manifest_payload(
     worker_directory: Path,
 ) -> dict[str, Any]:
     validate_frontend_shape(frontend_directory)
-    validate_worker_shape(worker_directory)
     return {
         "schema_version": SCHEMA_VERSION,
         "source": source,
         "artifacts": {
             "frontend": {"kind": "workers-static-assets", **inventory_directory(frontend_directory)},
-            "worker": {"kind": "cloudflare-worker", **inventory_directory(worker_directory)},
+            "worker": {
+                "kind": "cloudflare-worker",
+                "entrypoint": WORKER_ENTRYPOINT,
+                **worker_runtime_inventory(worker_directory),
+            },
         },
         "contracts": contract_inventory(root),
         "migrations": migration_inventory(root),
@@ -363,6 +400,20 @@ def copy_tree_exact(source: Path, destination: Path) -> None:
         fail(f"immutable release destination already exists: {destination}")
     shutil.copytree(source, destination, symlinks=True)
     inventory_directory(destination)
+
+
+def copy_worker_runtime(source: Path, destination: Path) -> None:
+    if destination.exists():
+        fail(f"immutable Worker destination already exists: {destination}")
+    validate_worker_shape(source)
+    for relative in WORKER_RUNTIME_FILES:
+        pure = PurePosixPath(relative)
+        source_path = source.joinpath(*pure.parts)
+        target = destination.joinpath(*pure.parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, target, follow_symlinks=False)
+    if worker_runtime_inventory(source) != worker_runtime_inventory(destination):
+        fail("copied Worker runtime differs from the exact worker-build output")
 
 
 def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
@@ -444,8 +495,12 @@ def verify_release_directory(
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, dict):
         fail("release manifest artifact inventories are missing")
-    compare_inventory("frontend", artifacts.get("frontend"), inventory_directory(frontend_directory))
-    compare_inventory("worker", artifacts.get("worker"), inventory_directory(worker_directory))
+    frontend_manifest = artifacts.get("frontend")
+    worker_manifest = artifacts.get("worker")
+    compare_inventory("frontend", frontend_manifest, inventory_directory(frontend_directory))
+    compare_inventory("worker", worker_manifest, worker_runtime_inventory(worker_directory))
+    if not isinstance(worker_manifest, dict) or worker_manifest.get("entrypoint") != WORKER_ENTRYPOINT:
+        fail("release manifest Worker entrypoint is not canonical")
 
     contracts = manifest.get("contracts")
     migrations = manifest.get("migrations")
@@ -509,10 +564,15 @@ def safe_archive_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
     members = archive.getmembers()
     if not members:
         fail("release archive is empty")
+    observed: set[str] = set()
     for member in members:
         pure = PurePosixPath(member.name)
+        normalized = pure.as_posix()
         if pure.is_absolute() or ".." in pure.parts or not pure.parts:
             fail(f"release archive contains unsafe path: {member.name}")
+        if normalized in observed:
+            fail(f"release archive contains duplicate path: {member.name}")
+        observed.add(normalized)
         if member.issym() or member.islnk():
             fail(f"release archive contains a link: {member.name}")
         if not (member.isdir() or member.isfile()):
@@ -585,7 +645,7 @@ def build_release(
         check_git=check_git,
     )
     frontend = root / FRONTEND_DIST
-    worker = root / WORKER_DIST
+    worker = root / WORKER_BUILD_DIR
     payload = build_manifest_payload(root, source=source, frontend_directory=frontend, worker_directory=worker)
     manifest = finalized_manifest(payload)
     release_root.mkdir(parents=True, exist_ok=True)
@@ -595,7 +655,7 @@ def build_release(
     release_directory.mkdir()
     try:
         copy_tree_exact(frontend, release_directory / "frontend")
-        copy_tree_exact(worker, release_directory / "worker")
+        copy_worker_runtime(worker, release_directory / "worker")
         write_manifest(release_directory / MANIFEST_NAME, manifest)
         verify_release_directory(
             root,
@@ -645,18 +705,33 @@ def create_mock_repo(root: Path) -> None:
     (root / "frontend" / "dist" / "assets").mkdir(parents=True)
     (root / "frontend" / "dist" / "index.html").write_text("<html>fixture</html>\n", encoding="utf-8")
     (root / "frontend" / "dist" / "assets" / "app-123.js").write_text("fixture();\n", encoding="utf-8")
-    (root / "apps" / "control-plane-worker" / "build" / "worker").mkdir(parents=True)
-    (root / "apps" / "control-plane-worker" / "build" / "worker" / "shim.mjs").write_text("export {};\n", encoding="utf-8")
-    (root / "apps" / "control-plane-worker" / "build" / "worker" / "index.wasm").write_bytes(b"\x00asmfixture")
+
+    worker = root / "apps" / "control-plane-worker" / "build"
+    (worker / "worker").mkdir(parents=True)
+    (worker / "worker" / "shim.mjs").write_text(
+        "export * from '../index.js';\nexport { default } from '../index.js';\n", encoding="utf-8"
+    )
+    (worker / "index.js").write_text(
+        "import wasm from './index_bg.wasm';\nexport default wasm;\n", encoding="utf-8"
+    )
+    (worker / "index_bg.wasm").write_bytes(b"\x00asmfixture")
+    # These are intentionally excluded from the runtime identity.
+    (worker / "package.json").write_text('{"files":[]}\n', encoding="utf-8")
+    (worker / "index.d.ts").write_text("export {};\n", encoding="utf-8")
+
     (root / "openapi" / "v1" / "fragments").mkdir(parents=True)
     (root / "openapi" / "v1" / "openapi.json").write_text('{"openapi":"3.1.0"}\n', encoding="utf-8")
     (root / "openapi" / "v1" / "fragments" / "fixture.json").write_text('{"fixture":true}\n', encoding="utf-8")
     (root / "contracts" / "generated").mkdir(parents=True)
     (root / "contracts" / "generated" / "fixture.openapi.json").write_text('{"fixture":true}\n', encoding="utf-8")
     (root / "frontend" / "src" / "shared" / "api" / "generated").mkdir(parents=True)
-    (root / "frontend" / "src" / "shared" / "api" / "generated" / "fixture.ts").write_text("export type Fixture = true;\n", encoding="utf-8")
+    (root / "frontend" / "src" / "shared" / "api" / "generated" / "fixture.ts").write_text(
+        "export type Fixture = true;\n", encoding="utf-8"
+    )
     (root / "migrations" / "d1").mkdir(parents=True)
-    (root / "migrations" / "d1" / "0001_fixture.sql").write_text("CREATE TABLE fixture(id TEXT);\n", encoding="utf-8")
+    (root / "migrations" / "d1" / "0001_fixture.sql").write_text(
+        "CREATE TABLE fixture(id TEXT);\n", encoding="utf-8"
+    )
     (root / "frontend" / "package.json").write_text(
         json.dumps(
             {
@@ -674,10 +749,11 @@ def create_mock_repo(root: Path) -> None:
     (root / "deploy" / "cloudflare" / "wrangler.jsonc").write_text(
         json.dumps(
             {
+                "main": "../../apps/control-plane-worker/build/worker/shim.mjs",
                 "build": {
                     "command": "cargo install worker-build --version 0.8.5 --locked && worker-build --release",
                     "cwd": "../../apps/control-plane-worker",
-                }
+                },
             }
         )
         + "\n",
@@ -716,8 +792,8 @@ def self_test() -> None:
         if first_archive.read_bytes() != second_archive.read_bytes():
             fail("identical D2 inputs produced non-deterministic release archives")
 
-        mutated = first_dir / "frontend" / "index.html"
-        mutated.write_text("mutated\n", encoding="utf-8")
+        mutated_frontend = first_dir / "frontend" / "index.html"
+        mutated_frontend.write_text("mutated\n", encoding="utf-8")
         expect_rejected(
             "frontend artifact substitution",
             lambda: verify_release_directory(
@@ -729,10 +805,17 @@ def self_test() -> None:
                 check_git=False,
             ),
         )
-        mutated.write_text("<html>fixture</html>\n", encoding="utf-8")
+        mutated_frontend.write_text("<html>fixture</html>\n", encoding="utf-8")
 
-        worker_wasm = first_dir / "worker" / "index.wasm"
-        worker_wasm.unlink()
+        mutated_worker = first_dir / "worker" / "index_bg.wasm"
+        original_worker = mutated_worker.read_bytes()
+        mutated_worker.write_bytes(original_worker + b"mutated")
+        expect_rejected(
+            "Worker artifact substitution",
+            lambda: verify_release_directory(root, first_dir, check_git=False),
+        )
+        mutated_worker.write_bytes(original_worker)
+        mutated_worker.unlink()
         expect_rejected(
             "missing Worker artifact",
             lambda: verify_release_directory(root, first_dir, check_git=False),
