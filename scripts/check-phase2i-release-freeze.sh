@@ -31,6 +31,14 @@ python scripts/check-pre2j-c3-contract-authority.py --self-test
 python scripts/check-pre2j-c3-contract-authority.py --authority-only --base-ref "origin/${base_ref}"
 python scripts/check-pre2j-c3g-contract-authority.py --self-test
 python scripts/check-pre2j-c3g-contract-authority.py --base-ref "origin/${base_ref}"
+python scripts/check-pre2j-d3-resolver-bootstrap-authority.py --self-test
+if git cat-file -e "origin/${base_ref}:architecture/pre2j-d3-resolver-bootstrap-authority.json" 2>/dev/null; then
+  python scripts/check-pre2j-d3-resolver-bootstrap-authority.py \
+    --authority-only \
+    --base-ref "origin/${base_ref}"
+else
+  python scripts/check-pre2j-d3-resolver-bootstrap-authority.py --base-ref "origin/${base_ref}"
+fi
 
 if git diff --quiet "origin/${base_ref}" -- migrations/d1; then
   echo "Accepted D1 migration history is unchanged."

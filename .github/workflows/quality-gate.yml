@@ -50,6 +50,7 @@ jobs:
           scripts/check-cloudflare-runtime-bindings.py
           scripts/cloudflare-release.py
           scripts/cloudflare-d1-bootstrap.py
+          scripts/check-pre2j-d3-resolver-bootstrap-authority.py
           scripts/test-d1-schema.py
           scripts/test-step4-identity-acl.py
           scripts/test-step4-command-guards.py
@@ -174,6 +175,12 @@ jobs:
 
       - name: Prove empty-D1 bootstrap authority fails closed
         run: python scripts/cloudflare-d1-bootstrap.py self-test
+
+      - name: Verify D3 resolver and first-deploy bootstrap authority
+        run: python scripts/check-pre2j-d3-resolver-bootstrap-authority.py
+
+      - name: Prove D3 resolver and bootstrap authority fails closed
+        run: python scripts/check-pre2j-d3-resolver-bootstrap-authority.py --self-test
 
       - name: Test D1 schema and transaction invariants
         run: python scripts/test-d1-schema.py
