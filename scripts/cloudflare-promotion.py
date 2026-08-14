@@ -32,6 +32,13 @@ CANONICAL_REPOSITORY = "iamaman11/part-crm-emai-profile"
 CANONICAL_QUALITY_WORKFLOW = ".github/workflows/quality-gate.yml"
 CANONICAL_QUALITY_NAME = "Quality Gate"
 ENVIRONMENTS = ("staging", "production")
+PROMOTION_AUTHORITY_ONLY_FILES = frozenset(
+    {
+        ".github/workflows/certification-gate.yml",
+        ".github/workflows/cloudflare-promotion.yml",
+        "scripts/cloudflare-promotion.py",
+    }
+)
 RELEASE_ID_RE = re.compile(r"^cloudflare-v1-sha256-[0-9a-f]{64}$")
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -66,6 +73,7 @@ FORBIDDEN_WORKFLOW_MARKERS = (
     "pull_request_target",
     "wrangler@latest",
     "continue-on-error: true",
+    "ref: ${{ inputs.release_sha }}",
     "CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n      - name: Preflight",
 )
 
@@ -133,6 +141,8 @@ def check_repository_policy() -> None:
         fail("production deploy and production verification must both cross the protected environment boundary")
     if workflow.count("environment: staging") < 2:
         fail("staging deploy and staging verification must both use the staging environment")
+    if workflow.count("ref: ${{ github.sha }}") != 5:
+        fail("all D3 jobs must execute the exact accepted main promotion authority")
     if "if:" in workflow:
         fail("D3 deployment jobs must not use conditional skips as pseudo-green evidence")
     if "push:" in workflow or "pull_request:" in workflow:
@@ -163,8 +173,8 @@ def validate_release_inputs(
         fail("release/workflow SHA must be exact lowercase 40-hex commits")
     if workflow_ref != "refs/heads/main":
         fail("promotion workflow must run from refs/heads/main")
-    if workflow_sha != release_sha:
-        fail("D3 currently promotes only the exact current accepted main release; D4 owns compatible rollback policy")
+    if workflow_sha == release_sha:
+        fail("D3 promotion authority must be the accepted post-D2 control commit, not the D2 release source")
     run_id = parse_positive_int(quality_run_id, "Quality Gate run id")
     artifact = parse_positive_int(artifact_id, "release artifact id")
     if SHA256_RE.fullmatch(artifact_sha256) is None:
@@ -195,21 +205,59 @@ def api_get(api_url: str, token: str, path: str) -> Any:
         raise PromotionError(f"cannot read GitHub promotion authority {path}: {error}") from error
 
 
+def validate_promotion_authority_delta(
+    *, release_sha: str, workflow_sha: str, authority_compare: Any
+) -> None:
+    if not isinstance(authority_compare, dict):
+        fail("promotion authority compare response is not an object")
+    if authority_compare.get("status") != "ahead":
+        fail("promotion authority must be one accepted control-only commit ahead of the D2 release")
+    if authority_compare.get("ahead_by") != 1 or authority_compare.get("behind_by") != 0:
+        fail("promotion authority must be exactly one non-diverged commit ahead of the D2 release")
+    if authority_compare.get("base_commit", {}).get("sha") != release_sha:
+        fail("promotion authority compare base does not match the D2 release SHA")
+    if authority_compare.get("merge_base_commit", {}).get("sha") != release_sha:
+        fail("promotion authority must descend directly from the D2 release without divergence")
+    commits = authority_compare.get("commits")
+    if not isinstance(commits, list) or len(commits) != 1 or not isinstance(commits[0], dict) or commits[0].get("sha") != workflow_sha:
+        fail("promotion authority compare must contain exactly the current accepted main control commit")
+    files = authority_compare.get("files")
+    if not isinstance(files, list):
+        fail("promotion authority compare lacks changed-file evidence")
+    filenames = {
+        item.get("filename")
+        for item in files
+        if isinstance(item, dict) and isinstance(item.get("filename"), str)
+    }
+    if len(filenames) != len(files) or filenames != PROMOTION_AUTHORITY_ONLY_FILES:
+        fail(
+            "D3 may advance beyond the D2 release only by the exact promotion-control file set; "
+            f"observed={sorted(filenames)}"
+        )
+
+
 def validate_github_authority(
     *,
     release_sha: str,
+    workflow_sha: str,
     quality_run_id: int,
     artifact_id: int,
     artifact_sha256: str,
     release_id: str,
     main_ref: Any,
+    authority_compare: Any,
     quality_run: Any,
     artifacts: Any,
     staging_environment: Any,
     production_environment: Any,
 ) -> None:
-    if not isinstance(main_ref, dict) or main_ref.get("object", {}).get("sha") != release_sha:
-        fail("requested release is no longer exact current main")
+    if not isinstance(main_ref, dict) or main_ref.get("object", {}).get("sha") != workflow_sha:
+        fail("promotion workflow is not executing from exact current accepted main")
+    validate_promotion_authority_delta(
+        release_sha=release_sha,
+        workflow_sha=workflow_sha,
+        authority_compare=authority_compare,
+    )
 
     if not isinstance(quality_run, dict):
         fail("Quality Gate run authority is not an object")
@@ -286,23 +334,33 @@ def github_preflight(args: argparse.Namespace) -> None:
         fail("GitHub token is required for promotion preflight")
     repository_path = f"/repos/{args.repository}"
     main_ref = api_get(args.api_url, args.token, repository_path + "/git/ref/heads/main")
+    authority_compare = api_get(
+        args.api_url,
+        args.token,
+        repository_path + f"/compare/{args.release_sha}...{args.workflow_sha}",
+    )
     quality_run = api_get(args.api_url, args.token, repository_path + f"/actions/runs/{parsed['quality_run_id']}")
     artifacts = api_get(args.api_url, args.token, repository_path + f"/actions/runs/{parsed['quality_run_id']}/artifacts?per_page=100")
     staging_environment = api_get(args.api_url, args.token, repository_path + "/environments/staging")
     production_environment = api_get(args.api_url, args.token, repository_path + "/environments/production")
     validate_github_authority(
         release_sha=args.release_sha,
+        workflow_sha=args.workflow_sha,
         quality_run_id=parsed["quality_run_id"],
         artifact_id=parsed["artifact_id"],
         artifact_sha256=args.artifact_sha256,
         release_id=args.release_id,
         main_ref=main_ref,
+        authority_compare=authority_compare,
         quality_run=quality_run,
         artifacts=artifacts,
         staging_environment=staging_environment,
         production_environment=production_environment,
     )
-    print(f"D3 GitHub preflight accepted exact release {args.release_id} from {args.release_sha}.")
+    print(
+        f"D3 GitHub preflight accepted exact D2 release {args.release_id} from {args.release_sha} "
+        f"under promotion authority {args.workflow_sha}."
+    )
 
 
 def load_json_file(path: Path, label: str) -> Any:
@@ -383,6 +441,7 @@ def prepare(args: argparse.Namespace) -> None:
         expected_source_sha=args.release_sha,
         expected_repository=args.repository,
         expected_authority="accepted-main",
+        check_git=False,
     )
     if manifest.get("release_id") != args.release_id:
         fail("downloaded release manifest id differs from dispatch authority")
@@ -394,7 +453,7 @@ def prepare(args: argparse.Namespace) -> None:
         frontend_target = ROOT / "frontend" / "dist"
         worker_target = ROOT / "apps" / "control-plane-worker" / "build"
         if frontend_target.exists() or worker_target.exists():
-            fail("promotion materialization targets must start absent in a clean exact-source checkout")
+            fail("promotion materialization targets must start absent in a clean promotion-authority checkout")
         shutil.copytree(extracted / "frontend", frontend_target)
         shutil.copytree(extracted / "worker", worker_target)
         release.compare_inventory("frontend", manifest["artifacts"]["frontend"], release.inventory_directory(frontend_target))
@@ -528,11 +587,21 @@ def expect_rejected(label: str, operation: Any) -> None:
 
 def self_test() -> None:
     release_sha = "a" * 40
+    workflow_sha = "d" * 40
     release_id = "cloudflare-v1-sha256-" + "b" * 64
     artifact_sha = "c" * 64
     run_id = 123
     artifact_id = 456
-    main_ref = {"object": {"sha": release_sha}}
+    main_ref = {"object": {"sha": workflow_sha}}
+    authority_compare = {
+        "status": "ahead",
+        "ahead_by": 1,
+        "behind_by": 0,
+        "base_commit": {"sha": release_sha},
+        "merge_base_commit": {"sha": release_sha},
+        "commits": [{"sha": workflow_sha}],
+        "files": [{"filename": path} for path in sorted(PROMOTION_AUTHORITY_ONLY_FILES)],
+    }
     run = {
         "id": run_id,
         "name": CANONICAL_QUALITY_NAME,
@@ -569,15 +638,17 @@ def self_test() -> None:
         confirmation=release_id,
         repository=CANONICAL_REPOSITORY,
         workflow_ref="refs/heads/main",
-        workflow_sha=release_sha,
+        workflow_sha=workflow_sha,
     )
     validate_github_authority(
         release_sha=release_sha,
+        workflow_sha=workflow_sha,
         quality_run_id=run_id,
         artifact_id=artifact_id,
         artifact_sha256=artifact_sha,
         release_id=release_id,
         main_ref=main_ref,
+        authority_compare=authority_compare,
         quality_run=run,
         artifacts=artifacts,
         staging_environment=staging,
@@ -587,47 +658,76 @@ def self_test() -> None:
     negative_cases = [
         ("fork workflow", lambda: validate_release_inputs(
             release_sha=release_sha, quality_run_id=str(run_id), artifact_id=str(artifact_id), artifact_sha256=artifact_sha,
-            release_id=release_id, confirmation=release_id, repository="example/fork", workflow_ref="refs/heads/main", workflow_sha=release_sha)),
+            release_id=release_id, confirmation=release_id, repository="example/fork", workflow_ref="refs/heads/main", workflow_sha=workflow_sha)),
         ("non-main workflow", lambda: validate_release_inputs(
             release_sha=release_sha, quality_run_id=str(run_id), artifact_id=str(artifact_id), artifact_sha256=artifact_sha,
-            release_id=release_id, confirmation=release_id, repository=CANONICAL_REPOSITORY, workflow_ref="refs/heads/topic", workflow_sha=release_sha)),
-        ("source mismatch", lambda: validate_release_inputs(
+            release_id=release_id, confirmation=release_id, repository=CANONICAL_REPOSITORY, workflow_ref="refs/heads/topic", workflow_sha=workflow_sha)),
+        ("malformed workflow SHA", lambda: validate_release_inputs(
             release_sha=release_sha, quality_run_id=str(run_id), artifact_id=str(artifact_id), artifact_sha256=artifact_sha,
-            release_id=release_id, confirmation=release_id, repository=CANONICAL_REPOSITORY, workflow_ref="refs/heads/main", workflow_sha="d" * 40)),
+            release_id=release_id, confirmation=release_id, repository=CANONICAL_REPOSITORY, workflow_ref="refs/heads/main", workflow_sha="not-a-sha")),
+        ("release/control identity collapse", lambda: validate_release_inputs(
+            release_sha=release_sha, quality_run_id=str(run_id), artifact_id=str(artifact_id), artifact_sha256=artifact_sha,
+            release_id=release_id, confirmation=release_id, repository=CANONICAL_REPOSITORY, workflow_ref="refs/heads/main", workflow_sha=release_sha)),
         ("confirmation mismatch", lambda: validate_release_inputs(
             release_sha=release_sha, quality_run_id=str(run_id), artifact_id=str(artifact_id), artifact_sha256=artifact_sha,
-            release_id=release_id, confirmation="wrong", repository=CANONICAL_REPOSITORY, workflow_ref="refs/heads/main", workflow_sha=release_sha)),
+            release_id=release_id, confirmation="wrong", repository=CANONICAL_REPOSITORY, workflow_ref="refs/heads/main", workflow_sha=workflow_sha)),
     ]
     for label, operation in negative_cases:
         expect_rejected(label, operation)
 
+    stale_main = {"object": {"sha": release_sha}}
+    expect_rejected("stale/non-main promotion authority", lambda: validate_github_authority(
+        release_sha=release_sha, workflow_sha=workflow_sha, quality_run_id=run_id, artifact_id=artifact_id,
+        artifact_sha256=artifact_sha, release_id=release_id, main_ref=stale_main,
+        authority_compare=authority_compare, quality_run=run, artifacts=artifacts,
+        staging_environment=staging, production_environment=production))
+    unauthorized_delta = copy.deepcopy(authority_compare)
+    unauthorized_delta["files"].append({"filename": "apps/control-plane-worker/src/lib.rs"})
+    expect_rejected("application drift between release and promotion authority", lambda: validate_github_authority(
+        release_sha=release_sha, workflow_sha=workflow_sha, quality_run_id=run_id, artifact_id=artifact_id,
+        artifact_sha256=artifact_sha, release_id=release_id, main_ref=main_ref,
+        authority_compare=unauthorized_delta, quality_run=run, artifacts=artifacts,
+        staging_environment=staging, production_environment=production))
+    multi_commit = copy.deepcopy(authority_compare)
+    multi_commit["ahead_by"] = 2
+    multi_commit["commits"] = [{"sha": "e" * 40}, {"sha": workflow_sha}]
+    expect_rejected("multi-commit promotion authority delta", lambda: validate_github_authority(
+        release_sha=release_sha, workflow_sha=workflow_sha, quality_run_id=run_id, artifact_id=artifact_id,
+        artifact_sha256=artifact_sha, release_id=release_id, main_ref=main_ref,
+        authority_compare=multi_commit, quality_run=run, artifacts=artifacts,
+        staging_environment=staging, production_environment=production))
     failed_run = dict(run)
     failed_run["conclusion"] = "failure"
     expect_rejected("failed Quality Gate", lambda: validate_github_authority(
-        release_sha=release_sha, quality_run_id=run_id, artifact_id=artifact_id, artifact_sha256=artifact_sha,
-        release_id=release_id, main_ref=main_ref, quality_run=failed_run, artifacts=artifacts,
+        release_sha=release_sha, workflow_sha=workflow_sha, quality_run_id=run_id, artifact_id=artifact_id,
+        artifact_sha256=artifact_sha, release_id=release_id, main_ref=main_ref,
+        authority_compare=authority_compare, quality_run=failed_run, artifacts=artifacts,
         staging_environment=staging, production_environment=production))
     wrong_artifact = copy.deepcopy(artifacts)
     wrong_artifact["artifacts"][0]["digest"] = "sha256:" + "d" * 64
     expect_rejected("artifact substitution", lambda: validate_github_authority(
-        release_sha=release_sha, quality_run_id=run_id, artifact_id=artifact_id, artifact_sha256=artifact_sha,
-        release_id=release_id, main_ref=main_ref, quality_run=run, artifacts=wrong_artifact,
+        release_sha=release_sha, workflow_sha=workflow_sha, quality_run_id=run_id, artifact_id=artifact_id,
+        artifact_sha256=artifact_sha, release_id=release_id, main_ref=main_ref,
+        authority_compare=authority_compare, quality_run=run, artifacts=wrong_artifact,
         staging_environment=staging, production_environment=production))
     expect_rejected("missing staging environment", lambda: validate_github_authority(
-        release_sha=release_sha, quality_run_id=run_id, artifact_id=artifact_id, artifact_sha256=artifact_sha,
-        release_id=release_id, main_ref=main_ref, quality_run=run, artifacts=artifacts,
+        release_sha=release_sha, workflow_sha=workflow_sha, quality_run_id=run_id, artifact_id=artifact_id,
+        artifact_sha256=artifact_sha, release_id=release_id, main_ref=main_ref,
+        authority_compare=authority_compare, quality_run=run, artifacts=artifacts,
         staging_environment={}, production_environment=production))
     unprotected = copy.deepcopy(production)
     unprotected["protection_rules"] = []
     expect_rejected("unprotected production", lambda: validate_github_authority(
-        release_sha=release_sha, quality_run_id=run_id, artifact_id=artifact_id, artifact_sha256=artifact_sha,
-        release_id=release_id, main_ref=main_ref, quality_run=run, artifacts=artifacts,
+        release_sha=release_sha, workflow_sha=workflow_sha, quality_run_id=run_id, artifact_id=artifact_id,
+        artifact_sha256=artifact_sha, release_id=release_id, main_ref=main_ref,
+        authority_compare=authority_compare, quality_run=run, artifacts=artifacts,
         staging_environment=staging, production_environment=unprotected))
     bypassable = copy.deepcopy(production)
     bypassable["can_admins_bypass"] = True
     expect_rejected("admin-bypass production", lambda: validate_github_authority(
-        release_sha=release_sha, quality_run_id=run_id, artifact_id=artifact_id, artifact_sha256=artifact_sha,
-        release_id=release_id, main_ref=main_ref, quality_run=run, artifacts=artifacts,
+        release_sha=release_sha, workflow_sha=workflow_sha, quality_run_id=run_id, artifact_id=artifact_id,
+        artifact_sha256=artifact_sha, release_id=release_id, main_ref=main_ref,
+        authority_compare=authority_compare, quality_run=run, artifacts=artifacts,
         staging_environment=staging, production_environment=bypassable))
 
     config = config_module()
