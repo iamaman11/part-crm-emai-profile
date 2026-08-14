@@ -27,8 +27,13 @@ lock
 
 # Secrets & Environment Variables
 .env
+.env.*
+.dev.vars
+.dev.vars.*
 *.pem
 *.key
+/deploy/cloudflare/manifests/
+/deploy/cloudflare/generated/
 
 # Python Virtual Environment & Bytecode
 __pycache__/

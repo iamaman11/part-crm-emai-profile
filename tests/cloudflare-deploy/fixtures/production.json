@@ -1,0 +1,15 @@
+{
+  "worker_name": "profile-control-production-fixture",
+  "account_id": "dddddddddddddddddddddddddddddddd",
+  "custom_domain": "production-fixture.crm.invalid",
+  "access_issuer": "https://production-fixture.cloudflareaccess.com",
+  "access_audience": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "d1_database_name": "profile-catalog-production-fixture",
+  "d1_database_id": "22222222-2222-2222-2222-222222222222",
+  "r2_bucket_name": "profile-objects-production-fixture",
+  "generation_verification_queue": "generation-verification-production-fixture",
+  "integration_events_queue": "integration-events-production-fixture",
+  "mailbox_jobs_queue": "mailbox-jobs-production-fixture",
+  "mailbox_jobs_dlq": "mailbox-jobs-dlq-production-fixture",
+  "mailbox_secret_resolver_service": "mailbox-secret-resolver-production-fixture"
+}

@@ -140,11 +140,18 @@ def enforce_phase1a_not_phase1b() -> None:
     if present:
         raise SystemExit(f"Phase 1A migration contains Phase 1B surfaces: {present}")
 
-    wrangler = (ROOT / "deploy" / "cloudflare" / "wrangler.example.toml").read_text(
+    wrangler = (ROOT / "deploy" / "cloudflare" / "wrangler.jsonc").read_text(
         encoding="utf-8"
-    ).lower()
-    if "integration_events" not in wrangler or "queues.consumers" not in wrangler:
-        raise SystemExit("Cloudflare example is missing the Integration Events producer/consumer")
+    )
+    required_wrangler = (
+        '"binding": "INTEGRATION_EVENTS"',
+        '"consumers": [',
+    )
+    missing_wrangler = [marker for marker in required_wrangler if marker not in wrangler]
+    if missing_wrangler:
+        raise SystemExit(
+            f"Canonical Cloudflare authority is missing Integration Events producer/consumer: {missing_wrangler}"
+        )
 
 
 def registered_events() -> set[str]:

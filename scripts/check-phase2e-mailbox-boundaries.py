@@ -291,15 +291,15 @@ def enforce(root: Path) -> None:
     if "CloudMailboxQueryAdapter" in worker_lib:
         fail("real Client Mail provider must not be called directly from the Worker transport router")
 
-    wrangler = read(root / "deploy" / "cloudflare" / "wrangler.example.toml")
+    wrangler = read(root / "deploy" / "cloudflare" / "wrangler.jsonc")
     assert_contains(
-        "wrangler.example.toml",
+        "wrangler.jsonc",
         wrangler,
         (
-            'binding = "MAILBOX_JOBS"',
-            "max_retries = 6",
-            "dead_letter_queue",
-            'binding = "MAILBOX_SECRET_RESOLVER"',
+            '"binding": "MAILBOX_JOBS"',
+            '"max_retries": 6',
+            '"dead_letter_queue"',
+            '"binding": "MAILBOX_SECRET_RESOLVER"',
         ),
     )
 

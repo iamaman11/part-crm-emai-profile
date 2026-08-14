@@ -1,0 +1,15 @@
+{
+  "worker_name": "profile-control-staging-fixture",
+  "account_id": "cccccccccccccccccccccccccccccccc",
+  "custom_domain": "staging-fixture.crm.invalid",
+  "access_issuer": "https://staging-fixture.cloudflareaccess.com",
+  "access_audience": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "d1_database_name": "profile-catalog-staging-fixture",
+  "d1_database_id": "11111111-1111-1111-1111-111111111111",
+  "r2_bucket_name": "profile-objects-staging-fixture",
+  "generation_verification_queue": "generation-verification-staging-fixture",
+  "integration_events_queue": "integration-events-staging-fixture",
+  "mailbox_jobs_queue": "mailbox-jobs-staging-fixture",
+  "mailbox_jobs_dlq": "mailbox-jobs-dlq-staging-fixture",
+  "mailbox_secret_resolver_service": "mailbox-secret-resolver-staging-fixture"
+}
