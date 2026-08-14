@@ -31,7 +31,6 @@ on:
 permissions:
   contents: read
   actions: read
-  deployments: write
 
 concurrency:
   group: cloudflare-promotion-${{ inputs.release_id }}
@@ -42,6 +41,9 @@ jobs:
     name: Accepted Release And Environment Preflight
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Checkout promotion authority from main
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -71,6 +73,10 @@ jobs:
     environment: staging
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
@@ -137,6 +143,8 @@ jobs:
             --remote \
             --env staging \
             --config deploy/cloudflare/wrangler.promotion.json \
+            --experimental-provision=false \
+            --experimental-auto-create=false \
             --command "SELECT name FROM d1_migrations ORDER BY id;" \
             --json > "$RUNNER_TEMP/staging-d1-migrations.json"
           python scripts/cloudflare-promotion.py verify-remote-d1 \
@@ -148,6 +156,9 @@ jobs:
           npx --yes wrangler@4.94.0 deploy
           --env staging
           --config deploy/cloudflare/wrangler.promotion.json
+          --no-bundle
+          --strict
+          --message "release=${{ inputs.release_id }} source=${{ inputs.release_sha }} artifact-sha256=${{ inputs.artifact_sha256 }}"
           --experimental-provision=false
           --experimental-auto-create=false
 
@@ -157,6 +168,10 @@ jobs:
     environment: staging
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
@@ -224,6 +239,8 @@ jobs:
           npx --yes wrangler@4.94.0 deployments status
           --env staging
           --config deploy/cloudflare/wrangler.promotion.json
+          --experimental-provision=false
+          --experimental-auto-create=false
           --json > "$RUNNER_TEMP/staging-deployment-status.json"
 
       - name: Smoke staging custom domain through Cloudflare Access
@@ -263,6 +280,10 @@ jobs:
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
@@ -329,6 +350,8 @@ jobs:
             --remote \
             --env production \
             --config deploy/cloudflare/wrangler.promotion.json \
+            --experimental-provision=false \
+            --experimental-auto-create=false \
             --command "SELECT name FROM d1_migrations ORDER BY id;" \
             --json > "$RUNNER_TEMP/production-d1-migrations.json"
           python scripts/cloudflare-promotion.py verify-remote-d1 \
@@ -340,6 +363,9 @@ jobs:
           npx --yes wrangler@4.94.0 deploy
           --env production
           --config deploy/cloudflare/wrangler.promotion.json
+          --no-bundle
+          --strict
+          --message "release=${{ inputs.release_id }} source=${{ inputs.release_sha }} artifact-sha256=${{ inputs.artifact_sha256 }}"
           --experimental-provision=false
           --experimental-auto-create=false
 
@@ -349,6 +375,10 @@ jobs:
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
@@ -416,6 +446,8 @@ jobs:
           npx --yes wrangler@4.94.0 deployments status
           --env production
           --config deploy/cloudflare/wrangler.promotion.json
+          --experimental-provision=false
+          --experimental-auto-create=false
           --json > "$RUNNER_TEMP/production-deployment-status.json"
 
       - name: Smoke production custom domain through Cloudflare Access
