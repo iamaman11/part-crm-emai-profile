@@ -118,6 +118,36 @@ describe('ClientMailComposer', () => {
     },
   );
 
+  it('forwards from the source mailbox with explicit deduplicated recipients', async () => {
+    mockedSendClientMail.mockResolvedValueOnce(receipt('SENT'));
+    const user = userEvent.setup();
+    renderComposer('FORWARD', source);
+
+    expect((screen.getByLabelText('From') as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText('Subject') as HTMLInputElement).value).toBe('Fwd: Source subject');
+    await user.type(screen.getByLabelText('To'), 'client@example.test');
+    await user.type(screen.getByLabelText('Cc'), 'CLIENT@example.test, other@example.test');
+    await user.type(screen.getByLabelText('Message'), 'Forward body');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(mockedSendClientMail).toHaveBeenCalledTimes(1));
+    expect(mockedSendClientMail).toHaveBeenCalledWith(
+      'tenant_01JMAILSEND',
+      'client_01JMAILSEND',
+      expect.objectContaining({
+        mailboxBindingId: 'binding_01JMAILSEND',
+        operation: 'FORWARD',
+        sourceProviderReference: 'gmail:source-message-1',
+        to: ['client@example.test'],
+        cc: ['other@example.test'],
+        bcc: [],
+        subject: 'Fwd: Source subject',
+        textBody: 'Forward body',
+      }),
+      expect.any(String),
+    );
+  });
+
   it('retries RETRYABLE with the exact same protected request and idempotency key', async () => {
     mockedSendClientMail
       .mockResolvedValueOnce(receipt('RETRYABLE'))
