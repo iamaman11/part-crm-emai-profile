@@ -16,6 +16,10 @@ import type {
   ClientUpdateRequest,
 } from '../../shared/api/generated/client-registry';
 import type {
+  ClientMailSendReceiptDto,
+  ClientMailSendRequestDto,
+} from '../../shared/api/generated/client-mail-send';
+import type {
   ClientMailSearchInput,
   MailMessageBodyDto,
   MailMessageSearchPageDto,
@@ -31,6 +35,10 @@ export type ArchiveClientContactInput = Omit<ClientContactArchiveRequest, 'reque
 export type MergeClientInput = Omit<ClientMergeRequest, 'requestDigest'>;
 export type { ClientProjection } from '../../shared/api/generated/control-plane';
 export type { ClientHistoryProjection, ClientListProjection } from '../../shared/api/generated/client-registry';
+export type {
+  ClientMailSendReceiptDto,
+  ClientMailSendRequestDto,
+} from '../../shared/api/generated/client-mail-send';
 export type { ClientMailSearchInput, MailMessageBodyDto, MailMessageSearchPageDto, MailboxMessageReferenceDto } from '../../shared/api/generated/query-mail';
 
 export function listClients(tenantId: string, signal?: AbortSignal): Promise<ClientListProjection | undefined> {
@@ -149,5 +157,18 @@ export function getClientMailMessage(
   return requestJson<MailMessageBodyDto>(
     `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/mail/message`,
     { tenantId, method: 'POST', body: reference, signal },
+  );
+}
+
+export function sendClientMail(
+  tenantId: string,
+  clientId: string,
+  input: ClientMailSendRequestDto,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<ClientMailSendReceiptDto | undefined> {
+  return requestJson<ClientMailSendReceiptDto>(
+    `/api/v1/tenants/${segment(tenantId)}/clients/${segment(clientId)}/mail/send`,
+    { tenantId, method: 'POST', body: input, idempotencyKey, signal },
   );
 }
