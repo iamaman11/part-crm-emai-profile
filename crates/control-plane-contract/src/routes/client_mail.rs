@@ -27,7 +27,10 @@ mod tests {
             "mail",
             "send",
         ];
-        assert_eq!(classify("POST", &segments), Some(RouteClass::ClientMailSendApi));
+        assert_eq!(
+            classify("POST", &segments),
+            Some(RouteClass::ClientMailSendApi)
+        );
         assert_eq!(classify("GET", &segments), None);
 
         let extra = [
