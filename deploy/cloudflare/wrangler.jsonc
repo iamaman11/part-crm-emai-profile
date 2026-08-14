@@ -1,0 +1,196 @@
+{
+  "name": "browser-profile-control-plane",
+  "main": "../../apps/control-plane-worker/build/worker/shim.mjs",
+  "compatibility_date": "2026-08-05",
+  "workers_dev": false,
+  "build": {
+    "command": "cargo install worker-build --version 0.8.5 --locked && worker-build --release"
+  },
+  "assets": {
+    "directory": "../../frontend/dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "single-page-application"
+  },
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["ProfileCoordinator"]
+    },
+    {
+      "tag": "v2",
+      "new_classes": ["NotificationHub"]
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "${STAGING_WORKER_NAME}",
+      "routes": [
+        {
+          "pattern": "${STAGING_CUSTOM_DOMAIN}",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "ACCESS_ISSUER": "${STAGING_ACCESS_ISSUER}",
+        "ACCESS_AUDIENCE": "${STAGING_ACCESS_AUDIENCE}",
+        "R2_GENERATION_ACCOUNT_ID": "${STAGING_R2_ACCOUNT_ID}",
+        "R2_GENERATION_BUCKET_NAME": "${STAGING_R2_BUCKET_NAME}"
+      },
+      "secrets": {
+        "required": [
+          "CLIENT_CONTACT_PROTECTION_KEYRING",
+          "R2_GENERATION_ACCESS_KEY_ID",
+          "R2_GENERATION_SECRET_ACCESS_KEY"
+        ]
+      },
+      "d1_databases": [
+        {
+          "binding": "CATALOG_DB",
+          "database_name": "${STAGING_D1_DATABASE_NAME}",
+          "database_id": "${STAGING_D1_DATABASE_ID}"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PROFILE_OBJECTS",
+          "bucket_name": "${STAGING_R2_BUCKET_NAME}"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "GENERATION_VERIFICATION",
+            "queue": "${STAGING_GENERATION_VERIFICATION_QUEUE}"
+          },
+          {
+            "binding": "INTEGRATION_EVENTS",
+            "queue": "${STAGING_INTEGRATION_EVENTS_QUEUE}"
+          },
+          {
+            "binding": "MAILBOX_JOBS",
+            "queue": "${STAGING_MAILBOX_JOBS_QUEUE}"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "${STAGING_INTEGRATION_EVENTS_QUEUE}",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          },
+          {
+            "queue": "${STAGING_MAILBOX_JOBS_QUEUE}",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 6,
+            "dead_letter_queue": "${STAGING_MAILBOX_JOBS_DLQ}"
+          }
+        ]
+      },
+      "services": [
+        {
+          "binding": "MAILBOX_SECRET_RESOLVER",
+          "service": "${STAGING_MAILBOX_SECRET_RESOLVER_SERVICE}"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "PROFILE_COORDINATOR",
+            "class_name": "ProfileCoordinator"
+          },
+          {
+            "name": "NOTIFICATION_HUB",
+            "class_name": "NotificationHub"
+          }
+        ]
+      }
+    },
+    "production": {
+      "name": "${PRODUCTION_WORKER_NAME}",
+      "routes": [
+        {
+          "pattern": "${PRODUCTION_CUSTOM_DOMAIN}",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "ACCESS_ISSUER": "${PRODUCTION_ACCESS_ISSUER}",
+        "ACCESS_AUDIENCE": "${PRODUCTION_ACCESS_AUDIENCE}",
+        "R2_GENERATION_ACCOUNT_ID": "${PRODUCTION_R2_ACCOUNT_ID}",
+        "R2_GENERATION_BUCKET_NAME": "${PRODUCTION_R2_BUCKET_NAME}"
+      },
+      "secrets": {
+        "required": [
+          "CLIENT_CONTACT_PROTECTION_KEYRING",
+          "R2_GENERATION_ACCESS_KEY_ID",
+          "R2_GENERATION_SECRET_ACCESS_KEY"
+        ]
+      },
+      "d1_databases": [
+        {
+          "binding": "CATALOG_DB",
+          "database_name": "${PRODUCTION_D1_DATABASE_NAME}",
+          "database_id": "${PRODUCTION_D1_DATABASE_ID}"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PROFILE_OBJECTS",
+          "bucket_name": "${PRODUCTION_R2_BUCKET_NAME}"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "GENERATION_VERIFICATION",
+            "queue": "${PRODUCTION_GENERATION_VERIFICATION_QUEUE}"
+          },
+          {
+            "binding": "INTEGRATION_EVENTS",
+            "queue": "${PRODUCTION_INTEGRATION_EVENTS_QUEUE}"
+          },
+          {
+            "binding": "MAILBOX_JOBS",
+            "queue": "${PRODUCTION_MAILBOX_JOBS_QUEUE}"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "${PRODUCTION_INTEGRATION_EVENTS_QUEUE}",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          },
+          {
+            "queue": "${PRODUCTION_MAILBOX_JOBS_QUEUE}",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 6,
+            "dead_letter_queue": "${PRODUCTION_MAILBOX_JOBS_DLQ}"
+          }
+        ]
+      },
+      "services": [
+        {
+          "binding": "MAILBOX_SECRET_RESOLVER",
+          "service": "${PRODUCTION_MAILBOX_SECRET_RESOLVER_SERVICE}"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "PROFILE_COORDINATOR",
+            "class_name": "ProfileCoordinator"
+          },
+          {
+            "name": "NOTIFICATION_HUB",
+            "class_name": "NotificationHub"
+          }
+        ]
+      }
+    }
+  }
+}
