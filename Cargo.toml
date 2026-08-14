@@ -2,6 +2,7 @@
 members = [
     "apps/control-plane-worker",
     "apps/foundation-check",
+    "apps/mailbox-secret-resolver-worker",
     "apps/profile-bridge",
     "crates/application-ports",
     "crates/bridge-domain",
@@ -35,6 +36,7 @@ edition = "2024"
 rust-version = "1.97.1"
 
 [workspace.dependencies]
+aes-gcm = { version = "=0.11.0", default-features = false, features = ["aes", "alloc", "zeroize"] }
 application-ports = { path = "crates/application-ports" }
 bridge-domain = { path = "crates/bridge-domain" }
 browser-execution-domain = { path = "crates/browser-execution-domain" }

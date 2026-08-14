@@ -1,11 +1,11 @@
 use application_ports::query::{QueryCursor, QueryPortError, QueryPortErrorClass};
 use mailbox_domain::MailboxBinding;
 use serde::Deserialize;
-use worker::wasm_bindgen::JsValue;
-use worker::{Env, Headers, Method, RequestInit};
-use zeroize::Zeroize;
+use serde_json::{Map, Value};
+use worker::Env;
 
 use crate::cloud_mailbox_secrets::MAILBOX_SECRET_RESOLVER_BINDING;
+use crate::resolver_request::signed_resolver_request;
 
 const CURSOR_STORE_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/microsoft-graph/cursors/store";
@@ -26,7 +26,7 @@ pub async fn store_query_cursor(
         env,
         binding,
         CURSOR_STORE_ENDPOINT,
-        &serde_json::json!({"providerCursor": provider_cursor}).to_string(),
+        cursor_payload(binding, "providerCursor", provider_cursor),
         false,
     )
     .await?;
@@ -50,7 +50,7 @@ pub async fn resolve_query_cursor(
         env,
         binding,
         CURSOR_RESOLVE_ENDPOINT,
-        &serde_json::json!({"cursorHandle": handle}).to_string(),
+        cursor_payload(binding, "cursorHandle", handle),
         true,
     )
     .await?;
@@ -63,39 +63,20 @@ async fn resolver_post(
     env: &Env,
     binding: &MailboxBinding,
     endpoint: &str,
-    body: &str,
+    payload: Map<String, Value>,
     invalid_cursor_on_gone: bool,
 ) -> Result<worker::Response, QueryPortError> {
     let resolver = env
         .service(MAILBOX_SECRET_RESOLVER_BINDING)
         .map_err(|_| integrity_failure())?;
-    let headers = Headers::new();
-    headers
-        .set("accept", "application/json")
-        .map_err(|_| integrity_failure())?;
-    headers
-        .set("content-type", "application/json")
-        .map_err(|_| integrity_failure())?;
-    headers
-        .set("cache-control", "no-store")
-        .map_err(|_| integrity_failure())?;
-    headers
-        .set("x-profile-tenant-id", binding.tenant_id().as_str())
-        .map_err(|_| integrity_failure())?;
-    headers
-        .set(
-            "x-profile-mailbox-binding-id",
-            binding.binding_id().as_str(),
-        )
-        .map_err(|_| integrity_failure())?;
-
-    let mut body = body.to_owned();
-    let js_body = JsValue::from_str(&body);
-    body.zeroize();
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post)
-        .with_headers(headers)
-        .with_body(Some(js_body));
+    let init = signed_resolver_request(
+        env,
+        endpoint,
+        binding.tenant_id().as_str(),
+        "microsoft_graph_cursor",
+        payload,
+    )
+    .map_err(|_| integrity_failure())?;
     let response = resolver
         .fetch(endpoint, Some(init))
         .await
@@ -107,6 +88,16 @@ async fn resolver_post(
         401 | 403 | 409 | 422 => Err(integrity_failure()),
         _ => Err(integrity_failure()),
     }
+}
+
+fn cursor_payload(binding: &MailboxBinding, name: &str, value: &str) -> Map<String, Value> {
+    Map::from_iter([
+        (
+            "mailboxBindingId".to_owned(),
+            Value::String(binding.binding_id().as_str().to_owned()),
+        ),
+        (name.to_owned(), Value::String(value.to_owned())),
+    ])
 }
 
 async fn parse_json<T: for<'de> Deserialize<'de>>(

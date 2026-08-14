@@ -1,7 +1,10 @@
 use mailbox_domain::{MailboxBinding, MailboxProvider};
 use serde::Deserialize;
-use worker::{Env, Headers, Method, RequestInit};
+use serde_json::{Map, Value};
+use worker::Env;
 use zeroize::Zeroize;
+
+use crate::resolver_request::signed_resolver_request;
 
 const MAILBOX_SECRET_RESOLVER_BINDING: &str = "MAILBOX_SECRET_RESOLVER";
 const MAILBOX_SECRET_RESOLVER_ENDPOINT: &str =
@@ -125,12 +128,31 @@ pub(crate) async fn resolve_smtp_send_credential(
     if binding.provider() != MailboxProvider::Imap || !binding.is_executable() {
         return Err(SmtpCredentialError::Rejected);
     }
-    let headers = resolver_headers(binding)?;
     let resolver = env
         .service(MAILBOX_SECRET_RESOLVER_BINDING)
         .map_err(|_| SmtpCredentialError::IntegrityFailure)?;
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post).with_headers(headers);
+    let payload = Map::from_iter([
+        (
+            "secretHandle".to_owned(),
+            Value::String(binding.secret_handle().as_str().to_owned()),
+        ),
+        (
+            "provider".to_owned(),
+            Value::String(binding.provider().storage_value().to_owned()),
+        ),
+        (
+            "credentialPurpose".to_owned(),
+            Value::String(SMTP_SEND_PURPOSE.to_owned()),
+        ),
+    ]);
+    let init = signed_resolver_request(
+        env,
+        MAILBOX_SECRET_RESOLVER_ENDPOINT,
+        binding.tenant_id().as_str(),
+        "mailbox_execute",
+        payload,
+    )
+    .map_err(|_| SmtpCredentialError::IntegrityFailure)?;
     let mut response = resolver
         .fetch(MAILBOX_SECRET_RESOLVER_ENDPOINT, Some(init))
         .await
@@ -154,35 +176,6 @@ pub(crate) async fn resolve_smtp_send_credential(
         return Err(SmtpCredentialError::Rejected);
     }
     Ok(credential)
-}
-
-fn resolver_headers(binding: &MailboxBinding) -> Result<Headers, SmtpCredentialError> {
-    let headers = Headers::new();
-    headers
-        .set("accept", "application/json")
-        .map_err(|_| SmtpCredentialError::IntegrityFailure)?;
-    headers
-        .set("cache-control", "no-store")
-        .map_err(|_| SmtpCredentialError::IntegrityFailure)?;
-    headers
-        .set("x-profile-tenant-id", binding.tenant_id().as_str())
-        .map_err(|_| SmtpCredentialError::IntegrityFailure)?;
-    headers
-        .set(
-            "x-profile-mailbox-secret-handle",
-            binding.secret_handle().as_str(),
-        )
-        .map_err(|_| SmtpCredentialError::IntegrityFailure)?;
-    headers
-        .set(
-            "x-profile-mailbox-provider",
-            binding.provider().storage_value(),
-        )
-        .map_err(|_| SmtpCredentialError::IntegrityFailure)?;
-    headers
-        .set("x-profile-mailbox-credential-purpose", SMTP_SEND_PURPOSE)
-        .map_err(|_| SmtpCredentialError::IntegrityFailure)?;
-    Ok(headers)
 }
 
 const fn classify_resolver_status(status: u16) -> Result<(), SmtpCredentialError> {

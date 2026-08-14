@@ -3,8 +3,11 @@ use mailbox_domain::{
     MailboxBinding, MailboxProvider, MailboxProviderFailure, MailboxProviderFailureClass,
 };
 use serde::Deserialize;
-use worker::{Env, Headers, Method, RequestInit};
+use serde_json::{Map, Value};
+use worker::Env;
 use zeroize::Zeroize;
+
+use crate::resolver_request::signed_resolver_request;
 
 pub const MAILBOX_SECRET_RESOLVER_BINDING: &str = "MAILBOX_SECRET_RESOLVER";
 const MAILBOX_SECRET_RESOLVER_ENDPOINT: &str =
@@ -187,8 +190,13 @@ pub async fn resolve_mailbox_credential(
     env: &Env,
     binding: &MailboxBinding,
 ) -> Result<MailboxCredential, MailboxProviderPortError> {
-    let headers = resolver_headers(binding)?;
-    let mut response = resolver_fetch(env, MAILBOX_SECRET_RESOLVER_ENDPOINT, headers).await?;
+    let mut response = resolver_fetch(
+        env,
+        binding,
+        MAILBOX_SECRET_RESOLVER_ENDPOINT,
+        "mailbox_execute",
+    )
+    .await?;
     map_resolver_status(response.status_code())?;
     let credential = parse_secret_document::<MailboxCredential>(&mut response).await?;
     let valid = match &credential {
@@ -209,8 +217,13 @@ pub async fn refresh_microsoft_graph_credential(
     if binding.provider() != MailboxProvider::MicrosoftGraph {
         return Err(MailboxProviderPortError::IntegrityFailure);
     }
-    let headers = resolver_headers(binding)?;
-    let mut response = resolver_fetch(env, MICROSOFT_GRAPH_REFRESH_ENDPOINT, headers).await?;
+    let mut response = resolver_fetch(
+        env,
+        binding,
+        MICROSOFT_GRAPH_REFRESH_ENDPOINT,
+        "microsoft_graph_mail",
+    )
+    .await?;
     map_resolver_status(response.status_code())?;
     let credential = parse_secret_document::<MicrosoftGraphCredential>(&mut response).await?;
     if !credential.validate() {
@@ -219,42 +232,33 @@ pub async fn refresh_microsoft_graph_credential(
     Ok(credential)
 }
 
-fn resolver_headers(binding: &MailboxBinding) -> Result<Headers, MailboxProviderPortError> {
-    let headers = Headers::new();
-    headers
-        .set("accept", "application/json")
-        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    headers
-        .set("cache-control", "no-store")
-        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    headers
-        .set("x-profile-tenant-id", binding.tenant_id().as_str())
-        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    headers
-        .set(
-            "x-profile-mailbox-secret-handle",
-            binding.secret_handle().as_str(),
-        )
-        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    headers
-        .set(
-            "x-profile-mailbox-provider",
-            binding.provider().storage_value(),
-        )
-        .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    Ok(headers)
-}
-
 async fn resolver_fetch(
     env: &Env,
+    binding: &MailboxBinding,
     endpoint: &str,
-    headers: Headers,
+    purpose: &str,
 ) -> Result<worker::Response, MailboxProviderPortError> {
     let resolver = env
         .service(MAILBOX_SECRET_RESOLVER_BINDING)
         .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post).with_headers(headers);
+    let payload = Map::from_iter([
+        (
+            "secretHandle".to_owned(),
+            Value::String(binding.secret_handle().as_str().to_owned()),
+        ),
+        (
+            "provider".to_owned(),
+            Value::String(binding.provider().storage_value().to_owned()),
+        ),
+    ]);
+    let init = signed_resolver_request(
+        env,
+        endpoint,
+        binding.tenant_id().as_str(),
+        purpose,
+        payload,
+    )
+    .map_err(|_| MailboxProviderPortError::IntegrityFailure)?;
     resolver
         .fetch(endpoint, Some(init))
         .await

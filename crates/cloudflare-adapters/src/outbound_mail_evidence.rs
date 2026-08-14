@@ -119,13 +119,15 @@ fn c5_gmail_send_boundaries_are_provider_local_and_retry_safe() {
 
     let consent = include_str!("gmail_send_capability.rs");
     has(consent, "https://www.googleapis.com/auth/gmail.send");
-    has(consent, "x-profile-oauth-include-granted-scopes");
+    has(consent, "oauthIncludeGrantedScopes");
+    has(consent, "signed_resolver_request");
     has(consent, "gmail/send/oauth/start");
     has(consent, "gmail/send/oauth/complete");
 
     let resolver = include_str!(concat!("gmail_send_", "credential.rs"));
     has(resolver, "gmail/send/resolve");
-    has(resolver, "x-profile-mailbox-capability");
+    has(resolver, "capability");
+    has(resolver, "signed_resolver_request");
     has(resolver, "\"SEND\"");
 
     let provider = include_str!("gmail_outbound_mail.rs");

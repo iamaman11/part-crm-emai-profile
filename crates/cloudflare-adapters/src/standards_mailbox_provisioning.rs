@@ -13,9 +13,11 @@ use profile_platform_primitives::{
     ActorContext, ActorId, IdempotencyKey, MailboxOnboardingId, SecretHandle, TenantId, UnixMillis,
 };
 use serde::{Deserialize, Serialize};
-use worker::wasm_bindgen::JsValue;
-use worker::{Env, Headers, Method, RequestInit};
+use serde_json::{Map, Value};
+use worker::Env;
 use zeroize::Zeroize;
+
+use crate::resolver_request::{oauth_callback_tenant, signed_resolver_request};
 
 const PASSWORD_PROVISION_ENDPOINT: &str =
     "https://mailbox-secret-resolver.internal/v1/mailbox-credentials/standards/password/provision";
@@ -48,29 +50,29 @@ impl StandardsMailboxProvisioningPort for CloudflareStandardsMailboxProvisioning
         idempotency_key: &IdempotencyKey,
         configuration: StandardsPasswordMailboxConfiguration,
     ) -> Result<StandardsMailboxProvisioningReceipt, StandardsMailboxProvisioningError> {
-        let headers = base_onboarding_headers(actor, onboarding_id, expected_version)?;
-        set_header(&headers, "content-type", "application/json")?;
-        set_header(
-            &headers,
-            "x-profile-mailbox-authentication-mode",
-            "PASSWORD",
-        )?;
-        set_header(
-            &headers,
-            "x-profile-idempotency-key",
-            idempotency_key.as_str(),
-        )?;
         let document = PasswordProvisionDocument::from(configuration);
-        let mut body = serde_json::to_string(&document).map_err(|_| integrity_error())?;
+        let mut payload = serde_json::to_value(&document)
+            .map_err(|_| integrity_error())?
+            .as_object()
+            .cloned()
+            .ok_or_else(integrity_error)?;
         drop(document);
-        let js_body = JsValue::from_str(&body);
-        body.zeroize();
+        payload.extend(onboarding_payload(actor, onboarding_id, expected_version));
+        payload.insert(
+            "authenticationMode".to_owned(),
+            Value::String("PASSWORD".to_owned()),
+        );
+        payload.insert(
+            "idempotencyKey".to_owned(),
+            Value::String(idempotency_key.as_str().to_owned()),
+        );
         let response = fetch(
             self.env,
             PASSWORD_PROVISION_ENDPOINT,
-            headers,
+            actor.tenant_scope().tenant_id().as_str(),
+            "standards_password",
+            payload,
             Operation::Provision,
-            Some(js_body),
         )
         .await?;
         parse_provisioning_receipt(response, StandardsMailboxAuthenticationMode::Password).await
@@ -82,20 +84,19 @@ impl StandardsMailboxProvisioningPort for CloudflareStandardsMailboxProvisioning
         onboarding_id: &MailboxOnboardingId,
         expected_version: MailboxOnboardingVersion,
     ) -> Result<MicrosoftStandardsOAuthStartReceipt, StandardsMailboxProvisioningError> {
-        let headers = base_onboarding_headers(actor, onboarding_id, expected_version)?;
-        set_header(
-            &headers,
-            "x-profile-mailbox-authentication-mode",
-            "MICROSOFT_OAUTH2",
-        )?;
-        set_header(&headers, "x-profile-oauth-scopes", MICROSOFT_SCOPES)?;
-        set_header(&headers, "x-profile-oauth-protocol", "IMAP_SMTP_XOAUTH2")?;
+        let mut payload = onboarding_payload(actor, onboarding_id, expected_version);
+        payload.extend([
+            string_field("authenticationMode", "MICROSOFT_OAUTH2"),
+            string_field("oauthScopes", MICROSOFT_SCOPES),
+            string_field("oauthProtocol", "IMAP_SMTP_XOAUTH2"),
+        ]);
         let response = fetch(
             self.env,
             MICROSOFT_START_ENDPOINT,
-            headers,
+            actor.tenant_scope().tenant_id().as_str(),
+            "standards_microsoft_oauth",
+            payload,
             Operation::Start,
-            None,
         )
         .await?;
         let document: StartDocument = parse_json(response).await?;
@@ -115,14 +116,15 @@ impl StandardsMailboxProvisioningPort for CloudflareStandardsMailboxProvisioning
         &self,
         state: &MicrosoftStandardsOAuthState,
     ) -> Result<MicrosoftStandardsOAuthCallbackTarget, StandardsMailboxProvisioningError> {
-        let headers = common_headers()?;
-        set_header(&headers, "x-profile-oauth-state", state.as_str())?;
+        let tenant_id = oauth_callback_tenant(state.as_str()).map_err(|_| integrity_error())?;
+        let payload = Map::from_iter([string_field("oauthState", state.as_str())]);
         let response = fetch(
             self.env,
             MICROSOFT_INSPECT_ENDPOINT,
-            headers,
+            tenant_id,
+            "standards_microsoft_oauth",
+            payload,
             Operation::Callback,
-            None,
         )
         .await?;
         let document: InspectDocument = parse_json(response).await?;
@@ -146,20 +148,20 @@ impl StandardsMailboxProvisioningPort for CloudflareStandardsMailboxProvisioning
         state: &MicrosoftStandardsOAuthState,
         authorization_code: MicrosoftStandardsOAuthAuthorizationCode,
     ) -> Result<StandardsMailboxProvisioningReceipt, StandardsMailboxProvisioningError> {
-        let headers = base_actor_headers(actor)?;
-        set_header(&headers, "x-profile-oauth-state", state.as_str())?;
-        set_header(
-            &headers,
-            "x-profile-oauth-authorization-code",
-            authorization_code.as_str(),
-        )?;
-        set_header(&headers, "x-profile-oauth-scopes", MICROSOFT_SCOPES)?;
+        require_actor_state_tenant(actor, state.as_str())?;
+        let payload = Map::from_iter([
+            actor_field(actor),
+            string_field("oauthState", state.as_str()),
+            string_field("oauthAuthorizationCode", authorization_code.as_str()),
+            string_field("oauthScopes", MICROSOFT_SCOPES),
+        ]);
         let response = fetch(
             self.env,
             MICROSOFT_COMPLETE_ENDPOINT,
-            headers,
+            actor.tenant_scope().tenant_id().as_str(),
+            "standards_microsoft_oauth",
+            payload,
             Operation::Callback,
-            None,
         )
         .await?;
         parse_provisioning_receipt(
@@ -174,14 +176,18 @@ impl StandardsMailboxProvisioningPort for CloudflareStandardsMailboxProvisioning
         actor: &ActorContext,
         state: &MicrosoftStandardsOAuthState,
     ) -> Result<(), StandardsMailboxProvisioningError> {
-        let headers = base_actor_headers(actor)?;
-        set_header(&headers, "x-profile-oauth-state", state.as_str())?;
+        require_actor_state_tenant(actor, state.as_str())?;
+        let payload = Map::from_iter([
+            actor_field(actor),
+            string_field("oauthState", state.as_str()),
+        ]);
         fetch(
             self.env,
             MICROSOFT_DENY_ENDPOINT,
-            headers,
+            actor.tenant_scope().tenant_id().as_str(),
+            "standards_microsoft_oauth",
+            payload,
             Operation::Callback,
-            None,
         )
         .await
         .map(|_| ())
@@ -192,19 +198,18 @@ impl StandardsMailboxProvisioningPort for CloudflareStandardsMailboxProvisioning
         actor: &ActorContext,
         secret_handle: &SecretHandle,
     ) -> Result<(), StandardsMailboxProvisioningError> {
-        let headers = base_actor_headers(actor)?;
-        set_header(
-            &headers,
-            "x-profile-mailbox-secret-handle",
-            secret_handle.as_str(),
-        )?;
-        set_header(&headers, "x-profile-mailbox-provider", "IMAP")?;
+        let payload = Map::from_iter([
+            actor_field(actor),
+            string_field("secretHandle", secret_handle.as_str()),
+            string_field("provider", "IMAP"),
+        ]);
         fetch(
             self.env,
             DISCARD_ENDPOINT,
-            headers,
+            actor.tenant_scope().tenant_id().as_str(),
+            "credential_discard",
+            payload,
             Operation::Discard,
-            None,
         )
         .await
         .map(|_| ())
@@ -270,18 +275,16 @@ enum Operation {
 async fn fetch(
     env: &Env,
     endpoint: &str,
-    headers: Headers,
+    tenant_id: &str,
+    purpose: &str,
+    payload: Map<String, Value>,
     operation: Operation,
-    body: Option<JsValue>,
 ) -> Result<worker::Response, StandardsMailboxProvisioningError> {
     let resolver = env
         .service(MAILBOX_SECRET_RESOLVER_BINDING)
         .map_err(|_| integrity_error())?;
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post).with_headers(headers);
-    if body.is_some() {
-        init.with_body(body);
-    }
+    let init = signed_resolver_request(env, endpoint, tenant_id, purpose, payload)
+        .map_err(|_| integrity_error())?;
     let response = resolver
         .fetch(endpoint, Some(init))
         .await
@@ -290,50 +293,40 @@ async fn fetch(
     Ok(response)
 }
 
-fn common_headers() -> Result<Headers, StandardsMailboxProvisioningError> {
-    let headers = Headers::new();
-    set_header(&headers, "accept", "application/json")?;
-    set_header(&headers, "cache-control", "no-store")?;
-    Ok(headers)
-}
-
-fn base_actor_headers(actor: &ActorContext) -> Result<Headers, StandardsMailboxProvisioningError> {
-    let headers = common_headers()?;
-    set_header(
-        &headers,
-        "x-profile-tenant-id",
-        actor.tenant_scope().tenant_id().as_str(),
-    )?;
-    set_header(&headers, "x-profile-actor-id", actor.actor_id().as_str())?;
-    Ok(headers)
-}
-
-fn base_onboarding_headers(
+fn onboarding_payload(
     actor: &ActorContext,
     onboarding_id: &MailboxOnboardingId,
     expected_version: MailboxOnboardingVersion,
-) -> Result<Headers, StandardsMailboxProvisioningError> {
-    let headers = base_actor_headers(actor)?;
-    set_header(
-        &headers,
-        "x-profile-mailbox-onboarding-id",
-        onboarding_id.as_str(),
-    )?;
-    set_header(
-        &headers,
-        "x-profile-mailbox-onboarding-version",
-        &expected_version.value().to_string(),
-    )?;
-    set_header(&headers, "x-profile-mailbox-provider", "IMAP")?;
-    Ok(headers)
+) -> Map<String, Value> {
+    Map::from_iter([
+        actor_field(actor),
+        string_field("mailboxOnboardingId", onboarding_id.as_str()),
+        (
+            "mailboxOnboardingVersion".to_owned(),
+            Value::from(expected_version.value()),
+        ),
+        string_field("provider", "IMAP"),
+    ])
 }
 
-fn set_header(
-    headers: &Headers,
-    name: &str,
-    value: &str,
+fn actor_field(actor: &ActorContext) -> (String, Value) {
+    string_field("actorId", actor.actor_id().as_str())
+}
+
+fn string_field(name: &str, value: &str) -> (String, Value) {
+    (name.to_owned(), Value::String(value.to_owned()))
+}
+
+fn require_actor_state_tenant(
+    actor: &ActorContext,
+    state: &str,
 ) -> Result<(), StandardsMailboxProvisioningError> {
-    headers.set(name, value).map_err(|_| integrity_error())
+    if oauth_callback_tenant(state).map_err(|_| integrity_error())?
+        != actor.tenant_scope().tenant_id().as_str()
+    {
+        return Err(integrity_error());
+    }
+    Ok(())
 }
 
 fn map_status(status: u16, operation: Operation) -> Result<(), StandardsMailboxProvisioningError> {
