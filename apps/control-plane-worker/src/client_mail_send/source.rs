@@ -1,46 +1,44 @@
 use application_ports::outbound_mail::OutboundMailIntent;
-use application_ports::query_mail_provider::MailboxMessageReference;
-use cloudflare_adapters::cloud_mail_query::CloudMailboxQueryAdapter;
-use cloudflare_adapters::d1_client_mail_eligibility::D1ClientMailboxEligibilityRepository;
-use cloudflare_adapters::d1_query::D1QueryRepository;
+use application_ports::query::QueryAuthorizationPort;
+use application_ports::query_mail_provider::{
+    ClientMailProviderQueryPort, ClientMailboxEligibilityPort, MailboxMessageReference,
+};
 use profile_platform_primitives::{ActorContext, ClientId};
-use use_cases_query::get_client_mailbox_message;
-use worker::{Env, Result};
+use use_cases_query::{QueryApplicationError, get_client_mailbox_message};
 
-pub(super) async fn is_accessible(
-    env: &Env,
+pub(super) async fn is_accessible<A, E, P>(
     actor: &ActorContext,
     client_id: &ClientId,
-    eligibility: &D1ClientMailboxEligibilityRepository,
+    authorization: &A,
+    eligibility: &E,
+    provider: &P,
     intent: &OutboundMailIntent,
-) -> Result<bool> {
+) -> Result<bool, QueryApplicationError>
+where
+    A: QueryAuthorizationPort,
+    E: ClientMailboxEligibilityPort,
+    P: ClientMailProviderQueryPort,
+{
     let Some(source) = intent.operation().source() else {
         return Ok(true);
     };
-    let reference = match MailboxMessageReference::new(
+    let reference = MailboxMessageReference::new(
         intent.binding_id().clone(),
         source.provider_reference().as_str().to_owned(),
-    ) {
-        Ok(value) => value,
-        Err(_) => return Ok(false),
-    };
-    let authorization = D1QueryRepository::new(catalog(env)?);
-    let provider =
-        CloudMailboxQueryAdapter::new(env, catalog(env)?, catalog(env)?, actor, client_id);
-    Ok(matches!(
-        get_client_mailbox_message(
-            actor,
-            &authorization,
-            eligibility,
-            &provider,
-            client_id,
-            &reference,
-        )
-        .await,
-        Ok(Some(_))
-    ))
-}
-
-fn catalog(env: &Env) -> Result<worker::d1::D1Database> {
-    env.d1(control_plane_contract::D1_CATALOG_BINDING)
+    )
+    .map_err(|_| QueryApplicationError::InvalidInput)?;
+    match get_client_mailbox_message(
+        actor,
+        authorization,
+        eligibility,
+        provider,
+        client_id,
+        &reference,
+    )
+    .await
+    {
+        Ok(Some(_)) => Ok(true),
+        Ok(None) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
