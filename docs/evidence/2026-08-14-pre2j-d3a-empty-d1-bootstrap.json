@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "cloudflare-d1-empty-bootstrap-remote-proof",
+  "proof_source_sha": "493d399b9531776aa8208242a5d1c05681764231",
+  "wrangler_version": "4.94.0",
+  "region": "EEUR",
+  "bootstrap": {
+    "bytes": 261937,
+    "sha256": "de1acf24f30084ba95c43bdb6f2463b068b54e27e9ec0834753dc6383efef069"
+  },
+  "fresh_target_schema": [
+    {
+      "type": "table",
+      "name": "_cf_KV",
+      "tbl_name": "_cf_KV"
+    }
+  ],
+  "first_import": {
+    "completed": true,
+    "statement_count": 421,
+    "rows_written": 2327
+  },
+  "migration_ledger": {
+    "count": 26,
+    "ordered_names": [
+      "0001_catalog.sql",
+      "0002_identity_acl.sql",
+      "0003_governed_commands.sql",
+      "0004_profile_coordinator_projection.sql",
+      "0005_profile_generation_state_guards.sql",
+      "0006_profile_generation_registry.sql",
+      "0007_profile_generation_integrity_guards.sql",
+      "0008_profile_generation_deactivation.sql",
+      "0009_governed_mutation_error_taxonomy.sql",
+      "0010_mailbox_vertical_slice.sql",
+      "0011_mailbox_governed_guards.sql",
+      "0012_integration_event_foundation.sql",
+      "0013_notification_delivery_hardening.sql",
+      "0014_client_contact_protection.sql",
+      "0015_client_merge_assignment_history.sql",
+      "0016_mailbox_cloud_lane.sql",
+      "0017_mailbox_queue_coordination.sql",
+      "0018_device_authorizations_and_jobs.sql",
+      "0019_device_actor_bindings.sql",
+      "0020_browser_mailbox_execution_bindings.sql",
+      "0021_device_generation_commit.sql",
+      "0022_profile_creator_grant.sql",
+      "0023_mailbox_client_associations.sql",
+      "0024_mailbox_onboarding_lifecycle.sql",
+      "0025_microsoft_graph_provider.sql",
+      "0026_outbound_mail_intents.sql"
+    ],
+    "latest": "0026_outbound_mail_intents.sql"
+  },
+  "integration_event_foundation": {
+    "objects": [
+      {
+        "type": "index",
+        "name": "consumer_idempotency_event_lookup",
+        "tbl_name": "consumer_idempotency"
+      },
+      {
+        "type": "index",
+        "name": "notification_events_tenant_time",
+        "tbl_name": "notification_events"
+      },
+      {
+        "type": "table",
+        "name": "consumer_idempotency",
+        "tbl_name": "consumer_idempotency"
+      },
+      {
+        "type": "table",
+        "name": "notification_events",
+        "tbl_name": "notification_events"
+      },
+      {
+        "type": "trigger",
+        "name": "consumer_idempotency_source_guard",
+        "tbl_name": "consumer_idempotency"
+      },
+      {
+        "type": "trigger",
+        "name": "notification_event_source_guard",
+        "tbl_name": "notification_events"
+      },
+      {
+        "type": "trigger",
+        "name": "outbox_event_payload_guard",
+        "tbl_name": "outbox_events"
+      },
+      {
+        "type": "trigger",
+        "name": "outbox_event_version_guard",
+        "tbl_name": "outbox_events"
+      }
+    ],
+    "outbox_columns": [
+      {
+        "name": "envelope_version",
+        "type": "INTEGER",
+        "notnull": 1,
+        "dflt_value": "1"
+      },
+      {
+        "name": "event_version",
+        "type": "INTEGER",
+        "notnull": 1,
+        "dflt_value": "1"
+      }
+    ]
+  },
+  "replay": {
+    "rejected": true,
+    "error_class": "SQLITE_ERROR",
+    "schema_object_count_before": 246,
+    "schema_object_count_after": 246,
+    "schema_sha256_before": "4effc97617730907d4b911881a5b4346326dc88ae92471063dc7bab5717f2f13",
+    "schema_sha256_after": "4effc97617730907d4b911881a5b4346326dc88ae92471063dc7bab5717f2f13",
+    "ledger_count_after": 26,
+    "latest_after": "0026_outbound_mail_intents.sql",
+    "residue": []
+  },
+  "canonical_staging_touched": false,
+  "canonical_production_touched": false,
+  "user_data_involved": false,
+  "secret_material_recorded": false
+}

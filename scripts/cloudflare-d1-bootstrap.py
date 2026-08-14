@@ -21,7 +21,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS_DIR = ROOT / "migrations" / "d1"
 DEFAULT_OUTPUT = ROOT / "artifacts" / "cloudflare-d1-bootstrap" / "bootstrap.sql"
+DEFAULT_EVIDENCE = ROOT / "docs" / "evidence" / "2026-08-14-pre2j-d3a-empty-d1-bootstrap.json"
 MIGRATION_RE = re.compile(r"^(?P<number>[0-9]{4})_[a-z0-9_]+\.sql$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+REMOTE_PROOF_SOURCE_SHA = "493d399b9531776aa8208242a5d1c05681764231"
 LEDGER_NAME = "d1_migrations"
 REMOTE_D1_SYSTEM_TYPE = "table"
 REMOTE_D1_SYSTEM_NAME = "_cf_KV"
@@ -30,6 +34,36 @@ REMOTE_D1_SYSTEM_SCHEMA_ROW = {
     "name": REMOTE_D1_SYSTEM_NAME,
     "tbl_name": REMOTE_D1_SYSTEM_NAME,
 }
+INTEGRATION_EVENT_FOUNDATION_OBJECTS = [
+    {
+        "type": "index",
+        "name": "consumer_idempotency_event_lookup",
+        "tbl_name": "consumer_idempotency",
+    },
+    {
+        "type": "index",
+        "name": "notification_events_tenant_time",
+        "tbl_name": "notification_events",
+    },
+    {"type": "table", "name": "consumer_idempotency", "tbl_name": "consumer_idempotency"},
+    {"type": "table", "name": "notification_events", "tbl_name": "notification_events"},
+    {
+        "type": "trigger",
+        "name": "consumer_idempotency_source_guard",
+        "tbl_name": "consumer_idempotency",
+    },
+    {
+        "type": "trigger",
+        "name": "notification_event_source_guard",
+        "tbl_name": "notification_events",
+    },
+    {"type": "trigger", "name": "outbox_event_payload_guard", "tbl_name": "outbox_events"},
+    {"type": "trigger", "name": "outbox_event_version_guard", "tbl_name": "outbox_events"},
+]
+INTEGRATION_EVENT_FOUNDATION_COLUMNS = [
+    {"name": "envelope_version", "type": "INTEGER", "notnull": 1, "dflt_value": "1"},
+    {"name": "event_version", "type": "INTEGER", "notnull": 1, "dflt_value": "1"},
+]
 
 
 class BootstrapError(ValueError):
@@ -178,6 +212,137 @@ def validate_empty_query_file(path: Path) -> None:
     validate_empty_query_document(document)
 
 
+def require_exact_keys(value: Any, expected: set[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != expected:
+        fail(f"{label} must contain exact keys {sorted(expected)}")
+    return value
+
+
+def verify_remote_evidence_document(document: Any) -> None:
+    evidence = require_exact_keys(
+        document,
+        {
+            "schema_version",
+            "evidence_kind",
+            "proof_source_sha",
+            "wrangler_version",
+            "region",
+            "bootstrap",
+            "fresh_target_schema",
+            "first_import",
+            "migration_ledger",
+            "integration_event_foundation",
+            "replay",
+            "canonical_staging_touched",
+            "canonical_production_touched",
+            "user_data_involved",
+            "secret_material_recorded",
+        },
+        "remote bootstrap evidence",
+    )
+    if evidence["schema_version"] != 1:
+        fail("remote bootstrap evidence schema version is unsupported")
+    if evidence["evidence_kind"] != "cloudflare-d1-empty-bootstrap-remote-proof":
+        fail("remote bootstrap evidence kind is not authoritative")
+    proof_source = evidence["proof_source_sha"]
+    if not isinstance(proof_source, str) or COMMIT_SHA_RE.fullmatch(proof_source) is None:
+        fail("remote bootstrap proof source must be one exact commit SHA")
+    if proof_source != REMOTE_PROOF_SOURCE_SHA:
+        fail("remote bootstrap proof source differs from the accepted external execution head")
+    if evidence["wrangler_version"] != "4.94.0" or evidence["region"] != "EEUR":
+        fail("remote bootstrap evidence toolchain or region differs from the proved authority")
+
+    payload = build_bootstrap_bytes()
+    bootstrap = require_exact_keys(evidence["bootstrap"], {"bytes", "sha256"}, "bootstrap identity")
+    if bootstrap["bytes"] != len(payload) or bootstrap["sha256"] != sha256_bytes(payload):
+        fail("remote proof bootstrap identity differs from exact current migration authority")
+    if not isinstance(bootstrap["sha256"], str) or SHA256_RE.fullmatch(bootstrap["sha256"]) is None:
+        fail("remote proof bootstrap SHA-256 is malformed")
+    if evidence["fresh_target_schema"] != [REMOTE_D1_SYSTEM_SCHEMA_ROW]:
+        fail("remote proof target was not an exact fresh D1 system schema")
+
+    first_import = require_exact_keys(
+        evidence["first_import"], {"completed", "statement_count", "rows_written"}, "first import"
+    )
+    if first_import["completed"] is not True:
+        fail("remote bootstrap first import did not complete")
+    for key in ("statement_count", "rows_written"):
+        if (
+            not isinstance(first_import[key], int)
+            or isinstance(first_import[key], bool)
+            or first_import[key] <= 0
+        ):
+            fail(f"remote bootstrap first import {key} must be a positive integer")
+
+    expected_names = [path.name for path in validated_migrations()]
+    ledger = require_exact_keys(
+        evidence["migration_ledger"], {"count", "ordered_names", "latest"}, "migration ledger"
+    )
+    if ledger["count"] != len(expected_names) or ledger["ordered_names"] != expected_names:
+        fail("remote bootstrap ledger differs from exact ordered migration authority")
+    if ledger["latest"] != expected_names[-1]:
+        fail("remote bootstrap latest ledger row differs from migration authority")
+
+    foundation = require_exact_keys(
+        evidence["integration_event_foundation"], {"objects", "outbox_columns"}, "0012 evidence"
+    )
+    if foundation["objects"] != INTEGRATION_EVENT_FOUNDATION_OBJECTS:
+        fail("remote bootstrap 0012 schema objects differ from the required foundation")
+    if foundation["outbox_columns"] != INTEGRATION_EVENT_FOUNDATION_COLUMNS:
+        fail("remote bootstrap 0012 outbox columns differ from the required foundation")
+
+    replay = require_exact_keys(
+        evidence["replay"],
+        {
+            "rejected",
+            "error_class",
+            "schema_object_count_before",
+            "schema_object_count_after",
+            "schema_sha256_before",
+            "schema_sha256_after",
+            "ledger_count_after",
+            "latest_after",
+            "residue",
+        },
+        "replay evidence",
+    )
+    if replay["rejected"] is not True or replay["error_class"] != "SQLITE_ERROR":
+        fail("remote bootstrap replay was not rejected by the expected SQLite boundary")
+    count_before = replay["schema_object_count_before"]
+    count_after = replay["schema_object_count_after"]
+    if not isinstance(count_before, int) or isinstance(count_before, bool) or count_before <= 0:
+        fail("remote bootstrap replay schema count is invalid")
+    if count_before != count_after:
+        fail("remote bootstrap replay changed the schema object count")
+    digest_before = replay["schema_sha256_before"]
+    digest_after = replay["schema_sha256_after"]
+    if not isinstance(digest_before, str) or SHA256_RE.fullmatch(digest_before) is None:
+        fail("remote bootstrap replay schema SHA-256 is malformed")
+    if digest_before != digest_after:
+        fail("remote bootstrap replay changed the schema inventory digest")
+    if replay["ledger_count_after"] != len(expected_names) or replay["latest_after"] != expected_names[-1]:
+        fail("remote bootstrap replay changed the migration ledger")
+    if replay["residue"] != []:
+        fail("remote bootstrap replay left schema residue")
+
+    for key in (
+        "canonical_staging_touched",
+        "canonical_production_touched",
+        "user_data_involved",
+        "secret_material_recorded",
+    ):
+        if evidence[key] is not False:
+            fail(f"remote bootstrap evidence violates the bounded {key} requirement")
+
+
+def verify_remote_evidence_file(path: Path) -> None:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise BootstrapError(f"cannot read remote bootstrap evidence JSON: {error}") from error
+    verify_remote_evidence_document(document)
+
+
 def check_repository_policy() -> None:
     first = build_bootstrap_bytes()
     second = build_bootstrap_bytes()
@@ -288,6 +453,45 @@ def self_test() -> None:
             ),
         )
 
+        evidence = json.loads(DEFAULT_EVIDENCE.read_text(encoding="utf-8"))
+        verify_remote_evidence_document(evidence)
+        tampered_evidence = json.loads(json.dumps(evidence))
+        tampered_evidence["bootstrap"]["sha256"] = "0" * 64
+        expect_rejected(
+            "stale remote proof bootstrap digest",
+            lambda: verify_remote_evidence_document(tampered_evidence),
+        )
+        reordered_evidence = json.loads(json.dumps(evidence))
+        reordered_evidence["migration_ledger"]["ordered_names"].reverse()
+        expect_rejected(
+            "reordered remote proof ledger",
+            lambda: verify_remote_evidence_document(reordered_evidence),
+        )
+        mutated_replay = json.loads(json.dumps(evidence))
+        mutated_replay["replay"]["schema_sha256_after"] = "1" * 64
+        expect_rejected(
+            "changed replay schema digest",
+            lambda: verify_remote_evidence_document(mutated_replay),
+        )
+        expanded_evidence = json.loads(json.dumps(evidence))
+        expanded_evidence["database_id"] = "prohibited-resource-identity"
+        expect_rejected(
+            "unexpected remote resource identity",
+            lambda: verify_remote_evidence_document(expanded_evidence),
+        )
+        stale_source = json.loads(json.dumps(evidence))
+        stale_source["proof_source_sha"] = "0" * 40
+        expect_rejected(
+            "substituted remote proof source",
+            lambda: verify_remote_evidence_document(stale_source),
+        )
+        expanded_scope = json.loads(json.dumps(evidence))
+        expanded_scope["canonical_staging_touched"] = True
+        expect_rejected(
+            "canonical staging mutation",
+            lambda: verify_remote_evidence_document(expanded_scope),
+        )
+
     print("Empty-D1 bootstrap deterministic and negative self-tests passed.")
 
 
@@ -305,6 +509,9 @@ def main() -> int:
 
     empty = subparsers.add_parser("validate-empty")
     empty.add_argument("--query-json", type=Path, required=True)
+
+    evidence = subparsers.add_parser("verify-evidence")
+    evidence.add_argument("--file", type=Path, default=DEFAULT_EVIDENCE)
 
     args = parser.parse_args()
     if args.command == "check":
@@ -327,6 +534,10 @@ def main() -> int:
     if args.command == "validate-empty":
         validate_empty_query_file(args.query_json)
         print("Remote D1 target is empty and eligible for first bootstrap import.")
+        return 0
+    if args.command == "verify-evidence":
+        verify_remote_evidence_file(args.file)
+        print("Verified sanitized remote empty-D1 bootstrap evidence against current authority.")
         return 0
     fail(f"unsupported command: {args.command}")
 
