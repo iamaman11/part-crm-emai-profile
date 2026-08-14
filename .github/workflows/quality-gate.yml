@@ -51,6 +51,9 @@ jobs:
           scripts/cloudflare-release.py
           scripts/cloudflare-d1-bootstrap.py
           scripts/check-pre2j-d3-resolver-bootstrap-authority.py
+          scripts/check-pre2j-d3-resolver-bootstrap-implementation.py
+          scripts/mailbox-secret-resolver-release.py
+          scripts/mailbox-secret-resolver-promotion.py
           scripts/test-d1-schema.py
           scripts/test-step4-identity-acl.py
           scripts/test-step4-command-guards.py
@@ -182,6 +185,19 @@ jobs:
       - name: Prove D3 resolver and bootstrap authority fails closed
         run: python scripts/check-pre2j-d3-resolver-bootstrap-authority.py --self-test
 
+      - name: Verify D3 resolver implementation and no-rebuild ceremony
+        env:
+          IMPLEMENTATION_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: >-
+          python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py
+          --base-ref "$IMPLEMENTATION_BASE"
+
+      - name: Prove D3 resolver implementation fails closed
+        run: |
+          python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
+          python scripts/mailbox-secret-resolver-release.py self-test
+          python scripts/mailbox-secret-resolver-promotion.py self-test
+
       - name: Test D1 schema and transaction invariants
         run: python scripts/test-d1-schema.py
 
@@ -264,6 +280,11 @@ jobs:
         env:
           RUSTFLAGS: -Dwarnings
         run: cargo test --locked -p cloudflare-adapters --lib
+
+      - name: Test mailbox secret resolver runtime
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: cargo test --locked -p mailbox-secret-resolver-worker
 
       - name: Check extracted identity application crate for Workers target
         run: >-

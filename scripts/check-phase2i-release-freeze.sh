@@ -39,6 +39,11 @@ if git cat-file -e "origin/${base_ref}:architecture/pre2j-d3-resolver-bootstrap-
 else
   python scripts/check-pre2j-d3-resolver-bootstrap-authority.py --base-ref "origin/${base_ref}"
 fi
+if [[ -f architecture/pre2j-d3-resolver-bootstrap-implementation.json ]]; then
+  python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py \
+    --base-ref "origin/${base_ref}"
+  python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
+fi
 
 if git diff --quiet "origin/${base_ref}" -- migrations/d1; then
   echo "Accepted D1 migration history is unchanged."

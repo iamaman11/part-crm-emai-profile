@@ -18,6 +18,11 @@ RAW_D1_TOKENS = (
     "query!(",
 )
 
+RESOLVER_D1_BOUNDARY_FILES = {
+    Path("apps/mailbox-secret-resolver-worker/src/replay.rs"),
+    Path("apps/mailbox-secret-resolver-worker/src/storage.rs"),
+}
+
 
 def check(root: Path) -> list[str]:
     errors: list[str] = []
@@ -31,6 +36,9 @@ def check(root: Path) -> list[str]:
             continue
 
         if relative.parts[:2] == ("crates", "cloudflare-adapters"):
+            continue
+
+        if repository_root and relative in RESOLVER_D1_BOUNDARY_FILES:
             continue
 
         forbidden = [token for token in RAW_D1_TOKENS if token in text]

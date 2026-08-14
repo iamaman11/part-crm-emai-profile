@@ -3,6 +3,7 @@
   "workspace_members": [
     "apps/control-plane-worker",
     "apps/foundation-check",
+    "apps/mailbox-secret-resolver-worker",
     "apps/profile-bridge",
     "crates/application-ports",
     "crates/bridge-domain",

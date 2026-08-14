@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "status": "implemented_pending_acceptance",
+  "authority_commit": "6a7dad9f74a25ccfd77cdd1a76216d8a46694e10",
+  "authority_sha256": "e19007fdcb0533001313463a070ce675e4fb636c04507b89f47a87feca3c610e",
+  "authority_pr": 257,
+  "tracking_issue": 258,
+  "implementation_base": "6a7dad9f74a25ccfd77cdd1a76216d8a46694e10",
+  "production_ready": false,
+  "external_mutations": false,
+  "resolver_endpoint_count": 23,
+  "implementation_roots": [
+    "apps/mailbox-secret-resolver-worker",
+    "crates/cloudflare-adapters",
+    "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc",
+    "migrations/resolver-d1",
+    "scripts/mailbox-secret-resolver-release.py",
+    "scripts/mailbox-secret-resolver-promotion.py",
+    ".github/workflows/mailbox-secret-resolver-release.yml",
+    ".github/workflows/mailbox-secret-resolver-promotion.yml"
+  ],
+  "release_workflow": ".github/workflows/mailbox-secret-resolver-release.yml",
+  "promotion_workflow": ".github/workflows/mailbox-secret-resolver-promotion.yml",
+  "same_bits_staging_production": true,
+  "first_control_plane_deploy_uses_secrets_file": true,
+  "openapi_v1_changed": false
+}

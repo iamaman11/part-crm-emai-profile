@@ -20,16 +20,20 @@ pub use model::{
     ErrorDocument, MAX_REQUEST_BYTES, MAX_SECRET_DOCUMENT_BYTES, NONCE_BYTES, ResolverEnvelope,
     ResolverRoute,
 };
-pub use operations::{OperationError, dispatch_operation};
+pub use operations::{OperationError, dispatch_operation, reconcile_encryption_keys};
 pub use protocol::{SignatureError, SignatureInput, body_digest_hex, sign_hex, verify};
 pub use provider::{
     OAuthProvider, ProviderError, ProviderTokenSet, authorization_url, exchange_authorization_code,
     refresh_access_token,
 };
 pub use replay::{ReplayClaimError, claim_request_nonce};
-pub use storage::{EncryptedRecordStore, RecordIdentity, RecordStoreError, StoredSecret};
+pub use storage::{
+    EncryptedRecordStore, ReconciliationResult, RecordIdentity, RecordStoreError, StoredSecret,
+};
 
-use worker::{Context, Date, Env, Request, Response, Result, event};
+use worker::{
+    Context, Date, Env, Request, Response, Result, ScheduleContext, ScheduledEvent, event,
+};
 
 #[event(fetch, respond_with_errors)]
 pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
@@ -63,6 +67,16 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
         Ok(response) => Ok(response),
         Err(error) => error_response(operation_status(error), operation_code(error)),
     }
+}
+
+#[event(scheduled)]
+pub async fn scheduled(_event: ScheduledEvent, env: Env, _context: ScheduleContext) {
+    assert!(
+        reconcile_encryption_keys(&env, Date::now().as_millis())
+            .await
+            .is_ok(),
+        "resolver key reconciliation failed"
+    );
 }
 
 const fn ingress_status(error: IngressError) -> u16 {

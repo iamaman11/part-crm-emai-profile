@@ -5,10 +5,12 @@ use crate::provider::{
     OAuthProvider, ProviderError, authorization_url, exchange_authorization_code,
     refresh_access_token,
 };
-use crate::storage::{EncryptedRecordStore, RecordIdentity, RecordStoreError};
+use crate::storage::{
+    EncryptedRecordStore, ReconciliationResult, RecordIdentity, RecordStoreError,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use worker::{Env, Response, query};
+use worker::{Env, Response};
 use zeroize::{Zeroize, Zeroizing};
 
 const RESOLVER_DB_BINDING: &str = "RESOLVER_DB";
@@ -52,15 +54,7 @@ pub async fn dispatch_operation(
             refresh_graph(&store, env, tenant_id, payload, now_ms).await
         }
         ResolverRoute::StandardsPasswordProvision => {
-            provision_password(
-                &store,
-                env,
-                tenant_id,
-                payload,
-                &request.body_digest,
-                now_ms,
-            )
-            .await
+            provision_password(&store, tenant_id, payload, &request.body_digest, now_ms).await
         }
         ResolverRoute::GmailOAuthStart
         | ResolverRoute::GmailSendOAuthStart
@@ -87,6 +81,16 @@ pub async fn dispatch_operation(
             complete_oauth(&store, env, request.route, tenant_id, payload, now_ms).await
         }
     }
+}
+
+pub async fn reconcile_encryption_keys(
+    env: &Env,
+    now_ms: u64,
+) -> Result<ReconciliationResult, OperationError> {
+    encrypted_store(env)?
+        .reconcile_key_rotation(now_ms, 100)
+        .await
+        .map_err(map_store_error)
 }
 
 fn encrypted_store(env: &Env) -> Result<EncryptedRecordStore<WorkerNonceSource>, OperationError> {
@@ -189,7 +193,6 @@ async fn discard(
 
 async fn provision_password(
     store: &EncryptedRecordStore<WorkerNonceSource>,
-    env: &Env,
     tenant_id: &str,
     payload: &Map<String, Value>,
     request_digest: &str,
@@ -197,7 +200,6 @@ async fn provision_password(
 ) -> Result<Response, OperationError> {
     claim_idempotency(
         store,
-        env,
         tenant_id,
         string(payload, "idempotencyKey")?,
         request_digest,
@@ -227,61 +229,21 @@ async fn provision_password(
 
 async fn claim_idempotency(
     store: &EncryptedRecordStore<WorkerNonceSource>,
-    env: &Env,
     tenant_id: &str,
     idempotency_key: &str,
     request_digest: &str,
     now_ms: u64,
 ) -> Result<(), OperationError> {
-    let key_digest = store
-        .lookup_digest(tenant_id, idempotency_key)
-        .map_err(map_store_error)?;
-    let database = env
-        .d1(RESOLVER_DB_BINDING)
-        .map_err(|_| OperationError::ConfigurationUnavailable)?;
-    let created_at = i64::try_from(now_ms).map_err(|_| OperationError::InvalidRequest)?;
-    query!(
-        &database,
-        r#"
-        INSERT INTO resolver_idempotency_records (
-            tenant_id, idempotency_digest, operation, request_sha256, created_at_ms
-        ) VALUES (?, ?, 'standards_password_provision', ?, ?)
-        ON CONFLICT (tenant_id, idempotency_digest, operation) DO NOTHING
-        "#,
-        tenant_id,
-        key_digest.as_str(),
-        request_digest,
-        created_at
-    )
-    .map_err(|_| OperationError::DependencyUnavailable)?
-    .run()
-    .await
-    .map_err(|_| OperationError::DependencyUnavailable)?;
-    let row = query!(
-        &database,
-        r#"
-        SELECT request_sha256
-        FROM resolver_idempotency_records
-        WHERE tenant_id = ? AND idempotency_digest = ?
-          AND operation = 'standards_password_provision'
-        "#,
-        tenant_id,
-        key_digest
-    )
-    .map_err(|_| OperationError::DependencyUnavailable)?
-    .first::<IdempotencyRow>(None)
-    .await
-    .map_err(|_| OperationError::DependencyUnavailable)?
-    .ok_or(OperationError::DependencyUnavailable)?;
-    if row.request_sha256 != request_digest {
-        return Err(OperationError::ReplayRejected);
-    }
-    Ok(())
-}
-
-#[derive(Deserialize)]
-struct IdempotencyRow {
-    request_sha256: String,
+    store
+        .claim_idempotency(
+            tenant_id,
+            idempotency_key,
+            "standards_password_provision",
+            request_digest,
+            now_ms,
+        )
+        .await
+        .map_err(map_store_error)
 }
 
 async fn resolve_credential(

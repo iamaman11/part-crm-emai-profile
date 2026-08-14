@@ -24,6 +24,14 @@ pub struct StoredSecret {
     pub reencrypted: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReconciliationResult {
+    pub active_key_version: u32,
+    pub scanned_records: u32,
+    pub reencrypted_records: u32,
+    pub remaining_records: u32,
+}
+
 pub struct RecordIdentity<'a> {
     pub tenant_id: &'a str,
     pub raw_handle: &'a str,
@@ -65,6 +73,64 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         self.crypto
             .lookup_digest(tenant_id, value)
             .map_err(map_crypto_error)
+    }
+
+    pub async fn claim_idempotency(
+        &self,
+        tenant_id: &str,
+        idempotency_key: &str,
+        operation: &str,
+        request_digest: &str,
+        now_ms: u64,
+    ) -> Result<(), RecordStoreError> {
+        if !bounded_identifier(tenant_id, 128)
+            || !bounded_identifier(idempotency_key, 192)
+            || !bounded_identifier(operation, 64)
+            || request_digest.len() != 64
+            || !request_digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(RecordStoreError::InvalidInput);
+        }
+        let key_digest = self.lookup_digest(tenant_id, idempotency_key)?;
+        let created_at = sqlite_millis(now_ms)?;
+        query!(
+            &self.database,
+            r#"
+            INSERT INTO resolver_idempotency_records (
+                tenant_id, idempotency_digest, operation, request_sha256, created_at_ms
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (tenant_id, idempotency_digest, operation) DO NOTHING
+            "#,
+            tenant_id,
+            key_digest.as_str(),
+            operation,
+            request_digest,
+            created_at
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .run()
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?;
+        let row = query!(
+            &self.database,
+            r#"
+            SELECT request_sha256
+            FROM resolver_idempotency_records
+            WHERE tenant_id = ? AND idempotency_digest = ? AND operation = ?
+            "#,
+            tenant_id,
+            key_digest,
+            operation
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .first::<IdempotencyRow>(None)
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .ok_or(RecordStoreError::StorageUnavailable)?;
+        if row.request_sha256 != request_digest {
+            return Err(RecordStoreError::ReplayRejected);
+        }
+        Ok(())
     }
 
     pub async fn store(
@@ -296,6 +362,196 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         })
     }
 
+    pub async fn reconcile_key_rotation(
+        &self,
+        now_ms: u64,
+        limit: u32,
+    ) -> Result<ReconciliationResult, RecordStoreError> {
+        if now_ms == 0 || !(1..=100).contains(&limit) {
+            return Err(RecordStoreError::InvalidInput);
+        }
+        let active_key_version = self.crypto.active_key_version();
+        let active_sql = i64::from(active_key_version);
+        let limit_sql = i64::from(limit);
+        let rows = query!(
+            &self.database,
+            r#"
+            SELECT tenant_id, lookup_digest, provider, record_kind, logical_id,
+                   key_version, nonce_hex, ciphertext_hex
+            FROM resolver_encrypted_records
+            WHERE key_version <> ? AND discarded_at_ms IS NULL
+            ORDER BY key_version, tenant_id, lookup_digest, record_kind
+            LIMIT ?
+            "#,
+            active_sql,
+            limit_sql
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .all()
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .results::<ReconciliationRow>()
+        .map_err(|_| RecordStoreError::StorageUnavailable)?;
+
+        let scanned_records =
+            u32::try_from(rows.len()).map_err(|_| RecordStoreError::StorageUnavailable)?;
+        let mut reencrypted_records = 0_u32;
+        let mut observed_versions: Vec<(u32, u32, u32)> = Vec::new();
+        for row in rows {
+            if row.logical_id != row.lookup_digest {
+                return Err(RecordStoreError::Crypto);
+            }
+            let previous_key_version =
+                u32::try_from(row.key_version).map_err(|_| RecordStoreError::Crypto)?;
+            let context = AuthenticatedContext {
+                tenant_id: &row.tenant_id,
+                provider: &row.provider,
+                record_kind: &row.record_kind,
+                logical_id: &row.logical_id,
+            };
+            let document = self
+                .crypto
+                .decrypt(
+                    &EncryptedValue {
+                        key_version: previous_key_version,
+                        nonce_hex: row.nonce_hex,
+                        ciphertext_hex: row.ciphertext_hex,
+                    },
+                    &context,
+                )
+                .map_err(map_crypto_error)?;
+            let encrypted = self
+                .crypto
+                .encrypt(&document, &context)
+                .map_err(map_crypto_error)?;
+            let now = sqlite_millis(now_ms)?;
+            let result = query!(
+                &self.database,
+                r#"
+                UPDATE resolver_encrypted_records
+                SET key_version = ?, nonce_hex = ?, ciphertext_hex = ?, updated_at_ms = ?
+                WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ?
+                  AND key_version = ? AND discarded_at_ms IS NULL
+                "#,
+                i64::from(encrypted.key_version),
+                encrypted.nonce_hex,
+                encrypted.ciphertext_hex,
+                now,
+                row.tenant_id,
+                row.lookup_digest,
+                row.record_kind,
+                row.key_version
+            )
+            .map_err(|_| RecordStoreError::StorageUnavailable)?
+            .run()
+            .await
+            .map_err(|_| RecordStoreError::StorageUnavailable)?;
+            let changes = result
+                .meta()
+                .map_err(|_| RecordStoreError::StorageUnavailable)?
+                .and_then(|meta| meta.changes)
+                .unwrap_or_default();
+            let reencrypted = u32::from(changes == 1);
+            reencrypted_records = reencrypted_records.saturating_add(reencrypted);
+            if let Some(entry) = observed_versions
+                .iter_mut()
+                .find(|entry| entry.0 == previous_key_version)
+            {
+                entry.1 = entry.1.saturating_add(1);
+                entry.2 = entry.2.saturating_add(reencrypted);
+            } else {
+                observed_versions.push((previous_key_version, 1, reencrypted));
+            }
+        }
+
+        let remaining = query!(
+            &self.database,
+            r#"
+            SELECT COUNT(*) AS count
+            FROM resolver_encrypted_records
+            WHERE key_version <> ? AND discarded_at_ms IS NULL
+            "#,
+            active_sql
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .first::<CountRow>(None)
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .ok_or(RecordStoreError::StorageUnavailable)?;
+        let remaining_records =
+            u32::try_from(remaining.count).map_err(|_| RecordStoreError::StorageUnavailable)?;
+
+        for (from_version, scanned, reencrypted) in observed_versions {
+            let rotation_id = format!("from-v{from_version}-to-v{active_key_version}");
+            let from_sql = i64::from(from_version);
+            let scanned_sql = i64::from(scanned);
+            let reencrypted_sql = i64::from(reencrypted);
+            let now = sqlite_millis(now_ms)?;
+            query!(
+                &self.database,
+                r#"
+                INSERT INTO resolver_key_rotation_runs (
+                    rotation_id, from_key_version, to_key_version, status,
+                    scanned_records, reencrypted_records, started_at_ms, verified_at_ms
+                ) VALUES (?, ?, ?, 'RUNNING', ?, ?, ?, NULL)
+                ON CONFLICT (rotation_id) DO UPDATE SET
+                    scanned_records = resolver_key_rotation_runs.scanned_records
+                        + excluded.scanned_records,
+                    reencrypted_records = resolver_key_rotation_runs.reencrypted_records
+                        + excluded.reencrypted_records
+                "#,
+                rotation_id,
+                from_sql,
+                active_sql,
+                scanned_sql,
+                reencrypted_sql,
+                now
+            )
+            .map_err(|_| RecordStoreError::StorageUnavailable)?
+            .run()
+            .await
+            .map_err(|_| RecordStoreError::StorageUnavailable)?;
+
+            let old_remaining = query!(
+                &self.database,
+                r#"
+                SELECT COUNT(*) AS count
+                FROM resolver_encrypted_records
+                WHERE key_version = ? AND discarded_at_ms IS NULL
+                "#,
+                from_sql
+            )
+            .map_err(|_| RecordStoreError::StorageUnavailable)?
+            .first::<CountRow>(None)
+            .await
+            .map_err(|_| RecordStoreError::StorageUnavailable)?
+            .ok_or(RecordStoreError::StorageUnavailable)?;
+            if old_remaining.count == 0 {
+                query!(
+                    &self.database,
+                    r#"
+                    UPDATE resolver_key_rotation_runs
+                    SET status = 'VERIFIED', verified_at_ms = ?
+                    WHERE rotation_id = ? AND status = 'RUNNING'
+                    "#,
+                    now,
+                    rotation_id
+                )
+                .map_err(|_| RecordStoreError::StorageUnavailable)?
+                .run()
+                .await
+                .map_err(|_| RecordStoreError::StorageUnavailable)?;
+            }
+        }
+
+        Ok(ReconciliationResult {
+            active_key_version,
+            scanned_records,
+            reencrypted_records,
+            remaining_records,
+        })
+    }
+
     async fn reencrypt(
         &self,
         identity: &RecordIdentity<'_>,
@@ -352,6 +608,28 @@ struct EncryptedRecordRow {
     ciphertext_hex: String,
     expires_at_ms: Option<i64>,
     discarded_at_ms: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct ReconciliationRow {
+    tenant_id: String,
+    lookup_digest: String,
+    provider: String,
+    record_kind: String,
+    logical_id: String,
+    key_version: i64,
+    nonce_hex: String,
+    ciphertext_hex: String,
+}
+
+#[derive(Deserialize)]
+struct CountRow {
+    count: i64,
+}
+
+#[derive(Deserialize)]
+struct IdempotencyRow {
+    request_sha256: String,
 }
 
 fn validate_record_input(
