@@ -81,10 +81,10 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
     steps:
-      - name: Checkout exact accepted release source
+      - name: Checkout accepted promotion authority from main
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ inputs.release_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download exact immutable release artifact
@@ -178,10 +178,10 @@ jobs:
       CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
       CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
     steps:
-      - name: Checkout exact accepted release source
+      - name: Checkout accepted promotion authority from main
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ inputs.release_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download exact immutable release artifact
@@ -288,10 +288,10 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
     steps:
-      - name: Checkout exact accepted release source
+      - name: Checkout accepted promotion authority from main
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ inputs.release_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download exact immutable release artifact
@@ -385,10 +385,10 @@ jobs:
       CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
       CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
     steps:
-      - name: Checkout exact accepted release source
+      - name: Checkout accepted promotion authority from main
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ inputs.release_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download exact immutable release artifact
