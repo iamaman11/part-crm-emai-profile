@@ -48,6 +48,7 @@ jobs:
           scripts/generate-architecture-inventory.py
           scripts/cloudflare-deploy-config.py
           scripts/check-cloudflare-runtime-bindings.py
+          scripts/cloudflare-release.py
           scripts/test-d1-schema.py
           scripts/test-step4-identity-acl.py
           scripts/test-step4-command-guards.py
@@ -151,6 +152,12 @@ jobs:
 
       - name: Prove Cloudflare environment configuration fails closed
         run: python scripts/cloudflare-deploy-config.py --self-test
+
+      - name: Verify immutable Cloudflare release provenance policy
+        run: python scripts/cloudflare-release.py check
+
+      - name: Prove immutable Cloudflare release provenance fails closed
+        run: python scripts/cloudflare-release.py self-test
 
       - name: Test D1 schema and transaction invariants
         run: python scripts/test-d1-schema.py
@@ -320,11 +327,38 @@ jobs:
   cloudflare-worker:
     name: Cloudflare Worker Release Build
     runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - name: Checkout
+      - name: Checkout exact release source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
+          ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
+
+      - name: Resolve immutable release source authority
+        id: source
+        env:
+          SOURCE_EVENT: ${{ github.event_name }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          case "$SOURCE_EVENT:$GITHUB_REF" in
+            push:refs/heads/main)
+              test -z "$PR_HEAD_REF"
+              echo "source_ref=refs/heads/main" >> "$GITHUB_OUTPUT"
+              echo "authority=accepted-main" >> "$GITHUB_OUTPUT"
+              ;;
+            pull_request:refs/pull/*/merge)
+              test -n "$PR_HEAD_REF"
+              echo "source_ref=refs/heads/$PR_HEAD_REF" >> "$GITHUB_OUTPUT"
+              echo "authority=review-candidate" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported release source event/ref: $SOURCE_EVENT $GITHUB_REF" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Show pinned toolchain
         run: rustup show active-toolchain
@@ -347,6 +381,63 @@ jobs:
         run: |
           test -f apps/control-plane-worker/build/worker/shim.mjs
           find apps/control-plane-worker/build -type f -name '*.wasm' -print -quit | grep -q .
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node and npm versions
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Install exact frontend dependency graph
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build release Static Assets artifact
+        working-directory: frontend
+        run: npm run build
+
+      - name: Build and verify immutable release package
+        id: release
+        env:
+          RELEASE_AUTHORITY: ${{ steps.source.outputs.authority }}
+          SOURCE_REF: ${{ steps.source.outputs.source_ref }}
+        run: |
+          python scripts/cloudflare-release.py build \
+            --source-sha "$SOURCE_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-ref "$SOURCE_REF" \
+            --source-event "$GITHUB_EVENT_NAME" \
+            --authority "$RELEASE_AUTHORITY" \
+            --github-output
+          python scripts/cloudflare-release.py verify-archive \
+            --archive "${{ steps.release.outputs.archive }}" \
+            --expected-source-sha "$SOURCE_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --authority "$RELEASE_AUTHORITY"
+
+      - name: Upload exact immutable release tar
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          path: ${{ steps.release.outputs.archive }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify uploaded artifact digest
+        env:
+          EXPECTED_DIGEST: ${{ steps.release.outputs.archive_sha256 }}
+          UPLOADED_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          test -n "$UPLOADED_DIGEST"
+          test "$UPLOADED_DIGEST" = "$EXPECTED_DIGEST"
+          echo "Verified immutable release artifact ${UPLOADED_DIGEST} for ${SOURCE_SHA}."
 
   rust-windows:
     name: Rust Windows And Profile Bridge Artifact
