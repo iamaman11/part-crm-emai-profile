@@ -19,6 +19,9 @@ lock
 # Rust build outputs
 /target/
 
+# Wrangler local state and caches
+/.wrangler/
+
 # Frontend dependency and build outputs
 /frontend/node_modules/
 /frontend/dist/

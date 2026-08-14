@@ -23,7 +23,13 @@ MIGRATIONS_DIR = ROOT / "migrations" / "d1"
 DEFAULT_OUTPUT = ROOT / "artifacts" / "cloudflare-d1-bootstrap" / "bootstrap.sql"
 MIGRATION_RE = re.compile(r"^(?P<number>[0-9]{4})_[a-z0-9_]+\.sql$")
 LEDGER_NAME = "d1_migrations"
-GUARD_NAME = "__part_crm_empty_d1_guard"
+REMOTE_D1_SYSTEM_TYPE = "table"
+REMOTE_D1_SYSTEM_NAME = "_cf_KV"
+REMOTE_D1_SYSTEM_SCHEMA_ROW = {
+    "type": REMOTE_D1_SYSTEM_TYPE,
+    "name": REMOTE_D1_SYSTEM_NAME,
+    "tbl_name": REMOTE_D1_SYSTEM_NAME,
+}
 
 
 class BootstrapError(ValueError):
@@ -61,20 +67,19 @@ def validated_migrations(directory: Path = MIGRATIONS_DIR) -> list[Path]:
 
 
 def empty_guard_sql() -> str:
-    return f'''CREATE TABLE "{GUARD_NAME}" (
-    ok INTEGER NOT NULL CHECK(ok = 1)
-) STRICT;
-INSERT INTO "{GUARD_NAME}" (ok)
-SELECT CASE
+    return f'''SELECT CASE
     WHEN EXISTS (
         SELECT 1
         FROM sqlite_schema
         WHERE name NOT LIKE 'sqlite_%'
-          AND name <> '{GUARD_NAME}'
-    ) THEN 0
+          AND NOT (
+              type = '{REMOTE_D1_SYSTEM_TYPE}'
+              AND name = '{REMOTE_D1_SYSTEM_NAME}'
+              AND tbl_name = '{REMOTE_D1_SYSTEM_NAME}'
+          )
+    ) THEN abs(-9223372036854775808)
     ELSE 1
-END;
-DROP TABLE "{GUARD_NAME}";
+END AS empty_d1_guard;
 '''
 
 
@@ -161,8 +166,8 @@ def validate_empty_query_document(document: Any) -> None:
     if result.get("success") is not True or not isinstance(result.get("results"), list):
         fail("remote empty-D1 query did not succeed")
     rows = result["results"]
-    if rows:
-        fail(f"bootstrap target is not empty; observed sqlite_schema rows={rows}")
+    if rows != [REMOTE_D1_SYSTEM_SCHEMA_ROW]:
+        fail(f"bootstrap target does not match exact fresh D1 system schema; observed rows={rows}")
 
 
 def validate_empty_query_file(path: Path) -> None:
@@ -225,17 +230,61 @@ def self_test() -> None:
         finally:
             connection.close()
 
+        # Fresh remote D1 databases contain Cloudflare's exact reserved storage table.
+        # The in-file guard must accept only that platform-owned schema object.
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.execute(
+                f'CREATE TABLE "{REMOTE_D1_SYSTEM_NAME}" '
+                "(key TEXT PRIMARY KEY, value BLOB) WITHOUT ROWID"
+            )
+            connection.executescript(build_bootstrap_bytes(fixture).decode("utf-8"))
+            if ledger_names(connection) != [path.name for path in migrations]:
+                fail("bootstrap with the reserved D1 system table produced an incorrect ledger")
+            schema_before_replay = schema_signature(connection)
+            ledger_before_replay = ledger_names(connection)
+            expect_rejected(
+                "bootstrap replay",
+                lambda: connection.executescript(build_bootstrap_bytes(fixture).decode("utf-8")),
+            )
+            if schema_signature(connection) != schema_before_replay:
+                fail("rejected bootstrap replay changed the application schema")
+            if ledger_names(connection) != ledger_before_replay:
+                fail("rejected bootstrap replay changed the migration ledger")
+        finally:
+            connection.close()
+
         payload = build_bootstrap_bytes(fixture)
         tampered = bytearray(payload)
         tampered[-2] ^= 1
         if sha256_bytes(bytes(tampered)) == sha256_bytes(payload):
             fail("tampered bootstrap fixture retained the original digest")
 
-        validate_empty_query_document([{"results": [], "success": True}])
+        validate_empty_query_document(
+            [{"results": [REMOTE_D1_SYSTEM_SCHEMA_ROW.copy()], "success": True}]
+        )
+        expect_rejected(
+            "missing reserved D1 system row",
+            lambda: validate_empty_query_document([{"results": [], "success": True}]),
+        )
         expect_rejected(
             "non-empty remote inventory",
             lambda: validate_empty_query_document(
-                [{"results": [{"type": "table", "name": "existing"}], "success": True}]
+                [
+                    {
+                        "results": [
+                            REMOTE_D1_SYSTEM_SCHEMA_ROW.copy(),
+                            {"type": "table", "name": "existing", "tbl_name": "existing"},
+                        ],
+                        "success": True,
+                    }
+                ]
+            ),
+        )
+        expect_rejected(
+            "malformed reserved D1 system row",
+            lambda: validate_empty_query_document(
+                [{"results": [{"type": "table", "name": "_cf_KV"}], "success": True}]
             ),
         )
 
