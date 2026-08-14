@@ -1,7 +1,7 @@
 # Test And Evidence Index
 
 **Статус:** normative evidence registry  
-**Дата:** 2026-08-07
+**Дата:** 2026-08-14
 
 A claim is accepted only within the scope of its referenced evidence. Passing one
 smoke test does not promote unrelated production gates.
@@ -27,6 +27,7 @@ smoke test does not promote unrelated production gates.
 | Mailbox composition / PR #60 + repair PR #62 | accepted repository-local composed/synthetic evidence | D1 mailbox binding/job persistence, secret-handle-only request DTOs, idempotency/audit/outbox, Worker API routes, metadata-only synthetic provider path, adapter/native/WASM/release compilation | real Gmail/IMAP/browser execution, mailbox contents, production scheduler/provider evidence or production readiness |
 | React operator UI / PR #64 | accepted repository-local composed/synthetic evidence | exact head `f2fcfe19335508a6062b9ed8a7c984fe2f97a417`; Node 24.19.0/npm 11.17.0 locked React/Vite/TypeScript workspace; same-origin API/problem boundary; neutral disclosure; high-impact confirmation; 11/11 permanent workflows and Frontend Gate `31207429792`; squash merge `c1e7896590661ab01cb5c9b32b72b4a7cfa4a38b` | deployed Cloudflare Access UI, real Bridge/custom-URI onboarding, real providers, missing backend list APIs or production readiness |
 | Cross-component standalone acceptance / PR #66 | accepted repository-local composed/synthetic evidence | exact head `31f358c92c2e09c752155af208b7d2aaf73d472a`; all 12 permanent workflows green; Cross-Component Gate `31208960718`; deterministic six-phase metadata-only manifest, D1/ACL/mailbox/generation invariants, adapter + Worker native/WASM, actual synthetic Bridge CLI to `DIRTY_LOCAL`, Node24 frontend install/typecheck/tests/build; squash merge `eb02f3e81022193fb459b7c46d14afcb19c8900f` | real Cloudflare/Camoufox/mailbox providers, production keys/signing, physical multi-device or production readiness |
+| Pre-2J D3A empty-D1 bootstrap / PR #254 | accepted bounded remote evidence | exact deterministic `0001`–`0026` SQL-file bootstrap imported into one fresh remote D1; exact ledger and 0012 schema; replay rejected with unchanged schema digest and ledger; permanent digest/ledger/negative CI binding | incremental migration of non-empty D1, canonical staging/production deployment, rollback/fail-forward policy, D3 promotion or production readiness |
 
 ### Repository Step 0 Evidence
 
@@ -339,6 +340,28 @@ review item; it is not a Worker runtime dependency claim.
 - Node `24.19.0` / npm `11.17.0` clean frontend install, strict TypeScript, Vitest and Vite build passed in the same lane;
 - metadata-only evidence scan passed; no user data or real external provider/runtime was involved;
 - final accepted source head: `31f358c92c2e09c752155af208b7d2aaf73d472a`; all 12 permanent workflows passed on that exact unchanged head; Cross-Component Acceptance Gate `31208960718` succeeded; squash merge `eb02f3e81022193fb459b7c46d14afcb19c8900f`.
+
+### Pre-2J D3A Empty-D1 Bootstrap Evidence
+
+- tracking: blocker issue #253 / PR #254 under D3 #251 and umbrella #203;
+- remote proof source: `493d399b9531776aa8208242a5d1c05681764231`;
+- Wrangler `4.94.0` remote SQL-file import completed against one dedicated fresh
+  proof D1 whose only initial schema object was Cloudflare's reserved `_cf_KV`;
+- bootstrap identity: `261937` bytes, SHA-256
+  `de1acf24f30084ba95c43bdb6f2463b068b54e27e9ec0834753dc6383efef069`;
+- exact ordered `d1_migrations` ledger `0001`–`0026`, required 0012 objects and
+  `outbox_events` version columns: passed;
+- identical replay: rejected with `SQLITE_ERROR`; schema object count, sanitized
+  schema SHA-256 and exact ledger remained unchanged; no guard residue remained;
+- canonical staging/production, credentials, secret material and user data
+  involved: no;
+- permanent Quality Gate regenerates the same bootstrap, checks the sanitized
+  external record against current migrations, proves negative fixtures and
+  verifies generated output remains untracked;
+- detailed report:
+  [`evidence/2026-08-14-pre2j-d3a-empty-d1-bootstrap.md`](evidence/2026-08-14-pre2j-d3a-empty-d1-bootstrap.md);
+- incremental non-empty D1 migration remains D4-owned; D3 promotion, #203,
+  Phase 2J and `production_ready=false` remain unchanged.
 
 ## 2. Required Permanent CI Evidence
 

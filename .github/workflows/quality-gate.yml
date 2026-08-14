@@ -49,6 +49,7 @@ jobs:
           scripts/cloudflare-deploy-config.py
           scripts/check-cloudflare-runtime-bindings.py
           scripts/cloudflare-release.py
+          scripts/cloudflare-d1-bootstrap.py
           scripts/test-d1-schema.py
           scripts/test-step4-identity-acl.py
           scripts/test-step4-command-guards.py
@@ -158,6 +159,21 @@ jobs:
 
       - name: Prove immutable Cloudflare release provenance fails closed
         run: python scripts/cloudflare-release.py self-test
+
+      - name: Verify deterministic empty-D1 bootstrap authority
+        run: |
+          python scripts/cloudflare-d1-bootstrap.py check
+          python scripts/cloudflare-d1-bootstrap.py build
+          python scripts/cloudflare-d1-bootstrap.py verify \
+            --file artifacts/cloudflare-d1-bootstrap/bootstrap.sql
+          python scripts/cloudflare-d1-bootstrap.py verify-evidence \
+            --file docs/evidence/2026-08-14-pre2j-d3a-empty-d1-bootstrap.json
+          test -z "$(git ls-files -- artifacts/cloudflare-d1-bootstrap/bootstrap.sql)"
+          git check-ignore -q artifacts/cloudflare-d1-bootstrap/bootstrap.sql
+          git check-ignore -q .wrangler/probe
+
+      - name: Prove empty-D1 bootstrap authority fails closed
+        run: python scripts/cloudflare-d1-bootstrap.py self-test
 
       - name: Test D1 schema and transaction invariants
         run: python scripts/test-d1-schema.py
