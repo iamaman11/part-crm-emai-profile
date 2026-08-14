@@ -140,6 +140,50 @@ describe('ClientMailComposer', () => {
     expect(secondCall?.[3]).toBe(firstCall?.[3]);
   });
 
+  it.each(['PENDING', 'DISPATCHING'] as const)(
+    '%s locks the current attempt instead of exposing a duplicate send',
+    async (state) => {
+      mockedSendClientMail.mockResolvedValueOnce(receipt(state));
+      const user = userEvent.setup();
+      renderComposer('NEW');
+
+      await user.type(screen.getByLabelText('To'), 'client@example.test');
+      await user.type(screen.getByLabelText('Message'), 'Still processing');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      expect(await screen.findByText(/still being processed/u)).toBeTruthy();
+      expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(true);
+      expect(screen.queryByRole('button', { name: 'Retry same protected attempt' })).toBeNull();
+      expect(mockedSendClientMail).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('requires an edit after REJECTED before creating a new idempotent attempt', async () => {
+    mockedSendClientMail
+      .mockResolvedValueOnce(receipt('REJECTED'))
+      .mockResolvedValueOnce(receipt('SENT'));
+    const user = userEvent.setup();
+    renderComposer('NEW');
+
+    await user.type(screen.getByLabelText('To'), 'client@example.test');
+    await user.type(screen.getByLabelText('Message'), 'Rejected body');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/send was rejected/u)).toBeTruthy();
+    const firstCall = mockedSendClientMail.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(false);
+
+    await user.type(screen.getByLabelText('Message'), ' edited');
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(mockedSendClientMail).toHaveBeenCalledTimes(2));
+    const secondCall = mockedSendClientMail.mock.calls[1];
+    expect(secondCall?.[3]).not.toBe(firstCall?.[3]);
+  });
+
   it('never exposes retry after an AMBIGUOUS outcome', async () => {
     mockedSendClientMail.mockResolvedValueOnce(receipt('AMBIGUOUS'));
     const user = userEvent.setup();
