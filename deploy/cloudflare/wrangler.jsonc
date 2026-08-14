@@ -4,7 +4,8 @@
   "compatibility_date": "2026-08-05",
   "workers_dev": false,
   "build": {
-    "command": "cargo install worker-build --version 0.8.5 --locked && worker-build --release"
+    "command": "cargo install worker-build --version 0.8.5 --locked && worker-build --release",
+    "cwd": "../../apps/control-plane-worker"
   },
   "assets": {
     "directory": "../../frontend/dist",
@@ -28,6 +29,7 @@
   "env": {
     "staging": {
       "name": "${STAGING_WORKER_NAME}",
+      "account_id": "${STAGING_ACCOUNT_ID}",
       "routes": [
         {
           "pattern": "${STAGING_CUSTOM_DOMAIN}",
@@ -37,7 +39,7 @@
       "vars": {
         "ACCESS_ISSUER": "${STAGING_ACCESS_ISSUER}",
         "ACCESS_AUDIENCE": "${STAGING_ACCESS_AUDIENCE}",
-        "R2_GENERATION_ACCOUNT_ID": "${STAGING_R2_ACCOUNT_ID}",
+        "R2_GENERATION_ACCOUNT_ID": "${STAGING_ACCOUNT_ID}",
         "R2_GENERATION_BUCKET_NAME": "${STAGING_R2_BUCKET_NAME}"
       },
       "secrets": {
@@ -111,6 +113,7 @@
     },
     "production": {
       "name": "${PRODUCTION_WORKER_NAME}",
+      "account_id": "${PRODUCTION_ACCOUNT_ID}",
       "routes": [
         {
           "pattern": "${PRODUCTION_CUSTOM_DOMAIN}",
@@ -120,7 +123,7 @@
       "vars": {
         "ACCESS_ISSUER": "${PRODUCTION_ACCESS_ISSUER}",
         "ACCESS_AUDIENCE": "${PRODUCTION_ACCESS_AUDIENCE}",
-        "R2_GENERATION_ACCOUNT_ID": "${PRODUCTION_R2_ACCOUNT_ID}",
+        "R2_GENERATION_ACCOUNT_ID": "${PRODUCTION_ACCOUNT_ID}",
         "R2_GENERATION_BUCKET_NAME": "${PRODUCTION_R2_BUCKET_NAME}"
       },
       "secrets": {
