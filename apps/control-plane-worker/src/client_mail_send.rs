@@ -151,8 +151,7 @@ async fn provider_for<'a>(
     actor: &ActorContext,
     binding_id: &profile_platform_primitives::MailboxBindingId,
 ) -> Result<Option<ClientMailProvider<'a>>> {
-    let repository =
-        D1MailboxRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
+    let repository = D1MailboxRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
     let Some(binding) = repository
         .find_binding(actor.tenant_scope(), binding_id)
         .await?
@@ -160,18 +159,16 @@ async fn provider_for<'a>(
         return Ok(None);
     };
     let provider = match binding.provider() {
-        MailboxProvider::GmailApi => ClientMailProvider::Gmail(
-            CloudflareGmailOutboundMailProvider::new(
+        MailboxProvider::GmailApi => {
+            ClientMailProvider::Gmail(CloudflareGmailOutboundMailProvider::new(
                 env,
                 env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-            ),
-        ),
-        MailboxProvider::Imap => ClientMailProvider::Smtp(
-            CloudflareSmtpOutboundMailProvider::new(
-                env,
-                env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-            ),
-        ),
+            ))
+        }
+        MailboxProvider::Imap => ClientMailProvider::Smtp(CloudflareSmtpOutboundMailProvider::new(
+            env,
+            env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
+        )),
         MailboxProvider::BrowserFallback | MailboxProvider::MicrosoftGraph => {
             ClientMailProvider::Unsupported
         }
