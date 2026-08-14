@@ -19,6 +19,7 @@ ACCEPTED_MAIN = "6a7dad9f74a25ccfd77cdd1a76216d8a46694e10"
 AUTHORITY_SHA256 = "e19007fdcb0533001313463a070ce675e4fb636c04507b89f47a87feca3c610e"
 RELEASE_WORKFLOW = Path(".github/workflows/mailbox-secret-resolver-release.yml")
 PROMOTION_WORKFLOW = Path(".github/workflows/mailbox-secret-resolver-promotion.yml")
+QUALITY_WORKFLOW = Path(".github/workflows/quality-gate.yml")
 RESOLVER_CONFIG = Path("deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc")
 RESOLVER_ROOT = Path("apps/mailbox-secret-resolver-worker")
 RESOLVER_MIGRATION_ROOT = Path("migrations/resolver-d1")
@@ -365,6 +366,23 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
     return errors
 
 
+def quality_workflow_errors(quality: str) -> list[str]:
+    try:
+        rust_linux = quality.split("\n  rust-linux:", 1)[1].split("\n  d1-catalog:", 1)[0]
+    except IndexError:
+        return ["quality workflow Rust Linux job is unavailable"]
+    errors: list[str] = []
+    if "fetch-depth: 0" not in rust_linux:
+        errors.append("quality workflow must fetch full history for the accepted implementation base")
+    for marker in (
+        "github.event.pull_request.base.sha || github.event.before",
+        '--base-ref "$IMPLEMENTATION_BASE"',
+    ):
+        if marker not in rust_linux:
+            errors.append(f"quality workflow implementation base interlock is missing {marker!r}")
+    return errors
+
+
 def release_script_errors() -> list[str]:
     release = read(Path("scripts/mailbox-secret-resolver-release.py"))
     promotion = read(Path("scripts/mailbox-secret-resolver-promotion.py"))
@@ -411,6 +429,7 @@ def current_errors() -> list[str]:
     errors.extend(adapter_errors())
     errors.extend(migration_errors())
     errors.extend(workflow_errors(read(RELEASE_WORKFLOW), read(PROMOTION_WORKFLOW)))
+    errors.extend(quality_workflow_errors(read(QUALITY_WORKFLOW)))
     errors.extend(release_script_errors())
     errors.extend(status_errors())
     control_config = load(Path("deploy/cloudflare/wrangler.jsonc"))
@@ -469,8 +488,10 @@ def self_test() -> None:
     assert endpoint_inventory_errors(authority["resolver_endpoints"], missing, accepted)
     release = read(RELEASE_WORKFLOW)
     promotion = read(PROMOTION_WORKFLOW)
+    quality = read(QUALITY_WORKFLOW)
     assert workflow_errors(release, promotion + "\nworker-build --release")
     assert workflow_errors(release, promotion.replace("--secrets-file", "--secret-file"))
+    assert quality_workflow_errors(quality.replace("fetch-depth: 0", "fetch-depth: 1", 1))
     config = load(RESOLVER_CONFIG)
     tampered = copy.deepcopy(config)
     tampered["env"]["staging"]["routes"] = ["staging.example.test/*"]
