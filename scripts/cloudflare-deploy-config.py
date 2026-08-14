@@ -20,12 +20,35 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_PATH = ROOT / "deploy" / "cloudflare" / "wrangler.jsonc"
 
 ENVIRONMENTS = ("staging", "production")
+TOP_LEVEL_KEYS = {
+    "name",
+    "main",
+    "compatibility_date",
+    "workers_dev",
+    "build",
+    "assets",
+    "triggers",
+    "migrations",
+    "env",
+}
+ENVIRONMENT_KEYS = {
+    "name",
+    "account_id",
+    "routes",
+    "vars",
+    "secrets",
+    "d1_databases",
+    "r2_buckets",
+    "queues",
+    "services",
+    "durable_objects",
+}
 MANIFEST_FIELDS = {
     "worker_name",
+    "account_id",
     "custom_domain",
     "access_issuer",
     "access_audience",
-    "r2_account_id",
     "d1_database_name",
     "d1_database_id",
     "r2_bucket_name",
@@ -71,7 +94,6 @@ EXPECTED_DURABLE_OBJECTS = {
     "PROFILE_COORDINATOR": "ProfileCoordinator",
     "NOTIFICATION_HUB": "NotificationHub",
 }
-PLACEHOLDER = re.compile(r"^\$\{(STAGING|PRODUCTION)_([A-Z0-9_]+)\}$")
 RESOURCE_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 D1_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 ACCOUNT_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -109,8 +131,26 @@ def string(value: object, label: str) -> str:
 
 def validate_template() -> dict[str, object]:
     document = require_object(load_json(TEMPLATE_PATH), "wrangler template")
+    if set(document) != TOP_LEVEL_KEYS:
+        missing = sorted(TOP_LEVEL_KEYS - set(document))
+        extra = sorted(set(document) - TOP_LEVEL_KEYS)
+        raise ConfigError(f"canonical Wrangler top-level keys drifted: missing={missing}, extra={extra}")
+    if document.get("name") != "browser-profile-control-plane":
+        raise ConfigError("base Worker name drifted")
+    if document.get("main") != "../../apps/control-plane-worker/build/worker/shim.mjs":
+        raise ConfigError("Worker module entrypoint drifted")
+    if document.get("compatibility_date") != "2026-08-05":
+        raise ConfigError("compatibility_date drifted from the accepted runtime baseline")
     if document.get("workers_dev") is not False:
         raise ConfigError("workers_dev must remain false")
+
+    build = require_object(document.get("build"), "build")
+    if build != {
+        "command": "cargo install worker-build --version 0.8.5 --locked && worker-build --release",
+        "cwd": "../../apps/control-plane-worker",
+    }:
+        raise ConfigError("Worker build command/cwd drifted from the pinned release build")
+
     assets = require_object(document.get("assets"), "assets")
     if assets != {
         "directory": "../../frontend/dist",
@@ -119,6 +159,9 @@ def validate_template() -> dict[str, object]:
         "not_found_handling": "single-page-application",
     }:
         raise ConfigError("Workers Static Assets configuration drifted from the accepted topology")
+    if document.get("triggers") != {"crons": ["* * * * *"]}:
+        raise ConfigError("scheduled runtime trigger drifted")
+
     migrations = require_array(document.get("migrations"), "migrations")
     if migrations != [
         {"tag": "v1", "new_classes": ["ProfileCoordinator"]},
@@ -136,8 +179,14 @@ def validate_template() -> dict[str, object]:
 
 def validate_environment_template(environment: str, config: dict[str, object]) -> None:
     prefix = environment.upper()
+    if set(config) != ENVIRONMENT_KEYS:
+        missing = sorted(ENVIRONMENT_KEYS - set(config))
+        extra = sorted(set(config) - ENVIRONMENT_KEYS)
+        raise ConfigError(f"{environment} config keys drifted: missing={missing}, extra={extra}")
     if string(config.get("name"), f"env.{environment}.name") != f"${{{prefix}_WORKER_NAME}}":
         raise ConfigError(f"{environment} Worker name must be controlled by its environment manifest")
+    if string(config.get("account_id"), f"env.{environment}.account_id") != f"${{{prefix}_ACCOUNT_ID}}":
+        raise ConfigError(f"{environment} deploy account must be controlled by its environment manifest")
 
     routes = require_array(config.get("routes"), f"env.{environment}.routes")
     if routes != [{"pattern": f"${{{prefix}_CUSTOM_DOMAIN}}", "custom_domain": True}]:
@@ -149,7 +198,7 @@ def validate_environment_template(environment: str, config: dict[str, object]) -
     expected_variable_tokens = {
         "ACCESS_ISSUER": f"${{{prefix}_ACCESS_ISSUER}}",
         "ACCESS_AUDIENCE": f"${{{prefix}_ACCESS_AUDIENCE}}",
-        "R2_GENERATION_ACCOUNT_ID": f"${{{prefix}_R2_ACCOUNT_ID}}",
+        "R2_GENERATION_ACCOUNT_ID": f"${{{prefix}_ACCOUNT_ID}}",
         "R2_GENERATION_BUCKET_NAME": f"${{{prefix}_R2_BUCKET_NAME}}",
     }
     if variables != expected_variable_tokens:
@@ -261,10 +310,10 @@ def validate_manifest(environment: str, manifest: object, *, fixture: bool = Fal
     ):
         if RESOURCE_NAME.fullmatch(values[key]) is None:
             raise ConfigError(f"{environment}.{key} is not a bounded Cloudflare resource name")
+    if ACCOUNT_ID.fullmatch(values["account_id"]) is None:
+        raise ConfigError(f"{environment}.account_id must be a 32-hex Cloudflare account identifier")
     if D1_ID.fullmatch(values["d1_database_id"]) is None:
         raise ConfigError(f"{environment}.d1_database_id must be a UUID-shaped D1 identifier")
-    if ACCOUNT_ID.fullmatch(values["r2_account_id"]) is None:
-        raise ConfigError(f"{environment}.r2_account_id must be a 32-hex account identifier")
     if AUDIENCE.fullmatch(values["access_audience"]) is None:
         raise ConfigError(f"{environment}.access_audience has an invalid shape")
 
@@ -307,10 +356,10 @@ def token_map(environment: str, manifest: dict[str, str]) -> dict[str, str]:
     prefix = environment.upper()
     mapping = {
         "WORKER_NAME": "worker_name",
+        "ACCOUNT_ID": "account_id",
         "CUSTOM_DOMAIN": "custom_domain",
         "ACCESS_ISSUER": "access_issuer",
         "ACCESS_AUDIENCE": "access_audience",
-        "R2_ACCOUNT_ID": "r2_account_id",
         "D1_DATABASE_NAME": "d1_database_name",
         "D1_DATABASE_ID": "d1_database_id",
         "R2_BUCKET_NAME": "r2_bucket_name",
@@ -353,10 +402,10 @@ def fixture_manifest(environment: str) -> dict[str, str]:
     label = "staging" if staging else "production"
     return {
         "worker_name": f"profile-control-{label}",
+        "account_id": ("c" if staging else "d") * 32,
         "custom_domain": f"{label}.crm.invalid",
         "access_issuer": f"https://{label}.cloudflareaccess.invalid",
         "access_audience": ("a" if staging else "b") * 32,
-        "r2_account_id": ("c" if staging else "d") * 32,
         "d1_database_name": f"profile-catalog-{label}",
         "d1_database_id": f"{digit * 8}-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}",
         "r2_bucket_name": f"profile-objects-{label}",
@@ -377,6 +426,14 @@ def self_test() -> None:
     production_env = require_object(envs["production"], "rendered production")
     if staging_env["name"] != staging["worker_name"] or production_env["name"] != production["worker_name"]:
         raise ConfigError("positive render fixture did not substitute environment Worker names")
+    if staging_env["account_id"] != staging["account_id"] or production_env["account_id"] != production["account_id"]:
+        raise ConfigError("positive render fixture did not lock deploy account identities")
+    staging_vars = require_object(staging_env["vars"], "rendered staging vars")
+    production_vars = require_object(production_env["vars"], "rendered production vars")
+    if staging_vars["R2_GENERATION_ACCOUNT_ID"] != staging["account_id"]:
+        raise ConfigError("staging R2 account identity diverged from deploy account")
+    if production_vars["R2_GENERATION_ACCOUNT_ID"] != production["account_id"]:
+        raise ConfigError("production R2 account identity diverged from deploy account")
     if "${" in json.dumps(rendered):
         raise ConfigError("positive render fixture retained a placeholder")
 
