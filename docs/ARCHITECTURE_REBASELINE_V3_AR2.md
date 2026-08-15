@@ -1,6 +1,6 @@
 # Architecture Re-baseline v3 — AR-2 Runtime Topology + D3 Compatibility
 
-**Document status:** AR-2 DECISION / ACCEPTANCE CANDIDATE  
+**Document status:** AR-2 ACCEPTANCE EVIDENCE — ACCEPTED ON MERGE  
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Tracking issue:** #266  
 **Decision base:** `5d4a0d4a653539c6ae2aaff7d0ee38d2ecb79dbf`  
