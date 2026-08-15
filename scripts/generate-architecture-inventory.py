@@ -26,9 +26,9 @@ RUNTIME_TOPOLOGY = "architecture/runtime-topology-ar2.json"
 AR2_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR2.md"
 AR4A_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md"
 TRACKING_ISSUE = 266
-ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3"]
-CURRENT_SLICE = "AR-3"
-NEXT_SLICE = "AR-4A"
+ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A"]
+CURRENT_SLICE = "AR-4A"
+NEXT_SLICE = "AR-4B"
 
 DOCUMENT_STATUS = [
     {"path": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md", "status": "CURRENT_AUTHORITY", "scope": "architecture_program_execution"},
@@ -49,7 +49,7 @@ DOCUMENT_STATUS = [
     {"path": AR2_EVIDENCE, "status": "EVIDENCE", "scope": "ar2_runtime_topology_and_d3_compatibility_acceptance"},
     {"path": RUNTIME_TOPOLOGY, "status": "STABLE_AUTHORITY", "scope": "accepted_ar2_runtime_topology_decision_input_for_ar3"},
     {"path": ar3.AR3_EVIDENCE, "status": "EVIDENCE", "scope": "ar3_application_architecture_contract_accepted"},
-    {"path": AR4A_EVIDENCE, "status": "EVIDENCE", "scope": "ar4a_composition_root_consolidation_candidate"},
+    {"path": AR4A_EVIDENCE, "status": "EVIDENCE", "scope": "ar4a_composition_root_consolidation_accepted"},
     {"path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "superseded_predecessor_forward_execution"},
     {"path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "accepted_r1_r9_closeout"},
     {"path": "IMPLEMENTATION_PLAN.md", "status": "SUPERSEDED", "scope": "compatibility_entrypoint_to_preserved_history"},
@@ -75,13 +75,13 @@ def validate_docs() -> None:
     current = status.get("current", {})
     program = current.get("architecture_program", {}) if isinstance(current, dict) else {}
     if status.get("production_ready") is not False:
-        raise SystemExit("docs/status.json must remain production_ready=false during AR-3")
+        raise SystemExit("docs/status.json must remain production_ready=false during accepted AR-4A")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
-        raise SystemExit("docs/status.json must keep AR-3 architecture/gate state fail closed")
+        raise SystemExit("docs/status.json must keep AR-4A architecture/gate state fail closed")
     if program.get("authority") != CURRENT_AUTHORITY or program.get("tracking_issue") != TRACKING_ISSUE:
         raise SystemExit("docs/status.json current architecture authority drifted")
     if program.get("accepted_slices") != ACCEPTED_SLICES or program.get("current_slice") != CURRENT_SLICE or program.get("next_slice_after_acceptance") != NEXT_SLICE:
-        raise SystemExit("docs/status.json must project accepted AR-3 -> active AR-4A sequencing after AR-3 closeout")
+        raise SystemExit("docs/status.json must project accepted AR-4A -> active AR-4B sequencing after AR-4A closeout")
     if program.get("runtime_topology_decision") != RUNTIME_TOPOLOGY:
         raise SystemExit("docs/status.json must project the accepted AR-2 topology decision")
 
@@ -121,7 +121,8 @@ def build_inventory() -> dict[str, object]:
             "runtime_topology_decision": RUNTIME_TOPOLOGY,
             "runtime_topology_evidence": AR2_EVIDENCE,
             "runtime_topology_projection_owner": "AR-3",
-            "application_architecture_evidence": ar3.AR3_EVIDENCE,
+            "application_architecture_evidence": AR4A_EVIDENCE,
+            "application_architecture_base_evidence": ar3.AR3_EVIDENCE,
             "application_architecture_projection": "architecture/inventory.json::application_architecture",
             "development_projection": "docs/DEVELOPMENT_PLAN.md",
             "readiness_projection": "docs/status.json",

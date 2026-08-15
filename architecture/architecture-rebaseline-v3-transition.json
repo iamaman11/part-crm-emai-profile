@@ -1,6 +1,6 @@
 {
   "schema_version": 7,
-  "status": "ACTIVE_AFTER_ACCEPTED_AR3_MERGE",
+  "status": "ACTIVE_AFTER_ACCEPTED_AR4A_MERGE",
   "program": "Architecture Re-baseline v3",
   "tracking_issue": 266,
   "subordinate_preproduction_issue": 268,
@@ -10,10 +10,11 @@
     "AR-0",
     "AR-1",
     "AR-2",
-    "AR-3"
+    "AR-3",
+    "AR-4A"
   ],
-  "current_slice": "AR-3",
-  "next_slice_after_acceptance": "AR-4A",
+  "current_slice": "AR-4A",
+  "next_slice_after_acceptance": "AR-4B",
   "state_model": {
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
@@ -144,7 +145,8 @@
     ],
     "ar2_decision_input": "architecture/runtime-topology-ar2.json",
     "ar3_projection_ownership": "ACCEPTED_APPLICATION_ARCHITECTURE_CONTRACT_IN_CANONICAL_INVENTORY",
-    "later_dimensions_remain_owned_by_their_ar_slices": true
+    "later_dimensions_remain_owned_by_their_ar_slices": true,
+    "ar4a_remediation": "ACCEPTED_COMPOSITION_ROOT_CONSOLIDATION_IN_CANONICAL_INVENTORY"
   },
   "preserve_accepted_history": [
     "repository_steps_0_10",
@@ -204,12 +206,16 @@
   },
   "application_architecture": {
     "canonical_projection": "architecture/inventory.json::application_architecture",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
-    "status": "ACCEPTED",
-    "ar4a": "NEXT_REQUIRED_SLICE",
-    "ar4b": "ROUTE_OWNERSHIP_DEBT",
+    "base_contract_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
+    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md",
+    "status": "ACCEPTED_THROUGH_AR4A",
+    "ar4a": "ACCEPTED_COMPOSITION_ROOT_CONSOLIDATION",
+    "ar4b": "NEXT_REQUIRED_SLICE_ROUTE_OWNERSHIP_DEBT",
     "ar4c": "OUTBOUND_MAIL_COMPOSITION_DEBT",
     "ar4d": "NOT_REQUIRED_UNLESS_LATER_ACCEPTED_EVIDENCE_REOPENS",
+    "implementation_pr": 280,
+    "exact_green_head": "f257a30a1df437812edb5c9e4b33c3de7e0740bc",
+    "implementation_merge": "74672285ef0146c2dc6da298024b378438e5a75d",
     "production_mutation": false
   }
 }

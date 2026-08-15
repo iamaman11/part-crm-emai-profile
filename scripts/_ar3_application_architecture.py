@@ -40,7 +40,7 @@ PROCESS_OWNERSHIP: list[dict[str, Any]] = [
             "mailbox_secret_resolver_service",
             "control_plane_schedule",
         ],
-        "status": "CENTRAL_COMPOSITION_ROOT_AR4A_CANDIDATE",
+        "status": "CENTRAL_COMPOSITION_ROOT_AR4A_ACCEPTED",
     },
     {
         "id": "mailbox_secret_resolver_worker",
@@ -93,7 +93,7 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
         "application_owner": "crates/use-cases-query",
         "ports_owner": "crates/application-ports",
         "composition_seam": "apps/control-plane-worker/src/composition.rs::query_repository",
-        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
         "remediation_slice": "AR-4A",
     },
     {
@@ -102,7 +102,7 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
         "application_owner": "crates/use-cases-query",
         "ports_owner": "crates/application-ports",
         "composition_seam": "apps/control-plane-worker/src/composition.rs::{query_repository,client_mail_eligibility_repository,client_mail_query_provider}",
-        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
         "remediation_slice": "AR-4A",
     },
     {
@@ -147,7 +147,7 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
         "application_owner": "crates/use-cases-mailboxes",
         "ports_owner": "crates/application-ports",
         "composition_seam": "apps/control-plane-worker/src/composition.rs::{mailbox_job_application,mailbox_job_provider}",
-        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
         "remediation_slice": "AR-4A",
     },
     {
@@ -165,7 +165,7 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
         "application_owner": "crates/use-cases-notifications",
         "ports_owner": "crates/application-ports",
         "composition_seam": "apps/control-plane-worker/src/composition.rs::{notification_operations_repository,notification_cursor_repository}",
-        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
         "remediation_slice": "AR-4A",
     },
     {
@@ -200,7 +200,7 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
 COMPOSITION_FINDINGS: list[dict[str, Any]] = [
     {
         "id": "general_composition_root_debt",
-        "status": "AR4A_COMPOSITION_ROOT_CONSOLIDATION_CANDIDATE",
+        "status": "AR4A_COMPOSITION_ROOT_CONSOLIDATION_ACCEPTED",
         "owner_slice": "AR-4A",
         "evidence": [
             "apps/control-plane-worker/src/composition.rs::query_repository",
@@ -412,9 +412,10 @@ def build_projection(root: Path) -> dict[str, Any]:
 
     return {
         "schema_version": 1,
-        "status": "ACCEPTED_AR3_APPLICATION_ARCHITECTURE_CONTRACT",
+        "status": "ACCEPTED_AR4A_APPLICATION_ARCHITECTURE_REMEDIATION",
         "topology_source": RUNTIME_TOPOLOGY,
-        "evidence": AR3_EVIDENCE,
+        "base_contract_evidence": AR3_EVIDENCE,
+        "evidence": AR4A_EVIDENCE,
         "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
         "composition_taxonomy": [
             "CONFORMING_COMPOSITION_SEAM",
@@ -422,25 +423,24 @@ def build_projection(root: Path) -> dict[str, Any]:
             "ROUTE_OWNERSHIP_DEBT",
             "INTENTIONAL_RUNTIME_BOUNDARY",
             "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
-            "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
+            "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
         ],
         "runtime_resources": copy.deepcopy(topology["resources"]),
         "runtime_processes": copy.deepcopy(PROCESS_OWNERSHIP),
         "capability_ownership": copy.deepcopy(CAPABILITY_OWNERSHIP),
         "composition_findings": copy.deepcopy(COMPOSITION_FINDINGS),
         "remediation_state": {
-            "accepted_through": "AR-3",
-            "candidate": "AR-4A",
-            "candidate_status": "COMPOSITION_ROOT_CONSOLIDATION_CANDIDATE",
+            "accepted_through": "AR-4A",
+            "status": "ACCEPTED",
             "evidence": AR4A_EVIDENCE,
-            "next_after_acceptance": "AR-4B",
+            "next_required_slice": "AR-4B",
         },
         "conditional_ar4d": {
             "decision": "NOT_REQUIRED",
             "reason": "Profile and Generation transports already use explicit composition seams; no measurable dependency-isolation benefit currently justifies extraction",
             "reopen_policy": "ONLY_BY_LATER_ACCEPTED_EVIDENCE",
         },
-        "next_required_slice_after_ar3": "AR-4A",
+        "next_required_slice_after_ar4a": "AR-4B",
         "production_mutation": False,
     }
 
@@ -449,9 +449,9 @@ def negative_self_test(root: Path) -> None:
     expected = build_projection(root)
 
     candidate_status = copy.deepcopy(expected)
-    candidate_status["status"] = "AR3_APPLICATION_ARCHITECTURE_CONTRACT"
+    candidate_status["status"] = "ACCEPTED_AR3_APPLICATION_ARCHITECTURE_CONTRACT"
     if candidate_status == expected:
-        raise SystemExit("AR-3 negative self-test failed to detect candidate-status regression")
+        raise SystemExit("AR-4A negative self-test failed to detect accepted-state rollback to AR-3")
 
     regression = _read(root, "apps/control-plane-worker/src/operator_queries.rs") + "\nD1QueryRepository::new"
     try:
@@ -462,9 +462,15 @@ def negative_self_test(root: Path) -> None:
         raise SystemExit("AR-4A negative self-test failed to reject transport adapter construction regression")
 
     remediation = copy.deepcopy(expected)
-    remediation["remediation_state"]["candidate_status"] = "ACCEPTED"
+    remediation["remediation_state"] = {
+        "accepted_through": "AR-3",
+        "candidate": "AR-4A",
+        "candidate_status": "COMPOSITION_ROOT_CONSOLIDATION_CANDIDATE",
+        "evidence": AR4A_EVIDENCE,
+        "next_after_acceptance": "AR-4B",
+    }
     if remediation == expected:
-        raise SystemExit("AR-4A negative self-test failed to distinguish candidate and accepted remediation state")
+        raise SystemExit("AR-4A negative self-test failed to detect candidate-state regression")
 
     missing_resource = copy.deepcopy(expected)
     missing_resource["runtime_resources"] = missing_resource["runtime_resources"][1:]
@@ -487,4 +493,4 @@ def negative_self_test(root: Path) -> None:
     if gate == expected:
         raise SystemExit("AR-3 negative self-test failed to distinguish production mutation")
 
-    print("AR-3 application architecture + AR-4A composition negative self-tests passed.")
+    print("AR-4A accepted application architecture remediation negative self-tests passed.")
