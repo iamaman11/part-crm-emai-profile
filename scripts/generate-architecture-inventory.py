@@ -149,34 +149,30 @@ def serialized(inventory: dict[str, object]) -> str:
 def check_current(expected: dict[str, object]) -> None:
     if not INVENTORY_PATH.is_file():
         raise SystemExit(f"architecture inventory is missing: {INVENTORY_PATH.relative_to(ROOT)}")
-    try:
-        current = json.loads(INVENTORY_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise SystemExit(f"architecture/inventory.json is not valid JSON: {error}") from error
-    if current != expected:
-        raise SystemExit("architecture/inventory.json is semantically stale; run python scripts/generate-architecture-inventory.py --write")
+    if INVENTORY_PATH.read_text(encoding="utf-8") != serialized(expected):
+        raise SystemExit("architecture/inventory.json is stale; run python scripts/generate-architecture-inventory.py --write")
 
 
 def self_test(expected: dict[str, object]) -> None:
     workspace = copy.deepcopy(expected)
     workspace["workspace_members"] = [*workspace["workspace_members"], "crates/does-not-exist"]
-    if workspace == expected:
+    if serialized(workspace) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect workspace drift")
     authority = copy.deepcopy(expected)
     authority["documentation_authority"]["current_program"] = "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md"
-    if authority == expected:
+    if serialized(authority) == serialized(expected):
         raise SystemExit("inventory self-test failed to distinguish current/historical program authority")
     state = copy.deepcopy(expected)
     state["program_state"]["current_architecture_slice"] = "AR-1"
-    if state == expected:
+    if serialized(state) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect AR-2 rollback")
     topology = copy.deepcopy(expected)
     topology["documentation_authority"]["runtime_topology_decision"] = "architecture/other.json"
-    if topology == expected:
+    if serialized(topology) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect topology authority drift")
     gate = copy.deepcopy(expected)
     gate["program_state"]["production_core_gate"] = "AUTHORIZED"
-    if gate == expected:
+    if serialized(gate) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect premature Production Core authorization")
     documentation = subprocess.run(
         [sys.executable, str(ROOT / "scripts/check-documentation-authority.py"), "--root", str(ROOT), "--self-test"],
