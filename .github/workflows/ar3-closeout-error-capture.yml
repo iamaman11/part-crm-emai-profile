@@ -1,0 +1,46 @@
+name: AR3 Closeout Error Capture
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  capture:
+    if: github.event.pull_request.head.ref == 'agent/ar3-authority-closeout-scratch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: agent/ar3-authority-closeout-scratch
+          persist-credentials: true
+      - name: Execute embedded transformation and capture first failure
+        run: |
+          mkdir -p scratch
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path('.github/workflows/ar3-authority-closeout-scratch.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = source.index(marker) + len(marker)
+          end = source.index("          PY\n", start)
+          script = textwrap.dedent(source[start:end])
+          try:
+              exec(compile(script, '<ar3-closeout-transform>', 'exec'), {})
+          except BaseException as exc:
+              Path('scratch/ar3-closeout-error.txt').write_text(
+                  f'{type(exc).__name__}: {exc}\n', encoding='utf-8', newline='\n'
+              )
+          else:
+              Path('scratch/ar3-closeout-error.txt').write_text(
+                  'TRANSFORMATION_COMPLETED_WITHOUT_EXCEPTION\n', encoding='utf-8', newline='\n'
+              )
+          PY
+          git restore . ':!scratch/ar3-closeout-error.txt'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scratch/ar3-closeout-error.txt
+          git commit -m 'chore: capture AR-3 closeout transformation diagnostic'
+          git push origin HEAD:agent/ar3-authority-closeout-scratch
