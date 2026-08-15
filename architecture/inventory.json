@@ -755,7 +755,8 @@
   "program_state": {
     "accepted_product_phase": "Phase 2I",
     "accepted_architecture_slices": [
-      "AR-0"
+      "AR-0",
+      "AR-1"
     ],
     "current_architecture_slice": "AR-1",
     "next_architecture_slice_after_acceptance": "AR-2",

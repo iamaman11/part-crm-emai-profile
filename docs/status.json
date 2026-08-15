@@ -27,7 +27,7 @@
       "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
       "tracking_issue": 266,
       "subordinate_preproduction_issue": 268,
-      "accepted_slices": ["AR-0"],
+      "accepted_slices": ["AR-0", "AR-1"],
       "current_slice": "AR-1",
       "next_slice_after_acceptance": "AR-2"
     },

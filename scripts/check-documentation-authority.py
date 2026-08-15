@@ -134,8 +134,8 @@ def validate(root: Path) -> list[str]:
     for key, expected in expected_program.items():
         if program.get(key) != expected:
             errors.append(f"docs/status.json architecture_program.{key} must be {expected!r}")
-    if program.get("accepted_slices") != ["AR-0"]:
-        errors.append("docs/status.json accepted_slices must remain exactly ['AR-0'] before AR-1 merge acceptance")
+    if program.get("accepted_slices") != ["AR-0", "AR-1"]:
+        errors.append("docs/status.json accepted_slices must project the atomic post-AR-1 state ['AR-0', 'AR-1']")
 
     phase2j = current.get("phase_2j")
     if not isinstance(phase2j, dict) or phase2j.get("forward_execution_authority") is not False:

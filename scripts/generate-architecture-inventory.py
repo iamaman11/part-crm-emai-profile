@@ -253,6 +253,8 @@ def validate_docs() -> None:
         raise SystemExit("docs/status.json must project the v3 current authority tracked by #266")
     if program.get("current_slice") != "AR-1" or program.get("next_slice_after_acceptance") != "AR-2":
         raise SystemExit("docs/status.json must project AR-1 -> AR-2 sequencing")
+    if program.get("accepted_slices") != ["AR-0", "AR-1"]:
+        raise SystemExit("docs/status.json must project the atomic post-AR-1 accepted slice set")
 
 
 def build_inventory() -> dict[str, object]:
@@ -304,7 +306,7 @@ def build_inventory() -> dict[str, object]:
         "document_status": DOCUMENT_STATUS,
         "program_state": {
             "accepted_product_phase": "Phase 2I",
-            "accepted_architecture_slices": ["AR-0"],
+            "accepted_architecture_slices": ["AR-0", "AR-1"],
             "current_architecture_slice": "AR-1",
             "next_architecture_slice_after_acceptance": "AR-2",
             "architecture_complete": False,
