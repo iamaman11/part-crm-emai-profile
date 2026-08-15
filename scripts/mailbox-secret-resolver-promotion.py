@@ -25,12 +25,17 @@ ENVIRONMENTS = ("staging", "production")
 CANONICAL_REPOSITORY = "iamaman11/part-crm-emai-profile"
 RESOLVER_RELEASE_WORKFLOW = ".github/workflows/mailbox-secret-resolver-release.yml"
 CONTROL_RELEASE_WORKFLOW = ".github/workflows/quality-gate.yml"
+PROMOTION_WORKFLOW = ".github/workflows/mailbox-secret-resolver-promotion.yml"
 RESOLVER_RELEASE_NAME = "Mailbox Secret Resolver Release"
 CONTROL_RELEASE_NAME = "Quality Gate"
+PROMOTION_NAME = "Mailbox Secret Resolver Promotion"
 RESOLVER_ARTIFACT_RE = re.compile(
     r"^mailbox-secret-resolver-v1-sha256-[0-9a-f]{64}\.tar$"
 )
 CONTROL_ARTIFACT_RE = re.compile(r"^cloudflare-v1-sha256-[0-9a-f]{64}\.tar$")
+STAGING_EVIDENCE_ARTIFACT_RE = re.compile(
+    r"^mailbox-secret-resolver-promotion-staging-[0-9a-f]{40}$"
+)
 RESOLVER_SECRET_NAMES = {
     "GOOGLE_OAUTH_CLIENT_SECRET",
     "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
@@ -174,6 +179,30 @@ def validate_workflow_run(
         fail(f"{name} workflow run is not exact accepted-main evidence: {mismatches}")
 
 
+def validate_staging_promotion_run(
+    value: Any, *, run_id: int, run_attempt: int, source_sha: str
+) -> None:
+    run = require_object(value, "staging promotion workflow run")
+    expected = {
+        "id": run_id,
+        "name": PROMOTION_NAME,
+        "path": PROMOTION_WORKFLOW,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "head_sha": source_sha,
+        "status": "completed",
+        "conclusion": "success",
+        "run_attempt": run_attempt,
+    }
+    mismatches = {
+        field: {"actual": run.get(field), "expected": expected_value}
+        for field, expected_value in expected.items()
+        if run.get(field) != expected_value
+    }
+    if mismatches:
+        fail(f"staging promotion run is not exact successful staging authority: {mismatches}")
+
+
 def validate_artifact(
     value: Any,
     *,
@@ -205,6 +234,38 @@ def validate_artifact(
     if isinstance(workflow_run, dict):
         if workflow_run.get("id") != run_id or workflow_run.get("head_sha") != source_sha:
             fail(f"{label} artifact workflow ownership drifted")
+
+
+def validate_staging_evidence_artifact(
+    value: Any,
+    *,
+    artifact_id: int,
+    artifact_digest: str,
+    source_sha: str,
+    run_id: int,
+) -> None:
+    inventory = require_object(value, "staging evidence artifact inventory")
+    artifacts = inventory.get("artifacts")
+    if not isinstance(artifacts, list) or len(artifacts) != 1:
+        fail("staging promotion run must own exactly one immutable evidence artifact")
+    matching = [item for item in artifacts if isinstance(item, dict) and item.get("id") == artifact_id]
+    if len(matching) != 1:
+        fail("staging evidence artifact id is not uniquely owned by the supplied staging run")
+    artifact = matching[0]
+    expected_name = f"mailbox-secret-resolver-promotion-staging-{source_sha}"
+    if artifact.get("name") != expected_name or STAGING_EVIDENCE_ARTIFACT_RE.fullmatch(
+        str(artifact.get("name"))
+    ) is None:
+        fail("staging evidence artifact name is not canonical for the exact source")
+    if ARTIFACT_DIGEST_RE.fullmatch(artifact_digest) is None:
+        fail("staging evidence artifact digest input is invalid")
+    if artifact.get("digest") != artifact_digest or artifact.get("expired") is not False:
+        fail("staging evidence artifact digest/retention authority does not match")
+    workflow_run = artifact.get("workflow_run")
+    if not isinstance(workflow_run, dict) or workflow_run.get("id") != run_id or workflow_run.get(
+        "head_sha"
+    ) != source_sha:
+        fail("staging evidence artifact workflow ownership drifted")
 
 
 def validate_environment(
@@ -260,6 +321,35 @@ def github_preflight(args: argparse.Namespace) -> None:
     control_run_id = parse_positive_int(args.control_plane_release_run_id, "control-plane release run id")
     resolver_artifact_id = parse_positive_int(args.resolver_artifact_id, "resolver artifact id")
     control_artifact_id = parse_positive_int(args.control_plane_artifact_id, "control-plane artifact id")
+    if (
+        not isinstance(args.resolver_release_id, str)
+        or re.fullmatch(r"mailbox-secret-resolver-v1-sha256-[0-9a-f]{64}", args.resolver_release_id)
+        is None
+        or SHA256_RE.fullmatch(args.resolver_worker_sha256) is None
+        or not isinstance(args.control_plane_release_id, str)
+        or re.fullmatch(r"cloudflare-v1-sha256-[0-9a-f]{64}", args.control_plane_release_id)
+        is None
+    ):
+        fail("release identity inputs are malformed")
+    staging_inputs = (
+        args.staging_promotion_run_id,
+        args.staging_evidence_artifact_id,
+        args.staging_evidence_artifact_digest,
+        args.staging_run_attempt,
+        args.staging_evidence_confirmation,
+    )
+    if args.environment == "production":
+        if not all(staging_inputs):
+            fail("production requires the exact immutable staging evidence identity")
+        if args.staging_evidence_confirmation != f"{args.source_sha}:{args.staging_evidence_artifact_digest}":
+            fail("production staging-evidence confirmation must exactly bind source SHA and artifact digest")
+        staging_run_id = parse_positive_int(args.staging_promotion_run_id, "staging promotion run id")
+        staging_artifact_id = parse_positive_int(
+            args.staging_evidence_artifact_id, "staging evidence artifact id"
+        )
+        staging_run_attempt = parse_positive_int(args.staging_run_attempt, "staging run attempt")
+    elif any(staging_inputs):
+        fail("staging promotion must not accept production-only staging evidence inputs")
     if not args.token:
         fail("GitHub token is required for promotion preflight")
 
@@ -315,6 +405,28 @@ def github_preflight(args: argparse.Namespace) -> None:
         name_pattern=CONTROL_ARTIFACT_RE,
         label="control-plane",
     )
+    if args.environment == "production":
+        staging_run = api_get(
+            args.api_url, args.token, repository_path + f"/actions/runs/{staging_run_id}"
+        )
+        validate_staging_promotion_run(
+            staging_run,
+            run_id=staging_run_id,
+            run_attempt=staging_run_attempt,
+            source_sha=args.source_sha,
+        )
+        staging_artifacts = api_get(
+            args.api_url,
+            args.token,
+            repository_path + f"/actions/runs/{staging_run_id}/artifacts?per_page=100",
+        )
+        validate_staging_evidence_artifact(
+            staging_artifacts,
+            artifact_id=staging_artifact_id,
+            artifact_digest=args.staging_evidence_artifact_digest,
+            source_sha=args.source_sha,
+            run_id=staging_run_id,
+        )
     environment = api_get(
         args.api_url, args.token, repository_path + f"/environments/{args.environment}"
     )
@@ -555,7 +667,10 @@ def relative_to_output(target: Path, output: Path) -> str:
 def render_resolver_config(
     environment: str, manifest: dict[str, str], release_directory: Path, output: Path
 ) -> None:
-    config = require_object(load_json(RESOLVER_CONFIG, "canonical resolver config"), "resolver config")
+    config = require_object(
+        load_json(release_directory / RESOLVER_CONFIG, "immutable resolver deployment config"),
+        "resolver config",
+    )
     selected = copy.deepcopy(require_object(config["env"][environment], f"resolver env.{environment}"))
     prefix = environment.upper()
     replacements = {
@@ -604,7 +719,10 @@ def control_replacements(environment: str, manifest: dict[str, str]) -> dict[str
 def render_control_config(
     environment: str, manifest: dict[str, str], release_directory: Path, output: Path
 ) -> None:
-    config = require_object(load_json(CONTROL_CONFIG, "canonical control-plane config"), "control config")
+    config = require_object(
+        load_json(release_directory / CONTROL_CONFIG, "immutable control-plane deployment config"),
+        "control config",
+    )
     selected = copy.deepcopy(require_object(config["env"][environment], f"control env.{environment}"))
     selected = require_object(
         substitute(selected, control_replacements(environment, manifest)),
@@ -619,6 +737,46 @@ def render_control_config(
     if "${" in serialized or '"build"' in serialized:
         fail("rendered control-plane config retained a placeholder or rebuild command")
     output.write_text(serialized, encoding="utf-8")
+
+
+def require_deployment_closure(release_directory: Path, label: str, paths: tuple[Path, ...]) -> None:
+    for relative in paths:
+        path = release_directory / relative
+        if path.is_symlink() or not path.is_file():
+            fail(f"{label} immutable deployment closure is missing {relative.as_posix()}")
+
+
+def validate_deployment_closures(resolver_release: Path, control_release: Path) -> None:
+    require_deployment_closure(
+        resolver_release,
+        "resolver",
+        (
+            Path("worker/index.js"),
+            Path("worker/index_bg.wasm"),
+            Path("worker/worker/shim.mjs"),
+            RESOLVER_CONFIG.relative_to(ROOT),
+        ),
+    )
+    migrations = resolver_release / "migrations" / "resolver-d1"
+    if migrations.is_symlink() or not migrations.is_dir() or not any(migrations.glob("*.sql")):
+        fail("resolver immutable deployment closure lacks migrations")
+    require_deployment_closure(
+        control_release,
+        "control-plane",
+        (
+            Path("worker/index.js"),
+            Path("worker/index_bg.wasm"),
+            Path("worker/worker/shim.mjs"),
+            Path("frontend/index.html"),
+            CONTROL_CONFIG.relative_to(ROOT),
+        ),
+    )
+    assets = control_release / "frontend" / "assets"
+    migrations = control_release / "migrations" / "d1"
+    if assets.is_symlink() or not assets.is_dir() or not any(path.is_file() for path in assets.rglob("*")):
+        fail("control-plane immutable deployment closure lacks static assets")
+    if migrations.is_symlink() or not migrations.is_dir() or not any(migrations.glob("*.sql")):
+        fail("control-plane immutable deployment closure lacks migrations")
 
 
 def prepare(
@@ -637,6 +795,7 @@ def prepare(
     ):
         if directory.is_symlink() or not directory.is_dir():
             fail(f"{label} is missing")
+    validate_deployment_closures(resolver_release, control_release)
     control, resolver = validate_deploy_manifest(deploy_manifest, environment)
     resolver_output.parent.mkdir(parents=True, exist_ok=True)
     control_output.parent.mkdir(parents=True, exist_ok=True)
@@ -645,27 +804,17 @@ def prepare(
     print(f"Prepared no-rebuild {environment} resolver and control-plane deployment configs.")
 
 
-def validate_staging_evidence(
-    evidence_path: Path,
+def validate_release_identities(
+    *,
+    source_sha: str,
     resolver_manifest_path: Path,
     control_manifest_path: Path,
+    resolver_release_id: str,
+    resolver_worker_sha256: str,
+    control_plane_release_id: str,
 ) -> None:
-    evidence = require_object(load_json(evidence_path, "accepted staging evidence"), "staging evidence")
-    expected_fields = {
-        "schema_version",
-        "status",
-        "environment",
-        "resolver_release_id",
-        "resolver_source_commit_sha",
-        "resolver_worker_sha256",
-        "control_plane_release_id",
-        "control_plane_source_commit_sha",
-        "deployment_evidence_sha256",
-    }
-    if set(evidence) != expected_fields:
-        fail("accepted staging evidence field inventory mismatch")
-    if evidence["schema_version"] != 1 or evidence["status"] != "accepted" or evidence["environment"] != "staging":
-        fail("production requires accepted staging evidence")
+    if COMMIT_RE.fullmatch(source_sha) is None or SHA256_RE.fullmatch(resolver_worker_sha256) is None:
+        fail("expected release identity is malformed")
     resolver = require_object(load_json(resolver_manifest_path, "resolver release manifest"), "resolver manifest")
     control = require_object(load_json(control_manifest_path, "control-plane release manifest"), "control manifest")
     source = require_object(control.get("source"), "control-plane release source")
@@ -676,13 +825,86 @@ def validate_staging_evidence(
         "control_plane_release_id": control.get("release_id"),
         "control_plane_source_commit_sha": source.get("commit_sha"),
     }
-    if any(evidence[name] != value for name, value in exact.items()):
-        fail("production artifacts differ from accepted staging evidence")
-    if COMMIT_RE.fullmatch(str(exact["resolver_source_commit_sha"])) is None or SHA256_RE.fullmatch(
-        str(evidence["deployment_evidence_sha256"])
-    ) is None:
-        fail("accepted staging evidence digest/source shape is invalid")
-    print("Production same-bits artifacts match accepted staging evidence.")
+    expected = {
+        "resolver_release_id": resolver_release_id,
+        "resolver_source_commit_sha": source_sha,
+        "resolver_worker_sha256": resolver_worker_sha256,
+        "control_plane_release_id": control_plane_release_id,
+        "control_plane_source_commit_sha": source_sha,
+    }
+    if exact != expected or source.get("authority") != "accepted-main" or source.get(
+        "repository"
+    ) != CANONICAL_REPOSITORY:
+        fail("immutable release manifests differ from the exact requested release identities")
+
+
+def validate_staging_evidence(
+    *,
+    evidence_path: Path,
+    source_sha: str,
+    resolver_release_id: str,
+    resolver_worker_sha256: str,
+    control_plane_release_id: str,
+    staging_promotion_run_id: str,
+    staging_run_attempt: str,
+) -> None:
+    evidence = require_object(load_json(evidence_path, "staging evidence"), "staging evidence")
+    expected_fields = {
+        "schema_version",
+        "status",
+        "environment",
+        "source_commit_sha",
+        "resolver",
+        "control_plane",
+        "smoke",
+        "github",
+    }
+    if set(evidence) != expected_fields:
+        fail("staging evidence field inventory mismatch")
+    if (
+        evidence["schema_version"] != 1
+        or evidence["status"] != "passed"
+        or evidence["environment"] != "staging"
+        or evidence["source_commit_sha"] != source_sha
+    ):
+        fail("production requires exact passed staging evidence")
+    resolver = require_object(evidence["resolver"], "staging resolver attestation")
+    control = require_object(evidence["control_plane"], "staging control-plane attestation")
+    smoke = require_object(evidence["smoke"], "staging smoke attestation")
+    github = require_object(evidence["github"], "staging GitHub attestation")
+    if set(resolver) != {"release_id", "worker_sha256", "deployment_status_sha256"}:
+        fail("staging resolver attestation field inventory mismatch")
+    if set(control) != {"release_id", "deployment_status_sha256"}:
+        fail("staging control-plane attestation field inventory mismatch")
+    if set(smoke) != {"response_sha256", "response_size"}:
+        fail("staging smoke attestation field inventory mismatch")
+    if set(github) != {"run_id", "run_attempt"}:
+        fail("staging GitHub attestation field inventory mismatch")
+    exact = {
+        "resolver_release_id": resolver.get("release_id"),
+        "resolver_worker_sha256": resolver.get("worker_sha256"),
+        "control_plane_release_id": control.get("release_id"),
+    }
+    expected = {
+        "resolver_release_id": resolver_release_id,
+        "resolver_worker_sha256": resolver_worker_sha256,
+        "control_plane_release_id": control_plane_release_id,
+    }
+    hashes = (
+        resolver.get("deployment_status_sha256"),
+        control.get("deployment_status_sha256"),
+        smoke.get("response_sha256"),
+    )
+    if (
+        exact != expected
+        or any(SHA256_RE.fullmatch(str(value)) is None for value in hashes)
+        or not isinstance(smoke.get("response_size"), int)
+        or smoke["response_size"] <= 0
+        or github.get("run_id") != parse_positive_int(staging_promotion_run_id, "staging promotion run id")
+        or github.get("run_attempt") != parse_positive_int(staging_run_attempt, "staging run attempt")
+    ):
+        fail("production artifacts differ from exact immutable staging evidence")
+    print("Production same-bits artifacts match immutable passed staging evidence.")
 
 
 def parse_remote_d1_names(value: Any, label: str) -> list[str]:
@@ -793,7 +1015,6 @@ def attest(
     workflow_run_id: str,
     workflow_run_attempt: str,
     evidence_output: Path,
-    acceptance_output: Path,
 ) -> None:
     if environment not in ENVIRONMENTS:
         fail("promotion evidence environment is invalid")
@@ -843,7 +1064,7 @@ def attest(
         fail("smoke response body must be one bounded non-empty regular file")
     evidence = {
         "schema_version": 1,
-        "status": "passed_unaccepted",
+        "status": "passed",
         "environment": environment,
         "source_commit_sha": resolver_source,
         "resolver": {
@@ -866,25 +1087,10 @@ def attest(
         "github": {"run_id": run_id, "run_attempt": run_attempt},
     }
     evidence_bytes = canonical_document(evidence)
-    acceptance = {
-        "schema_version": 1,
-        "status": "passed_unaccepted",
-        "environment": environment,
-        "resolver_release_id": resolver.get("release_id"),
-        "resolver_source_commit_sha": resolver_source,
-        "resolver_worker_sha256": resolver.get("resolver_worker_sha256"),
-        "control_plane_release_id": control.get("release_id"),
-        "control_plane_source_commit_sha": control_source_sha,
-        "deployment_evidence_sha256": hashlib.sha256(evidence_bytes).hexdigest(),
-    }
     evidence_output.parent.mkdir(parents=True, exist_ok=True)
-    acceptance_output.parent.mkdir(parents=True, exist_ok=True)
     evidence_output.write_bytes(evidence_bytes)
-    acceptance_output.write_bytes(canonical_document(acceptance))
-    write_github_output(
-        {"evidence": str(evidence_output), "acceptance_candidate": str(acceptance_output)}
-    )
-    print(f"Recorded metadata-only {environment} D3 promotion evidence candidate.")
+    write_github_output({"evidence": str(evidence_output)})
+    print(f"Recorded immutable metadata-only {environment} D3 promotion evidence.")
 
 
 def fixture_deploy_manifest(environment: str) -> dict[str, Any]:
@@ -957,6 +1163,27 @@ def expect_rejected(label: str, operation: Any) -> None:
 def self_test() -> None:
     with tempfile.TemporaryDirectory(prefix="resolver-promotion-self-test-") as temporary:
         root = Path(temporary)
+        resolver_closure = root / "resolver-closure"
+        control_closure = root / "control-closure"
+        for release, config, migration in (
+            (resolver_closure, RESOLVER_CONFIG.relative_to(ROOT), Path("migrations/resolver-d1/0001_fixture.sql")),
+            (control_closure, CONTROL_CONFIG.relative_to(ROOT), Path("migrations/d1/0001_fixture.sql")),
+        ):
+            for relative in (Path("worker/index.js"), Path("worker/index_bg.wasm"), Path("worker/worker/shim.mjs"), config, migration):
+                path = release / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture\n", encoding="utf-8")
+        for relative in (Path("frontend/index.html"), Path("frontend/assets/app.js")):
+            path = control_closure / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture\n", encoding="utf-8")
+        validate_deployment_closures(resolver_closure, control_closure)
+        (control_closure / "frontend/assets/app.js").unlink()
+        expect_rejected(
+            "control-plane static assets missing from immutable closure",
+            lambda: validate_deployment_closures(resolver_closure, control_closure),
+        )
+        (control_closure / "frontend/assets/app.js").write_text("fixture\n", encoding="utf-8")
         resolver, control = fixture_secrets("a")
         peer_resolver, peer_control = fixture_secrets("b")
         paths = [root / name for name in ("resolver.json", "control.json", "peer-r.json", "peer-c.json")]
@@ -1039,6 +1266,59 @@ def self_test() -> None:
             name_pattern=RESOLVER_ARTIFACT_RE,
             label="resolver",
         )
+        staging_run = {
+            "id": 23,
+            "name": PROMOTION_NAME,
+            "path": PROMOTION_WORKFLOW,
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "head_sha": source_sha,
+            "status": "completed",
+            "conclusion": "success",
+            "run_attempt": 1,
+        }
+        validate_staging_promotion_run(
+            staging_run, run_id=23, run_attempt=1, source_sha=source_sha
+        )
+        failed_staging_run = dict(staging_run)
+        failed_staging_run["conclusion"] = "failure"
+        expect_rejected(
+            "failed staging promotion",
+            lambda: validate_staging_promotion_run(
+                failed_staging_run, run_id=23, run_attempt=1, source_sha=source_sha
+            ),
+        )
+        staging_artifact_digest = "sha256:" + "e" * 64
+        staging_artifacts = {
+            "artifacts": [
+                {
+                    "id": 29,
+                    "name": f"mailbox-secret-resolver-promotion-staging-{source_sha}",
+                    "digest": staging_artifact_digest,
+                    "expired": False,
+                    "workflow_run": {"id": 23, "head_sha": source_sha},
+                }
+            ]
+        }
+        validate_staging_evidence_artifact(
+            staging_artifacts,
+            artifact_id=29,
+            artifact_digest=staging_artifact_digest,
+            source_sha=source_sha,
+            run_id=23,
+        )
+        expired_evidence = copy.deepcopy(staging_artifacts)
+        expired_evidence["artifacts"][0]["expired"] = True
+        expect_rejected(
+            "expired staging evidence artifact",
+            lambda: validate_staging_evidence_artifact(
+                expired_evidence,
+                artifact_id=29,
+                artifact_digest=staging_artifact_digest,
+                source_sha=source_sha,
+                run_id=23,
+            ),
+        )
         substituted = copy.deepcopy(artifacts)
         substituted["artifacts"][0]["digest"] = "sha256:" + "d" * 64
         expect_rejected(
@@ -1102,6 +1382,14 @@ def self_test() -> None:
         (control_release / "release-manifest.json").write_bytes(
             canonical_document(control_manifest)
         )
+        validate_release_identities(
+            source_sha=source_sha,
+            resolver_manifest_path=resolver_release / "release-manifest.json",
+            control_manifest_path=control_release / "release-manifest.json",
+            resolver_release_id=resolver_manifest["release_id"],
+            resolver_worker_sha256=resolver_manifest["resolver_worker_sha256"],
+            control_plane_release_id=control_manifest["release_id"],
+        )
         resolver_query = root / "resolver-query.json"
         control_query = root / "control-query.json"
         resolver_query.write_text('[{"results":[{"name":"0001_resolver.sql"}]}]', encoding="utf-8")
@@ -1124,7 +1412,6 @@ def self_test() -> None:
         control_status.write_text('{"versions":[{"id":"control-version"}]}', encoding="utf-8")
         smoke_body.write_text("ok", encoding="utf-8")
         evidence_output = root / "evidence.json"
-        acceptance_output = root / "acceptance.json"
         attest(
             environment="staging",
             resolver_manifest_path=resolver_release / "release-manifest.json",
@@ -1135,11 +1422,31 @@ def self_test() -> None:
             workflow_run_id="23",
             workflow_run_attempt="1",
             evidence_output=evidence_output,
-            acceptance_output=acceptance_output,
         )
-        acceptance = require_object(load_json(acceptance_output, "acceptance fixture"), "acceptance fixture")
-        if acceptance.get("status") != "passed_unaccepted" or not evidence_output.is_file():
-            fail("promotion evidence fixture did not remain unaccepted and metadata-only")
+        validate_staging_evidence(
+            evidence_path=evidence_output,
+            source_sha=source_sha,
+            resolver_release_id=resolver_manifest["release_id"],
+            resolver_worker_sha256=resolver_manifest["resolver_worker_sha256"],
+            control_plane_release_id=control_manifest["release_id"],
+            staging_promotion_run_id="23",
+            staging_run_attempt="1",
+        )
+        production_evidence = require_object(load_json(evidence_output, "evidence fixture"), "evidence fixture")
+        production_evidence["environment"] = "production"
+        evidence_output.write_bytes(canonical_document(production_evidence))
+        expect_rejected(
+            "production evidence substituted for staging",
+            lambda: validate_staging_evidence(
+                evidence_path=evidence_output,
+                source_sha=source_sha,
+                resolver_release_id=resolver_manifest["release_id"],
+                resolver_worker_sha256=resolver_manifest["resolver_worker_sha256"],
+                control_plane_release_id=control_manifest["release_id"],
+                staging_promotion_run_id="23",
+                staging_run_attempt="1",
+            ),
+        )
     print("Mailbox resolver promotion positive and negative self-tests passed.")
 
 
@@ -1153,9 +1460,17 @@ def main() -> int:
     preflight.add_argument("--resolver-release-run-id", required=True)
     preflight.add_argument("--resolver-artifact-id", required=True)
     preflight.add_argument("--resolver-artifact-digest", required=True)
+    preflight.add_argument("--resolver-release-id", required=True)
+    preflight.add_argument("--resolver-worker-sha256", required=True)
     preflight.add_argument("--control-plane-release-run-id", required=True)
     preflight.add_argument("--control-plane-artifact-id", required=True)
     preflight.add_argument("--control-plane-artifact-digest", required=True)
+    preflight.add_argument("--control-plane-release-id", required=True)
+    preflight.add_argument("--staging-promotion-run-id", default="")
+    preflight.add_argument("--staging-evidence-artifact-id", default="")
+    preflight.add_argument("--staging-evidence-artifact-digest", default="")
+    preflight.add_argument("--staging-run-attempt", default="")
+    preflight.add_argument("--staging-evidence-confirmation", default="")
     preflight.add_argument("--confirmation", required=True)
     preflight.add_argument("--repository", required=True)
     preflight.add_argument("--workflow-ref", required=True)
@@ -1176,8 +1491,19 @@ def main() -> int:
     prepare_parser.add_argument("--control-plane-output", type=Path, required=True)
     evidence = commands.add_parser("validate-staging-evidence")
     evidence.add_argument("--evidence", type=Path, required=True)
-    evidence.add_argument("--resolver-manifest", type=Path, required=True)
-    evidence.add_argument("--control-plane-manifest", type=Path, required=True)
+    evidence.add_argument("--source-sha", required=True)
+    evidence.add_argument("--resolver-release-id", required=True)
+    evidence.add_argument("--resolver-worker-sha256", required=True)
+    evidence.add_argument("--control-plane-release-id", required=True)
+    evidence.add_argument("--staging-promotion-run-id", required=True)
+    evidence.add_argument("--staging-run-attempt", required=True)
+    identities = commands.add_parser("validate-release-identities")
+    identities.add_argument("--source-sha", required=True)
+    identities.add_argument("--resolver-manifest", type=Path, required=True)
+    identities.add_argument("--control-plane-manifest", type=Path, required=True)
+    identities.add_argument("--resolver-release-id", required=True)
+    identities.add_argument("--resolver-worker-sha256", required=True)
+    identities.add_argument("--control-plane-release-id", required=True)
     d1 = commands.add_parser("verify-remote-d1")
     d1.add_argument("--resolver-release", type=Path, required=True)
     d1.add_argument("--control-plane-release", type=Path, required=True)
@@ -1193,7 +1519,6 @@ def main() -> int:
     attestation.add_argument("--workflow-run-id", required=True)
     attestation.add_argument("--workflow-run-attempt", required=True)
     attestation.add_argument("--evidence-output", type=Path, required=True)
-    attestation.add_argument("--acceptance-output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "self-test":
         self_test()
@@ -1217,7 +1542,24 @@ def main() -> int:
             args.control_plane_output,
         )
     elif args.command == "validate-staging-evidence":
-        validate_staging_evidence(args.evidence, args.resolver_manifest, args.control_plane_manifest)
+        validate_staging_evidence(
+            evidence_path=args.evidence,
+            source_sha=args.source_sha,
+            resolver_release_id=args.resolver_release_id,
+            resolver_worker_sha256=args.resolver_worker_sha256,
+            control_plane_release_id=args.control_plane_release_id,
+            staging_promotion_run_id=args.staging_promotion_run_id,
+            staging_run_attempt=args.staging_run_attempt,
+        )
+    elif args.command == "validate-release-identities":
+        validate_release_identities(
+            source_sha=args.source_sha,
+            resolver_manifest_path=args.resolver_manifest,
+            control_manifest_path=args.control_plane_manifest,
+            resolver_release_id=args.resolver_release_id,
+            resolver_worker_sha256=args.resolver_worker_sha256,
+            control_plane_release_id=args.control_plane_release_id,
+        )
     elif args.command == "verify-remote-d1":
         verify_remote_d1(
             args.resolver_release,
@@ -1236,7 +1578,6 @@ def main() -> int:
             workflow_run_id=args.workflow_run_id,
             workflow_run_attempt=args.workflow_run_attempt,
             evidence_output=args.evidence_output,
-            acceptance_output=args.acceptance_output,
         )
     return 0
 
