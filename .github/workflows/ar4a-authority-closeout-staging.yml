@@ -21,7 +21,7 @@ jobs:
           persist-credentials: true
 
       - name: Project accepted AR-4A authority
-        run: python scratch/ar4a_authority_closeout_v2.py
+        run: python scratch/ar4a_authority_closeout_v3.py
 
       - name: Regenerate canonical inventory
         run: python scripts/generate-architecture-inventory.py --write
