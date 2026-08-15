@@ -20,21 +20,26 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Update Phase 2I hardening ownership contract
-        run: python scratch/ar4a_phase2i_hardening_fix.py
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
 
-      - name: Verify complete cross-component policy preflight
+      - name: Enforce Node and npm versions
         shell: bash
         run: |
-          python -m py_compile \
-            scripts/test-cross-component-acceptance.py \
-            scripts/check-profile-worker-application-boundary.py \
-            scripts/check-phase2f-retained-operator.py \
-            scripts/check-phase2i-hardening.py \
-            scripts/check-phase2i-operational-bounds.py \
-            scripts/check-phase2i-supply-chain.py \
-            scripts/check-phase2i-support-bundle.py \
-            scripts/test-phase2i-d1-backup-restore.py
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
+      - name: Update Phase 2H Client Mail ownership contract
+        run: python scratch/ar4a_phase2h_ui_fix.py
+
+      - name: Validate deterministic acceptance manifests and composition surfaces
+        shell: bash
+        run: |
+          python -m py_compile scripts/test-cross-component-acceptance.py scripts/check-profile-worker-application-boundary.py scripts/check-phase2f-retained-operator.py scripts/check-phase2i-hardening.py scripts/check-phase2i-operational-bounds.py scripts/check-phase2i-supply-chain.py scripts/check-phase2i-support-bundle.py scripts/test-phase2i-d1-backup-restore.py
           python scripts/test-cross-component-acceptance.py
           python scripts/check-profile-worker-application-boundary.py
           python scripts/check-phase2f-retained-operator.py
@@ -47,6 +52,104 @@ jobs:
           python scripts/check-phase2i-supply-chain.py --self-test
           python scripts/check-phase2i-support-bundle.py
           python scripts/check-phase2i-support-bundle.py --self-test
+
+      - name: Prove integrated authorization query mailbox and device invariants
+        shell: bash
+        run: |
+          python scripts/test-d1-schema.py
+          python scripts/test-step4-identity-acl.py
+          python scripts/test-step4-command-guards.py
+          python scripts/test-step5-coordinator-projection.py
+          python scripts/test-phase2d-query-projections.py
+          python scripts/test-mailbox-vertical-slice.py
+          python scripts/test-device-job-d1.py
+          python scripts/test-device-generation-commit-d1.py
+          python scripts/test-browser-mail-execution-d1.py
+          if python scripts/test-step4-identity-acl.py --negative-fixture tests/identity-acl/fixtures/assignment-authorizes.sql; then
+            echo "Assignment-derived authorization unexpectedly passed." >&2
+            exit 1
+          fi
+          python scripts/check-phase2d-query-boundaries.py --self-test
+
+      - name: Prove realtime UI privacy and authority negative matrix
+        shell: bash
+        run: |
+          python scripts/check-phase2g-realtime-boundaries.py
+          python scripts/check-phase2g-realtime-boundaries.py --self-test
+          python scripts/check-phase2h-ui-boundaries.py
+          python scripts/check-phase2h-ui-boundaries.py --self-test
+
+      - name: Prove immutable generation registry and activation invariants
+        shell: bash
+        run: |
+          python scripts/test-profile-generation-registry.py
+          python scripts/test-profile-generation-registry-edge-cases.py
+          python scripts/test-profile-generation-integrity-guards.py
+
+      - name: Execute repository-local backup restore and recovery drills
+        shell: bash
+        run: |
+          python scripts/test-phase2i-d1-backup-restore.py
+          python scripts/check-r2-generation-objects.py
+          cargo test --locked -p encrypted-generation-domain
+          python scripts/check-step5-profile-coordinator.py
+          python scripts/test-step5-coordinator-projection.py
+          python scripts/check-phase2f-retained-operator.py
+          python scripts/check-phase2f-retained-operator.py --self-test
+
+      - name: Test application Worker adapter and failure composition
+        shell: bash
+        run: |
+          cargo test --locked -p application-ports -p use-cases-query -p use-cases-mailboxes -p use-cases-devices -p use-cases-notifications
+          cargo test --locked -p cloudflare-adapters --lib
+          cargo test --locked -p browser-profile-control-plane-worker --lib
+          cargo check --locked -p browser-profile-control-plane-worker --target wasm32-unknown-unknown
+
+      - name: Verify installed Rust dependency licenses
+        run: python scripts/check-phase2i-supply-chain.py --cargo-licenses
+
+      - name: Test and execute synthetic Profile Bridge operator flow
+        shell: bash
+        run: |
+          cargo test --locked -p profile-bridge --all-targets
+          root="$RUNNER_TEMP/cross-component-profile"
+          rm -rf "$root"
+          cargo run --locked -p profile-bridge --bin profile-bridge-synthetic -- \
+            'profilebridge://claim/claim_0123456789abcdef0123456789abcdef' "$root" \
+            | tee "$RUNNER_TEMP/profile-bridge-synthetic.out"
+          grep -Fxq 'synthetic-operator-complete state=DIRTY_LOCAL_COMMITTED_GENERATION' "$RUNNER_TEMP/profile-bridge-synthetic.out"
+
+      - name: Clean install frontend from exact lockfile
+        working-directory: frontend
+        run: npm ci
+
+      - name: Verify installed npm dependency licenses
+        run: python scripts/check-phase2i-supply-chain.py --node-licenses
+
+      - name: Test frontend contract and neutral projection boundary
+        working-directory: frontend
+        shell: bash
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Verify metadata-only acceptance output
+        shell: bash
+        run: |
+          python -m json.tool tests/cross-component/standalone-acceptance.json >/dev/null
+          python -m json.tool tests/cross-component/phase2i-release-candidate.json >/dev/null
+          python -m json.tool tests/operations/phase2i-operational-bounds.json >/dev/null
+          python -m json.tool tests/support/phase2i-support-bundle.json >/dev/null
+          test -f frontend/dist/index.html
+          if grep -R -n -E --include='*.json' '(password|access.?token|oauth|cookie|message.?body|credential.?value|raw.?secret)' tests/cross-component tests/operations; then
+            echo "Sensitive field found in Phase 2I repository-local acceptance evidence." >&2
+            exit 1
+          fi
+
+      - name: Verify canonical architecture authority
+        shell: bash
+        run: |
           python scripts/check-documentation-authority.py --root .
           python scripts/generate-architecture-inventory.py --check
           python scripts/generate-architecture-inventory.py --self-test
@@ -54,10 +157,10 @@ jobs:
       - name: Verify hygiene and commit output only
         shell: bash
         run: |
-          git add scripts/check-phase2i-hardening.py
+          git add scripts/check-phase2h-ui-boundaries.py
           git diff --cached --check
-          git diff --cached --quiet && { echo 'No hardening policy update produced'; exit 1; }
+          git diff --cached --quiet && { echo 'No Phase 2H policy update produced'; exit 1; }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'AR-4A: align Phase 2I hardening with composition root'
+          git commit -m 'AR-4A: align Phase 2H Client Mail ownership with composition root'
           git push origin HEAD:agent/ar4a-cross-component-fix-staging
