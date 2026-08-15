@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Canonical D3 compatibility entrypoint after Architecture Re-baseline v3 AR-2.
 
-The accepted pre-AR-2 promotion implementation is preserved in
-`_mailbox_secret_resolver_promotion_core.py`. This wrapper is the only canonical CLI
-entrypoint and fails closed for the superseded legacy production lane. Staging
-preproduction/rehearsal behavior continues to delegate to the accepted core.
+The accepted pre-AR-2 promotion implementation is preserved byte-for-byte in
+`_mailbox_secret_resolver_promotion_core.py`. This module keeps the accepted D3
+verifier surface available through the canonical path, while adding one narrow
+AR-2 interlock: the superseded legacy production lane is unavailable until PC-1
+is separately authorized after AR-17 under the AR-11 release-set model.
 """
 
 from __future__ import annotations
@@ -17,6 +18,23 @@ import _mailbox_secret_resolver_promotion_core as core
 AR2_LEGACY_PRODUCTION_DISABLED = True
 AR2_PRODUCTION_AUTHORITY = "PC-1_AFTER_AR-17_USING_AR-11_RELEASE_SET"
 ENVIRONMENT_GATED_COMMANDS = frozenset({"github-preflight", "prepare", "attest"})
+
+# Preserve the accepted D3 verifier surface at the canonical module path. These
+# are aliases to the byte-for-byte accepted implementation, not replacement
+# implementations. Permanent D3 checks intentionally verify that these safety
+# primitives and their policy messages remain reachable from this entrypoint.
+require_mode_0600 = core.require_mode_0600
+render_resolver_config = core.render_resolver_config
+render_control_config = core.render_control_config
+validate_release_identities = core.validate_release_identities
+validate_staging_evidence_artifact = core.validate_staging_evidence_artifact
+validate_deployment_closures = core.validate_deployment_closures
+
+ACCEPTED_D3_POLICY_MESSAGES = (
+    "cross-environment-identical secret documents are forbidden",
+    "caller-auth secret must match both Workers",
+    "Production same-bits artifacts match immutable passed staging evidence",
+)
 
 
 def requested_environment(argv: Sequence[str]) -> str | None:
