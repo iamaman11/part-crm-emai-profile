@@ -1,0 +1,56 @@
+name: Resolver D1 First Bootstrap
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: resolver-d1-first-bootstrap-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Resolver D1 first-bootstrap implementation
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      FIRST_BOOTSTRAP_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Compile first-bootstrap policy scripts
+        run: >-
+          python -m py_compile
+          scripts/mailbox-secret-resolver-d1-bootstrap.py
+          scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py
+          scripts/mailbox-secret-resolver-release.py
+
+      - name: Verify resolver D1 first-bootstrap implementation
+        run: |
+          set -euo pipefail
+          python scripts/mailbox-secret-resolver-d1-bootstrap.py check
+          python scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py \
+            --base-ref "$FIRST_BOOTSTRAP_BASE"
+
+      - name: Prove resolver D1 first-bootstrap fails closed
+        run: |
+          set -euo pipefail
+          python scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py --self-test
+          python scripts/mailbox-secret-resolver-d1-bootstrap.py self-test
+          python scripts/mailbox-secret-resolver-release.py self-test
+          python scripts/mailbox-secret-resolver-d1-bootstrap.py build --development-working-tree
+          test -z "$(git ls-files -- artifacts/mailbox-secret-resolver-d1-first-bootstrap/bootstrap.sql)"
+          git check-ignore -q artifacts/mailbox-secret-resolver-d1-first-bootstrap/bootstrap.sql
