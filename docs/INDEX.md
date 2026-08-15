@@ -1,67 +1,92 @@
 # Documentation Authority Index
 
-This index defines which repository documents are normative **now** and which files are historical or
-evidence-only. It is intentionally small so current implementation and security truth do not drift
-across multiple roadmaps.
+**Document status:** GENERATED_PROJECTION  
+**Current program authority:** [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md)  
+**Tracking:** issue #266
+
+This index classifies repository documents by authority role so a target, historical plan or evidence
+file cannot silently become a second current roadmap.
 
 ## Current repository state
 
 - Accepted repository-local product phase: **Phase 2I**, proven by
   [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json).
-- The R1–R9 pre-2J architecture remediation is **CLOSED / ACCEPTED HISTORY** in
-  [`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md).
-- The post-closeout pre-2J product-readiness remediation is **ACTIVE / BLOCKING Phase 2J**, tracked by
-  issue #203 and governed by
-  [`PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`](PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md).
-- Initial repository-owned follow-up findings are **P0=0, P1=5, P2=1**.
-- Phase 2J is **blocked / pending repository remediation** and has not started.
-- Machine-readable readiness authority: [`status.json`](status.json), with `production_ready=false`.
-- Canonical current repository-local security authority: [`THREAT_MODEL.md`](THREAT_MODEL.md).
+- Architecture Re-baseline v3 is the active forward program.
+- AR-0 is accepted through PR #267.
+- AR-1 is the current bounded authority-cutover slice after its accepted merge.
+- `architecture_complete=false`.
+- `production_core_gate=BLOCKED`.
+- `production_ready=false`.
+- Phase 2J and the pre-2J issue #203 sequence are predecessor history, not the current implementation queue.
+- Issue #251 remains OPEN predecessor external work; AR-1 does not execute it.
 
 ## Authority hierarchy
 
-1. [`PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`](PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md) is the
-   current pre-2J execution authority while issue #203 remains active. It defines Batches 0/A/B/C/D/E/F
-   and the conditions required before Phase 2J may return to unblocked/not-started.
-2. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) defines product phase order, ownership and acceptance and
-   must reflect the current #203 hold.
-3. [`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) is the historical
-   accepted R1–R9 remediation/closeout record. Its findings remain closed and regression-protected; the
-   current product-readiness follow-up does not reactivate them.
-4. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs and [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md)
-   define stable architecture/security/privacy invariants.
-5. [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) defines the standalone UI target.
-6. [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md) records what is accepted on `main`
-   and at which evidence level.
-7. [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json) is the immutable phase
-   provenance ledger; [`status.json`](status.json) is the current machine-readable projection.
-8. [`THREAT_MODEL.md`](THREAT_MODEL.md) is the canonical current threat model. Phase-specific threat
-   documents are accepted evidence/history only.
+1. [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) is the single current
+   architecture/program execution authority, tracked by issue #266.
+2. [`../architecture/architecture-rebaseline-v3-transition.json`](../architecture/architecture-rebaseline-v3-transition.json)
+   is the machine transition projection of that authority.
+3. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) and [`status.json`](status.json) are current projections;
+   they do not define a competing execution sequence.
+4. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md),
+   [`THREAT_MODEL.md`](THREAT_MODEL.md) and [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) remain normative
+   within their stable architecture/security/data/UI scopes.
+5. [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md) records capability/evidence accepted
+   on `main`; source presence is not production enablement.
+6. [`../architecture/inventory.json`](../architecture/inventory.json) is the canonical machine inventory
+   and document-status hierarchy. It is extended rather than replaced.
+7. [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json) is immutable accepted
+   product-phase provenance.
 
-If these sources disagree, implementation stops and the authority documents are corrected before work
-continues. An open branch/PR never outranks accepted `main`.
+If these sources disagree, implementation stops and the authority projections are corrected before the
+next AR slice proceeds. An open branch/PR never outranks accepted `main`.
 
-## Current architecture and capability references
+## Document status model
 
-- [`PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`](PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md)
+The machine inventory uses these roles:
+
+- `CURRENT_AUTHORITY` — current program execution authority;
+- `GENERATED_PROJECTION` — current navigation/status/product projection derived from authority;
+- `STABLE_AUTHORITY` — normative within a bounded architecture/security/data/product scope, not a roadmap;
+- `TARGET` — forward target/research material not independently executable;
+- `ACCEPTED_HISTORICAL` — accepted predecessor/history retained for provenance;
+- `EVIDENCE` — research or acceptance evidence;
+- `RUNBOOK` — operational procedure, not roadmap authority;
+- `SUPERSEDED` — old current-looking entrypoint explicitly retired for forward execution.
+
+## Current program references
+
+- [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md)
+- [`ARCHITECTURE_REBASELINE_V3_AR0.md`](ARCHITECTURE_REBASELINE_V3_AR0.md)
+- [`ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md`](ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md)
+- [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md)
 - [`ARCHITECTURE.md`](ARCHITECTURE.md)
 - [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md)
-- [`REALTIME_NOTIFICATIONS.md`](REALTIME_NOTIFICATIONS.md)
-- [`PROFILE_GENERATION_REGISTRY.md`](PROFILE_GENERATION_REGISTRY.md)
-- [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md)
+- [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md)
 - [`THREAT_MODEL.md`](THREAT_MODEL.md)
-- [`TEST_EVIDENCE_INDEX.md`](TEST_EVIDENCE_INDEX.md)
+- [`REALTIME_NOTIFICATIONS.md`](REALTIME_NOTIFICATIONS.md)
+- [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md)
+- [`status.json`](status.json)
+- [`../architecture/inventory.json`](../architecture/inventory.json)
+- [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json)
 
 ## Historical and evidence context
 
+- [`PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`](PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md) —
+  ACCEPTED_HISTORICAL predecessor stub; exact accepted body is retained in
+  `history/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN_PRE_AR_V3_2026-08-15.md`.
 - [`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) — accepted R1–R9
-  architecture closeout history; not the active remediation queue.
+  architecture closeout history.
+- `history/DEVELOPMENT_PLAN_PRE_AR_V3_2026-08-15.md` — exact former #203-oriented development plan.
+- `history/IMPLEMENTATION_PLAN_PRE_AR_V3_2026-08-15.md` and
+  `history/PROFILE_LIFECYCLE_PLAN_PRE_AR_V3_2026-08-15.md` — exact former current-looking root plans.
+- `history/ARCHITECTURE_REBASELINE_V3_PLAN_AR0_ACCEPTED_2026-08-15.md` — exact detailed AR-0 plan before
+  AR-1 activation metadata cutover.
+- `history/architecture-rebaseline-v3-transition-ar0-accepted-2026-08-15.json` — exact AR-0 machine
+  transition baseline.
 - [`DELIVERY_ROADMAP.md`](DELIVERY_ROADMAP.md) — historical Repository Steps 0–10.
 - [`evidence/`](evidence/) — immutable/bounded acceptance evidence.
-- [`PHASE2I_THREAT_MODEL.md`](PHASE2I_THREAT_MODEL.md) — Historical accepted Phase 2I evidence; current
-  threat authority is `THREAT_MODEL.md`.
-- Phase-specific governance/closeout/runbook files preserve the evidence and reasoning of their owning
-  phase; they do not become a second current roadmap.
 
-Future CRM/Party work remains future-only in [`FUTURE_DEVELOPMENT.md`](FUTURE_DEVELOPMENT.md) until the
-standalone product passes Phase 2J.
+The historical files are evidence/provenance. Statements inside preserved historical bodies that call
+themselves “current”, “active” or “canonical” describe their former accepted context and are not current
+authority after AR-1.
