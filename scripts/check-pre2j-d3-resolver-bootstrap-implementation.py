@@ -342,7 +342,6 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
         "github-preflight",
         "download-artifact@",
         "artifact-ids:",
-        "--no-bundle",
         "--strict",
         "--experimental-autoconfig=false",
         "validate-secrets",
@@ -358,6 +357,11 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
     ):
         if marker not in promotion:
             errors.append(f"resolver promotion workflow is missing {marker!r}")
+    if "--no-bundle" in promotion:
+        errors.append(
+            "promotion must let pinned Wrangler package the immutable Worker module closure; "
+            "--no-bundle rejects worker-build's shim module imports"
+        )
     if promotion.count("--secrets-file") != 2:
         errors.append("resolver and first control-plane deploy must each use --secrets-file")
     if promotion.count("artifact-ids:") != 2:
