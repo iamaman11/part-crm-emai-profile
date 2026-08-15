@@ -28,12 +28,6 @@ pub(super) fn classify(method: &str, segments: &[&str]) -> Option<RouteClass> {
         {
             Some(RouteClass::ClientGrantApi)
         }
-        ["api", "v1", "tenants", _, "clients", _, "mail", "search"] if method == "POST" => {
-            Some(RouteClass::ClientMailSearchApi)
-        }
-        ["api", "v1", "tenants", _, "clients", _, "mail", "message"] if method == "POST" => {
-            Some(RouteClass::ClientMailMessageApi)
-        }
         _ => None,
     }
 }
