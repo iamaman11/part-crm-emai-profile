@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "status": "approved_pending_implementation",
+  "decision_base": "bd486d502cf54423534bb535e085464d3db600fe",
+  "parent_issue": 251,
+  "umbrella_blocker_issue": 203,
+  "accepted_authority_pr": 262,
+  "accepted_authority_commit": "bd486d502cf54423534bb535e085464d3db600fe",
+  "accepted_authority_path": "architecture/pre2j-d3-resolver-d1-first-bootstrap-authority.json",
+  "accepted_authority_sha256": "a7aa24f369ffb9d3848211690d8cbeb751a84241054bb37208d50e253e065ead",
+  "accepted_authority_git_blob": "c1bf786e526c0da99ece7fd4101a004e08f84807",
+  "correction": {
+    "field": "status",
+    "recorded_value": "proposed_pending_acceptance",
+    "effective_value": "approved_pending_implementation",
+    "correction_class": "lifecycle_status_erratum_only",
+    "reason": "PR #262 completed the guarded authority acceptance merge, but the immutable authority record retained its pre-acceptance lifecycle label.",
+    "substantive_authority_unchanged": true
+  },
+  "rules": {
+    "accepted_authority_record_is_immutable": true,
+    "accepted_authority_bytes_must_match_recorded_sha256": true,
+    "implementation_in_same_change_forbidden": true,
+    "resolver_runtime_change_forbidden": true,
+    "resolver_migration_change_forbidden": true,
+    "release_or_promotion_workflow_change_forbidden": true,
+    "openapi_v1_change_forbidden": true,
+    "external_mutations_forbidden": true,
+    "production_ready_must_remain_false": true,
+    "erratum_must_be_accepted_before_first_bootstrap_implementation": true,
+    "erratum_is_immutable_after_acceptance": true,
+    "gate_a_remediation_remains_separate": true,
+    "staging_or_production_provisioning_forbidden": true
+  }
+}
