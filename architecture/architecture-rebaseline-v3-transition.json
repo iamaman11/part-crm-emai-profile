@@ -1,0 +1,284 @@
+{
+  "schema_version": 4,
+  "status": "proposed_ar0_candidate",
+  "tracking_issue": 266,
+  "audit_base": "5be54c2989dbfa22822d3692e22156f23d2a4602",
+  "production_ready": false,
+  "phase_2j": "blocked",
+  "activation_slice": "AR-1",
+  "current_authority_until_ar1": {
+    "plan": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
+    "tracking_issue": 203
+  },
+  "proposed_forward_authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+  "research_evidence": [
+    "docs/ARCHITECTURE_REBASELINE_V3_AR0.md",
+    "docs/ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md"
+  ],
+  "preserve_accepted_history": [
+    "repository_steps_0_10",
+    "accepted_product_phases_through_2I",
+    "pre2j_R1_R9",
+    "pre2j_batch_A",
+    "pre2j_batch_B",
+    "pre2j_batch_C",
+    "pre2j_D1",
+    "pre2j_D2",
+    "pre2j_D3_repository_side",
+    "accepted_contract_authorities",
+    "accepted_capability_matrix_evidence",
+    "resolver_security_and_bootstrap_authorities",
+    "mailbox_onboarding_reauth_state_machine",
+    "provider_oauth_ceremonies",
+    "resolver_refresh_primitive_and_paths",
+    "versioned_keyrings_and_resolver_rotation_ledger",
+    "phase2i_repository_local_recovery"
+  ],
+  "document_status_model": [
+    "CURRENT_AUTHORITY",
+    "TARGET",
+    "ACCEPTED_HISTORICAL",
+    "EVIDENCE",
+    "RUNBOOK",
+    "GENERATED_PROJECTION"
+  ],
+  "executable_role_model": [
+    "VALIDATOR_GENERATOR",
+    "INFRA_MUTATOR",
+    "APP_TEST_DATA_MUTATOR",
+    "SYNTHETIC_EVIDENCE",
+    "EXTERNAL_RESEARCH_ONLY",
+    "HISTORICAL_QUARANTINE"
+  ],
+  "operations_authority_roles": [
+    "model_policy_authority",
+    "validator_generator",
+    "mutation_executor",
+    "approval_orchestration_authority",
+    "evidence_verifier"
+  ],
+  "credential_inventory_model": {
+    "repository_policy_registry": "ONLY_FIELDS_ALLOWED_BY_DATA_CLASSIFICATION",
+    "protected_live_operational_inventory": "SENSITIVE_ACTIVE_IDENTITIES_VERSIONS_HANDLES_PROVIDER_STATE",
+    "git_safe_by_default": false,
+    "evidence_rule": "ONLY_EXPLICITLY_ALLOWED_REDACTED_DIGEST_STATUS_METADATA"
+  },
+  "oauth_refresh_model": {
+    "domain_onboarding_reauth_state_machine": "PRESENT",
+    "google_microsoft_refresh_grant": "PRESENT",
+    "implicit_resolve_refresh": "PRESENT",
+    "explicit_graph_refresh": "PRESENT",
+    "credential_refresh_single_flight_or_cas": "PARTIAL_MISSING_PROOF",
+    "stale_refresh_result_overwrite_prevention": "PARTIAL_MISSING_PROOF",
+    "provider_revocation_to_durable_reauth_reconciliation": "PARTIAL",
+    "target_ar": "AR-8"
+  },
+  "opsctl_migration_labels": [
+    "KEEP_VALIDATOR",
+    "MIGRATE_MODEL",
+    "MIGRATE_MUTATOR",
+    "DELETE_AFTER_PARITY"
+  ],
+  "authority_cutover_closure": [
+    "README.md",
+    "docs/README.md",
+    "docs/INDEX.md",
+    "docs/DEVELOPMENT_PLAN.md",
+    "docs/status.json",
+    "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
+    "docs/DEVELOPER_CAPABILITY_MATRIX.md_if_orientation_changes",
+    "IMPLEMENTATION_PLAN.md_status",
+    "PROFILE_LIFECYCLE_PLAN.md_status",
+    "legacy_root_authority_references",
+    "scripts/check-documentation-authority.py",
+    "scripts/check-phase2i-release-freeze.sh",
+    "other_hardcoded_issue203_authority_consumers",
+    "scripts/generate-architecture-inventory.py",
+    "architecture/inventory.json",
+    "architecture_inventory_negative_fixtures",
+    "tracking_issue_relationships"
+  ],
+  "architecture_inventory_target_dimensions": [
+    "workspace_dependencies",
+    "route_ownership",
+    "migrations",
+    "generated_contracts_complete",
+    "documentation_authority",
+    "document_status",
+    "capability_ownership",
+    "runtime_resource_ownership",
+    "concurrency_ownership",
+    "executable_tool_roles"
+  ],
+  "runtime_topology": {
+    "control_plane_worker": "KEEP",
+    "workers_static_assets": "KEEP",
+    "mailbox_secret_resolver_worker": "KEEP",
+    "catalog_d1": "KEEP",
+    "resolver_d1": "KEEP",
+    "generation_r2": "KEEP",
+    "profile_coordinator_do": "KEEP",
+    "notification_hub_do": "KEEP",
+    "integration_events_queue": "KEEP",
+    "mailbox_jobs_queue": "KEEP_PENDING_FINAL_AR2_TABLE",
+    "mailbox_jobs_dlq": "KEEP_PENDING_FINAL_AR2_TABLE",
+    "generation_verification_queue": "DELETE_CANDIDATE_REQUIRES_NO_EXTERNAL_CONSUMER_PROOF",
+    "microsoft_graph_oauth_read_delta": "KEEP",
+    "microsoft_graph_mail_send": "DEFER"
+  },
+  "executable_candidates": {
+    "tools/runtime_bundle.py": "SYNTHETIC_EVIDENCE_KEEP",
+    "runtime/camouhost/main.py": "SYNTHETIC_EVIDENCE_KEEP",
+    "tools/fingerprint_certify.py": "EXTERNAL_RESEARCH_ONLY_KEEP_BOUNDED",
+    "tools/r2_s3_canary.py": "APP_TEST_DATA_MUTATOR_KEEP_EPHEMERAL",
+    "tools/profile_browser.py": "EXTERNAL_RESEARCH_ONLY_REVIEW_GUARDS_OR_RETIRE",
+    "tools/cloud_profile_smoke.py": "HISTORICAL_QUARANTINE_CANDIDATE"
+  },
+  "generated_contract_inventory": {
+    "generated_ts_modules_observed": 9,
+    "aggregate_inventory_rows_observed": 7,
+    "missing_aggregate_rows": [
+      "client-mail-send.ts",
+      "mailbox-client-association.ts"
+    ],
+    "target": "100_percent_generated_module_owner_generator_coverage"
+  },
+  "application_hotspots": {
+    "composition_root": "concrete_adapter_construction_exists_in_composition_rs_and_lib_binding_probe",
+    "client_mail_route_ownership": "read_routes_in_clients_classifier_send_route_in_client_mail_classifier",
+    "outbound_mail_transport": [
+      "duplicate_eligibility_precheck_before_application_use_case",
+      "worker_constructs_multiple_d1_query_provider_adapters",
+      "source_message_access_orchestrated_in_worker_support_code",
+      "provider_binding_lookup_and_gmail_smtp_selection_in_worker",
+      "existing_worker_boundary_checker_does_not_cover_client_mail_send"
+    ],
+    "oauth_refresh_concurrency": [
+      "implicit_and_explicit_refresh_share_no_visible_per_handle_revision_fence",
+      "refresh_persists_through_general_encrypted_record_upsert",
+      "stale_refresh_result_overwrite_prevention_not_proven",
+      "provider_rejection_to_existing_reauth_state_needs_durable_reconciliation"
+    ],
+    "profile_generation_shared_use_cases": "review_cohesion_before_any_crate_split"
+  },
+  "ar4_candidate_slices": [
+    "AR-4A_composition_root_consolidation",
+    "AR-4B_client_mail_internal_route_ownership_normalization",
+    "AR-4C_outbound_mail_composition_extraction_and_boundary_checker_extension",
+    "AR-4D_profile_application_extraction_only_if_AR3_proves_benefit"
+  ],
+  "future_scope_mapping": {
+    "pre2j_D3_external_continuation": "AR-2_compatibility_gate_then_preserve_or_consciously_supersede_unaccepted_target",
+    "pre2j_D4": "AR-9",
+    "pre2j_D5": ["AR-3", "AR-10", "AR-17"],
+    "pre2j_D6": ["AR-1", "AR-6", "AR-7", "AR-12", "AR-14", "AR-17"],
+    "pre2j_Batch_E": "AR-15",
+    "pre2j_Batch_F": "AR-17",
+    "Phase_2J": "blocked_until_AR-17_then_external_acceptance"
+  },
+  "sequence": [
+    "AR-0", "AR-1", "AR-2", "AR-3", "AR-4", "AR-5", "AR-6", "AR-7", "AR-8",
+    "AR-9", "AR-10", "AR-11", "AR-12", "AR-13", "AR-14", "AR-15", "AR-16", "AR-17"
+  ],
+  "hard_invariants": [
+    "no_terraform",
+    "no_generic_hidden_iac_state",
+    "one_mutable_concern_one_authority",
+    "wrangler_worker_configuration_authority",
+    "environment_identity_does_not_duplicate_wrangler",
+    "derived_deploy_manifest_is_not_manual_third_authority",
+    "no_opsctl_dual_mutation_authority",
+    "application_deploy_does_not_recreate_persistent_infrastructure",
+    "credential_rotation_does_not_recreate_infrastructure",
+    "sensitive_live_credential_metadata_not_git_safe_by_default",
+    "oauth_refresh_per_handle_single_authority",
+    "database_lifecycle_independent_of_application_rollback",
+    "domain_application_dependency_direction_enforced",
+    "concrete_wiring_only_in_declared_composition_or_diagnostic_roots",
+    "frontend_sibling_feature_internals_forbidden",
+    "generated_contract_inventory_complete",
+    "public_api_not_changed_for_internal_refactor",
+    "target_not_misrepresented_as_accepted",
+    "historical_executable_not_misrepresented_as_supported_runtime",
+    "mutable_active_r2_operational_path_forbidden",
+    "build_once_per_component",
+    "release_set_binds_required_component_artifacts",
+    "staging_production_identical_component_bytes",
+    "windows_updater_scope_preserved",
+    "repository_local_recovery_not_misrepresented_as_remote_evidence",
+    "accepted_history_not_rewritten",
+    "production_ready_false_until_external_acceptance"
+  ],
+  "ar0_findings": {
+    "present": [
+      "layered_rust_workspace",
+      "architecture_and_frontend_fitness_checks",
+      "capability_specific_use_cases",
+      "generated_contract_discipline",
+      "control_plane_composition_root_foundation",
+      "canonical_control_plane_and_resolver_wrangler",
+      "resolver_service_security_boundary",
+      "immutable_component_releases_and_no_rebuild_promotion",
+      "catalog_and_resolver_d1_bootstrap_migration_foundations",
+      "mailbox_onboarding_reauth_state_machine",
+      "provider_oauth_ceremonies",
+      "google_microsoft_refresh_primitive_and_runtime_paths",
+      "versioned_contact_and_resolver_keyrings",
+      "resolver_key_rotation_ledger_and_reconciliation",
+      "repository_local_phase2i_recovery",
+      "substantial_profile_bridge_runtime",
+      "exact_head_acceptance_discipline"
+    ],
+    "partial": [
+      "composition_root_singularity",
+      "client_mail_capability_ownership",
+      "outbound_mail_thin_transport",
+      "oauth_refresh_race_safety",
+      "provider_revocation_to_durable_reauth_reconciliation",
+      "credential_policy_vs_live_inventory_model",
+      "capability_ownership_machine_model",
+      "generated_contract_inventory_completeness",
+      "document_status_machine_model",
+      "executable_tool_role_model",
+      "environment_identity_vs_derived_manifest_authority",
+      "operations_authority_consolidation",
+      "credential_and_key_lifecycle_registry",
+      "rotation_rehearsal",
+      "remote_recovery_rehearsal",
+      "d1_release_schema_compatibility",
+      "release_set_protocol_compatibility",
+      "developer_operator_single_path"
+    ],
+    "missing": [
+      "rust_opsctl_read_only_project_model",
+      "canonical_rehearsal_environment_lifecycle",
+      "protected_live_credential_inventory_integration",
+      "schema_compatibility_window_enforcement",
+      "production_windows_updater",
+      "remote_whole_system_recovery_rehearsal"
+    ],
+    "conflict": [
+      "main_branch_metadata_unprotected_and_repository_rulesets_empty_vs_guarded_merge_expectation",
+      "implementation_plan_root_looks_current",
+      "profile_lifecycle_plan_root_stale_normative_target",
+      "historical_slice_docs_can_look_current_without_status_class",
+      "legacy_root_references_to_superseded_or_future_authority",
+      "release_freeze_gate_hardcodes_old_issue203_authority",
+      "cloud_profile_smoke_executable_uses_obsolete_mutable_active_r2_model",
+      "future_opsctl_mutator_before_explicit_old_mutator_retirement",
+      "future_uncoordinated_refresh_store_after_AR8"
+    ]
+  },
+  "ar0_mutation_policy": {
+    "product_code": false,
+    "openapi_v1": false,
+    "migration_sql": false,
+    "workflows": false,
+    "cloudflare_resources": false,
+    "provider_resources": false,
+    "secrets": false,
+    "staging_deployment": false,
+    "production_deployment": false,
+    "production_ready": false
+  }
+}
