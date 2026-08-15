@@ -10,9 +10,9 @@ privacy boundaries.
 - **Accepted repository-local product phase:** Phase 2I. Immutable provenance is
   [`architecture/accepted-phases.json`](architecture/accepted-phases.json).
 - **Architecture Re-baseline v3:** active program, tracked by issue #266.
-- **Accepted architecture slices:** AR-0, AR-1 and AR-2.
-- **Current accepted checkpoint:** AR-2 — Runtime Topology + D3 Compatibility.
-- **Next slice:** AR-3 — Application Architecture Contract.
+- **Accepted architecture slices:** AR-0, AR-1, AR-2 and AR-3.
+- **Current accepted checkpoint:** AR-3 — Application Architecture Contract.
+- **Next slice:** AR-4A — Composition-root consolidation.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
@@ -21,9 +21,10 @@ privacy boundaries.
 
 The single current architecture/program execution authority is
 [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md), tracked by issue
-#266. AR-2 runtime-topology decisions are recorded in
-[`architecture/runtime-topology-ar2.json`](architecture/runtime-topology-ar2.json), with evidence in
-[`docs/ARCHITECTURE_REBASELINE_V3_AR2.md`](docs/ARCHITECTURE_REBASELINE_V3_AR2.md). Machine transition
+#266. AR-3 application/runtime ownership is projected in
+[`architecture/inventory.json`](architecture/inventory.json), with evidence in
+[`docs/ARCHITECTURE_REBASELINE_V3_AR3.md`](docs/ARCHITECTURE_REBASELINE_V3_AR3.md); the accepted AR-2 topology input remains
+[`architecture/runtime-topology-ar2.json`](architecture/runtime-topology-ar2.json). Machine transition
 state is [`architecture/architecture-rebaseline-v3-transition.json`](architecture/architecture-rebaseline-v3-transition.json).
 
 The sequence is fail-closed:
@@ -47,8 +48,8 @@ Start with [`docs/INDEX.md`](docs/INDEX.md). The main current sources are:
 
 - [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md) — single current
   architecture/program execution authority, issue #266;
-- [`architecture/runtime-topology-ar2.json`](architecture/runtime-topology-ar2.json) — accepted AR-2
-  topology/D3 compatibility decision input for AR-3;
+- [`docs/ARCHITECTURE_REBASELINE_V3_AR3.md`](docs/ARCHITECTURE_REBASELINE_V3_AR3.md) — accepted AR-3 application architecture evidence;
+- [`architecture/runtime-topology-ar2.json`](architecture/runtime-topology-ar2.json) — accepted AR-2 topology/D3 input retained by the AR-3 projection;
 - [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — current product/program projection and
   immutable accepted-phase provenance;
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) + accepted ADRs — stable architecture invariants;

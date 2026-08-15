@@ -1,9 +1,12 @@
 # Architecture Re-baseline v3 — AR-3 Application Architecture Contract
 
-**Document status:** EVIDENCE / AR-3 candidate  
+**Document status:** EVIDENCE / AR-3 accepted  
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Tracking:** #266 / bounded slice #274  
 **Exact baseline:** `3c592e98a0435388119f5b224a864b8f0d649379`  
+**Exact-green implementation candidate:** `f26726a5892e660940dffab7bce5615c3f13eb87`  
+**Accepted implementation merge:** `2b7e7ec828b7d29209b97adb5100b1c2559c73f0`  
+**Implementation PR:** #276 — 13/13 applicable permanent PR workflows passed on the unchanged exact head  
 **Production mutation:** forbidden
 
 ## 1. Purpose

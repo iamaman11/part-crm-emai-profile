@@ -12,9 +12,9 @@ file cannot silently become a second current roadmap.
 - Accepted repository-local product phase: **Phase 2I**, proven by
   [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json).
 - Architecture Re-baseline v3 is the active forward program.
-- AR-0, AR-1 and AR-2 are accepted checkpoints.
-- AR-2 — Runtime Topology + D3 Compatibility is the current accepted checkpoint.
-- AR-3 — Application Architecture Contract is the only next slice.
+- AR-0, AR-1, AR-2 and AR-3 are accepted checkpoints.
+- AR-3 — Application Architecture Contract is the current accepted checkpoint.
+- AR-4A — Composition-root consolidation is the only next slice.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
@@ -28,7 +28,7 @@ file cannot silently become a second current roadmap.
 2. [`../architecture/architecture-rebaseline-v3-transition.json`](../architecture/architecture-rebaseline-v3-transition.json)
    is the machine transition projection of that authority.
 3. [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json) is the
-   accepted AR-2 topology/D3 decision input; AR-3 owns its canonical runtime-resource projection.
+   accepted AR-2 topology/D3 decision input retained by the accepted AR-3 application/runtime ownership projection.
 4. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) and [`status.json`](status.json) are current projections;
    they do not define a competing execution sequence.
 5. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md),
@@ -60,6 +60,7 @@ The machine inventory uses these roles:
 ## Current program references
 
 - [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md)
+- [`ARCHITECTURE_REBASELINE_V3_AR3.md`](ARCHITECTURE_REBASELINE_V3_AR3.md)
 - [`ARCHITECTURE_REBASELINE_V3_AR2.md`](ARCHITECTURE_REBASELINE_V3_AR2.md)
 - [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json)
 - [`ARCHITECTURE_REBASELINE_V3_AR0.md`](ARCHITECTURE_REBASELINE_V3_AR0.md)

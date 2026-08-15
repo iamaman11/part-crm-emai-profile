@@ -381,7 +381,7 @@ def build_projection(root: Path) -> dict[str, Any]:
 
     return {
         "schema_version": 1,
-        "status": "AR3_APPLICATION_ARCHITECTURE_CONTRACT",
+        "status": "ACCEPTED_AR3_APPLICATION_ARCHITECTURE_CONTRACT",
         "topology_source": RUNTIME_TOPOLOGY,
         "evidence": AR3_EVIDENCE,
         "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
@@ -408,6 +408,11 @@ def build_projection(root: Path) -> dict[str, Any]:
 
 def negative_self_test(root: Path) -> None:
     expected = build_projection(root)
+
+    candidate_status = copy.deepcopy(expected)
+    candidate_status["status"] = "AR3_APPLICATION_ARCHITECTURE_CONTRACT"
+    if candidate_status == expected:
+        raise SystemExit("AR-3 negative self-test failed to detect candidate-status regression")
 
     missing_resource = copy.deepcopy(expected)
     missing_resource["runtime_resources"] = missing_resource["runtime_resources"][1:]
