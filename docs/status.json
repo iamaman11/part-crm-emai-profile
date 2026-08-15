@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "as_of": "2026-08-15",
   "current": {
     "accepted_product_phase": "Phase 2I",
@@ -30,9 +30,11 @@
       "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
       "tracking_issue": 266,
       "subordinate_preproduction_issue": 268,
-      "accepted_slices": ["AR-0", "AR-1"],
-      "current_slice": "AR-1",
-      "next_slice_after_acceptance": "AR-2"
+      "accepted_slices": ["AR-0", "AR-1", "AR-2"],
+      "current_slice": "AR-2",
+      "next_slice_after_acceptance": "AR-3",
+      "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
+      "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md"
     },
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
@@ -44,8 +46,11 @@
     },
     "predecessor_external_d3": {
       "issue": 251,
-      "state_verified": "open",
-      "role": "OPEN_PREDECESSOR_CLASSIFY_IN_AR2_NO_AR1_PRODUCTION_MUTATION"
+      "state_verified_at_ar2_start": "open",
+      "role": "AR2_CLASSIFIED_SUPERSEDED_FORWARD_PRODUCTION_SEQUENCE",
+      "repository_side_foundation": "KEEP",
+      "legacy_production_lane": "DISABLED_BY_AR2",
+      "closeout_after_ar2_acceptance": "NOT_PLANNED_PRESERVE_HISTORY"
     },
     "device_authorization_ownership": {
       "production_authority": [
@@ -76,8 +81,8 @@
   },
   "next_repository_step": {
     "number": null,
-    "name": "Architecture Re-baseline v3 AR-1",
-    "status": "active_after_accepted_ar1_merge",
+    "name": "Architecture Re-baseline v3 AR-3",
+    "status": "next_after_accepted_ar2_merge",
     "tracking_issue": 266,
     "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
   },
@@ -201,7 +206,7 @@
     "repository_local_product_phase": "accepted_phase_2i",
     "pre2j_architecture_remediation": "closed_r1_r9",
     "pre2j_product_readiness_remediation": "historical_issue_203_superseded_by_ar_v3",
-    "architecture_rebaseline_v3": "active_issue_266_ar1",
+    "architecture_rebaseline_v3": "active_issue_266_ar2",
     "application_ownership": "r5_accepted_capability_owners_without_compatibility_facades",
     "frontend_api_ownership": "r6_accepted_feature_owned_capability_api"
   },

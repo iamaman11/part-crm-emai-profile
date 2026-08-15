@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "status": "AR2_ACCEPTED_CANDIDATE",
+  "program": "Architecture Re-baseline v3",
+  "tracking_issue": 266,
+  "slice": "AR-2",
+  "decision_base": "5d4a0d4a653539c6ae2aaff7d0ee38d2ecb79dbf",
+  "production_mutation": false,
+  "next_slice_after_acceptance": "AR-3",
+  "policies": {
+    "resource_decisions_are_architecture_input_not_provider_mutation": true,
+    "wrangler_source_binding_changes_deferred_to_ar5": true,
+    "runtime_simplification_execution_deferred_to_ar10_when_needed": true,
+    "production_resource_creation_update_delete_forbidden_during_ar": true,
+    "production_promotion_authority": "PC-1_AFTER_AR-17_USING_AR-11_RELEASE_SET",
+    "new_parallel_runtime_registry_forbidden": true
+  },
+  "generation_verification": {
+    "binding": "GENERATION_VERIFICATION",
+    "decision": "DELETE",
+    "proof": {
+      "wrangler_producer_binding_present": true,
+      "wrangler_consumer_present": false,
+      "control_plane_queue_envelope_present": false,
+      "worker_queue_handler_branch_present": false,
+      "synchronous_verify_route_present": true,
+      "synchronous_application_authority": "apps/control-plane-worker/src/profile_generations.rs::verify_generation -> use_cases::generations::execute_verify_generation"
+    },
+    "source_binding_removal_slice": "AR-5",
+    "historical_cleanup_slice": "AR-10",
+    "production_resource_policy": "DO_NOT_PROVISION_IN_PC-1; NO_AR_PRODUCTION_MUTATION"
+  },
+  "d3_compatibility": {
+    "predecessor_issue": 251,
+    "state_verified_at_ar2_start": "open",
+    "repository_side_promotion_machinery": "KEEP",
+    "resolver_isolation": "KEEP",
+    "staging_same_bits_lane": "KEEP_PREPRODUCTION_FOUNDATION",
+    "legacy_d3_production_lane": "DISABLE_FORWARD_EXECUTION",
+    "reason": "AR-v3 forbids production mutation through AR-17; PC-1 owns first production provisioning/promotion after gate authorization",
+    "generalize_release_semantics_in": "AR-11",
+    "issue_disposition_after_ar2_acceptance": "CLOSE_NOT_PLANNED_SUPERSEDED_FORWARD_SEQUENCE_PRESERVE_HISTORY"
+  },
+  "resources": [
+    {
+      "id": "control_plane_worker",
+      "kind": "WORKER",
+      "owner": "apps/control-plane-worker",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc", "apps/control-plane-worker/src/lib.rs"]
+    },
+    {
+      "id": "static_assets",
+      "kind": "WORKER_STATIC_ASSETS",
+      "owner": "frontend",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc"]
+    },
+    {
+      "id": "mailbox_secret_resolver_worker",
+      "kind": "WORKER",
+      "owner": "apps/mailbox-secret-resolver-worker",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "evidence": ["deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc", "architecture/pre2j-d3-resolver-bootstrap-authority.json"]
+    },
+    {
+      "id": "catalog_d1",
+      "kind": "D1",
+      "owner": "control-plane/catalog",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc", "migrations/d1"]
+    },
+    {
+      "id": "resolver_d1",
+      "kind": "D1",
+      "owner": "mailbox-secret-resolver",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "evidence": ["deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc", "migrations/resolver-d1"]
+    },
+    {
+      "id": "profile_objects",
+      "kind": "R2",
+      "owner": "profile-generation",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc"]
+    },
+    {
+      "id": "profile_coordinator",
+      "kind": "DURABLE_OBJECT",
+      "owner": "profile/session coordination",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc", "apps/control-plane-worker/src/profile_coordinator.rs"]
+    },
+    {
+      "id": "notification_hub",
+      "kind": "DURABLE_OBJECT",
+      "owner": "realtime notifications",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc", "apps/control-plane-worker/src/realtime_notifications.rs"]
+    },
+    {
+      "id": "integration_events",
+      "kind": "QUEUE",
+      "owner": "notifications/integration-events",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "producer": "scheduled D1 outbox dispatcher",
+      "consumer": "control-plane queue handler",
+      "failure_boundary": "D1 durable delivery state + bounded Queue retry; realtime overlay is non-authoritative",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc", "apps/control-plane-worker/src/integration_events.rs"]
+    },
+    {
+      "id": "mailbox_jobs",
+      "kind": "QUEUE",
+      "owner": "mailbox scheduling",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "producer": "scheduled D1 dispatcher",
+      "consumer": "control-plane queue handler",
+      "failure_boundary": "D1 job/version authority + bounded Queue retry",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc", "apps/control-plane-worker/src/mailbox_scheduling.rs"]
+    },
+    {
+      "id": "mailbox_jobs_dlq",
+      "kind": "QUEUE_DLQ",
+      "owner": "mailbox operations",
+      "decision": "KEEP",
+      "execution_slice": "PC-3_MUTABLE_RECOVERY_ONLY_AFTER_AUTHORITY",
+      "producer": "MAILBOX_JOBS consumer retry exhaustion",
+      "consumer": "NO_CURRENT_AUTOMATIC_CONSUMER; FUTURE_OPERATOR_RECOVERY",
+      "failure_boundary": "inspect current D1 authority before controlled requeue/rerun/retire",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc"]
+    },
+    {
+      "id": "generation_verification",
+      "kind": "QUEUE",
+      "owner": "legacy profile-generation transport",
+      "decision": "DELETE",
+      "execution_slice": "AR-5_SOURCE_BINDING_REMOVAL",
+      "producer": "NO_PRODUCTION_PRODUCER_PROVEN; WRANGLER PRODUCER BINDING ONLY",
+      "consumer": "NONE",
+      "failure_boundary": "synchronous generation verification is authoritative",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc", "apps/control-plane-worker/src/lib.rs", "crates/cloudflare-adapters/src/control_plane_queue.rs", "apps/control-plane-worker/src/profile_generations.rs"]
+    },
+    {
+      "id": "mailbox_secret_resolver_service",
+      "kind": "SERVICE_BINDING",
+      "owner": "mailbox credential boundary",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc", "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc", "crates/cloudflare-adapters/src/cloud_mailbox_secrets.rs"]
+    },
+    {
+      "id": "control_plane_schedule",
+      "kind": "CRON",
+      "owner": "control-plane dispatchers",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "evidence": ["deploy/cloudflare/wrangler.jsonc", "apps/control-plane-worker/src/lib.rs"]
+    },
+    {
+      "id": "resolver_reconciliation_schedule",
+      "kind": "CRON",
+      "owner": "mailbox-secret-resolver key reconciliation",
+      "decision": "KEEP",
+      "execution_slice": "NONE",
+      "evidence": ["deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc"]
+    },
+    {
+      "id": "gmail_api",
+      "kind": "PROVIDER_LANE",
+      "owner": "mailbox provider adapters",
+      "decision": "KEEP",
+      "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+      "evidence": ["crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"]
+    },
+    {
+      "id": "imap_read",
+      "kind": "PROVIDER_LANE",
+      "owner": "mailbox provider adapters",
+      "decision": "KEEP",
+      "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+      "evidence": ["crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"]
+    },
+    {
+      "id": "smtp_send",
+      "kind": "PROVIDER_LANE",
+      "owner": "outbound mail provider adapters",
+      "decision": "KEEP",
+      "execution_slice": "PC-4_ACTIVATION",
+      "evidence": ["crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"]
+    },
+    {
+      "id": "microsoft_graph_oauth_read_delta",
+      "kind": "PROVIDER_LANE",
+      "owner": "mailbox provider adapters",
+      "decision": "KEEP",
+      "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+      "evidence": ["crates/cloudflare-adapters/src/cloud_mailbox_provider.rs", "apps/control-plane-worker/src/mailbox_microsoft_graph_oauth.rs"]
+    },
+    {
+      "id": "microsoft_graph_mail_send",
+      "kind": "PROVIDER_LANE",
+      "owner": "outbound mail",
+      "decision": "DEFER",
+      "execution_slice": "SEPARATE_ACCEPTANCE_IF_IMPLEMENTED",
+      "evidence": ["docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"]
+    },
+    {
+      "id": "browser_bridge_mailbox_lane",
+      "kind": "LOCAL_RUNTIME_LANE",
+      "owner": "Profile Bridge/browser mailbox execution",
+      "decision": "KEEP",
+      "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+      "evidence": ["apps/profile-bridge", "apps/control-plane-worker/src/mailbox_bindings.rs"]
+    }
+  ]
+}

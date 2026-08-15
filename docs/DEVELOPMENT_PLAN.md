@@ -4,7 +4,8 @@
 **Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Tracking:** issue #266  
 **Accepted product phase:** Phase 2I  
-**Current architecture slice after accepted AR-1 merge:** AR-1  
+**Current accepted architecture checkpoint:** AR-2 — Runtime Topology + D3 Compatibility  
+**Next architecture slice:** AR-3 — Application Architecture Contract  
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `production_ready=false`
@@ -30,13 +31,17 @@ advance during Architecture Re-baseline v3.
 
 - Accepted repository-local product phase: **Phase 2I**.
 - AR-0 — Delta Architecture Inventory: **DONE / ACCEPTED** through PR #267.
-- AR-1 — Architecture Authority Re-baseline: **CURRENT** after its accepted merge.
-- AR-2…AR-17: ordered future architecture slices.
+- AR-1 — Architecture Authority Re-baseline: **DONE / ACCEPTED**.
+- AR-2 — Runtime Topology + D3 Compatibility: **CURRENT ACCEPTED CHECKPOINT**.
+- AR-3 — Application Architecture Contract: **NEXT**.
+- AR-4A…AR-17: ordered future architecture slices.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
 - Real production mutation: **forbidden throughout AR-0…AR-17**.
-- Issue #251: OPEN external predecessor; AR-1 does not execute it.
+- AR-2 decision authority: `architecture/runtime-topology-ar2.json`.
+- `GENERATION_VERIFICATION=DELETE`; source/Wrangler binding cleanup belongs to AR-5, not AR-2.
+- Historical D3/#251 repository-side machinery is preserved; its old production lane is disabled for forward execution.
 - Draft PR #269: feasibility evidence only; canonical read-only `opsctl` integration remains AR-6.
 
 ## 3. Accepted product phase ledger
@@ -63,9 +68,9 @@ Architecture Re-baseline v3                                   ACTIVE
 
 ```text
 AR-0   Delta Architecture Inventory                              DONE
-AR-1   Architecture Authority Re-baseline                        CURRENT
-AR-2   Runtime Topology + D3 Compatibility
-AR-3   Application Architecture Contract
+AR-1   Architecture Authority Re-baseline                        DONE
+AR-2   Runtime Topology + D3 Compatibility                       CURRENT / ACCEPTED CHECKPOINT
+AR-3   Application Architecture Contract                         NEXT
 AR-4A  Composition-root consolidation
 AR-4B  Client Mail route ownership
 AR-4C  Outbound Mail composition extraction
@@ -141,10 +146,14 @@ IaC state are not part of this architecture.
 
 ## 8. Public contract and migration discipline
 
-AR-1 changes no public API/OpenAPI semantics and no D1 migration. Historical migration provenance is
+AR-2 changes no public API/OpenAPI semantics and no D1 migration. Historical migration provenance is
 preserved. Fresh bootstrap is not an upgrade migration. One legitimate migration executor is required;
 a DB-level distributed lock is introduced only when an independent concurrent executor is proven and
 cannot be eliminated.
+
+AR-2 also performs no Cloudflare resource mutation. Its `DELETE` decision for the legacy
+`GENERATION_VERIFICATION` queue is architecture input; AR-5 owns source/Wrangler cleanup and PC-1 must
+not provision that queue for the Production Core release.
 
 ## 9. Security, privacy and authorization completion rules
 
@@ -155,6 +164,9 @@ association never become ACL shortcuts.
 
 The existing mailbox onboarding and `ReauthRequired` lifecycle remains the OAuth domain authority. AR-8
 extends refresh concurrency/revocation safety rather than creating a second OAuth state machine.
+
+Resolver isolation remains intentional after AR-2: the private mailbox-secret-resolver Worker, dedicated
+resolver D1 and service binding are a credential/security boundary rather than accidental duplication.
 
 ## 10. Exact-head acceptance discipline
 
@@ -174,9 +186,11 @@ Every bounded AR candidate follows one immutable-head protocol:
 
 ## 11. Immediate next action
 
-After AR-1 is accepted, begin AR-2 from the resulting `main`. Do not jump to AR-6/opsctl, production
-provisioning or a later capability gate. PR #269 remains feasibility/source material for AR-6 and must
-not become authority merely because its old candidate was green.
+After AR-2 is accepted, begin AR-3 — Application Architecture Contract — from the resulting `main`.
+AR-3 consumes `architecture/runtime-topology-ar2.json` and owns canonical runtime-resource/application
+ownership projection. Do not jump to AR-5 cleanup, AR-6/opsctl, production provisioning or a later
+capability gate. PR #269 remains feasibility/source material for AR-6 and must not become authority
+merely because its old candidate was green.
 
 Throughout AR-0…AR-17:
 

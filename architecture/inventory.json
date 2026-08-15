@@ -641,8 +641,11 @@
   "documentation_authority": {
     "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
     "tracking_issue": 266,
-    "current_slice": "AR-1",
+    "current_slice": "AR-2",
     "transition": "architecture/architecture-rebaseline-v3-transition.json",
+    "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
+    "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
+    "runtime_topology_projection_owner": "AR-3",
     "development_projection": "docs/DEVELOPMENT_PLAN.md",
     "readiness_projection": "docs/status.json",
     "index": "docs/INDEX.md",
@@ -732,6 +735,16 @@
       "scope": "ar0_second_pass_research"
     },
     {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
+      "status": "EVIDENCE",
+      "scope": "ar2_runtime_topology_and_d3_compatibility_acceptance"
+    },
+    {
+      "path": "architecture/runtime-topology-ar2.json",
+      "status": "STABLE_AUTHORITY",
+      "scope": "accepted_ar2_runtime_topology_decision_input_for_ar3"
+    },
+    {
       "path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
       "status": "ACCEPTED_HISTORICAL",
       "scope": "superseded_predecessor_forward_execution"
@@ -756,10 +769,11 @@
     "accepted_product_phase": "Phase 2I",
     "accepted_architecture_slices": [
       "AR-0",
-      "AR-1"
+      "AR-1",
+      "AR-2"
     ],
-    "current_architecture_slice": "AR-1",
-    "next_architecture_slice_after_acceptance": "AR-2",
+    "current_architecture_slice": "AR-2",
+    "next_architecture_slice_after_acceptance": "AR-3",
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
     "production_ready": false,

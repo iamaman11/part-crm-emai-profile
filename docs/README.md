@@ -7,14 +7,17 @@ current-authority hierarchy live in [`INDEX.md`](INDEX.md).
 
 - **Accepted repository-local product phase:** Phase 2I.
 - **Architecture Re-baseline v3:** active, tracked by issue #266.
-- **AR-0:** accepted through PR #267.
-- **Current slice after accepted AR-1 merge:** AR-1 — Architecture Authority Re-baseline.
+- **Accepted architecture slices:** AR-0, AR-1 and AR-2.
+- **Current accepted checkpoint:** AR-2 — Runtime Topology + D3 Compatibility.
+- **Next slice:** AR-3 — Application Architecture Contract.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
 
 The single current architecture/program authority is
-[`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md). Machine transition state is
+[`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md). AR-2 runtime-topology
+authority is [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json),
+and machine transition state is
 [`../architecture/architecture-rebaseline-v3-transition.json`](../architecture/architecture-rebaseline-v3-transition.json).
 
 No AR-0…AR-17 step may provision or promote production. AR-16 is the final whole-project P0/P1 audit;
@@ -24,6 +27,8 @@ first program step that may perform real Production Core mutation.
 ## Current sources
 
 - [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — CURRENT_AUTHORITY, issue #266;
+- [`ARCHITECTURE_REBASELINE_V3_AR2.md`](ARCHITECTURE_REBASELINE_V3_AR2.md) — AR-2 acceptance evidence;
+- [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json) — accepted AR-2 topology/D3 decision input for AR-3;
 - [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) — generated/current product-program projection plus immutable phase provenance;
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) + accepted ADRs — stable architecture invariants;
 - [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md) — data/privacy authority;
@@ -45,7 +50,8 @@ first program step that may perform real Production Core mutation.
   — AR-0 research/evidence;
 - [`DELIVERY_ROADMAP.md`](DELIVERY_ROADMAP.md) and [`evidence/`](evidence/) — historical delivery/evidence.
 
-Issue #203 remains predecessor history rather than the forward program tracker after AR-1. Issue #251
-remains an open external predecessor and is classified by AR-2; AR-1 performs no production mutation.
+Issue #203 remains a predecessor blocker lifecycle rather than the forward program tracker after AR-1.
+AR-2 classified issue #251's old production-promotion sequence as superseded forward execution while
+preserving its repository-side D3 foundation; AR-3 is the only next architecture slice.
 
 For contributor commands and exact-head acceptance discipline see [`../CONTRIBUTING.md`](../CONTRIBUTING.md).

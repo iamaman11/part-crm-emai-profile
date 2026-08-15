@@ -6,7 +6,8 @@
 **Subordinate pre-production/tooling issue:** #268  
 **Accepted activation prerequisite:** AR-0 / PR #267  
 **Accepted AR-0 main:** `e00420704950af5ca9352d2f0f02d3a9c9688527`  
-**Current slice after accepted AR-1 merge:** AR-1 — Architecture Authority Re-baseline  
+**Current accepted architecture checkpoint:** AR-2 — Runtime Topology + D3 Compatibility  
+**Next slice:** AR-3 — Application Architecture Contract  
 **Accepted product phase:** Phase 2I  
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
@@ -14,7 +15,7 @@
 
 ## 1. Authority
 
-This file is the single current architecture/program execution authority after the AR-1 authority cutover is accepted into `main`.
+This file is the single current architecture/program execution authority after the AR-1 authority cutover. AR-2 is the latest accepted checkpoint; its normalized runtime-topology decision is `architecture/runtime-topology-ar2.json` with acceptance evidence in `docs/ARCHITECTURE_REBASELINE_V3_AR2.md`.
 
 The accepted AR-0 research package is preserved without rewriting:
 
@@ -63,9 +64,9 @@ Only successful PC-1 may set `production_ready=true`, and only for the accepted 
 
 ```text
 AR-0   Delta Architecture Inventory                              DONE
-AR-1   Architecture Authority Re-baseline                        CURRENT
-AR-2   Runtime Topology + D3 Compatibility
-AR-3   Application Architecture Contract
+AR-1   Architecture Authority Re-baseline                        DONE
+AR-2   Runtime Topology + D3 Compatibility                       CURRENT / ACCEPTED CHECKPOINT
+AR-3   Application Architecture Contract                         NEXT
 AR-4A  Composition-root consolidation
 AR-4B  Client Mail route ownership
 AR-4C  Outbound Mail composition extraction
@@ -158,23 +159,29 @@ The existing mailbox onboarding / `ReauthRequired` state model remains the OAuth
 
 `MAILBOX_JOBS` Queue + DLQ remain. Recovery is operator reconciliation over current D1 authority, not a parallel mailbox-domain DLQ state machine.
 
-## 7. AR-1 atomic transaction
+AR-2 additionally establishes these accepted topology inputs without executing provider mutation:
 
-AR-1 changes governance/authority only. Its accepted merge must make all of these true at once:
+- `GENERATION_VERIFICATION = DELETE`; source/Wrangler binding removal belongs to AR-5 and the queue must not be provisioned by PC-1;
+- `INTEGRATION_EVENTS`, `MAILBOX_JOBS` and its DLQ remain real transport boundaries over D1 authority;
+- mailbox-secret-resolver Worker + dedicated D1 + service binding remain a deliberate security isolation boundary;
+- accepted D3 repository-side bootstrap/same-bits/promotion machinery is preserved as foundation for AR-11;
+- the legacy D3 production lane is fail-closed because production mutation remains forbidden through AR-17; PC-1 owns first production provisioning/promotion after AR-17 using the AR-11 release-set authority.
+
+## 7. Accepted AR-1 authority transaction
+
+AR-1 changed governance/authority only. Its accepted merge made all of these true at once:
 
 1. exactly one current architecture/program authority exists — this file, tracked by #266;
 2. root and docs entry points project that authority;
-3. `docs/status.json` projects the same current slice and fail-closed production state;
+3. `docs/status.json` projects the same fail-closed production state;
 4. `architecture/architecture-rebaseline-v3-transition.json` records the activated transition;
 5. `architecture/inventory.json` is extended, not replaced, with program/document-status authority;
-6. historical/current-looking plans are preserved byte-for-byte under `history/` and their old paths become explicit historical/supersession stubs where necessary;
+6. historical/current-looking plans are preserved byte-for-byte under `history/` and their old paths are explicit historical/supersession stubs where necessary;
 7. documentation checker self-tests reject stale #203 authority, premature production readiness and state drift;
 8. architecture inventory generator/checker rejects docs ↔ machine-state disagreement;
-9. stable product/runtime/API/schema/provider behavior is unchanged.
+9. stable product/runtime/API/schema/provider behavior remains protected.
 
-AR-1 does **not** change runtime behavior, public API/OpenAPI semantics, D1 migrations, Cloudflare resources, staging/production state, secrets, provider state, capability activation, `production_ready`, or the canonical `opsctl` implementation.
-
-Issue #203 and its pre-2J plan are accepted predecessor history, not the forward program tracker after AR-1. Issue #251 remains an OPEN external predecessor until separately resolved; AR-1 does not execute its production mutation. AR-2 owns the D3 compatibility/topology classification needed to carry forward the useful repository-side D3 machinery without reviving the superseded production sequencing.
+Issue #203 and its pre-2J plan are accepted predecessor history, not the forward program tracker after AR-1. Its still-open blocker lifecycle remains available to accepted predecessor exception/freeze gates but has no forward execution authority.
 
 ## 8. Slice discipline
 
@@ -194,8 +201,8 @@ A slice is not accepted from isolated green jobs. Acceptance requires the comple
 
 Any new commit invalidates prior exact-head evidence.
 
-## 9. AR-1 exit / AR-2 entry
+## 9. AR-2 exit / AR-3 entry
 
-AR-1 is complete only after its guarded merge to the then-current `main` and a post-merge re-read confirms docs, machine transition, inventory, status and issue ledger agree.
+AR-2 is complete only after its guarded merge to the then-current `main`, post-merge re-read confirms docs, topology decision, machine transition, inventory, status and issue ledger agree, and predecessor issue #251 is closed as `not_planned` for its superseded forward production sequence while its repository-side history/evidence remains preserved.
 
-Only then may AR-2 begin. AR-2 must start from that newly accepted `main` and must not inherit the experimental #269 branch as authority.
+Only then may AR-3 begin. AR-3 starts from that newly accepted `main` and owns the canonical runtime-resource/application ownership projection; it must consume `architecture/runtime-topology-ar2.json` rather than invent a competing topology registry. PR #269 remains feasibility material for AR-6 and is not AR-3 authority.
