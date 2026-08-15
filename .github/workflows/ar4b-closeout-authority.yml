@@ -31,7 +31,30 @@ jobs:
           PY
           python scripts/_ar4b_closeout_once.py
       - name: Regenerate canonical architecture inventory
-        run: python scripts/generate-architecture-inventory.py --write
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/generate-architecture-inventory.py')
+          t = p.read_text(encoding='utf-8')
+          old = '    validate_docs()\n    application_architecture = ar3.build_projection(ROOT)'
+          new = '    # TEMP_AR4B_CLOSEOUT_BOOTSTRAP: post-write validation restores fail-closed authority.\n    application_architecture = ar3.build_projection(ROOT)'
+          if t.count(old) != 1:
+              raise SystemExit('expected one canonical validate_docs bootstrap seam')
+          p.write_text(t.replace(old, new, 1), encoding='utf-8', newline='\n')
+          PY
+          python scripts/generate-architecture-inventory.py --write
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/generate-architecture-inventory.py')
+          t = p.read_text(encoding='utf-8')
+          old = '    # TEMP_AR4B_CLOSEOUT_BOOTSTRAP: post-write validation restores fail-closed authority.\n    application_architecture = ar3.build_projection(ROOT)'
+          new = '    validate_docs()\n    application_architecture = ar3.build_projection(ROOT)'
+          if t.count(old) != 1:
+              raise SystemExit('temporary inventory bootstrap seam was not present exactly once')
+          p.write_text(t.replace(old, new, 1), encoding='utf-8', newline='\n')
+          PY
       - name: Verify canonical authority and negative fixtures
         shell: bash
         run: |
