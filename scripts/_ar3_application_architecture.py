@@ -16,6 +16,7 @@ from typing import Any
 RUNTIME_TOPOLOGY = "architecture/runtime-topology-ar2.json"
 AR3_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR3.md"
 AR4A_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md"
+AR4B_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md"
 
 PROCESS_OWNERSHIP: list[dict[str, Any]] = [
     {
@@ -213,11 +214,11 @@ COMPOSITION_FINDINGS: list[dict[str, Any]] = [
     },
     {
         "id": "client_mail_route_ownership",
-        "status": "ROUTE_OWNERSHIP_DEBT",
+        "status": "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
         "owner_slice": "AR-4B",
         "evidence": [
-            "crates/control-plane-contract/src/routes/clients.rs::ClientMailSearchApi",
-            "crates/control-plane-contract/src/routes/clients.rs::ClientMailMessageApi",
+            "crates/control-plane-contract/src/routes/client_mail.rs::ClientMailSearchApi",
+            "crates/control-plane-contract/src/routes/client_mail.rs::ClientMailMessageApi",
             "crates/control-plane-contract/src/routes/client_mail.rs::ClientMailSendApi",
         ],
     },
@@ -289,13 +290,23 @@ _REQUIRED_SNIPPETS: dict[str, list[str]] = {
         "CloudflareGmailOutboundMailProvider::new",
         "CloudflareSmtpOutboundMailProvider::new",
     ],
-    "crates/control-plane-contract/src/routes/clients.rs": ["ClientMailSearchApi", "ClientMailMessageApi"],
-    "crates/control-plane-contract/src/routes/client_mail.rs": ["ClientMailSendApi"],
+    "crates/control-plane-contract/src/routes/clients.rs": ["ClientCollectionApi", "ClientGrantApi"],
+    "crates/control-plane-contract/src/routes/client_mail.rs": [
+        "ClientMailSearchApi",
+        "ClientMailMessageApi",
+        "ClientMailSendApi",
+    ],
     "crates/use-cases/src/lib.rs": ["pub mod generations;", "pub mod profiles;"],
     "apps/mailbox-secret-resolver-worker/src/lib.rs": ["#[event(fetch, respond_with_errors)]", "#[event(scheduled)]"],
     "apps/profile-bridge/src/main.rs": ["ClaimUri::parse"],
     AR3_EVIDENCE: ["AR-4D", "NOT_REQUIRED", "architecture/inventory.json"],
     AR4A_EVIDENCE: ["AR-4A Composition-root consolidation", "AR-4B", "AR-4C", "Production Core remains `BLOCKED`"],
+    AR4B_EVIDENCE: [
+        "AR-4B Client Mail route ownership",
+        "ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
+        "AR-4C",
+        "Production Core remains `BLOCKED`",
+    ],
 }
 
 _FORBIDDEN_SNIPPETS: dict[str, list[str]] = {
@@ -322,6 +333,11 @@ _FORBIDDEN_SNIPPETS: dict[str, list[str]] = {
         "CloudMailboxQueryAdapter::new",
         "D1ClientMailboxEligibilityRepository::new",
         "D1QueryRepository::new",
+    ],
+    "crates/control-plane-contract/src/routes/clients.rs": [
+        "ClientMailSearchApi",
+        "ClientMailMessageApi",
+        "ClientMailSendApi",
     ],
 }
 
@@ -424,6 +440,7 @@ def build_projection(root: Path) -> dict[str, Any]:
             "INTENTIONAL_RUNTIME_BOUNDARY",
             "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
             "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
+            "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
         ],
         "runtime_resources": copy.deepcopy(topology["resources"]),
         "runtime_processes": copy.deepcopy(PROCESS_OWNERSHIP),
@@ -431,9 +448,10 @@ def build_projection(root: Path) -> dict[str, Any]:
         "composition_findings": copy.deepcopy(COMPOSITION_FINDINGS),
         "remediation_state": {
             "accepted_through": "AR-4A",
-            "status": "ACCEPTED",
-            "evidence": AR4A_EVIDENCE,
-            "next_required_slice": "AR-4B",
+            "candidate": "AR-4B",
+            "candidate_status": "ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
+            "evidence": AR4B_EVIDENCE,
+            "next_after_acceptance": "AR-4C",
         },
         "conditional_ar4d": {
             "decision": "NOT_REQUIRED",
@@ -448,29 +466,46 @@ def build_projection(root: Path) -> dict[str, Any]:
 def negative_self_test(root: Path) -> None:
     expected = build_projection(root)
 
-    candidate_status = copy.deepcopy(expected)
-    candidate_status["status"] = "ACCEPTED_AR3_APPLICATION_ARCHITECTURE_CONTRACT"
-    if candidate_status == expected:
-        raise SystemExit("AR-4A negative self-test failed to detect accepted-state rollback to AR-3")
+    accepted_status = copy.deepcopy(expected)
+    accepted_status["status"] = "ACCEPTED_AR3_APPLICATION_ARCHITECTURE_CONTRACT"
+    if accepted_status == expected:
+        raise SystemExit("AR-4B negative self-test failed to detect accepted-state rollback to AR-3")
 
-    regression = _read(root, "apps/control-plane-worker/src/operator_queries.rs") + "\nD1QueryRepository::new"
+    adapter_regression = _read(root, "apps/control-plane-worker/src/operator_queries.rs") + "\nD1QueryRepository::new"
     try:
-        _validate_source_text("apps/control-plane-worker/src/operator_queries.rs", regression)
+        _validate_source_text("apps/control-plane-worker/src/operator_queries.rs", adapter_regression)
     except SystemExit:
         pass
     else:
         raise SystemExit("AR-4A negative self-test failed to reject transport adapter construction regression")
 
+    split_route_regression = _read(root, "crates/control-plane-contract/src/routes/clients.rs") + "\nClientMailSearchApi"
+    try:
+        _validate_source_text("crates/control-plane-contract/src/routes/clients.rs", split_route_regression)
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit("AR-4B negative self-test failed to reject Client Mail route ownership regression")
+
+    missing_route_owner = _read(root, "crates/control-plane-contract/src/routes/client_mail.rs").replace(
+        "ClientMailMessageApi", "RemovedClientMailMessageApi"
+    )
+    try:
+        _validate_source_text("crates/control-plane-contract/src/routes/client_mail.rs", missing_route_owner)
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit("AR-4B negative self-test failed to reject missing Client Mail route ownership")
+
     remediation = copy.deepcopy(expected)
     remediation["remediation_state"] = {
-        "accepted_through": "AR-3",
-        "candidate": "AR-4A",
-        "candidate_status": "COMPOSITION_ROOT_CONSOLIDATION_CANDIDATE",
+        "accepted_through": "AR-4A",
+        "status": "ACCEPTED",
         "evidence": AR4A_EVIDENCE,
-        "next_after_acceptance": "AR-4B",
+        "next_required_slice": "AR-4B",
     }
     if remediation == expected:
-        raise SystemExit("AR-4A negative self-test failed to detect candidate-state regression")
+        raise SystemExit("AR-4B negative self-test failed to distinguish candidate and accepted remediation state")
 
     missing_resource = copy.deepcopy(expected)
     missing_resource["runtime_resources"] = missing_resource["runtime_resources"][1:]
@@ -493,4 +528,4 @@ def negative_self_test(root: Path) -> None:
     if gate == expected:
         raise SystemExit("AR-3 negative self-test failed to distinguish production mutation")
 
-    print("AR-4A accepted application architecture remediation negative self-tests passed.")
+    print("AR-4B Client Mail route ownership candidate negative self-tests passed.")
