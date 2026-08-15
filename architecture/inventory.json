@@ -640,9 +640,10 @@
   ],
   "application_architecture": {
     "schema_version": 1,
-    "status": "ACCEPTED_AR3_APPLICATION_ARCHITECTURE_CONTRACT",
+    "status": "ACCEPTED_AR4A_APPLICATION_ARCHITECTURE_REMEDIATION",
     "topology_source": "architecture/runtime-topology-ar2.json",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
+    "base_contract_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
+    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md",
     "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
     "composition_taxonomy": [
       "CONFORMING_COMPOSITION_SEAM",
@@ -650,7 +651,7 @@
       "ROUTE_OWNERSHIP_DEBT",
       "INTENTIONAL_RUNTIME_BOUNDARY",
       "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
-      "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE"
+      "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED"
     ],
     "runtime_resources": [
       {
@@ -915,7 +916,7 @@
           "mailbox_secret_resolver_service",
           "control_plane_schedule"
         ],
-        "status": "CENTRAL_COMPOSITION_ROOT_AR4A_CANDIDATE"
+        "status": "CENTRAL_COMPOSITION_ROOT_AR4A_ACCEPTED"
       },
       {
         "id": "mailbox_secret_resolver_worker",
@@ -969,7 +970,7 @@
         "application_owner": "crates/use-cases-query",
         "ports_owner": "crates/application-ports",
         "composition_seam": "apps/control-plane-worker/src/composition.rs::query_repository",
-        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
         "remediation_slice": "AR-4A"
       },
       {
@@ -978,7 +979,7 @@
         "application_owner": "crates/use-cases-query",
         "ports_owner": "crates/application-ports",
         "composition_seam": "apps/control-plane-worker/src/composition.rs::{query_repository,client_mail_eligibility_repository,client_mail_query_provider}",
-        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
         "remediation_slice": "AR-4A"
       },
       {
@@ -1023,7 +1024,7 @@
         "application_owner": "crates/use-cases-mailboxes",
         "ports_owner": "crates/application-ports",
         "composition_seam": "apps/control-plane-worker/src/composition.rs::{mailbox_job_application,mailbox_job_provider}",
-        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
         "remediation_slice": "AR-4A"
       },
       {
@@ -1041,7 +1042,7 @@
         "application_owner": "crates/use-cases-notifications",
         "ports_owner": "crates/application-ports",
         "composition_seam": "apps/control-plane-worker/src/composition.rs::{notification_operations_repository,notification_cursor_repository}",
-        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
         "remediation_slice": "AR-4A"
       },
       {
@@ -1075,7 +1076,7 @@
     "composition_findings": [
       {
         "id": "general_composition_root_debt",
-        "status": "AR4A_COMPOSITION_ROOT_CONSOLIDATION_CANDIDATE",
+        "status": "AR4A_COMPOSITION_ROOT_CONSOLIDATION_ACCEPTED",
         "owner_slice": "AR-4A",
         "evidence": [
           "apps/control-plane-worker/src/composition.rs::query_repository",
@@ -1122,29 +1123,29 @@
       }
     ],
     "remediation_state": {
-      "accepted_through": "AR-3",
-      "candidate": "AR-4A",
-      "candidate_status": "COMPOSITION_ROOT_CONSOLIDATION_CANDIDATE",
+      "accepted_through": "AR-4A",
+      "status": "ACCEPTED",
       "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md",
-      "next_after_acceptance": "AR-4B"
+      "next_required_slice": "AR-4B"
     },
     "conditional_ar4d": {
       "decision": "NOT_REQUIRED",
       "reason": "Profile and Generation transports already use explicit composition seams; no measurable dependency-isolation benefit currently justifies extraction",
       "reopen_policy": "ONLY_BY_LATER_ACCEPTED_EVIDENCE"
     },
-    "next_required_slice_after_ar3": "AR-4A",
+    "next_required_slice_after_ar4a": "AR-4B",
     "production_mutation": false
   },
   "documentation_authority": {
     "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
     "tracking_issue": 266,
-    "current_slice": "AR-3",
+    "current_slice": "AR-4A",
     "transition": "architecture/architecture-rebaseline-v3-transition.json",
     "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
     "runtime_topology_projection_owner": "AR-3",
-    "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
+    "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md",
+    "application_architecture_base_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
     "application_architecture_projection": "architecture/inventory.json::application_architecture",
     "development_projection": "docs/DEVELOPMENT_PLAN.md",
     "readiness_projection": "docs/status.json",
@@ -1252,7 +1253,7 @@
     {
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md",
       "status": "EVIDENCE",
-      "scope": "ar4a_composition_root_consolidation_candidate"
+      "scope": "ar4a_composition_root_consolidation_accepted"
     },
     {
       "path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
@@ -1281,10 +1282,11 @@
       "AR-0",
       "AR-1",
       "AR-2",
-      "AR-3"
+      "AR-3",
+      "AR-4A"
     ],
-    "current_architecture_slice": "AR-3",
-    "next_architecture_slice_after_acceptance": "AR-4A",
+    "current_architecture_slice": "AR-4A",
+    "next_architecture_slice_after_acceptance": "AR-4B",
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
     "production_ready": false,
