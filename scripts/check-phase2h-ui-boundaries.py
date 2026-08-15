@@ -22,6 +22,7 @@ FILES = {
     "mail_html": Path("frontend/src/shared/mail/safeMailHtml.ts"),
     "mail_body": Path("frontend/src/shared/mail/SafeMailBody.tsx"),
     "worker_mail": Path("apps/control-plane-worker/src/client_mail_query.rs"),
+    "composition": Path("apps/control-plane-worker/src/composition.rs"),
     "eligibility": Path("crates/cloudflare-adapters/src/d1_client_mail_eligibility.rs"),
     "query_mail_contract": Path("crates/control-plane-contract/src/query_mail_api.rs"),
     "query_mail_openapi": Path("openapi/v1/fragments/query-mail.json"),
@@ -166,8 +167,9 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
     for marker in (
         "search_client_mailbox_messages",
         "get_client_mailbox_message",
-        "D1ClientMailboxEligibilityRepository",
-        "CloudMailboxQueryAdapter",
+        "query_repository(env)?",
+        "client_mail_eligibility_repository(env)?",
+        "client_mail_query_provider(env, actor.actor(), &client_id)?",
         "resolve_active_request_actor",
     ):
         if marker not in worker:
@@ -175,6 +177,25 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
     for forbidden in ("SELECT ", "INSERT ", "UPDATE ", "DELETE FROM"):
         if forbidden in worker:
             errors.append(f"SQL must stay out of Client Mail Worker ingress: {forbidden}")
+    for forbidden in (
+        "D1ClientMailboxEligibilityRepository",
+        "D1QueryRepository",
+        "CloudMailboxQueryAdapter",
+    ):
+        if forbidden in worker:
+            errors.append(f"concrete Client Mail adapter must stay out of Worker ingress: {forbidden}")
+
+    composition = sources["composition"]
+    for marker in (
+        "pub fn query_repository",
+        "pub fn client_mail_eligibility_repository",
+        "pub fn client_mail_query_provider<'a>",
+        "D1ClientMailboxEligibilityRepository::new",
+        "D1QueryRepository::new",
+        "CloudMailboxQueryAdapter::new",
+    ):
+        if marker not in composition:
+            errors.append(f"Client Mail composition-root marker missing: {marker}")
 
     eligibility = sources["eligibility"]
     for marker in (
@@ -235,6 +256,11 @@ def self_test(sources: dict[str, str]) -> None:
         mutated[key] = mutated[key].replace(needle, replacement)
         if not validate_sources(mutated):
             raise ValueError(f"Phase 2H negative fixture was not rejected: {label}")
+
+    leaked_adapter = dict(sources)
+    leaked_adapter["worker_mail"] = leaked_adapter["worker_mail"] + "\nCloudMailboxQueryAdapter"
+    if not validate_sources(leaked_adapter):
+        raise ValueError("Phase 2H negative fixture was not rejected: Client Mail adapter leakage")
 
 
 def main() -> int:

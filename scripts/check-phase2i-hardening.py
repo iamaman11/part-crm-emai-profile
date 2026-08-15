@@ -62,6 +62,7 @@ EXPECTED_EXTERNAL_EXCLUSIONS = {
 SOURCE_FILES = {
     "query": Path("crates/use-cases-query/src/lib.rs"),
     "worker_mail": Path("apps/control-plane-worker/src/client_mail_query.rs"),
+    "composition": Path("apps/control-plane-worker/src/composition.rs"),
     "realtime": Path("frontend/src/shared/realtime/NotificationRealtimeBridge.tsx"),
     "bridge": Path("apps/profile-bridge/src/operator_flow.rs"),
     "phase2g": Path("scripts/check-phase2g-realtime-boundaries.py"),
@@ -215,7 +216,9 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
                 "resolve_active_request_actor",
                 "search_client_mailbox_messages",
                 "get_client_mailbox_message",
-                "D1ClientMailboxEligibilityRepository",
+                "query_repository(env)?",
+                "client_mail_eligibility_repository(env)?",
+                "client_mail_query_provider(env, actor.actor(), &client_id)?",
             ),
             "Client Mail authenticated application ingress",
         )
@@ -223,6 +226,31 @@ def validate_sources(sources: dict[str, str]) -> list[str]:
     for forbidden in ("SELECT ", "INSERT ", "UPDATE ", "DELETE FROM"):
         if forbidden in worker_mail:
             errors.append(f"Client Mail Worker ingress contains forbidden direct SQL: {forbidden}")
+    for forbidden in (
+        "D1ClientMailboxEligibilityRepository",
+        "D1QueryRepository",
+        "CloudMailboxQueryAdapter",
+    ):
+        if forbidden in worker_mail:
+            errors.append(
+                f"Client Mail Worker ingress contains forbidden concrete adapter ownership: {forbidden}"
+            )
+
+    composition = sources["composition"]
+    errors.extend(
+        require_all(
+            composition,
+            (
+                "pub fn query_repository",
+                "pub fn client_mail_eligibility_repository",
+                "pub fn client_mail_query_provider<'a>",
+                "D1ClientMailboxEligibilityRepository::new",
+                "D1QueryRepository::new",
+                "CloudMailboxQueryAdapter::new",
+            ),
+            "Client Mail composition root",
+        )
+    )
 
     realtime = sources["realtime"]
     errors.extend(
@@ -313,6 +341,15 @@ def self_test(root: Path, manifest: dict[str, object], sources: dict[str, str]) 
         mutated[key] = mutated[key].replace(needle, replacement)
         if not validate_sources(mutated):
             raise ValueError(f"Phase 2I source negative fixture was not rejected: {label}")
+
+    leaked_adapter = dict(sources)
+    leaked_adapter["worker_mail"] = (
+        leaked_adapter["worker_mail"] + "\nD1ClientMailboxEligibilityRepository"
+    )
+    if not validate_sources(leaked_adapter):
+        raise ValueError(
+            "Phase 2I source negative fixture was not rejected: Client Mail concrete adapter leakage"
+        )
 
 
 def main() -> int:

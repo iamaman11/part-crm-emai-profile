@@ -521,9 +521,18 @@ def validate_composition_surfaces() -> None:
                 "mailbox_job_application(env)",
                 "validate_create_mailbox_job_request",
                 "validate_mailbox_job_run_version",
-                "CloudMailboxProviderRouter::new(env)",
+                "mailbox_job_provider(env, actor)?",
             ),
             "mailbox job application transport",
+        ),
+        (
+            "apps/control-plane-worker/src/composition.rs",
+            (
+                "pub fn mailbox_job_provider<'a>",
+                "CloudMailboxProviderRouter::new(env)",
+                "with_microsoft_graph_authorization(microsoft_graph_mailbox_authorization(env)?, actor)",
+            ),
+            "mailbox job composition root",
         ),
         (
             "crates/use-cases-mailboxes/src/mailbox_jobs.rs",
@@ -644,6 +653,8 @@ def validate_composition_surfaces() -> None:
             "D1Database",
             "MetadataMailboxProviderAdapter",
             "decide_mailbox_run",
+            "cloudflare_adapters::cloud_mailbox_provider::CloudMailboxProviderRouter",
+            "CloudMailboxProviderRouter::new(",
         ),
         "mailbox job Worker transport",
     )

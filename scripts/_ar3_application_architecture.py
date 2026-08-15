@@ -15,6 +15,7 @@ from typing import Any
 
 RUNTIME_TOPOLOGY = "architecture/runtime-topology-ar2.json"
 AR3_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR3.md"
+AR4A_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md"
 
 PROCESS_OWNERSHIP: list[dict[str, Any]] = [
     {
@@ -39,7 +40,7 @@ PROCESS_OWNERSHIP: list[dict[str, Any]] = [
             "mailbox_secret_resolver_service",
             "control_plane_schedule",
         ],
-        "status": "CENTRAL_COMPOSITION_ROOT_WITH_BOUNDED_DEBT",
+        "status": "CENTRAL_COMPOSITION_ROOT_AR4A_CANDIDATE",
     },
     {
         "id": "mailbox_secret_resolver_worker",
@@ -91,8 +92,8 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
         "transport": "apps/control-plane-worker/src/operator_queries.rs",
         "application_owner": "crates/use-cases-query",
         "ports_owner": "crates/application-ports",
-        "composition_seam": "transport currently constructs D1QueryRepository",
-        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::query_repository",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
         "remediation_slice": "AR-4A",
     },
     {
@@ -100,8 +101,8 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
         "transport": "apps/control-plane-worker/src/client_mail_query.rs",
         "application_owner": "crates/use-cases-query",
         "ports_owner": "crates/application-ports",
-        "composition_seam": "transport currently constructs query/eligibility/provider adapters",
-        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::{query_repository,client_mail_eligibility_repository,client_mail_query_provider}",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
         "remediation_slice": "AR-4A",
     },
     {
@@ -145,8 +146,8 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
         "transport": "apps/control-plane-worker/src/mailbox_jobs.rs",
         "application_owner": "crates/use-cases-mailboxes",
         "ports_owner": "crates/application-ports",
-        "composition_seam": "repositories composed centrally; provider router remains direct in transport path",
-        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::{mailbox_job_application,mailbox_job_provider}",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
         "remediation_slice": "AR-4A",
     },
     {
@@ -163,8 +164,8 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
         "transport": "apps/control-plane-worker/src/notifications.rs",
         "application_owner": "crates/use-cases-notifications",
         "ports_owner": "crates/application-ports",
-        "composition_seam": "transport currently constructs notification D1 repositories",
-        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::{notification_operations_repository,notification_cursor_repository}",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
         "remediation_slice": "AR-4A",
     },
     {
@@ -199,16 +200,15 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
 COMPOSITION_FINDINGS: list[dict[str, Any]] = [
     {
         "id": "general_composition_root_debt",
-        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "status": "AR4A_COMPOSITION_ROOT_CONSOLIDATION_CANDIDATE",
         "owner_slice": "AR-4A",
         "evidence": [
-            "apps/control-plane-worker/src/operator_queries.rs::D1QueryRepository::new",
-            "apps/control-plane-worker/src/notifications.rs::D1NotificationOperationsRepository::new",
-            "apps/control-plane-worker/src/notifications.rs::D1NotificationRepository::new",
-            "apps/control-plane-worker/src/mailbox_jobs.rs::CloudMailboxProviderRouter",
-            "apps/control-plane-worker/src/client_mail_query.rs::D1QueryRepository::new",
-            "apps/control-plane-worker/src/client_mail_query.rs::D1ClientMailboxEligibilityRepository::new",
-            "apps/control-plane-worker/src/client_mail_query.rs::CloudMailboxQueryAdapter::new",
+            "apps/control-plane-worker/src/composition.rs::query_repository",
+            "apps/control-plane-worker/src/composition.rs::notification_operations_repository",
+            "apps/control-plane-worker/src/composition.rs::notification_cursor_repository",
+            "apps/control-plane-worker/src/composition.rs::client_mail_eligibility_repository",
+            "apps/control-plane-worker/src/composition.rs::client_mail_query_provider",
+            "apps/control-plane-worker/src/composition.rs::mailbox_job_provider",
         ],
     },
     {
@@ -261,6 +261,12 @@ _REQUIRED_SNIPPETS: dict[str, list[str]] = {
         "pub fn profile_generation_application",
         "pub fn mailbox_binding_application",
         "pub fn device_job_repository",
+        "pub fn query_repository",
+        "pub fn client_mail_eligibility_repository",
+        "pub fn client_mail_query_provider",
+        "pub fn notification_operations_repository",
+        "pub fn notification_cursor_repository",
+        "pub fn mailbox_job_provider",
     ],
     "apps/control-plane-worker/src/clients.rs": ["crate::composition::{", "use_cases_clients::"],
     "apps/control-plane-worker/src/identity.rs": ["crate::composition::{identity_ceremony_application, identity_governance_application}"],
@@ -268,13 +274,13 @@ _REQUIRED_SNIPPETS: dict[str, list[str]] = {
     "apps/control-plane-worker/src/profile_generations.rs": ["crate::composition::profile_generation_application"],
     "apps/control-plane-worker/src/mailbox_bindings.rs": ["crate::composition::{browser_mailbox_execution_application, mailbox_binding_application}"],
     "apps/control-plane-worker/src/device_jobs.rs": ["crate::composition::{", "device_job_repository"],
-    "apps/control-plane-worker/src/operator_queries.rs": ["D1QueryRepository::new"],
-    "apps/control-plane-worker/src/notifications.rs": ["D1NotificationOperationsRepository::new", "D1NotificationRepository::new"],
-    "apps/control-plane-worker/src/mailbox_jobs.rs": ["CloudMailboxProviderRouter"],
+    "apps/control-plane-worker/src/operator_queries.rs": ["crate::composition::query_repository", "query_repository(env)?"],
+    "apps/control-plane-worker/src/notifications.rs": ["notification_operations_repository", "notification_cursor_repository"],
+    "apps/control-plane-worker/src/mailbox_jobs.rs": ["mailbox_job_provider", "mailbox_job_provider(env, actor)?"],
     "apps/control-plane-worker/src/client_mail_query.rs": [
-        "D1QueryRepository::new",
-        "D1ClientMailboxEligibilityRepository::new",
-        "CloudMailboxQueryAdapter::new",
+        "client_mail_eligibility_repository",
+        "client_mail_query_provider",
+        "query_repository",
     ],
     "apps/control-plane-worker/src/client_mail_send.rs": [
         "D1ClientMailboxEligibilityRepository::new",
@@ -289,11 +295,34 @@ _REQUIRED_SNIPPETS: dict[str, list[str]] = {
     "apps/mailbox-secret-resolver-worker/src/lib.rs": ["#[event(fetch, respond_with_errors)]", "#[event(scheduled)]"],
     "apps/profile-bridge/src/main.rs": ["ClaimUri::parse"],
     AR3_EVIDENCE: ["AR-4D", "NOT_REQUIRED", "architecture/inventory.json"],
+    AR4A_EVIDENCE: ["AR-4A Composition-root consolidation", "AR-4B", "AR-4C", "Production Core remains `BLOCKED`"],
 }
 
 _FORBIDDEN_SNIPPETS: dict[str, list[str]] = {
     "apps/control-plane-worker/src/profiles.rs": ["use cloudflare_adapters::"],
     "apps/control-plane-worker/src/profile_generations.rs": ["use cloudflare_adapters::"],
+    "apps/control-plane-worker/src/operator_queries.rs": [
+        "cloudflare_adapters::d1_query::D1QueryRepository",
+        "D1QueryRepository::new",
+    ],
+    "apps/control-plane-worker/src/notifications.rs": [
+        "cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository",
+        "cloudflare_adapters::d1_notifications::D1NotificationRepository",
+        "D1NotificationOperationsRepository::new",
+        "D1NotificationRepository::new",
+    ],
+    "apps/control-plane-worker/src/mailbox_jobs.rs": [
+        "cloudflare_adapters::cloud_mailbox_provider::CloudMailboxProviderRouter",
+        "CloudMailboxProviderRouter::new",
+    ],
+    "apps/control-plane-worker/src/client_mail_query.rs": [
+        "cloudflare_adapters::cloud_mail_query::CloudMailboxQueryAdapter",
+        "cloudflare_adapters::d1_client_mail_eligibility::D1ClientMailboxEligibilityRepository",
+        "cloudflare_adapters::d1_query::D1QueryRepository",
+        "CloudMailboxQueryAdapter::new",
+        "D1ClientMailboxEligibilityRepository::new",
+        "D1QueryRepository::new",
+    ],
 }
 
 
@@ -340,17 +369,19 @@ def load_topology(root: Path) -> dict[str, Any]:
     return topology
 
 
+def _validate_source_text(relative: str, source: str) -> None:
+    for snippet in _REQUIRED_SNIPPETS.get(relative, []):
+        if snippet not in source:
+            raise SystemExit(f"AR-3 source contract drift: {relative} missing {snippet!r}")
+    for snippet in _FORBIDDEN_SNIPPETS.get(relative, []):
+        if snippet in source:
+            raise SystemExit(f"AR-3 source contract drift: {relative} unexpectedly contains {snippet!r}")
+
+
 def validate_source_contract(root: Path) -> None:
-    for relative, snippets in _REQUIRED_SNIPPETS.items():
-        source = _read(root, relative)
-        for snippet in snippets:
-            if snippet not in source:
-                raise SystemExit(f"AR-3 source contract drift: {relative} missing {snippet!r}")
-    for relative, snippets in _FORBIDDEN_SNIPPETS.items():
-        source = _read(root, relative)
-        for snippet in snippets:
-            if snippet in source:
-                raise SystemExit(f"AR-3 source contract drift: {relative} unexpectedly contains {snippet!r}")
+    paths = sorted(set(_REQUIRED_SNIPPETS) | set(_FORBIDDEN_SNIPPETS))
+    for relative in paths:
+        _validate_source_text(relative, _read(root, relative))
 
 
 def _validate_unique_ids(items: list[dict[str, Any]], label: str) -> None:
@@ -391,11 +422,19 @@ def build_projection(root: Path) -> dict[str, Any]:
             "ROUTE_OWNERSHIP_DEBT",
             "INTENTIONAL_RUNTIME_BOUNDARY",
             "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
+            "AR4A_CENTRALIZED_COMPOSITION_CANDIDATE",
         ],
         "runtime_resources": copy.deepcopy(topology["resources"]),
         "runtime_processes": copy.deepcopy(PROCESS_OWNERSHIP),
         "capability_ownership": copy.deepcopy(CAPABILITY_OWNERSHIP),
         "composition_findings": copy.deepcopy(COMPOSITION_FINDINGS),
+        "remediation_state": {
+            "accepted_through": "AR-3",
+            "candidate": "AR-4A",
+            "candidate_status": "COMPOSITION_ROOT_CONSOLIDATION_CANDIDATE",
+            "evidence": AR4A_EVIDENCE,
+            "next_after_acceptance": "AR-4B",
+        },
         "conditional_ar4d": {
             "decision": "NOT_REQUIRED",
             "reason": "Profile and Generation transports already use explicit composition seams; no measurable dependency-isolation benefit currently justifies extraction",
@@ -413,6 +452,19 @@ def negative_self_test(root: Path) -> None:
     candidate_status["status"] = "AR3_APPLICATION_ARCHITECTURE_CONTRACT"
     if candidate_status == expected:
         raise SystemExit("AR-3 negative self-test failed to detect candidate-status regression")
+
+    regression = _read(root, "apps/control-plane-worker/src/operator_queries.rs") + "\nD1QueryRepository::new"
+    try:
+        _validate_source_text("apps/control-plane-worker/src/operator_queries.rs", regression)
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit("AR-4A negative self-test failed to reject transport adapter construction regression")
+
+    remediation = copy.deepcopy(expected)
+    remediation["remediation_state"]["candidate_status"] = "ACCEPTED"
+    if remediation == expected:
+        raise SystemExit("AR-4A negative self-test failed to distinguish candidate and accepted remediation state")
 
     missing_resource = copy.deepcopy(expected)
     missing_resource["runtime_resources"] = missing_resource["runtime_resources"][1:]
@@ -435,4 +487,4 @@ def negative_self_test(root: Path) -> None:
     if gate == expected:
         raise SystemExit("AR-3 negative self-test failed to distinguish production mutation")
 
-    print("AR-3 application architecture negative self-test passed.")
+    print("AR-3 application architecture + AR-4A composition negative self-tests passed.")

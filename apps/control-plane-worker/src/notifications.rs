@@ -1,11 +1,10 @@
 use crate::access_session::{
     correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
 };
+use crate::composition::{notification_cursor_repository, notification_operations_repository};
 use crate::realtime_notifications;
 use application_ports::NotificationReplayIntent;
 use application_ports::{CursorAdvanceWriteOutcome, ReplayPreparationOutcome, ReplayReasonClass};
-use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
-use cloudflare_adapters::d1_notifications::D1NotificationRepository;
 use control_plane_contract::RouteClass;
 use control_plane_contract::public_api::{
     NotificationCatchUpAckRequest, NotificationCatchUpProjection, NotificationEventProjection,
@@ -50,11 +49,8 @@ async fn get_catch_up(request: &Request, env: &Env, tenant_id: &str) -> Result<R
     let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
         return neutral_not_found(&correlation_hint(request));
     };
-    let operations = D1NotificationOperationsRepository::new(
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-    );
-    let cursors =
-        D1NotificationRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
+    let operations = notification_operations_repository(env)?;
+    let cursors = notification_cursor_repository(env)?;
     match load_catch_up(
         &operations,
         &cursors,
@@ -93,11 +89,8 @@ async fn acknowledge(request: &mut Request, env: &Env, tenant_id: &str) -> Resul
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let operations = D1NotificationOperationsRepository::new(
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-    );
-    let cursors =
-        D1NotificationRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
+    let operations = notification_operations_repository(env)?;
+    let cursors = notification_cursor_repository(env)?;
     let now = UnixMillis::new(Date::now().as_millis());
     match acknowledge_catch_up(
         &operations,
@@ -164,9 +157,7 @@ async fn prepare_operator_replay(
         reason_class,
         UnixMillis::new(Date::now().as_millis()),
     );
-    let operations = D1NotificationOperationsRepository::new(
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-    );
+    let operations = notification_operations_repository(env)?;
     match prepare_replay(&operations, &operations, actor.actor(), &intent).await {
         Ok(outcome) => Response::from_json(&NotificationReplayReceipt {
             replay_id: intent.replay_id().as_str().to_owned(),
@@ -184,9 +175,7 @@ async fn get_operations(request: &Request, env: &Env, tenant_id: &str) -> Result
     let Some(actor) = resolve_active_request_actor(request, env, Some(tenant_id)).await? else {
         return neutral_not_found(&correlation_hint(request));
     };
-    let operations = D1NotificationOperationsRepository::new(
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-    );
+    let operations = notification_operations_repository(env)?;
     match load_operations(
         &operations,
         &operations,

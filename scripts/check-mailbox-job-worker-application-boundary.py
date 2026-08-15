@@ -9,6 +9,8 @@ from pathlib import Path
 
 FORBIDDEN_JOB_TRANSPORT_TOKENS = (
     "cloudflare_adapters::d1_",
+    "cloudflare_adapters::cloud_mailbox_provider::CloudMailboxProviderRouter",
+    "CloudMailboxProviderRouter::new(",
     "D1MailboxRepository",
     "D1IdempotencyRepository",
     "CreateMailboxJobMutation",
@@ -26,7 +28,7 @@ REQUIRED_JOB_TRANSPORT_TOKENS = (
     "mailbox_job_application(env)",
     "validate_create_mailbox_job_request",
     "validate_mailbox_job_run_version",
-    "CloudMailboxProviderRouter::new(env)",
+    "mailbox_job_provider(env, actor)?",
 )
 
 REQUIRED_USE_CASE_TOKENS = (
@@ -105,6 +107,13 @@ def validate(root: Path) -> list[str]:
         or "env.d1(D1_CATALOG_BINDING)?" not in composition
     ):
         errors.append("Worker composition root must construct the D1 mailbox job application adapter")
+    for token in (
+        "pub fn mailbox_job_provider<'a>",
+        "CloudMailboxProviderRouter::new(env)",
+        "with_microsoft_graph_authorization(microsoft_graph_mailbox_authorization(env)?, actor)",
+    ):
+        if token not in composition:
+            errors.append(f"Worker composition root missing mailbox job provider token `{token}`")
 
     if "pub trait MailboxJobApplicationPort" not in ports:
         errors.append("application ports must own MailboxJobApplicationPort")
@@ -140,13 +149,17 @@ def write_self_test_fixture(root: Path) -> None:
     (worker / "mailbox_jobs.rs").write_text(
         "use cloudflare_adapters::d1_mailboxes::D1MailboxRepository;\n"
         "MetadataMailboxProviderAdapter decide_mailbox_run\n"
+        "CloudMailboxProviderRouter::new(env); "
         "fn route() { execute_create_mailbox_job(); get_mailbox_job(); execute_run_mailbox_job(); "
         "mailbox_job_application(env); validate_create_mailbox_job_request(); "
-        "validate_mailbox_job_run_version(); CloudMailboxProviderRouter::new(env); }\n",
+        "validate_mailbox_job_run_version(); mailbox_job_provider(env, actor)?; }\n",
         encoding="utf-8",
     )
     (worker / "composition.rs").write_text(
-        "D1MailboxJobApplicationRepository mailbox_job_application env.d1(D1_CATALOG_BINDING)?\n",
+        "D1MailboxJobApplicationRepository mailbox_job_application env.d1(D1_CATALOG_BINDING)?\n"
+        "pub fn mailbox_job_provider<'a> {}\n"
+        "CloudMailboxProviderRouter::new(env)\n"
+        "with_microsoft_graph_authorization(microsoft_graph_mailbox_authorization(env)?, actor)\n",
         encoding="utf-8",
     )
     (worker / "lib.rs").write_text(
@@ -188,8 +201,9 @@ def main() -> int:
             write_self_test_fixture(fixture)
             errors = validate(fixture)
             direct_d1 = any("D1MailboxRepository" in error for error in errors)
-            provider = any("MetadataMailboxProviderAdapter" in error for error in errors)
-            if not (direct_d1 and provider):
+            legacy_provider = any("MetadataMailboxProviderAdapter" in error for error in errors)
+            concrete_provider = any("CloudMailboxProviderRouter" in error for error in errors)
+            if not (direct_d1 and legacy_provider and concrete_provider):
                 print("negative direct-D1/provider mailbox job fixture unexpectedly passed")
                 for error in errors:
                     print(error)
