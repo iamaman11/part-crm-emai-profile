@@ -6,6 +6,8 @@ use application_ports::clients::{
 #[cfg(not(target_arch = "wasm32"))]
 use client_domain::{EncryptedContactValue, ExactLookupToken};
 use cloudflare_adapters::access_identity::VerifiedExternalIdentity;
+use cloudflare_adapters::cloud_mail_query::CloudMailboxQueryAdapter;
+use cloudflare_adapters::cloud_mailbox_provider::CloudMailboxProviderRouter;
 #[cfg(target_arch = "wasm32")]
 use cloudflare_adapters::contact_keyring::contact_protection_from_serialized_keyring;
 #[cfg(target_arch = "wasm32")]
@@ -17,6 +19,7 @@ use cloudflare_adapters::coordinator_ingress::{
 };
 use cloudflare_adapters::d1_authenticated_device::D1AuthenticatedDevice;
 use cloudflare_adapters::d1_browser_mail_execution::D1BrowserMailboxExecutionBinding;
+use cloudflare_adapters::d1_client_mail_eligibility::D1ClientMailboxEligibilityRepository;
 use cloudflare_adapters::d1_client_merge::D1ClientMergeRepository;
 use cloudflare_adapters::d1_client_persistence::D1ClientPersistenceRepository;
 use cloudflare_adapters::d1_client_registry::D1ClientRegistryProjectionRepository;
@@ -29,8 +32,11 @@ use cloudflare_adapters::d1_identity_ceremonies::D1IdentityCeremonyApplicationRe
 use cloudflare_adapters::d1_identity_governance::D1IdentityGovernanceApplicationRepository;
 use cloudflare_adapters::d1_mailbox_bindings::D1MailboxBindingApplicationRepository;
 use cloudflare_adapters::d1_mailbox_jobs::D1MailboxJobApplicationRepository;
+use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
+use cloudflare_adapters::d1_notifications::D1NotificationRepository;
 use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
 use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
+use cloudflare_adapters::d1_query::D1QueryRepository;
 use cloudflare_adapters::microsoft_graph_authorization::D1MicrosoftGraphAuthorization;
 use cloudflare_adapters::r2_generation_objects::R2GenerationObjects;
 use cloudflare_adapters::r2_generation_upload_capability::{
@@ -39,6 +45,7 @@ use cloudflare_adapters::r2_generation_upload_capability::{
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING,
 };
+use profile_platform_primitives::{ActorContext, ClientId};
 use worker::{Env, Error, Result};
 
 #[cfg(target_arch = "wasm32")]
@@ -176,10 +183,54 @@ pub fn mailbox_job_application(env: &Env) -> Result<D1MailboxJobApplicationRepos
     ))
 }
 
+pub fn query_repository(env: &Env) -> Result<D1QueryRepository> {
+    Ok(D1QueryRepository::new(env.d1(D1_CATALOG_BINDING)?))
+}
+
+pub fn client_mail_eligibility_repository(
+    env: &Env,
+) -> Result<D1ClientMailboxEligibilityRepository> {
+    Ok(D1ClientMailboxEligibilityRepository::new(
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
+}
+
+pub fn client_mail_query_provider<'a>(
+    env: &'a Env,
+    actor: &'a ActorContext,
+    client_id: &'a ClientId,
+) -> Result<CloudMailboxQueryAdapter<'a>> {
+    Ok(CloudMailboxQueryAdapter::new(
+        env,
+        env.d1(D1_CATALOG_BINDING)?,
+        env.d1(D1_CATALOG_BINDING)?,
+        actor,
+        client_id,
+    ))
+}
+
+pub fn notification_operations_repository(env: &Env) -> Result<D1NotificationOperationsRepository> {
+    Ok(D1NotificationOperationsRepository::new(
+        env.d1(D1_CATALOG_BINDING)?,
+    ))
+}
+
+pub fn notification_cursor_repository(env: &Env) -> Result<D1NotificationRepository> {
+    Ok(D1NotificationRepository::new(env.d1(D1_CATALOG_BINDING)?))
+}
+
 pub fn microsoft_graph_mailbox_authorization(env: &Env) -> Result<D1MicrosoftGraphAuthorization> {
     Ok(D1MicrosoftGraphAuthorization::new(
         env.d1(D1_CATALOG_BINDING)?,
     ))
+}
+
+pub fn mailbox_job_provider<'a>(
+    env: &'a Env,
+    actor: &'a ActorContext,
+) -> Result<CloudMailboxProviderRouter<'a>> {
+    Ok(CloudMailboxProviderRouter::new(env)
+        .with_microsoft_graph_authorization(microsoft_graph_mailbox_authorization(env)?, actor))
 }
 
 pub fn authenticated_device(env: &Env) -> Result<D1AuthenticatedDevice> {

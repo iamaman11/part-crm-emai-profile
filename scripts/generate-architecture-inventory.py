@@ -24,6 +24,7 @@ CURRENT_AUTHORITY = "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
 TRANSITION = "architecture/architecture-rebaseline-v3-transition.json"
 RUNTIME_TOPOLOGY = "architecture/runtime-topology-ar2.json"
 AR2_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR2.md"
+AR4A_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md"
 TRACKING_ISSUE = 266
 ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3"]
 CURRENT_SLICE = "AR-3"
@@ -48,6 +49,7 @@ DOCUMENT_STATUS = [
     {"path": AR2_EVIDENCE, "status": "EVIDENCE", "scope": "ar2_runtime_topology_and_d3_compatibility_acceptance"},
     {"path": RUNTIME_TOPOLOGY, "status": "STABLE_AUTHORITY", "scope": "accepted_ar2_runtime_topology_decision_input_for_ar3"},
     {"path": ar3.AR3_EVIDENCE, "status": "EVIDENCE", "scope": "ar3_application_architecture_contract_accepted"},
+    {"path": AR4A_EVIDENCE, "status": "EVIDENCE", "scope": "ar4a_composition_root_consolidation_candidate"},
     {"path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "superseded_predecessor_forward_execution"},
     {"path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "accepted_r1_r9_closeout"},
     {"path": "IMPLEMENTATION_PLAN.md", "status": "SUPERSEDED", "scope": "compatibility_entrypoint_to_preserved_history"},
