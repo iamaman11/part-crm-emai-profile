@@ -1,0 +1,32 @@
+{
+  "authority_commit": "bd486d502cf54423534bb535e085464d3db600fe",
+  "authority_erratum_commit": "4b143a75b0ba0b490182cd149c4ca0ac771c1cc7",
+  "authority_erratum_sha256": "8f85063801e58d9c760482080519359867474f450aba4103c8a382bb99806cf8",
+  "authority_sha256": "a7aa24f369ffb9d3848211690d8cbeb751a84241054bb37208d50e253e065ead",
+  "bootstrap_cli": [
+    "check",
+    "self-test",
+    "build",
+    "validate-empty",
+    "verify-evidence"
+  ],
+  "external_mutations": false,
+  "implementation_base": "4b143a75b0ba0b490182cd149c4ca0ac771c1cc7",
+  "implementation_roots": [
+    "architecture/pre2j-d3-resolver-d1-first-bootstrap-implementation.json",
+    "scripts/mailbox-secret-resolver-d1-bootstrap.py",
+    "scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py",
+    ".github/workflows/resolver-d1-first-bootstrap.yml"
+  ],
+  "openapi_v1_changed": false,
+  "parent_issue": 251,
+  "production_ready": false,
+  "promotion_workflow_changed": false,
+  "release_script_changed": false,
+  "release_workflow_changed": false,
+  "resolver_migrations_changed": false,
+  "resolver_runtime_changed": false,
+  "schema_version": 1,
+  "status": "implemented_pending_acceptance",
+  "umbrella_blocker_issue": 203
+}
