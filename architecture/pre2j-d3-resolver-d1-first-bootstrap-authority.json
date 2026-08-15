@@ -1,0 +1,371 @@
+{
+  "schema_version": 1,
+  "status": "proposed_pending_acceptance",
+  "decision_base": "99e04f06f60b3c16a15a0c6e3026d29b2b6dc7be",
+  "parent_issue": 251,
+  "umbrella_blocker_issue": 203,
+  "production_ready": false,
+  "external_mutations": false,
+  "implementation_in_same_change": false,
+  "purpose": "Define only the one-time first initialization contract that brings a brand-new resolver D1 to the exact resolver schema and canonical d1_migrations ledger required by D3 promotion preflight.",
+  "predecessor_authority": {
+    "path": "architecture/pre2j-d3-resolver-bootstrap-authority.json",
+    "immutable": true,
+    "implementation_is_separate": true
+  },
+  "immutable_release_authority": {
+    "required_identity_fields": [
+      "resolver_release_id",
+      "resolver_source_commit_sha",
+      "resolver_migration_manifest_sha256"
+    ],
+    "remote_bootstrap_input_rule": "Canonical migration bytes for external first bootstrap must come only from a successfully verified immutable accepted-main resolver release artifact, never from an arbitrary mutable working tree.",
+    "required_future_ceremony": [
+      "Identify one exact accepted-main resolver release.",
+      "Verify its immutable release archive.",
+      "Verify resolver_source_commit_sha.",
+      "Verify resolver_migration_manifest_sha256.",
+      "Extract that release's exact migrations/resolver-d1 inventory.",
+      "Build bootstrap SQL only from those extracted migration bytes.",
+      "Record the verified release identity and migration-manifest digest in metadata-only evidence.",
+      "Require D3 promotion later to accept the remote resolver ledger against the same release."
+    ],
+    "local_development_exception": "Working-tree migrations may be used only for disposable local development and self-tests; they are insufficient authority for external bootstrap.",
+    "external_bootstrap_eligibility": [
+      "The immutable resolver release used for external first bootstrap must be produced from accepted-main source that already contains the accepted first-bootstrap implementation and compatible resolver release migration validator.",
+      "Current historical release artifacts may be used as reference evidence but are not automatically bootstrap-eligible after this authority.",
+      "After implementation is merged, external bootstrap must use a new exact accepted-main resolver release produced from that implementation SHA."
+    ]
+  },
+  "scope": {
+    "target_binding": "RESOLVER_DB",
+    "migration_root": "migrations/resolver-d1",
+    "current_ordered_migration_inventory": [
+      "0001_resolver_security_boundary.sql"
+    ],
+    "only_fresh_database_initialization": true,
+    "out_of_scope": [
+      "upgrading a non-empty resolver database",
+      "rollback or down-migrations",
+      "D4 migration compatibility or fail-forward policy",
+      "arbitrary migration application",
+      "production provisioning",
+      "Worker deployment",
+      "OAuth or Cloudflare Access changes",
+      "catalog D1 bootstrap",
+      "modification of resolver migration contents"
+    ]
+  },
+  "fresh_target_semantics": {
+    "local": {
+      "target": "disposable normal SQLite database",
+      "platform_owned_schema_required": false,
+      "rules": [
+        "Local parity does not require or include Cloudflare's _cf_KV table.",
+        "Database A applies only validated resolver migration SQL and does not create d1_migrations.",
+        "Database B applies generated bootstrap SQL."
+      ]
+    },
+    "remote_cloudflare": {
+      "source_semantics": "scripts/cloudflare-d1-bootstrap.py",
+      "accepted_platform_owned_schema_inventory": [
+        {
+          "type": "table",
+          "name": "_cf_KV",
+          "tbl_name": "_cf_KV"
+        }
+      ],
+      "required_rules": [
+        "A pre-import Wrangler schema query must prove that the complete non-sqlite SQLite schema inventory exactly equals accepted_platform_owned_schema_inventory.",
+        "No application-owned table, index, trigger, or view may exist before import.",
+        "A malformed, missing, duplicate, or additional platform-owned schema object rejects the target.",
+        "An existing d1_migrations table rejects the target as non-fresh.",
+        "Any existing resolver application table rejects the target as non-fresh.",
+        "The generated SQL guard executes before ledger or application DDL as defense in depth, but does not replace exact remote fresh-target evidence validation."
+      ]
+    }
+  },
+  "migration_inventory": {
+    "source_of_truth": "migrations/resolver-d1",
+    "filename_pattern": "^[0-9]{4}_[a-z0-9_]+\\.sql$",
+    "ordering": "deterministic lexical order by canonical filename, equivalent to ascending numeric prefix",
+    "sequence": "contiguous numeric prefixes beginning at 0001",
+    "required_rejections": [
+      "empty migration inventory",
+      "missing 0001",
+      "duplicate numeric prefix",
+      "numeric sequence gap",
+      "unexpected filename",
+      "symlink or non-regular migration path",
+      "NUL byte",
+      "malformed UTF-8 or malformed migration input"
+    ],
+    "release_validation_compatibility": [
+      "Future bootstrap implementation and accepted resolver release validation must use compatible migration-inventory acceptance semantics.",
+      "A resolver release whose migration inventory is rejected by first bootstrap is not first-bootstrap eligible."
+    ]
+  },
+  "canonical_migration_ledger": {
+    "name": "d1_migrations",
+    "schema_sql": "CREATE TABLE \"d1_migrations\" (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL);",
+    "semantics": {
+      "id": "INTEGER PRIMARY KEY AUTOINCREMENT; establishes application order",
+      "name": "TEXT UNIQUE; stores the exact canonical resolver migration filename",
+      "applied_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL"
+    },
+    "rules": [
+      "The bootstrap creates this canonical repository ledger; no resolver-specific alternate ledger is permitted.",
+      "Each exact resolver migration produces exactly one ledger row after that migration is applied.",
+      "Ledger names and rows must be in exact migration inventory order."
+    ],
+    "current_expected_query": {
+      "sql": "SELECT name FROM d1_migrations ORDER BY id;",
+      "ordered_names": [
+        "0001_resolver_security_boundary.sql"
+      ]
+    }
+  },
+  "deterministic_bootstrap": {
+    "construction_order": [
+      "fail-closed fresh-target guard",
+      "canonical d1_migrations creation",
+      "each exact resolver migration in inventory order",
+      "one exact d1_migrations INSERT after each corresponding migration"
+    ],
+    "determinism": [
+      "Identical accepted migration inputs produce byte-identical bootstrap SQL.",
+      "The bootstrap SHA-256 is computed over those exact bytes.",
+      "The generated SQL is a one-time fresh-D1 ceremony, not an idempotent migration runner."
+    ]
+  },
+  "local_parity_proof": {
+    "database_a": "Use a disposable normal local SQLite database; apply the exact validated resolver migration SQL sequentially and do not create d1_migrations.",
+    "database_b": "Use a separate disposable normal local SQLite database; apply generated bootstrap SQL.",
+    "must_prove_equal": [
+      "application SQLite schema inventory",
+      "application-owned table, index, trigger, and view definitions",
+      "expected resolver application object inventory"
+    ],
+    "excluded_from_application_parity_signature": [
+      "d1_migrations",
+      "_cf_KV"
+    ],
+    "database_b_additional_checks": [
+      "Canonical d1_migrations exists.",
+      "Its schema exactly equals canonical_migration_ledger.schema_sql semantics.",
+      "Its ordered names exactly equal the validated migration inventory."
+    ],
+    "derivation_rule": "Derive schema parity from the migration inventory wherever possible; retain only established repository security invariants as explicit checks."
+  },
+  "replay_contract": {
+    "replay_must_fail_closed": true,
+    "required_evidence": [
+      "schema_count_before",
+      "schema_count_after",
+      "schema_sha256_before",
+      "schema_sha256_after",
+      "ordered_names_before",
+      "ordered_names_after",
+      "ledger_sha256_before",
+      "ledger_sha256_after",
+      "residue"
+    ],
+    "invariants": [
+      "schema_count_before equals schema_count_after",
+      "schema_sha256_before equals schema_sha256_after",
+      "ordered_names_before exactly equals ordered_names_after",
+      "ledger_sha256_before equals ledger_sha256_after",
+      "residue equals an empty list"
+    ]
+  },
+  "remote_execution_contract": {
+    "pinned_wrangler_version": "4.94.0",
+    "future_ceremony_only": true,
+    "conceptual_order": [
+      "Create one dedicated resolver D1 externally.",
+      "Read-only inspect the exact fresh-target schema.",
+      "Validate fresh-target evidence against fresh_target_semantics.remote_cloudflare.",
+      "Verify immutable release identity and extract its exact resolver migration bytes.",
+      "Generate deterministic resolver bootstrap SQL from those exact extracted release bytes.",
+      "Import that SQL remotely with the pinned Wrangler toolchain.",
+      "Query d1_migrations and verify the exact ordered ledger.",
+      "Prove the expected resolver schema inventory.",
+      "Prove replay rejection on a disposable proof target or through an accepted bounded proof mechanism.",
+      "Only then mark the resolver D1 eligible for D3 promotion preflight."
+    ],
+    "forbidden_authority_content": [
+      "production resource identifiers",
+      "database credentials",
+      "API tokens",
+      "secret material"
+    ]
+  },
+  "metadata_only_evidence": {
+    "evidence_kind": "resolver-d1-empty-bootstrap-remote-proof",
+    "top_level_exact_keys": [
+      "schema_version",
+      "evidence_kind",
+      "resolver_release_id",
+      "resolver_source_commit_sha",
+      "resolver_migration_manifest_sha256",
+      "wrangler_version",
+      "fresh_target_schema",
+      "bootstrap",
+      "migration_inventory",
+      "schema_inventory",
+      "first_import",
+      "migration_ledger",
+      "replay",
+      "user_data_involved",
+      "secret_material_recorded",
+      "production_touched"
+    ],
+    "required_metadata": {
+      "fresh_target_schema": [
+        "pre-import Cloudflare schema inspection result"
+      ],
+      "bootstrap": [
+        "bytes",
+        "sha256"
+      ],
+      "migration_inventory": [
+        "ordered_names",
+        "count"
+      ],
+      "schema_inventory": [
+        "count",
+        "sha256"
+      ],
+      "first_import": [
+        "completed",
+        "statement_count",
+        "rows_written"
+      ],
+      "migration_ledger": [
+        "ordered_names",
+        "count",
+        "latest"
+      ],
+      "replay": [
+        "rejected",
+        "error_class",
+        "schema_count_before",
+        "schema_count_after",
+        "schema_sha256_before",
+        "schema_sha256_after",
+        "ordered_names_before",
+        "ordered_names_after",
+        "ledger_sha256_before",
+        "ledger_sha256_after",
+        "residue"
+      ]
+    },
+    "fresh_target_schema_contract": {
+      "phase": "pre-bootstrap import",
+      "exact_value": [
+        {
+          "type": "table",
+          "name": "_cf_KV",
+          "tbl_name": "_cf_KV"
+        }
+      ],
+      "separate_from_post_bootstrap_schema_inventory": true,
+      "validator_rejections": [
+        "missing fresh_target_schema",
+        "extra, missing, reordered, or malformed fresh-target schema row",
+        "any application-owned pre-import schema object",
+        "pre-import d1_migrations",
+        "pre-import resolver application object"
+      ]
+    },
+    "release_identity_validation": [
+      "resolver_source_commit_sha must equal the source SHA verified from the immutable release archive used as bootstrap input.",
+      "resolver_migration_manifest_sha256 must equal the verified migration-manifest digest for the extracted bootstrap input bytes.",
+      "resolver_release_id must identify that same verified immutable release.",
+      "A mismatch between release source, migration digest, release identity, or bootstrap inputs fails validation."
+    ],
+    "required_false_booleans": [
+      "user_data_involved",
+      "secret_material_recorded",
+      "production_touched"
+    ],
+    "prohibited_content": [
+      "database credentials",
+      "API tokens",
+      "OAuth secrets",
+      "resolver encrypted data",
+      "mailbox or user data",
+      "production identifiers",
+      "secret material"
+    ]
+  },
+  "promotion_compatibility": {
+    "d3_promotion_schema_mutation": false,
+    "required_preflight_query": "SELECT name FROM d1_migrations ORDER BY id;",
+    "required_preflight_behavior": "Compare remote names with the immutable resolver release migration inventory.",
+    "bootstrap_purpose": "Only make a brand-new resolver D1, from the same verified immutable release, reach the exact state required by that read-only promotion preflight.",
+    "migration_application_inside_promotion_forbidden": true
+  },
+  "d3_d4_boundary": {
+    "this_authority_is_d4": false,
+    "non_fresh_resolver_database_action": "Reject and hand off to future D4 policy.",
+    "forbidden": [
+      "upgrade non-empty databases",
+      "infer compatibility between schema versions",
+      "perform down-migrations",
+      "automatically apply pending migrations during promotion",
+      "define rollback semantics"
+    ]
+  },
+  "future_implementation": {
+    "proposed_roots": [
+      "scripts/mailbox-secret-resolver-d1-bootstrap.py",
+      "scripts/mailbox-secret-resolver-release.py",
+      "dedicated permanent checker and metadata-only evidence files"
+    ],
+    "resolver_release_validator_alignment": {
+      "bounded_reason": "The future implementation may tighten resolver release migration inventory validation only as required to enforce the same canonical contiguous-from-0001 contract used by first bootstrap.",
+      "constraints": [
+        "No resolver runtime behavior change.",
+        "No weakening of release artifact validation.",
+        "No reuse of an old immutable release after validator or source changes.",
+        "Implementation merge must produce a new accepted-main resolver release.",
+        "External bootstrap ceremony must consume a release created from accepted implementation source, not a pre-authority or pre-implementation release."
+      ]
+    },
+    "alternative": "A later reviewed implementation may reuse or generalize scripts/cloudflare-d1-bootstrap.py only if it preserves accepted catalog D3A semantics and keeps resolver invocation explicit and separate.",
+    "required_cli_operations": [
+      "check",
+      "self-test",
+      "build",
+      "validate-empty",
+      "verify-evidence"
+    ],
+    "required_negative_tests": [
+      "empty migration set",
+      "missing 0001",
+      "sequence gap",
+      "unexpected migration filename",
+      "symlink migration",
+      "migration NUL",
+      "non-fresh target",
+      "existing d1_migrations",
+      "existing resolver table",
+      "malformed Cloudflare reserved schema",
+      "missing fresh_target_schema",
+      "malformed fresh_target_schema",
+      "extra pre-import schema object",
+      "pre-import d1_migrations",
+      "pre-import resolver object",
+      "modified bootstrap bytes",
+      "stale proof source SHA",
+      "reordered migration ledger",
+      "missing migration ledger row",
+      "extra migration ledger row",
+      "replay that changes schema",
+      "evidence with unexpected fields",
+      "evidence claiming production touched",
+      "evidence claiming user data or secret material involved"
+    ]
+  }
+}
