@@ -1,0 +1,33 @@
+name: AR-4B Regenerate Inventory
+
+on:
+  push:
+    branches:
+      - ar4b-client-mail-route-ownership
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout candidate branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ar4b-client-mail-route-ownership
+      - name: Regenerate canonical architecture inventory
+        run: python scripts/generate-architecture-inventory.py --write
+      - name: Commit generated inventory only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add architecture/inventory.json
+          if git diff --cached --quiet; then
+            echo "Canonical inventory already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "AR-4B regenerate canonical architecture inventory"
+          git push origin HEAD:ar4b-client-mail-route-ownership
