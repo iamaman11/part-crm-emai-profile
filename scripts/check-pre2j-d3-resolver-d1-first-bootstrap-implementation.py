@@ -79,7 +79,7 @@ def quality_workflow_errors(text: str) -> list[str]:
         "mailbox-secret-resolver-d1-bootstrap.py check",
         "mailbox-secret-resolver-d1-bootstrap.py self-test",
         "mailbox-secret-resolver-d1-bootstrap.py build --development-working-tree",
-        "artifacts/mailbox-secret-resolver-d1-bootstrap/bootstrap.sql",
+        "artifacts/mailbox-secret-resolver-d1-first-bootstrap/bootstrap.sql",
     ):
         if marker not in text:
             errors.append(f"first-bootstrap workflow proof is missing {marker!r}")
