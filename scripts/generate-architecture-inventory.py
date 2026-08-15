@@ -25,9 +25,9 @@ TRANSITION = "architecture/architecture-rebaseline-v3-transition.json"
 RUNTIME_TOPOLOGY = "architecture/runtime-topology-ar2.json"
 AR2_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR2.md"
 TRACKING_ISSUE = 266
-ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2"]
-CURRENT_SLICE = "AR-2"
-NEXT_SLICE = "AR-3"
+ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3"]
+CURRENT_SLICE = "AR-3"
+NEXT_SLICE = "AR-4A"
 
 DOCUMENT_STATUS = [
     {"path": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md", "status": "CURRENT_AUTHORITY", "scope": "architecture_program_execution"},
@@ -47,7 +47,7 @@ DOCUMENT_STATUS = [
     {"path": "docs/ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md", "status": "EVIDENCE", "scope": "ar0_second_pass_research"},
     {"path": AR2_EVIDENCE, "status": "EVIDENCE", "scope": "ar2_runtime_topology_and_d3_compatibility_acceptance"},
     {"path": RUNTIME_TOPOLOGY, "status": "STABLE_AUTHORITY", "scope": "accepted_ar2_runtime_topology_decision_input_for_ar3"},
-    {"path": ar3.AR3_EVIDENCE, "status": "EVIDENCE", "scope": "ar3_application_architecture_contract_candidate"},
+    {"path": ar3.AR3_EVIDENCE, "status": "EVIDENCE", "scope": "ar3_application_architecture_contract_accepted"},
     {"path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "superseded_predecessor_forward_execution"},
     {"path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "accepted_r1_r9_closeout"},
     {"path": "IMPLEMENTATION_PLAN.md", "status": "SUPERSEDED", "scope": "compatibility_entrypoint_to_preserved_history"},
@@ -79,7 +79,7 @@ def validate_docs() -> None:
     if program.get("authority") != CURRENT_AUTHORITY or program.get("tracking_issue") != TRACKING_ISSUE:
         raise SystemExit("docs/status.json current architecture authority drifted")
     if program.get("accepted_slices") != ACCEPTED_SLICES or program.get("current_slice") != CURRENT_SLICE or program.get("next_slice_after_acceptance") != NEXT_SLICE:
-        raise SystemExit("docs/status.json must preserve accepted AR-2 -> active AR-3 sequencing until AR-3 acceptance")
+        raise SystemExit("docs/status.json must project accepted AR-3 -> active AR-4A sequencing after AR-3 closeout")
     if program.get("runtime_topology_decision") != RUNTIME_TOPOLOGY:
         raise SystemExit("docs/status.json must project the accepted AR-2 topology decision")
 

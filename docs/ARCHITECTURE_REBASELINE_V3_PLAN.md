@@ -6,8 +6,8 @@
 **Subordinate pre-production/tooling issue:** #268  
 **Accepted activation prerequisite:** AR-0 / PR #267  
 **Accepted AR-0 main:** `e00420704950af5ca9352d2f0f02d3a9c9688527`  
-**Current accepted architecture checkpoint:** AR-2 — Runtime Topology + D3 Compatibility  
-**Next slice:** AR-3 — Application Architecture Contract  
+**Current accepted architecture checkpoint:** AR-3 — Application Architecture Contract  
+**Next slice:** AR-4A — Composition-root consolidation  
 **Accepted product phase:** Phase 2I  
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
@@ -15,7 +15,7 @@
 
 ## 1. Authority
 
-This file is the single current architecture/program execution authority after the AR-1 authority cutover. AR-2 is the latest accepted checkpoint; its normalized runtime-topology decision is `architecture/runtime-topology-ar2.json` with acceptance evidence in `docs/ARCHITECTURE_REBASELINE_V3_AR2.md`.
+This file is the single current architecture/program execution authority after the AR-1 authority cutover. AR-3 is the latest accepted checkpoint. Its application/runtime ownership contract is projected in `architecture/inventory.json` with acceptance evidence in `docs/ARCHITECTURE_REBASELINE_V3_AR3.md`; the accepted AR-2 runtime-topology decision remains `architecture/runtime-topology-ar2.json`.
 
 The accepted AR-0 research package is preserved without rewriting:
 
@@ -65,12 +65,12 @@ Only successful PC-1 may set `production_ready=true`, and only for the accepted 
 ```text
 AR-0   Delta Architecture Inventory                              DONE
 AR-1   Architecture Authority Re-baseline                        DONE
-AR-2   Runtime Topology + D3 Compatibility                       CURRENT / ACCEPTED CHECKPOINT
-AR-3   Application Architecture Contract                         NEXT
-AR-4A  Composition-root consolidation
+AR-2   Runtime Topology + D3 Compatibility                       DONE / ACCEPTED
+AR-3   Application Architecture Contract                         CURRENT / ACCEPTED CHECKPOINT
+AR-4A  Composition-root consolidation                            NEXT
 AR-4B  Client Mail route ownership
 AR-4C  Outbound Mail composition extraction
-AR-4D  Profile extraction only if AR-3 proves benefit
+AR-4D  Profile extraction — NOT REQUIRED by AR-3; reopen only by later accepted evidence
 AR-5   Wrangler / Runtime Authority Cleanup
 AR-6   Full Python Estate + read-only Rust opsctl
 AR-7   Environments + GitHub Governance + Operational Boundaries
