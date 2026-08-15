@@ -1,0 +1,47 @@
+name: AR3 Authority Closeout V2
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  closeout:
+    if: github.event.pull_request.head.ref == 'agent/ar3-authority-closeout-scratch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout scratch branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: agent/ar3-authority-closeout-scratch
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Project and verify accepted AR-3 authority
+        run: python scratch/ar3_authority_closeout_v2.py
+
+      - name: Commit only authority closeout outputs
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            README.md \
+            docs/README.md \
+            docs/INDEX.md \
+            docs/status.json \
+            docs/DEVELOPMENT_PLAN.md \
+            docs/ARCHITECTURE_REBASELINE_V3_PLAN.md \
+            docs/ARCHITECTURE_REBASELINE_V3_AR3.md \
+            architecture/architecture-rebaseline-v3-transition.json \
+            architecture/inventory.json \
+            scripts/generate-architecture-inventory.py \
+            scripts/_ar3_application_architecture.py \
+            scripts/check-documentation-authority.py
+          if git diff --cached --quiet; then
+            echo 'Authority closeout outputs already current.'
+            exit 0
+          fi
+          git commit -m 'AR-3 closeout: advance accepted authority to AR-4A'
+          git push origin HEAD:agent/ar3-authority-closeout-scratch
