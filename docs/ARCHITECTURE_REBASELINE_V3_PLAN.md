@@ -81,7 +81,7 @@ AR-11  Release-set / Promotion Architecture
 AR-12  Fresh Rehearsal Environment
 AR-13  Rotation Rehearsal
 AR-14  Remote Recovery Rehearsal
-AR-15  Windows Release & Update Architecture
+AR-15  Windows Delivery Program — inherited Batch E
 AR-16  Final Whole-project 10/10 Audit
 AR-17  Architecture Closeout + Production Core Gate
 ```
@@ -108,6 +108,7 @@ Production Core v1 is intended to enable only the accepted release profile for:
 - clients / customer cards;
 - browser profiles;
 - Camoufox/profile runtime;
+- Windows Profile Bridge runtime plus its production-grade update/publisher delivery chain;
 - single and bulk browser-profile operations;
 - client ↔ browser-profile binding;
 - required audit, health, readiness, observability, release and recovery foundations.
@@ -119,6 +120,8 @@ UI visibility is not a security boundary. Production-disabled capabilities must 
 There is one `main`, one architecture and one schema/compatibility history. No production-lite branch, mailbox fork or second migration lineage is permitted.
 
 The canonical machine hierarchy remains `architecture/inventory.json`; it is extended over time and must not be replaced by a second capability registry.
+
+Because the current Production Core v1 scope includes Camoufox/profile runtime through Windows Profile Bridge, AR-15 is a mandatory precondition of AR-16/AR-17 closeout. A future scope decision may remove that dependency only through the canonical Production Capability / Release Profile authority and an explicit compatibility/security review; it may not be bypassed by declaring the updater “post-production work”.
 
 ## 5. Operational authority
 
@@ -167,7 +170,117 @@ AR-2 additionally establishes these accepted topology inputs without executing p
 - accepted D3 repository-side bootstrap/same-bits/promotion machinery is preserved as foundation for AR-11;
 - the legacy D3 production lane is fail-closed because production mutation remains forbidden through AR-17; PC-1 owns first production provisioning/promotion after AR-17 using the AR-11 release-set authority.
 
-## 7. Accepted AR-1 authority transaction
+## 7. AR-15 — inherited Windows Delivery Program (Batch E)
+
+The unfinished historical **Batch E — Windows Profile Bridge auto-update mechanism** is preserved as still-binding future work and is absorbed into AR-15 without rewriting historical plan provenance. AR-15 is not a generic “review the updater” checkpoint: it must produce an accepted production-grade Windows delivery lifecycle before the final whole-project audit.
+
+AR-15 starts only after the cloud/profile/release contracts it consumes are stable enough to bind compatibility, especially the AR-11 release-set authority and AR-14 recovery semantics. Cloud changes before AR-15 must continue to run Windows impact review; incompatible changes after AR-15 acceptance reopen the affected Windows delivery evidence.
+
+Profile Bridge runtime and updater are separate components/failure domains. The updater must never overwrite or mutate the running Bridge/runtime in place.
+
+### AR-15A / inherited E1 — Release/update contract
+
+Define one versioned machine-readable update manifest contract covering at least:
+
+- release-set / Windows release identity;
+- Bridge version and updater compatibility;
+- runtime-bundle version;
+- supported profile-generation/profile-format compatibility window;
+- platform and architecture;
+- immutable artifact identity, byte size and SHA-256 digest;
+- signing key identifier / trust-policy version;
+- release channel and publication timestamp;
+- minimum supported updater/Bridge version where required;
+- rollback/downgrade compatibility policy.
+
+The Production Capability / Release Profile authority must be able to state whether a Production Core release requires this Windows artifact set and which compatibility window is accepted.
+
+### AR-15B / inherited E2 — Signature verification and key rotation
+
+The trust chain must be fail-closed:
+
+```text
+trusted update root/keyring
+-> verify signed manifest
+-> obtain expected artifact identity/digest/size
+-> download artifact
+-> verify size + SHA-256
+-> verify required Windows code-signing/Authenticode identity where applicable
+-> stage only after all checks pass
+```
+
+Required behavior includes key IDs, active + previous key transition, unknown/revoked-key rejection, explicit rotation procedure, manifest tamper rejection, replay protection and downgrade/rollback policy. A valid hash delivered by an untrusted manifest is not sufficient evidence.
+
+### AR-15C / inherited E3 — Download and side-by-side staging
+
+Updates are downloaded into an isolated versioned staging location and never overwrite the running binary/runtime. The installation model must preserve at least current, candidate and Last Known Good identities and support crash-safe cleanup/resume of incomplete staging.
+
+Activation must be an atomic pointer/selection transition over already verified staged bits rather than destructive replacement of the currently running installation.
+
+### AR-15D / inherited E4 — Safe activation lifecycle
+
+Activation is allowed only at a proven quiescent boundary. At minimum there must be no active Camoufox/browser-profile session and no Bridge/profile operation whose interruption can corrupt local state or violate the cloud/profile lifecycle contract.
+
+The activation protocol must define restart/process ownership, concurrent launch behavior, crash/reboot behavior and what happens when quiescence cannot be obtained. “Browser window closed” alone is not a sufficient state model if other Bridge/runtime work remains active.
+
+### AR-15E / inherited E5 — Health check, Last Known Good and automatic rollback
+
+A candidate becomes Last Known Good only after explicit post-activation health evidence. The health gate must cover startup/self-test, local state compatibility, runtime/profile-format compatibility and required control-plane/release compatibility.
+
+Failure must atomically restore the previous Last Known Good version, revalidate it, record bounded metadata-only failure evidence and prevent infinite candidate↔rollback retry loops. Failure of both candidate and LKG must enter an explicit recoverable failure state rather than silently continuing.
+
+### AR-15F / inherited E6 — Release publisher integration
+
+Windows publication must consume the same immutable source/release provenance model established by AR-11:
+
+```text
+accepted source SHA
+-> immutable Windows build
+-> code signing
+-> signed update manifest
+-> immutable publication
+-> release-set identity / artifact digests
+-> updater consumption
+```
+
+No manually renamed “final” binaries, mutable artifact replacement or rebuild-on-promotion path is permitted. The published manifest/artifact relation must be reproducible from repository/release evidence without secret values.
+
+### AR-15G / inherited E7 — Permanent updater verification
+
+Permanent automated evidence must cover at least:
+
+- interrupted/truncated download;
+- wrong size/digest and corrupt artifact;
+- invalid manifest signature;
+- unknown/revoked signing key and accepted key rotation;
+- replayed old release / forbidden downgrade;
+- insufficient disk or staging failure;
+- active browser/session blocking activation;
+- restart/reboot during staging and activation boundaries;
+- candidate startup/self-test/health timeout failure;
+- successful rollback to LKG;
+- repeated failed candidate without update loop;
+- preservation of local profiles/state across successful update and rollback;
+- runtime/profile-format incompatibility rejection;
+- successful end-to-end update.
+
+Unit tests alone are insufficient; supported Windows CI/integration evidence is required.
+
+### AR-15H — Production-equivalent Windows release rehearsal
+
+Before AR-15 can close, perform a production-equivalent Windows rehearsal from an older accepted version through publication, discovery, download, verification, staging, quiescent activation, health marking and rollback fault injection. The rehearsal must exercise the actual Profile Bridge/Camoufox boundary on a supported Windows environment rather than proving only portable library code.
+
+Evidence must bind exact source/release identity, Windows artifact digest/signature identity, manifest identity, old/new/LKG versions, compatibility result, activation/health result and rollback result. It must not contain credential or sensitive profile contents.
+
+### AR-15 exit / downstream gate
+
+AR-15 is complete only when E1–E7 and AR-15H are all accepted through bounded PRs/PR chains with permanent tests and exact-head evidence. Missing updater/signing/rollback/rehearsal evidence is a release-blocking architecture defect for the current Production Core v1 scope.
+
+AR-16 must explicitly re-audit Windows delivery together with cloud release/recovery compatibility. AR-17 is forbidden from changing `production_core_gate` from `BLOCKED` to `AUTHORIZED` while the current Core release profile requires Windows Profile Bridge and AR-15 is incomplete or its compatibility evidence is stale.
+
+PC-1 must promote only a release profile whose cloud and Windows release identities are mutually compatible; PC-1 must not be the first place where updater safety, signature trust or rollback is tested.
+
+## 8. Accepted AR-1 authority transaction
 
 AR-1 changed governance/authority only. Its accepted merge made all of these true at once:
 
@@ -183,7 +296,7 @@ AR-1 changed governance/authority only. Its accepted merge made all of these tru
 
 Issue #203 and its pre-2J plan are accepted predecessor history, not the forward program tracker after AR-1. Its still-open blocker lifecycle remains available to accepted predecessor exception/freeze gates but has no forward execution authority.
 
-## 8. Slice discipline
+## 9. Slice discipline
 
 Every AR slice follows one bounded loop:
 
@@ -201,7 +314,7 @@ A slice is not accepted from isolated green jobs. Acceptance requires the comple
 
 Any new commit invalidates prior exact-head evidence.
 
-## 9. AR-2 exit / AR-3 entry
+## 10. AR-2 exit / AR-3 entry
 
 AR-2 is complete only after its guarded merge to the then-current `main`, post-merge re-read confirms docs, topology decision, machine transition, inventory, status and issue ledger agree, and predecessor issue #251 is closed as `not_planned` for its superseded forward production sequence while its repository-side history/evidence remains preserved.
 
