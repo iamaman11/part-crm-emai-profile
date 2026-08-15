@@ -1,10 +1,10 @@
 use crate::access_session::{
     correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
 };
+use crate::composition::query_repository;
 use application_ports::query_mailboxes::{MailboxBindingStatus, MailboxProvider};
 use application_ports::query_profiles::ProfileStatus;
 use application_ports::{QueryCursor, QueryPageRequest, QueryPageSize};
-use cloudflare_adapters::d1_query::D1QueryRepository;
 use control_plane_contract::RouteClass;
 use control_plane_contract::operator_query_api::{
     MailboxListItemDto, MailboxListPageDto, MemberListItemDto, MemberListPageDto,
@@ -41,7 +41,7 @@ pub async fn dispatch(route: RouteClass, request: &Request, env: &Env) -> Result
             );
         }
     };
-    let repository = D1QueryRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
+    let repository = query_repository(env)?;
 
     match route {
         RouteClass::ProfileCollectionApi => {

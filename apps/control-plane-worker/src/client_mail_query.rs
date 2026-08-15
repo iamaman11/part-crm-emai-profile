@@ -1,13 +1,13 @@
 use crate::access_session::{
     correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
 };
+use crate::composition::{
+    client_mail_eligibility_repository, client_mail_query_provider, query_repository,
+};
 use application_ports::query::{QueryCursor, QueryPageRequest, QueryPageSize};
 use application_ports::query_mail_provider::{
     MailSearchTerm, MailboxMessageReference, SearchClientMailboxMessagesRequest,
 };
-use cloudflare_adapters::cloud_mail_query::CloudMailboxQueryAdapter;
-use cloudflare_adapters::d1_client_mail_eligibility::D1ClientMailboxEligibilityRepository;
-use cloudflare_adapters::d1_query::D1QueryRepository;
 use control_plane_contract::RouteClass;
 use profile_platform_primitives::{ClientId, MailboxBindingId};
 use serde_json::{Map, Value, json};
@@ -33,17 +33,9 @@ pub async fn dispatch(route: RouteClass, request: &mut Request, env: &Env) -> Re
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
 
-    let authorization = D1QueryRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
-    let eligibility = D1ClientMailboxEligibilityRepository::new(
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-    );
-    let provider = CloudMailboxQueryAdapter::new(
-        env,
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-        actor.actor(),
-        &client_id,
-    );
+    let authorization = query_repository(env)?;
+    let eligibility = client_mail_eligibility_repository(env)?;
+    let provider = client_mail_query_provider(env, actor.actor(), &client_id)?;
 
     match route {
         RouteClass::ClientMailSearchApi => {
