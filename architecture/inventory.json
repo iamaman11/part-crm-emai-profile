@@ -273,7 +273,7 @@
       },
       {
         "route_class": "ClientMailSearchApi",
-        "capability": "clients",
+        "capability": "client_mail",
         "methods": [
           "POST"
         ],
@@ -283,7 +283,7 @@
       },
       {
         "route_class": "ClientMailMessageApi",
-        "capability": "clients",
+        "capability": "client_mail",
         "methods": [
           "POST"
         ],
@@ -651,7 +651,8 @@
       "ROUTE_OWNERSHIP_DEBT",
       "INTENTIONAL_RUNTIME_BOUNDARY",
       "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
-      "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED"
+      "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
+      "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE"
     ],
     "runtime_resources": [
       {
@@ -1089,11 +1090,11 @@
       },
       {
         "id": "client_mail_route_ownership",
-        "status": "ROUTE_OWNERSHIP_DEBT",
+        "status": "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
         "owner_slice": "AR-4B",
         "evidence": [
-          "crates/control-plane-contract/src/routes/clients.rs::ClientMailSearchApi",
-          "crates/control-plane-contract/src/routes/clients.rs::ClientMailMessageApi",
+          "crates/control-plane-contract/src/routes/client_mail.rs::ClientMailSearchApi",
+          "crates/control-plane-contract/src/routes/client_mail.rs::ClientMailMessageApi",
           "crates/control-plane-contract/src/routes/client_mail.rs::ClientMailSendApi"
         ]
       },
@@ -1124,9 +1125,10 @@
     ],
     "remediation_state": {
       "accepted_through": "AR-4A",
-      "status": "ACCEPTED",
-      "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md",
-      "next_required_slice": "AR-4B"
+      "candidate": "AR-4B",
+      "candidate_status": "ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
+      "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md",
+      "next_after_acceptance": "AR-4C"
     },
     "conditional_ar4d": {
       "decision": "NOT_REQUIRED",
@@ -1145,6 +1147,7 @@
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
     "runtime_topology_projection_owner": "AR-3",
     "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md",
+    "application_architecture_candidate_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md",
     "application_architecture_base_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
     "application_architecture_projection": "architecture/inventory.json::application_architecture",
     "development_projection": "docs/DEVELOPMENT_PLAN.md",
@@ -1254,6 +1257,11 @@
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md",
       "status": "EVIDENCE",
       "scope": "ar4a_composition_root_consolidation_accepted"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md",
+      "status": "EVIDENCE",
+      "scope": "ar4b_client_mail_route_ownership_candidate"
     },
     {
       "path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
