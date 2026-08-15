@@ -2,25 +2,76 @@
 
 **Status:** AR-0 candidate evidence; not active execution authority until AR-1  
 **Audit base:** `5be54c2989dbfa22822d3692e22156f23d2a4602`  
-**Tracking:** #266 / Draft PR #267  
-**Production readiness:** `false` and unchanged
+**Tracking:** #266 / Draft PR #267; subordinate pre-production authority work #268  
+**Production readiness:** `false` and unchanged  
+**Production Core v1 gate:** `BLOCKED`
 
 ## 1. Audit method
 
-Repeated repository reads covered backend/application layering, frontend/contracts, architecture fitness tests, Cloudflare topology/promotion, D1 migrations, resolver credential/key storage, recovery, Profile Bridge, documentation authority and operational/research executables.
+Repeated repository reads covered backend/application layering, frontend/contracts, architecture fitness tests, Cloudflare topology/promotion, D1 migrations, resolver credential/key storage, recovery, Profile Bridge, documentation authority, GitHub governance and operational/research executables.
 
 Classifications: `PRESENT`, `PARTIAL`, `MISSING`, `CONFLICT`, `SUPERSEDED`; runtime also uses `KEEP/SIMPLIFY/DEFER/DELETE_CANDIDATE`.
 
+The audit intentionally distinguishes:
+
+- source present;
+- accepted architecture;
+- production-enabled capability;
+- architecture complete;
+- production gate authorized;
+- production ready.
+
+These are not interchangeable states.
+
 ## 2. Baseline truth
 
-- Phase 2I remains accepted; Phase 2J blocked; `production_ready=false`.
+- Phase 2I remains accepted; historical Phase 2J remains blocked; `production_ready=false`.
 - R1–R9 and Pre-2J A/B/C/D1/D2/repository-side D3 remain accepted history/evidence.
 - #203/current Pre-2J plan remain execution authority until separately accepted AR-1.
-- D3 external #251 remains open.
+- Pre-2J D3 external issue #251 is currently **open** and must be classified during authority cutover rather than rewritten as if v3 always existed.
 - audit-base `main` is `5be54c2989dbfa22822d3692e22156f23d2a4602`.
-- GitHub branch metadata reports `main` unprotected and repository rulesets list is empty; direct branch-protection details are inaccessible to the integration, so governance finding is limited to the observable lack of branch/ruleset protection despite guarded-merge process expectations.
+- PR #267 currently starts from that exact base.
+- GitHub branch metadata reports `main` as `protected=false` and repository rulesets are empty.
+- the GitHub `production` Environment is materially protected: a required reviewer exists, `can_admins_bypass=false`, and its custom deployment branch policy contains only `main`.
+- therefore production-environment protection and `main` merge protection are two different security boundaries; the former is a strength, the latter is a current governance gap.
 
-## 3. Backend/application
+## 3. Primary sequencing correction discovered after the first candidate
+
+The first candidate plan placed real production provisioning/promotion in AR-16 and only then ran the whole-project audit in AR-17. That ordering is rejected.
+
+Correct mandatory lifecycle:
+
+```text
+AR-0..AR-15
+architecture + operational remediation/rehearsal
+NO production rollout
+        ->
+AR-16
+final whole-project 10/10 audit
+P0=0 / P1=0
+NO production mutation
+        ->
+AR-17
+architecture closeout
+freeze canonical authorities
+Production Core v1 gate BLOCKED -> AUTHORIZED
+production_ready remains false
+NO production deployment
+        ->
+AR ENDS
+        ->
+PC-1 Production Core v1 provisioning/promotion
+        ->
+PC-2 Mailbox Administration
+        ->
+PC-3 Mailbox Jobs/Automation
+        ->
+PC-4 Outbound/subsequent capabilities
+```
+
+Reason: production-like provisioning, migration, release, recovery and convergence can and must be proven in rehearsal/staging/disposable environments. Real production mutation adds operational risk but is not required to prove architecture correctness.
+
+## 4. Backend/application
 
 ### PRESENT
 
@@ -39,11 +90,19 @@ Classifications: `PRESENT`, `PARTIAL`, `MISSING`, `CONFLICT`, `SUPERSEDED`; runt
 - concrete construction also exists in `lib.rs::binding_probe`, outside `composition.rs`;
 - Client Mail read/send classifier ownership is split;
 - Outbound Mail handler duplicates eligibility, constructs D1/query/intent/provider adapters, owns source-message access plumbing and provider selection;
-- shared Profile/Generation application crate is cohesive/inward enough that extraction is unproven.
+- shared Profile/Generation application cluster is cohesive/inward enough that extraction is unproven.
 
 AR-4 candidates: composition-root consolidation; Client Mail classifier normalization; Outbound Mail source-access/provider-router/composition extraction with existing Worker-boundary checker extension; profile application extraction only if AR-3 proves benefit.
 
-## 4. Frontend/contracts
+## 5. Rust workspace / modularity conclusion
+
+The repository already has a layered workspace with domains, use-cases, ports, adapters and executable/composition roots. The quality gap is not “too few crates” or “too much code in one language”. The gap is proof of semantic ownership, dependency direction and singular composition authority.
+
+Cross-domain dependencies must be intentional, acyclic, documented and fitness-tested. Crate split/merge is allowed only when it measurably reduces ownership ambiguity, fan-in/fan-out, compile/change blast radius or cognitive load.
+
+No broad Rust rewrite is justified.
+
+## 6. Frontend/contracts
 
 ### PRESENT
 
@@ -55,12 +114,57 @@ AR-4 candidates: composition-root consolidation; Client Mail classifier normaliz
 
 ### PARTIAL
 
-- target (`UI_ARCHITECTURE`) versus accepted capability must become machine-explicit;
-- 9 generated TS modules exist while aggregate `GENERATED_CONTRACTS` architecture inventory covers 7; missing aggregate rows are `client-mail-send.ts` and `mailbox-client-association.ts`, both already legitimately generated by bounded generators.
+- target (`UI_ARCHITECTURE`) versus accepted/composed/production-enabled state must become machine-explicit;
+- aggregate generated-contract architecture inventory is not yet proven complete for every generated TS module;
+- Production Core capability exposure needs one server-authoritative release-profile projection rather than ad-hoc frontend flags.
 
-Correct action: extend existing architecture inventory to 100%, not create another registry.
+Correct action: extend existing architecture inventory; do not create another competing registry.
 
-## 5. Documentation/governance
+## 7. Production Capability / Release Profile finding
+
+Current repository search does not expose canonical `production_enabled` / `release_profile` semantics in the accepted architecture inventory.
+
+This is an explicit pre-production architecture gap.
+
+Machine authority must distinguish at least:
+
+```text
+source_present
+accepted
+production_enabled
+environment
+release_profile
+dependencies
+compatibility
+backend_enforcement
+frontend_projection
+activation_gate
+```
+
+Initial intended rollout:
+
+### Production Core v1 enabled after AR closeout + PC-1
+
+- authentication/authorization/membership;
+- users;
+- clients/customer cards;
+- browser profiles;
+- Camoufox/profile runtime;
+- single and bulk browser-profile operations;
+- client <-> browser-profile binding;
+- required audit/health/readiness/observability/release/recovery foundations.
+
+### Source-present but production-disabled at Core v1
+
+- mailbox administration;
+- bulk mailbox operations;
+- client <-> mailbox binding;
+- mailbox jobs/automation;
+- outbound mail/email side effects unless separately accepted.
+
+No long-lived reduced production branch or mailbox fork is required or allowed.
+
+## 8. Documentation/governance
 
 ### PRESENT
 
@@ -69,140 +173,276 @@ Root README, docs index/development/capability matrix, stable architecture/threa
 ### CONFLICT/PARTIAL
 
 - AR-1 authority closure is larger than docs: checkers/generators/release-freeze logic encode #203/current plan assumptions;
-- `IMPLEMENTATION_PLAN.md` still looks current/implementation-ready;
-- `PROFILE_LIFECYCLE_PLAN.md` still looks normative while carrying stale policy assumptions;
-- accepted historical slice docs can contain old rules/“remaining work” and need explicit status rather than rewriting;
-- retired root scripts still point to old/future planning language;
-- `status.json` is truthful about blocker/Phase2J but progress/severity interpretation is ambiguous;
-- `check-phase2i-release-freeze.sh` hard-codes old authority and must migrate during AR-1.
+- `IMPLEMENTATION_PLAN.md` remains current-looking/implementation-ready;
+- `PROFILE_LIFECYCLE_PLAN.md` remains current-looking while carrying stale policy assumptions;
+- accepted historical slice docs can contain old rules/remaining work and need explicit status rather than rewriting;
+- release-freeze/check scripts may hard-code predecessor authority;
+- #203/#251/#266/#268 relationships must become explicit provenance/authority relationships;
+- branch/ruleset mechanical enforcement is weaker than guarded-merge expectations.
 
-Document statuses: `CURRENT_AUTHORITY`, `TARGET`, `ACCEPTED_HISTORICAL`, `EVIDENCE`, `RUNBOOK`, `GENERATED_PROJECTION`.
+Document statuses target: `CURRENT_AUTHORITY`, `TARGET`, `ACCEPTED_HISTORICAL`, `EVIDENCE`, `RUNBOOK`, `GENERATED_PROJECTION`, with `SUPERSEDED` where a forward status is required.
 
-## 6. Architecture inventory
+## 9. GitHub governance finding
+
+Verified current state:
+
+```text
+production Environment:
+  required reviewer = present
+  can_admins_bypass = false
+  deployment branch policy = main only
+
+main branch:
+  protected = false
+  required status checks = off via branch metadata
+
+repository rulesets:
+  []
+```
+
+Conclusion: production deployment approval has a good protection foundation, but repository merge/governance policy is not yet mechanically at the same level.
+
+Before architecture closeout, CI/PR requirements must be enforced by branch protection and/or rulesets rather than relying only on procedural discipline.
+
+## 10. Architecture inventory
 
 ### PRESENT
 
-Existing `architecture/inventory.json` already aggregates workspace, routes, migrations, generated contracts and documentation authority.
+Existing `architecture/inventory.json` is already the correct machine-readable architecture foundation.
 
 ### PARTIAL target
 
-Extend it—not parallel files—to complete capability/runtime/concurrency ownership, all generated contracts, document status and executable-tool role/environment inventory.
+Extend it—not a parallel registry—to complete:
 
-## 7. Cloudflare topology
+- capability ownership;
+- Production Capability / Release Profile;
+- runtime-resource ownership;
+- concurrency ownership;
+- all generated contracts;
+- document status;
+- executable-tool roles;
+- exact Python dispositions;
+- environment/release compatibility projection.
+
+## 11. Full Python estate / `opsctl`
+
+### Verified conclusion
+
+The correct architecture question is not “how many Python lines should be rewritten in Rust?”. Python remains appropriate for deterministic validators, generators, fixtures, CI helpers and bounded research/evidence tooling.
+
+### Current evidence gap
+
+A complete mechanically proven per-file Python estate with **every repository-owned `.py`**, exact LOC, callers, workflow callers, remote reads/mutations, data/secret access, current authority and disposition has not yet been completed.
+
+Therefore AR-6 cannot be considered satisfied until that census exists.
+
+Allowed dispositions:
+
+- `KEEP_PYTHON`;
+- `MOVE_OPSCTL_READ`;
+- `MOVE_OPSCTL_MUTATION_LATER`;
+- `MERGE`;
+- `RETIRE`;
+- `DELETE`.
+
+Rust `opsctl` is currently MISSING and must start read-only:
+
+```text
+opsctl inventory
+opsctl plan
+opsctl doctor
+opsctl drift
+```
+
+Mutable operations cut over one lifecycle at a time only after parity/rehearsal and retirement of the old mutable authority.
+
+## 12. Cloudflare topology
 
 ### KEEP
 
-Control-plane Worker/Static Assets; dedicated mailbox-secret-resolver/service binding; catalog D1; resolver D1; generation R2; ProfileCoordinator DO; NotificationHub DO; integration-events Queue; mailbox-jobs Queue/DLQ pending final AR-2 table; Access + application authorization.
+Control-plane Worker/Static Assets; dedicated mailbox-secret-resolver/service binding; catalog D1; resolver D1; generation R2; ProfileCoordinator DO; NotificationHub DO; integration-events Queue; `MAILBOX_JOBS` Queue/DLQ; Access + application authorization.
 
-Resolver isolation is an accepted security boundary for opaque credentials.
+Resolver isolation remains a justified security boundary unless a later threat-model proof says otherwise.
 
 ### DELETE_CANDIDATE
 
-`GENERATION_VERIFICATION` Queue: Wrangler/checker/binding probe include it, while accepted Worker Queue message model consumes IntegrationEvent/MailboxJob only. AR-2 must still prove no external/independent consumer before removal.
+`GENERATION_VERIFICATION` Queue remains a deletion candidate pending proof of no external/independent consumer. Removal must atomically cover config, bindings, probes/checkers, runtime assumptions, physical resource and docs/inventory.
 
 Providers: Gmail read/send KEEP; IMAP+SMTP KEEP; Graph OAuth/read/delta KEEP; Graph `Mail.Send` DEFER; browser/Bridge lane KEEP at current evidence level.
 
-## 8. Operations/release
+## 13. MAILBOX_JOBS Queue / DLQ
 
-### PRESENT
+Preserve Queue/DLQ and at-least-once semantics. No new mailbox-domain DLQ state machine is required.
 
-Canonical Wrangler; env isolation and required-secret checks; immutable resolver + control-plane/SPA artifacts; exact-source/no-rebuild promotion; protected environment approval model; pinned Wrangler; resolver-before-control-plane order; D1 ledger preflight; smoke/attestation.
+Target recovery:
 
-### PARTIAL
+```text
+inspect envelope
+  -> resolve tenant/binding/job/version
+  -> load current D1 authority
+  -> validate ownership/version/fence
+  -> controlled requeue | rerun | retire
+  -> metadata-only evidence
+```
 
-Typed environment identity versus derived deploy-manifest authority; separately accepted production provisioning lifecycle; operational policy dispersed across `scripts/`/`tools/`; explicit multi-component release-set/protocol/schema compatibility; Rust read-only `opsctl` absent.
+Read-only inspect/doctor precedes mutable DLQ actions.
 
-Mutation authority today is not “Python”; it is policy/generation + GitHub workflow/environment approval + pinned Wrangler. `opsctl` migration must be concern/role based.
+## 14. Executable tooling examples
 
-## 9. Executable tooling
+Current sampled classifications remain hypotheses/evidence until the full Python census:
 
 - `runtime_bundle.py`: synthetic evidence KEEP;
 - fake Camouhost runtime: synthetic evidence KEEP;
-- `fingerprint_certify.py`: bounded external-research/evidence;
+- `fingerprint_certify.py`: bounded external research/evidence;
 - `r2_s3_canary.py`: ephemeral app-test-data mutator;
-- `profile_browser.py`: EXTERNAL_RESEARCH_ONLY candidate; guard/retire if needed;
-- `cloud_profile_smoke.py`: HISTORICAL_QUARANTINE candidate because it retains obsolete AES-GCM + mutable R2 `current.json` model versus current immutable generation objects + D1 active-generation registry.
+- `profile_browser.py`: `EXTERNAL_RESEARCH_ONLY` candidate; guard/retire if needed;
+- `cloud_profile_smoke.py`: `HISTORICAL_QUARANTINE` candidate because it retains obsolete mutable R2 active-pointer behavior versus immutable generation objects + D1 active-generation authority.
 
-AR-10 removes/quarantines obsolete operational-looking paths and adds negative regression.
+AR-10 executes only classifications proven by the complete AR-6 inventory.
 
-## 10. Database evolution
+## 15. Operations/release
 
 ### PRESENT
 
-Catalog migrations through 0026; separate resolver migration/bootstrap authority; fresh-bootstrap vs upgrade distinction; replay/parity negatives; D3 exact remote migration-ledger preflight; migration/invariant CI.
+Canonical Wrangler; environment required-secret checks; immutable resolver + control-plane/SPA artifacts; exact-source/no-rebuild promotion foundations; protected production Environment; pinned Wrangler; resolver-before-control-plane order; D1 ledger preflight; smoke/attestation mechanisms.
 
 ### PARTIAL
 
-No canonical migration classes, per-component min/max catalog/resolver schema windows, mechanical rollback blocker, unified migration-concurrency authority or canonical destructive multi-release sequencing. AR-9 adds compatibility policy, not replacement mechanics.
+- typed environment identity versus derived deploy-manifest authority;
+- canonical `rehearsal/staging/production` semantics;
+- concern-by-concern operational authority cutover;
+- multi-component release-set/protocol/schema compatibility;
+- `opsctl` read model;
+- repository governance enforcement;
+- explicit separation between architecture closeout and actual production mutation.
 
-## 11. Credentials/OAuth/keys
+Wrangler remains Worker/configuration execution authority. GitHub remains orchestration/approval boundary. `opsctl` owns typed project operational semantics after bounded cutover. Python remains valid for clean deterministic repository/CI roles.
 
-### PRESENT — stronger than initial plan assumed
+## 16. Database evolution
 
-- mailbox onboarding domain is versioned/CAS-governed and already owns `Pending -> Active -> ReauthRequired -> Active/Disabled/ConfigError` transitions;
+### PRESENT
+
+Catalog/resolver migrations and bootstrap authority; fresh-bootstrap vs upgrade distinction; replay/parity negatives; exact remote migration-ledger preflight; migration/invariant CI.
+
+### PARTIAL
+
+No fully canonical migration classes, per-component min/max schema windows, rollback blocker or unified concurrency ownership yet.
+
+Correction from re-review: do **not** automatically add a database distributed lock. First enforce one legitimate migration executor plus workflow/ops concurrency. Add a DB-level lock only if an independent concurrent mutation surface remains unavoidable.
+
+Preserve historical migration provenance. A fresh current baseline/epoch may be introduced later only with semantic-convergence proof and must not be called `V2` unless a real compatibility break is accepted.
+
+## 17. Credentials/OAuth/keys
+
+### PRESENT — stronger than rewrite assumptions
+
+- mailbox onboarding domain is versioned/CAS-governed and owns `Pending -> Active -> ReauthRequired -> Active/Disabled/ConfigError` transitions;
 - Gmail/Microsoft OAuth ceremonies have bounded state/code/expiry/replay semantics and opaque credential handles;
 - resolver provider adapter supports authorization-code exchange and refresh-token grant for Google/Microsoft;
-- resolver `resolve_credential` and Gmail-send resolve automatically call refresh when expiry is near; explicit Microsoft Graph refresh route also exists;
+- resolver paths automatically refresh near-expiry credentials; explicit Microsoft Graph refresh exists;
 - replacement refresh tokens and expiry are persisted;
-- resolver encrypted store uses versioned encryption keys and records/reconciles key rotation;
-- contact keyrings are also versioned/current-write historical-read foundations.
+- resolver encrypted store uses versioned encryption keys and rotation reconciliation;
+- contact keyrings are versioned/current-write historical-read foundations.
 
 ### PARTIAL — exact AR-8 delta
 
-1. **Refresh concurrency is not proven race-safe.** General credential refresh is load -> provider refresh -> ordinary encrypted-record upsert. Resolver record schema has no general credential revision column used by refresh. Implicit resolve-time refresh and explicit Graph refresh can therefore compete for one handle without a visible single-flight/CAS fence.
-2. **Provider revocation -> application state reconciliation is incomplete as a single durable lifecycle.** `ProviderRejected` exists at resolver boundary, but v3 must ensure invalid/revoked refresh credentials durably reach the already existing onboarding `ReauthRequired` state rather than being only a transient resolver error.
-3. **Credential inventory must be two-level.** `DATA_CLASSIFICATION` treats secret handles/key identifiers/security configuration as sensitive; “metadata-only” is not automatically Git-safe.
-4. **Uniform rotation/retirement/recovery policy** across credential/key classes remains incomplete, despite strong keyring foundations.
-5. **Production-like rotation rehearsal** remains missing.
+1. refresh concurrency is not proven race-safe; current conceptual path is load -> provider refresh -> ordinary encrypted-record upsert without a visible per-handle fence;
+2. provider revocation -> application `ReauthRequired` reconciliation must be one durable lifecycle;
+3. credential inventory must separate repository-safe policy from protected live state;
+4. uniform logical credential issue/import -> validate -> bind -> switch -> verify -> revoke-previous lifecycle remains incomplete;
+5. production-like rotation rehearsal remains missing.
 
-Target AR-8:
+No second OAuth/onboarding state machine is created.
 
-- tracked repository policy only for fields explicitly safe under data classification;
-- protected live operational inventory for sensitive active identity/version/handle/provider state;
-- per-credential refresh single-flight/CAS/lease/fence shared by implicit and explicit refresh;
-- stale refresh result cannot overwrite newer rotated credential;
-- failure preserves last usable credential where safe;
-- invalid/revoked refresh credential reconciles durably to existing `ReauthRequired`;
-- permanent concurrent-refresh/replay/rotation negatives.
+## 18. Recovery
 
-No second onboarding/OAuth state machine is created.
+Repository-local Phase 2I recovery is PRESENT. Missing level is disposable remote catalog/resolver D1 restore, R2/key recovery, credential/OAuth re-establishment, Queue reconciliation, measured RTO/RPO and full post-restore application invariants.
 
-## 12. Recovery
+AR-14 provides this evidence without touching production.
 
-Repository-local Phase2I D1/R2/coordinator/Bridge recovery is PRESENT. Missing level is remote disposable catalog/resolver D1 restore, R2/key recovery, credential/OAuth re-establishment, Queue reconciliation as applicable, measured RTO/RPO and full post-restore application invariants. AR-14 extends accepted recovery.
+## 19. Release model
 
-## 13. Release model
+Immutable component artifacts, exact-source/no-rebuild and deployment evidence foundations are PRESENT.
 
-Immutable resolver and control-plane/SPA components, exact-source/no-rebuild and deployment evidence are PRESENT. Explicit release-set object with all component identities/digests, protocol compatibility, per-DB schema windows, deploy order/topology revision and promotion evidence is PARTIAL.
+Explicit release-set object with all component identities/digests, protocol compatibility, per-DB schema windows, deploy order/topology revision and same-bits promotion policy is PARTIAL.
 
-## 14. Windows
+AR-11 completes the model. Real production promotion happens only in PC-1 after AR closeout.
+
+## 20. Windows
 
 Profile Bridge runtime is substantial/composed-synthetic. Missing capability is production updater/publisher: signed manifest, trusted-key policy, staged side-by-side install, activation, health, LKG rollback and failed-update recovery. AR-15 owns updater only.
 
-## 15. Summary
+## 21. Summary
 
 ### PRESENT
 
-Strong clean architecture, backend/frontend negative gates, capability use-case separation, generated contracts, canonical Wrangler/resolver boundary, immutable releases, D1 migration/bootstrap, versioned keyrings, real OAuth refresh primitive/path, repository-local recovery, exact-head CI, substantial Bridge runtime.
+Strong layered architecture, backend/frontend negative gates, capability use-case separation, generated-contract discipline, canonical Wrangler/resolver boundary, immutable release foundations, D1 migration/bootstrap, versioned keyrings, real OAuth refresh primitives, repository-local recovery, exact-head CI discipline, substantial Bridge runtime and protected production Environment approval.
 
 ### PARTIAL
 
-Composition singularity; Client Mail ownership; Outbound Mail thin transport; complete architecture-inventory dimensions; generated-contract aggregate coverage; document status; executable roles; environment/deploy authority; race-safe credential refresh and durable Reauth reconciliation; credential/key policy/live-inventory split; D1 schema compatibility; release-set compatibility; remote recovery/rotation; developer/operator single path.
+Composition singularity; Client Mail ownership; Outbound Mail thin transport; capability/release-profile machine authority; complete generated-contract coverage; document status; exact executable/Python roles; environment/deploy authority; GitHub branch/ruleset enforcement; race-safe credential refresh; logical credential lifecycle; D1 schema compatibility; release-set compatibility; remote recovery/rotation; developer/operator single path.
 
 ### MISSING
 
-Read-only Rust `opsctl`; canonical rehearsal environment lifecycle; protected-live credential inventory integration/policy comparison; schema-window enforcement; production Windows updater; remote whole-system recovery rehearsal.
+Read-only Rust `opsctl`; complete exact Python disposition inventory; canonical rehearsal environment lifecycle; protected-live credential inventory integration; schema-window enforcement; production Windows updater; remote whole-system recovery rehearsal.
 
 ### CONFLICT
 
-Observable unprotected `main` + empty rulesets versus guarded-merge expectation; root current-looking stale plans; historical docs without status class; stale legacy references; release-freeze old #203 authority; historical mutable-active-R2 smoke executable; any future dual mutator; any refresh implementation that remains uncoordinated load/provider/upsert after AR-8.
+- first PR #267 candidate sequencing put production provisioning before final audit;
+- observable unprotected `main` + empty rulesets versus guarded-merge expectation;
+- current-looking stale root plans/historical docs without full status classification;
+- any future dual operational mutator;
+- any refresh implementation that remains uncoordinated after AR-8;
+- source-present mailbox/outbound code being mistaken for production authorization.
 
-## 16. D3 compatibility
+## 22. Corrected execution gates
 
-Repository-side D3 machinery is high quality and should be preserved. If v3 activates before external D3 acceptance: AR-2 no material topology conflict -> continue preserved path; material topology change -> do not provision obsolete resources to close old sequencing, supersede only unaccepted external target consciously.
+### AR-16 — final audit
 
-## 17. AR-0 acceptance recommendation
+Must run on latest accepted `main` and end with:
 
-Accept AR-0 only after canonical plan/audit/repeated-review/machine transition reflect these corrections and every permanent workflow passes on one exact unchanged head.
+```text
+P0=0
+P1=0
+```
 
-AR-0 itself changes no product code, OpenAPI, migration SQL, workflow, Cloudflare/provider resource, secret or deployment. AR-1 is first authority-changing slice.
+No production mutation.
+
+### AR-17 — architecture closeout
+
+May set only:
+
+```text
+architecture_complete=true
+production_core_gate=AUTHORIZED
+production_ready=false
+```
+
+No production deployment.
+
+### PC-1 — Production Core v1
+
+First real production provisioning/promotion. Only successful protected production evidence may set `production_ready=true` for Core v1 scope.
+
+Later capabilities activate independently through PC-2/PC-3/PC-4.
+
+## 23. D3 compatibility
+
+Repository-side D3 machinery is high quality and should be preserved as predecessor evidence. Issue #251 is currently open. V3 must classify its future status explicitly during AR-1/AR-2.
+
+If an unaccepted D3 external target conflicts materially with the accepted v3 topology, do not provision obsolete production resources merely to close old sequencing. Preserve accepted repository-side evidence and consciously supersede only the unaccepted external target.
+
+## 24. AR-0 acceptance recommendation
+
+Accept AR-0 only after the canonical plan, this audit, repeated-review record and machine transition all reflect:
+
+- corrected `AR-16 audit -> AR-17 closeout -> PC-1 production` sequencing;
+- Production Capability / Release Profile requirement;
+- exact Python -> opsctl disposition requirement;
+- GitHub governance split between production Environment and unprotected `main`;
+- environment/secret/release/recovery findings;
+- no-production-mutation AR invariant.
+
+Every permanent workflow must then pass on one exact unchanged candidate head. Any amendment invalidates previous exact-head evidence.
+
+AR-0 changes no product code, OpenAPI, migration SQL, workflow, Cloudflare/provider resource, secret or deployment. AR-1 is the first authority-changing slice.
