@@ -1,0 +1,48 @@
+name: AR4A Repository Quality Fix Staging
+
+on:
+  push:
+    branches:
+      - agent/ar4a-repo-quality-fix-staging
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout staging branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: agent/ar4a-repo-quality-fix-staging
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Update mailbox job boundary ownership contract
+        run: python scratch/ar4a_mailbox_job_boundary_fix.py
+
+      - name: Verify affected repository-quality boundary and downstream authority checks
+        shell: bash
+        run: |
+          python -m py_compile scripts/check-mailbox-job-worker-application-boundary.py
+          python scripts/check-mailbox-job-worker-application-boundary.py
+          python scripts/check-mailbox-job-worker-application-boundary.py --self-test
+          python scripts/check-frontend-feature-boundaries.py
+          python scripts/check-frontend-feature-boundaries.py --self-test
+          python scripts/check-documentation-authority.py --root .
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/generate-architecture-inventory.py --self-test
+          python scripts/test-architecture-inventory-negative.py
+
+      - name: Verify hygiene and commit output only
+        shell: bash
+        run: |
+          git add scripts/check-mailbox-job-worker-application-boundary.py
+          git diff --cached --check
+          git diff --cached --quiet && { echo 'No mailbox job boundary update produced'; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'AR-4A: align mailbox job Worker boundary with composition root'
+          git push origin HEAD:agent/ar4a-repo-quality-fix-staging
