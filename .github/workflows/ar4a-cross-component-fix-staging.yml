@@ -20,13 +20,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Update cross-component acceptance contract
-        run: python scratch/ar4a_cross_component_fix.py
+      - name: Update Phase 2I hardening ownership contract
+        run: python scratch/ar4a_phase2i_hardening_fix.py
 
-      - name: Verify cross-component and architecture contracts
+      - name: Verify complete cross-component policy preflight
         shell: bash
         run: |
+          python -m py_compile \
+            scripts/test-cross-component-acceptance.py \
+            scripts/check-profile-worker-application-boundary.py \
+            scripts/check-phase2f-retained-operator.py \
+            scripts/check-phase2i-hardening.py \
+            scripts/check-phase2i-operational-bounds.py \
+            scripts/check-phase2i-supply-chain.py \
+            scripts/check-phase2i-support-bundle.py \
+            scripts/test-phase2i-d1-backup-restore.py
           python scripts/test-cross-component-acceptance.py
+          python scripts/check-profile-worker-application-boundary.py
+          python scripts/check-phase2f-retained-operator.py
+          python scripts/check-phase2f-retained-operator.py --self-test
+          python scripts/check-phase2i-hardening.py
+          python scripts/check-phase2i-hardening.py --self-test
+          python scripts/check-phase2i-operational-bounds.py
+          python scripts/check-phase2i-operational-bounds.py --self-test
+          python scripts/check-phase2i-supply-chain.py
+          python scripts/check-phase2i-supply-chain.py --self-test
+          python scripts/check-phase2i-support-bundle.py
+          python scripts/check-phase2i-support-bundle.py --self-test
           python scripts/check-documentation-authority.py --root .
           python scripts/generate-architecture-inventory.py --check
           python scripts/generate-architecture-inventory.py --self-test
@@ -34,10 +54,10 @@ jobs:
       - name: Verify hygiene and commit output only
         shell: bash
         run: |
-          git add scripts/test-cross-component-acceptance.py
+          git add scripts/check-phase2i-hardening.py
           git diff --cached --check
-          git diff --cached --quiet && { echo 'No acceptance update produced'; exit 1; }
+          git diff --cached --quiet && { echo 'No hardening policy update produced'; exit 1; }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'AR-4A: align cross-component acceptance with composition root'
+          git commit -m 'AR-4A: align Phase 2I hardening with composition root'
           git push origin HEAD:agent/ar4a-cross-component-fix-staging
