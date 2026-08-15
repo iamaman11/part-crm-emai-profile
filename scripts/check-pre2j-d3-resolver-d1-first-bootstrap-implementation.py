@@ -178,7 +178,7 @@ def self_test() -> None:
     bootstrap.self_test()
     composite_release_alignment_self_test(bootstrap, release)
     quality = read(QUALITY)
-    if not quality_workflow_errors(quality.replace("FIRST_BOOTSTRAP_BASE", "REMOVED", 1)):
+    if not quality_workflow_errors(quality.replace("FIRST_BOOTSTRAP_BASE", "REMOVED")):
         fail("first-bootstrap workflow base-ref negative fixture unexpectedly passed")
     print("Resolver D1 first-bootstrap implementation negative policy self-test passed.")
 
