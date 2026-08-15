@@ -7,57 +7,69 @@ privacy boundaries.
 
 ## Current state
 
-- **Accepted repository-local product phase: Phase 2I.** The immutable acceptance ledger is
+- **Accepted repository-local product phase:** Phase 2I. Immutable provenance is
   [`architecture/accepted-phases.json`](architecture/accepted-phases.json).
-- **R1–R9 pre-2J architecture remediation: CLOSED / ACCEPTED HISTORY.** The accepted closeout record is
-  [`docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md); it is not
-  reopened by the current follow-up.
-- **Pre-2J product-readiness remediation: ACTIVE / BLOCKING Phase 2J.** Current execution authority is
-  [`docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`](docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md),
-  tracked by issue #203. Initial repository-owned findings are P0=0, P1=5, P2=1.
-- **Phase 2J is blocked and has not started.** Repository-owned remediation #203 must be accepted through
-  Batch F before Phase 2J can return to unblocked/not-started and external production evidence may begin.
-- **Production readiness:** `production_ready=false`. The machine-readable projection is
-  [`docs/status.json`](docs/status.json).
+- **Architecture Re-baseline v3:** active program, tracked by issue #266.
+- **Accepted architecture slice:** AR-0 via PR #267.
+- **Current slice after accepted AR-1 cutover:** AR-1 — Architecture Authority Re-baseline.
+- **Architecture complete:** `false`.
+- **Production Core gate:** `BLOCKED`.
+- **Production readiness:** `production_ready=false`.
+- **Phase 2J / old pre-2J execution sequence:** historical predecessor context; it is not the forward
+  implementation queue after AR-1.
 
-Repository Steps 0–10 are historical delivery history, not the current implementation queue. Their
-accepted evidence remains in [`docs/DELIVERY_ROADMAP.md`](docs/DELIVERY_ROADMAP.md) and
-[`docs/evidence/`](docs/evidence/).
+The single current architecture/program execution authority is
+[`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md), tracked by issue
+#266. Machine transition state is
+[`architecture/architecture-rebaseline-v3-transition.json`](architecture/architecture-rebaseline-v3-transition.json).
+
+The sequence is fail-closed:
+
+```text
+AR remediation
+  -> AR-16 final whole-project audit with P0=0/P1=0
+  -> AR-17 architecture closeout / Production Core gate authorization
+  -> PC-1 Production Core v1
+  -> real production mutation
+```
+
+No production provisioning or promotion is authorized in AR-0…AR-17. Successful AR-17 may set
+`architecture_complete=true` and `production_core_gate=AUTHORIZED`, but it still leaves
+`production_ready=false`. Only successful PC-1 may set `production_ready=true` for the accepted
+`production-core-v1` scope.
 
 ## Current authority
 
 Start with [`docs/INDEX.md`](docs/INDEX.md). The main current sources are:
 
-- [`docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`](docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md) —
-  current pre-2J product-readiness remediation authority, issue #203;
-- [`docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) —
-  historical accepted R1–R9 remediation and closeout record;
-- [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — normative product phase plan;
+- [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md) — single current
+  architecture/program execution authority, issue #266;
+- [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — current product/program projection and
+  immutable accepted-phase provenance;
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) + accepted ADRs — stable architecture invariants;
-- [`docs/DEVELOPER_CAPABILITY_MATRIX.md`](docs/DEVELOPER_CAPABILITY_MATRIX.md) — accepted capability
-  and evidence level on `main`;
+- [`docs/DATA_CLASSIFICATION.md`](docs/DATA_CLASSIFICATION.md) — data/privacy authority;
+- [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — current repository-local threat model;
+- [`docs/DEVELOPER_CAPABILITY_MATRIX.md`](docs/DEVELOPER_CAPABILITY_MATRIX.md) — capability/evidence
+  accepted on `main`;
 - [`docs/status.json`](docs/status.json) — machine-readable current/readiness projection;
-- [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — canonical current repository-local threat model;
-- [`architecture/accepted-phases.json`](architecture/accepted-phases.json) — immutable accepted phase
-  provenance.
+- [`architecture/inventory.json`](architecture/inventory.json) — canonical architecture inventory;
+- [`architecture/accepted-phases.json`](architecture/accepted-phases.json) — immutable accepted product
+  phase provenance.
 
-If prose conflicts, follow the hierarchy in `docs/INDEX.md`; do not infer acceptance from an open PR,
-historical evidence file or phase-specific closeout document.
+The former issue #203 pre-2J product-readiness plan and current-looking root plans are preserved as
+accepted predecessor history and explicitly marked historical/superseded for forward execution. Issue
+#251 remains an open predecessor external blocker until separately resolved; AR-1 does not execute it.
 
 ## Architecture snapshot
 
 - pure Rust domain/application crates own business rules and provider-neutral use cases;
-- capability-specific application ownership is separated (`use-cases-clients`, `use-cases-identity`,
-  `use-cases-mailboxes`, `use-cases-devices`, `use-cases-notifications`, `use-cases-query`), while the
-  remaining shared `use-cases` crate owns current Profile/Generation/coordinator orchestration;
+- capability-specific application ownership stays explicit;
 - Cloudflare D1/R2/Queue/Durable Object and provider mechanics stay in outer adapters/composition;
-- the React SPA uses feature-owned routes and feature-owned capability API modules; shared API code is
-  transport/generated-contract infrastructure only;
+- the React SPA uses feature-owned routes and feature-owned capability API modules;
 - governed public DTOs are Rust-owned and generated deterministically to OpenAPI/TypeScript;
-- production device authorization is owned by `device-domain`, application/use-case orchestration and
-  D1/persistence composition; `certification-domain` is not a device-authorization authority;
-- authorization, neutral disclosure, idempotency, fencing, privacy and recovery boundaries are backed
-  by permanent positive and negative CI evidence.
+- authorization, neutral disclosure, idempotency, fencing, privacy and recovery boundaries remain
+  regression-protected by permanent positive and negative CI evidence;
+- `source_present != production_enabled`; UI visibility is never the production security boundary.
 
 ## Fast local verification
 
@@ -66,8 +78,8 @@ python scripts/verify-fast.py
 python scripts/verify-fast.py --with-compile
 ```
 
-Full acceptance still requires all permanent GitHub workflows to succeed on one unchanged exact PR
-head, zero blocking reviews/unresolved threads, `behind_by=0` and a guarded squash merge.
+Full acceptance still requires all applicable permanent GitHub workflows to succeed on one unchanged
+exact PR head, zero blocking reviews/unresolved threads, `behind_by=0` and a guarded squash merge.
 
 ## Development and security
 
@@ -76,6 +88,6 @@ head, zero blocking reviews/unresolved threads, `behind_by=0` and a guarded squa
 - Product intent: [`docs/PRODUCT.md`](docs/PRODUCT.md)
 - Future CRM boundary: [`docs/FUTURE_DEVELOPMENT.md`](docs/FUTURE_DEVELOPMENT.md)
 
-Phase 2J External evidence cannot be collected or claimed while issue #203 remains the active
-repository-owned blocker. `production_ready=true` remains forbidden until Phase 2J is later unblocked,
-executed, and every mandatory external acceptance gate is reviewed and accepted.
+Do not infer production authorization from source presence, UI visibility, an open PR, historical plan,
+or synthetic/external evidence. Current machine state remains fail-closed until its owning gates are
+accepted on `main`.

@@ -1,0 +1,509 @@
+{
+  "schema_version": 5,
+  "status": "proposed_ar0_candidate",
+  "tracking_issue": 266,
+  "subordinate_preproduction_issue": 268,
+  "audit_base": "5be54c2989dbfa22822d3692e22156f23d2a4602",
+  "candidate_pr": 267,
+  "state_model": {
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false,
+    "phase_2j": "blocked"
+  },
+  "activation_slice": "AR-1",
+  "current_authority_until_ar1": {
+    "plan": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
+    "tracking_issue": 203,
+    "pre2j_d3_external_issue": 251,
+    "pre2j_d3_external_issue_state_verified": "open"
+  },
+  "proposed_forward_authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+  "research_evidence": [
+    "docs/ARCHITECTURE_REBASELINE_V3_AR0.md",
+    "docs/ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md"
+  ],
+  "binding_sequence_model": {
+    "architecture_program": [
+      "AR-0",
+      "AR-1",
+      "AR-2",
+      "AR-3",
+      "AR-4",
+      "AR-5",
+      "AR-6",
+      "AR-7",
+      "AR-8",
+      "AR-9",
+      "AR-10",
+      "AR-11",
+      "AR-12",
+      "AR-13",
+      "AR-14",
+      "AR-15",
+      "AR-16",
+      "AR-17"
+    ],
+    "ar16": "FINAL_WHOLE_PROJECT_AUDIT_P0_0_P1_0_NO_PRODUCTION_MUTATION",
+    "ar17": "ARCHITECTURE_CLOSEOUT_AND_PRODUCTION_CORE_GATE_AUTHORIZATION_NO_PRODUCTION_MUTATION",
+    "architecture_program_ends_after": "AR-17",
+    "production_program": [
+      "PC-1",
+      "PC-2",
+      "PC-3",
+      "PC-4"
+    ],
+    "pc1": "PRODUCTION_CORE_V1_PROVISION_AND_PROMOTE",
+    "pc2": "MAILBOX_ADMINISTRATION_ACTIVATION",
+    "pc3": "MAILBOX_JOBS_AUTOMATION_ACTIVATION",
+    "pc4": "OUTBOUND_AND_SUBSEQUENT_CAPABILITY_ACTIVATION"
+  },
+  "gate_transitions": {
+    "after_successful_ar16": {
+      "required": [
+        "P0=0",
+        "P1=0"
+      ],
+      "production_mutation": false
+    },
+    "after_successful_ar17": {
+      "architecture_complete": true,
+      "production_core_gate": "AUTHORIZED",
+      "production_ready": false,
+      "production_mutation": false
+    },
+    "after_successful_pc1": {
+      "production_core_gate": "AUTHORIZED",
+      "production_ready": true,
+      "scope": "production-core-v1"
+    }
+  },
+  "preserve_accepted_history": [
+    "repository_steps_0_10",
+    "accepted_product_phases_through_2I",
+    "pre2j_R1_R9",
+    "pre2j_batch_A",
+    "pre2j_batch_B",
+    "pre2j_batch_C",
+    "pre2j_D1",
+    "pre2j_D2",
+    "pre2j_D3_repository_side",
+    "accepted_contract_authorities",
+    "accepted_capability_matrix_evidence",
+    "resolver_security_and_bootstrap_authorities",
+    "mailbox_onboarding_reauth_state_machine",
+    "provider_oauth_ceremonies",
+    "resolver_refresh_primitive_and_paths",
+    "versioned_keyrings_and_resolver_rotation_ledger",
+    "phase2i_repository_local_recovery"
+  ],
+  "verified_github_governance": {
+    "main": {
+      "sha": "5be54c2989dbfa22822d3692e22156f23d2a4602",
+      "protected": false,
+      "required_status_checks_from_branch_metadata": "off"
+    },
+    "repository_rulesets": [],
+    "production_environment": {
+      "exists": true,
+      "required_reviewer_present": true,
+      "can_admins_bypass": false,
+      "deployment_branch_policy": [
+        "main"
+      ]
+    },
+    "finding": "PRODUCTION_ENVIRONMENT_PROTECTION_STRONGER_THAN_MAIN_MERGE_PROTECTION",
+    "target_ar": "AR-7",
+    "closeout_requirement": "MECHANICALLY_ENFORCED_PR_REQUIRED_CHECK_REVIEW_AND_MAIN_PROTECTION_POLICY"
+  },
+  "document_status_model": [
+    "CURRENT_AUTHORITY",
+    "TARGET",
+    "ACCEPTED_HISTORICAL",
+    "EVIDENCE",
+    "RUNBOOK",
+    "GENERATED_PROJECTION",
+    "SUPERSEDED"
+  ],
+  "architecture_inventory_policy": {
+    "foundation": "architecture/inventory.json",
+    "rule": "EXTEND_CANONICAL_HIERARCHY_DO_NOT_CREATE_COMPETING_REGISTRY",
+    "target_dimensions": [
+      "workspace_dependencies",
+      "route_ownership",
+      "migrations",
+      "generated_contracts_complete",
+      "documentation_authority",
+      "document_status",
+      "capability_ownership",
+      "production_capability_release_profile",
+      "runtime_resource_ownership",
+      "concurrency_ownership",
+      "executable_tool_roles",
+      "python_dispositions",
+      "environment_release_compatibility"
+    ]
+  },
+  "production_capability_model": {
+    "current_accepted_inventory_has_production_enabled_semantics_proven": false,
+    "required_fields": [
+      "capability_id",
+      "owner",
+      "source_present",
+      "accepted",
+      "production_enabled",
+      "environment",
+      "release_profile",
+      "dependencies",
+      "compatibility",
+      "backend_enforcement",
+      "frontend_projection",
+      "activation_gate"
+    ],
+    "fail_closed_backend_required": true,
+    "ui_is_projection_not_security_boundary": true,
+    "no_long_lived_reduced_production_branch": true,
+    "profiles": {
+      "production-core-v1": {
+        "enabled_after": "AR-17_GATE_AUTHORIZATION_AND_PC-1_SUCCESS",
+        "enabled_capabilities": [
+          "authentication_authorization_membership",
+          "users",
+          "clients",
+          "browser_profiles",
+          "camoufox_profile_runtime",
+          "browser_profile_single_operations",
+          "browser_profile_bulk_operations",
+          "client_browser_profile_binding",
+          "audit_health_readiness_observability_release_recovery_foundations"
+        ],
+        "source_present_but_production_disabled": [
+          "mailbox_administration",
+          "mailbox_bulk_operations",
+          "client_mailbox_binding",
+          "mailbox_jobs_automation",
+          "outbound_mail_side_effects"
+        ]
+      }
+    }
+  },
+  "executable_role_model": [
+    "VALIDATOR_GENERATOR",
+    "INFRA_MUTATOR",
+    "APP_TEST_DATA_MUTATOR",
+    "SYNTHETIC_EVIDENCE",
+    "EXTERNAL_RESEARCH_ONLY",
+    "HISTORICAL_QUARANTINE",
+    "OPERATOR_READ",
+    "OPERATOR_MUTATION"
+  ],
+  "python_estate": {
+    "complete_census_proven": false,
+    "target_ar": "AR-6",
+    "required_for_every_repository_owned_python_executable": [
+      "path",
+      "exact_loc",
+      "owner",
+      "purpose",
+      "direct_callers",
+      "workflow_callers",
+      "remote_reads",
+      "remote_mutations",
+      "secret_or_customer_data_access",
+      "current_mutable_authority",
+      "expected_lifetime",
+      "replacement_or_cutover_target",
+      "disposition"
+    ],
+    "allowed_dispositions": [
+      "KEEP_PYTHON",
+      "MOVE_OPSCTL_READ",
+      "MOVE_OPSCTL_MUTATION_LATER",
+      "MERGE",
+      "RETIRE",
+      "DELETE"
+    ],
+    "post_ar6_invariant": "NEW_EXECUTABLE_PYTHON_WITHOUT_DISPOSITION_FAILS_CI"
+  },
+  "opsctl": {
+    "accepted_main_implementation_present": false,
+    "initial_target_ar": "AR-6",
+    "initial_mode": "READ_ONLY",
+    "initial_commands": [
+      "inventory",
+      "plan",
+      "doctor",
+      "drift"
+    ],
+    "mutation_cutover_rule": "ONE_LIFECYCLE_AT_A_TIME_AFTER_PARITY_REHEARSAL_AND_OLD_MUTATOR_RETIREMENT",
+    "generic_iac_forbidden": true,
+    "ci_replacement": false
+  },
+  "operations_authority": {
+    "github_actions_environments": [
+      "orchestration",
+      "ci",
+      "approvals",
+      "workflow_concurrency",
+      "credential_exposure_boundary",
+      "exact_head_evidence",
+      "artifact_evidence_retention"
+    ],
+    "opsctl": "PROJECT_SPECIFIC_TYPED_OPERATIONAL_SEMANTICS_AFTER_BOUNDED_CUTOVER",
+    "wrangler_provider_api": "ALLOWED_CLOUDFLARE_PROVIDER_MUTATION_EXECUTOR",
+    "python": "VALID_FOR_DETERMINISTIC_REPOSITORY_CI_GENERATION_FIXTURE_RESEARCH_AND_OTHER_EXPLICITLY_CLASSIFIED_ROLES"
+  },
+  "environment_model": {
+    "canonical_names": [
+      "rehearsal",
+      "staging",
+      "production"
+    ],
+    "provider_prod_alias_rule": "DERIVED_MAPPING_ONLY_NOT_CANONICAL_ENVIRONMENT_IDENTITY",
+    "persistent_identity_isolation": true
+  },
+  "credential_inventory_model": {
+    "repository_policy_registry": "ONLY_FIELDS_ALLOWED_BY_DATA_CLASSIFICATION",
+    "protected_live_operational_inventory": "SENSITIVE_ACTIVE_IDENTITIES_VERSIONS_HANDLES_PROVIDER_STATE",
+    "git_safe_by_default": false,
+    "evidence_rule": "ONLY_EXPLICITLY_ALLOWED_REDACTED_DIGEST_STATUS_METADATA",
+    "logical_lifecycle": [
+      "issue_or_import",
+      "validate",
+      "bind",
+      "switch",
+      "verify",
+      "revoke_previous"
+    ]
+  },
+  "oauth_refresh_model": {
+    "domain_onboarding_reauth_state_machine": "PRESENT",
+    "google_microsoft_refresh_grant": "PRESENT",
+    "implicit_resolve_refresh": "PRESENT",
+    "explicit_graph_refresh": "PRESENT",
+    "credential_refresh_single_flight_or_cas": "PARTIAL_MISSING_PROOF",
+    "stale_refresh_result_overwrite_prevention": "PARTIAL_MISSING_PROOF",
+    "provider_revocation_to_durable_reauth_reconciliation": "PARTIAL",
+    "target_ar": "AR-8"
+  },
+  "d1_evolution_model": {
+    "historical_migration_provenance_preserved": true,
+    "fresh_bootstrap_not_upgrade_migration": true,
+    "migration_classes_target": [
+      "EXPAND_SAFE",
+      "BACKFILL",
+      "CONTRACT",
+      "MANUAL_EXCEPTION"
+    ],
+    "per_component_schema_windows_required": true,
+    "one_legitimate_migration_executor_required": true,
+    "database_distributed_lock": "ONLY_IF_INDEPENDENT_CONCURRENT_EXECUTOR_IS_PROVEN_AND_CANNOT_BE_ELIMINATED",
+    "fresh_epoch_rule": "SEMANTIC_CONVERGENCE_WITH_HISTORICAL_UPGRADE_PATH_REQUIRED",
+    "v2_naming_rule": "ONLY_FOR_REAL_INTENTIONAL_COMPATIBILITY_BREAK"
+  },
+  "runtime_topology": {
+    "control_plane_worker": "KEEP",
+    "workers_static_assets": "KEEP",
+    "mailbox_secret_resolver_worker": "KEEP",
+    "catalog_d1": "KEEP",
+    "resolver_d1": "KEEP",
+    "generation_r2": "KEEP",
+    "profile_coordinator_do": "KEEP",
+    "notification_hub_do": "KEEP",
+    "integration_events_queue": "KEEP",
+    "mailbox_jobs_queue": "KEEP",
+    "mailbox_jobs_dlq": "KEEP",
+    "generation_verification_queue": "DELETE_CANDIDATE_REQUIRES_NO_EXTERNAL_CONSUMER_PROOF",
+    "microsoft_graph_oauth_read_delta": "KEEP",
+    "microsoft_graph_mail_send": "DEFER"
+  },
+  "mailbox_jobs_recovery_model": {
+    "new_domain_dlq_state_machine": false,
+    "sequence": [
+      "inspect_envelope",
+      "resolve_tenant_binding_job_version",
+      "load_current_d1_authority",
+      "validate_ownership_version_fence",
+      "controlled_requeue_or_rerun_or_retire",
+      "metadata_only_audit_evidence"
+    ],
+    "mutable_actions_after_read_only_doctor": true
+  },
+  "executable_candidates": {
+    "tools/runtime_bundle.py": "SYNTHETIC_EVIDENCE_KEEP",
+    "runtime/camouhost/main.py": "SYNTHETIC_EVIDENCE_KEEP",
+    "tools/fingerprint_certify.py": "EXTERNAL_RESEARCH_ONLY_KEEP_BOUNDED",
+    "tools/r2_s3_canary.py": "APP_TEST_DATA_MUTATOR_KEEP_EPHEMERAL",
+    "tools/profile_browser.py": "EXTERNAL_RESEARCH_ONLY_REVIEW_GUARDS_OR_RETIRE",
+    "tools/cloud_profile_smoke.py": "HISTORICAL_QUARANTINE_CANDIDATE"
+  },
+  "application_hotspots": {
+    "composition_root": "CONCRETE_ADAPTER_CONSTRUCTION_EXISTS_IN_COMPOSITION_RS_AND_LIB_BINDING_PROBE",
+    "client_mail_route_ownership": "READ_SEND_CLASSIFIER_OWNERSHIP_SPLIT",
+    "outbound_mail_transport": [
+      "duplicate_eligibility_precheck_before_application_use_case",
+      "worker_constructs_d1_query_provider_adapters",
+      "source_message_access_orchestrated_in_worker_support_code",
+      "provider_selection_in_worker",
+      "worker_boundary_checker_needs_client_mail_send_coverage"
+    ],
+    "profile_generation_shared_use_cases": "REVIEW_COHESION_BEFORE_ANY_CRATE_SPLIT"
+  },
+  "ar4_candidate_slices": [
+    "AR-4A_composition_root_consolidation",
+    "AR-4B_client_mail_internal_route_ownership_normalization",
+    "AR-4C_outbound_mail_composition_extraction_and_boundary_checker_extension",
+    "AR-4D_profile_application_extraction_only_if_AR3_proves_benefit"
+  ],
+  "release_set_model": {
+    "build_once_per_component": true,
+    "same_component_bytes_staging_production": true,
+    "required_fields": [
+      "release_id",
+      "git_sha",
+      "component_digests",
+      "frontend_digest",
+      "worker_digest",
+      "bridge_compatibility",
+      "schema_compatibility_windows",
+      "protocol_compatibility_window",
+      "migration_revision",
+      "generated_contract_revision"
+    ],
+    "production_fields_populated_only_after_pc1": true
+  },
+  "future_scope_mapping": {
+    "pre2j_D3_external_issue_251": "OPEN_PREDECESSOR_CLASSIFY_IN_AR1_AR2_NO_FORCED_OBSOLETE_PRODUCTION_MUTATION",
+    "pre2j_D4": "AR-9",
+    "pre2j_D5": [
+      "AR-3",
+      "AR-10",
+      "AR-16"
+    ],
+    "pre2j_D6": [
+      "AR-1",
+      "AR-6",
+      "AR-7",
+      "AR-12",
+      "AR-14",
+      "AR-16",
+      "AR-17"
+    ],
+    "pre2j_Batch_E": "AR-15",
+    "pre2j_Batch_F": [
+      "AR-16",
+      "AR-17"
+    ],
+    "Phase_2J": "BLOCKED_THROUGH_AR17_THEN_DEPENDS_ON_PC1_EXTERNAL_PRODUCTION_EVIDENCE"
+  },
+  "hard_invariants": [
+    "no_terraform",
+    "no_generic_hidden_iac_state",
+    "one_mutable_concern_one_authority",
+    "wrangler_worker_configuration_authority",
+    "environment_identity_does_not_duplicate_wrangler",
+    "derived_deploy_manifest_is_not_manual_third_authority",
+    "no_opsctl_dual_mutation_authority",
+    "application_deploy_does_not_implicitly_recreate_persistent_infrastructure",
+    "credential_rotation_does_not_recreate_infrastructure",
+    "sensitive_live_credential_metadata_not_git_safe_by_default",
+    "oauth_refresh_per_handle_single_authority",
+    "database_lifecycle_independent_of_application_rollback",
+    "database_lock_only_for_proven_independent_concurrency_surface",
+    "domain_application_dependency_direction_enforced",
+    "concrete_wiring_only_in_declared_composition_or_diagnostic_roots",
+    "frontend_sibling_feature_internals_forbidden",
+    "generated_contract_inventory_complete",
+    "production_capability_profile_machine_authoritative",
+    "source_present_not_equal_production_enabled",
+    "production_disabled_capability_fails_closed_server_side",
+    "public_api_not_changed_for_internal_refactor",
+    "target_not_misrepresented_as_accepted",
+    "historical_executable_not_misrepresented_as_supported_runtime",
+    "mutable_active_r2_operational_path_forbidden",
+    "build_once_per_component",
+    "release_set_binds_required_component_artifacts",
+    "staging_production_identical_component_bytes",
+    "windows_updater_scope_preserved",
+    "repository_local_recovery_not_misrepresented_as_remote_evidence",
+    "accepted_history_not_rewritten",
+    "no_production_provision_or_promotion_in_ar0_through_ar17",
+    "production_ready_false_at_ar17_closeout",
+    "production_ready_true_only_after_successful_pc1_evidence"
+  ],
+  "ar0_findings": {
+    "present": [
+      "layered_rust_workspace",
+      "architecture_and_frontend_fitness_checks",
+      "capability_specific_use_cases",
+      "generated_contract_discipline",
+      "control_plane_composition_root_foundation",
+      "canonical_control_plane_and_resolver_wrangler",
+      "resolver_service_security_boundary",
+      "immutable_component_release_foundations",
+      "catalog_and_resolver_d1_bootstrap_migration_foundations",
+      "mailbox_onboarding_reauth_state_machine",
+      "provider_oauth_ceremonies",
+      "google_microsoft_refresh_primitive_and_runtime_paths",
+      "versioned_contact_and_resolver_keyrings",
+      "resolver_key_rotation_ledger_and_reconciliation",
+      "repository_local_phase2i_recovery",
+      "substantial_profile_bridge_runtime",
+      "exact_head_acceptance_discipline",
+      "protected_production_environment_required_reviewer_and_no_admin_bypass"
+    ],
+    "partial": [
+      "composition_root_singularity",
+      "client_mail_capability_ownership",
+      "outbound_mail_thin_transport",
+      "oauth_refresh_race_safety",
+      "provider_revocation_to_durable_reauth_reconciliation",
+      "credential_policy_vs_live_inventory_model",
+      "production_capability_release_profile_machine_model",
+      "generated_contract_inventory_completeness",
+      "document_status_machine_model",
+      "environment_identity_vs_derived_manifest_authority",
+      "operations_authority_consolidation",
+      "credential_and_key_lifecycle",
+      "rotation_rehearsal",
+      "remote_recovery_rehearsal",
+      "d1_release_schema_compatibility",
+      "release_set_protocol_compatibility",
+      "developer_operator_single_path",
+      "github_main_merge_governance"
+    ],
+    "missing": [
+      "rust_opsctl_read_only_project_model",
+      "complete_exact_python_disposition_inventory",
+      "canonical_rehearsal_environment_lifecycle",
+      "protected_live_credential_inventory_integration",
+      "schema_compatibility_window_enforcement",
+      "production_windows_updater",
+      "remote_whole_system_recovery_rehearsal"
+    ],
+    "conflict": [
+      "candidate_ar16_production_before_ar17_audit_rejected",
+      "main_branch_unprotected_and_repository_rulesets_empty_vs_guarded_merge_expectation",
+      "implementation_plan_root_looks_current",
+      "profile_lifecycle_plan_root_stale_normative_target",
+      "historical_slice_docs_can_look_current_without_status_class",
+      "legacy_root_references_to_predecessor_authority",
+      "cloud_profile_smoke_executable_uses_obsolete_mutable_active_r2_model",
+      "future_opsctl_mutator_before_explicit_old_mutator_retirement",
+      "future_uncoordinated_refresh_store_after_AR8",
+      "source_presence_misinterpreted_as_production_activation"
+    ]
+  },
+  "ar0_mutation_policy": {
+    "product_code": false,
+    "openapi_v1": false,
+    "migration_sql": false,
+    "workflows": false,
+    "cloudflare_resources": false,
+    "provider_resources": false,
+    "secrets": false,
+    "staging_deployment": false,
+    "production_deployment": false,
+    "production_ready": false
+  }
+}

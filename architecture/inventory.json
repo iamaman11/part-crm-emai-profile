@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "workspace_members": [
     "apps/control-plane-worker",
     "apps/foundation-check",
@@ -639,16 +639,130 @@
     }
   ],
   "documentation_authority": {
-    "execution_order": "docs/DEVELOPMENT_PLAN.md",
+    "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+    "tracking_issue": 266,
+    "current_slice": "AR-1",
+    "transition": "architecture/architecture-rebaseline-v3-transition.json",
+    "development_projection": "docs/DEVELOPMENT_PLAN.md",
+    "readiness_projection": "docs/status.json",
+    "index": "docs/INDEX.md",
     "architecture": "docs/ARCHITECTURE.md",
     "data_classification": "docs/DATA_CLASSIFICATION.md",
     "ui_target": "docs/UI_ARCHITECTURE.md",
     "accepted_capabilities": "docs/DEVELOPER_CAPABILITY_MATRIX.md",
-    "index": "docs/INDEX.md",
-    "pre2j_current_product_readiness": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
-    "pre2j_historical_architecture_closeout": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
-    "readiness": "docs/status.json",
     "security": "docs/THREAT_MODEL.md",
-    "accepted_phase_ledger": "architecture/accepted-phases.json"
+    "accepted_phase_ledger": "architecture/accepted-phases.json",
+    "historical_pre2j_product_readiness": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
+    "historical_pre2j_architecture_closeout": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md"
+  },
+  "document_status": [
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+      "status": "CURRENT_AUTHORITY",
+      "scope": "architecture_program_execution"
+    },
+    {
+      "path": "docs/DEVELOPMENT_PLAN.md",
+      "status": "GENERATED_PROJECTION",
+      "scope": "product_program_projection_and_accepted_phase_provenance"
+    },
+    {
+      "path": "docs/status.json",
+      "status": "GENERATED_PROJECTION",
+      "scope": "machine_readable_program_and_readiness_state"
+    },
+    {
+      "path": "docs/INDEX.md",
+      "status": "GENERATED_PROJECTION",
+      "scope": "documentation_authority_navigation"
+    },
+    {
+      "path": "README.md",
+      "status": "GENERATED_PROJECTION",
+      "scope": "repository_entrypoint"
+    },
+    {
+      "path": "docs/README.md",
+      "status": "GENERATED_PROJECTION",
+      "scope": "documentation_entrypoint"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "status": "STABLE_AUTHORITY",
+      "scope": "accepted_architecture_invariants"
+    },
+    {
+      "path": "docs/DATA_CLASSIFICATION.md",
+      "status": "STABLE_AUTHORITY",
+      "scope": "data_privacy_classification"
+    },
+    {
+      "path": "docs/THREAT_MODEL.md",
+      "status": "STABLE_AUTHORITY",
+      "scope": "repository_security_threat_model"
+    },
+    {
+      "path": "docs/UI_ARCHITECTURE.md",
+      "status": "STABLE_AUTHORITY",
+      "scope": "ui_architecture_target"
+    },
+    {
+      "path": "docs/DEVELOPER_CAPABILITY_MATRIX.md",
+      "status": "STABLE_AUTHORITY",
+      "scope": "accepted_capability_evidence"
+    },
+    {
+      "path": "architecture/accepted-phases.json",
+      "status": "STABLE_AUTHORITY",
+      "scope": "immutable_accepted_product_phase_provenance"
+    },
+    {
+      "path": "architecture/architecture-rebaseline-v3-transition.json",
+      "status": "GENERATED_PROJECTION",
+      "scope": "architecture_program_transition_state"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR0.md",
+      "status": "EVIDENCE",
+      "scope": "ar0_research_acceptance"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md",
+      "status": "EVIDENCE",
+      "scope": "ar0_second_pass_research"
+    },
+    {
+      "path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
+      "status": "ACCEPTED_HISTORICAL",
+      "scope": "superseded_predecessor_forward_execution"
+    },
+    {
+      "path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+      "status": "ACCEPTED_HISTORICAL",
+      "scope": "accepted_r1_r9_closeout"
+    },
+    {
+      "path": "IMPLEMENTATION_PLAN.md",
+      "status": "SUPERSEDED",
+      "scope": "compatibility_entrypoint_to_preserved_history"
+    },
+    {
+      "path": "PROFILE_LIFECYCLE_PLAN.md",
+      "status": "SUPERSEDED",
+      "scope": "compatibility_entrypoint_to_preserved_history"
+    }
+  ],
+  "program_state": {
+    "accepted_product_phase": "Phase 2I",
+    "accepted_architecture_slices": [
+      "AR-0"
+    ],
+    "current_architecture_slice": "AR-1",
+    "next_architecture_slice_after_acceptance": "AR-2",
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false,
+    "production_mutation_allowed_during_ar0_ar17": false,
+    "production_ready_authority": "PC-1_AFTER_AR-17_AUTHORIZATION"
   }
 }
