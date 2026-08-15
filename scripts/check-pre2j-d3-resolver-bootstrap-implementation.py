@@ -334,14 +334,25 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
         errors.append("resolver release workflow must build exactly once")
     for marker in (
         "workflow_dispatch:",
+        "resolver_artifact_id:",
+        "resolver_artifact_digest:",
+        "control_plane_artifact_id:",
+        "control_plane_artifact_digest:",
+        "confirmation:",
+        "github-preflight",
         "download-artifact@",
+        "artifact-ids:",
         "--no-bundle",
+        "--strict",
+        "--experimental-autoconfig=false",
         "validate-secrets",
         "validate-staging-evidence",
+        "verify-remote-d1",
+        "deployments status",
+        "attest",
         "umask 077",
         "chmod 0600",
         "trap 'rm -f",
-        "passed_unaccepted",
         "CLOUDFLARE_RESOLVER_SECRETS_JSON",
         "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON",
     ):
@@ -349,6 +360,21 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
             errors.append(f"resolver promotion workflow is missing {marker!r}")
     if promotion.count("--secrets-file") != 2:
         errors.append("resolver and first control-plane deploy must each use --secrets-file")
+    if promotion.count("artifact-ids:") != 2:
+        errors.append("promotion must download both artifacts by exact GitHub artifact id")
+    if promotion.count("--strict") != 2:
+        errors.append("both Worker deployments must use strict upload validation")
+    if promotion.count("--experimental-autoconfig=false") != 2:
+        errors.append("both Worker deployments must disable Wrangler automatic configuration")
+    preflight_job = promotion.find("\n  preflight:")
+    deploy_job = promotion.find("\n  promote-same-bits:")
+    if (
+        preflight_job < 0
+        or deploy_job < 0
+        or preflight_job >= deploy_job
+        or "needs: [preflight]" not in promotion
+    ):
+        errors.append("environment-secret deployment must depend on exact accepted-main preflight")
     resolver_deploy = promotion.find('--config "$resolver_config"')
     control_deploy = promotion.find('--config "$control_config"')
     if resolver_deploy < 0 or control_deploy < 0 or resolver_deploy >= control_deploy:
@@ -492,6 +518,8 @@ def self_test() -> None:
     quality = read(QUALITY_WORKFLOW)
     assert workflow_errors(release, promotion + "\nworker-build --release")
     assert workflow_errors(release, promotion.replace("--secrets-file", "--secret-file"))
+    assert workflow_errors(release, promotion.replace("artifact-ids:", "pattern:", 1))
+    assert workflow_errors(release, promotion.replace("github-preflight", "unchecked-preflight", 1))
     assert quality_workflow_errors(quality.replace("fetch-depth: 0", "fetch-depth: 1", 1))
     config = load(RESOLVER_CONFIG)
     tampered = copy.deepcopy(config)

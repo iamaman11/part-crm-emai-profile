@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import re
 import stat
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
@@ -18,6 +22,15 @@ ROOT = Path(__file__).resolve().parents[1]
 RESOLVER_CONFIG = ROOT / "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc"
 CONTROL_CONFIG = ROOT / "deploy/cloudflare/wrangler.jsonc"
 ENVIRONMENTS = ("staging", "production")
+CANONICAL_REPOSITORY = "iamaman11/part-crm-emai-profile"
+RESOLVER_RELEASE_WORKFLOW = ".github/workflows/mailbox-secret-resolver-release.yml"
+CONTROL_RELEASE_WORKFLOW = ".github/workflows/quality-gate.yml"
+RESOLVER_RELEASE_NAME = "Mailbox Secret Resolver Release"
+CONTROL_RELEASE_NAME = "Quality Gate"
+RESOLVER_ARTIFACT_RE = re.compile(
+    r"^mailbox-secret-resolver-v1-sha256-[0-9a-f]{64}\.tar$"
+)
+CONTROL_ARTIFACT_RE = re.compile(r"^cloudflare-v1-sha256-[0-9a-f]{64}\.tar$")
 RESOLVER_SECRET_NAMES = {
     "GOOGLE_OAUTH_CLIENT_SECRET",
     "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
@@ -62,6 +75,7 @@ D1_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 AUDIENCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 FORBIDDEN_VALUE_MARKERS = (
     "${",
     "changeme",
@@ -82,6 +96,20 @@ def fail(message: str) -> None:
     raise PromotionError(message)
 
 
+def canonical_document(value: Any) -> bytes:
+    return (json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode()
+
+
+def sha256_file(path: Path) -> str:
+    if path.is_symlink() or not path.is_file():
+        fail(f"expected regular file: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def load_json(path: Path, label: str, *, maximum_bytes: int = 64 * 1024) -> Any:
     if path.is_symlink() or not path.is_file():
         fail(f"{label} must be a regular file")
@@ -91,6 +119,216 @@ def load_json(path: Path, label: str, *, maximum_bytes: int = 64 * 1024) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise PromotionError(f"{label} is not strict UTF-8 JSON") from error
+
+
+def parse_positive_int(value: str, label: str) -> int:
+    if not value.isdigit() or int(value) <= 0:
+        fail(f"{label} must be a positive integer")
+    return int(value)
+
+
+def api_get(api_url: str, token: str, path: str) -> Any:
+    if not api_url.startswith("https://"):
+        fail("GitHub API URL must use HTTPS")
+    request = urllib.request.Request(
+        api_url.rstrip("/") + path,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "part-crm-d3-promotion",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise PromotionError(f"cannot read GitHub promotion authority {path}") from error
+
+
+def validate_workflow_run(
+    value: Any,
+    *,
+    run_id: int,
+    source_sha: str,
+    name: str,
+    path: str,
+) -> None:
+    run = require_object(value, f"{name} workflow run")
+    expected = {
+        "id": run_id,
+        "name": name,
+        "path": path,
+        "event": "push",
+        "head_branch": "main",
+        "head_sha": source_sha,
+        "status": "completed",
+        "conclusion": "success",
+    }
+    mismatches = {
+        field: {"actual": run.get(field), "expected": expected_value}
+        for field, expected_value in expected.items()
+        if run.get(field) != expected_value
+    }
+    if mismatches:
+        fail(f"{name} workflow run is not exact accepted-main evidence: {mismatches}")
+
+
+def validate_artifact(
+    value: Any,
+    *,
+    artifact_id: int,
+    artifact_digest: str,
+    source_sha: str,
+    run_id: int,
+    name_pattern: re.Pattern[str],
+    label: str,
+) -> None:
+    inventory = require_object(value, f"{label} artifact inventory")
+    artifacts = inventory.get("artifacts")
+    if not isinstance(artifacts, list):
+        fail(f"{label} artifact inventory is missing")
+    if len(artifacts) != 1:
+        fail(f"{label} release run must own exactly one immutable artifact")
+    matching = [item for item in artifacts if isinstance(item, dict) and item.get("id") == artifact_id]
+    if len(matching) != 1:
+        fail(f"{label} artifact id is not uniquely owned by the supplied workflow run")
+    artifact = matching[0]
+    name = artifact.get("name")
+    if not isinstance(name, str) or name_pattern.fullmatch(name) is None:
+        fail(f"{label} artifact name is not canonical")
+    if ARTIFACT_DIGEST_RE.fullmatch(artifact_digest) is None:
+        fail(f"{label} artifact digest input is invalid")
+    if artifact.get("digest") != artifact_digest or artifact.get("expired") is not False:
+        fail(f"{label} artifact digest/retention authority does not match")
+    workflow_run = artifact.get("workflow_run")
+    if isinstance(workflow_run, dict):
+        if workflow_run.get("id") != run_id or workflow_run.get("head_sha") != source_sha:
+            fail(f"{label} artifact workflow ownership drifted")
+
+
+def validate_environment(
+    environment: Any,
+    branch_policies: Any,
+    *,
+    expected_name: str,
+) -> None:
+    value = require_object(environment, f"{expected_name} environment")
+    if value.get("name") != expected_name:
+        fail(f"real GitHub {expected_name} environment is missing")
+    policy = value.get("deployment_branch_policy")
+    if policy != {"protected_branches": False, "custom_branch_policies": True}:
+        fail(f"{expected_name} environment must use an exact custom deployment-branch policy")
+    policies = require_object(branch_policies, f"{expected_name} branch policies").get(
+        "branch_policies"
+    )
+    if not isinstance(policies, list):
+        fail(f"{expected_name} environment branch-policy inventory is missing")
+    branches = sorted(
+        item.get("name")
+        for item in policies
+        if isinstance(item, dict)
+        and item.get("type") == "branch"
+        and isinstance(item.get("name"), str)
+    )
+    if branches != ["main"]:
+        fail(f"{expected_name} environment must authorize only the exact main branch")
+    if expected_name == "production":
+        if value.get("can_admins_bypass") is not False:
+            fail("production environment must disable administrator protection bypass")
+        rules = value.get("protection_rules")
+        if not isinstance(rules, list):
+            fail("production environment protection rules are missing")
+        reviewer_rules = [
+            item for item in rules if isinstance(item, dict) and item.get("type") == "required_reviewers"
+        ]
+        reviewers = reviewer_rules[0].get("reviewers") if len(reviewer_rules) == 1 else None
+        if not isinstance(reviewers, list) or not reviewers:
+            fail("production environment must have one non-empty required-reviewers rule")
+
+
+def github_preflight(args: argparse.Namespace) -> None:
+    if args.repository != CANONICAL_REPOSITORY:
+        fail(f"promotion repository must be {CANONICAL_REPOSITORY}")
+    if COMMIT_RE.fullmatch(args.source_sha) is None:
+        fail("source SHA must be exact lowercase 40-hex")
+    if args.workflow_ref != "refs/heads/main" or args.workflow_sha != args.source_sha:
+        fail("promotion workflow must execute from the exact accepted-main source")
+    if args.confirmation != args.source_sha:
+        fail("promotion confirmation must exactly equal the accepted-main source SHA")
+    resolver_run_id = parse_positive_int(args.resolver_release_run_id, "resolver release run id")
+    control_run_id = parse_positive_int(args.control_plane_release_run_id, "control-plane release run id")
+    resolver_artifact_id = parse_positive_int(args.resolver_artifact_id, "resolver artifact id")
+    control_artifact_id = parse_positive_int(args.control_plane_artifact_id, "control-plane artifact id")
+    if not args.token:
+        fail("GitHub token is required for promotion preflight")
+
+    repository_path = f"/repos/{args.repository}"
+    main_ref = api_get(args.api_url, args.token, repository_path + "/git/ref/heads/main")
+    if not isinstance(main_ref, dict) or main_ref.get("object", {}).get("sha") != args.source_sha:
+        fail("promotion source is no longer exact current main")
+    resolver_run = api_get(
+        args.api_url, args.token, repository_path + f"/actions/runs/{resolver_run_id}"
+    )
+    control_run = api_get(
+        args.api_url, args.token, repository_path + f"/actions/runs/{control_run_id}"
+    )
+    validate_workflow_run(
+        resolver_run,
+        run_id=resolver_run_id,
+        source_sha=args.source_sha,
+        name=RESOLVER_RELEASE_NAME,
+        path=RESOLVER_RELEASE_WORKFLOW,
+    )
+    validate_workflow_run(
+        control_run,
+        run_id=control_run_id,
+        source_sha=args.source_sha,
+        name=CONTROL_RELEASE_NAME,
+        path=CONTROL_RELEASE_WORKFLOW,
+    )
+    resolver_artifacts = api_get(
+        args.api_url,
+        args.token,
+        repository_path + f"/actions/runs/{resolver_run_id}/artifacts?per_page=100",
+    )
+    control_artifacts = api_get(
+        args.api_url,
+        args.token,
+        repository_path + f"/actions/runs/{control_run_id}/artifacts?per_page=100",
+    )
+    validate_artifact(
+        resolver_artifacts,
+        artifact_id=resolver_artifact_id,
+        artifact_digest=args.resolver_artifact_digest,
+        source_sha=args.source_sha,
+        run_id=resolver_run_id,
+        name_pattern=RESOLVER_ARTIFACT_RE,
+        label="resolver",
+    )
+    validate_artifact(
+        control_artifacts,
+        artifact_id=control_artifact_id,
+        artifact_digest=args.control_plane_artifact_digest,
+        source_sha=args.source_sha,
+        run_id=control_run_id,
+        name_pattern=CONTROL_ARTIFACT_RE,
+        label="control-plane",
+    )
+    environment = api_get(
+        args.api_url, args.token, repository_path + f"/environments/{args.environment}"
+    )
+    branch_policies = api_get(
+        args.api_url,
+        args.token,
+        repository_path
+        + f"/environments/{args.environment}/deployment-branch-policies?per_page=100",
+    )
+    validate_environment(environment, branch_policies, expected_name=args.environment)
+    print(
+        f"D3 preflight accepted exact resolver/control-plane artifacts from {args.source_sha} "
+        f"for protected {args.environment}."
+    )
 
 
 def require_object(value: Any, label: str) -> dict[str, Any]:
@@ -447,6 +685,208 @@ def validate_staging_evidence(
     print("Production same-bits artifacts match accepted staging evidence.")
 
 
+def parse_remote_d1_names(value: Any, label: str) -> list[str]:
+    if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):
+        fail(f"{label} must be one Wrangler JSON result object")
+    results = value[0].get("results")
+    if not isinstance(results, list):
+        fail(f"{label} lacks a results array")
+    names: list[str] = []
+    for row in results:
+        if not isinstance(row, dict) or set(row) != {"name"} or not isinstance(row["name"], str):
+            fail(f"{label} returned an unexpected row shape")
+        names.append(row["name"])
+    return names
+
+
+def expected_resolver_migrations(release_directory: Path) -> list[str]:
+    directory = release_directory / "migrations/resolver-d1"
+    if directory.is_symlink() or not directory.is_dir():
+        fail("resolver release migration directory is missing")
+    names = sorted(
+        path.name
+        for path in directory.glob("*.sql")
+        if path.is_file() and not path.is_symlink()
+    )
+    if not names or any(
+        re.fullmatch(r"[0-9]{4}_[a-z0-9_]+\.sql", name) is None for name in names
+    ):
+        fail("resolver release migration inventory is invalid")
+    return names
+
+
+def expected_control_migrations(release_directory: Path) -> list[str]:
+    manifest = require_object(
+        load_json(release_directory / "release-manifest.json", "control-plane release manifest"),
+        "control-plane release manifest",
+    )
+    migrations = require_object(manifest.get("migrations"), "control-plane migration inventory")
+    files = migrations.get("files")
+    if not isinstance(files, list) or not files:
+        fail("control-plane release migration inventory is empty")
+    names: list[str] = []
+    for item in files:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            fail("control-plane release migration row is invalid")
+        path = PurePosixPath(item["path"])
+        if (
+            len(path.parts) != 3
+            or path.parts[:2] != ("migrations", "d1")
+            or re.fullmatch(r"[0-9]{4}_[a-z0-9_]+\.sql", path.name) is None
+        ):
+            fail("control-plane release migration path escaped migrations/d1")
+        names.append(path.name)
+    if names != sorted(set(names)):
+        fail("control-plane release migration inventory is not unique and ordered")
+    return names
+
+
+def verify_remote_d1(
+    resolver_release: Path,
+    control_release: Path,
+    resolver_query: Path,
+    control_query: Path,
+) -> None:
+    expected_resolver = expected_resolver_migrations(resolver_release)
+    expected_control = expected_control_migrations(control_release)
+    actual_resolver = parse_remote_d1_names(
+        load_json(resolver_query, "remote resolver D1 query", maximum_bytes=256 * 1024),
+        "remote resolver D1 query",
+    )
+    actual_control = parse_remote_d1_names(
+        load_json(control_query, "remote catalog D1 query", maximum_bytes=256 * 1024),
+        "remote catalog D1 query",
+    )
+    if actual_resolver != expected_resolver:
+        fail(
+            "remote resolver D1 migration set differs from the exact release: "
+            f"expected={expected_resolver}, actual={actual_resolver}"
+        )
+    if actual_control != expected_control:
+        fail(
+            "remote catalog D1 migration set differs from the exact release: "
+            f"expected={expected_control}, actual={actual_control}"
+        )
+    print(
+        "Remote resolver/catalog D1 ledgers exactly match the immutable releases; "
+        "D3 performed no schema mutation."
+    )
+
+
+def write_github_output(values: dict[str, str]) -> None:
+    output = os.environ.get("GITHUB_OUTPUT")
+    if not output:
+        return
+    with Path(output).open("a", encoding="utf-8") as handle:
+        for name, value in values.items():
+            handle.write(f"{name}={value}\n")
+
+
+def attest(
+    *,
+    environment: str,
+    resolver_manifest_path: Path,
+    control_manifest_path: Path,
+    resolver_status_path: Path,
+    control_status_path: Path,
+    smoke_body_path: Path,
+    workflow_run_id: str,
+    workflow_run_attempt: str,
+    evidence_output: Path,
+    acceptance_output: Path,
+) -> None:
+    if environment not in ENVIRONMENTS:
+        fail("promotion evidence environment is invalid")
+    run_id = parse_positive_int(workflow_run_id, "workflow run id")
+    run_attempt = parse_positive_int(workflow_run_attempt, "workflow run attempt")
+    resolver = require_object(
+        load_json(resolver_manifest_path, "resolver release manifest"), "resolver release manifest"
+    )
+    control = require_object(
+        load_json(control_manifest_path, "control-plane release manifest"),
+        "control-plane release manifest",
+    )
+    control_source = require_object(control.get("source"), "control-plane release source")
+    resolver_source = resolver.get("source_commit_sha")
+    control_source_sha = control_source.get("commit_sha")
+    if (
+        COMMIT_RE.fullmatch(str(resolver_source)) is None
+        or resolver_source != control_source_sha
+        or control_source.get("authority") != "accepted-main"
+        or control_source.get("repository") != CANONICAL_REPOSITORY
+        or re.fullmatch(
+            r"mailbox-secret-resolver-v1-sha256-[0-9a-f]{64}",
+            str(resolver.get("release_id")),
+        )
+        is None
+        or SHA256_RE.fullmatch(str(resolver.get("resolver_worker_sha256"))) is None
+        or re.fullmatch(
+            r"cloudflare-v1-sha256-[0-9a-f]{64}", str(control.get("release_id"))
+        )
+        is None
+    ):
+        fail("promotion evidence requires same-source accepted-main releases")
+    resolver_status = load_json(
+        resolver_status_path, "resolver deployment status", maximum_bytes=256 * 1024
+    )
+    control_status = load_json(
+        control_status_path, "control-plane deployment status", maximum_bytes=256 * 1024
+    )
+    if not isinstance(resolver_status, (dict, list)) or not isinstance(control_status, (dict, list)):
+        fail("deployment status must be one JSON object or array")
+    if (
+        smoke_body_path.is_symlink()
+        or not smoke_body_path.is_file()
+        or smoke_body_path.stat().st_size == 0
+        or smoke_body_path.stat().st_size > 1024 * 1024
+    ):
+        fail("smoke response body must be one bounded non-empty regular file")
+    evidence = {
+        "schema_version": 1,
+        "status": "passed_unaccepted",
+        "environment": environment,
+        "source_commit_sha": resolver_source,
+        "resolver": {
+            "release_id": resolver.get("release_id"),
+            "worker_sha256": resolver.get("resolver_worker_sha256"),
+            "deployment_status_sha256": hashlib.sha256(
+                json.dumps(resolver_status, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        },
+        "control_plane": {
+            "release_id": control.get("release_id"),
+            "deployment_status_sha256": hashlib.sha256(
+                json.dumps(control_status, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        },
+        "smoke": {
+            "response_sha256": sha256_file(smoke_body_path),
+            "response_size": smoke_body_path.stat().st_size,
+        },
+        "github": {"run_id": run_id, "run_attempt": run_attempt},
+    }
+    evidence_bytes = canonical_document(evidence)
+    acceptance = {
+        "schema_version": 1,
+        "status": "passed_unaccepted",
+        "environment": environment,
+        "resolver_release_id": resolver.get("release_id"),
+        "resolver_source_commit_sha": resolver_source,
+        "resolver_worker_sha256": resolver.get("resolver_worker_sha256"),
+        "control_plane_release_id": control.get("release_id"),
+        "control_plane_source_commit_sha": control_source_sha,
+        "deployment_evidence_sha256": hashlib.sha256(evidence_bytes).hexdigest(),
+    }
+    evidence_output.parent.mkdir(parents=True, exist_ok=True)
+    acceptance_output.parent.mkdir(parents=True, exist_ok=True)
+    evidence_output.write_bytes(evidence_bytes)
+    acceptance_output.write_bytes(canonical_document(acceptance))
+    write_github_output(
+        {"evidence": str(evidence_output), "acceptance_candidate": str(acceptance_output)}
+    )
+    print(f"Recorded metadata-only {environment} D3 promotion evidence candidate.")
+
+
 def fixture_deploy_manifest(environment: str) -> dict[str, Any]:
     digit = "1" if environment == "staging" else "2"
     resolver_name = f"mailbox-secret-resolver-{environment}"
@@ -548,6 +988,158 @@ def self_test() -> None:
                 manifest["resolver"], "staging", manifest["control_plane"]
             ),
         )
+        source_sha = "a" * 40
+        run = {
+            "id": 17,
+            "name": RESOLVER_RELEASE_NAME,
+            "path": RESOLVER_RELEASE_WORKFLOW,
+            "event": "push",
+            "head_branch": "main",
+            "head_sha": source_sha,
+            "status": "completed",
+            "conclusion": "success",
+        }
+        validate_workflow_run(
+            run,
+            run_id=17,
+            source_sha=source_sha,
+            name=RESOLVER_RELEASE_NAME,
+            path=RESOLVER_RELEASE_WORKFLOW,
+        )
+        failed_run = dict(run)
+        failed_run["conclusion"] = "failure"
+        expect_rejected(
+            "failed accepted-main release",
+            lambda: validate_workflow_run(
+                failed_run,
+                run_id=17,
+                source_sha=source_sha,
+                name=RESOLVER_RELEASE_NAME,
+                path=RESOLVER_RELEASE_WORKFLOW,
+            ),
+        )
+        artifact_digest = "sha256:" + "b" * 64
+        artifacts = {
+            "artifacts": [
+                {
+                    "id": 19,
+                    "name": "mailbox-secret-resolver-v1-sha256-" + "c" * 64 + ".tar",
+                    "digest": artifact_digest,
+                    "expired": False,
+                    "workflow_run": {"id": 17, "head_sha": source_sha},
+                }
+            ]
+        }
+        validate_artifact(
+            artifacts,
+            artifact_id=19,
+            artifact_digest=artifact_digest,
+            source_sha=source_sha,
+            run_id=17,
+            name_pattern=RESOLVER_ARTIFACT_RE,
+            label="resolver",
+        )
+        substituted = copy.deepcopy(artifacts)
+        substituted["artifacts"][0]["digest"] = "sha256:" + "d" * 64
+        expect_rejected(
+            "artifact substitution",
+            lambda: validate_artifact(
+                substituted,
+                artifact_id=19,
+                artifact_digest=artifact_digest,
+                source_sha=source_sha,
+                run_id=17,
+                name_pattern=RESOLVER_ARTIFACT_RE,
+                label="resolver",
+            ),
+        )
+        production = {
+            "name": "production",
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            },
+            "can_admins_bypass": False,
+            "protection_rules": [
+                {"type": "required_reviewers", "reviewers": [{"type": "User"}]}
+            ],
+        }
+        policies = {"branch_policies": [{"type": "branch", "name": "main"}]}
+        validate_environment(production, policies, expected_name="production")
+        expect_rejected(
+            "wildcard deployment branch",
+            lambda: validate_environment(
+                production,
+                {"branch_policies": [{"type": "branch", "name": "*"}]},
+                expected_name="production",
+            ),
+        )
+
+        resolver_release = root / "resolver-release"
+        control_release = root / "control-release"
+        (resolver_release / "migrations/resolver-d1").mkdir(parents=True)
+        (resolver_release / "migrations/resolver-d1/0001_resolver.sql").write_text(
+            "SELECT 1;\n", encoding="utf-8"
+        )
+        control_release.mkdir()
+        resolver_manifest = {
+            "release_id": "mailbox-secret-resolver-v1-sha256-" + "1" * 64,
+            "source_commit_sha": source_sha,
+            "resolver_worker_sha256": "2" * 64,
+        }
+        control_manifest = {
+            "release_id": "cloudflare-v1-sha256-" + "3" * 64,
+            "source": {
+                "repository": CANONICAL_REPOSITORY,
+                "commit_sha": source_sha,
+                "authority": "accepted-main",
+            },
+            "migrations": {"files": [{"path": "migrations/d1/0001_catalog.sql"}]},
+        }
+        (resolver_release / "release-manifest.json").write_bytes(
+            canonical_document(resolver_manifest)
+        )
+        (control_release / "release-manifest.json").write_bytes(
+            canonical_document(control_manifest)
+        )
+        resolver_query = root / "resolver-query.json"
+        control_query = root / "control-query.json"
+        resolver_query.write_text('[{"results":[{"name":"0001_resolver.sql"}]}]', encoding="utf-8")
+        control_query.write_text('[{"results":[{"name":"0001_catalog.sql"}]}]', encoding="utf-8")
+        verify_remote_d1(
+            resolver_release, control_release, resolver_query, control_query
+        )
+        control_query.write_text('[{"results":[]}]', encoding="utf-8")
+        expect_rejected(
+            "incomplete remote D1 ledger",
+            lambda: verify_remote_d1(
+                resolver_release, control_release, resolver_query, control_query
+            ),
+        )
+        control_query.write_text('[{"results":[{"name":"0001_catalog.sql"}]}]', encoding="utf-8")
+        resolver_status = root / "resolver-status.json"
+        control_status = root / "control-status.json"
+        smoke_body = root / "smoke-body"
+        resolver_status.write_text('{"versions":[{"id":"resolver-version"}]}', encoding="utf-8")
+        control_status.write_text('{"versions":[{"id":"control-version"}]}', encoding="utf-8")
+        smoke_body.write_text("ok", encoding="utf-8")
+        evidence_output = root / "evidence.json"
+        acceptance_output = root / "acceptance.json"
+        attest(
+            environment="staging",
+            resolver_manifest_path=resolver_release / "release-manifest.json",
+            control_manifest_path=control_release / "release-manifest.json",
+            resolver_status_path=resolver_status,
+            control_status_path=control_status,
+            smoke_body_path=smoke_body,
+            workflow_run_id="23",
+            workflow_run_attempt="1",
+            evidence_output=evidence_output,
+            acceptance_output=acceptance_output,
+        )
+        acceptance = require_object(load_json(acceptance_output, "acceptance fixture"), "acceptance fixture")
+        if acceptance.get("status") != "passed_unaccepted" or not evidence_output.is_file():
+            fail("promotion evidence fixture did not remain unaccepted and metadata-only")
     print("Mailbox resolver promotion positive and negative self-tests passed.")
 
 
@@ -555,6 +1147,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("self-test")
+    preflight = commands.add_parser("github-preflight")
+    preflight.add_argument("--environment", choices=ENVIRONMENTS, required=True)
+    preflight.add_argument("--source-sha", required=True)
+    preflight.add_argument("--resolver-release-run-id", required=True)
+    preflight.add_argument("--resolver-artifact-id", required=True)
+    preflight.add_argument("--resolver-artifact-digest", required=True)
+    preflight.add_argument("--control-plane-release-run-id", required=True)
+    preflight.add_argument("--control-plane-artifact-id", required=True)
+    preflight.add_argument("--control-plane-artifact-digest", required=True)
+    preflight.add_argument("--confirmation", required=True)
+    preflight.add_argument("--repository", required=True)
+    preflight.add_argument("--workflow-ref", required=True)
+    preflight.add_argument("--workflow-sha", required=True)
+    preflight.add_argument("--api-url", required=True)
+    preflight.add_argument("--token", default=os.environ.get("GITHUB_TOKEN", ""))
     secrets = commands.add_parser("validate-secrets")
     secrets.add_argument("--resolver", type=Path, required=True)
     secrets.add_argument("--control-plane", type=Path, required=True)
@@ -571,9 +1178,27 @@ def main() -> int:
     evidence.add_argument("--evidence", type=Path, required=True)
     evidence.add_argument("--resolver-manifest", type=Path, required=True)
     evidence.add_argument("--control-plane-manifest", type=Path, required=True)
+    d1 = commands.add_parser("verify-remote-d1")
+    d1.add_argument("--resolver-release", type=Path, required=True)
+    d1.add_argument("--control-plane-release", type=Path, required=True)
+    d1.add_argument("--resolver-query", type=Path, required=True)
+    d1.add_argument("--control-plane-query", type=Path, required=True)
+    attestation = commands.add_parser("attest")
+    attestation.add_argument("--environment", choices=ENVIRONMENTS, required=True)
+    attestation.add_argument("--resolver-manifest", type=Path, required=True)
+    attestation.add_argument("--control-plane-manifest", type=Path, required=True)
+    attestation.add_argument("--resolver-status", type=Path, required=True)
+    attestation.add_argument("--control-plane-status", type=Path, required=True)
+    attestation.add_argument("--smoke-body", type=Path, required=True)
+    attestation.add_argument("--workflow-run-id", required=True)
+    attestation.add_argument("--workflow-run-attempt", required=True)
+    attestation.add_argument("--evidence-output", type=Path, required=True)
+    attestation.add_argument("--acceptance-output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "self-test":
         self_test()
+    elif args.command == "github-preflight":
+        github_preflight(args)
     elif args.command == "validate-secrets":
         validate_secret_documents(
             args.resolver,
@@ -593,6 +1218,26 @@ def main() -> int:
         )
     elif args.command == "validate-staging-evidence":
         validate_staging_evidence(args.evidence, args.resolver_manifest, args.control_plane_manifest)
+    elif args.command == "verify-remote-d1":
+        verify_remote_d1(
+            args.resolver_release,
+            args.control_plane_release,
+            args.resolver_query,
+            args.control_plane_query,
+        )
+    elif args.command == "attest":
+        attest(
+            environment=args.environment,
+            resolver_manifest_path=args.resolver_manifest,
+            control_manifest_path=args.control_plane_manifest,
+            resolver_status_path=args.resolver_status,
+            control_status_path=args.control_plane_status,
+            smoke_body_path=args.smoke_body,
+            workflow_run_id=args.workflow_run_id,
+            workflow_run_attempt=args.workflow_run_attempt,
+            evidence_output=args.evidence_output,
+            acceptance_output=args.acceptance_output,
+        )
     return 0
 
 
