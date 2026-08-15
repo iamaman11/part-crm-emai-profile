@@ -10,8 +10,9 @@ privacy boundaries.
 - **Accepted repository-local product phase:** Phase 2I. Immutable provenance is
   [`architecture/accepted-phases.json`](architecture/accepted-phases.json).
 - **Architecture Re-baseline v3:** active program, tracked by issue #266.
-- **Accepted architecture slice:** AR-0 via PR #267.
-- **Current slice after accepted AR-1 cutover:** AR-1 — Architecture Authority Re-baseline.
+- **Accepted architecture slices:** AR-0, AR-1 and AR-2.
+- **Current accepted checkpoint:** AR-2 — Runtime Topology + D3 Compatibility.
+- **Next slice:** AR-3 — Application Architecture Contract.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
@@ -20,8 +21,10 @@ privacy boundaries.
 
 The single current architecture/program execution authority is
 [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md), tracked by issue
-#266. Machine transition state is
-[`architecture/architecture-rebaseline-v3-transition.json`](architecture/architecture-rebaseline-v3-transition.json).
+#266. AR-2 runtime-topology decisions are recorded in
+[`architecture/runtime-topology-ar2.json`](architecture/runtime-topology-ar2.json), with evidence in
+[`docs/ARCHITECTURE_REBASELINE_V3_AR2.md`](docs/ARCHITECTURE_REBASELINE_V3_AR2.md). Machine transition
+state is [`architecture/architecture-rebaseline-v3-transition.json`](architecture/architecture-rebaseline-v3-transition.json).
 
 The sequence is fail-closed:
 
@@ -44,6 +47,8 @@ Start with [`docs/INDEX.md`](docs/INDEX.md). The main current sources are:
 
 - [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md) — single current
   architecture/program execution authority, issue #266;
+- [`architecture/runtime-topology-ar2.json`](architecture/runtime-topology-ar2.json) — accepted AR-2
+  topology/D3 compatibility decision input for AR-3;
 - [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — current product/program projection and
   immutable accepted-phase provenance;
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) + accepted ADRs — stable architecture invariants;
@@ -57,8 +62,9 @@ Start with [`docs/INDEX.md`](docs/INDEX.md). The main current sources are:
   phase provenance.
 
 The former issue #203 pre-2J product-readiness plan and current-looking root plans are preserved as
-accepted predecessor history and explicitly marked historical/superseded for forward execution. Issue
-#251 remains an open predecessor external blocker until separately resolved; AR-1 does not execute it.
+accepted predecessor history and explicitly marked historical/superseded for forward execution. AR-2
+classified issue #251's old real-production D3 sequence as superseded forward execution while retaining
+its repository-side bootstrap/release/promotion evidence; the legacy D3 production lane is fail-closed.
 
 ## Architecture snapshot
 

@@ -12,13 +12,14 @@ file cannot silently become a second current roadmap.
 - Accepted repository-local product phase: **Phase 2I**, proven by
   [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json).
 - Architecture Re-baseline v3 is the active forward program.
-- AR-0 is accepted through PR #267.
-- AR-1 is the current bounded authority-cutover slice after its accepted merge.
+- AR-0, AR-1 and AR-2 are accepted checkpoints.
+- AR-2 — Runtime Topology + D3 Compatibility is the current accepted checkpoint.
+- AR-3 — Application Architecture Contract is the only next slice.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
 - Phase 2J and the pre-2J issue #203 sequence are predecessor history, not the current implementation queue.
-- Issue #251 remains OPEN predecessor external work; AR-1 does not execute it.
+- AR-2 classified issue #251's old production-promotion sequence as superseded forward execution; its repository-side D3 evidence remains preserved.
 
 ## Authority hierarchy
 
@@ -26,16 +27,18 @@ file cannot silently become a second current roadmap.
    architecture/program execution authority, tracked by issue #266.
 2. [`../architecture/architecture-rebaseline-v3-transition.json`](../architecture/architecture-rebaseline-v3-transition.json)
    is the machine transition projection of that authority.
-3. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) and [`status.json`](status.json) are current projections;
+3. [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json) is the
+   accepted AR-2 topology/D3 decision input; AR-3 owns its canonical runtime-resource projection.
+4. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) and [`status.json`](status.json) are current projections;
    they do not define a competing execution sequence.
-4. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md),
+5. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md),
    [`THREAT_MODEL.md`](THREAT_MODEL.md) and [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) remain normative
    within their stable architecture/security/data/UI scopes.
-5. [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md) records capability/evidence accepted
+6. [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md) records capability/evidence accepted
    on `main`; source presence is not production enablement.
-6. [`../architecture/inventory.json`](../architecture/inventory.json) is the canonical machine inventory
+7. [`../architecture/inventory.json`](../architecture/inventory.json) is the canonical machine inventory
    and document-status hierarchy. It is extended rather than replaced.
-7. [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json) is immutable accepted
+8. [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json) is immutable accepted
    product-phase provenance.
 
 If these sources disagree, implementation stops and the authority projections are corrected before the
@@ -57,6 +60,8 @@ The machine inventory uses these roles:
 ## Current program references
 
 - [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md)
+- [`ARCHITECTURE_REBASELINE_V3_AR2.md`](ARCHITECTURE_REBASELINE_V3_AR2.md)
+- [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json)
 - [`ARCHITECTURE_REBASELINE_V3_AR0.md`](ARCHITECTURE_REBASELINE_V3_AR0.md)
 - [`ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md`](ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md)
 - [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md)
@@ -89,4 +94,4 @@ The machine inventory uses these roles:
 
 The historical files are evidence/provenance. Statements inside preserved historical bodies that call
 themselves “current”, “active” or “canonical” describe their former accepted context and are not current
-authority after AR-1.
+authority after AR-1. AR-2 does not rewrite that history.
