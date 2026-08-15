@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "workspace_members": [
     "apps/control-plane-worker",
     "apps/foundation-check",
@@ -638,6 +638,497 @@
       "generator": "scripts/generate-frontend-contracts.py"
     }
   ],
+  "application_architecture": {
+    "schema_version": 1,
+    "status": "AR3_APPLICATION_ARCHITECTURE_CONTRACT",
+    "topology_source": "architecture/runtime-topology-ar2.json",
+    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
+    "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
+    "composition_taxonomy": [
+      "CONFORMING_COMPOSITION_SEAM",
+      "TRANSPORT_COMPOSITION_DEBT",
+      "ROUTE_OWNERSHIP_DEBT",
+      "INTENTIONAL_RUNTIME_BOUNDARY",
+      "CONDITIONAL_EXTRACTION_NOT_REQUIRED"
+    ],
+    "runtime_resources": [
+      {
+        "id": "control_plane_worker",
+        "kind": "WORKER",
+        "owner": "apps/control-plane-worker",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/lib.rs"
+        ]
+      },
+      {
+        "id": "static_assets",
+        "kind": "WORKER_STATIC_ASSETS",
+        "owner": "frontend",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc"
+        ]
+      },
+      {
+        "id": "mailbox_secret_resolver_worker",
+        "kind": "WORKER",
+        "owner": "apps/mailbox-secret-resolver-worker",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc",
+          "architecture/pre2j-d3-resolver-bootstrap-authority.json"
+        ]
+      },
+      {
+        "id": "catalog_d1",
+        "kind": "D1",
+        "owner": "control-plane/catalog",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "migrations/d1"
+        ]
+      },
+      {
+        "id": "resolver_d1",
+        "kind": "D1",
+        "owner": "mailbox-secret-resolver",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc",
+          "migrations/resolver-d1"
+        ]
+      },
+      {
+        "id": "profile_objects",
+        "kind": "R2",
+        "owner": "profile-generation",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc"
+        ]
+      },
+      {
+        "id": "profile_coordinator",
+        "kind": "DURABLE_OBJECT",
+        "owner": "profile/session coordination",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/profile_coordinator.rs"
+        ]
+      },
+      {
+        "id": "notification_hub",
+        "kind": "DURABLE_OBJECT",
+        "owner": "realtime notifications",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/realtime_notifications.rs"
+        ]
+      },
+      {
+        "id": "integration_events",
+        "kind": "QUEUE",
+        "owner": "notifications/integration-events",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "producer": "scheduled D1 outbox dispatcher",
+        "consumer": "control-plane queue handler",
+        "failure_boundary": "D1 durable delivery state + bounded Queue retry; realtime overlay is non-authoritative",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/integration_events.rs"
+        ]
+      },
+      {
+        "id": "mailbox_jobs",
+        "kind": "QUEUE",
+        "owner": "mailbox scheduling",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "producer": "scheduled D1 dispatcher",
+        "consumer": "control-plane queue handler",
+        "failure_boundary": "D1 job/version authority + bounded Queue retry",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/mailbox_scheduling.rs"
+        ]
+      },
+      {
+        "id": "mailbox_jobs_dlq",
+        "kind": "QUEUE_DLQ",
+        "owner": "mailbox operations",
+        "decision": "KEEP",
+        "execution_slice": "PC-3_MUTABLE_RECOVERY_ONLY_AFTER_AUTHORITY",
+        "producer": "MAILBOX_JOBS consumer retry exhaustion",
+        "consumer": "NO_CURRENT_AUTOMATIC_CONSUMER; FUTURE_OPERATOR_RECOVERY",
+        "failure_boundary": "inspect current D1 authority before controlled requeue/rerun/retire",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc"
+        ]
+      },
+      {
+        "id": "generation_verification",
+        "kind": "QUEUE",
+        "owner": "legacy profile-generation transport",
+        "decision": "DELETE",
+        "execution_slice": "AR-5_SOURCE_BINDING_REMOVAL",
+        "producer": "NO_PRODUCTION_PRODUCER_PROVEN; WRANGLER PRODUCER BINDING ONLY",
+        "consumer": "NONE",
+        "failure_boundary": "synchronous generation verification is authoritative",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/lib.rs",
+          "crates/cloudflare-adapters/src/control_plane_queue.rs",
+          "apps/control-plane-worker/src/profile_generations.rs"
+        ]
+      },
+      {
+        "id": "mailbox_secret_resolver_service",
+        "kind": "SERVICE_BINDING",
+        "owner": "mailbox credential boundary",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc",
+          "crates/cloudflare-adapters/src/cloud_mailbox_secrets.rs"
+        ]
+      },
+      {
+        "id": "control_plane_schedule",
+        "kind": "CRON",
+        "owner": "control-plane dispatchers",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/lib.rs"
+        ]
+      },
+      {
+        "id": "resolver_reconciliation_schedule",
+        "kind": "CRON",
+        "owner": "mailbox-secret-resolver key reconciliation",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc"
+        ]
+      },
+      {
+        "id": "gmail_api",
+        "kind": "PROVIDER_LANE",
+        "owner": "mailbox provider adapters",
+        "decision": "KEEP",
+        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+        "evidence": [
+          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"
+        ]
+      },
+      {
+        "id": "imap_read",
+        "kind": "PROVIDER_LANE",
+        "owner": "mailbox provider adapters",
+        "decision": "KEEP",
+        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+        "evidence": [
+          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"
+        ]
+      },
+      {
+        "id": "smtp_send",
+        "kind": "PROVIDER_LANE",
+        "owner": "outbound mail provider adapters",
+        "decision": "KEEP",
+        "execution_slice": "PC-4_ACTIVATION",
+        "evidence": [
+          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"
+        ]
+      },
+      {
+        "id": "microsoft_graph_oauth_read_delta",
+        "kind": "PROVIDER_LANE",
+        "owner": "mailbox provider adapters",
+        "decision": "KEEP",
+        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+        "evidence": [
+          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs",
+          "apps/control-plane-worker/src/mailbox_microsoft_graph_oauth.rs"
+        ]
+      },
+      {
+        "id": "microsoft_graph_mail_send",
+        "kind": "PROVIDER_LANE",
+        "owner": "outbound mail",
+        "decision": "DEFER",
+        "execution_slice": "SEPARATE_ACCEPTANCE_IF_IMPLEMENTED",
+        "evidence": [
+          "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
+        ]
+      },
+      {
+        "id": "browser_bridge_mailbox_lane",
+        "kind": "LOCAL_RUNTIME_LANE",
+        "owner": "Profile Bridge/browser mailbox execution",
+        "decision": "KEEP",
+        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+        "evidence": [
+          "apps/profile-bridge",
+          "apps/control-plane-worker/src/mailbox_bindings.rs"
+        ]
+      }
+    ],
+    "runtime_processes": [
+      {
+        "id": "control_plane_worker",
+        "runtime_kind": "CLOUDFLARE_WORKER",
+        "entrypoint": "apps/control-plane-worker/src/lib.rs",
+        "transport_owner": "apps/control-plane-worker",
+        "route_classifier": "crates/control-plane-contract/src/lib.rs::classify_route",
+        "composition_root": "apps/control-plane-worker/src/composition.rs",
+        "state_authority": "D1/application-owned repositories plus accepted R2/DO runtime boundaries",
+        "resource_refs": [
+          "control_plane_worker",
+          "static_assets",
+          "catalog_d1",
+          "profile_objects",
+          "profile_coordinator",
+          "notification_hub",
+          "integration_events",
+          "mailbox_jobs",
+          "mailbox_jobs_dlq",
+          "generation_verification",
+          "mailbox_secret_resolver_service",
+          "control_plane_schedule"
+        ],
+        "status": "CENTRAL_COMPOSITION_ROOT_WITH_BOUNDED_DEBT"
+      },
+      {
+        "id": "mailbox_secret_resolver_worker",
+        "runtime_kind": "ISOLATED_CLOUDFLARE_WORKER",
+        "entrypoint": "apps/mailbox-secret-resolver-worker/src/lib.rs",
+        "transport_owner": "apps/mailbox-secret-resolver-worker",
+        "composition_root": "apps/mailbox-secret-resolver-worker",
+        "state_authority": "dedicated resolver D1 encrypted credential/replay boundary",
+        "resource_refs": [
+          "mailbox_secret_resolver_worker",
+          "resolver_d1",
+          "resolver_reconciliation_schedule"
+        ],
+        "status": "INTENTIONAL_RUNTIME_BOUNDARY"
+      },
+      {
+        "id": "profile_bridge",
+        "runtime_kind": "WINDOWS_LOCAL_RUNTIME",
+        "entrypoint": "apps/profile-bridge/src/main.rs",
+        "transport_owner": "apps/profile-bridge",
+        "composition_root": "apps/profile-bridge",
+        "state_authority": "local encrypted workspace/cache/outbox under cloud device/profile authority",
+        "resource_refs": [
+          "browser_bridge_mailbox_lane"
+        ],
+        "status": "INTENTIONAL_RUNTIME_BOUNDARY"
+      }
+    ],
+    "capability_ownership": [
+      {
+        "id": "identity",
+        "transport": "apps/control-plane-worker/src/identity.rs",
+        "application_owner": "crates/use-cases-identity",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "clients",
+        "transport": "apps/control-plane-worker/src/clients.rs",
+        "application_owner": "crates/use-cases-clients",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "operator_queries",
+        "transport": "apps/control-plane-worker/src/operator_queries.rs",
+        "application_owner": "crates/use-cases-query",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "transport currently constructs D1QueryRepository",
+        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "remediation_slice": "AR-4A"
+      },
+      {
+        "id": "client_mail_query",
+        "transport": "apps/control-plane-worker/src/client_mail_query.rs",
+        "application_owner": "crates/use-cases-query",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "transport currently constructs query/eligibility/provider adapters",
+        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "remediation_slice": "AR-4A"
+      },
+      {
+        "id": "outbound_mail",
+        "transport": "apps/control-plane-worker/src/client_mail_send.rs",
+        "application_owner": "crates/use-cases-mailboxes::outbound_mail",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "transport currently constructs/selects D1 and concrete Gmail/SMTP providers",
+        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "remediation_slice": "AR-4C"
+      },
+      {
+        "id": "profiles",
+        "transport": "apps/control-plane-worker/src/profiles.rs",
+        "application_owner": "crates/use-cases::profiles/profile_assignments/profile_grants",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::profile_application",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "profile_generations",
+        "transport": "apps/control-plane-worker/src/profile_generations.rs",
+        "application_owner": "crates/use-cases::generations",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::profile_generation_application",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "mailbox_bindings",
+        "transport": "apps/control-plane-worker/src/mailbox_bindings.rs",
+        "application_owner": "crates/use-cases-mailboxes",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "mailbox_jobs",
+        "transport": "apps/control-plane-worker/src/mailbox_jobs.rs",
+        "application_owner": "crates/use-cases-mailboxes",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "repositories composed centrally; provider router remains direct in transport path",
+        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "remediation_slice": "AR-4A"
+      },
+      {
+        "id": "devices",
+        "transport": "apps/control-plane-worker/src/device_jobs.rs",
+        "application_owner": "crates/use-cases-devices",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "notifications",
+        "transport": "apps/control-plane-worker/src/notifications.rs",
+        "application_owner": "crates/use-cases-notifications",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "transport currently constructs notification D1 repositories",
+        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "remediation_slice": "AR-4A"
+      },
+      {
+        "id": "profile_coordination",
+        "transport": "apps/control-plane-worker/src/profile_coordinator_ingress.rs",
+        "application_owner": "crates/use-cases::coordinator_ingress + crates/session-domain",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "accepted coordinator ingress/adapter boundary",
+        "status": "INTENTIONAL_RUNTIME_BOUNDARY",
+        "remediation_slice": null
+      },
+      {
+        "id": "mailbox_secret_resolution",
+        "transport": "apps/mailbox-secret-resolver-worker/src/lib.rs",
+        "application_owner": "apps/mailbox-secret-resolver-worker application/security modules",
+        "ports_owner": "resolver-private contract/storage/provider boundary",
+        "composition_seam": "isolated resolver Worker and dedicated resolver D1",
+        "status": "INTENTIONAL_RUNTIME_BOUNDARY",
+        "remediation_slice": null
+      },
+      {
+        "id": "profile_bridge_runtime",
+        "transport": "apps/profile-bridge/src/main.rs",
+        "application_owner": "bridge/device/browser runtime domains and application ports",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "Windows Profile Bridge runtime boundary",
+        "status": "INTENTIONAL_RUNTIME_BOUNDARY",
+        "remediation_slice": "AR-15_DELIVERY_ONLY"
+      }
+    ],
+    "composition_findings": [
+      {
+        "id": "general_composition_root_debt",
+        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "owner_slice": "AR-4A",
+        "evidence": [
+          "apps/control-plane-worker/src/operator_queries.rs::D1QueryRepository::new",
+          "apps/control-plane-worker/src/notifications.rs::D1NotificationOperationsRepository::new",
+          "apps/control-plane-worker/src/notifications.rs::D1NotificationRepository::new",
+          "apps/control-plane-worker/src/mailbox_jobs.rs::CloudMailboxProviderRouter",
+          "apps/control-plane-worker/src/client_mail_query.rs::D1QueryRepository::new",
+          "apps/control-plane-worker/src/client_mail_query.rs::D1ClientMailboxEligibilityRepository::new",
+          "apps/control-plane-worker/src/client_mail_query.rs::CloudMailboxQueryAdapter::new"
+        ]
+      },
+      {
+        "id": "client_mail_route_ownership",
+        "status": "ROUTE_OWNERSHIP_DEBT",
+        "owner_slice": "AR-4B",
+        "evidence": [
+          "crates/control-plane-contract/src/routes/clients.rs::ClientMailSearchApi",
+          "crates/control-plane-contract/src/routes/clients.rs::ClientMailMessageApi",
+          "crates/control-plane-contract/src/routes/client_mail.rs::ClientMailSendApi"
+        ]
+      },
+      {
+        "id": "outbound_mail_composition",
+        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "owner_slice": "AR-4C",
+        "evidence": [
+          "apps/control-plane-worker/src/client_mail_send.rs::D1ClientMailboxEligibilityRepository::new",
+          "apps/control-plane-worker/src/client_mail_send.rs::D1OutboundMailIntentRepository::new",
+          "apps/control-plane-worker/src/client_mail_send.rs::D1MailboxRepository::new",
+          "apps/control-plane-worker/src/client_mail_send.rs::CloudflareGmailOutboundMailProvider::new",
+          "apps/control-plane-worker/src/client_mail_send.rs::CloudflareSmtpOutboundMailProvider::new"
+        ]
+      },
+      {
+        "id": "profile_application_extraction",
+        "status": "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
+        "owner_slice": "AR-4D",
+        "decision": "NOT_REQUIRED",
+        "evidence": [
+          "apps/control-plane-worker/src/profiles.rs::crate::composition::profile_application",
+          "apps/control-plane-worker/src/profile_generations.rs::crate::composition::profile_generation_application",
+          "crates/use-cases/src/lib.rs::profiles",
+          "crates/use-cases/src/lib.rs::generations"
+        ]
+      }
+    ],
+    "conditional_ar4d": {
+      "decision": "NOT_REQUIRED",
+      "reason": "Profile and Generation transports already use explicit composition seams; no measurable dependency-isolation benefit currently justifies extraction",
+      "reopen_policy": "ONLY_BY_LATER_ACCEPTED_EVIDENCE"
+    },
+    "next_required_slice_after_ar3": "AR-4A",
+    "production_mutation": false
+  },
   "documentation_authority": {
     "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
     "tracking_issue": 266,
@@ -646,6 +1137,8 @@
     "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
     "runtime_topology_projection_owner": "AR-3",
+    "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
+    "application_architecture_projection": "architecture/inventory.json::application_architecture",
     "development_projection": "docs/DEVELOPMENT_PLAN.md",
     "readiness_projection": "docs/status.json",
     "index": "docs/INDEX.md",
@@ -743,6 +1236,11 @@
       "path": "architecture/runtime-topology-ar2.json",
       "status": "STABLE_AUTHORITY",
       "scope": "accepted_ar2_runtime_topology_decision_input_for_ar3"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
+      "status": "EVIDENCE",
+      "scope": "ar3_application_architecture_contract_candidate"
     },
     {
       "path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Generate and verify the canonical architecture inventory after AR-2.
+"""Generate and verify the canonical architecture inventory during AR-3.
 
 The proven workspace/migration/route/generated-contract core remains in
-`_architecture_inventory_core.py`. AR-2 updates only program/document authority
-and registers its normalized topology decision as input for the AR-3 projection.
+`_architecture_inventory_core.py`. AR-3 consumes the accepted AR-2 topology and projects
+runtime-resource/application ownership into the same canonical architecture inventory.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import _architecture_inventory_core as core
+import _ar3_application_architecture as ar3
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_PATH = ROOT / "architecture" / "inventory.json"
@@ -46,6 +47,7 @@ DOCUMENT_STATUS = [
     {"path": "docs/ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md", "status": "EVIDENCE", "scope": "ar0_second_pass_research"},
     {"path": AR2_EVIDENCE, "status": "EVIDENCE", "scope": "ar2_runtime_topology_and_d3_compatibility_acceptance"},
     {"path": RUNTIME_TOPOLOGY, "status": "STABLE_AUTHORITY", "scope": "accepted_ar2_runtime_topology_decision_input_for_ar3"},
+    {"path": ar3.AR3_EVIDENCE, "status": "EVIDENCE", "scope": "ar3_application_architecture_contract_candidate"},
     {"path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "superseded_predecessor_forward_execution"},
     {"path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "accepted_r1_r9_closeout"},
     {"path": "IMPLEMENTATION_PLAN.md", "status": "SUPERSEDED", "scope": "compatibility_entrypoint_to_preserved_history"},
@@ -71,13 +73,13 @@ def validate_docs() -> None:
     current = status.get("current", {})
     program = current.get("architecture_program", {}) if isinstance(current, dict) else {}
     if status.get("production_ready") is not False:
-        raise SystemExit("docs/status.json must remain production_ready=false during AR-2")
+        raise SystemExit("docs/status.json must remain production_ready=false during AR-3")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
-        raise SystemExit("docs/status.json must keep AR-2 architecture/gate state fail closed")
+        raise SystemExit("docs/status.json must keep AR-3 architecture/gate state fail closed")
     if program.get("authority") != CURRENT_AUTHORITY or program.get("tracking_issue") != TRACKING_ISSUE:
         raise SystemExit("docs/status.json current architecture authority drifted")
     if program.get("accepted_slices") != ACCEPTED_SLICES or program.get("current_slice") != CURRENT_SLICE or program.get("next_slice_after_acceptance") != NEXT_SLICE:
-        raise SystemExit("docs/status.json must project accepted AR-2 -> AR-3 sequencing")
+        raise SystemExit("docs/status.json must preserve accepted AR-2 -> active AR-3 sequencing until AR-3 acceptance")
     if program.get("runtime_topology_decision") != RUNTIME_TOPOLOGY:
         raise SystemExit("docs/status.json must project the accepted AR-2 topology decision")
 
@@ -85,6 +87,7 @@ def validate_docs() -> None:
 def build_inventory() -> dict[str, object]:
     core.validate_route_ownership()
     validate_docs()
+    application_architecture = ar3.build_projection(ROOT)
     routes = [
         {
             "route_class": route_class,
@@ -97,7 +100,7 @@ def build_inventory() -> dict[str, object]:
         for route_class, capability, methods, template, example_path, authenticated in core.ROUTE_SPECS
     ]
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "workspace_members": core.workspace_members(),
         "d1_migrations": {"directory": "migrations/d1", "files": core.migration_files()},
         "routing": {
@@ -107,6 +110,7 @@ def build_inventory() -> dict[str, object]:
             "public_routes": routes,
         },
         "generated_contracts": core.GENERATED_CONTRACTS,
+        "application_architecture": application_architecture,
         "documentation_authority": {
             "current_program": CURRENT_AUTHORITY,
             "tracking_issue": TRACKING_ISSUE,
@@ -115,6 +119,8 @@ def build_inventory() -> dict[str, object]:
             "runtime_topology_decision": RUNTIME_TOPOLOGY,
             "runtime_topology_evidence": AR2_EVIDENCE,
             "runtime_topology_projection_owner": "AR-3",
+            "application_architecture_evidence": ar3.AR3_EVIDENCE,
+            "application_architecture_projection": "architecture/inventory.json::application_architecture",
             "development_projection": "docs/DEVELOPMENT_PLAN.md",
             "readiness_projection": "docs/status.json",
             "index": "docs/INDEX.md",
@@ -165,15 +171,28 @@ def self_test(expected: dict[str, object]) -> None:
     state = copy.deepcopy(expected)
     state["program_state"]["current_architecture_slice"] = "AR-1"
     if serialized(state) == serialized(expected):
-        raise SystemExit("inventory self-test failed to detect AR-2 rollback")
+        raise SystemExit("inventory self-test failed to detect accepted checkpoint rollback")
     topology = copy.deepcopy(expected)
     topology["documentation_authority"]["runtime_topology_decision"] = "architecture/other.json"
     if serialized(topology) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect topology authority drift")
+    ownership = copy.deepcopy(expected)
+    ownership["application_architecture"]["capability_ownership"][0]["application_owner"] = "apps/control-plane-worker"
+    if serialized(ownership) == serialized(expected):
+        raise SystemExit("inventory self-test failed to detect application ownership drift")
+    missing_resource = copy.deepcopy(expected)
+    missing_resource["application_architecture"]["runtime_resources"] = missing_resource["application_architecture"]["runtime_resources"][1:]
+    if serialized(missing_resource) == serialized(expected):
+        raise SystemExit("inventory self-test failed to detect missing runtime-resource projection")
+    ar4d = copy.deepcopy(expected)
+    ar4d["application_architecture"]["conditional_ar4d"]["decision"] = "REQUIRED"
+    if serialized(ar4d) == serialized(expected):
+        raise SystemExit("inventory self-test failed to detect unsupported AR-4D activation")
     gate = copy.deepcopy(expected)
     gate["program_state"]["production_core_gate"] = "AUTHORIZED"
     if serialized(gate) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect premature Production Core authorization")
+    ar3.negative_self_test(ROOT)
     documentation = subprocess.run(
         [sys.executable, str(ROOT / "scripts/check-documentation-authority.py"), "--root", str(ROOT), "--self-test"],
         cwd=ROOT,
@@ -186,7 +205,7 @@ def self_test(expected: dict[str, object]) -> None:
         raise SystemExit(f"documentation authority negative self-test failed:\n{details}")
     if documentation.stdout.strip():
         print(documentation.stdout.strip())
-    print("Architecture inventory AR-2 negative self-test passed.")
+    print("Architecture inventory AR-3 negative self-test passed.")
 
 
 def main() -> int:
@@ -203,7 +222,7 @@ def main() -> int:
         print(f"Wrote {INVENTORY_PATH.relative_to(ROOT)}")
     elif args.check:
         check_current(expected)
-        print("Architecture inventory and AR-2 authority consistency are current.")
+        print("Architecture inventory and AR-3 application ownership projection are current.")
     else:
         self_test(expected)
     return 0
