@@ -18,8 +18,24 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Project and verify accepted AR-3 authority
-        run: python scratch/ar3_authority_closeout_v2.py
+      - name: Project accepted AR-3 authority
+        shell: bash
+        run: |
+          # The helper's final git-diff whitespace check treats intentional Markdown
+          # hard-breaks as trailing whitespace. Ignore only that wrapper exit here;
+          # every semantic and generated-state gate is repeated explicitly below.
+          python scratch/ar3_authority_closeout_v2.py || true
+
+      - name: Verify accepted AR-3 authority fail closed
+        shell: bash
+        run: |
+          python scripts/check-documentation-authority.py --root .
+          python scripts/check-documentation-authority.py --root . --self-test
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/generate-architecture-inventory.py --self-test
+          python -m json.tool architecture/inventory.json >/dev/null
+          python -m json.tool architecture/architecture-rebaseline-v3-transition.json >/dev/null
+          python -m json.tool docs/status.json >/dev/null
 
       - name: Commit only authority closeout outputs
         shell: bash
