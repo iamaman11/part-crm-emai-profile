@@ -30,14 +30,13 @@ jobs:
           p.write_text(t, encoding='utf-8', newline='\n')
           PY
           python scripts/_ar4b_closeout_once.py
-      - name: Verify documentation authority before inventory generation
-        run: python scripts/check-documentation-authority.py --root .
       - name: Regenerate canonical architecture inventory
         run: python scripts/generate-architecture-inventory.py --write
       - name: Verify canonical authority and negative fixtures
         shell: bash
         run: |
           set -euo pipefail
+          python scripts/check-documentation-authority.py --root .
           python scripts/check-documentation-authority.py --root . --self-test
           python scripts/generate-architecture-inventory.py --check
           python scripts/generate-architecture-inventory.py --self-test
