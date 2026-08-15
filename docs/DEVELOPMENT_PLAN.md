@@ -85,7 +85,7 @@ AR-11  Release-set / Promotion Architecture
 AR-12  Fresh Rehearsal Environment
 AR-13  Rotation Rehearsal
 AR-14  Remote Recovery Rehearsal
-AR-15  Windows Release & Update Architecture
+AR-15  Windows Delivery Program — inherited Batch E
 AR-16  Final Whole-project 10/10 Audit
 AR-17  Architecture Closeout + Production Core Gate
 ```
@@ -131,6 +131,17 @@ boundary only when the owning bounded slice proves the delta; it does not reopen
 release profile after AR-17 authorization and successful PC-1, while mailbox administration, bulk
 mailbox operations, client↔mailbox binding, mailbox jobs/automation and outbound side effects remain
 production-disabled until later capability gates.
+
+The current Core scope includes Camoufox/profile runtime through Windows Profile Bridge. Therefore the
+unfinished historical Windows updater Batch E is inherited by **AR-15** and is release-blocking for the
+current Core scope: signed/versioned update manifest, trust/key rotation, side-by-side staging, safe
+quiescent activation, health + Last Known Good rollback, immutable Windows publisher integration,
+permanent failure-path tests and a production-equivalent Windows rehearsal must all be accepted before
+AR-16/AR-17 can authorize PC-1. Profile Bridge runtime and updater remain separate failure domains.
+
+PC-1 must consume a Production Capability / Release Profile whose cloud release-set and Windows
+Bridge/updater/runtime/profile-format compatibility are mutually accepted. PC-1 is not allowed to be the
+first exercise of updater signature trust, rollback or activation safety.
 
 UI projection is never the security boundary. Production-disabled capability paths must fail closed in
 the backend. The project retains one `main`, one architecture and one schema/compatibility lineage.
