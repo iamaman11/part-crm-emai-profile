@@ -4,8 +4,8 @@
 **Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Tracking:** issue #266  
 **Accepted product phase:** Phase 2I  
-**Current accepted architecture checkpoint:** AR-3 — Application Architecture Contract  
-**Next architecture slice:** AR-4A — Composition-root consolidation  
+**Current accepted architecture checkpoint:** AR-4A — Composition-root consolidation
+**Next architecture slice:** AR-4B — Client Mail route ownership
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `production_ready=false`
@@ -33,9 +33,10 @@ advance during Architecture Re-baseline v3.
 - AR-0 — Delta Architecture Inventory: **DONE / ACCEPTED** through PR #267.
 - AR-1 — Architecture Authority Re-baseline: **DONE / ACCEPTED**.
 - AR-2 — Runtime Topology + D3 Compatibility: **DONE / ACCEPTED**.
-- AR-3 — Application Architecture Contract: **CURRENT ACCEPTED CHECKPOINT**.
-- AR-4A — Composition-root consolidation: **NEXT**.
-- AR-4B…AR-17: ordered future architecture slices; AR-4D is skipped unless later accepted evidence reopens it.
+- AR-3 — Application Architecture Contract: **DONE / ACCEPTED**.
+- AR-4A — Composition-root consolidation: **CURRENT ACCEPTED CHECKPOINT**.
+- AR-4B — Client Mail route ownership: **NEXT**.
+- AR-4C…AR-17: ordered future architecture slices; AR-4D is skipped unless later accepted evidence reopens it.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
@@ -71,9 +72,9 @@ Architecture Re-baseline v3                                   ACTIVE
 AR-0   Delta Architecture Inventory                              DONE
 AR-1   Architecture Authority Re-baseline                        DONE
 AR-2   Runtime Topology + D3 Compatibility                       DONE / ACCEPTED
-AR-3   Application Architecture Contract                         CURRENT / ACCEPTED CHECKPOINT
-AR-4A  Composition-root consolidation                            NEXT
-AR-4B  Client Mail route ownership
+AR-3   Application Architecture Contract                         DONE / ACCEPTED
+AR-4A  Composition-root consolidation                            CURRENT / ACCEPTED CHECKPOINT
+AR-4B  Client Mail route ownership                               NEXT
 AR-4C  Outbound Mail composition extraction
 AR-4D  Profile extraction — NOT REQUIRED by AR-3; reopen only by later accepted evidence
 AR-5   Wrangler / Runtime Authority Cleanup
