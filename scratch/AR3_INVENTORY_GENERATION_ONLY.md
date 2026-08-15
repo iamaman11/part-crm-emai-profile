@@ -1,0 +1,1 @@
+This branch exists only to execute the repository-owned AR-3 inventory generator and capture the resulting `architecture/inventory.json` blob. It is never intended for merge. The final AR-3 branch receives only the generated inventory blob; this scratch workflow and marker are discarded.
