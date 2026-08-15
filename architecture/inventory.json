@@ -640,7 +640,7 @@
   ],
   "application_architecture": {
     "schema_version": 1,
-    "status": "AR3_APPLICATION_ARCHITECTURE_CONTRACT",
+    "status": "ACCEPTED_AR3_APPLICATION_ARCHITECTURE_CONTRACT",
     "topology_source": "architecture/runtime-topology-ar2.json",
     "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
     "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
@@ -1132,7 +1132,7 @@
   "documentation_authority": {
     "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
     "tracking_issue": 266,
-    "current_slice": "AR-2",
+    "current_slice": "AR-3",
     "transition": "architecture/architecture-rebaseline-v3-transition.json",
     "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
@@ -1240,7 +1240,7 @@
     {
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
       "status": "EVIDENCE",
-      "scope": "ar3_application_architecture_contract_candidate"
+      "scope": "ar3_application_architecture_contract_accepted"
     },
     {
       "path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
@@ -1268,10 +1268,11 @@
     "accepted_architecture_slices": [
       "AR-0",
       "AR-1",
-      "AR-2"
+      "AR-2",
+      "AR-3"
     ],
-    "current_architecture_slice": "AR-2",
-    "next_architecture_slice_after_acceptance": "AR-3",
+    "current_architecture_slice": "AR-3",
+    "next_architecture_slice_after_acceptance": "AR-4A",
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
     "production_ready": false,
