@@ -1,0 +1,43 @@
+name: AR4A Cross Component Fix Staging
+
+on:
+  push:
+    branches:
+      - agent/ar4a-cross-component-fix-staging
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout staging branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: agent/ar4a-cross-component-fix-staging
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Update cross-component acceptance contract
+        run: python scratch/ar4a_cross_component_fix.py
+
+      - name: Verify cross-component and architecture contracts
+        shell: bash
+        run: |
+          python scripts/test-cross-component-acceptance.py
+          python scripts/check-documentation-authority.py --root .
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/generate-architecture-inventory.py --self-test
+
+      - name: Verify hygiene and commit output only
+        shell: bash
+        run: |
+          git add scripts/test-cross-component-acceptance.py
+          git diff --cached --check
+          git diff --cached --quiet && { echo 'No acceptance update produced'; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'AR-4A: align cross-component acceptance with composition root'
+          git push origin HEAD:agent/ar4a-cross-component-fix-staging
