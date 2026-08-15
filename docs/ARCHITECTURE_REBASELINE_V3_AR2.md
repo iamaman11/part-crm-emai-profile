@@ -91,7 +91,7 @@ No mutable DLQ operator action is introduced by AR-2.
 
 Historical D3 already produced useful accepted repository assets: resolver isolation, deterministic bootstrap authority, immutable resolver/control-plane releases, exact-artifact verification, protected-environment checks, resolver-before-control-plane ordering, same-bits promotion logic, D1-ledger verification and metadata-only evidence. These are `KEEP` predecessor foundations and become inputs to AR-11 release-set generalization.
 
-What does not survive as forward authority is the old requirement that #251 perform real production promotion before architecture work continues. Architecture Re-baseline v3 requires:
+The **legacy D3 production lane** is superseded for forward execution. What does not survive as forward authority is the old requirement that #251 perform real production promotion before architecture work continues. Architecture Re-baseline v3 requires:
 
 ```text
 AR-0..AR-17: no production mutation

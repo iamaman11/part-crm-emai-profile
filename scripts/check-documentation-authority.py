@@ -111,7 +111,7 @@ def validate(root: Path) -> list[str]:
     if current.get("accepted_product_phase") != ACCEPTED_PHASE:
         errors.append("docs/status.json accepted product phase must remain Phase 2I")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
-        errors.append("AR-2 architecture/gate state must remain fail closed")
+        errors.append("AR-2 architecture/Production Core gate state must remain fail closed")
 
     program = current.get("architecture_program") if isinstance(current.get("architecture_program"), dict) else {}
     expected_program = {
