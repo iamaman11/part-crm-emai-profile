@@ -338,13 +338,23 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
         "resolver_artifact_digest:",
         "control_plane_artifact_id:",
         "control_plane_artifact_digest:",
+        "resolver_release_id:",
+        "resolver_worker_sha256:",
+        "control_plane_release_id:",
+        "staging_promotion_run_id:",
+        "staging_evidence_artifact_id:",
+        "staging_evidence_artifact_digest:",
+        "staging_run_attempt:",
+        "staging_evidence_confirmation:",
         "confirmation:",
         "github-preflight",
         "download-artifact@",
         "artifact-ids:",
+        "deploy --dry-run",
         "--strict",
         "--experimental-autoconfig=false",
         "validate-secrets",
+        "validate-release-identities",
         "validate-staging-evidence",
         "verify-remote-d1",
         "deployments status",
@@ -362,14 +372,18 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
             "promotion must let pinned Wrangler package the immutable Worker module closure; "
             "--no-bundle rejects worker-build's shim module imports"
         )
-    if promotion.count("--secrets-file") != 2:
-        errors.append("resolver and first control-plane deploy must each use --secrets-file")
-    if promotion.count("artifact-ids:") != 2:
-        errors.append("promotion must download both artifacts by exact GitHub artifact id")
-    if promotion.count("--strict") != 2:
-        errors.append("both Worker deployments must use strict upload validation")
-    if promotion.count("--experimental-autoconfig=false") != 2:
-        errors.append("both Worker deployments must disable Wrangler automatic configuration")
+    if "staging_evidence_path" in promotion or "docs/evidence/" in promotion:
+        errors.append("production must accept immutable staging evidence artifacts, never tracked Git evidence")
+    if promotion.count("--secrets-file") != 4:
+        errors.append("both immutable artifact dry-runs and both Worker deploys must each use --secrets-file")
+    if promotion.count("artifact-ids:") != 5:
+        errors.append("preflight and deployment must download exact release artifacts, plus production staging evidence, by GitHub artifact id")
+    if promotion.count("--strict") != 4:
+        errors.append("both immutable artifact dry-runs and both Worker deployments must use strict validation")
+    if promotion.count("--experimental-autoconfig=false") != 4:
+        errors.append("both immutable artifact dry-runs and both Worker deployments must disable Wrangler automatic configuration")
+    if promotion.count("deploy --dry-run") != 2:
+        errors.append("resolver and control-plane immutable artifacts must each pass pinned Wrangler dry-run")
     preflight_job = promotion.find("\n  preflight:")
     deploy_job = promotion.find("\n  promote-same-bits:")
     if (
@@ -393,6 +407,10 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
     ):
         if forbidden in promotion:
             errors.append(f"promotion contains forbidden rebuild/provisioning authority: {forbidden}")
+    if promotion.count("validate-release-identities") != 2:
+        errors.append("both preflight and deployment must bind manifests to exact release identities")
+    if promotion.count("validate-staging-evidence") != 1:
+        errors.append("production must validate one downloaded immutable staging evidence artifact")
     return errors
 
 
@@ -436,7 +454,10 @@ def release_script_errors() -> list[str]:
         "caller-auth secret must match both Workers",
         "render_resolver_config",
         "render_control_config",
-        "Production same-bits artifacts match accepted staging evidence",
+        "validate_release_identities",
+        "validate_staging_evidence_artifact",
+        "validate_deployment_closures",
+        "Production same-bits artifacts match immutable passed staging evidence",
     ):
         if marker not in promotion:
             errors.append(f"resolver promotion verifier is missing {marker!r}")
@@ -474,6 +495,14 @@ def current_errors() -> list[str]:
             required = secrets.get("required") if isinstance(secrets, dict) else None
             if not isinstance(required, list) or set(required) != EXPECTED_CONTROL_SECRETS:
                 errors.append(f"control-plane {environment} secret-name inventory drifted")
+    cloudflare_release = read(Path("scripts/cloudflare-release.py"))
+    for marker in (
+        '"deployment_config"',
+        "copy_tree_exact(root / \"migrations\" / \"d1\"",
+        "migration_inventory(release_directory)",
+    ):
+        if marker not in cloudflare_release:
+            errors.append(f"control-plane immutable release closure is missing {marker!r}")
     return errors
 
 
@@ -524,6 +553,8 @@ def self_test() -> None:
     assert workflow_errors(release, promotion.replace("--secrets-file", "--secret-file"))
     assert workflow_errors(release, promotion.replace("artifact-ids:", "pattern:", 1))
     assert workflow_errors(release, promotion.replace("github-preflight", "unchecked-preflight", 1))
+    assert workflow_errors(release, promotion + "\n--no-bundle")
+    assert workflow_errors(release, promotion.replace("staging_evidence_artifact_id", "tracked_evidence_path", 1))
     assert quality_workflow_errors(quality.replace("fetch-depth: 0", "fetch-depth: 1", 1))
     config = load(RESOLVER_CONFIG)
     tampered = copy.deepcopy(config)

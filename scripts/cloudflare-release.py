@@ -27,6 +27,7 @@ CONTRACT_VERSION = "v1"
 RELEASE_DIR = ROOT / "artifacts" / "cloudflare-release"
 FRONTEND_DIST = Path("frontend/dist")
 WORKER_BUILD_DIR = Path("apps/control-plane-worker/build")
+DEPLOYMENT_CONFIG = Path("deploy/cloudflare/wrangler.jsonc")
 # worker-build 0.8.5 emits the deployable module closure at the build root while
 # retaining build/worker/shim.mjs as the Wrangler-compatible entrypoint alias.
 # Do not hash .tmp/intermediate files or non-runtime package/type metadata.
@@ -381,6 +382,10 @@ def build_manifest_payload(
                 "entrypoint": WORKER_ENTRYPOINT,
                 **worker_runtime_inventory(worker_directory),
             },
+            "deployment_config": {
+                "kind": "wrangler-config",
+                **inventory_entries(root, [DEPLOYMENT_CONFIG.as_posix()]),
+            },
         },
         "contracts": contract_inventory(root),
         "migrations": migration_inventory(root),
@@ -497,8 +502,14 @@ def verify_release_directory(
         fail("release manifest artifact inventories are missing")
     frontend_manifest = artifacts.get("frontend")
     worker_manifest = artifacts.get("worker")
+    deployment_config_manifest = artifacts.get("deployment_config")
     compare_inventory("frontend", frontend_manifest, inventory_directory(frontend_directory))
     compare_inventory("worker", worker_manifest, worker_runtime_inventory(worker_directory))
+    compare_inventory(
+        "deployment config",
+        deployment_config_manifest,
+        inventory_entries(release_directory, [DEPLOYMENT_CONFIG.as_posix()]),
+    )
     if not isinstance(worker_manifest, dict) or worker_manifest.get("entrypoint") != WORKER_ENTRYPOINT:
         fail("release manifest Worker entrypoint is not canonical")
 
@@ -507,10 +518,11 @@ def verify_release_directory(
     build = manifest.get("build")
     actual_contracts = contract_inventory(root)
     actual_migrations = migration_inventory(root)
+    release_migrations = migration_inventory(release_directory)
     actual_build = load_toolchain_identity(root)
     if contracts != actual_contracts:
         fail("generated contract identity no longer matches the exact source checkout")
-    if migrations != actual_migrations:
+    if migrations != actual_migrations or migrations != release_migrations:
         fail("D1 migration-set identity no longer matches the exact source checkout")
     if build != actual_build:
         fail("build/toolchain identity no longer matches repository authorities")
@@ -656,6 +668,11 @@ def build_release(
     try:
         copy_tree_exact(frontend, release_directory / "frontend")
         copy_worker_runtime(worker, release_directory / "worker")
+        copy_tree_exact(root / "migrations" / "d1", release_directory / "migrations" / "d1")
+        deployment_config = root / DEPLOYMENT_CONFIG
+        deployment_config_target = release_directory / DEPLOYMENT_CONFIG
+        deployment_config_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(deployment_config, deployment_config_target, follow_symlinks=False)
         write_manifest(release_directory / MANIFEST_NAME, manifest)
         verify_release_directory(
             root,
