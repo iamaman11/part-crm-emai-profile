@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "AR2_ACCEPTED_CANDIDATE",
+  "status": "ACCEPTED_AR2_DECISION",
   "program": "Architecture Re-baseline v3",
   "tracking_issue": 266,
   "slice": "AR-2",

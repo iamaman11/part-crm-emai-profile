@@ -195,7 +195,7 @@ def validate_resolver_isolation(resolver: dict[str, Any]) -> None:
 def validate_topology(topology: dict[str, Any]) -> None:
     exact = {
         "schema_version": 1,
-        "status": "AR2_ACCEPTED_CANDIDATE",
+        "status": "ACCEPTED_AR2_DECISION",
         "program": "Architecture Re-baseline v3",
         "tracking_issue": 266,
         "slice": "AR-2",
@@ -346,6 +346,15 @@ def self_test(control: dict[str, Any], topology: dict[str, Any], workflow: str) 
     else:
         fail("GENERATION_VERIFICATION decision negative fixture unexpectedly passed")
 
+    candidate_status = copy.deepcopy(topology)
+    candidate_status["status"] = "AR2_ACCEPTED_CANDIDATE"
+    try:
+        validate_topology(candidate_status)
+    except Ar2TopologyError:
+        pass
+    else:
+        fail("post-merge AR-2 candidate-status negative fixture unexpectedly passed")
+
     bypass = workflow.replace("needs: [preflight]", "needs: []", 1)
     try:
         validate_d3_gate(bypass)
@@ -370,7 +379,7 @@ def main() -> int:
         validate_d3_gate(workflow)
         self_test(control, topology, workflow)
         print(
-            "AR-2 runtime topology, GENERATION_VERIFICATION deletion proof, resolver isolation, "
+            "AR-2 accepted runtime topology, GENERATION_VERIFICATION deletion proof, resolver isolation, "
             "and D3 production fail-closed compatibility checks passed."
         )
         return 0
