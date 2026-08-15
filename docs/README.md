@@ -7,9 +7,9 @@ current-authority hierarchy live in [`INDEX.md`](INDEX.md).
 
 - **Accepted repository-local product phase:** Phase 2I.
 - **Architecture Re-baseline v3:** active, tracked by issue #266.
-- **Accepted architecture slices:** AR-0, AR-1, AR-2, AR-3 and AR-4A.
-- **Current accepted checkpoint:** AR-4A — Composition-root consolidation.
-- **Next slice:** AR-4B — Client Mail route ownership.
+- **Accepted architecture slices:** AR-0, AR-1, AR-2, AR-3, AR-4A and AR-4B.
+- **Current accepted checkpoint:** AR-4B — Client Mail route ownership.
+- **Next slice:** AR-4C — Outbound Mail composition extraction.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
@@ -27,6 +27,7 @@ first program step that may perform real Production Core mutation.
 ## Current sources
 
 - [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — CURRENT_AUTHORITY, issue #266;
+- [`ARCHITECTURE_REBASELINE_V3_AR4B.md`](ARCHITECTURE_REBASELINE_V3_AR4B.md) — accepted AR-4B Client Mail route-ownership evidence;
 - [`ARCHITECTURE_REBASELINE_V3_AR4A.md`](ARCHITECTURE_REBASELINE_V3_AR4A.md) — accepted AR-4A composition-root remediation evidence;
 - [`ARCHITECTURE_REBASELINE_V3_AR3.md`](ARCHITECTURE_REBASELINE_V3_AR3.md) — accepted AR-3 base application architecture evidence;
 - [`ARCHITECTURE_REBASELINE_V3_AR2.md`](ARCHITECTURE_REBASELINE_V3_AR2.md) — accepted AR-2 topology/D3 evidence;
@@ -54,6 +55,6 @@ first program step that may perform real Production Core mutation.
 
 Issue #203 remains a predecessor blocker lifecycle rather than the forward program tracker after AR-1.
 AR-2 classified issue #251's old production-promotion sequence as superseded forward execution while
-preserving its repository-side D3 foundation; AR-4A is accepted and AR-4B is the only next architecture slice.
+preserving its repository-side D3 foundation; AR-4B is accepted and AR-4C is the only next architecture slice.
 
 For contributor commands and exact-head acceptance discipline see [`../CONTRIBUTING.md`](../CONTRIBUTING.md).

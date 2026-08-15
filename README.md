@@ -10,9 +10,9 @@ privacy boundaries.
 - **Accepted repository-local product phase:** Phase 2I. Immutable provenance is
   [`architecture/accepted-phases.json`](architecture/accepted-phases.json).
 - **Architecture Re-baseline v3:** active program, tracked by issue #266.
-- **Accepted architecture slices:** AR-0, AR-1, AR-2, AR-3 and AR-4A.
-- **Current accepted checkpoint:** AR-4A — Composition-root consolidation.
-- **Next slice:** AR-4B — Client Mail route ownership.
+- **Accepted architecture slices:** AR-0, AR-1, AR-2, AR-3, AR-4A and AR-4B.
+- **Current accepted checkpoint:** AR-4B — Client Mail route ownership.
+- **Next slice:** AR-4C — Outbound Mail composition extraction.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
@@ -21,9 +21,10 @@ privacy boundaries.
 
 The single current architecture/program execution authority is
 [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md), tracked by issue
-#266. AR-4A composition-root remediation extends the accepted AR-3 application/runtime ownership contract in
-[`architecture/inventory.json`](architecture/inventory.json), with acceptance evidence in
-[`docs/ARCHITECTURE_REBASELINE_V3_AR4A.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4A.md) and the AR-3 base contract preserved in
+#266. AR-4B Client Mail route-ownership remediation extends the AR-4A-remediated accepted AR-3 application/runtime ownership contract in
+[`architecture/inventory.json`](architecture/inventory.json), with AR-4B acceptance evidence in
+[`docs/ARCHITECTURE_REBASELINE_V3_AR4B.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4B.md), AR-4A evidence preserved in
+[`docs/ARCHITECTURE_REBASELINE_V3_AR4A.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4A.md), and the AR-3 base contract preserved in
 [`docs/ARCHITECTURE_REBASELINE_V3_AR3.md`](docs/ARCHITECTURE_REBASELINE_V3_AR3.md); the accepted AR-2 topology input remains
 [`architecture/runtime-topology-ar2.json`](architecture/runtime-topology-ar2.json). Machine transition
 state is [`architecture/architecture-rebaseline-v3-transition.json`](architecture/architecture-rebaseline-v3-transition.json).
@@ -49,6 +50,7 @@ Start with [`docs/INDEX.md`](docs/INDEX.md). The main current sources are:
 
 - [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md) — single current
   architecture/program execution authority, issue #266;
+- [`docs/ARCHITECTURE_REBASELINE_V3_AR4B.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4B.md) — accepted AR-4B Client Mail route-ownership evidence;
 - [`docs/ARCHITECTURE_REBASELINE_V3_AR4A.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4A.md) — accepted AR-4A composition-root remediation evidence;
 - [`docs/ARCHITECTURE_REBASELINE_V3_AR3.md`](docs/ARCHITECTURE_REBASELINE_V3_AR3.md) — accepted AR-3 base application architecture evidence;
 - [`architecture/runtime-topology-ar2.json`](architecture/runtime-topology-ar2.json) — accepted AR-2 topology/D3 input retained by the AR-3 projection;

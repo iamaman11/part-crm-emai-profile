@@ -1,10 +1,15 @@
 # Architecture Re-baseline v3 — AR-4B Client Mail route ownership
 
-Status: **CANDIDATE — NOT ACCEPTED UNTIL POST-MERGE CLOSEOUT**
+Status: **EVIDENCE / AR-4B accepted**
 
 Parent program: #266  
 Bounded implementation issue: #282  
-Accepted baseline: `c705dc45c9e923582daf531242bd2c6af2239597` (`main`, AR-4A accepted)
+Accepted baseline: `c705dc45c9e923582daf531242bd2c6af2239597` (`main`, AR-4A accepted)  
+Implementation issue: #282  
+Implementation PR: #283  
+Exact-green implementation head: `7ccdd1b0ed0c0eae974cd9bde15c87524315c023`  
+Implementation merge: `04b62c97813010ac283d8b70c81089f1c16f5672`  
+Applicable permanent workflows: **13/13 success**
 
 ## Purpose
 
@@ -12,7 +17,7 @@ AR-4B closes the route-classifier ownership debt identified by AR-3 and preserve
 
 The remediation is deliberately structural and behavior-neutral: all nested Client Mail HTTP contract routes are classified by `crates/control-plane-contract/src/routes/client_mail.rs`, while `routes/clients.rs` owns only Client capability routes.
 
-## Candidate ownership
+## Accepted ownership
 
 `crates/control-plane-contract/src/routes/client_mail.rs` is the single classifier owner for:
 
@@ -49,14 +54,13 @@ The canonical AR-3/AR-4 architecture checker is updated so that:
 
 This turns route ownership into a fail-closed repository invariant rather than a reviewer convention.
 
-## Candidate machine state
+## Accepted machine state
 
-Until the separate closeout step accepts the merged implementation:
+After post-merge authority closeout:
 
-- `accepted_through = AR-4A`;
-- candidate slice = `AR-4B`;
-- candidate status = `ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE`;
-- next slice after acceptance = `AR-4C`;
+- `accepted_through = AR-4B`;
+- accepted status = `ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED`;
+- next required slice = `AR-4C`;
 - `architecture_complete = false`;
 - Production Core remains `BLOCKED`;
 - `production_ready = false`;
