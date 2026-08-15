@@ -488,7 +488,7 @@ def negative_self_test(root: Path) -> None:
         raise SystemExit("AR-4B negative self-test failed to reject Client Mail route ownership regression")
 
     missing_route_owner = _read(root, "crates/control-plane-contract/src/routes/client_mail.rs").replace(
-        "ClientMailMessageApi", "RemovedClientMailMessageApi"
+        "ClientMailMessageApi", "MissingMailMessageRouteClass"
     )
     try:
         _validate_source_text("crates/control-plane-contract/src/routes/client_mail.rs", missing_route_owner)
