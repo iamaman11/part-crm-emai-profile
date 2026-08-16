@@ -209,10 +209,11 @@ Every bounded AR candidate follows one immutable-head protocol:
 
 ## 11. Immediate next action
 
-Accept issue #302 — post-AR-7 exact-head CI and GitHub Actions supply-chain hardening — from the
-current accepted AR-7 `main`. This is a bounded correction to acceptance mechanics, not AR-8
-implementation and not a new architecture slice. After #302 is exact-green and merged through protected
-`main`, begin **AR-8 — Secrets / Keys / OAuth Refresh Concurrency** from that resulting accepted main.
+Post-AR-7 exact-head CI and GitHub Actions supply-chain hardening is **DONE / ACCEPTED** through
+issue #302 / PR #303; exact-green candidate `e8022adb799184628f5c5706c9651d0245386d55` was merged
+through protected `main` as merge commit `d94bc315faad45ed376fb302b843642fb4397659`. The accepted
+architecture checkpoint remains AR-7; the immediate next sequential slice is
+**AR-8 — Secrets / Keys / OAuth Refresh Concurrency**.
 
 Throughout AR-0…AR-17:
 
