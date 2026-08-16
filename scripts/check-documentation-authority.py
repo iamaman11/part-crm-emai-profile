@@ -137,8 +137,8 @@ def validate(root: Path) -> list[str]:
         "subordinate_preproduction_issue": SUBORDINATE_ISSUE,
         "current_slice": CURRENT_SLICE,
         "next_slice_after_acceptance": NEXT_SLICE,
-        "runtime_topology_decision": str(TOPOLOGY),
-        "runtime_topology_evidence": str(AR2_EVIDENCE),
+        "runtime_topology_decision": TOPOLOGY.as_posix(),
+        "runtime_topology_evidence": AR2_EVIDENCE.as_posix(),
     }
     for key, expected in expected_program.items():
         if program.get(key) != expected:
@@ -147,7 +147,7 @@ def validate(root: Path) -> list[str]:
         errors.append(f"docs/status.json accepted_slices must be {ACCEPTED_SLICES!r}")
     ar5 = program.get("ar5_acceptance") if isinstance(program.get("ar5_acceptance"), dict) else {}
     if (
-        program.get("runtime_authority_cleanup_evidence") != str(AR5_EVIDENCE)
+        program.get("runtime_authority_cleanup_evidence") != AR5_EVIDENCE.as_posix()
         or ar5.get("issue") != 290
         or ar5.get("implementation_pr") != 291
         or ar5.get("exact_green_head") != "afed435bb714794d6c4f252be6b44c592ee31b2b"
@@ -190,14 +190,14 @@ def validate(root: Path) -> list[str]:
     if transition_state.get("architecture_complete") is not False or transition_state.get("production_core_gate") != "BLOCKED" or transition_state.get("production_ready") is not False:
         errors.append("transition state must remain fail closed through AR-5")
     runtime = transition.get("runtime_topology") if isinstance(transition.get("runtime_topology"), dict) else {}
-    if runtime.get("decision_authority") != str(TOPOLOGY) or runtime.get("generation_verification_decision") != "DELETE" or runtime.get("legacy_d3_production_forward_execution") != "DISABLED":
+    if runtime.get("decision_authority") != TOPOLOGY.as_posix() or runtime.get("generation_verification_decision") != "DELETE" or runtime.get("legacy_d3_production_forward_execution") != "DISABLED":
         errors.append("transition lost accepted AR-2 runtime-topology decisions")
     cleanup = transition.get("runtime_authority_cleanup") if isinstance(transition.get("runtime_authority_cleanup"), dict) else {}
     if (
         runtime.get("generation_verification_source_binding_removal") != "ACCEPTED_AR5"
-        or runtime.get("runtime_authority_cleanup_evidence") != str(AR5_EVIDENCE)
+        or runtime.get("runtime_authority_cleanup_evidence") != AR5_EVIDENCE.as_posix()
         or cleanup.get("status") != "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP"
-        or cleanup.get("evidence") != str(AR5_EVIDENCE)
+        or cleanup.get("evidence") != AR5_EVIDENCE.as_posix()
         or cleanup.get("implementation_pr") != 291
         or cleanup.get("exact_green_head") != "afed435bb714794d6c4f252be6b44c592ee31b2b"
         or cleanup.get("implementation_merge") != "82d251a1d6666199c6eace393eedc1766157fcee"
@@ -219,7 +219,7 @@ def validate(root: Path) -> list[str]:
     program_state = inventory.get("program_state") if isinstance(inventory.get("program_state"), dict) else {}
     if doc_authority.get("current_program") != CURRENT_AUTHORITY or doc_authority.get("current_slice") != CURRENT_SLICE:
         errors.append("architecture inventory documentation authority is stale")
-    if doc_authority.get("runtime_topology_decision") != str(TOPOLOGY):
+    if doc_authority.get("runtime_topology_decision") != TOPOLOGY.as_posix():
         errors.append("architecture inventory must point to the accepted AR-2 topology decision")
     if program_state.get("accepted_architecture_slices") != ACCEPTED_SLICES or program_state.get("current_architecture_slice") != CURRENT_SLICE or program_state.get("next_architecture_slice_after_acceptance") != NEXT_SLICE:
         errors.append("architecture inventory AR-5 program state is stale")
@@ -228,7 +228,7 @@ def validate(root: Path) -> list[str]:
     inventory_cleanup = inventory.get("runtime_authority_cleanup") if isinstance(inventory.get("runtime_authority_cleanup"), dict) else {}
     if (
         inventory_cleanup.get("status") != "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP"
-        or inventory_cleanup.get("evidence") != str(AR5_EVIDENCE)
+        or inventory_cleanup.get("evidence") != AR5_EVIDENCE.as_posix()
         or inventory_cleanup.get("implementation_pr") != 291
         or inventory_cleanup.get("exact_green_head") != "afed435bb714794d6c4f252be6b44c592ee31b2b"
         or inventory_cleanup.get("implementation_merge") != "82d251a1d6666199c6eace393eedc1766157fcee"
