@@ -1,0 +1,38 @@
+name: AR8B Inventory Generation Scratch
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    if: github.event.pull_request.head.ref == 'scratch/ar8b-inventory-generation'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout scratch source branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: scratch/ar8b-inventory-generation
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Generate canonical architecture inventory
+        run: |
+          python scripts/generate-architecture-inventory.py --write
+          python -m json.tool architecture/inventory.json >/dev/null
+          git diff --check
+
+      - name: Commit generated inventory only when stale
+        run: |
+          if git diff --quiet -- architecture/inventory.json; then
+            echo 'architecture/inventory.json already current'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add architecture/inventory.json
+          test "$(git diff --cached --name-only)" = 'architecture/inventory.json'
+          git commit -m 'chore: generate AR-8B canonical inventory'
+          git push origin HEAD:scratch/ar8b-inventory-generation
