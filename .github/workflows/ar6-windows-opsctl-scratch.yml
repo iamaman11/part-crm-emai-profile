@@ -1,0 +1,42 @@
+name: AR-6 Windows opsctl Patch Scratch
+
+on:
+  push:
+    branches:
+      - scratch/ar6-windows-opsctl
+    paths:
+      - .github/workflows/ar6-windows-opsctl-scratch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout scratch branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: scratch/ar6-windows-opsctl
+
+      - name: Add permanent Windows opsctl execution proof
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/quality-gate.yml')
+          text = path.read_text(encoding='utf-8')
+          needle = '''      - name: Build release Profile Bridge executable\n        run: cargo build --locked --release -p profile-bridge\n\n      - name: Verify Windows Profile Bridge artifact\n'''
+          replacement = '''      - name: Build release Profile Bridge executable\n        run: cargo build --locked --release -p profile-bridge\n\n      - name: Test and build AR-6 opsctl on Windows\n        run: |\n          cargo test --locked --manifest-path tools/opsctl/Cargo.toml\n          cargo build --locked --manifest-path tools/opsctl/Cargo.toml\n\n      - name: Exercise AR-6 opsctl read-only commands on Windows\n        shell: pwsh\n        run: |\n          $bin = 'tools/opsctl/target/debug/opsctl.exe'\n          if (-not (Test-Path $bin)) { throw 'opsctl.exe was not produced' }\n          foreach ($command in @('doctor', 'status', 'inventory')) {\n            $output = & $bin --root . $command\n            if ($LASTEXITCODE -ne 0) { throw "opsctl $command failed with exit code $LASTEXITCODE" }\n            $parsed = $output | ConvertFrom-Json\n            if ($null -eq $parsed) { throw "opsctl $command did not return JSON" }\n            if ($command -eq 'doctor') {\n              if ($parsed.status -ne 'ok' -or $parsed.mode -ne 'read-only' -or $parsed.mutation_executed -ne $false) {\n                throw 'opsctl doctor lost the AR-6 read-only contract'\n              }\n            }\n          }\n\n      - name: Verify Windows Profile Bridge artifact\n'''
+          if text.count(needle) != 1:
+              raise SystemExit(f'quality-gate Windows insertion point drifted: count={text.count(needle)}')
+          path.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Commit patched workflow on scratch only
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/quality-gate.yml
+          git commit -m 'scratch: add Windows opsctl proof'
+          git push origin HEAD:scratch/ar6-windows-opsctl
