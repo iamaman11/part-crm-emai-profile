@@ -1,0 +1,46 @@
+name: AR8C Hosted Audit Scope Correction Scratch
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.event.pull_request.head.ref == 'scratch/ar8c-hosted-audit-scope-correction'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout scratch source branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: scratch/ar8c-hosted-audit-scope-correction
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply staging-only live audit correction
+        run: python .scratch/ar8c_hosted_audit_scope_correction.py
+
+      - name: Validate lifecycle, projection and documentation authority
+        run: |
+          node --check .github/scripts/credential-lifecycle.mjs
+          node .github/scripts/credential-lifecycle.mjs contract
+          node .github/scripts/credential-lifecycle.mjs self-test
+          python scripts/generate-architecture-inventory.py --write
+          python scripts/check-documentation-authority.py --root .
+          python scripts/check-documentation-authority.py --root . --self-test
+          python scripts/generate-architecture-inventory.py --check
+          python -m json.tool architecture/credential-authority-ar8b.json >/dev/null
+          python -m json.tool architecture/inventory.json >/dev/null
+          git diff --check
+
+      - name: Commit only canonical correction files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/scripts/credential-lifecycle.mjs architecture/credential-authority-ar8b.json architecture/inventory.json scripts/check-documentation-authority.py scripts/generate-architecture-inventory.py
+          changed="$(git diff --cached --name-only)"
+          expected=$'.github/scripts/credential-lifecycle.mjs\narchitecture/credential-authority-ar8b.json\narchitecture/inventory.json\nscripts/check-documentation-authority.py\nscripts/generate-architecture-inventory.py'
+          test "$changed" = "$expected"
+          git commit -m 'chore: scope AR-8C hosted reconciliation to staging'
+          git push origin HEAD:scratch/ar8c-hosted-audit-scope-correction
