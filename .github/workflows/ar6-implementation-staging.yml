@@ -18,7 +18,10 @@ jobs:
           fetch-depth: 0
 
       - name: Apply deterministic AR-6 staging projection
-        run: python scripts/ar6-implementation-staging.py
+        shell: bash
+        run: |
+          python scripts/ar6-implementation-staging.py
+          git rm scripts/ar6-implementation-staging.py
 
       - name: Generate full Python estate
         run: python scripts/python-estate-ar6.py --write
@@ -48,7 +51,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/ar6-implementation-staging.yml scripts/ar6-implementation-staging.py
+          git rm .github/workflows/ar6-implementation-staging.yml
           git add architecture/python-estate-ar6.json scripts/python-estate-ar6.py tools/opsctl .github/workflows/quality-gate.yml .github/workflows/repository-quality-audit-gate.yml
           git commit -m "AR-6 verified implementation staging output"
           git push origin HEAD:agent/ar6-implementation-staging
