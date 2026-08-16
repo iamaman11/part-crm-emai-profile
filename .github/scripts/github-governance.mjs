@@ -51,8 +51,8 @@ function validateContract(contract) {
   expect(contract?.schema_version === 1, 'schema_version must be 1');
   expect(contract?.slice === 'AR-7', 'slice must be AR-7');
   expect(
-    contract?.status === 'CANDIDATE_UNTIL_HOSTED_GOVERNANCE_PROVEN',
-    'status must remain candidate until hosted governance is proven',
+    contract?.status === 'ACCEPTED_AR7_GITHUB_GOVERNANCE',
+    'status must remain the accepted AR-7 GitHub governance authority',
   );
   expect(contract?.repository === 'iamaman11/part-crm-emai-profile', 'repository authority drifted');
   expect(contract?.baseline_main === 'dde7123586b080c1c053e90ad0ba489d4620e4d2', 'AR-7 baseline_main drifted');
@@ -108,6 +108,16 @@ function validateContract(contract) {
   expect(acceptance.direct_main_negative_probe_required === true, 'direct-main negative probe must remain required');
   expect(acceptance.live_audit_required === true, 'live governance audit must remain required');
   expect(acceptance.production_ready === false, 'AR-7 contract must not claim production readiness');
+  expect(acceptance.implementation_issue === 298, 'AR-7 accepted implementation issue must be #298');
+  expect(acceptance.implementation_pr === 299, 'AR-7 accepted implementation PR must be #299');
+  expect(acceptance.implementation_exact_green_head === '1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7', 'AR-7 exact-green head drifted');
+  expect(acceptance.implementation_merge === '3492273cb9237850e3fa27343cc5edbdb0f66aa1', 'AR-7 implementation merge drifted');
+  expect(acceptance.applicable_permanent_workflows === '14/14', 'AR-7 permanent workflow evidence drifted');
+  expect(acceptance.hosted_audit_run_id === 31953316327, 'AR-7 hosted audit run drifted');
+  expect(acceptance.hosted_contract_job === 'success', 'AR-7 hosted contract job must remain successful');
+  expect(acceptance.hosted_state_job === 'success', 'AR-7 hosted state job must remain successful');
+  expect(acceptance.direct_main_negative_probe === 'HTTP_409_REJECTED_NO_SENTINEL', 'AR-7 direct-main negative probe evidence drifted');
+  expect(acceptance.closeout_issue === 300, 'AR-7 closeout issue must be #300');
 
   return errors;
 }

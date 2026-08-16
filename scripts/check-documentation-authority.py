@@ -15,10 +15,10 @@ CURRENT_PROGRAM = "Architecture Re-baseline v3"
 CURRENT_AUTHORITY = "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
 TRACKING_ISSUE = 266
 SUBORDINATE_ISSUE = 268
-CURRENT_SLICE = "AR-6"
-NEXT_SLICE = "AR-7"
+CURRENT_SLICE = "AR-7"
+NEXT_SLICE = "AR-8"
 STATUS_DATE = "2026-08-16"
-ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5", "AR-6"]
+ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5", "AR-6", "AR-7"]
 TOPOLOGY = Path("architecture/runtime-topology-ar2.json")
 AR2_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR2.md")
 AR3_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR3.md")
@@ -27,6 +27,8 @@ AR4B_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR4B.md")
 AR4C_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR4C.md")
 AR5_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR5.md")
 AR6_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR6.md")
+AR7_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR7.md")
+GOVERNANCE_CONTRACT = Path("architecture/github-governance-ar7.json")
 PYTHON_ESTATE = Path("architecture/python-estate-ar6.json")
 
 REQUIRED_FILES = (
@@ -51,6 +53,8 @@ REQUIRED_FILES = (
     AR4C_EVIDENCE,
     AR5_EVIDENCE,
     AR6_EVIDENCE,
+    AR7_EVIDENCE,
+    GOVERNANCE_CONTRACT,
     PYTHON_ESTATE,
     Path("docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md"),
     Path("docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md"),
@@ -110,6 +114,8 @@ def validate(root: Path) -> list[str]:
         ar4c_evidence = read(root, AR4C_EVIDENCE)
         ar5_evidence = read(root, AR5_EVIDENCE)
         ar6_evidence = read(root, AR6_EVIDENCE)
+        ar7_evidence = read(root, AR7_EVIDENCE)
+        governance = load_json(root, GOVERNANCE_CONTRACT)
         python_estate = load_json(root, PYTHON_ESTATE)
         pre2j_stub = read(root, Path("docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md"))
         implementation_stub = read(root, Path("IMPLEMENTATION_PLAN.md"))
@@ -124,15 +130,15 @@ def validate(root: Path) -> list[str]:
     if accepted_phase != ACCEPTED_PHASE:
         errors.append(f"accepted phase ledger must end at {ACCEPTED_PHASE}; observed {accepted_phase!r}")
 
-    if status.get("schema_version") != 4 or status.get("as_of") != STATUS_DATE:
-        errors.append("docs/status.json must be the current AR-6 schema/date projection")
+    if status.get("schema_version") != 5 or status.get("as_of") != STATUS_DATE:
+        errors.append("docs/status.json must be the current AR-7 schema/date projection")
     if status.get("production_ready") is not False:
-        errors.append("production_ready must remain false throughout accepted AR-6")
+        errors.append("production_ready must remain false throughout accepted AR-7")
     current = status.get("current") if isinstance(status.get("current"), dict) else {}
     if current.get("accepted_product_phase") != ACCEPTED_PHASE:
         errors.append("docs/status.json accepted product phase must remain Phase 2I")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
-        errors.append("AR-6 architecture_complete/Production Core gate state must remain fail closed")
+        errors.append("AR-7 architecture_complete/Production Core gate state must remain fail closed")
 
     program = current.get("architecture_program") if isinstance(current.get("architecture_program"), dict) else {}
     expected_program = {
@@ -180,6 +186,34 @@ def validate(root: Path) -> list[str]:
         or ar6.get("closeout_issue") != 296
     ):
         errors.append("docs/status.json AR-6 acceptance provenance drifted")
+    ar7 = program.get("ar7_acceptance") if isinstance(program.get("ar7_acceptance"), dict) else {}
+    if (
+        program.get("github_governance_contract") != GOVERNANCE_CONTRACT.as_posix()
+        or program.get("github_governance_evidence") != AR7_EVIDENCE.as_posix()
+        or ar7.get("issue") != 298
+        or ar7.get("implementation_pr") != 299
+        or ar7.get("exact_green_head") != "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7"
+        or ar7.get("implementation_merge") != "3492273cb9237850e3fa27343cc5edbdb0f66aa1"
+        or ar7.get("applicable_permanent_workflows") != "14/14"
+        or ar7.get("hosted_audit_run_id") != 31953316327
+        or ar7.get("hosted_contract_job") != "success"
+        or ar7.get("hosted_state_job") != "success"
+        or ar7.get("direct_main_negative_probe") != "HTTP_409_REJECTED_NO_SENTINEL"
+        or ar7.get("required_status_checks") != 21
+        or ar7.get("closeout_issue") != 300
+    ):
+        errors.append("docs/status.json AR-7 acceptance provenance drifted")
+    acceptance = governance.get("acceptance") if isinstance(governance.get("acceptance"), dict) else {}
+    if (
+        governance.get("status") != "ACCEPTED_AR7_GITHUB_GOVERNANCE"
+        or governance.get("repository") != "iamaman11/part-crm-emai-profile"
+        or acceptance.get("implementation_pr") != 299
+        or acceptance.get("hosted_audit_run_id") != 31953316327
+        or acceptance.get("hosted_state_job") != "success"
+        or acceptance.get("direct_main_negative_probe") != "HTTP_409_REJECTED_NO_SENTINEL"
+        or acceptance.get("production_ready") is not False
+    ):
+        errors.append("accepted AR-7 GitHub governance contract drifted")
     if (
         python_estate.get("status") != "AR6_ACCEPTED_PYTHON_ESTATE"
         or python_estate.get("accepted_program_checkpoint") != "AR-6"
@@ -209,17 +243,17 @@ def validate(root: Path) -> list[str]:
     if phase2j.get("status") != "blocked_pending_repository_remediation" or phase2j.get("forward_execution_authority") is not False:
         errors.append("historical Phase 2J state must remain blocked/non-forward")
 
-    if transition.get("schema_version") != 9 or transition.get("status") != "ACTIVE_AFTER_ACCEPTED_AR6_MERGE":
-        errors.append("architecture transition must encode accepted AR-6 state")
+    if transition.get("schema_version") != 10 or transition.get("status") != "ACTIVE_AFTER_ACCEPTED_AR7_MERGE":
+        errors.append("architecture transition must encode accepted AR-7 state")
     if transition.get("tracking_issue") != TRACKING_ISSUE or transition.get("current_authority") != CURRENT_AUTHORITY:
         errors.append("architecture transition authority drifted")
     if transition.get("accepted_slices") != ACCEPTED_SLICES:
         errors.append("architecture transition accepted_slices drifted")
     if transition.get("current_slice") != CURRENT_SLICE or transition.get("next_slice_after_acceptance") != NEXT_SLICE:
-        errors.append("architecture transition must encode AR-6 -> AR-7 sequencing")
+        errors.append("architecture transition must encode AR-7 -> AR-8 sequencing")
     transition_state = transition.get("state_model") if isinstance(transition.get("state_model"), dict) else {}
     if transition_state.get("architecture_complete") is not False or transition_state.get("production_core_gate") != "BLOCKED" or transition_state.get("production_ready") is not False:
-        errors.append("transition state must remain fail closed through AR-6")
+        errors.append("transition state must remain fail closed through AR-7")
     runtime = transition.get("runtime_topology") if isinstance(transition.get("runtime_topology"), dict) else {}
     if runtime.get("decision_authority") != TOPOLOGY.as_posix() or runtime.get("generation_verification_decision") != "DELETE" or runtime.get("legacy_d3_production_forward_execution") != "DISABLED":
         errors.append("transition lost accepted AR-2 runtime-topology decisions")
@@ -253,6 +287,26 @@ def validate(root: Path) -> list[str]:
     ):
         errors.append("transition AR-6 Python/opsctl acceptance drifted")
 
+    github_governance = transition.get("github_governance_authority") if isinstance(transition.get("github_governance_authority"), dict) else {}
+    hosted = github_governance.get("hosted_audit") if isinstance(github_governance.get("hosted_audit"), dict) else {}
+    negative_probe = github_governance.get("direct_main_negative_probe") if isinstance(github_governance.get("direct_main_negative_probe"), dict) else {}
+    if (
+        github_governance.get("status") != "ACCEPTED_AR7_GITHUB_GOVERNANCE"
+        or github_governance.get("evidence") != AR7_EVIDENCE.as_posix()
+        or github_governance.get("contract") != GOVERNANCE_CONTRACT.as_posix()
+        or github_governance.get("implementation_pr") != 299
+        or github_governance.get("exact_green_head") != "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7"
+        or github_governance.get("implementation_merge") != "3492273cb9237850e3fa27343cc5edbdb0f66aa1"
+        or github_governance.get("applicable_permanent_workflows") != "14/14"
+        or hosted.get("run_id") != 31953316327
+        or hosted.get("hosted_state_job") != "success"
+        or negative_probe.get("result") != "HTTP_409_REJECTED"
+        or negative_probe.get("sentinel_present_after_probe") is not False
+        or github_governance.get("next_required_slice") != "AR-8"
+        or github_governance.get("production_mutation") is not False
+    ):
+        errors.append("transition AR-7 GitHub governance acceptance drifted")
+
     if topology.get("slice") != "AR-2" or topology.get("production_mutation") is not False:
         errors.append("AR-2 topology authority must remain non-mutating")
     generation = topology.get("generation_verification") if isinstance(topology.get("generation_verification"), dict) else {}
@@ -269,7 +323,7 @@ def validate(root: Path) -> list[str]:
     if doc_authority.get("runtime_topology_decision") != TOPOLOGY.as_posix():
         errors.append("architecture inventory must point to the accepted AR-2 topology decision")
     if program_state.get("accepted_architecture_slices") != ACCEPTED_SLICES or program_state.get("current_architecture_slice") != CURRENT_SLICE or program_state.get("next_architecture_slice_after_acceptance") != NEXT_SLICE:
-        errors.append("architecture inventory AR-6 program state is stale")
+        errors.append("architecture inventory AR-7 program state is stale")
     if program_state.get("production_ready") is not False or program_state.get("production_core_gate") != "BLOCKED":
         errors.append("architecture inventory must remain fail closed")
     inventory_cleanup = inventory.get("runtime_authority_cleanup") if isinstance(inventory.get("runtime_authority_cleanup"), dict) else {}
@@ -296,12 +350,29 @@ def validate(root: Path) -> list[str]:
     ):
         errors.append("architecture inventory AR-6 Python/opsctl projection drifted")
 
-    common = ("Architecture Re-baseline v3", "issue #266", "AR-6", "AR-7", "production_ready=false")
+    inventory_governance = inventory.get("github_governance_authority") if isinstance(inventory.get("github_governance_authority"), dict) else {}
+    inventory_hosted = inventory_governance.get("hosted_audit") if isinstance(inventory_governance.get("hosted_audit"), dict) else {}
+    if (
+        inventory_governance.get("status") != "ACCEPTED_AR7_GITHUB_GOVERNANCE"
+        or inventory_governance.get("evidence") != AR7_EVIDENCE.as_posix()
+        or inventory_governance.get("contract") != GOVERNANCE_CONTRACT.as_posix()
+        or inventory_governance.get("implementation_pr") != 299
+        or inventory_governance.get("exact_green_head") != "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7"
+        or inventory_governance.get("implementation_merge") != "3492273cb9237850e3fa27343cc5edbdb0f66aa1"
+        or inventory_governance.get("applicable_permanent_workflows") != "14/14"
+        or inventory_hosted.get("run_id") != 31953316327
+        or inventory_hosted.get("hosted_state_job") != "success"
+        or inventory_governance.get("next_required_slice") != "AR-8"
+        or inventory_governance.get("production_mutation") is not False
+    ):
+        errors.append("architecture inventory AR-7 GitHub governance projection drifted")
+
+    common = ("Architecture Re-baseline v3", "issue #266", "AR-7", "AR-8", "production_ready=false")
     require(root_readme, common, "README.md", errors)
     require(docs_readme, common, "docs/README.md", errors)
-    require(index, ("CURRENT_AUTHORITY", "ARCHITECTURE_REBASELINE_V3_PLAN.md", "issue #266", "AR-6", "AR-7"), "docs/INDEX.md", errors)
-    require(development, ("Document status:** GENERATED_PROJECTION", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-7   Environments + GitHub Governance + Operational Boundaries", "production_ready=false", "Immutable Accepted Phase Provenance"), "docs/DEVELOPMENT_PLAN.md", errors)
-    require(plan, ("Document status:** CURRENT_AUTHORITY", "Tracking issue:** #266", "Current accepted architecture checkpoint:** AR-6", "Next slice:** AR-7", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "source_present != production_enabled", "No production provisioning, promotion or other real production mutation is an AR-0…AR-17 activity"), "current v3 plan", errors)
+    require(index, ("CURRENT_AUTHORITY", "ARCHITECTURE_REBASELINE_V3_PLAN.md", "issue #266", "AR-7", "AR-8"), "docs/INDEX.md", errors)
+    require(development, ("Document status:** GENERATED_PROJECTION", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-7   Environments + GitHub Governance + Operational Boundaries", "AR-8   Secrets / Keys / OAuth Refresh Concurrency", "production_ready=false", "Immutable Accepted Phase Provenance"), "docs/DEVELOPMENT_PLAN.md", errors)
+    require(plan, ("Document status:** CURRENT_AUTHORITY", "Tracking issue:** #266", "Current accepted architecture checkpoint:** AR-7", "Next slice:** AR-8", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "source_present != production_enabled", "No production provisioning, promotion or other real production mutation is an AR-0…AR-17 activity"), "current v3 plan", errors)
     require(ar2_evidence, ("AR-2 Runtime Topology + D3 Compatibility", "GENERATION_VERIFICATION = DELETE", "legacy D3 production lane", "AR-5", "AR-11", "PC-1"), "AR-2 evidence", errors)
     require(ar3_evidence, ("AR-3 Application Architecture Contract", "EVIDENCE / AR-3 accepted", "AR-4A", "AR-4B", "AR-4C", "NOT_REQUIRED", "architecture/inventory.json"), "AR-3 evidence", errors)
     require(ar4a_evidence, ("AR-4A Composition-root consolidation", "EVIDENCE / AR-4A accepted", "f257a30a1df437812edb5c9e4b33c3de7e0740bc", "74672285ef0146c2dc6da298024b378438e5a75d", "AR-4B", "AR-4C", "Production Core remains `BLOCKED`"), "AR-4A evidence", errors)
@@ -309,6 +380,7 @@ def validate(root: Path) -> list[str]:
     require(ar4c_evidence, ("AR-4C Outbound Mail composition extraction", "EVIDENCE / AR-4C accepted", "c62f3a7fb00acf16fa1a8a00d9d2f101949cf8a3", "d8382d1578c4911287fb76dd0b9966b23aa85c25", "AR-5", "Production Core remains `BLOCKED`"), "AR-4C evidence", errors)
     require(ar5_evidence, ("AR-5 Wrangler / Runtime Authority Cleanup", "EVIDENCE / AR-5 accepted", "afed435bb714794d6c4f252be6b44c592ee31b2b", "82d251a1d6666199c6eace393eedc1766157fcee", "13/13 success", "AR-6", "Production Core remains `BLOCKED`"), "AR-5 evidence", errors)
     require(ar6_evidence, ("AR-6 Full Python Estate + read-only Rust opsctl", "EVIDENCE / AR-6 accepted", "9b06d542873ffa3122e53e107105098e21f5933c", "d0229fedd81ee870822b6d9394bc4ee313ea3a3c", "13/13 success", "108", "AR-7", "production_core_gate = BLOCKED"), "AR-6 evidence", errors)
+    require(ar7_evidence, ("AR-7 — Environments + GitHub Governance + Operational Boundaries", "EVIDENCE / AR-7 accepted", "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7", "3492273cb9237850e3fa27343cc5edbdb0f66aa1", "14/14 success", "31953316327", "HTTP 409", "AR-8", "production_core_gate = BLOCKED"), "AR-7 evidence", errors)
     require(pre2j_stub, ("ACCEPTED_HISTORICAL", "SUPERSEDED_FOR_FORWARD_EXECUTION", "Former tracking issue:** #203", "Current program authority"), "pre-2J compatibility stub", errors)
     require(implementation_stub, ("Document status:** SUPERSEDED", "history/IMPLEMENTATION_PLAN_PRE_AR_V3_2026-08-15.md", "ARCHITECTURE_REBASELINE_V3_PLAN.md"), "IMPLEMENTATION_PLAN.md", errors)
     require(lifecycle_stub, ("Document status:** SUPERSEDED", "history/PROFILE_LIFECYCLE_PLAN_PRE_AR_V3_2026-08-15.md", "ARCHITECTURE_REBASELINE_V3_PLAN.md"), "PROFILE_LIFECYCLE_PLAN.md", errors)
@@ -340,7 +412,7 @@ def self_test(root: Path) -> bool:
         return False
     fixtures = [
         ("tracking rollback", Path("docs/status.json"), '"tracking_issue": 266', '"tracking_issue": 203', "tracking_issue"),
-        ("slice rollback", Path("docs/status.json"), '"current_slice": "AR-6"', '"current_slice": "AR-5"', "current_slice"),
+        ("slice rollback", Path("docs/status.json"), '"current_slice": "AR-7"', '"current_slice": "AR-6"', "current_slice"),
         ("premature architecture closeout", Path("docs/status.json"), '"architecture_complete": false', '"architecture_complete": true', "architecture_complete"),
         ("premature gate authorization", Path("docs/status.json"), '"production_core_gate": "BLOCKED"', '"production_core_gate": "AUTHORIZED"', "Production"),
         ("premature production readiness", Path("docs/status.json"), '"production_ready": false', '"production_ready": true', "production_ready"),
@@ -360,7 +432,7 @@ def self_test(root: Path) -> bool:
             if not errors or not any(expected.lower() in error.lower() for error in errors):
                 print(f"negative fixture {label} was not rejected by the expected invariant: {errors}")
                 return False
-    print("Architecture Re-baseline v3 AR-6 documentation authority negative fixtures passed.")
+    print("Architecture Re-baseline v3 AR-7 documentation authority negative fixtures passed.")
     return True
 
 
@@ -377,7 +449,7 @@ def main() -> int:
         for error in errors:
             print(error)
         return 1
-    print("Architecture Re-baseline v3 AR-6 documentation/program authority is consistent.")
+    print("Architecture Re-baseline v3 AR-7 documentation/program authority is consistent.")
     return 0
 
 
