@@ -10,6 +10,9 @@ mod provider;
 mod replay;
 mod storage;
 
+#[cfg(test)]
+mod ar8_refresh_invariants_tests;
+
 mod refresh_fencing {
     pub(crate) use crate::storage::CredentialLifecycleState;
 }
