@@ -38,6 +38,8 @@ jobs:
           python -m py_compile scripts/check-mailbox-job-worker-application-boundary.py
           python -m py_compile scripts/check-frontend-feature-boundaries.py
           python -m py_compile scripts/generate-architecture-inventory.py
+          python -m py_compile scripts/python-estate-ar6.py
+          python -m py_compile scripts/check-opsctl-readonly.py
           python -m py_compile scripts/test-architecture-inventory-negative.py
           python -m py_compile scripts/check-phase1a-event-boundaries.py
           python -m py_compile scripts/check-phase1b-notification-boundaries.py
@@ -179,6 +181,14 @@ jobs:
 
       - name: Prove architecture inventory drift is rejected
         run: python scripts/test-architecture-inventory-negative.py
+
+      - name: Audit AR-6 Python estate and read-only opsctl boundary
+        run: |
+          python scripts/python-estate-ar6.py --check
+          python scripts/python-estate-ar6.py --self-test
+          python scripts/check-opsctl-readonly.py
+          python scripts/check-opsctl-readonly.py --self-test
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml
 
       - name: Enforce Phase 1A event/outbox ownership and scope
         run: python scripts/check-phase1a-event-boundaries.py
