@@ -30,10 +30,6 @@ SOURCE_CONSTANTS = {
         "crates/control-plane-contract/src/lib.rs",
         "R2_PROFILES_BINDING",
     ),
-    "verification_queue": (
-        "crates/control-plane-contract/src/lib.rs",
-        "VERIFICATION_QUEUE_BINDING",
-    ),
     "profile_coordinator": (
         "crates/control-plane-contract/src/lib.rs",
         "PROFILE_COORDINATOR_BINDING",
@@ -186,7 +182,6 @@ def validate_config(document: dict[str, object], source: dict[str, str]) -> None
         source["r2_secret_access_key"],
     }
     expected_queues = {
-        source["verification_queue"],
         source["integration_events_queue"],
         source["mailbox_jobs_queue"],
     }
