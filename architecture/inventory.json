@@ -1263,7 +1263,7 @@
     "schema_version": 1,
     "status": "CANDIDATE_AR8B_CREDENTIAL_METADATA_AUTHORITY",
     "source_authority": "architecture/credential-authority-ar8b.json",
-    "source_git_blob_sha1": "5817732ff063881a06127f43cd3a60d0a838f55b",
+    "source_git_blob_sha1": "1407a07f42e2d11463597f14d0bf8cc358e7d12b",
     "metadata_only": true,
     "canonical_environments": [
       "rehearsal",
@@ -1278,13 +1278,14 @@
       "ar9_blocked": true
     },
     "authority_counts": {
-      "credentials": 14,
+      "credentials": 15,
       "dynamic_credential_domains": 1,
       "future_trust_domains": 1
     },
     "authority_ids": [
       "github.governance-audit",
       "github.hosted-admin-operator",
+      "github.actions-runtime-api",
       "cloudflare.platform-api",
       "cloudflare.access-service-auth",
       "cloudflare.resolver-secret-bundle-transport",
@@ -1309,6 +1310,8 @@
       "CLOUDFLARE_DEPLOY_MANIFEST_JSON",
       "CLOUDFLARE_RESOLVER_SECRETS_JSON",
       "GH_ADMIN_OPERATOR_TOKEN",
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
       "GOOGLE_OAUTH_CLIENT_SECRET",
       "GOVERNANCE_AUDIT_TOKEN",
       "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
@@ -1321,6 +1324,7 @@
     "future_cutovers": {
       "github.governance-audit": "AR-8C",
       "github.hosted-admin-operator": "AR-8C",
+      "github.actions-runtime-api": "EXISTING_GITHUB_ACTIONS_RUNTIME",
       "cloudflare.platform-api": "AR-8C",
       "cloudflare.access-service-auth": "AR-8C",
       "cloudflare.resolver-secret-bundle-transport": "AR-8C",
