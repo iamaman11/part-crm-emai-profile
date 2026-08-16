@@ -185,6 +185,8 @@ def classify(path: str) -> dict[str, Any]:
     if path in EXPLICIT_KEEP:
         role, side_effect, rationale = EXPLICIT_KEEP[path]
         return keep(path, role, side_effect, rationale)
+    if path == "scripts/python-estate-ar6.py":
+        return keep(path, "estate_generator", "repository_validation_and_inventory_generation", "AR-6 canonical Python estate generator/checker remains legitimate Python")
     if path.startswith("tests/"):
         return keep(path, "test_or_fixture", "test_only", "tests and fixtures remain legitimate Python")
     if path.startswith("scripts/check-") or path.startswith("scripts/check_"):
