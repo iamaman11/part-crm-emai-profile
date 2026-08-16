@@ -313,7 +313,7 @@ def validate(root: Path) -> list[str]:
         errors.append("accepted AR-6 Python estate authority drifted")
 
     if (
-        credential_authority.get("status") != "CANDIDATE_AR8B_CREDENTIAL_METADATA_AUTHORITY"
+        credential_authority.get("status") != "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY"
         or credential_authority.get("parent_issue") != AR8_UMBRELLA_ISSUE
         or credential_authority.get("implementation_issue") != AR8B_IMPLEMENTATION_ISSUE
         or credential_authority.get("canonical_inventory") != "architecture/inventory.json"
