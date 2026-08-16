@@ -214,7 +214,7 @@ COMPOSITION_FINDINGS: list[dict[str, Any]] = [
     },
     {
         "id": "client_mail_route_ownership",
-        "status": "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
+        "status": "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
         "owner_slice": "AR-4B",
         "evidence": [
             "crates/control-plane-contract/src/routes/client_mail.rs::ClientMailSearchApi",
@@ -303,7 +303,7 @@ _REQUIRED_SNIPPETS: dict[str, list[str]] = {
     AR4A_EVIDENCE: ["AR-4A Composition-root consolidation", "AR-4B", "AR-4C", "Production Core remains `BLOCKED`"],
     AR4B_EVIDENCE: [
         "AR-4B Client Mail route ownership",
-        "ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
+        "ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
         "AR-4C",
         "Production Core remains `BLOCKED`",
     ],
@@ -428,10 +428,10 @@ def build_projection(root: Path) -> dict[str, Any]:
 
     return {
         "schema_version": 1,
-        "status": "ACCEPTED_AR4A_APPLICATION_ARCHITECTURE_REMEDIATION",
+        "status": "ACCEPTED_AR4B_APPLICATION_ARCHITECTURE_REMEDIATION",
         "topology_source": RUNTIME_TOPOLOGY,
         "base_contract_evidence": AR3_EVIDENCE,
-        "evidence": AR4A_EVIDENCE,
+        "evidence": AR4B_EVIDENCE,
         "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
         "composition_taxonomy": [
             "CONFORMING_COMPOSITION_SEAM",
@@ -440,25 +440,24 @@ def build_projection(root: Path) -> dict[str, Any]:
             "INTENTIONAL_RUNTIME_BOUNDARY",
             "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
             "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
-            "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
+            "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
         ],
         "runtime_resources": copy.deepcopy(topology["resources"]),
         "runtime_processes": copy.deepcopy(PROCESS_OWNERSHIP),
         "capability_ownership": copy.deepcopy(CAPABILITY_OWNERSHIP),
         "composition_findings": copy.deepcopy(COMPOSITION_FINDINGS),
         "remediation_state": {
-            "accepted_through": "AR-4A",
-            "candidate": "AR-4B",
-            "candidate_status": "ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
+            "accepted_through": "AR-4B",
+            "status": "ACCEPTED",
             "evidence": AR4B_EVIDENCE,
-            "next_after_acceptance": "AR-4C",
+            "next_required_slice": "AR-4C",
         },
         "conditional_ar4d": {
             "decision": "NOT_REQUIRED",
             "reason": "Profile and Generation transports already use explicit composition seams; no measurable dependency-isolation benefit currently justifies extraction",
             "reopen_policy": "ONLY_BY_LATER_ACCEPTED_EVIDENCE",
         },
-        "next_required_slice_after_ar4a": "AR-4B",
+        "next_required_slice_after_ar4b": "AR-4C",
         "production_mutation": False,
     }
 
@@ -500,12 +499,13 @@ def negative_self_test(root: Path) -> None:
     remediation = copy.deepcopy(expected)
     remediation["remediation_state"] = {
         "accepted_through": "AR-4A",
-        "status": "ACCEPTED",
-        "evidence": AR4A_EVIDENCE,
-        "next_required_slice": "AR-4B",
+        "candidate": "AR-4B",
+        "candidate_status": "ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
+        "evidence": AR4B_EVIDENCE,
+        "next_after_acceptance": "AR-4C",
     }
     if remediation == expected:
-        raise SystemExit("AR-4B negative self-test failed to distinguish candidate and accepted remediation state")
+        raise SystemExit("AR-4B negative self-test failed to detect accepted-state rollback to candidate remediation state")
 
     missing_resource = copy.deepcopy(expected)
     missing_resource["runtime_resources"] = missing_resource["runtime_resources"][1:]
@@ -528,4 +528,4 @@ def negative_self_test(root: Path) -> None:
     if gate == expected:
         raise SystemExit("AR-3 negative self-test failed to distinguish production mutation")
 
-    print("AR-4B Client Mail route ownership candidate negative self-tests passed.")
+    print("AR-4B accepted Client Mail route ownership negative self-tests passed.")
