@@ -1,3 +1,4 @@
+# Temporary branch-only closeout runner; removed before acceptance.
 name: AR-4C Closeout Authority Migration
 
 on:
