@@ -197,6 +197,9 @@ impl<N: NonceSource> ResolverCrypto<N> {
         value: &EncryptedValue,
         context: &AuthenticatedContext<'_>,
     ) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        if value.key_version > self.keyring.active_version() {
+            return Err(CryptoError::InvalidKeyring);
+        }
         let key = self.keyring.version(value.key_version)?;
         let nonce_bytes = hex_decode(&value.nonce_hex).ok_or(CryptoError::InvalidEnvelope)?;
         if nonce_bytes.len() != AES_GCM_NONCE_BYTES {
@@ -288,9 +291,15 @@ mod tests {
     }
 
     fn crypto() -> Result<ResolverCrypto<FixedNonce>, CryptoError> {
-        let keyring = EncryptionKeyring::parse(
-            r#"{"activeVersion":2,"keys":[{"version":1,"keyHex":"1111111111111111111111111111111111111111111111111111111111111111"},{"version":2,"keyHex":"2222222222222222222222222222222222222222222222222222222222222222"}]}"#,
-        )?;
+        crypto_with_active_version(2)
+    }
+
+    fn crypto_with_active_version(
+        active_version: u32,
+    ) -> Result<ResolverCrypto<FixedNonce>, CryptoError> {
+        let keyring = EncryptionKeyring::parse(&format!(
+            r#"{{"activeVersion":{active_version},"keys":[{{"version":1,"keyHex":"1111111111111111111111111111111111111111111111111111111111111111"}},{{"version":2,"keyHex":"2222222222222222222222222222222222222222222222222222222222222222"}}]}}"#,
+        ))?;
         ResolverCrypto::new(keyring, vec![0x44; 32], FixedNonce)
     }
 
@@ -315,6 +324,25 @@ mod tests {
         assert_eq!(
             crypto.decrypt(&encrypted, &wrong_tenant),
             Err(CryptoError::AuthenticationFailed)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn keyring_rollback_cannot_decrypt_or_reencrypt_newer_ciphertext() -> Result<(), CryptoError> {
+        let active = crypto_with_active_version(2)?;
+        let rolled_back = crypto_with_active_version(1)?;
+        let context = AuthenticatedContext {
+            tenant_id: "tenant_01",
+            provider: "MICROSOFT_GRAPH",
+            record_kind: "credential",
+            logical_id: "secret_01",
+        };
+        let encrypted = active.encrypt(b"sensitive", &context)?;
+        assert_eq!(encrypted.key_version, 2);
+        assert_eq!(
+            rolled_back.decrypt(&encrypted, &context),
+            Err(CryptoError::InvalidKeyring)
         );
         Ok(())
     }
