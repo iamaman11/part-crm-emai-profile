@@ -1,0 +1,80 @@
+name: AR-8C Staging Bootstrap Preflight
+
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/ar8c-staging-bootstrap-preflight.mjs'
+      - '.github/workflows/ar8c-staging-bootstrap-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ar8c-staging-bootstrap-preflight-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: AR-8C Bootstrap Preflight Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node version
+        run: test "$(node --version)" = "v24.19.0"
+
+      - name: Prove preflight authority is staging-only and deterministic
+        run: node .github/scripts/ar8c-staging-bootstrap-preflight.mjs self-test
+
+  preflight:
+    name: AR-8C Protected Staging Bootstrap Preflight
+    if: github.event_name == 'workflow_dispatch'
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    env:
+      AR8C_TARGET_ENVIRONMENT: staging
+      CLOUDFLARE_BOOTSTRAP_TOKEN: ${{ secrets.CLOUDFLARE_BOOTSTRAP_TOKEN }}
+      CLOUDFLARE_TOKEN_ISSUER_TOKEN: ${{ secrets.CLOUDFLARE_TOKEN_ISSUER_TOKEN }}
+      GH_BOOTSTRAP_ADMIN_TOKEN: ${{ secrets.GH_BOOTSTRAP_ADMIN_TOKEN }}
+    steps:
+      - name: Checkout accepted main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact accepted source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node version
+        run: test "$(node --version)" = "v24.19.0"
+
+      - name: Verify protected bootstrap credentials and discover provider identity
+        run: node .github/scripts/ar8c-staging-bootstrap-preflight.mjs preflight
