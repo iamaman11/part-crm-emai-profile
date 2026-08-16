@@ -28,7 +28,7 @@ jobs:
           python scripts/generate-architecture-inventory.py --write
           python scripts/check-documentation-authority.py --root .
           python scripts/check-documentation-authority.py --root . --self-test
-          python scripts/generate-architecture-inventory.py
+          python scripts/generate-architecture-inventory.py --check
           python -m json.tool architecture/architecture-rebaseline-v3-transition.json >/dev/null
           python -m json.tool docs/status.json >/dev/null
           python -m json.tool architecture/inventory.json >/dev/null
