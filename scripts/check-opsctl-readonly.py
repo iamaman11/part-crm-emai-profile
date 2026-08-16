@@ -28,6 +28,23 @@ FORBIDDEN_RUNTIME_MARKERS = (
     "secret_access_key",
     "api_token",
 )
+FORBIDDEN_MUTATION_CAPABILITIES = (
+    "fs::write(",
+    "fs::remove_file(",
+    "fs::remove_dir(",
+    "fs::remove_dir_all(",
+    "fs::rename(",
+    "fs::copy(",
+    "fs::create_dir(",
+    "fs::create_dir_all(",
+    "File::create(",
+    "OpenOptions",
+    "std::fs::File",
+    "std::io::Write",
+    ".write_all(",
+    "env::set_var(",
+    "env::remove_var(",
+)
 
 
 class GateError(ValueError):
@@ -70,8 +87,15 @@ def validate_source(lib: str, main: str, cargo: str, lock: str) -> None:
     for marker in FORBIDDEN_RUNTIME_MARKERS:
         if marker in production_source:
             fail(f"opsctl read-only boundary contains forbidden runtime marker: {marker}")
+    for marker in FORBIDDEN_MUTATION_CAPABILITIES:
+        if marker in production_source:
+            fail(f"opsctl read-only boundary contains forbidden mutation capability: {marker}")
+
+    if production_source.count("Command::new(") != 1:
+        fail("opsctl may contain exactly one process-spawn site")
     if production_source.count("Command::new(&python)") != 1:
-        fail("opsctl may spawn only the canonical Python validator runner")
+        fail("opsctl process-spawn site must target only the canonical Python validator runner")
+
     for required in (
         '"scripts/generate-architecture-inventory.py"',
         '"scripts/python-estate-ar6.py"',
@@ -101,13 +125,41 @@ def self_test() -> None:
     lock = read(ROOT, LOCK)
     validate_source(lib, main, cargo, lock)
 
-    injected = lib.split("#[cfg(test)]", 1)[0] + '\nfn forbidden() { let _ = Command::new("wrangler").arg("deploy"); }\n#[cfg(test)]' + lib.split("#[cfg(test)]", 1)[1]
+    process_injected = (
+        lib.split("#[cfg(test)]", 1)[0]
+        + '\nfn forbidden() { let _ = Command::new("wrangler").arg("deploy"); }\n#[cfg(test)]'
+        + lib.split("#[cfg(test)]", 1)[1]
+    )
     try:
-        validate_source(injected, main, cargo, lock)
+        validate_source(process_injected, main, cargo, lock)
     except GateError:
         pass
     else:
         fail("mutable process-spawn negative fixture unexpectedly passed")
+
+    filesystem_injected = (
+        lib.split("#[cfg(test)]", 1)[0]
+        + '\nfn forbidden_write() { let _ = fs::write("state.json", b"mutable"); }\n#[cfg(test)]'
+        + lib.split("#[cfg(test)]", 1)[1]
+    )
+    try:
+        validate_source(filesystem_injected, main, cargo, lock)
+    except GateError:
+        pass
+    else:
+        fail("filesystem mutation capability negative fixture unexpectedly passed")
+
+    environment_injected = (
+        lib.split("#[cfg(test)]", 1)[0]
+        + '\nfn forbidden_env() { unsafe { env::set_var("TOKEN", "mutable"); } }\n#[cfg(test)]'
+        + lib.split("#[cfg(test)]", 1)[1]
+    )
+    try:
+        validate_source(environment_injected, main, cargo, lock)
+    except GateError:
+        pass
+    else:
+        fail("environment mutation capability negative fixture unexpectedly passed")
 
     expanded = lib.replace("    Inventory,\n}", "    Inventory,\n    Deploy,\n}", 1)
     try:
@@ -125,7 +177,7 @@ def self_test() -> None:
     else:
         fail("opsctl dependency negative fixture unexpectedly passed")
 
-    print("AR-6 opsctl mutation/dependency negative fixtures rejected as expected.")
+    print("AR-6 opsctl capability, mutation and dependency negative fixtures rejected as expected.")
 
 
 def main() -> int:
@@ -136,7 +188,7 @@ def main() -> int:
         self_test()
     else:
         validate()
-        print("AR-6 opsctl is dependency-free, typed and read-only.")
+        print("AR-6 opsctl is dependency-free, typed and capability-bounded read-only.")
     return 0
 
 
