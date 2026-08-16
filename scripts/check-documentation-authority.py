@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -122,10 +123,21 @@ def validate_ar8_progress(value: object, label: str, errors: list[str], *, allow
             errors.append(f"{label}.canonical_projection must remain inside canonical inventory")
 
 
-def git_blob_sha(path: Path) -> str:
-    data = path.read_bytes()
-    header = f"blob {len(data)}\0".encode("ascii")
-    return hashlib.sha1(header + data).hexdigest()
+def git_blob_sha(root: Path, path: Path) -> str:
+    relative = path.relative_to(root).as_posix()
+    repository_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        ["git", "hash-object", f"--path={relative}", "--", str(path.resolve())],
+        cwd=repository_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    digest = result.stdout.strip().lower()
+    if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", digest) is None:
+        details = result.stderr.strip()
+        raise ValueError(f"git hash-object failed for {relative}: {details or digest or result.returncode}")
+    return digest
 
 
 def expected_credential_projection(root: Path, payload: dict[str, Any]) -> dict[str, object]:
@@ -156,7 +168,7 @@ def expected_credential_projection(root: Path, payload: dict[str, Any]) -> dict[
         "schema_version": int(payload["schema_version"]),
         "status": str(payload["status"]),
         "source_authority": CREDENTIAL_AUTHORITY.as_posix(),
-        "source_git_blob_sha1": git_blob_sha(root / CREDENTIAL_AUTHORITY),
+        "source_git_blob_sha1": git_blob_sha(root, root / CREDENTIAL_AUTHORITY),
         "metadata_only": True,
         "canonical_environments": payload["canonical_environments"],
         "invariants": payload["invariants"],
@@ -314,7 +326,7 @@ def validate(root: Path) -> list[str]:
         errors.append("AR-2 must preserve predecessor issue #251 provenance")
     if predecessor.get("role") != "AR2_CLASSIFIED_SUPERSEDED_FORWARD_PRODUCTION_SEQUENCE":
         errors.append("issue #251 must be classified as superseded forward production sequencing")
-    if predecessor.get("legacy_production_lane") != "DISABLED_BY_AR2":
+    if predecessor.get("legacy_d3_production_lane") != "DISABLED_BY_AR2":
         errors.append("legacy D3 production lane must be disabled after AR-2")
     if predecessor.get("current_state") != "closed_not_planned_after_ar2_acceptance":
         errors.append("issue #251 must remain closed not_planned after AR-2 acceptance")
