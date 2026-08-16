@@ -163,6 +163,7 @@ function validateLifecycle(authority) {
       expect(github.metadata_only === true, 'GitHub hosted reconciliation must be metadata-only');
       expect(github.readback_values === false, 'GitHub hosted reconciliation must forbid secret value readback');
       expect(github.executor_binding === 'GH_ADMIN_OPERATOR_TOKEN', 'GitHub hosted reconciliation executor must be GH_ADMIN_OPERATOR_TOKEN');
+      expect(sameStringSet(github.live_audit_environments, ['staging']), 'GitHub live audit environments must be staging-only during AR-0..AR-17');
       expect(sameStringSet(github.required_repository_secrets, EXPECTED_REPOSITORY_SECRETS), 'GitHub repository secret metadata requirements drifted');
       for (const environment of ['staging', 'production']) {
         expect(sameStringSet(github.required_environment_secrets?.[environment], EXPECTED_ENVIRONMENT_SECRETS), `GitHub ${environment} environment secret metadata requirements drifted`);
@@ -245,6 +246,7 @@ async function selfTest(root, authority) {
     { name: 'production mutation', expected: 'production mutation', mutate: (copy) => { copy.ar8c_operational_lifecycle.production_mutation = true; } },
     { name: 'wrong environment alias', expected: 'staging environment secret', mutate: (copy) => { copy.ar8c_operational_lifecycle.hosted_reconciliation.github.required_environment_secrets.prod = copy.ar8c_operational_lifecycle.hosted_reconciliation.github.required_environment_secrets.staging; delete copy.ar8c_operational_lifecycle.hosted_reconciliation.github.required_environment_secrets.staging; } },
     { name: 'missing hosted binding', expected: 'production environment secret', mutate: (copy) => { copy.ar8c_operational_lifecycle.hosted_reconciliation.github.required_environment_secrets.production.pop(); } },
+    { name: 'production live audit forbidden during AR', expected: 'live audit environments', mutate: (copy) => { copy.ar8c_operational_lifecycle.hosted_reconciliation.github.live_audit_environments.push('production'); } },
     { name: 'missing Cloudflare deploy manifest binding', expected: 'deploy manifest binding', mutate: (copy) => { delete copy.ar8c_operational_lifecycle.hosted_reconciliation.cloudflare.deploy_manifest_binding; } },
     { name: 'wrong Cloudflare secret metadata endpoint', expected: 'secret metadata endpoint', mutate: (copy) => { copy.ar8c_operational_lifecycle.hosted_reconciliation.cloudflare.secret_binding_metadata_endpoint = 'POST /forbidden'; } },
   ];
@@ -292,7 +294,7 @@ async function githubLive(authority) {
   for (const name of lifecycle.hosted_reconciliation.github.required_repository_secrets) {
     if (!repoSecrets.has(name)) errors.push(`required GitHub repository secret metadata is missing: ${name}`);
   }
-  for (const environment of ['staging', 'production']) {
+  for (const environment of lifecycle.hosted_reconciliation.github.live_audit_environments) {
     const encoded = encodeURIComponent(environment);
     const payload = await githubJson(`/repos/${owner}/${repo}/environments/${encoded}/secrets?per_page=100`, token);
     const names = secretNames(payload);

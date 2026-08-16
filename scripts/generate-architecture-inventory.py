@@ -551,6 +551,7 @@ def build_ar8c_operational_lifecycle_projection(payload: dict[str, Any]) -> dict
                 "metadata_only": github.get("metadata_only") is True,
                 "readback_values": github.get("readback_values") is True,
                 "executor_binding": github.get("executor_binding"),
+                "live_audit_environments": github.get("live_audit_environments"),
             },
             "cloudflare": {
                 "accepted_main_only": cloudflare.get("accepted_main_only") is True,
