@@ -1,6 +1,6 @@
 {
-  "schema_version": 8,
-  "status": "ACTIVE_AFTER_ACCEPTED_AR5_MERGE",
+  "schema_version": 9,
+  "status": "ACTIVE_AFTER_ACCEPTED_AR6_MERGE",
   "program": "Architecture Re-baseline v3",
   "tracking_issue": 266,
   "subordinate_preproduction_issue": 268,
@@ -14,10 +14,11 @@
     "AR-4A",
     "AR-4B",
     "AR-4C",
-    "AR-5"
+    "AR-5",
+    "AR-6"
   ],
-  "current_slice": "AR-5",
-  "next_slice_after_acceptance": "AR-6",
+  "current_slice": "AR-6",
+  "next_slice_after_acceptance": "AR-7",
   "state_model": {
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
@@ -153,7 +154,8 @@
     "ar4a_remediation": "ACCEPTED_COMPOSITION_ROOT_CONSOLIDATION_IN_CANONICAL_INVENTORY",
     "ar4b_remediation": "ACCEPTED_CLIENT_MAIL_ROUTE_OWNERSHIP_IN_CANONICAL_INVENTORY",
     "ar4c_remediation": "ACCEPTED_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_IN_CANONICAL_INVENTORY",
-    "ar5_remediation": "ACCEPTED_RUNTIME_AUTHORITY_CLEANUP_IN_CANONICAL_INVENTORY"
+    "ar5_remediation": "ACCEPTED_RUNTIME_AUTHORITY_CLEANUP_IN_CANONICAL_INVENTORY",
+    "ar6_remediation": "ACCEPTED_FULL_PYTHON_ESTATE_AND_READ_ONLY_OPSCTL_IN_CANONICAL_INVENTORY"
   },
   "preserve_accepted_history": [
     "repository_steps_0_10",
@@ -227,8 +229,8 @@
     "implementation_issue": 286,
     "applicable_permanent_workflows": "13/13",
     "next_required_slice": "AR-5",
-    "program_handoff_status": "AR-5_ACCEPTED",
-    "program_next_required_slice": "AR-6"
+    "program_handoff_status": "AR-6_ACCEPTED",
+    "program_next_required_slice": "AR-7"
   },
   "runtime_authority_cleanup": {
     "status": "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP",
@@ -252,5 +254,41 @@
     ],
     "production_mutation": false,
     "next_required_slice": "AR-6"
+  },
+  "python_operational_authority": {
+    "status": "ACCEPTED_AR6_PYTHON_OPSCTL_FOUNDATION",
+    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR6.md",
+    "python_estate": "architecture/python-estate-ar6.json",
+    "implementation_issue": 294,
+    "implementation_pr": 295,
+    "exact_green_head": "9b06d542873ffa3122e53e107105098e21f5933c",
+    "implementation_merge": "d0229fedd81ee870822b6d9394bc4ee313ea3a3c",
+    "applicable_permanent_workflows": "13/13",
+    "python_summary": {
+      "tracked_python_files": 116,
+      "KEEP_PYTHON": 108,
+      "MIGRATE_TO_RUST": 2,
+      "DELETE_AFTER_SEQUENCE": 6,
+      "WRAP_WITH_RUST": 0
+    },
+    "opsctl": {
+      "path": "tools/opsctl",
+      "mode": "READ_ONLY_FOUNDATION",
+      "commands": [
+        "doctor",
+        "status",
+        "inventory"
+      ],
+      "third_party_dependencies": false,
+      "provider_mutation": false
+    },
+    "future_cutovers": {
+      "AR-10": "DELETE_AFTER_SEQUENCE",
+      "AR-11": "MIGRATE_TO_RUST"
+    },
+    "application_architecture_accepted_through": "AR-4C",
+    "runtime_authority_cleanup_accepted_through": "AR-5",
+    "production_mutation": false,
+    "next_required_slice": "AR-7"
   }
 }

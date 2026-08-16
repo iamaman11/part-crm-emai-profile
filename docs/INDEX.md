@@ -12,9 +12,9 @@ file cannot silently become a second current roadmap.
 - Accepted repository-local product phase: **Phase 2I**, proven by
   [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json).
 - Architecture Re-baseline v3 is the active forward program.
-- AR-0, AR-1, AR-2, AR-3, AR-4A, AR-4B, AR-4C and AR-5 are accepted checkpoints.
-- AR-5 — Wrangler / Runtime Authority Cleanup is the current accepted checkpoint.
-- AR-6 — Full Python Estate + read-only Rust opsctl is the only next slice; AR-4D remains NOT_REQUIRED unless later accepted evidence reopens it.
+- AR-0, AR-1, AR-2, AR-3, AR-4A, AR-4B, AR-4C, AR-5 and AR-6 are accepted checkpoints.
+- AR-6 — Full Python Estate + read-only Rust opsctl is the current accepted checkpoint.
+- AR-7 — Environments + GitHub Governance + Operational Boundaries is the only next slice; AR-4D remains NOT_REQUIRED unless later accepted evidence reopens it.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
@@ -28,7 +28,7 @@ file cannot silently become a second current roadmap.
 2. [`../architecture/architecture-rebaseline-v3-transition.json`](../architecture/architecture-rebaseline-v3-transition.json)
    is the machine transition projection of that authority.
 3. [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json) is the
-   accepted AR-2 topology/D3 decision input; AR-5 has now accepted its generation-verification runtime/deployment cleanup while the application/runtime ownership projection remains accepted through AR-4C.
+   accepted AR-2 topology/D3 decision input; AR-5 accepted its generation-verification runtime/deployment cleanup, AR-6 accepted the Python/opsctl operational-tooling dimension, and the application/runtime ownership projection remains accepted through AR-4C.
 4. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) and [`status.json`](status.json) are current projections;
    they do not define a competing execution sequence.
 5. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md),
@@ -60,6 +60,8 @@ The machine inventory uses these roles:
 ## Current program references
 
 - [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md)
+- [`ARCHITECTURE_REBASELINE_V3_AR6.md`](ARCHITECTURE_REBASELINE_V3_AR6.md)
+- [`../architecture/python-estate-ar6.json`](../architecture/python-estate-ar6.json)
 - [`ARCHITECTURE_REBASELINE_V3_AR5.md`](ARCHITECTURE_REBASELINE_V3_AR5.md)
 - [`ARCHITECTURE_REBASELINE_V3_AR4C.md`](ARCHITECTURE_REBASELINE_V3_AR4C.md)
 - [`ARCHITECTURE_REBASELINE_V3_AR4B.md`](ARCHITECTURE_REBASELINE_V3_AR4B.md)

@@ -423,9 +423,9 @@ def build_inventory(root: Path = ROOT) -> dict[str, Any]:
         summary[row["classification"]] += 1
     return {
         "schema_version": SCHEMA_VERSION,
-        "status": "AR6_CANDIDATE_PYTHON_ESTATE",
+        "status": "AR6_ACCEPTED_PYTHON_ESTATE",
         "scope": "ALL_GIT_TRACKED_PYTHON_STRONGER_THAN_EXECUTABLE_ONLY",
-        "accepted_program_checkpoint_remains": "AR-5",
+        "accepted_program_checkpoint": "AR-6",
         "owning_slice": "AR-6",
         "classification_vocabulary": sorted(ALLOWED),
         "policy": {
@@ -441,7 +441,7 @@ def build_inventory(root: Path = ROOT) -> dict[str, Any]:
 
 
 def validate(document: dict[str, Any], root: Path = ROOT) -> None:
-    if document.get("schema_version") != SCHEMA_VERSION or document.get("status") != "AR6_CANDIDATE_PYTHON_ESTATE":
+    if document.get("schema_version") != SCHEMA_VERSION or document.get("status") != "AR6_ACCEPTED_PYTHON_ESTATE":
         raise ValueError("AR-6 Python estate schema/status drifted")
     rows = document.get("files")
     if not isinstance(rows, list):

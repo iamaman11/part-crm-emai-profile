@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "status": "AR6_CANDIDATE_PYTHON_ESTATE",
+  "status": "AR6_ACCEPTED_PYTHON_ESTATE",
   "scope": "ALL_GIT_TRACKED_PYTHON_STRONGER_THAN_EXECUTABLE_ONLY",
-  "accepted_program_checkpoint_remains": "AR-5",
+  "accepted_program_checkpoint": "AR-6",
   "owning_slice": "AR-6",
   "classification_vocabulary": [
     "DELETE_AFTER_SEQUENCE",
