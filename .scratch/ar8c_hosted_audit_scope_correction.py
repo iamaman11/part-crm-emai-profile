@@ -38,11 +38,17 @@ def patch_validator() -> None:
         "    { name: 'missing hosted binding', expected: 'production environment secret', mutate: (copy) => { copy.ar8c_operational_lifecycle.hosted_reconciliation.github.required_environment_secrets.production.pop(); } },\n"
         "    { name: 'production live audit forbidden during AR', expected: 'live audit environments', mutate: (copy) => { copy.ar8c_operational_lifecycle.hosted_reconciliation.github.live_audit_environments.push('production'); } },\n",
     )
-    replace_once(
-        path,
-        "  for (const environment of ['staging', 'production']) {\n",
-        "  for (const environment of lifecycle.hosted_reconciliation.github.live_audit_environments) {\n",
-    )
+    old = """  for (const name of lifecycle.hosted_reconciliation.github.required_repository_secrets) {
+    if (!repoSecrets.has(name)) errors.push(`required GitHub repository secret metadata is missing: ${name}`);
+  }
+  for (const environment of ['staging', 'production']) {
+"""
+    new = """  for (const name of lifecycle.hosted_reconciliation.github.required_repository_secrets) {
+    if (!repoSecrets.has(name)) errors.push(`required GitHub repository secret metadata is missing: ${name}`);
+  }
+  for (const environment of lifecycle.hosted_reconciliation.github.live_audit_environments) {
+"""
+    replace_once(path, old, new)
 
 
 def patch_projection(path: str) -> None:
