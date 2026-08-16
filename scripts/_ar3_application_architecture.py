@@ -17,6 +17,7 @@ RUNTIME_TOPOLOGY = "architecture/runtime-topology-ar2.json"
 AR3_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR3.md"
 AR4A_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md"
 AR4B_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md"
+AR4C_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md"
 
 PROCESS_OWNERSHIP: list[dict[str, Any]] = [
     {
@@ -111,8 +112,8 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
         "transport": "apps/control-plane-worker/src/client_mail_send.rs",
         "application_owner": "crates/use-cases-mailboxes::outbound_mail",
         "ports_owner": "crates/application-ports",
-        "composition_seam": "transport currently constructs/selects D1 and concrete Gmail/SMTP providers",
-        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::{client_mail_eligibility_repository,query_repository,client_mail_query_provider,outbound_mail_intent_repository,client_mail_outbound_provider}",
+        "status": "AR4C_COMPOSITION_EXTRACTION_CANDIDATE",
         "remediation_slice": "AR-4C",
     },
     {
@@ -224,14 +225,15 @@ COMPOSITION_FINDINGS: list[dict[str, Any]] = [
     },
     {
         "id": "outbound_mail_composition",
-        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "status": "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
         "owner_slice": "AR-4C",
         "evidence": [
-            "apps/control-plane-worker/src/client_mail_send.rs::D1ClientMailboxEligibilityRepository::new",
-            "apps/control-plane-worker/src/client_mail_send.rs::D1OutboundMailIntentRepository::new",
-            "apps/control-plane-worker/src/client_mail_send.rs::D1MailboxRepository::new",
-            "apps/control-plane-worker/src/client_mail_send.rs::CloudflareGmailOutboundMailProvider::new",
-            "apps/control-plane-worker/src/client_mail_send.rs::CloudflareSmtpOutboundMailProvider::new",
+            "apps/control-plane-worker/src/composition/outbound_mail.rs::outbound_mail_intent_repository",
+            "apps/control-plane-worker/src/composition/outbound_mail.rs::client_mail_outbound_provider",
+            "apps/control-plane-worker/src/composition/outbound_mail.rs::D1OutboundMailIntentRepository::new",
+            "apps/control-plane-worker/src/composition/outbound_mail.rs::D1MailboxRepository::new",
+            "apps/control-plane-worker/src/composition/outbound_mail.rs::CloudflareGmailOutboundMailProvider::new",
+            "apps/control-plane-worker/src/composition/outbound_mail.rs::CloudflareSmtpOutboundMailProvider::new",
         ],
     },
     {
@@ -265,6 +267,9 @@ _REQUIRED_SNIPPETS: dict[str, list[str]] = {
         "pub fn query_repository",
         "pub fn client_mail_eligibility_repository",
         "pub fn client_mail_query_provider",
+        "pub use outbound_mail::{",
+        "client_mail_outbound_provider",
+        "outbound_mail_intent_repository",
         "pub fn notification_operations_repository",
         "pub fn notification_cursor_repository",
         "pub fn mailbox_job_provider",
@@ -284,7 +289,15 @@ _REQUIRED_SNIPPETS: dict[str, list[str]] = {
         "query_repository",
     ],
     "apps/control-plane-worker/src/client_mail_send.rs": [
-        "D1ClientMailboxEligibilityRepository::new",
+        "client_mail_eligibility_repository",
+        "query_repository",
+        "client_mail_query_provider",
+        "outbound_mail_intent_repository",
+        "client_mail_outbound_provider",
+    ],
+    "apps/control-plane-worker/src/composition/outbound_mail.rs": [
+        "pub fn outbound_mail_intent_repository",
+        "pub async fn client_mail_outbound_provider",
         "D1OutboundMailIntentRepository::new",
         "D1MailboxRepository::new",
         "CloudflareGmailOutboundMailProvider::new",
@@ -305,6 +318,12 @@ _REQUIRED_SNIPPETS: dict[str, list[str]] = {
         "AR-4B Client Mail route ownership",
         "ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
         "AR-4C",
+        "Production Core remains `BLOCKED`",
+    ],
+    AR4C_EVIDENCE: [
+        "AR-4C Outbound Mail composition extraction",
+        "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
+        "AR-5",
         "Production Core remains `BLOCKED`",
     ],
 }
@@ -339,7 +358,21 @@ _FORBIDDEN_SNIPPETS: dict[str, list[str]] = {
         "ClientMailMessageApi",
         "ClientMailSendApi",
     ],
+    "apps/control-plane-worker/src/client_mail_send.rs": [
+        "cloudflare_adapters::",
+        "D1ClientMailboxEligibilityRepository::new",
+        "D1QueryRepository::new",
+        "CloudMailboxQueryAdapter::new",
+        "D1OutboundMailIntentRepository::new",
+        "D1MailboxRepository::new",
+        "CloudflareGmailOutboundMailProvider::new",
+        "CloudflareSmtpOutboundMailProvider::new",
+        "mod provider;",
+        "provider::ClientMailProvider",
+    ],
 }
+
+_FORBIDDEN_PATHS = ["apps/control-plane-worker/src/client_mail_send/provider.rs"]
 
 
 def _read(root: Path, relative: str) -> str:
@@ -398,6 +431,11 @@ def validate_source_contract(root: Path) -> None:
     paths = sorted(set(_REQUIRED_SNIPPETS) | set(_FORBIDDEN_SNIPPETS))
     for relative in paths:
         _validate_source_text(relative, _read(root, relative))
+    for relative in _FORBIDDEN_PATHS:
+        if (root / relative).exists():
+            raise SystemExit(
+                f"AR-4C source contract drift: forbidden transport composition path exists: {relative}"
+            )
 
 
 def _validate_unique_ids(items: list[dict[str, Any]], label: str) -> None:
@@ -441,6 +479,7 @@ def build_projection(root: Path) -> dict[str, Any]:
             "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
             "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
             "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
+            "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
         ],
         "runtime_resources": copy.deepcopy(topology["resources"]),
         "runtime_processes": copy.deepcopy(PROCESS_OWNERSHIP),
@@ -448,9 +487,10 @@ def build_projection(root: Path) -> dict[str, Any]:
         "composition_findings": copy.deepcopy(COMPOSITION_FINDINGS),
         "remediation_state": {
             "accepted_through": "AR-4B",
-            "status": "ACCEPTED",
-            "evidence": AR4B_EVIDENCE,
-            "next_required_slice": "AR-4C",
+            "candidate": "AR-4C",
+            "candidate_status": "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
+            "evidence": AR4C_EVIDENCE,
+            "next_after_acceptance": "AR-5",
         },
         "conditional_ar4d": {
             "decision": "NOT_REQUIRED",
@@ -496,16 +536,47 @@ def negative_self_test(root: Path) -> None:
     else:
         raise SystemExit("AR-4B negative self-test failed to reject missing Client Mail route ownership")
 
+    outbound_transport_regression = _read(
+        root, "apps/control-plane-worker/src/client_mail_send.rs"
+    ) + "\nD1OutboundMailIntentRepository::new"
+    try:
+        _validate_source_text(
+            "apps/control-plane-worker/src/client_mail_send.rs", outbound_transport_regression
+        )
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit(
+            "AR-4C negative self-test failed to reject transport adapter construction regression"
+        )
+
+    missing_outbound_composition = _read(
+        root, "apps/control-plane-worker/src/composition/outbound_mail.rs"
+    ).replace(
+        "pub fn outbound_mail_intent_repository",
+        "pub fn missing_outbound_mail_intent_repository",
+    )
+    try:
+        _validate_source_text(
+            "apps/control-plane-worker/src/composition/outbound_mail.rs",
+            missing_outbound_composition,
+        )
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit("AR-4C negative self-test failed to reject missing composition seam")
+
     remediation = copy.deepcopy(expected)
     remediation["remediation_state"] = {
-        "accepted_through": "AR-4A",
-        "candidate": "AR-4B",
-        "candidate_status": "ROUTE_OWNERSHIP_CONSOLIDATION_CANDIDATE",
+        "accepted_through": "AR-4B",
+        "status": "ACCEPTED",
         "evidence": AR4B_EVIDENCE,
-        "next_after_acceptance": "AR-4C",
+        "next_required_slice": "AR-4C",
     }
     if remediation == expected:
-        raise SystemExit("AR-4B negative self-test failed to detect accepted-state rollback to candidate remediation state")
+        raise SystemExit(
+            "AR-4C negative self-test failed to distinguish candidate and accepted remediation state"
+        )
 
     missing_resource = copy.deepcopy(expected)
     missing_resource["runtime_resources"] = missing_resource["runtime_resources"][1:]
@@ -528,4 +599,4 @@ def negative_self_test(root: Path) -> None:
     if gate == expected:
         raise SystemExit("AR-3 negative self-test failed to distinguish production mutation")
 
-    print("AR-4B accepted Client Mail route ownership negative self-tests passed.")
+    print("AR-4C Outbound Mail composition candidate negative self-tests passed.")

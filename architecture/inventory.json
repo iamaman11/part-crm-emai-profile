@@ -652,7 +652,8 @@
       "INTENTIONAL_RUNTIME_BOUNDARY",
       "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
       "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
-      "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED"
+      "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
+      "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE"
     ],
     "runtime_resources": [
       {
@@ -988,8 +989,8 @@
         "transport": "apps/control-plane-worker/src/client_mail_send.rs",
         "application_owner": "crates/use-cases-mailboxes::outbound_mail",
         "ports_owner": "crates/application-ports",
-        "composition_seam": "transport currently constructs/selects D1 and concrete Gmail/SMTP providers",
-        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::{client_mail_eligibility_repository,query_repository,client_mail_query_provider,outbound_mail_intent_repository,client_mail_outbound_provider}",
+        "status": "AR4C_COMPOSITION_EXTRACTION_CANDIDATE",
         "remediation_slice": "AR-4C"
       },
       {
@@ -1100,14 +1101,15 @@
       },
       {
         "id": "outbound_mail_composition",
-        "status": "TRANSPORT_COMPOSITION_DEBT",
+        "status": "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
         "owner_slice": "AR-4C",
         "evidence": [
-          "apps/control-plane-worker/src/client_mail_send.rs::D1ClientMailboxEligibilityRepository::new",
-          "apps/control-plane-worker/src/client_mail_send.rs::D1OutboundMailIntentRepository::new",
-          "apps/control-plane-worker/src/client_mail_send.rs::D1MailboxRepository::new",
-          "apps/control-plane-worker/src/client_mail_send.rs::CloudflareGmailOutboundMailProvider::new",
-          "apps/control-plane-worker/src/client_mail_send.rs::CloudflareSmtpOutboundMailProvider::new"
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::outbound_mail_intent_repository",
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::client_mail_outbound_provider",
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::D1OutboundMailIntentRepository::new",
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::D1MailboxRepository::new",
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::CloudflareGmailOutboundMailProvider::new",
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::CloudflareSmtpOutboundMailProvider::new"
         ]
       },
       {
@@ -1125,9 +1127,10 @@
     ],
     "remediation_state": {
       "accepted_through": "AR-4B",
-      "status": "ACCEPTED",
-      "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md",
-      "next_required_slice": "AR-4C"
+      "candidate": "AR-4C",
+      "candidate_status": "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
+      "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
+      "next_after_acceptance": "AR-5"
     },
     "conditional_ar4d": {
       "decision": "NOT_REQUIRED",
@@ -1146,6 +1149,7 @@
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
     "runtime_topology_projection_owner": "AR-3",
     "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md",
+    "application_architecture_candidate_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
     "application_architecture_base_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
     "application_architecture_projection": "architecture/inventory.json::application_architecture",
     "development_projection": "docs/DEVELOPMENT_PLAN.md",
@@ -1260,6 +1264,11 @@
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md",
       "status": "EVIDENCE",
       "scope": "ar4b_client_mail_route_ownership_accepted"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
+      "status": "EVIDENCE",
+      "scope": "ar4c_outbound_mail_composition_candidate"
     },
     {
       "path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
