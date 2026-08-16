@@ -4,6 +4,7 @@
 from pathlib import Path
 
 # Branch-only helper: the accepted marker is written only after the one-shot closeout migration.
+# A separate push after the v2 workflow exists triggers the temporary closeout runner.
 path = Path(__file__).resolve().parents[1] / "scripts/_ar3_application_architecture.py"
 text = path.read_text(encoding="utf-8")
 old = (
