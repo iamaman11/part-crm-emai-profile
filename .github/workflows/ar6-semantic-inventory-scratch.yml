@@ -20,6 +20,19 @@ jobs:
         with:
           ref: scratch/ar6-semantic-inventory
 
+      - name: Apply reviewed semantic exception on scratch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/python-estate-ar6.py')
+          text = path.read_text(encoding='utf-8')
+          needle = 'EXPLICIT_KEEP: dict[str, tuple[str, str, str]] = {\n'
+          insertion = '''EXPLICIT_KEEP: dict[str, tuple[str, str, str]] = {\n    "scripts/check-external-review-attestations.py": (\n        "external_review_attestation_verifier",\n        "github_api_read_only",\n        "terminal external-evidence verification performs bounded GitHub API GETs and may consume a workflow-scoped token; it has no mutation surface",\n    ),\n'''
+          if needle not in text:
+              raise SystemExit('explicit keep insertion point drifted')
+          path.write_text(text.replace(needle, insertion, 1), encoding='utf-8')
+          PY
+
       - name: Semantic audit and generate estate
         run: |
           python -m py_compile scripts/python-estate-ar6.py
@@ -28,13 +41,13 @@ jobs:
           python scripts/python-estate-ar6.py --check
           git diff --check
 
-      - name: Commit generated inventory on scratch only
+      - name: Commit generated scratch result
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add architecture/python-estate-ar6.json
+          git add scripts/python-estate-ar6.py architecture/python-estate-ar6.json
           if git diff --cached --quiet; then
-            echo 'Inventory already current.'
+            echo 'Scratch result already current.'
           else
             git commit -m 'scratch: generate AR-6 semantic Python estate'
             git push origin HEAD:scratch/ar6-semantic-inventory
