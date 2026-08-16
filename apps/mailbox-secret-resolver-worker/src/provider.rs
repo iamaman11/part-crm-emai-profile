@@ -59,8 +59,15 @@ pub enum ProviderError {
     InvalidRequest,
     DependencyUnavailable,
     ProviderRejected,
+    CredentialRejected,
     ResponseTooLarge,
     InvalidResponse,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TokenGrantKind {
+    AuthorizationCode,
+    RefreshToken,
 }
 
 #[derive(Deserialize)]
@@ -104,6 +111,17 @@ impl Drop for ProviderTokenSet {
         if let Some(value) = self.id_token.as_mut() {
             value.zeroize();
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct OAuthErrorDocument {
+    error: String,
+}
+
+impl Drop for OAuthErrorDocument {
+    fn drop(&mut self) {
+        self.error.zeroize();
     }
 }
 
@@ -192,7 +210,12 @@ pub async fn exchange_authorization_code(
     if let Some(verifier) = pkce_verifier {
         parameters.push(("code_verifier", verifier));
     }
-    send_token_request(provider.token_endpoint(), &parameters).await
+    send_token_request(
+        provider.token_endpoint(),
+        &parameters,
+        TokenGrantKind::AuthorizationCode,
+    )
+    .await
 }
 
 pub async fn refresh_access_token(
@@ -213,6 +236,9 @@ pub async fn refresh_access_token(
             .map_err(|_| ProviderError::InvalidConfiguration)?
             .to_string(),
     );
+    if secret.is_empty() || secret.len() > 8 * 1024 {
+        return Err(ProviderError::InvalidConfiguration);
+    }
     let mut parameters = vec![
         ("client_id", client_id.as_str()),
         ("client_secret", secret.as_str()),
@@ -222,12 +248,18 @@ pub async fn refresh_access_token(
     if let Some(value) = scopes {
         parameters.push(("scope", value));
     }
-    send_token_request(provider.token_endpoint(), &parameters).await
+    send_token_request(
+        provider.token_endpoint(),
+        &parameters,
+        TokenGrantKind::RefreshToken,
+    )
+    .await
 }
 
 async fn send_token_request(
     endpoint: &str,
     parameters: &[(&str, &str)],
+    grant_kind: TokenGrantKind,
 ) -> Result<ProviderTokenSet, ProviderError> {
     let mut body = form_encode(parameters);
     if body.len() > 32 * 1024 {
@@ -253,12 +285,51 @@ async fn send_token_request(
         .await
         .map_err(|_| ProviderError::DependencyUnavailable)?;
     match response.status_code() {
-        200 => {}
-        400 | 401 | 403 => return Err(ProviderError::ProviderRejected),
-        408 | 425 | 429 | 500..=599 => return Err(ProviderError::DependencyUnavailable),
-        _ => return Err(ProviderError::InvalidResponse),
+        200 => parse_token_success(&mut response).await,
+        400 | 401 | 403 => {
+            let error = parse_token_error(&mut response, grant_kind).await?;
+            Err(error)
+        }
+        408 | 425 | 429 | 500..=599 => Err(ProviderError::DependencyUnavailable),
+        _ => Err(ProviderError::InvalidResponse),
     }
-    if content_length_exceeds(&response, MAX_PROVIDER_RESPONSE_BYTES)? {
+}
+
+async fn parse_token_success(
+    response: &mut worker::Response,
+) -> Result<ProviderTokenSet, ProviderError> {
+    let mut bytes = read_provider_response(response).await?;
+    let parsed = serde_json::from_slice::<ProviderTokenSet>(&bytes);
+    bytes.zeroize();
+    let tokens = parsed.map_err(|_| ProviderError::InvalidResponse)?;
+    tokens.validate()?;
+    Ok(tokens)
+}
+
+async fn parse_token_error(
+    response: &mut worker::Response,
+    grant_kind: TokenGrantKind,
+) -> Result<ProviderError, ProviderError> {
+    let mut bytes = read_provider_response(response).await?;
+    let parsed = serde_json::from_slice::<OAuthErrorDocument>(&bytes);
+    bytes.zeroize();
+    let document = parsed.map_err(|_| ProviderError::InvalidResponse)?;
+    if document.error.is_empty()
+        || document.error.len() > 128
+        || !document
+            .error
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(ProviderError::InvalidResponse);
+    }
+    Ok(classify_oauth_error(grant_kind, &document.error))
+}
+
+async fn read_provider_response(
+    response: &mut worker::Response,
+) -> Result<Vec<u8>, ProviderError> {
+    if content_length_exceeds(response, MAX_PROVIDER_RESPONSE_BYTES)? {
         return Err(ProviderError::ResponseTooLarge);
     }
     let mut bytes = response
@@ -269,11 +340,21 @@ async fn send_token_request(
         bytes.zeroize();
         return Err(ProviderError::ResponseTooLarge);
     }
-    let parsed = serde_json::from_slice::<ProviderTokenSet>(&bytes);
-    bytes.zeroize();
-    let tokens = parsed.map_err(|_| ProviderError::InvalidResponse)?;
-    tokens.validate()?;
-    Ok(tokens)
+    Ok(bytes)
+}
+
+const fn classify_oauth_error(grant_kind: TokenGrantKind, error: &str) -> ProviderError {
+    if matches!(grant_kind, TokenGrantKind::RefreshToken) && matches!(error, "invalid_grant") {
+        return ProviderError::CredentialRejected;
+    }
+    match error {
+        "invalid_client" | "unauthorized_client" | "invalid_scope" => {
+            ProviderError::InvalidConfiguration
+        }
+        "invalid_request" | "unsupported_grant_type" => ProviderError::InvalidRequest,
+        "server_error" | "temporarily_unavailable" => ProviderError::DependencyUnavailable,
+        _ => ProviderError::ProviderRejected,
+    }
 }
 
 fn content_length_exceeds(
@@ -378,7 +459,10 @@ fn base64url_unpadded(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64url_unpadded, percent_encode, validate_pkce_verifier};
+    use super::{
+        ProviderError, TokenGrantKind, base64url_unpadded, classify_oauth_error, percent_encode,
+        validate_pkce_verifier,
+    };
     use sha2::{Digest, Sha256};
 
     #[test]
@@ -394,5 +478,25 @@ mod tests {
     #[test]
     fn oauth_form_encoding_is_rfc3986_and_never_uses_plus_for_space() {
         assert_eq!(percent_encode("a b+c"), "a%20b%2Bc");
+    }
+
+    #[test]
+    fn refresh_invalid_grant_is_the_only_credential_rejection_class() {
+        assert_eq!(
+            classify_oauth_error(TokenGrantKind::RefreshToken, "invalid_grant"),
+            ProviderError::CredentialRejected
+        );
+        assert_eq!(
+            classify_oauth_error(TokenGrantKind::AuthorizationCode, "invalid_grant"),
+            ProviderError::ProviderRejected
+        );
+        assert_eq!(
+            classify_oauth_error(TokenGrantKind::RefreshToken, "invalid_client"),
+            ProviderError::InvalidConfiguration
+        );
+        assert_eq!(
+            classify_oauth_error(TokenGrantKind::RefreshToken, "invalid_scope"),
+            ProviderError::InvalidConfiguration
+        );
     }
 }
