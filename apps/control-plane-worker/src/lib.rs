@@ -43,7 +43,7 @@ use cloudflare_adapters::d1_mailboxes::D1MailboxRepository;
 use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
 use control_plane_contract::{
     D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING, RouteClass,
-    STATIC_ASSETS_BINDING, VERIFICATION_QUEUE_BINDING, classify_route,
+    STATIC_ASSETS_BINDING, classify_route,
 };
 use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 use session_domain::coordinator::coordinator_object_name;
@@ -209,7 +209,6 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _idempotency_repository = D1IdempotencyRepository::new(idempotency_catalog);
     let profile_objects = env.bucket(R2_PROFILES_BINDING)?;
     let _generation_upload_signer = composition::generation_upload_capability_signer(env)?;
-    let _verification_queue = env.queue(VERIFICATION_QUEUE_BINDING)?;
     let _integration_events_queue =
         env.queue(integration_events::INTEGRATION_EVENTS_QUEUE_BINDING)?;
     let _mailbox_jobs_queue = env.queue(mailbox_scheduling::MAILBOX_JOBS_QUEUE_BINDING)?;

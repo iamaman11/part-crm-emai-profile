@@ -52,7 +52,6 @@ MANIFEST_FIELDS = {
     "d1_database_name",
     "d1_database_id",
     "r2_bucket_name",
-    "generation_verification_queue",
     "integration_events_queue",
     "mailbox_jobs_queue",
     "mailbox_jobs_dlq",
@@ -65,7 +64,6 @@ ISOLATED_FIELDS = {
     "d1_database_name",
     "d1_database_id",
     "r2_bucket_name",
-    "generation_verification_queue",
     "integration_events_queue",
     "mailbox_jobs_queue",
     "mailbox_jobs_dlq",
@@ -86,7 +84,6 @@ EXPECTED_VARS = {
 EXPECTED_D1 = {"CATALOG_DB"}
 EXPECTED_R2 = {"PROFILE_OBJECTS"}
 EXPECTED_QUEUE_PRODUCERS = {
-    "GENERATION_VERIFICATION",
     "INTEGRATION_EVENTS",
     "MAILBOX_JOBS",
 }
@@ -233,10 +230,9 @@ def validate_environment_template(environment: str, config: dict[str, object]) -
     queues = require_object(config.get("queues"), f"env.{environment}.queues")
     producers = require_array(queues.get("producers"), f"env.{environment}.queues.producers")
     producer_bindings = {require_object(item, "queue producer").get("binding") for item in producers}
-    if producer_bindings != EXPECTED_QUEUE_PRODUCERS or len(producers) != 3:
+    if producer_bindings != EXPECTED_QUEUE_PRODUCERS or len(producers) != 2:
         raise ConfigError(f"{environment} queue producer bindings drifted")
     expected_queues = {
-        "GENERATION_VERIFICATION": f"${{{prefix}_GENERATION_VERIFICATION_QUEUE}}",
         "INTEGRATION_EVENTS": f"${{{prefix}_INTEGRATION_EVENTS_QUEUE}}",
         "MAILBOX_JOBS": f"${{{prefix}_MAILBOX_JOBS_QUEUE}}",
     }
@@ -303,7 +299,6 @@ def validate_manifest(environment: str, manifest: object, *, fixture: bool = Fal
         "worker_name",
         "d1_database_name",
         "r2_bucket_name",
-        "generation_verification_queue",
         "integration_events_queue",
         "mailbox_jobs_queue",
         "mailbox_jobs_dlq",
@@ -335,12 +330,11 @@ def validate_manifest(environment: str, manifest: object, *, fixture: bool = Fal
         raise ConfigError(f"{environment}.custom_domain must be one dedicated hostname")
 
     queue_names = {
-        values["generation_verification_queue"],
         values["integration_events_queue"],
         values["mailbox_jobs_queue"],
         values["mailbox_jobs_dlq"],
     }
-    if len(queue_names) != 4:
+    if len(queue_names) != 3:
         raise ConfigError(f"{environment} queue names must be distinct, including the DLQ")
     if values["r2_bucket_name"] == values["d1_database_name"]:
         raise ConfigError(f"{environment} D1 and R2 resource names must not collide")
@@ -364,7 +358,6 @@ def token_map(environment: str, manifest: dict[str, str]) -> dict[str, str]:
         "D1_DATABASE_NAME": "d1_database_name",
         "D1_DATABASE_ID": "d1_database_id",
         "R2_BUCKET_NAME": "r2_bucket_name",
-        "GENERATION_VERIFICATION_QUEUE": "generation_verification_queue",
         "INTEGRATION_EVENTS_QUEUE": "integration_events_queue",
         "MAILBOX_JOBS_QUEUE": "mailbox_jobs_queue",
         "MAILBOX_JOBS_DLQ": "mailbox_jobs_dlq",
@@ -410,7 +403,6 @@ def fixture_manifest(environment: str) -> dict[str, str]:
         "d1_database_name": f"profile-catalog-{label}",
         "d1_database_id": f"{digit * 8}-{digit * 4}-{digit * 4}-{digit * 4}-{digit * 12}",
         "r2_bucket_name": f"profile-objects-{label}",
-        "generation_verification_queue": f"generation-verification-{label}",
         "integration_events_queue": f"integration-events-{label}",
         "mailbox_jobs_queue": f"mailbox-jobs-{label}",
         "mailbox_jobs_dlq": f"mailbox-jobs-dlq-{label}",

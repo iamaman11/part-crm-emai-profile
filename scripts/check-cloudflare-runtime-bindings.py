@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""AR-2 extension of the accepted Cloudflare runtime-binding fitness gate.
+"""Canonical Cloudflare runtime-binding and accepted-topology fitness gate.
 
-The pre-AR-2 validator is preserved byte-for-byte in
-`_cloudflare_runtime_bindings_core.py`. This canonical entrypoint first executes
-that accepted core, then adds AR-2 topology, generation-verification, resolver-
-isolation and D3 compatibility invariants.
+The shared validator in `_cloudflare_runtime_bindings_core.py` proves the current
+source-to-Wrangler binding inventory. This entrypoint preserves the accepted
+AR-2 topology, resolver-isolation and D3 compatibility invariants and applies
+AR-5's accepted deletion authority for the legacy GENERATION_VERIFICATION Queue.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ PROMOTION_ENTRYPOINT = ROOT / "scripts/mailbox-secret-resolver-promotion.py"
 PROMOTION_CORE = ROOT / "scripts/_mailbox_secret_resolver_promotion_core.py"
 QUEUE_ENTRYPOINT = ROOT / "apps/control-plane-worker/src/lib.rs"
 QUEUE_ENVELOPE = ROOT / "crates/cloudflare-adapters/src/control_plane_queue.rs"
+CONTROL_PLANE_CONTRACT = ROOT / "crates/control-plane-contract/src/lib.rs"
 GENERATION_ROUTE = ROOT / "apps/control-plane-worker/src/profile_generations.rs"
 
 EXPECTED_RESOURCE_DECISIONS = {
@@ -100,6 +101,25 @@ def consumer_queues(control: dict[str, Any], environment: str) -> set[str]:
     return observed
 
 
+def producer_bindings(control: dict[str, Any], environment: str) -> set[str]:
+    envs = object_value(control.get("env"), "control env")
+    selected = object_value(envs.get(environment), f"control env.{environment}")
+    queues = object_value(selected.get("queues"), f"control env.{environment}.queues")
+    producers = array_value(
+        queues.get("producers"), f"control env.{environment}.queues.producers"
+    )
+    observed: set[str] = set()
+    for item in producers:
+        entry = object_value(item, "queue producer")
+        binding = entry.get("binding")
+        if not isinstance(binding, str) or not binding:
+            fail(f"control env.{environment} producer lacks binding")
+        if binding in observed:
+            fail(f"control env.{environment} duplicates Queue producer binding {binding}")
+        observed.add(binding)
+    return observed
+
+
 def validate_queue_consumers(control: dict[str, Any]) -> None:
     expected = {
         "staging": {
@@ -120,10 +140,31 @@ def validate_queue_consumers(control: dict[str, Any]) -> None:
             )
 
 
-def validate_generation_verification_runtime() -> None:
+def validate_queue_producers(control: dict[str, Any]) -> None:
+    wanted = {"INTEGRATION_EVENTS", "MAILBOX_JOBS"}
+    for environment in ("staging", "production"):
+        observed = producer_bindings(control, environment)
+        if observed != wanted:
+            fail(
+                f"{environment} Queue producer bindings must be exactly integration-events + mailbox-jobs; "
+                f"observed={sorted(observed)!r}"
+            )
+
+
+def validate_generation_verification_runtime(control: dict[str, Any]) -> None:
     envelope = QUEUE_ENVELOPE.read_text(encoding="utf-8")
     entrypoint = QUEUE_ENTRYPOINT.read_text(encoding="utf-8")
+    contract = CONTROL_PLANE_CONTRACT.read_text(encoding="utf-8")
     route = GENERATION_ROUTE.read_text(encoding="utf-8")
+
+    for environment in ("staging", "production"):
+        if "GENERATION_VERIFICATION" in producer_bindings(control, environment):
+            fail(f"{environment} unexpectedly restored GENERATION_VERIFICATION producer binding")
+
+    if "VERIFICATION_QUEUE_BINDING" in contract or "GENERATION_VERIFICATION" in contract:
+        fail("legacy generation-verification Queue contract authority still exists")
+    if "VERIFICATION_QUEUE_BINDING" in entrypoint or 'env.queue("GENERATION_VERIFICATION")' in entrypoint:
+        fail("control-plane runtime still probes the deleted generation-verification Queue")
 
     enum_match = re.search(
         r"pub enum ControlPlaneQueueMessage\s*\{(?P<body>.*?)\n\}", envelope, re.S
@@ -146,10 +187,8 @@ def validate_generation_verification_runtime() -> None:
     ):
         if marker not in handler:
             fail(f"control-plane Queue handler lost {marker}")
-    if "VERIFICATION_QUEUE_BINDING" in handler or "GENERATION_VERIFICATION" in handler:
-        fail("GENERATION_VERIFICATION unexpectedly became a Queue workload")
-    if "GenerationVerification" in envelope or "GenerationVerification" in handler:
-        fail("generation verification unexpectedly gained an async Queue envelope")
+    if "GENERATION_VERIFICATION" in handler or "GenerationVerification" in envelope or "GenerationVerification" in handler:
+        fail("generation verification unexpectedly gained an async Queue workload")
 
     if (
         "RouteClass::ProfileGenerationVerifyApi" not in route
@@ -157,7 +196,7 @@ def validate_generation_verification_runtime() -> None:
     ):
         fail("synchronous profile-generation verification authority disappeared")
     if "VERIFICATION_QUEUE_BINDING" in route or "GENERATION_VERIFICATION" in route:
-        fail("profile-generation verification must not depend on the legacy Queue binding")
+        fail("profile-generation verification must not depend on the deleted Queue binding")
 
 
 def validate_resolver_isolation(resolver: dict[str, Any]) -> None:
@@ -315,9 +354,27 @@ def validate_d3_gate(workflow: str) -> None:
 
 
 def self_test(control: dict[str, Any], topology: dict[str, Any], workflow: str) -> None:
-    drifted_control = copy.deepcopy(control)
+    restored_producer = copy.deepcopy(control)
     production = object_value(
-        object_value(drifted_control["env"], "env")["production"], "production"
+        object_value(restored_producer["env"], "env")["production"], "production"
+    )
+    queues = object_value(production["queues"], "queues")
+    array_value(queues["producers"], "producers").append(
+        {
+            "binding": "GENERATION_VERIFICATION",
+            "queue": "${PRODUCTION_GENERATION_VERIFICATION_QUEUE}",
+        }
+    )
+    try:
+        validate_queue_producers(restored_producer)
+    except Ar2TopologyError:
+        pass
+    else:
+        fail("GENERATION_VERIFICATION producer restoration negative fixture unexpectedly passed")
+
+    restored_consumer = copy.deepcopy(control)
+    production = object_value(
+        object_value(restored_consumer["env"], "env")["production"], "production"
     )
     queues = object_value(production["queues"], "queues")
     array_value(queues["consumers"], "consumers").append(
@@ -328,7 +385,7 @@ def self_test(control: dict[str, Any], topology: dict[str, Any], workflow: str) 
         }
     )
     try:
-        validate_queue_consumers(drifted_control)
+        validate_queue_consumers(restored_consumer)
     except Ar2TopologyError:
         pass
     else:
@@ -373,18 +430,19 @@ def main() -> int:
         topology = load(TOPOLOGY, "AR-2 runtime topology")
         workflow = PROMOTION_WORKFLOW.read_text(encoding="utf-8")
         validate_queue_consumers(control)
-        validate_generation_verification_runtime()
+        validate_queue_producers(control)
+        validate_generation_verification_runtime(control)
         validate_resolver_isolation(resolver)
         validate_topology(topology)
         validate_d3_gate(workflow)
         self_test(control, topology, workflow)
         print(
-            "AR-2 accepted runtime topology, GENERATION_VERIFICATION deletion proof, resolver isolation, "
+            "AR-5 runtime authority cleanup, accepted AR-2 topology, resolver isolation, "
             "and D3 production fail-closed compatibility checks passed."
         )
         return 0
     except (OSError, json.JSONDecodeError, Ar2TopologyError, KeyError) as error:
-        print(f"AR-2 runtime topology error: {error}", file=sys.stderr)
+        print(f"Cloudflare runtime topology error: {error}", file=sys.stderr)
         return 1
 
 
