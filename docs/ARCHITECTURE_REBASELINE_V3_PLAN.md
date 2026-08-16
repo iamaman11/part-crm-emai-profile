@@ -6,8 +6,8 @@
 **Subordinate pre-production/tooling issue:** #268  
 **Accepted activation prerequisite:** AR-0 / PR #267  
 **Accepted AR-0 main:** `e00420704950af5ca9352d2f0f02d3a9c9688527`  
-**Current accepted architecture checkpoint:** AR-4C — Outbound Mail composition extraction
-**Next slice:** AR-5 — Wrangler / Runtime Authority Cleanup
+**Current accepted architecture checkpoint:** AR-5 — Wrangler / Runtime Authority Cleanup
+**Next slice:** AR-6 — Full Python Estate + read-only Rust opsctl
 **Accepted product phase:** Phase 2I  
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
@@ -15,7 +15,7 @@
 
 ## 1. Authority
 
-This file is the single current architecture/program execution authority after the AR-1 authority cutover. AR-4C is the latest accepted checkpoint. Its Outbound Mail composition extraction extends the AR-4B-remediated accepted AR-3 application/runtime ownership contract in `architecture/inventory.json`, with AR-4C acceptance evidence in `docs/ARCHITECTURE_REBASELINE_V3_AR4C.md`, AR-4B and AR-4A evidence preserved in their evidence documents, and the AR-3 base contract preserved in `docs/ARCHITECTURE_REBASELINE_V3_AR3.md`; the accepted AR-2 runtime-topology decision remains `architecture/runtime-topology-ar2.json`. AR-4D remains `NOT_REQUIRED` unless later accepted evidence reopens it.
+This file is the single current architecture/program execution authority after the AR-1 authority cutover. AR-5 is the latest accepted checkpoint. Its Wrangler / Runtime Authority Cleanup applies the accepted AR-2 `GENERATION_VERIFICATION = DELETE` decision to canonical runtime/deployment authority, with acceptance evidence in `docs/ARCHITECTURE_REBASELINE_V3_AR5.md`. The latest application-architecture remediation remains AR-4C in `architecture/inventory.json`, with AR-4C/AR-4B/AR-4A evidence preserved and the AR-3 base contract unchanged; the accepted AR-2 runtime-topology decision remains `architecture/runtime-topology-ar2.json`. AR-4D remains `NOT_REQUIRED` unless later accepted evidence reopens it.
 
 The accepted AR-0 research package is preserved without rewriting:
 
@@ -69,10 +69,10 @@ AR-2   Runtime Topology + D3 Compatibility                       DONE / ACCEPTED
 AR-3   Application Architecture Contract                         DONE / ACCEPTED
 AR-4A  Composition-root consolidation                            DONE / ACCEPTED
 AR-4B  Client Mail route ownership                               DONE / ACCEPTED
-AR-4C  Outbound Mail composition extraction                      CURRENT / ACCEPTED CHECKPOINT
+AR-4C  Outbound Mail composition extraction                      DONE / ACCEPTED
 AR-4D  Profile extraction — NOT REQUIRED by AR-3; reopen only by later accepted evidence
-AR-5   Wrangler / Runtime Authority Cleanup                     NEXT
-AR-6   Full Python Estate + read-only Rust opsctl
+AR-5   Wrangler / Runtime Authority Cleanup                     CURRENT / ACCEPTED CHECKPOINT
+AR-6   Full Python Estate + read-only Rust opsctl                NEXT
 AR-7   Environments + GitHub Governance + Operational Boundaries
 AR-8   Secrets / Keys / OAuth Refresh Concurrency
 AR-9   D1 Evolution / Schema Compatibility
@@ -164,7 +164,7 @@ The existing mailbox onboarding / `ReauthRequired` state model remains the OAuth
 
 AR-2 additionally establishes these accepted topology inputs without executing provider mutation:
 
-- `GENERATION_VERIFICATION = DELETE`; source/Wrangler binding removal belongs to AR-5 and the queue must not be provisioned by PC-1;
+- `GENERATION_VERIFICATION = DELETE`; AR-5 accepted removal from canonical source/Wrangler/deployment authority, and the queue must not be provisioned by PC-1;
 - `INTEGRATION_EVENTS`, `MAILBOX_JOBS` and its DLQ remain real transport boundaries over D1 authority;
 - mailbox-secret-resolver Worker + dedicated D1 + service binding remain a deliberate security isolation boundary;
 - accepted D3 repository-side bootstrap/same-bits/promotion machinery is preserved as foundation for AR-11;
