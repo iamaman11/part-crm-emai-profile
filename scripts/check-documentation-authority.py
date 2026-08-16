@@ -122,6 +122,12 @@ def validate_ar8_progress(value: object, label: str, errors: list[str], *, allow
             errors.append(f"{label}.canonical_projection must remain inside canonical inventory")
 
 
+def git_blob_sha(path: Path) -> str:
+    data = path.read_bytes()
+    header = f"blob {len(data)}\0".encode("ascii")
+    return hashlib.sha1(header + data).hexdigest()
+
+
 def expected_credential_projection(root: Path, payload: dict[str, Any]) -> dict[str, object]:
     sections = ("credentials", "dynamic_credential_domains", "future_trust_domains")
     entries: list[dict[str, Any]] = []
@@ -150,7 +156,7 @@ def expected_credential_projection(root: Path, payload: dict[str, Any]) -> dict[
         "schema_version": int(payload["schema_version"]),
         "status": str(payload["status"]),
         "source_authority": CREDENTIAL_AUTHORITY.as_posix(),
-        "source_sha256": hashlib.sha256((root / CREDENTIAL_AUTHORITY).read_bytes()).hexdigest(),
+        "source_git_blob_sha1": git_blob_sha(root / CREDENTIAL_AUTHORITY),
         "metadata_only": True,
         "canonical_environments": payload["canonical_environments"],
         "invariants": payload["invariants"],
@@ -419,7 +425,7 @@ def validate(root: Path) -> list[str]:
         errors.append(str(exc))
     else:
         if projected_credential != expected_projection:
-            errors.append("architecture inventory credential_authority projection/digest is stale")
+            errors.append("architecture inventory credential_authority projection/source identity is stale")
 
     inventory_cleanup = inventory.get("runtime_authority_cleanup") if isinstance(inventory.get("runtime_authority_cleanup"), dict) else {}
     if (
