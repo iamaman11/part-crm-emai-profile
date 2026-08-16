@@ -84,12 +84,9 @@ fn refresh_execution_has_one_provider_call_site_and_no_unconditional_store() {
 
 #[test]
 fn public_refresh_response_does_not_expose_refresh_or_fencing_material() {
-    let explicit_refresh = function_body(
-        OPERATIONS,
-        "async fn refresh_graph(",
-        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum RefreshMode",
-    )
-    .unwrap_or_default();
+    let explicit_refresh =
+        function_body(OPERATIONS, "async fn refresh_graph(", "enum RefreshMode")
+            .unwrap_or_default();
     assert!(explicit_refresh.contains("\"access_token\""));
     assert!(!explicit_refresh.contains("\"refresh_token\""));
     assert!(!explicit_refresh.contains("owner_digest"));
