@@ -1,0 +1,72 @@
+name: AR-6 Closeout Generate Scratch
+
+on:
+  push:
+    branches:
+      - scratch/ar6-closeout-generate
+    paths:
+      - scripts/ar6-closeout-scratch.py
+      - .github/workflows/ar6-closeout-generate-scratch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout scratch branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: scratch/ar6-closeout-generate
+
+      - name: Prepare closeout sources
+        run: |
+          python scripts/ar6-closeout-scratch.py
+          python -m py_compile scripts/python-estate-ar6.py scripts/check-documentation-authority.py scripts/generate-architecture-inventory.py
+          python scripts/python-estate-ar6.py --write
+
+      - name: Bootstrap regenerated canonical inventory without weakening final validator
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import sys
+          from pathlib import Path
+          root = Path('.').resolve()
+          sys.path.insert(0, str(root / 'scripts'))
+          path = root / 'scripts/generate-architecture-inventory.py'
+          spec = importlib.util.spec_from_file_location('ar6_inventory_generator', path)
+          module = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          spec.loader.exec_module(module)
+          module.validate_docs = lambda: None
+          expected = module.build_inventory()
+          module.INVENTORY_PATH.write_text(module.serialized(expected), encoding='utf-8', newline='\n')
+          print('Bootstrapped architecture/inventory.json from final generator logic.')
+          PY
+
+      - name: Verify final authority transaction
+        run: |
+          python scripts/check-documentation-authority.py
+          python scripts/check-documentation-authority.py --self-test
+          python scripts/python-estate-ar6.py --check
+          python scripts/python-estate-ar6.py --self-test
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/generate-architecture-inventory.py --self-test
+          python scripts/check-opsctl-readonly.py
+          python scripts/check-opsctl-readonly.py --self-test
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . doctor | python -m json.tool >/dev/null
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . status | python -m json.tool >/dev/null
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . inventory | python -m json.tool >/dev/null
+          git diff --check
+
+      - name: Commit generated scratch closeout
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add README.md architecture/architecture-rebaseline-v3-transition.json architecture/inventory.json architecture/python-estate-ar6.json docs/ARCHITECTURE_REBASELINE_V3_AR6.md docs/ARCHITECTURE_REBASELINE_V3_PLAN.md docs/DEVELOPMENT_PLAN.md docs/INDEX.md docs/README.md docs/status.json scripts/check-documentation-authority.py scripts/generate-architecture-inventory.py scripts/python-estate-ar6.py
+          git commit -m 'scratch: accept AR-6 authority and advance to AR-7'
+          git push origin HEAD:scratch/ar6-closeout-generate
