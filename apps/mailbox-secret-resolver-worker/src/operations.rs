@@ -1,12 +1,14 @@
 use crate::crypto::{EncryptionKeyring, ResolverCrypto, WorkerNonceSource};
 use crate::ingress::AuthenticatedResolverRequest;
 use crate::model::ResolverRoute;
+use crate::refresh_fencing::CredentialLifecycleState;
 use crate::provider::{
     OAuthProvider, ProviderError, authorization_url, exchange_authorization_code,
     refresh_access_token,
 };
 use crate::storage::{
     EncryptedRecordStore, ReconciliationResult, RecordIdentity, RecordStoreError,
+    RefreshAcquireError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -17,6 +19,8 @@ const RESOLVER_DB_BINDING: &str = "RESOLVER_DB";
 const ENCRYPTION_KEYRING_SECRET: &str = "MAILBOX_RESOLVER_ENCRYPTION_KEYRING";
 const HANDLE_HMAC_SECRET: &str = "MAILBOX_RESOLVER_HANDLE_HMAC_KEY";
 const OAUTH_CEREMONY_LIFETIME_MS: u64 = 10 * 60 * 1000;
+const ACCESS_TOKEN_REFRESH_SKEW_MS: u64 = 60_000;
+const COMPETING_REFRESH_REUSE_MIN_MS: u64 = 5_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperationError {
@@ -25,6 +29,7 @@ pub enum OperationError {
     Expired,
     ReplayRejected,
     ProviderRejected,
+    ReauthRequired,
     DependencyUnavailable,
     ConfigurationUnavailable,
     InternalFailure,
@@ -255,17 +260,18 @@ async fn resolve_credential(
 ) -> Result<Response, OperationError> {
     let provider = string(payload, "provider")?;
     let handle = string(payload, "secretHandle")?;
-    let mut credential =
-        load_credential(store, tenant_id, handle, provider, "credential", now_ms).await?;
-    refresh_if_needed(
+    let loaded = load_credential(store, tenant_id, handle, provider, "credential", now_ms).await?;
+    let credential = refresh_credential(
         store,
         env,
         &RefreshTarget {
             tenant_id,
             handle,
+            provider,
             record_kind: "credential",
         },
-        &mut credential,
+        loaded,
+        RefreshMode::IfNeeded,
         now_ms,
     )
     .await?;
@@ -291,7 +297,7 @@ async fn resolve_gmail_send(
     now_ms: u64,
 ) -> Result<Response, OperationError> {
     let handle = string(payload, "mailboxBindingId")?;
-    let mut credential = load_credential(
+    let loaded = load_credential(
         store,
         tenant_id,
         handle,
@@ -300,15 +306,17 @@ async fn resolve_gmail_send(
         now_ms,
     )
     .await?;
-    refresh_if_needed(
+    let credential = refresh_credential(
         store,
         env,
         &RefreshTarget {
             tenant_id,
             handle,
+            provider: "GMAIL_API",
             record_kind: "gmail_send_capability",
         },
-        &mut credential,
+        loaded,
+        RefreshMode::IfNeeded,
         now_ms,
     )
     .await?;
@@ -325,7 +333,7 @@ async fn refresh_graph(
     now_ms: u64,
 ) -> Result<Response, OperationError> {
     let handle = string(payload, "secretHandle")?;
-    let mut credential = load_credential(
+    let loaded = load_credential(
         store,
         tenant_id,
         handle,
@@ -334,77 +342,227 @@ async fn refresh_graph(
         now_ms,
     )
     .await?;
-    let refresh_token = credential
-        .refresh_token
-        .as_deref()
-        .ok_or(OperationError::ProviderRejected)?;
-    let mut tokens = refresh_access_token(
-        env,
-        OAuthProvider::Microsoft,
-        refresh_token,
-        credential.scope.as_deref(),
-    )
-    .await
-    .map_err(map_provider_error)?;
-    credential.access_token = Some(core::mem::take(&mut tokens.access_token));
-    if let Some(replacement) = tokens.refresh_token.as_mut() {
-        credential.refresh_token = Some(core::mem::take(replacement));
-    }
-    credential.expires_at_ms = Some(now_ms.saturating_add(tokens.expires_in * 1000));
-    let access_token = credential
-        .access_token
-        .clone()
-        .ok_or(OperationError::InternalFailure)?;
-    store_credential(store, tenant_id, handle, &credential, now_ms).await?;
-    json_response(json!({"access_token": access_token}))
-}
-
-async fn refresh_if_needed(
-    store: &EncryptedRecordStore<WorkerNonceSource>,
-    env: &Env,
-    target: &RefreshTarget<'_>,
-    credential: &mut StoredCredential,
-    now_ms: u64,
-) -> Result<(), OperationError> {
-    if credential
-        .expires_at_ms
-        .is_some_and(|expires_at| expires_at > now_ms.saturating_add(60_000))
-    {
-        return Ok(());
-    }
-    let provider = match credential.provider.as_str() {
-        "GMAIL_API" => OAuthProvider::Google,
-        "MICROSOFT_GRAPH" | "IMAP" => OAuthProvider::Microsoft,
-        _ => return Err(OperationError::InvalidRequest),
-    };
-    let refresh_token = credential
-        .refresh_token
-        .as_deref()
-        .ok_or(OperationError::ProviderRejected)?;
-    let mut tokens =
-        refresh_access_token(env, provider, refresh_token, credential.scope.as_deref())
-            .await
-            .map_err(map_provider_error)?;
-    credential.access_token = Some(core::mem::take(&mut tokens.access_token));
-    if let Some(replacement) = tokens.refresh_token.as_mut() {
-        credential.refresh_token = Some(core::mem::take(replacement));
-    }
-    credential.expires_at_ms = Some(now_ms.saturating_add(tokens.expires_in * 1000));
-    store_credential_kind(
+    let credential = refresh_credential(
         store,
-        target.tenant_id,
-        target.handle,
-        target.record_kind,
-        credential,
+        env,
+        &RefreshTarget {
+            tenant_id,
+            handle,
+            provider: "MICROSOFT_GRAPH",
+            record_kind: "credential",
+        },
+        loaded,
+        RefreshMode::Force,
         now_ms,
     )
-    .await
+    .await?;
+    json_response(json!({
+        "access_token": credential.access_token.as_deref().ok_or(OperationError::InternalFailure)?,
+    }))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RefreshMode {
+    IfNeeded,
+    Force,
+}
+
+struct LoadedCredential {
+    credential: StoredCredential,
+    mutation_generation: u64,
 }
 
 struct RefreshTarget<'a> {
     tenant_id: &'a str,
     handle: &'a str,
+    provider: &'a str,
     record_kind: &'a str,
+}
+
+async fn refresh_credential(
+    store: &EncryptedRecordStore<WorkerNonceSource>,
+    env: &Env,
+    target: &RefreshTarget<'_>,
+    mut loaded: LoadedCredential,
+    mode: RefreshMode,
+    now_ms: u64,
+) -> Result<StoredCredential, OperationError> {
+    if !refresh_required(&loaded.credential, mode, now_ms) {
+        return Ok(loaded.credential);
+    }
+    let provider = oauth_provider(&loaded.credential)?;
+    let identity = RecordIdentity {
+        tenant_id: target.tenant_id,
+        raw_handle: target.handle,
+        provider: target.provider,
+        record_kind: target.record_kind,
+    };
+    let lease = match store
+        .acquire_refresh_lease(&identity, loaded.mutation_generation, now_ms)
+        .await
+    {
+        Ok(lease) => lease,
+        Err(RefreshAcquireError::Busy)
+        | Err(RefreshAcquireError::Store(RecordStoreError::ConcurrentMutation)) => {
+            return reload_after_refresh_competition(
+                store,
+                target,
+                loaded.mutation_generation,
+                mode,
+                now_ms,
+            )
+            .await;
+        }
+        Err(RefreshAcquireError::ReauthRequired) => return Err(OperationError::ReauthRequired),
+        Err(RefreshAcquireError::Store(error)) => return Err(map_store_error(error)),
+    };
+
+    let Some(refresh_token) = loaded.credential.refresh_token.as_deref() else {
+        return release_then_error(
+            store,
+            &identity,
+            &lease,
+            now_ms,
+            OperationError::InternalFailure,
+        )
+        .await;
+    };
+
+    let tokens = refresh_access_token(
+        env,
+        provider,
+        refresh_token,
+        loaded.credential.scope.as_deref(),
+    )
+    .await;
+
+    match tokens {
+        Ok(mut tokens) => {
+            loaded.credential.access_token = Some(core::mem::take(&mut tokens.access_token));
+            if let Some(replacement) = tokens.refresh_token.as_mut() {
+                loaded.credential.refresh_token = Some(core::mem::take(replacement));
+            }
+            loaded.credential.expires_at_ms =
+                Some(now_ms.saturating_add(tokens.expires_in.saturating_mul(1000)));
+            let mut document = serde_json::to_vec(&loaded.credential)
+                .map_err(|_| OperationError::InternalFailure)?;
+            let committed = store.commit_refresh(&identity, &lease, &document, now_ms).await;
+            document.zeroize();
+            match committed {
+                Ok(_) => Ok(loaded.credential),
+                Err(RecordStoreError::ConcurrentMutation) => {
+                    reload_after_refresh_competition(
+                        store,
+                        target,
+                        loaded.mutation_generation,
+                        mode,
+                        now_ms,
+                    )
+                    .await
+                }
+                Err(error) => Err(map_store_error(error)),
+            }
+        }
+        Err(ProviderError::CredentialRejected) => {
+            match store.mark_reauth_required(&identity, &lease, now_ms).await {
+                Ok(_) => Err(OperationError::ReauthRequired),
+                Err(RecordStoreError::ConcurrentMutation) => {
+                    reload_after_refresh_competition(
+                        store,
+                        target,
+                        loaded.mutation_generation,
+                        mode,
+                        now_ms,
+                    )
+                    .await
+                }
+                Err(error) => Err(map_store_error(error)),
+            }
+        }
+        Err(error) => {
+            match store.release_refresh_lease(&identity, &lease, now_ms).await {
+                Ok(()) => Err(map_provider_error(error)),
+                Err(RecordStoreError::ConcurrentMutation) => {
+                    reload_after_refresh_competition(
+                        store,
+                        target,
+                        loaded.mutation_generation,
+                        mode,
+                        now_ms,
+                    )
+                    .await
+                }
+                Err(store_error) => Err(map_store_error(store_error)),
+            }
+        }
+    }
+}
+
+async fn release_then_error(
+    store: &EncryptedRecordStore<WorkerNonceSource>,
+    identity: &RecordIdentity<'_>,
+    lease: &crate::storage::RefreshLease,
+    now_ms: u64,
+    error: OperationError,
+) -> Result<StoredCredential, OperationError> {
+    match store.release_refresh_lease(identity, lease, now_ms).await {
+        Ok(()) | Err(RecordStoreError::ConcurrentMutation) => Err(error),
+        Err(store_error) => Err(map_store_error(store_error)),
+    }
+}
+
+async fn reload_after_refresh_competition(
+    store: &EncryptedRecordStore<WorkerNonceSource>,
+    target: &RefreshTarget<'_>,
+    previous_generation: u64,
+    mode: RefreshMode,
+    now_ms: u64,
+) -> Result<StoredCredential, OperationError> {
+    let reloaded = load_credential(
+        store,
+        target.tenant_id,
+        target.handle,
+        target.provider,
+        target.record_kind,
+        now_ms,
+    )
+    .await?;
+    if reloaded.mutation_generation > previous_generation {
+        return Ok(reloaded.credential);
+    }
+    if mode == RefreshMode::IfNeeded
+        && access_token_usable_during_refresh(&reloaded.credential, now_ms)
+    {
+        return Ok(reloaded.credential);
+    }
+    Err(OperationError::DependencyUnavailable)
+}
+
+fn refresh_required(credential: &StoredCredential, mode: RefreshMode, now_ms: u64) -> bool {
+    match mode {
+        RefreshMode::Force => true,
+        RefreshMode::IfNeeded => credential.expires_at_ms.is_some_and(|expires_at| {
+            expires_at <= now_ms.saturating_add(ACCESS_TOKEN_REFRESH_SKEW_MS)
+        }),
+    }
+}
+
+fn access_token_usable_during_refresh(credential: &StoredCredential, now_ms: u64) -> bool {
+    credential.access_token.is_some()
+        && credential.expires_at_ms.is_some_and(|expires_at| {
+            expires_at > now_ms.saturating_add(COMPETING_REFRESH_REUSE_MIN_MS)
+        })
+}
+
+fn oauth_provider(credential: &StoredCredential) -> Result<OAuthProvider, OperationError> {
+    match credential.provider.as_str() {
+        "GMAIL_API" => Ok(OAuthProvider::Google),
+        "MICROSOFT_GRAPH" | "IMAP" if credential.refresh_token.is_some() => {
+            Ok(OAuthProvider::Microsoft)
+        }
+        "IMAP" => Err(OperationError::InvalidRequest),
+        _ => Err(OperationError::InvalidRequest),
+    }
 }
 
 fn protocol_response(
@@ -486,7 +644,7 @@ async fn load_credential(
     provider: &str,
     record_kind: &str,
     now_ms: u64,
-) -> Result<StoredCredential, OperationError> {
+) -> Result<LoadedCredential, OperationError> {
     let stored = store
         .load(
             &RecordIdentity {
@@ -499,7 +657,18 @@ async fn load_credential(
         )
         .await
         .map_err(map_store_error)?;
-    serde_json::from_slice(&stored.document).map_err(|_| OperationError::InternalFailure)
+    if stored.lifecycle == CredentialLifecycleState::ReauthRequired {
+        return Err(OperationError::ReauthRequired);
+    }
+    let credential: StoredCredential =
+        serde_json::from_slice(&stored.document).map_err(|_| OperationError::InternalFailure)?;
+    if credential.provider != provider {
+        return Err(OperationError::InternalFailure);
+    }
+    Ok(LoadedCredential {
+        credential,
+        mutation_generation: stored.mutation_generation,
+    })
 }
 
 #[derive(Deserialize)]
@@ -630,14 +799,14 @@ const fn map_store_error(error: RecordStoreError) -> OperationError {
         RecordStoreError::ReplayRejected => OperationError::ReplayRejected,
         RecordStoreError::StorageUnavailable => OperationError::DependencyUnavailable,
         RecordStoreError::InvalidInput => OperationError::InvalidRequest,
-        RecordStoreError::Crypto | RecordStoreError::ConcurrentMutation => {
-            OperationError::InternalFailure
-        }
+        RecordStoreError::ConcurrentMutation => OperationError::DependencyUnavailable,
+        RecordStoreError::Crypto => OperationError::InternalFailure,
     }
 }
 
 const fn map_provider_error(error: ProviderError) -> OperationError {
     match error {
+        ProviderError::CredentialRejected => OperationError::ReauthRequired,
         ProviderError::ProviderRejected => OperationError::ProviderRejected,
         ProviderError::DependencyUnavailable => OperationError::DependencyUnavailable,
         ProviderError::InvalidConfiguration => OperationError::ConfigurationUnavailable,
@@ -1114,7 +1283,10 @@ fn base64url_decode(value: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64url_decode, id_token_username};
+    use super::{
+        RefreshMode, StoredCredential, access_token_usable_during_refresh, base64url_decode,
+        id_token_username, refresh_required,
+    };
 
     #[test]
     fn microsoft_id_token_username_is_bounded_to_the_payload_claim() {
@@ -1124,5 +1296,44 @@ mod tests {
             Some("user@example.com")
         );
         assert!(base64url_decode("not valid!").is_none());
+    }
+
+    #[test]
+    fn password_credentials_do_not_enter_oauth_refresh() {
+        let credential = StoredCredential {
+            provider: "IMAP".to_owned(),
+            access_token: None,
+            refresh_token: None,
+            expires_at_ms: None,
+            scope: None,
+            imap: None,
+            smtp: None,
+        };
+        assert!(!refresh_required(
+            &credential,
+            RefreshMode::IfNeeded,
+            1_000
+        ));
+    }
+
+    #[test]
+    fn expiring_oauth_credentials_refresh_and_live_tokens_can_bridge_single_flight() {
+        let credential = StoredCredential {
+            provider: "MICROSOFT_GRAPH".to_owned(),
+            access_token: Some("opaque-access-token".to_owned()),
+            refresh_token: Some("opaque-refresh-token".to_owned()),
+            expires_at_ms: Some(70_000),
+            scope: Some("offline_access Mail.Read".to_owned()),
+            imap: None,
+            smtp: None,
+        };
+        assert!(refresh_required(
+            &credential,
+            RefreshMode::IfNeeded,
+            20_000
+        ));
+        assert!(access_token_usable_during_refresh(&credential, 20_000));
+        assert!(!access_token_usable_during_refresh(&credential, 66_000));
+        assert!(refresh_required(&credential, RefreshMode::Force, 1));
     }
 }
