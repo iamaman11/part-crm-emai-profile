@@ -92,17 +92,7 @@ def expected_ar8_progress() -> dict[str, object]:
     }
 
 
-def validate_docs() -> None:
-    authority = subprocess.run(
-        [sys.executable, str(ROOT / "scripts/check-documentation-authority.py"), "--root", str(ROOT)],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if authority.returncode != 0:
-        details = "\n".join(value.strip() for value in (authority.stdout, authority.stderr) if value.strip())
-        raise SystemExit(f"documentation authority check failed:\n{details}")
+def validate_source_documents() -> None:
     for item in DOCUMENT_STATUS:
         if not (ROOT / item["path"]).is_file():
             raise SystemExit(f"document-status inventory path missing: {item['path']}")
@@ -137,6 +127,19 @@ def validate_docs() -> None:
     if runtime_gate.returncode != 0:
         details = "\n".join(value.strip() for value in (runtime_gate.stdout, runtime_gate.stderr) if value.strip())
         raise SystemExit(f"AR-5 runtime authority gate failed:\n{details}")
+
+
+def validate_full_documentation_authority() -> None:
+    authority = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-documentation-authority.py"), "--root", str(ROOT)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if authority.returncode != 0:
+        details = "\n".join(value.strip() for value in (authority.stdout, authority.stderr) if value.strip())
+        raise SystemExit(f"documentation authority check failed:\n{details}")
 
 
 def load_credential_authority() -> dict[str, Any]:
@@ -211,7 +214,7 @@ def build_credential_projection(payload: dict[str, Any]) -> dict[str, object]:
 
 def build_inventory() -> dict[str, object]:
     core.validate_route_ownership()
-    validate_docs()
+    validate_source_documents()
     application_architecture = ar3.build_projection(ROOT)
     credential_authority = load_credential_authority()
     credential_projection = build_credential_projection(credential_authority)
@@ -470,6 +473,7 @@ def main() -> int:
         print(f"Wrote {INVENTORY_PATH.relative_to(ROOT)}")
     elif args.check:
         check_current(expected)
+        validate_full_documentation_authority()
         print("Architecture inventory projects active AR-8 with AR-8A accepted and AR-8B current.")
     else:
         self_test(expected)
