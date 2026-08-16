@@ -26,6 +26,7 @@ RUNTIME_TOPOLOGY = "architecture/runtime-topology-ar2.json"
 AR2_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR2.md"
 AR4A_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md"
 AR4B_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md"
+AR4C_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md"
 TRACKING_ISSUE = 266
 ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B"]
 CURRENT_SLICE = "AR-4B"
@@ -52,6 +53,7 @@ DOCUMENT_STATUS = [
     {"path": ar3.AR3_EVIDENCE, "status": "EVIDENCE", "scope": "ar3_application_architecture_contract_accepted"},
     {"path": AR4A_EVIDENCE, "status": "EVIDENCE", "scope": "ar4a_composition_root_consolidation_accepted"},
     {"path": AR4B_EVIDENCE, "status": "EVIDENCE", "scope": "ar4b_client_mail_route_ownership_accepted"},
+    {"path": AR4C_EVIDENCE, "status": "EVIDENCE", "scope": "ar4c_outbound_mail_composition_candidate"},
     {"path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "superseded_predecessor_forward_execution"},
     {"path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "accepted_r1_r9_closeout"},
     {"path": "IMPLEMENTATION_PLAN.md", "status": "SUPERSEDED", "scope": "compatibility_entrypoint_to_preserved_history"},
@@ -124,6 +126,7 @@ def build_inventory() -> dict[str, object]:
             "runtime_topology_evidence": AR2_EVIDENCE,
             "runtime_topology_projection_owner": "AR-3",
             "application_architecture_evidence": AR4B_EVIDENCE,
+            "application_architecture_candidate_evidence": AR4C_EVIDENCE,
             "application_architecture_base_evidence": ar3.AR3_EVIDENCE,
             "application_architecture_projection": "architecture/inventory.json::application_architecture",
             "development_projection": "docs/DEVELOPMENT_PLAN.md",
@@ -210,7 +213,7 @@ def self_test(expected: dict[str, object]) -> None:
         raise SystemExit(f"documentation authority negative self-test failed:\n{details}")
     if documentation.stdout.strip():
         print(documentation.stdout.strip())
-    print("Architecture inventory accepted AR-4B negative self-test passed.")
+    print("Architecture inventory AR-4C candidate negative self-test passed.")
 
 
 def main() -> int:
@@ -227,7 +230,7 @@ def main() -> int:
         print(f"Wrote {INVENTORY_PATH.relative_to(ROOT)}")
     elif args.check:
         check_current(expected)
-        print("Architecture inventory and accepted AR-4B ownership projection are current.")
+        print("Architecture inventory and AR-4C candidate composition projection are current.")
     else:
         self_test(expected)
     return 0

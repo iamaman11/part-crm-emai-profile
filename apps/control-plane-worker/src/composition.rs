@@ -1,3 +1,7 @@
+mod outbound_mail;
+
+pub use outbound_mail::{client_mail_outbound_provider, outbound_mail_intent_repository};
+
 #[cfg(not(target_arch = "wasm32"))]
 use application_ports::clients::{
     ContactEncryptionRequest, ContactExactLookupRequest, ContactProtectionPort,
