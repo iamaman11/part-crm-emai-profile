@@ -127,15 +127,15 @@ def git_blob_sha(root: Path, path: Path) -> str:
     relative = path.relative_to(root).as_posix()
     repository_root = Path(__file__).resolve().parents[1]
     result = subprocess.run(
-        ["git", "hash-object", f"--path={relative}", "--", str(path.resolve())],
+        ["git", "hash-object", f"--path={relative}", "--stdin"],
         cwd=repository_root,
-        text=True,
+        input=path.read_bytes(),
         capture_output=True,
         check=False,
     )
-    digest = result.stdout.strip().lower()
+    digest = result.stdout.decode("ascii", errors="replace").strip().lower()
     if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", digest) is None:
-        details = result.stderr.strip()
+        details = result.stderr.decode("utf-8", errors="replace").strip()
         raise ValueError(f"git hash-object failed for {relative}: {details or digest or result.returncode}")
     return digest
 
@@ -326,7 +326,7 @@ def validate(root: Path) -> list[str]:
         errors.append("AR-2 must preserve predecessor issue #251 provenance")
     if predecessor.get("role") != "AR2_CLASSIFIED_SUPERSEDED_FORWARD_PRODUCTION_SEQUENCE":
         errors.append("issue #251 must be classified as superseded forward production sequencing")
-    if predecessor.get("legacy_d3_production_lane") != "DISABLED_BY_AR2":
+    if predecessor.get("legacy_production_lane") != "DISABLED_BY_AR2":
         errors.append("legacy D3 production lane must be disabled after AR-2")
     if predecessor.get("current_state") != "closed_not_planned_after_ar2_acceptance":
         errors.append("issue #251 must remain closed not_planned after AR-2 acceptance")
