@@ -1339,6 +1339,51 @@
       "resolver.microsoft-oauth-application": "AR-8E",
       "resolver.mailbox-credentials": "EXISTING_AR8A",
       "windows.release-signing-trust": "AR-15B"
+    },
+    "operational_lifecycle": {
+      "schema_version": 1,
+      "status": "CANDIDATE_AR8C_OPERATIONAL_CREDENTIAL_LIFECYCLE",
+      "implementation_issue": 314,
+      "accepted_base": "4e4d1c25226384858ca8905377ee155bedabc6d4",
+      "metadata_only": true,
+      "stage_order": [
+        "issue_or_import",
+        "validate",
+        "bind",
+        "switch",
+        "verify",
+        "revoke_previous"
+      ],
+      "concern_ids": [
+        "cloudflare.access-service-auth",
+        "cloudflare.control-plane-secret-bundle-transport",
+        "cloudflare.deploy-manifest-protected-input",
+        "cloudflare.platform-api",
+        "cloudflare.resolver-secret-bundle-transport",
+        "github.governance-audit",
+        "github.hosted-admin-operator",
+        "profile-generation.r2-access"
+      ],
+      "hosted_reconciliation": {
+        "github": {
+          "accepted_main_only": true,
+          "pull_request_exposure": false,
+          "metadata_only": true,
+          "readback_values": false,
+          "executor_binding": "GH_ADMIN_OPERATOR_TOKEN"
+        },
+        "cloudflare": {
+          "accepted_main_only": true,
+          "audit_environment": "staging",
+          "read_only": true,
+          "api_token_binding": "CLOUDFLARE_API_TOKEN",
+          "verify_endpoint": "GET /user/tokens/verify",
+          "required_token_status": "active",
+          "worker_secret_contract_source": "wrangler.secrets.required"
+        }
+      },
+      "production_mutation": false,
+      "opsctl_mutation": false
     }
   },
   "documentation_authority": {
@@ -1543,12 +1588,12 @@
     "ar8_progress": {
       "umbrella_issue": 308,
       "accepted_subslices": [
-        "AR-8A"
+        "AR-8A",
+        "AR-8B"
       ],
-      "current_subslice": "AR-8B",
-      "current_implementation_issue": 309,
+      "current_subslice": "AR-8C",
+      "current_implementation_issue": 314,
       "mandatory_remaining": [
-        "AR-8B",
         "AR-8C",
         "AR-8D",
         "AR-8E",
@@ -1557,6 +1602,13 @@
       "full_ar8_accepted": false,
       "ar9_blocked": true,
       "production_mutation": false
+    },
+    "ar8b_acceptance": {
+      "issue": 309,
+      "implementation_pr": 312,
+      "exact_green_head": "743276b578bb15042e8a42beff0e14f7698e61b0",
+      "implementation_merge": "4e4d1c25226384858ca8905377ee155bedabc6d4",
+      "applicable_permanent_workflows": "14/14"
     },
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
