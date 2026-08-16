@@ -23,6 +23,7 @@ jobs:
       - name: Prepare closeout sources
         run: |
           python scripts/ar6-closeout-scratch.py
+          git rm --cached scripts/ar6-closeout-scratch.py
           python -m py_compile scripts/python-estate-ar6.py scripts/check-documentation-authority.py scripts/generate-architecture-inventory.py
           python scripts/python-estate-ar6.py --write
 
