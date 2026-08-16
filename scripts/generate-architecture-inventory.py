@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import _architecture_inventory_core as core
 import _ar3_application_architecture as ar3
@@ -137,7 +139,7 @@ def validate_docs() -> None:
         raise SystemExit(f"AR-5 runtime authority gate failed:\n{details}")
 
 
-def load_credential_authority() -> dict[str, object]:
+def load_credential_authority() -> dict[str, Any]:
     path = ROOT / CREDENTIAL_AUTHORITY
     if not path.is_file():
         raise SystemExit(f"AR-8B credential source authority missing: {CREDENTIAL_AUTHORITY}")
@@ -161,11 +163,52 @@ def load_credential_authority() -> dict[str, object]:
     return payload
 
 
+def build_credential_projection(payload: dict[str, Any]) -> dict[str, object]:
+    path = ROOT / CREDENTIAL_AUTHORITY
+    sections = ("credentials", "dynamic_credential_domains", "future_trust_domains")
+    entries: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    for section in sections:
+        raw = payload.get(section)
+        if not isinstance(raw, list) or any(not isinstance(entry, dict) for entry in raw):
+            raise SystemExit(f"AR-8B credential authority {section} must be a list of objects")
+        counts[section] = len(raw)
+        entries.extend(raw)
+    ids = [entry.get("id") for entry in entries]
+    if any(not isinstance(value, str) or not value for value in ids):
+        raise SystemExit("AR-8B credential authority projection requires stable logical ids")
+    binding_names = sorted(
+        {
+            binding.get("name")
+            for entry in entries
+            for binding in entry.get("bindings", [])
+            if isinstance(binding, dict) and isinstance(binding.get("name"), str) and binding.get("name")
+        }
+    )
+    future_cutovers = {str(entry["id"]): entry.get("future_cutover") for entry in entries}
+    if any(not isinstance(value, str) or not value for value in future_cutovers.values()):
+        raise SystemExit("AR-8B credential authority projection requires future_cutover for every authority")
+    return {
+        "schema_version": int(payload["schema_version"]),
+        "status": str(payload["status"]),
+        "source_authority": CREDENTIAL_AUTHORITY,
+        "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "metadata_only": True,
+        "canonical_environments": payload["canonical_environments"],
+        "invariants": payload["invariants"],
+        "authority_counts": counts,
+        "authority_ids": ids,
+        "static_binding_names": binding_names,
+        "future_cutovers": future_cutovers,
+    }
+
+
 def build_inventory() -> dict[str, object]:
     core.validate_route_ownership()
     validate_docs()
     application_architecture = ar3.build_projection(ROOT)
     credential_authority = load_credential_authority()
+    credential_projection = build_credential_projection(credential_authority)
     routes = [
         {
             "route_class": route_class,
@@ -279,7 +322,7 @@ def build_inventory() -> dict[str, object]:
             "production_mutation": False,
             "next_required_slice": "AR-8",
         },
-        "credential_authority": credential_authority,
+        "credential_authority": credential_projection,
         "documentation_authority": {
             "current_program": CURRENT_AUTHORITY,
             "tracking_issue": TRACKING_ISSUE,
@@ -359,6 +402,10 @@ def self_test(expected: dict[str, object]) -> None:
     credential["credential_authority"]["metadata_only"] = False
     if serialized(credential) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect credential-authority projection drift")
+    credential_digest = copy.deepcopy(expected)
+    credential_digest["credential_authority"]["source_sha256"] = "0" * 64
+    if serialized(credential_digest) == serialized(expected):
+        raise SystemExit("inventory self-test failed to detect credential-authority source digest drift")
     topology = copy.deepcopy(expected)
     topology["documentation_authority"]["runtime_topology_decision"] = "architecture/other.json"
     if serialized(topology) == serialized(expected):
