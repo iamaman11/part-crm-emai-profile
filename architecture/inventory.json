@@ -640,10 +640,10 @@
   ],
   "application_architecture": {
     "schema_version": 1,
-    "status": "ACCEPTED_AR4B_APPLICATION_ARCHITECTURE_REMEDIATION",
+    "status": "ACCEPTED_AR4C_APPLICATION_ARCHITECTURE_REMEDIATION",
     "topology_source": "architecture/runtime-topology-ar2.json",
     "base_contract_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md",
+    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
     "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
     "composition_taxonomy": [
       "CONFORMING_COMPOSITION_SEAM",
@@ -653,7 +653,7 @@
       "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
       "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
       "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
-      "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE"
+      "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED"
     ],
     "runtime_resources": [
       {
@@ -990,7 +990,7 @@
         "application_owner": "crates/use-cases-mailboxes::outbound_mail",
         "ports_owner": "crates/application-ports",
         "composition_seam": "apps/control-plane-worker/src/composition.rs::{client_mail_eligibility_repository,query_repository,client_mail_query_provider,outbound_mail_intent_repository,client_mail_outbound_provider}",
-        "status": "AR4C_COMPOSITION_EXTRACTION_CANDIDATE",
+        "status": "AR4C_COMPOSITION_EXTRACTION_ACCEPTED",
         "remediation_slice": "AR-4C"
       },
       {
@@ -1101,7 +1101,7 @@
       },
       {
         "id": "outbound_mail_composition",
-        "status": "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
+        "status": "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED",
         "owner_slice": "AR-4C",
         "evidence": [
           "apps/control-plane-worker/src/composition/outbound_mail.rs::outbound_mail_intent_repository",
@@ -1126,30 +1126,28 @@
       }
     ],
     "remediation_state": {
-      "accepted_through": "AR-4B",
-      "candidate": "AR-4C",
-      "candidate_status": "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
+      "accepted_through": "AR-4C",
+      "status": "ACCEPTED",
       "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
-      "next_after_acceptance": "AR-5"
+      "next_required_slice": "AR-5"
     },
     "conditional_ar4d": {
       "decision": "NOT_REQUIRED",
       "reason": "Profile and Generation transports already use explicit composition seams; no measurable dependency-isolation benefit currently justifies extraction",
       "reopen_policy": "ONLY_BY_LATER_ACCEPTED_EVIDENCE"
     },
-    "next_required_slice_after_ar4b": "AR-4C",
+    "next_required_slice_after_ar4c": "AR-5",
     "production_mutation": false
   },
   "documentation_authority": {
     "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
     "tracking_issue": 266,
-    "current_slice": "AR-4B",
+    "current_slice": "AR-4C",
     "transition": "architecture/architecture-rebaseline-v3-transition.json",
     "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
     "runtime_topology_projection_owner": "AR-3",
-    "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md",
-    "application_architecture_candidate_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
+    "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
     "application_architecture_base_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
     "application_architecture_projection": "architecture/inventory.json::application_architecture",
     "development_projection": "docs/DEVELOPMENT_PLAN.md",
@@ -1268,7 +1266,7 @@
     {
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
       "status": "EVIDENCE",
-      "scope": "ar4c_outbound_mail_composition_candidate"
+      "scope": "ar4c_outbound_mail_composition_accepted"
     },
     {
       "path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
@@ -1299,10 +1297,11 @@
       "AR-2",
       "AR-3",
       "AR-4A",
-      "AR-4B"
+      "AR-4B",
+      "AR-4C"
     ],
-    "current_architecture_slice": "AR-4B",
-    "next_architecture_slice_after_acceptance": "AR-4C",
+    "current_architecture_slice": "AR-4C",
+    "next_architecture_slice_after_acceptance": "AR-5",
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
     "production_ready": false,

@@ -46,13 +46,14 @@
         "AR-2",
         "AR-3",
         "AR-4A",
-        "AR-4B"
+        "AR-4B",
+        "AR-4C"
       ],
-      "current_slice": "AR-4B",
-      "next_slice_after_acceptance": "AR-4C",
+      "current_slice": "AR-4C",
+      "next_slice_after_acceptance": "AR-5",
       "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
       "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
-      "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md",
+      "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
       "application_architecture_projection": "architecture/inventory.json::application_architecture",
       "application_architecture_base_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
       "ar4a_acceptance": {
@@ -67,6 +68,13 @@
         "implementation_pr": 283,
         "exact_green_head": "7ccdd1b0ed0c0eae974cd9bde15c87524315c023",
         "implementation_merge": "04b62c97813010ac283d8b70c81089f1c16f5672",
+        "applicable_permanent_workflows": "13/13"
+      },
+      "ar4c_acceptance": {
+        "issue": 286,
+        "implementation_pr": 287,
+        "exact_green_head": "c62f3a7fb00acf16fa1a8a00d9d2f101949cf8a3",
+        "implementation_merge": "d8382d1578c4911287fb76dd0b9966b23aa85c25",
         "applicable_permanent_workflows": "13/13"
       }
     },
@@ -116,8 +124,8 @@
   },
   "next_repository_step": {
     "number": null,
-    "name": "Architecture Re-baseline v3 AR-4C",
-    "status": "next_after_accepted_ar4b_merge",
+    "name": "Architecture Re-baseline v3 AR-5",
+    "status": "next_after_accepted_ar4c_merge",
     "tracking_issue": 266,
     "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
   },
@@ -241,7 +249,7 @@
     "repository_local_product_phase": "accepted_phase_2i",
     "pre2j_architecture_remediation": "closed_r1_r9",
     "pre2j_product_readiness_remediation": "historical_issue_203_superseded_by_ar_v3",
-    "architecture_rebaseline_v3": "active_issue_266_ar4b_accepted_next_ar4c",
+    "architecture_rebaseline_v3": "active_issue_266_ar4c_accepted_next_ar5",
     "application_ownership": "r5_accepted_capability_owners_without_compatibility_facades",
     "frontend_api_ownership": "r6_accepted_feature_owned_capability_api"
   },
