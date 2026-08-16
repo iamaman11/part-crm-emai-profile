@@ -21,13 +21,13 @@ jobs:
       - name: Advance accepted AR-8B to current AR-8C machine state
         run: python .scratch/ar8c_program_projection_sync.py
 
-      - name: Validate and regenerate canonical projections
+      - name: Regenerate and validate canonical projections
         run: |
           node .github/scripts/credential-lifecycle.mjs contract
           node .github/scripts/credential-lifecycle.mjs self-test
+          python scripts/generate-architecture-inventory.py --write
           python scripts/check-documentation-authority.py --root .
           python scripts/check-documentation-authority.py --root . --self-test
-          python scripts/generate-architecture-inventory.py --write
           python scripts/generate-architecture-inventory.py
           python -m json.tool architecture/architecture-rebaseline-v3-transition.json >/dev/null
           python -m json.tool docs/status.json >/dev/null
