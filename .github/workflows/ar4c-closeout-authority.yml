@@ -26,11 +26,11 @@ jobs:
           path = Path('scripts/_ar3_application_architecture.py')
           text = path.read_text(encoding='utf-8')
           old = '''    AR4C_EVIDENCE: [
-              "AR-4C Outbound Mail composition extraction",
-              "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",'''
+        "AR-4C Outbound Mail composition extraction",
+        "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",'''
           new = '''    AR4C_EVIDENCE: [
-              "AR-4C Outbound Mail composition extraction",
-              "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED",'''
+        "AR-4C Outbound Mail composition extraction",
+        "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED",'''
           if text.count(old) != 1:
               raise SystemExit('expected exactly one AR-4C required evidence marker')
           path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
