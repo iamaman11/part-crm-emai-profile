@@ -1263,7 +1263,7 @@
     "schema_version": 1,
     "status": "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY",
     "source_authority": "architecture/credential-authority-ar8b.json",
-    "source_git_blob_sha1": "3e3dc31e12c2003d0a700a7c4a14cae9d4d19300",
+    "source_git_blob_sha1": "8c0747047654e081215c3291229330c2aade4ced",
     "metadata_only": true,
     "canonical_environments": [
       "rehearsal",
@@ -1370,7 +1370,10 @@
           "pull_request_exposure": false,
           "metadata_only": true,
           "readback_values": false,
-          "executor_binding": "GH_ADMIN_OPERATOR_TOKEN"
+          "executor_binding": "GH_ADMIN_OPERATOR_TOKEN",
+          "live_audit_environments": [
+            "staging"
+          ]
         },
         "cloudflare": {
           "accepted_main_only": true,
