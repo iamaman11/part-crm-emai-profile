@@ -1,8 +1,6 @@
 mod outbound_mail;
 
-pub use outbound_mail::{
-    ClientMailOutboundProvider, client_mail_outbound_provider, outbound_mail_intent_repository,
-};
+pub use outbound_mail::{client_mail_outbound_provider, outbound_mail_intent_repository};
 
 #[cfg(not(target_arch = "wasm32"))]
 use application_ports::clients::{
@@ -13,186 +11,126 @@ use application_ports::clients::{
 use client_domain::{EncryptedContactValue, ExactLookupToken};
 use cloudflare_adapters::access_identity::VerifiedExternalIdentity;
 use cloudflare_adapters::cloud_mail_query::CloudMailboxQueryAdapter;
-use cloudflare_adapters::cloud_mailbox_provider::CloudMailboxProviderRouter;
-#[cfg(target_arch = "wasm32")]
-use cloudflare_adapters::contact_keyring::contact_protection_from_serialized_keyring;
-#[cfg(target_arch = "wasm32")]
-use cloudflare_adapters::contact_protection::{
-    RustCryptoContactProtection, WorkerCryptoNonceSource,
-};
-use cloudflare_adapters::coordinator_ingress::{
-    CloudflareCoordinatorIngressApplication, CloudflareDeviceGenerationCommitPort,
-};
-use cloudflare_adapters::d1_authenticated_device::D1AuthenticatedDevice;
-use cloudflare_adapters::d1_browser_mail_execution::D1BrowserMailboxExecutionBinding;
 use cloudflare_adapters::d1_client_mail_eligibility::D1ClientMailboxEligibilityRepository;
-use cloudflare_adapters::d1_client_merge::D1ClientMergeRepository;
-use cloudflare_adapters::d1_client_persistence::D1ClientPersistenceRepository;
-use cloudflare_adapters::d1_client_registry::D1ClientRegistryProjectionRepository;
-use cloudflare_adapters::d1_clients::D1ClientApplicationRepository;
-use cloudflare_adapters::d1_device_authorization::D1DeviceJobAuthorization;
-use cloudflare_adapters::d1_device_generation_commit::D1DeviceGenerationCommitJournal;
+use cloudflare_adapters::d1_clients::D1ClientRepository;
+use cloudflare_adapters::d1_clients_query::D1ClientQueryRepository;
 use cloudflare_adapters::d1_device_jobs::D1DeviceJobRepository;
-use cloudflare_adapters::d1_device_preconditions::D1DeviceExecutionPreconditions;
-use cloudflare_adapters::d1_identity_ceremonies::D1IdentityCeremonyApplicationRepository;
-use cloudflare_adapters::d1_identity_governance::D1IdentityGovernanceApplicationRepository;
-use cloudflare_adapters::d1_mailbox_bindings::D1MailboxBindingApplicationRepository;
-use cloudflare_adapters::d1_mailbox_jobs::D1MailboxJobApplicationRepository;
+use cloudflare_adapters::d1_mailbox_execution::D1BrowserMailboxExecutionRepository;
+use cloudflare_adapters::d1_mailbox_jobs::D1MailboxJobRepository;
+use cloudflare_adapters::d1_mailboxes::D1MailboxRepository;
 use cloudflare_adapters::d1_notification_operations::D1NotificationOperationsRepository;
 use cloudflare_adapters::d1_notifications::D1NotificationRepository;
-use cloudflare_adapters::d1_profile_application::D1ProfileApplicationBundle;
-use cloudflare_adapters::d1_profile_generation_application::D1ProfileGenerationApplicationRepository;
+use cloudflare_adapters::d1_profile_assignments::D1ProfileAssignmentRepository;
+use cloudflare_adapters::d1_profile_generations::D1ProfileGenerationRepository;
+use cloudflare_adapters::d1_profile_grants::D1ProfileGrantRepository;
+use cloudflare_adapters::d1_profiles::D1ProfileRepository;
 use cloudflare_adapters::d1_query::D1QueryRepository;
-use cloudflare_adapters::microsoft_graph_authorization::D1MicrosoftGraphAuthorization;
-use cloudflare_adapters::r2_generation_objects::R2GenerationObjects;
-use cloudflare_adapters::r2_generation_upload_capability::{
-    R2GenerationUploadCapabilitySigner, R2SigV4Credentials,
+use cloudflare_adapters::d1_tenant_memberships::D1TenantMembershipRepository;
+use cloudflare_adapters::d1_tenants::D1TenantRepository;
+use cloudflare_adapters::profile_generation_registry::D1ProfileGenerationRegistry;
+use cloudflare_adapters::r2_profile_generations::R2ProfileGenerationObjectStore;
+use cloudflare_adapters::CloudMailboxProviderRouter;
+use control_plane_contract::{D1_CATALOG_BINDING, PROFILE_OBJECTS_R2_BINDING};
+use profile_platform_primitives::{ActorContext, ClientId, ProfileId};
+use use_cases::generations::ProfileGenerationApplication;
+use use_cases::profiles::ProfileApplication;
+use use_cases_clients::ClientApplication;
+use use_cases_devices::DeviceJobRepository;
+use use_cases_identity::{IdentityCeremonyApplication, IdentityGovernanceApplication};
+use use_cases_mailboxes::{
+    BrowserMailboxExecutionApplication, MailboxBindingApplication, MailboxJobApplication,
 };
-use control_plane_contract::{
-    D1_CATALOG_BINDING, PROFILE_COORDINATOR_BINDING, R2_PROFILES_BINDING,
-};
-use profile_platform_primitives::{ActorContext, ClientId};
-use worker::{Env, Error, Result};
+use worker::{Env, Result};
 
-#[cfg(target_arch = "wasm32")]
-const CLIENT_CONTACT_PROTECTION_KEYRING_BINDING: &str = "CLIENT_CONTACT_PROTECTION_KEYRING";
-const R2_GENERATION_ACCOUNT_ID_BINDING: &str = "R2_GENERATION_ACCOUNT_ID";
-const R2_GENERATION_BUCKET_NAME_BINDING: &str = "R2_GENERATION_BUCKET_NAME";
-const R2_GENERATION_ACCESS_KEY_ID_BINDING: &str = "R2_GENERATION_ACCESS_KEY_ID";
-const R2_GENERATION_SECRET_ACCESS_KEY_BINDING: &str = "R2_GENERATION_SECRET_ACCESS_KEY";
-
-pub fn client_application(env: &Env) -> Result<D1ClientApplicationRepository> {
-    Ok(D1ClientApplicationRepository::new(
+#[must_use]
+pub fn client_application(env: &Env) -> Result<ClientApplication<D1ClientRepository>> {
+    Ok(ClientApplication::new(D1ClientRepository::new(
         env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
-    ))
+    )))
 }
 
-pub fn client_persistence_application(env: &Env) -> Result<D1ClientPersistenceRepository> {
-    Ok(D1ClientPersistenceRepository::new(
-        env.d1(D1_CATALOG_BINDING)?,
-    ))
-}
-
-pub fn client_merge_application(env: &Env) -> Result<D1ClientMergeRepository> {
-    Ok(D1ClientMergeRepository::new(env.d1(D1_CATALOG_BINDING)?))
-}
-
-pub fn client_registry_projection(env: &Env) -> Result<D1ClientRegistryProjectionRepository> {
-    Ok(D1ClientRegistryProjectionRepository::new(
-        env.d1(D1_CATALOG_BINDING)?,
-    ))
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn client_contact_protection(
-    env: &Env,
-) -> Result<RustCryptoContactProtection<WorkerCryptoNonceSource>> {
-    contact_protection_from_serialized_keyring(
-        env.secret(CLIENT_CONTACT_PROTECTION_KEYRING_BINDING)?
-            .to_string(),
-    )
-    .map_err(|_| Error::RustError("invalid client contact protection keyring".to_owned()))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct UnavailableContactProtection;
-
-#[cfg(not(target_arch = "wasm32"))]
-impl ContactProtectionPort for UnavailableContactProtection {
-    async fn encrypt_contact_display(
-        &self,
-        _request: ContactEncryptionRequest<'_>,
-    ) -> Result<EncryptedContactValue, ContactProtectionPortError> {
-        Err(ContactProtectionPortError::new(
-            ContactProtectionPortErrorClass::InternalFailure,
-        ))
-    }
-
-    async fn derive_exact_lookup_token(
-        &self,
-        _request: ContactExactLookupRequest<'_>,
-    ) -> Result<ExactLookupToken, ContactProtectionPortError> {
-        Err(ContactProtectionPortError::new(
-            ContactProtectionPortErrorClass::InternalFailure,
-        ))
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn client_contact_protection(_env: &Env) -> Result<UnavailableContactProtection> {
-    Ok(UnavailableContactProtection)
-}
-
-pub fn identity_governance_application(
-    env: &Env,
-) -> Result<D1IdentityGovernanceApplicationRepository> {
-    Ok(D1IdentityGovernanceApplicationRepository::new(
-        env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
-    ))
-}
-
+#[must_use]
 pub fn identity_ceremony_application(
     env: &Env,
-    verified_identity: VerifiedExternalIdentity,
-) -> Result<D1IdentityCeremonyApplicationRepository> {
-    Ok(D1IdentityCeremonyApplicationRepository::new(
-        env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
-        verified_identity,
+) -> Result<IdentityCeremonyApplication<D1TenantRepository, D1TenantMembershipRepository>> {
+    Ok(IdentityCeremonyApplication::new(
+        D1TenantRepository::new(env.d1(D1_CATALOG_BINDING)?),
+        D1TenantMembershipRepository::new(env.d1(D1_CATALOG_BINDING)?),
     ))
 }
 
-pub fn profile_application(env: &Env) -> Result<D1ProfileApplicationBundle> {
-    Ok(D1ProfileApplicationBundle::new(
-        env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
+#[must_use]
+pub fn identity_governance_application(
+    env: &Env,
+) -> Result<IdentityGovernanceApplication<D1TenantRepository, D1TenantMembershipRepository>> {
+    Ok(IdentityGovernanceApplication::new(
+        D1TenantRepository::new(env.d1(D1_CATALOG_BINDING)?),
+        D1TenantMembershipRepository::new(env.d1(D1_CATALOG_BINDING)?),
     ))
 }
 
+#[must_use]
+pub fn profile_application(env: &Env) -> Result<ProfileApplication<D1ProfileRepository>> {
+    Ok(ProfileApplication::new(D1ProfileRepository::new(
+        env.d1(D1_CATALOG_BINDING)?,
+    )))
+}
+
+#[must_use]
 pub fn profile_generation_application(
     env: &Env,
-) -> Result<D1ProfileGenerationApplicationRepository> {
-    Ok(D1ProfileGenerationApplicationRepository::new(
-        env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
+) -> Result<
+    ProfileGenerationApplication<
+        D1ProfileGenerationRegistry,
+        R2ProfileGenerationObjectStore,
+        D1ProfileGenerationRepository,
+    >,
+> {
+    Ok(ProfileGenerationApplication::new(
+        D1ProfileGenerationRegistry::new(env.d1(D1_CATALOG_BINDING)?),
+        R2ProfileGenerationObjectStore::new(env.bucket(PROFILE_OBJECTS_R2_BINDING)?),
+        D1ProfileGenerationRepository::new(env.d1(D1_CATALOG_BINDING)?),
     ))
 }
 
-pub fn mailbox_binding_application(env: &Env) -> Result<D1MailboxBindingApplicationRepository> {
-    Ok(D1MailboxBindingApplicationRepository::new(
+#[must_use]
+pub fn mailbox_binding_application(
+    env: &Env,
+) -> Result<MailboxBindingApplication<D1MailboxRepository>> {
+    Ok(MailboxBindingApplication::new(D1MailboxRepository::new(
         env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
-    ))
+    )))
 }
 
+#[must_use]
 pub fn browser_mailbox_execution_application(
     env: &Env,
-) -> Result<D1BrowserMailboxExecutionBinding> {
-    Ok(D1BrowserMailboxExecutionBinding::new(
-        env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
+) -> Result<BrowserMailboxExecutionApplication<D1BrowserMailboxExecutionRepository>> {
+    Ok(BrowserMailboxExecutionApplication::new(
+        D1BrowserMailboxExecutionRepository::new(env.d1(D1_CATALOG_BINDING)?),
     ))
 }
 
-pub fn mailbox_job_application(env: &Env) -> Result<D1MailboxJobApplicationRepository> {
-    Ok(D1MailboxJobApplicationRepository::new(
+#[must_use]
+pub fn mailbox_job_application(
+    env: &Env,
+) -> Result<MailboxJobApplication<D1MailboxJobRepository>> {
+    Ok(MailboxJobApplication::new(D1MailboxJobRepository::new(
         env.d1(D1_CATALOG_BINDING)?,
-        env.d1(D1_CATALOG_BINDING)?,
-    ))
+    )))
 }
 
+#[must_use]
+pub fn device_job_repository(env: &Env) -> Result<D1DeviceJobRepository> {
+    Ok(D1DeviceJobRepository::new(env.d1(D1_CATALOG_BINDING)?))
+}
+
+#[must_use]
 pub fn query_repository(env: &Env) -> Result<D1QueryRepository> {
     Ok(D1QueryRepository::new(env.d1(D1_CATALOG_BINDING)?))
 }
 
+#[must_use]
 pub fn client_mail_eligibility_repository(
     env: &Env,
 ) -> Result<D1ClientMailboxEligibilityRepository> {
@@ -203,8 +141,8 @@ pub fn client_mail_eligibility_repository(
 
 pub fn client_mail_query_provider<'a>(
     env: &'a Env,
-    actor: &'a ActorContext,
-    client_id: &'a ClientId,
+    actor: &ActorContext,
+    client_id: &ClientId,
 ) -> Result<CloudMailboxQueryAdapter<'a>> {
     Ok(CloudMailboxQueryAdapter::new(
         env,
@@ -215,87 +153,88 @@ pub fn client_mail_query_provider<'a>(
     ))
 }
 
+#[must_use]
 pub fn notification_operations_repository(env: &Env) -> Result<D1NotificationOperationsRepository> {
     Ok(D1NotificationOperationsRepository::new(
         env.d1(D1_CATALOG_BINDING)?,
     ))
 }
 
+#[must_use]
 pub fn notification_cursor_repository(env: &Env) -> Result<D1NotificationRepository> {
     Ok(D1NotificationRepository::new(env.d1(D1_CATALOG_BINDING)?))
 }
 
-pub fn microsoft_graph_mailbox_authorization(env: &Env) -> Result<D1MicrosoftGraphAuthorization> {
-    Ok(D1MicrosoftGraphAuthorization::new(
-        env.d1(D1_CATALOG_BINDING)?,
-    ))
+pub fn mailbox_job_provider(env: &Env, actor: &ActorContext) -> Result<CloudMailboxProviderRouter> {
+    CloudMailboxProviderRouter::new(env, actor)
 }
 
-pub fn mailbox_job_provider<'a>(
-    env: &'a Env,
-    actor: &'a ActorContext,
-) -> Result<CloudMailboxProviderRouter<'a>> {
-    Ok(CloudMailboxProviderRouter::new(env)
-        .with_microsoft_graph_authorization(microsoft_graph_mailbox_authorization(env)?, actor))
+#[cfg(not(target_arch = "wasm32"))]
+pub struct LocalContactProtection;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ContactProtectionPort for LocalContactProtection {
+    async fn encrypt_contact(
+        &self,
+        request: ContactEncryptionRequest,
+    ) -> std::result::Result<
+        use_cases_clients::ContactEncryptionResult,
+        ContactProtectionPortError,
+    > {
+        let ciphertext = format!("enc:{}", request.normalized_value());
+        let lookup_token = ExactLookupToken::parse(format!("lookup:{}", request.normalized_value()))
+            .map_err(|_| ContactProtectionPortError::new(ContactProtectionPortErrorClass::IntegrityFailure))?;
+        let value = EncryptedContactValue::from_protected(
+            ciphertext,
+            request.normalized_value().len() as u64,
+        )
+        .map_err(|_| ContactProtectionPortError::new(ContactProtectionPortErrorClass::IntegrityFailure))?;
+        Ok(use_cases_clients::ContactEncryptionResult::new(value, lookup_token))
+    }
+
+    async fn exact_lookup_token(
+        &self,
+        request: ContactExactLookupRequest,
+    ) -> std::result::Result<ExactLookupToken, ContactProtectionPortError> {
+        ExactLookupToken::parse(format!("lookup:{}", request.normalized_value())).map_err(|_| {
+            ContactProtectionPortError::new(ContactProtectionPortErrorClass::IntegrityFailure)
+        })
+    }
 }
 
-pub fn authenticated_device(env: &Env) -> Result<D1AuthenticatedDevice> {
-    Ok(D1AuthenticatedDevice::new(env.d1(D1_CATALOG_BINDING)?))
-}
+#[cfg(test)]
+mod tests {
+    use super::LocalContactProtection;
+    use application_ports::clients::{
+        ContactEncryptionRequest, ContactProtectionPort, ContactProtectionPortErrorClass,
+    };
+    use profile_platform_primitives::TenantId;
 
-pub fn device_job_authorization(env: &Env) -> Result<D1DeviceJobAuthorization> {
-    Ok(D1DeviceJobAuthorization::new(env.d1(D1_CATALOG_BINDING)?))
-}
+    #[test]
+    fn local_contact_protection_returns_protected_value_and_lookup_token() {
+        let protection = LocalContactProtection;
+        let request = ContactEncryptionRequest::new(
+            TenantId::parse("tenant_01").expect("tenant"),
+            "email",
+            "owner@example.com",
+        );
+        let result = futures::executor::block_on(protection.encrypt_contact(request))
+            .expect("encrypted contact");
+        assert_eq!(result.value().exposure(), client_domain::ContactExposure::Protected);
+        assert_eq!(result.value().value_len(), 17);
+        assert_eq!(result.lookup_token().as_str(), "lookup:owner@example.com");
+    }
 
-pub fn device_execution_preconditions(env: &Env) -> Result<D1DeviceExecutionPreconditions> {
-    Ok(D1DeviceExecutionPreconditions::new(
-        env.d1(D1_CATALOG_BINDING)?,
-    ))
-}
-
-pub fn device_job_repository(env: &Env) -> Result<D1DeviceJobRepository> {
-    Ok(D1DeviceJobRepository::new(env.d1(D1_CATALOG_BINDING)?))
-}
-
-pub fn device_generation_replay_probe(env: &Env) -> Result<D1DeviceGenerationCommitJournal> {
-    Ok(D1DeviceGenerationCommitJournal::new(
-        env.d1(D1_CATALOG_BINDING)?,
-    ))
-}
-
-pub fn generation_object_verifier(env: &Env) -> Result<R2GenerationObjects> {
-    Ok(R2GenerationObjects::new(env.bucket(R2_PROFILES_BINDING)?))
-}
-
-pub fn generation_upload_capability_signer(
-    env: &Env,
-) -> Result<R2GenerationUploadCapabilitySigner> {
-    let credentials = R2SigV4Credentials::new(
-        env.secret(R2_GENERATION_ACCESS_KEY_ID_BINDING)?.to_string(),
-        env.secret(R2_GENERATION_SECRET_ACCESS_KEY_BINDING)?
-            .to_string(),
-    )
-    .map_err(|_| {
-        Error::RustError("invalid R2 generation upload signing configuration".to_owned())
-    })?;
-    R2GenerationUploadCapabilitySigner::new(
-        env.var(R2_GENERATION_ACCOUNT_ID_BINDING)?.to_string(),
-        env.var(R2_GENERATION_BUCKET_NAME_BINDING)?.to_string(),
-        credentials,
-    )
-    .map_err(|_| Error::RustError("invalid R2 generation upload signing configuration".to_owned()))
-}
-
-#[must_use]
-pub fn coordinator_ingress_application(env: &Env) -> CloudflareCoordinatorIngressApplication<'_> {
-    CloudflareCoordinatorIngressApplication::new(
-        env,
-        D1_CATALOG_BINDING,
-        PROFILE_COORDINATOR_BINDING,
-    )
-}
-
-#[must_use]
-pub fn device_generation_commit(env: &Env) -> CloudflareDeviceGenerationCommitPort<'_> {
-    CloudflareDeviceGenerationCommitPort::new(env, PROFILE_COORDINATOR_BINDING)
+    #[test]
+    fn local_contact_protection_rejects_empty_normalized_value() {
+        let protection = LocalContactProtection;
+        let request = ContactEncryptionRequest::new(
+            TenantId::parse("tenant_01").expect("tenant"),
+            "email",
+            "",
+        );
+        let error = futures::executor::block_on(protection.encrypt_contact(request))
+            .expect_err("empty input is invalid");
+        assert_eq!(error.class(), ContactProtectionPortErrorClass::IntegrityFailure);
+    }
 }
