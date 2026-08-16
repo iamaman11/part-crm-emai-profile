@@ -146,6 +146,11 @@ FUTURE_DECISIONS: dict[str, dict[str, str]] = {
 }
 
 EXPLICIT_KEEP: dict[str, tuple[str, str, str]] = {
+    "scripts/check-external-review-attestations.py": (
+        "external_review_attestation_verifier",
+        "github_api_read_only",
+        "terminal external-evidence verification performs bounded GitHub API GETs and may consume a workflow-scoped token; it has no mutation surface",
+    ),
     "runtime/camouhost/main.py": (
         "synthetic_runtime_fixture",
         "synthetic_local_fixture_state_only",
