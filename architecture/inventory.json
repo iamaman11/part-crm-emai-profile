@@ -1259,10 +1259,88 @@
     "production_mutation": false,
     "next_required_slice": "AR-8"
   },
+  "credential_authority": {
+    "schema_version": 1,
+    "status": "CANDIDATE_AR8B_CREDENTIAL_METADATA_AUTHORITY",
+    "source_authority": "architecture/credential-authority-ar8b.json",
+    "source_git_blob_sha1": "5817732ff063881a06127f43cd3a60d0a838f55b",
+    "metadata_only": true,
+    "canonical_environments": [
+      "rehearsal",
+      "staging",
+      "production"
+    ],
+    "invariants": {
+      "plaintext_in_git": "FORBIDDEN",
+      "competing_registry": "FORBIDDEN",
+      "mutable_authorities_per_concern": 1,
+      "production_mutation": false,
+      "ar9_blocked": true
+    },
+    "authority_counts": {
+      "credentials": 14,
+      "dynamic_credential_domains": 1,
+      "future_trust_domains": 1
+    },
+    "authority_ids": [
+      "github.governance-audit",
+      "github.hosted-admin-operator",
+      "cloudflare.platform-api",
+      "cloudflare.access-service-auth",
+      "cloudflare.resolver-secret-bundle-transport",
+      "cloudflare.control-plane-secret-bundle-transport",
+      "cloudflare.deploy-manifest-protected-input",
+      "control-plane.client-contact-protection",
+      "mailbox-resolver.caller-auth",
+      "profile-generation.r2-access",
+      "resolver.encryption-keyring",
+      "resolver.handle-hmac",
+      "resolver.google-oauth-application",
+      "resolver.microsoft-oauth-application",
+      "resolver.mailbox-credentials",
+      "windows.release-signing-trust"
+    ],
+    "static_binding_names": [
+      "CLIENT_CONTACT_PROTECTION_KEYRING",
+      "CLOUDFLARE_ACCESS_CLIENT_ID",
+      "CLOUDFLARE_ACCESS_CLIENT_SECRET",
+      "CLOUDFLARE_API_TOKEN",
+      "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON",
+      "CLOUDFLARE_DEPLOY_MANIFEST_JSON",
+      "CLOUDFLARE_RESOLVER_SECRETS_JSON",
+      "GH_ADMIN_OPERATOR_TOKEN",
+      "GOOGLE_OAUTH_CLIENT_SECRET",
+      "GOVERNANCE_AUDIT_TOKEN",
+      "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
+      "MAILBOX_RESOLVER_ENCRYPTION_KEYRING",
+      "MAILBOX_RESOLVER_HANDLE_HMAC_KEY",
+      "MICROSOFT_OAUTH_CLIENT_SECRET",
+      "R2_GENERATION_ACCESS_KEY_ID",
+      "R2_GENERATION_SECRET_ACCESS_KEY"
+    ],
+    "future_cutovers": {
+      "github.governance-audit": "AR-8C",
+      "github.hosted-admin-operator": "AR-8C",
+      "cloudflare.platform-api": "AR-8C",
+      "cloudflare.access-service-auth": "AR-8C",
+      "cloudflare.resolver-secret-bundle-transport": "AR-8C",
+      "cloudflare.control-plane-secret-bundle-transport": "AR-8C",
+      "cloudflare.deploy-manifest-protected-input": "AR-8C",
+      "control-plane.client-contact-protection": "AR-8D",
+      "mailbox-resolver.caller-auth": "AR-8D",
+      "profile-generation.r2-access": "AR-8C",
+      "resolver.encryption-keyring": "AR-8D",
+      "resolver.handle-hmac": "AR-8D",
+      "resolver.google-oauth-application": "AR-8E",
+      "resolver.microsoft-oauth-application": "AR-8E",
+      "resolver.mailbox-credentials": "EXISTING_AR8A",
+      "windows.release-signing-trust": "AR-15B"
+    }
+  },
   "documentation_authority": {
     "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
     "tracking_issue": 266,
-    "current_slice": "AR-7",
+    "current_slice": "AR-8",
     "transition": "architecture/architecture-rebaseline-v3-transition.json",
     "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
@@ -1272,6 +1350,9 @@
     "python_estate": "architecture/python-estate-ar6.json",
     "github_governance_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR7.md",
     "github_governance_contract": "architecture/github-governance-ar7.json",
+    "credential_authority_source": "architecture/credential-authority-ar8b.json",
+    "credential_authority_projection": "architecture/inventory.json::credential_authority",
+    "ar8_umbrella_issue": 308,
     "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
     "application_architecture_base_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
     "application_architecture_projection": "architecture/inventory.json::application_architecture",
@@ -1453,8 +1534,26 @@
       "AR-6",
       "AR-7"
     ],
-    "current_architecture_slice": "AR-7",
-    "next_architecture_slice_after_acceptance": "AR-8",
+    "current_architecture_slice": "AR-8",
+    "next_architecture_slice_after_acceptance": "AR-9",
+    "ar8_progress": {
+      "umbrella_issue": 308,
+      "accepted_subslices": [
+        "AR-8A"
+      ],
+      "current_subslice": "AR-8B",
+      "current_implementation_issue": 309,
+      "mandatory_remaining": [
+        "AR-8B",
+        "AR-8C",
+        "AR-8D",
+        "AR-8E",
+        "AR-8F"
+      ],
+      "full_ar8_accepted": false,
+      "ar9_blocked": true,
+      "production_mutation": false
+    },
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
     "production_ready": false,
