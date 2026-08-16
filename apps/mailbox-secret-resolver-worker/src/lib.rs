@@ -7,6 +7,7 @@ mod model;
 mod operations;
 mod protocol;
 mod provider;
+mod refresh_fencing;
 mod replay;
 mod storage;
 
@@ -25,6 +26,10 @@ pub use protocol::{SignatureError, SignatureInput, body_digest_hex, sign_hex, ve
 pub use provider::{
     OAuthProvider, ProviderError, ProviderTokenSet, authorization_url, exchange_authorization_code,
     refresh_access_token,
+};
+pub use refresh_fencing::{
+    CredentialLifecycleState, REFRESH_LEASE_TTL_MS, RefreshAcquireDecision, RefreshCommitDecision,
+    RefreshLeaseSnapshot, valid_owner_digest,
 };
 pub use replay::{ReplayClaimError, claim_request_nonce};
 pub use storage::{
