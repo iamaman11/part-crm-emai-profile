@@ -4,8 +4,8 @@
 **Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Tracking:** issue #266  
 **Accepted product phase:** Phase 2I  
-**Current accepted architecture checkpoint:** AR-4C — Outbound Mail composition extraction
-**Next architecture slice:** AR-5 — Wrangler / Runtime Authority Cleanup
+**Current accepted architecture checkpoint:** AR-5 — Wrangler / Runtime Authority Cleanup
+**Next architecture slice:** AR-6 — Full Python Estate + read-only Rust opsctl
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `production_ready=false`
@@ -36,16 +36,17 @@ advance during Architecture Re-baseline v3.
 - AR-3 — Application Architecture Contract: **DONE / ACCEPTED**.
 - AR-4A — Composition-root consolidation: **DONE / ACCEPTED**.
 - AR-4B — Client Mail route ownership: **DONE / ACCEPTED**.
-- AR-4C — Outbound Mail composition extraction: **CURRENT ACCEPTED CHECKPOINT**.
+- AR-4C — Outbound Mail composition extraction: **DONE / ACCEPTED**.
 - AR-4D remains **NOT REQUIRED** unless later accepted evidence reopens it.
-- AR-5 — Wrangler / Runtime Authority Cleanup: **NEXT**.
-- AR-6…AR-17: ordered future architecture slices.
+- AR-5 — Wrangler / Runtime Authority Cleanup: **CURRENT ACCEPTED CHECKPOINT**.
+- AR-6 — Full Python Estate + read-only Rust opsctl: **NEXT**.
+- AR-7…AR-17: ordered future architecture slices.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
 - Real production mutation: **forbidden throughout AR-0…AR-17**.
 - AR-2 decision authority: `architecture/runtime-topology-ar2.json`.
-- `GENERATION_VERIFICATION=DELETE`; source/Wrangler binding cleanup belongs to AR-5, not AR-2.
+- `GENERATION_VERIFICATION=DELETE`; AR-5 accepted source/Wrangler/deployment authority cleanup while preserving synchronous verification semantics.
 - Historical D3/#251 repository-side machinery is preserved; its old production lane is disabled for forward execution.
 - Draft PR #269: feasibility evidence only; canonical read-only `opsctl` integration remains AR-6.
 
@@ -78,10 +79,10 @@ AR-2   Runtime Topology + D3 Compatibility                       DONE / ACCEPTED
 AR-3   Application Architecture Contract                         DONE / ACCEPTED
 AR-4A  Composition-root consolidation                            DONE / ACCEPTED
 AR-4B  Client Mail route ownership                               DONE / ACCEPTED
-AR-4C  Outbound Mail composition extraction                      CURRENT / ACCEPTED CHECKPOINT
+AR-4C  Outbound Mail composition extraction                      DONE / ACCEPTED
 AR-4D  Profile extraction — NOT REQUIRED by AR-3; reopen only by later accepted evidence
-AR-5   Wrangler / Runtime Authority Cleanup                     NEXT
-AR-6   Full Python Estate + read-only Rust opsctl
+AR-5   Wrangler / Runtime Authority Cleanup                     CURRENT / ACCEPTED CHECKPOINT
+AR-6   Full Python Estate + read-only Rust opsctl                NEXT
 AR-7   Environments + GitHub Governance + Operational Boundaries
 AR-8   Secrets / Keys / OAuth Refresh Concurrency
 AR-9   D1 Evolution / Schema Compatibility

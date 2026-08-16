@@ -1139,14 +1139,42 @@
     "next_required_slice_after_ar4c": "AR-5",
     "production_mutation": false
   },
+  "runtime_authority_cleanup": {
+    "schema_version": 1,
+    "status": "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP",
+    "topology_decision_source": "architecture/runtime-topology-ar2.json",
+    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
+    "implementation_issue": 290,
+    "implementation_pr": 291,
+    "exact_green_head": "afed435bb714794d6c4f252be6b44c592ee31b2b",
+    "implementation_merge": "82d251a1d6666199c6eace393eedc1766157fcee",
+    "applicable_permanent_workflows": "13/13",
+    "generation_verification": {
+      "topology_decision": "DELETE",
+      "wrangler_producer_binding": "ABSENT",
+      "runtime_contract_binding": "ABSENT",
+      "deployment_manifest_identity": "ABSENT",
+      "queue_workload": "ABSENT",
+      "verification_authority": "SYNCHRONOUS_APPLICATION_ROUTE"
+    },
+    "preserved_queue_producers": [
+      "INTEGRATION_EVENTS",
+      "MAILBOX_JOBS"
+    ],
+    "application_architecture_accepted_through": "AR-4C",
+    "ar4d": "NOT_REQUIRED_UNLESS_LATER_ACCEPTED_EVIDENCE_REOPENS",
+    "production_mutation": false,
+    "next_required_slice": "AR-6"
+  },
   "documentation_authority": {
     "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
     "tracking_issue": 266,
-    "current_slice": "AR-4C",
+    "current_slice": "AR-5",
     "transition": "architecture/architecture-rebaseline-v3-transition.json",
     "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
     "runtime_topology_projection_owner": "AR-3",
+    "runtime_authority_cleanup_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
     "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
     "application_architecture_base_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
     "application_architecture_projection": "architecture/inventory.json::application_architecture",
@@ -1269,6 +1297,11 @@
       "scope": "ar4c_outbound_mail_composition_accepted"
     },
     {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
+      "status": "EVIDENCE",
+      "scope": "ar5_runtime_authority_cleanup_accepted"
+    },
+    {
       "path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
       "status": "ACCEPTED_HISTORICAL",
       "scope": "superseded_predecessor_forward_execution"
@@ -1298,10 +1331,11 @@
       "AR-3",
       "AR-4A",
       "AR-4B",
-      "AR-4C"
+      "AR-4C",
+      "AR-5"
     ],
-    "current_architecture_slice": "AR-4C",
-    "next_architecture_slice_after_acceptance": "AR-5",
+    "current_architecture_slice": "AR-5",
+    "next_architecture_slice_after_acceptance": "AR-6",
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
     "production_ready": false,
