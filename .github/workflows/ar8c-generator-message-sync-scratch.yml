@@ -1,0 +1,38 @@
+name: AR8C Generator Message Sync Scratch
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.event.pull_request.head.ref == 'scratch/ar8c-generator-message-sync'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout scratch source branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: scratch/ar8c-generator-message-sync
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Sync AR-8C generator diagnostics
+        run: python .scratch/ar8c_generator_message_sync.py
+
+      - name: Validate canonical inventory and documentation authority
+        run: |
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/generate-architecture-inventory.py --self-test
+          python scripts/check-documentation-authority.py --root .
+          git diff --check
+
+      - name: Commit generator diagnostic sync only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/generate-architecture-inventory.py
+          test "$(git diff --cached --name-only)" = 'scripts/generate-architecture-inventory.py'
+          git commit -m 'chore: sync AR-8C generator diagnostics'
+          git push origin HEAD:scratch/ar8c-generator-message-sync
