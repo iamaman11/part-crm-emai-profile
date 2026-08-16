@@ -1,5 +1,6 @@
 const STORAGE: &str = include_str!("storage.rs");
 const OPERATIONS: &str = include_str!("operations.rs");
+const LIB: &str = include_str!("lib.rs");
 const MIGRATION: &str =
     include_str!("../../../migrations/resolver-d1/0002_oauth_refresh_fencing.sql");
 
@@ -93,4 +94,10 @@ fn public_refresh_response_does_not_expose_refresh_or_fencing_material() {
     assert!(!explicit_refresh.contains("\"refresh_token\""));
     assert!(!explicit_refresh.contains("owner_digest"));
     assert!(!explicit_refresh.contains("mutation_generation"));
+}
+
+#[test]
+fn no_standalone_refresh_fencing_module_is_compiled() {
+    assert!(!LIB.contains("mod refresh_fencing;"));
+    assert!(!LIB.contains("pub use refresh_fencing"));
 }
