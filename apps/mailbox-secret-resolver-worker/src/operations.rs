@@ -1,11 +1,11 @@
 use crate::crypto::{EncryptionKeyring, ResolverCrypto, WorkerNonceSource};
 use crate::ingress::AuthenticatedResolverRequest;
 use crate::model::ResolverRoute;
-use crate::refresh_fencing::CredentialLifecycleState;
 use crate::provider::{
     OAuthProvider, ProviderError, authorization_url, exchange_authorization_code,
     refresh_access_token,
 };
+use crate::refresh_fencing::CredentialLifecycleState;
 use crate::storage::{
     EncryptedRecordStore, ReconciliationResult, RecordIdentity, RecordStoreError,
     RefreshAcquireError,
@@ -446,7 +446,9 @@ async fn refresh_credential(
                 Some(now_ms.saturating_add(tokens.expires_in.saturating_mul(1000)));
             let mut document = serde_json::to_vec(&loaded.credential)
                 .map_err(|_| OperationError::InternalFailure)?;
-            let committed = store.commit_refresh(&identity, &lease, &document, now_ms).await;
+            let committed = store
+                .commit_refresh(&identity, &lease, &document, now_ms)
+                .await;
             document.zeroize();
             match committed {
                 Ok(_) => Ok(loaded.credential),
@@ -479,22 +481,20 @@ async fn refresh_credential(
                 Err(error) => Err(map_store_error(error)),
             }
         }
-        Err(error) => {
-            match store.release_refresh_lease(&identity, &lease, now_ms).await {
-                Ok(()) => Err(map_provider_error(error)),
-                Err(RecordStoreError::ConcurrentMutation) => {
-                    reload_after_refresh_competition(
-                        store,
-                        target,
-                        loaded.mutation_generation,
-                        mode,
-                        now_ms,
-                    )
-                    .await
-                }
-                Err(store_error) => Err(map_store_error(store_error)),
+        Err(error) => match store.release_refresh_lease(&identity, &lease, now_ms).await {
+            Ok(()) => Err(map_provider_error(error)),
+            Err(RecordStoreError::ConcurrentMutation) => {
+                reload_after_refresh_competition(
+                    store,
+                    target,
+                    loaded.mutation_generation,
+                    mode,
+                    now_ms,
+                )
+                .await
             }
-        }
+            Err(store_error) => Err(map_store_error(store_error)),
+        },
     }
 }
 
@@ -1309,11 +1309,7 @@ mod tests {
             imap: None,
             smtp: None,
         };
-        assert!(!refresh_required(
-            &credential,
-            RefreshMode::IfNeeded,
-            1_000
-        ));
+        assert!(!refresh_required(&credential, RefreshMode::IfNeeded, 1_000));
     }
 
     #[test]
@@ -1327,11 +1323,7 @@ mod tests {
             imap: None,
             smtp: None,
         };
-        assert!(refresh_required(
-            &credential,
-            RefreshMode::IfNeeded,
-            20_000
-        ));
+        assert!(refresh_required(&credential, RefreshMode::IfNeeded, 20_000));
         assert!(access_token_usable_during_refresh(&credential, 20_000));
         assert!(!access_token_usable_during_refresh(&credential, 66_000));
         assert!(refresh_required(&credential, RefreshMode::Force, 1));
