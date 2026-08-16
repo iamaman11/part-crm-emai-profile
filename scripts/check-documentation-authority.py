@@ -23,9 +23,17 @@ STATUS_DATE = "2026-08-16"
 ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5", "AR-6", "AR-7"]
 AR8_UMBRELLA_ISSUE = 308
 AR8B_IMPLEMENTATION_ISSUE = 309
-AR8_ACCEPTED_SUBSLICES = ["AR-8A"]
-AR8_CURRENT_SUBSLICE = "AR-8B"
-AR8_MANDATORY_REMAINING = ["AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"]
+AR8C_IMPLEMENTATION_ISSUE = 314
+AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B"]
+AR8_CURRENT_SUBSLICE = "AR-8C"
+AR8_MANDATORY_REMAINING = ["AR-8C", "AR-8D", "AR-8E", "AR-8F"]
+AR8B_ACCEPTANCE = {
+    "issue": 309,
+    "implementation_pr": 312,
+    "exact_green_head": "743276b578bb15042e8a42beff0e14f7698e61b0",
+    "implementation_merge": "4e4d1c25226384858ca8905377ee155bedabc6d4",
+    "applicable_permanent_workflows": "14/14",
+}
 TOPOLOGY = Path("architecture/runtime-topology-ar2.json")
 AR2_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR2.md")
 AR3_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR3.md")
@@ -107,7 +115,7 @@ def validate_ar8_progress(value: object, label: str, errors: list[str], *, allow
         "umbrella_issue": AR8_UMBRELLA_ISSUE,
         "accepted_subslices": AR8_ACCEPTED_SUBSLICES,
         "current_subslice": AR8_CURRENT_SUBSLICE,
-        "current_implementation_issue": AR8B_IMPLEMENTATION_ISSUE,
+        "current_implementation_issue": AR8C_IMPLEMENTATION_ISSUE,
         "mandatory_remaining": AR8_MANDATORY_REMAINING,
         "full_ar8_accepted": False,
         "ar9_blocked": True,
@@ -138,6 +146,58 @@ def git_blob_sha(root: Path, path: Path) -> str:
         details = result.stderr.decode("utf-8", errors="replace").strip()
         raise ValueError(f"git hash-object failed for {relative}: {details or digest or result.returncode}")
     return digest
+
+
+def expected_ar8c_operational_lifecycle_projection(payload: dict[str, Any]) -> dict[str, object]:
+    lifecycle = payload.get("ar8c_operational_lifecycle")
+    if not isinstance(lifecycle, dict):
+        raise ValueError("AR-8C operational lifecycle source is missing")
+    concerns = lifecycle.get("concerns")
+    hosted = lifecycle.get("hosted_reconciliation")
+    github = hosted.get("github") if isinstance(hosted, dict) else None
+    cloudflare = hosted.get("cloudflare") if isinstance(hosted, dict) else None
+    if not isinstance(concerns, list) or any(not isinstance(item, dict) for item in concerns):
+        raise ValueError("AR-8C operational lifecycle concerns must be a list of objects")
+    if not isinstance(github, dict) or not isinstance(cloudflare, dict):
+        raise ValueError("AR-8C hosted reconciliation source is incomplete")
+    concern_ids = sorted(
+        str(item.get("id"))
+        for item in concerns
+        if isinstance(item.get("id"), str) and item.get("id")
+    )
+    if len(concern_ids) != len(concerns) or len(set(concern_ids)) != len(concern_ids):
+        raise ValueError("AR-8C operational lifecycle requires unique stable concern ids")
+    return {
+        "schema_version": int(lifecycle["schema_version"]),
+        "status": str(lifecycle["status"]),
+        "implementation_issue": int(lifecycle["implementation_issue"]),
+        "accepted_base": str(lifecycle["accepted_base"]),
+        "metadata_only": lifecycle.get("metadata_only") is True,
+        "stage_order": lifecycle["stage_order"],
+        "concern_ids": concern_ids,
+        "hosted_reconciliation": {
+            "github": {
+                "accepted_main_only": github.get("accepted_main_only") is True,
+                "pull_request_exposure": github.get("pull_request_exposure") is True,
+                "metadata_only": github.get("metadata_only") is True,
+                "readback_values": github.get("readback_values") is True,
+                "executor_binding": github.get("executor_binding"),
+            },
+            "cloudflare": {
+                "accepted_main_only": cloudflare.get("accepted_main_only") is True,
+                "audit_environment": cloudflare.get("audit_environment"),
+                "read_only": cloudflare.get("read_only") is True,
+                "api_token_binding": cloudflare.get("api_token_binding"),
+                "verify_endpoint": cloudflare.get("verify_endpoint"),
+                "required_token_status": cloudflare.get("required_token_status"),
+                "worker_secret_contract_source": cloudflare.get("worker_secret_contract_source"),
+                "deploy_manifest_binding": cloudflare.get("deploy_manifest_binding"),
+                "secret_binding_metadata_endpoint": cloudflare.get("secret_binding_metadata_endpoint"),
+            },
+        },
+        "production_mutation": lifecycle.get("production_mutation") is True,
+        "opsctl_mutation": lifecycle.get("opsctl_mutation") is True,
+    }
 
 
 def expected_credential_projection(root: Path, payload: dict[str, Any]) -> dict[str, object]:
@@ -176,6 +236,7 @@ def expected_credential_projection(root: Path, payload: dict[str, Any]) -> dict[
         "authority_ids": ids,
         "static_binding_names": binding_names,
         "future_cutovers": future_cutovers,
+        "operational_lifecycle": expected_ar8c_operational_lifecycle_projection(payload),
     }
 
 
@@ -246,6 +307,8 @@ def validate(root: Path) -> list[str]:
     if program.get("accepted_slices") != ACCEPTED_SLICES:
         errors.append(f"docs/status.json accepted_slices must remain fully accepted top-level slices only: {ACCEPTED_SLICES!r}")
     validate_ar8_progress(program.get("ar8_progress"), "docs/status.json architecture_program.ar8_progress", errors, allow_projection_fields=False)
+    if program.get("ar8b_acceptance") != AR8B_ACCEPTANCE:
+        errors.append("docs/status.json AR-8B acceptance provenance drifted")
 
     ar5 = program.get("ar5_acceptance") if isinstance(program.get("ar5_acceptance"), dict) else {}
     if (
@@ -320,6 +383,17 @@ def validate(root: Path) -> list[str]:
         or credential_authority.get("metadata_only") is not True
     ):
         errors.append("AR-8B credential source authority provenance/policy drifted")
+    ar8c_lifecycle = credential_authority.get("ar8c_operational_lifecycle") if isinstance(credential_authority.get("ar8c_operational_lifecycle"), dict) else {}
+    if (
+        ar8c_lifecycle.get("status") != "CANDIDATE_AR8C_OPERATIONAL_CREDENTIAL_LIFECYCLE"
+        or ar8c_lifecycle.get("implementation_issue") != AR8C_IMPLEMENTATION_ISSUE
+        or ar8c_lifecycle.get("accepted_base") != "4e4d1c25226384858ca8905377ee155bedabc6d4"
+        or ar8c_lifecycle.get("metadata_only") is not True
+        or ar8c_lifecycle.get("production_mutation") is not False
+        or ar8c_lifecycle.get("opsctl_mutation") is not False
+        or ar8c_lifecycle.get("pull_request_privileged_exposure") is not False
+    ):
+        errors.append("AR-8C operational credential lifecycle source provenance/policy drifted")
 
     predecessor = current.get("predecessor_external_d3") if isinstance(current.get("predecessor_external_d3"), dict) else {}
     if predecessor.get("issue") != 251:
@@ -343,8 +417,8 @@ def validate(root: Path) -> list[str]:
     if phase2j.get("status") != "blocked_pending_repository_remediation" or phase2j.get("forward_execution_authority") is not False:
         errors.append("historical Phase 2J state must remain blocked/non-forward")
 
-    if transition.get("schema_version") != 10 or transition.get("status") != "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8A":
-        errors.append("architecture transition must encode active AR-8 after accepted AR-8A")
+    if transition.get("schema_version") != 11 or transition.get("status") != "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8B":
+        errors.append("architecture transition must encode active AR-8 after accepted AR-8B")
     if transition.get("tracking_issue") != TRACKING_ISSUE or transition.get("current_authority") != CURRENT_AUTHORITY:
         errors.append("architecture transition authority drifted")
     if transition.get("accepted_slices") != ACCEPTED_SLICES:
@@ -352,6 +426,8 @@ def validate(root: Path) -> list[str]:
     if transition.get("current_slice") != CURRENT_SLICE or transition.get("next_slice_after_acceptance") != NEXT_SLICE:
         errors.append("architecture transition must encode active AR-8 with AR-9 only after full acceptance")
     validate_ar8_progress(transition.get("ar8_progress"), "architecture transition ar8_progress", errors, allow_projection_fields=True)
+    if transition.get("ar8b_acceptance") != AR8B_ACCEPTANCE:
+        errors.append("architecture transition AR-8B acceptance provenance drifted")
     transition_state = transition.get("state_model") if isinstance(transition.get("state_model"), dict) else {}
     if transition_state.get("architecture_complete") is not False or transition_state.get("production_core_gate") != "BLOCKED" or transition_state.get("production_ready") is not False:
         errors.append("transition state must remain fail closed through AR-8")
@@ -428,6 +504,8 @@ def validate(root: Path) -> list[str]:
     if program_state.get("accepted_architecture_slices") != ACCEPTED_SLICES or program_state.get("current_architecture_slice") != CURRENT_SLICE or program_state.get("next_architecture_slice_after_acceptance") != NEXT_SLICE:
         errors.append("architecture inventory active AR-8 program state is stale")
     validate_ar8_progress(program_state.get("ar8_progress"), "architecture inventory program_state.ar8_progress", errors, allow_projection_fields=False)
+    if program_state.get("ar8b_acceptance") != AR8B_ACCEPTANCE:
+        errors.append("architecture inventory AR-8B acceptance provenance drifted")
     if program_state.get("production_ready") is not False or program_state.get("production_core_gate") != "BLOCKED":
         errors.append("architecture inventory must remain fail closed")
     projected_credential = inventory.get("credential_authority") if isinstance(inventory.get("credential_authority"), dict) else {}
@@ -526,7 +604,7 @@ def self_test(root: Path) -> bool:
     fixtures = [
         ("tracking rollback", Path("docs/status.json"), '"tracking_issue": 266', '"tracking_issue": 203', "tracking_issue"),
         ("active slice rollback", Path("docs/status.json"), '"current_slice": "AR-8"', '"current_slice": "AR-7"', "current_slice"),
-        ("AR-8 subslice skip", Path("docs/status.json"), '"current_subslice": "AR-8B"', '"current_subslice": "AR-8C"', "current_subslice"),
+        ("AR-8 subslice skip", Path("docs/status.json"), '"current_subslice": "AR-8C"', '"current_subslice": "AR-8D"', "current_subslice"),
         ("premature AR-8 acceptance", Path("docs/status.json"), '"full_ar8_accepted": false', '"full_ar8_accepted": true', "full_ar8_accepted"),
         ("premature AR-9 unblock", Path("docs/status.json"), '"ar9_blocked": true', '"ar9_blocked": false', "ar9_blocked"),
         ("premature architecture closeout", Path("docs/status.json"), '"architecture_complete": false', '"architecture_complete": true', "architecture_complete"),
@@ -548,7 +626,7 @@ def self_test(root: Path) -> bool:
             if not errors or not any(expected.lower() in error.lower() for error in errors):
                 print(f"negative fixture {label} was not rejected by the expected invariant: {errors}")
                 return False
-    print("Architecture Re-baseline v3 active AR-8 / current AR-8B documentation authority negative fixtures passed.")
+    print("Architecture Re-baseline v3 active AR-8 / current AR-8C documentation authority negative fixtures passed.")
     return True
 
 
@@ -565,7 +643,7 @@ def main() -> int:
         for error in errors:
             print(error)
         return 1
-    print("Architecture Re-baseline v3 active AR-8 / current AR-8B documentation/program authority is consistent.")
+    print("Architecture Re-baseline v3 active AR-8 / current AR-8C documentation/program authority is consistent.")
     return 0
 
 
