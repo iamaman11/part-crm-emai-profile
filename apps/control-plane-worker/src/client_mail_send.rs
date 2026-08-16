@@ -1,28 +1,22 @@
 mod input;
-mod provider;
 mod source;
 
 use crate::access_session::{
     correlation_hint, neutral_not_found, problem, resolve_active_request_actor,
 };
 use crate::command_evidence;
+use crate::composition::{
+    client_mail_eligibility_repository, client_mail_outbound_provider, client_mail_query_provider,
+    outbound_mail_intent_repository, query_repository,
+};
 use application_ports::client_mail_access::{
     ClientMailboxAccessPort, ClientMailboxAccessPortErrorClass,
 };
 use application_ports::outbound_mail::OutboundMailIntentState;
-use cloudflare_adapters::MailboxProvider;
-use cloudflare_adapters::cloud_mail_query::CloudMailboxQueryAdapter;
-use cloudflare_adapters::d1_client_mail_eligibility::D1ClientMailboxEligibilityRepository;
-use cloudflare_adapters::d1_mailboxes::D1MailboxRepository;
-use cloudflare_adapters::d1_outbound_mail_intents::D1OutboundMailIntentRepository;
-use cloudflare_adapters::d1_query::D1QueryRepository;
-use cloudflare_adapters::gmail_outbound_mail::CloudflareGmailOutboundMailProvider;
-use cloudflare_adapters::smtp_outbound_mail::CloudflareSmtpOutboundMailProvider;
 use control_plane_contract::client_mail_send_api::{
     ClientMailSendReceiptDto, ClientMailSendRequestDto, ClientMailSendStateDto,
 };
-use profile_platform_primitives::{ActorContext, ClientId};
-use provider::ClientMailProvider;
+use profile_platform_primitives::ClientId;
 use sha2::{Digest, Sha256};
 use use_cases_mailboxes::outbound_mail::{
     OutboundMailOperationError, OutboundMailOutcome, execute_outbound_mail,
@@ -57,9 +51,7 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         Err(()) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
 
-    let eligibility = D1ClientMailboxEligibilityRepository::new(
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-    );
+    let eligibility = client_mail_eligibility_repository(env)?;
     match eligibility
         .is_mailbox_accessible(actor.actor(), &client_id, intent.binding_id())
         .await
@@ -72,15 +64,8 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
     }
 
     if intent.operation().source().is_some() {
-        let source_authorization =
-            D1QueryRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
-        let source_provider = CloudMailboxQueryAdapter::new(
-            env,
-            env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-            env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-            actor.actor(),
-            &client_id,
-        );
+        let source_authorization = query_repository(env)?;
+        let source_provider = client_mail_query_provider(env, actor.actor(), &client_id)?;
         match source::is_accessible(
             actor.actor(),
             &client_id,
@@ -107,14 +92,12 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let provider = match provider_for(env, actor.actor(), intent.binding_id()).await? {
+    let provider = match client_mail_outbound_provider(env, actor.actor(), intent.binding_id()).await?
+    {
         Some(value) => value,
         None => return neutral_not_found(actor.actor().correlation_id().as_str()),
     };
-    let store = D1OutboundMailIntentRepository::new(
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-        env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-    );
+    let store = outbound_mail_intent_repository(env)?;
     match execute_outbound_mail(
         actor.actor(),
         &eligibility,
@@ -128,36 +111,6 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         Ok(outcome) => receipt(&outcome),
         Err(error) => operation_failure(actor.actor().correlation_id().as_str(), error),
     }
-}
-
-async fn provider_for<'a>(
-    env: &'a Env,
-    actor: &ActorContext,
-    binding_id: &profile_platform_primitives::MailboxBindingId,
-) -> Result<Option<ClientMailProvider<'a>>> {
-    let repository = D1MailboxRepository::new(env.d1(control_plane_contract::D1_CATALOG_BINDING)?);
-    let Some(binding) = repository
-        .find_binding(actor.tenant_scope(), binding_id)
-        .await?
-    else {
-        return Ok(None);
-    };
-    let provider = match binding.provider() {
-        MailboxProvider::GmailApi => {
-            ClientMailProvider::Gmail(CloudflareGmailOutboundMailProvider::new(
-                env,
-                env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-            ))
-        }
-        MailboxProvider::Imap => ClientMailProvider::Smtp(CloudflareSmtpOutboundMailProvider::new(
-            env,
-            env.d1(control_plane_contract::D1_CATALOG_BINDING)?,
-        )),
-        MailboxProvider::BrowserFallback | MailboxProvider::MicrosoftGraph => {
-            ClientMailProvider::Unsupported
-        }
-    };
-    Ok(Some(provider))
 }
 
 fn request_digest(body: &ClientMailSendRequestDto) -> Result<String, ()> {
