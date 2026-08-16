@@ -1,0 +1,59 @@
+name: AR-6 Path Portability Scratch
+
+on:
+  push:
+    branches:
+      - scratch/ar6-windows-path-portability
+    paths:
+      - .github/workflows/ar6-path-portability-scratch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout scratch branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: scratch/ar6-windows-path-portability
+
+      - name: Make canonical repository path identities platform-independent
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/check-documentation-authority.py')
+          text = path.read_text(encoding='utf-8')
+          names = (
+              'TOPOLOGY',
+              'AR2_EVIDENCE',
+              'AR3_EVIDENCE',
+              'AR4A_EVIDENCE',
+              'AR4B_EVIDENCE',
+              'AR4C_EVIDENCE',
+              'AR5_EVIDENCE',
+          )
+          replacements = 0
+          for name in names:
+              old = f'str({name})'
+              count = text.count(old)
+              if count:
+                  text = text.replace(old, f'{name}.as_posix()')
+                  replacements += count
+          if replacements < 7:
+              raise SystemExit(f'expected canonical path replacements were not found: {replacements}')
+          path.write_text(text, encoding='utf-8')
+          PY
+          python -m py_compile scripts/check-documentation-authority.py
+          python scripts/check-documentation-authority.py
+          python scripts/check-documentation-authority.py --self-test
+          git diff --check
+
+      - name: Commit portable validator on scratch only
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/check-documentation-authority.py
+          git commit -m 'scratch: make documentation paths portable'
+          git push origin HEAD:scratch/ar6-windows-path-portability
