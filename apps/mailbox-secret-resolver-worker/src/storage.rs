@@ -419,16 +419,18 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         let current_generation = u64::try_from(row.mutation_generation)
             .map_err(|_| RefreshAcquireError::Store(RecordStoreError::Crypto))?;
         if current_generation != expected_generation {
-            return Err(RefreshAcquireError::Store(RecordStoreError::ConcurrentMutation));
+            return Err(RefreshAcquireError::Store(
+                RecordStoreError::ConcurrentMutation,
+            ));
         }
         if row.refresh_owner_digest.is_some()
-            && row
-                .refresh_expires_at_ms
-                .is_some_and(|value| value > now)
+            && row.refresh_expires_at_ms.is_some_and(|value| value > now)
         {
             return Err(RefreshAcquireError::Busy);
         }
-        Err(RefreshAcquireError::Store(RecordStoreError::ConcurrentMutation))
+        Err(RefreshAcquireError::Store(
+            RecordStoreError::ConcurrentMutation,
+        ))
     }
 
     pub async fn commit_refresh(
@@ -454,8 +456,8 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             .encrypt(document, &context)
             .map_err(map_crypto_error)?;
         let now = sqlite_millis(now_ms)?;
-        let generation = i64::try_from(lease.mutation_generation)
-            .map_err(|_| RecordStoreError::InvalidInput)?;
+        let generation =
+            i64::try_from(lease.mutation_generation).map_err(|_| RecordStoreError::InvalidInput)?;
         let next_generation = lease
             .mutation_generation
             .checked_add(1)
@@ -492,7 +494,11 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         .run()
         .await
         .map_err(|_| RecordStoreError::StorageUnavailable)?;
-        require_one_change(result.meta().map_err(|_| RecordStoreError::StorageUnavailable)?)?;
+        require_one_change(
+            result
+                .meta()
+                .map_err(|_| RecordStoreError::StorageUnavailable)?,
+        )?;
         Ok(next_generation)
     }
 
@@ -505,8 +511,8 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         validate_identity(identity)?;
         let lookup_digest = self.lookup_digest(identity.tenant_id, identity.raw_handle)?;
         let now = sqlite_millis(now_ms)?;
-        let generation = i64::try_from(lease.mutation_generation)
-            .map_err(|_| RecordStoreError::InvalidInput)?;
+        let generation =
+            i64::try_from(lease.mutation_generation).map_err(|_| RecordStoreError::InvalidInput)?;
         let result = query!(
             &self.database,
             r#"
@@ -528,7 +534,11 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         .run()
         .await
         .map_err(|_| RecordStoreError::StorageUnavailable)?;
-        require_one_change(result.meta().map_err(|_| RecordStoreError::StorageUnavailable)?)
+        require_one_change(
+            result
+                .meta()
+                .map_err(|_| RecordStoreError::StorageUnavailable)?,
+        )
     }
 
     pub async fn mark_reauth_required(
@@ -540,8 +550,8 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         validate_identity(identity)?;
         let lookup_digest = self.lookup_digest(identity.tenant_id, identity.raw_handle)?;
         let now = sqlite_millis(now_ms)?;
-        let generation = i64::try_from(lease.mutation_generation)
-            .map_err(|_| RecordStoreError::InvalidInput)?;
+        let generation =
+            i64::try_from(lease.mutation_generation).map_err(|_| RecordStoreError::InvalidInput)?;
         let next_generation = lease
             .mutation_generation
             .checked_add(1)
@@ -557,7 +567,8 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
                 refresh_expires_at_ms = NULL, updated_at_ms = ?
             WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ? AND provider = ?
               AND mutation_generation = ? AND credential_state = 'ACTIVE'
-              AND refresh_owner_digest = ? AND discarded_at_ms IS NULL
+              AND refresh_owner_digest = ? AND refresh_expires_at_ms > ?
+              AND discarded_at_ms IS NULL
             "#,
             next_generation_sql,
             now,
@@ -566,13 +577,18 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             identity.record_kind,
             identity.provider,
             generation,
-            lease.owner_digest.as_str()
+            lease.owner_digest.as_str(),
+            now
         )
         .map_err(|_| RecordStoreError::StorageUnavailable)?
         .run()
         .await
         .map_err(|_| RecordStoreError::StorageUnavailable)?;
-        require_one_change(result.meta().map_err(|_| RecordStoreError::StorageUnavailable)?)?;
+        require_one_change(
+            result
+                .meta()
+                .map_err(|_| RecordStoreError::StorageUnavailable)?,
+        )?;
         Ok(next_generation)
     }
 
