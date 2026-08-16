@@ -560,6 +560,8 @@ def build_ar8c_operational_lifecycle_projection(payload: dict[str, Any]) -> dict
                 "verify_endpoint": cloudflare.get("verify_endpoint"),
                 "required_token_status": cloudflare.get("required_token_status"),
                 "worker_secret_contract_source": cloudflare.get("worker_secret_contract_source"),
+                "deploy_manifest_binding": cloudflare.get("deploy_manifest_binding"),
+                "secret_binding_metadata_endpoint": cloudflare.get("secret_binding_metadata_endpoint"),
             },
         },
         "production_mutation": lifecycle.get("production_mutation") is True,

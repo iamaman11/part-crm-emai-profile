@@ -1263,7 +1263,7 @@
     "schema_version": 1,
     "status": "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY",
     "source_authority": "architecture/credential-authority-ar8b.json",
-    "source_git_blob_sha1": "b6d2e1bf1ef8529bb447b253398e8b7627859388",
+    "source_git_blob_sha1": "3e3dc31e12c2003d0a700a7c4a14cae9d4d19300",
     "metadata_only": true,
     "canonical_environments": [
       "rehearsal",
@@ -1379,7 +1379,9 @@
           "api_token_binding": "CLOUDFLARE_API_TOKEN",
           "verify_endpoint": "GET /user/tokens/verify",
           "required_token_status": "active",
-          "worker_secret_contract_source": "wrangler.secrets.required"
+          "worker_secret_contract_source": "wrangler.secrets.required",
+          "deploy_manifest_binding": "CLOUDFLARE_DEPLOY_MANIFEST_JSON",
+          "secret_binding_metadata_endpoint": "GET /accounts/{account_id}/workers/scripts/{script_name}/secrets/{secret_name}"
         }
       },
       "production_mutation": false,
