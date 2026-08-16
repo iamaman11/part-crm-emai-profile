@@ -120,6 +120,7 @@ const fn operation_status(error: OperationError) -> u16 {
         OperationError::Expired => 410,
         OperationError::ReplayRejected => 409,
         OperationError::ProviderRejected => 400,
+        OperationError::ReauthRequired => 401,
         OperationError::DependencyUnavailable | OperationError::ConfigurationUnavailable => 503,
         OperationError::InternalFailure => 500,
     }
@@ -132,6 +133,7 @@ const fn operation_code(error: OperationError) -> &'static str {
         OperationError::Expired => "resolver_record_expired",
         OperationError::ReplayRejected => "resolver_replay_rejected",
         OperationError::ProviderRejected => "resolver_provider_rejected",
+        OperationError::ReauthRequired => "resolver_reauth_required",
         OperationError::DependencyUnavailable => "resolver_dependency_unavailable",
         OperationError::ConfigurationUnavailable => "resolver_configuration_unavailable",
         OperationError::InternalFailure => "resolver_internal_failure",
