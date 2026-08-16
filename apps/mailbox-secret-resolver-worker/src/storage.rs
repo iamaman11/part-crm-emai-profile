@@ -3,7 +3,7 @@ use crate::crypto::{
 };
 use crate::model::MAX_SECRET_DOCUMENT_BYTES;
 use serde::Deserialize;
-use worker::d1::D1Database;
+use worker::d1::{D1Database, D1ResultMeta};
 use worker::query;
 use zeroize::Zeroizing;
 
@@ -48,7 +48,6 @@ pub struct StoredSecret {
 pub(crate) struct RefreshLease {
     mutation_generation: u64,
     owner_digest: String,
-    expires_at_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -388,7 +387,6 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             return Ok(RefreshLease {
                 mutation_generation: expected_generation,
                 owner_digest,
-                expires_at_ms,
             });
         }
 
@@ -984,7 +982,7 @@ struct IdempotencyRow {
     request_sha256: String,
 }
 
-fn require_one_change(meta: Option<worker::d1::D1Meta>) -> Result<(), RecordStoreError> {
+fn require_one_change(meta: Option<D1ResultMeta>) -> Result<(), RecordStoreError> {
     let changes = meta.and_then(|value| value.changes).unwrap_or_default();
     if changes == 1 {
         Ok(())
