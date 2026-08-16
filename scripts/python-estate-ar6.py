@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
 import json
 import subprocess
@@ -22,8 +23,45 @@ FUTURE_FIELDS = {
     "compatibility_requirement",
     "retirement_proof",
 }
+EXPLICIT_ONLY_CAPABILITIES = {
+    "browser_runtime",
+    "network_io",
+    "provider_mutation_subprocess",
+    "secret_environment_access",
+}
+NETWORK_IMPORT_PREFIXES = (
+    "aiohttp",
+    "http.client",
+    "httpx",
+    "requests",
+    "socket",
+    "urllib.request",
+)
+BROWSER_IMPORT_PREFIXES = ("camoufox", "playwright")
+SECRET_ENV_MARKERS = (
+    "ACCESS_KEY",
+    "API_KEY",
+    "API_TOKEN",
+    "CLIENT_SECRET",
+    "CREDENTIAL",
+    "ENCRYPTION_KEY",
+    "HMAC_KEY",
+    "PASSWORD",
+    "PRIVATE_KEY",
+    "SECRET",
+    "TOKEN",
+)
+PROVIDER_MUTATION_TERMS = (
+    "deploy",
+    "delete",
+    "d1 execute",
+    "d1 migrations apply",
+    "kv put",
+    "queues create",
+    "r2 object put",
+    "secret put",
+)
 
-# These paths are architecture decisions, not pattern guesses.
 FUTURE_DECISIONS: dict[str, dict[str, str]] = {
     "check_mail.py": {
         "classification": "DELETE_AFTER_SEQUENCE",
@@ -44,6 +82,36 @@ FUTURE_DECISIONS: dict[str, dict[str, str]] = {
         "cutover_slice": "AR-10",
         "compatibility_requirement": "Profile Bridge remains the only accepted local profile lifecycle authority",
         "retirement_proof": "repository reference scan + Windows/Profile Bridge permanent gates pass after deletion",
+    },
+    "test_fingerprint_consistency.py": {
+        "classification": "DELETE_AFTER_SEQUENCE",
+        "role": "retired_legacy_marker",
+        "side_effect_class": "none_retired_fail_closed",
+        "rust_target": "certification application port + accepted Profile Bridge runtime boundary",
+        "artifact_type": "retired compatibility marker",
+        "cutover_slice": "AR-10",
+        "compatibility_requirement": "accepted certification evidence must not depend on this retired launcher marker",
+        "retirement_proof": "zero accepted references + certification/Profile Bridge permanent gates green after deletion",
+    },
+    "tools/cloud_profile_smoke.py": {
+        "classification": "DELETE_AFTER_SEQUENCE",
+        "role": "legacy_direct_profile_r2_smoke_tool",
+        "side_effect_class": "external_profile_object_and_pointer_mutation",
+        "rust_target": "Profile Bridge + control-plane generation APIs + bounded R2 canary evidence",
+        "artifact_type": "legacy direct profile/R2 smoke executable",
+        "cutover_slice": "AR-10",
+        "compatibility_requirement": "profile generation, restore and synchronization evidence remains covered without direct Python profile lifecycle or profiles/v1 pointer mutation authority",
+        "retirement_proof": "zero accepted workflow/operator references + Profile Bridge/generation/R2 canary gates green after deletion",
+    },
+    "tools/fingerprint_certify.py": {
+        "classification": "DELETE_AFTER_SEQUENCE",
+        "role": "legacy_direct_browser_certification_tool",
+        "side_effect_class": "disposable_profile_clone_browser_execution",
+        "rust_target": "certification application port + accepted Profile Bridge/Camoufox runtime boundary",
+        "artifact_type": "legacy direct browser certification executable",
+        "cutover_slice": "AR-10",
+        "compatibility_requirement": "fingerprint certification remains available through the accepted certification/runtime boundary without importing the legacy direct browser launcher",
+        "retirement_proof": "zero accepted workflow/operator references + certification/Profile Bridge permanent gates green after deletion",
     },
     "tools/profile_browser.py": {
         "classification": "DELETE_AFTER_SEQUENCE",
@@ -82,17 +150,6 @@ EXPLICIT_KEEP: dict[str, tuple[str, str, str]] = {
         "synthetic_runtime_fixture",
         "synthetic_local_fixture_state_only",
         "repository contract evidence fake; not production Camoufox authority",
-    ),
-    "test_fingerprint_consistency.py": ("test", "test_only", "test/evidence remains legitimate Python"),
-    "tools/cloud_profile_smoke.py": (
-        "external_smoke_evidence",
-        "disposable_external_test_objects",
-        "live evidence helper is not production lifecycle authority; credentials remain workflow-scoped",
-    ),
-    "tools/fingerprint_certify.py": (
-        "external_certification_evidence",
-        "disposable_profile_clone_only",
-        "fingerprint certification/research remains legitimate Python evidence",
     ),
     "tools/r2_s3_canary.py": (
         "external_provider_canary",
@@ -138,6 +195,11 @@ EXPLICIT_KEEP: dict[str, tuple[str, str, str]] = {
         "evidence_preparer",
         "evidence_artifact_only",
         "research/evidence helper remains legitimate Python",
+    ),
+    "scripts/python-estate-ar6.py": (
+        "estate_generator",
+        "repository_validation_and_inventory_generation",
+        "AR-6 canonical Python estate generator/checker remains legitimate Python",
     ),
     "scripts/render-openapi.py": (
         "contract_generator",
@@ -185,8 +247,6 @@ def classify(path: str) -> dict[str, Any]:
     if path in EXPLICIT_KEEP:
         role, side_effect, rationale = EXPLICIT_KEEP[path]
         return keep(path, role, side_effect, rationale)
-    if path == "scripts/python-estate-ar6.py":
-        return keep(path, "estate_generator", "repository_validation_and_inventory_generation", "AR-6 canonical Python estate generator/checker remains legitimate Python")
     if path.startswith("tests/"):
         return keep(path, "test_or_fixture", "test_only", "tests and fixtures remain legitimate Python")
     if path.startswith("scripts/check-") or path.startswith("scripts/check_"):
@@ -204,8 +264,155 @@ def classify(path: str) -> dict[str, Any]:
     raise ValueError(f"unclassified tracked Python path: {path}")
 
 
+def _import_names(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module)
+    return names
+
+
+def _call_name(node: ast.Call) -> str:
+    parts: list[str] = []
+    value: ast.AST = node.func
+    while isinstance(value, ast.Attribute):
+        parts.append(value.attr)
+        value = value.value
+    if isinstance(value, ast.Name):
+        parts.append(value.id)
+    return ".".join(reversed(parts))
+
+
+def _string_literals(node: ast.AST) -> set[str]:
+    return {
+        child.value
+        for child in ast.walk(node)
+        if isinstance(child, ast.Constant) and isinstance(child.value, str)
+    }
+
+
+def semantic_capabilities(source: str, *, label: str) -> tuple[set[str], set[str]]:
+    try:
+        tree = ast.parse(source, filename=label)
+    except SyntaxError as error:
+        raise ValueError(f"tracked Python must parse as Python: {label}: {error}") from error
+
+    imports = _import_names(tree)
+    capabilities: set[str] = set()
+    if any(name == prefix or name.startswith(prefix + ".") for name in imports for prefix in NETWORK_IMPORT_PREFIXES):
+        capabilities.add("network_io")
+    if any(name == prefix or name.startswith(prefix + ".") for name in imports for prefix in BROWSER_IMPORT_PREFIXES):
+        capabilities.add("browser_runtime")
+    if "subprocess" in imports:
+        capabilities.add("process_exec")
+    if "sqlite3" in imports:
+        capabilities.add("local_database")
+    if "cryptography" in imports or any(name.startswith("cryptography.") for name in imports):
+        capabilities.add("cryptography")
+
+    imported_modules = {name.rsplit(".", 1)[-1] for name in imports}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            target = node.value
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "os"
+                and target.attr == "environ"
+                and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, str)
+                and any(marker in node.slice.value.upper() for marker in SECRET_ENV_MARKERS)
+            ):
+                capabilities.add("secret_environment_access")
+            continue
+        if not isinstance(node, ast.Call):
+            continue
+        name = _call_name(node)
+        literals = _string_literals(node)
+        upper_literals = {value.upper() for value in literals}
+
+        if name in {"os.getenv", "os.environ.get"} and any(
+            marker in value for value in upper_literals for marker in SECRET_ENV_MARKERS
+        ):
+            capabilities.add("secret_environment_access")
+
+        if name.startswith("subprocess."):
+            capabilities.add("process_exec")
+            lowered = " ".join(sorted(value.lower() for value in literals))
+            if "wrangler" in lowered and any(term in lowered for term in PROVIDER_MUTATION_TERMS):
+                capabilities.add("provider_mutation_subprocess")
+
+        if (
+            name.endswith(".write_text")
+            or name.endswith(".write_bytes")
+            or name.endswith(".mkdir")
+            or name.endswith(".unlink")
+            or name.endswith(".rename")
+            or name.endswith(".replace")
+            or name.endswith(".touch")
+            or name in {
+                "os.remove",
+                "os.replace",
+                "os.rename",
+                "shutil.copy",
+                "shutil.copy2",
+                "shutil.copyfile",
+                "shutil.copytree",
+                "shutil.move",
+                "shutil.rmtree",
+            }
+        ):
+            capabilities.add("filesystem_mutation")
+
+    return capabilities, imported_modules
+
+
+def semantic_validate(path: str, row: dict[str, Any], root: Path = ROOT) -> None:
+    source_path = root / path
+    if source_path.is_symlink() or not source_path.is_file():
+        raise ValueError(f"tracked Python path must be a regular file for semantic review: {path}")
+    try:
+        source = source_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ValueError(f"cannot read tracked Python as UTF-8 for semantic review: {path}") from error
+
+    capabilities, imported_modules = semantic_capabilities(source, label=path)
+    classification = row["classification"]
+    role = row["role"]
+
+    if classification == "KEEP_PYTHON":
+        explicit_only = sorted(capabilities & EXPLICIT_ONLY_CAPABILITIES)
+        if explicit_only and path not in EXPLICIT_KEEP:
+            raise ValueError(
+                f"Python KEEP decision requires explicit semantic review for {path}: capabilities={explicit_only}"
+            )
+
+        future_modules = {Path(future_path).stem: future_path for future_path in FUTURE_DECISIONS}
+        dependencies = sorted(
+            future_modules[module]
+            for module in imported_modules & set(future_modules)
+        )
+        if dependencies and role not in {"test", "test_or_fixture"}:
+            raise ValueError(
+                f"KEEP_PYTHON path depends directly on future-cutover Python: {path}: {dependencies}"
+            )
+
+    if "provider_mutation_subprocess" in capabilities and classification == "KEEP_PYTHON":
+        raise ValueError(
+            f"KEEP_PYTHON may not execute Wrangler/provider mutation semantics: {path}"
+        )
+
+
+def semantic_validate_all(rows: list[dict[str, Any]], root: Path = ROOT) -> None:
+    for row in rows:
+        semantic_validate(row["path"], row, root)
+
+
 def build_inventory(root: Path = ROOT) -> dict[str, Any]:
     rows = [classify(path) for path in tracked_python(root)]
+    semantic_validate_all(rows, root)
     summary = {name: 0 for name in sorted(ALLOWED)}
     for row in rows:
         summary[row["classification"]] += 1
@@ -255,6 +462,7 @@ def validate(document: dict[str, Any], root: Path = ROOT) -> None:
             missing = sorted(field for field in FUTURE_FIELDS if not isinstance(row.get(field), str) or not row[field])
             if missing:
                 raise ValueError(f"future-cutover row {row['path']} lacks metadata: {missing}")
+    semantic_validate_all(rows, root)
     expected_summary = build_inventory(root)["summary"]
     if document.get("summary") != expected_summary:
         raise ValueError("AR-6 Python estate summary drifted")
@@ -303,7 +511,28 @@ def self_test() -> None:
     else:
         raise ValueError("unknown Python path fail-closed fixture unexpectedly passed")
 
-    print("AR-6 Python estate negative fixtures rejected as expected.")
+    capabilities, _ = semantic_capabilities(
+        "import urllib.request\nurllib.request.urlopen('https://example.invalid')\n",
+        label="scripts/check-future-network.py",
+    )
+    if "network_io" not in capabilities or not (capabilities & EXPLICIT_ONLY_CAPABILITIES):
+        raise ValueError("semantic capability detector lost network negative fixture")
+
+    _, imported = semantic_capabilities(
+        "from profile_browser import browser_environment\n",
+        label="tools/future-keeper.py",
+    )
+    if "profile_browser" not in imported:
+        raise ValueError("semantic dependency detector lost future-cutover negative fixture")
+
+    provider_capabilities, _ = semantic_capabilities(
+        "import subprocess\nsubprocess.run(['npx', 'wrangler', 'deploy'], check=True)\n",
+        label="scripts/check-future-provider.py",
+    )
+    if "provider_mutation_subprocess" not in provider_capabilities:
+        raise ValueError("semantic capability detector lost provider-mutation negative fixture")
+
+    print("AR-6 Python estate semantic and inventory negative fixtures rejected as expected.")
 
 
 def main() -> int:
@@ -329,7 +558,10 @@ def main() -> int:
     validate(actual)
     if serialized(actual) != serialized(expected):
         raise ValueError("AR-6 Python estate is not deterministic/current; run --write")
-    print(f"AR-6 Python estate is current: {len(expected['files'])} tracked files, zero unclassified.")
+    print(
+        f"AR-6 Python estate is current: {len(expected['files'])} tracked files, "
+        "zero unclassified; semantic capability audit passed."
+    )
     return 0
 
 
