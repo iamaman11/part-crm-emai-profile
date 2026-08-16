@@ -48,10 +48,11 @@
         "AR-4A",
         "AR-4B",
         "AR-4C",
-        "AR-5"
+        "AR-5",
+        "AR-6"
       ],
-      "current_slice": "AR-5",
-      "next_slice_after_acceptance": "AR-6",
+      "current_slice": "AR-6",
+      "next_slice_after_acceptance": "AR-7",
       "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
       "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
       "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
@@ -86,6 +87,16 @@
         "implementation_merge": "82d251a1d6666199c6eace393eedc1766157fcee",
         "applicable_permanent_workflows": "13/13",
         "closeout_issue": 292
+      },
+      "python_estate": "architecture/python-estate-ar6.json",
+      "python_operational_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR6.md",
+      "ar6_acceptance": {
+        "issue": 294,
+        "implementation_pr": 295,
+        "exact_green_head": "9b06d542873ffa3122e53e107105098e21f5933c",
+        "implementation_merge": "d0229fedd81ee870822b6d9394bc4ee313ea3a3c",
+        "applicable_permanent_workflows": "13/13",
+        "closeout_issue": 296
       }
     },
     "architecture_complete": false,
