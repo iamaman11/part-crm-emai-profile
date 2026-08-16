@@ -1261,9 +1261,9 @@
   },
   "credential_authority": {
     "schema_version": 1,
-    "status": "CANDIDATE_AR8B_CREDENTIAL_METADATA_AUTHORITY",
+    "status": "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY",
     "source_authority": "architecture/credential-authority-ar8b.json",
-    "source_git_blob_sha1": "5f7172d966f5bf4ca7169f10752c00ed78259cfd",
+    "source_git_blob_sha1": "00a0405ea75bd43ff50fe60ac318eef898448db5",
     "metadata_only": true,
     "canonical_environments": [
       "rehearsal",
