@@ -1,10 +1,14 @@
 # Architecture Re-baseline v3 — AR-4C Outbound Mail composition extraction
 
-Status: **CANDIDATE — NOT ACCEPTED UNTIL POST-MERGE CLOSEOUT**
+Status: **EVIDENCE / AR-4C accepted**
 
 Parent program: #266  
-Bounded implementation issue: #286  
-Accepted baseline: `bf323fbb8af160471299cdf30f0fcf406fe0457d` (`main`, AR-4B accepted)
+Accepted baseline: `bf323fbb8af160471299cdf30f0fcf406fe0457d` (`main`, AR-4B accepted)  
+Implementation issue: #286  
+Implementation PR: #287  
+Exact-green implementation head: `c62f3a7fb00acf16fa1a8a00d9d2f101949cf8a3`  
+Implementation merge: `d8382d1578c4911287fb76dd0b9966b23aa85c25`  
+Applicable permanent workflows: **13/13 success**
 
 ## Purpose
 
@@ -12,7 +16,7 @@ AR-4C closes the remaining Outbound Mail transport-composition debt identified b
 
 The remediation is structural and behavior-neutral: `apps/control-plane-worker/src/client_mail_send.rs` remains the HTTP transport owner, while concrete D1/query/provider construction and provider selection move behind the control-plane composition boundary.
 
-## Candidate composition ownership
+## Accepted composition ownership
 
 The accepted existing composition seams are reused for:
 
@@ -54,15 +58,14 @@ The canonical architecture checker must make the extraction fail closed:
 4. a negative fixture must reintroduce concrete transport adapter construction and be rejected;
 5. the obsolete transport-owned `client_mail_send/provider.rs` module must not return.
 
-## Candidate machine state
+## Accepted machine state
 
-Until the separate closeout step accepts the merged implementation:
+After post-merge authority closeout:
 
-- `accepted_through = AR-4B`;
-- candidate slice = `AR-4C`;
-- candidate status = `OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE`;
+- `accepted_through = AR-4C`;
+- accepted status = `OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED`;
 - AR-4D remains `NOT_REQUIRED` unless later accepted evidence reopens it;
-- next required slice after AR-4C acceptance = `AR-5`;
+- next required slice = `AR-5`;
 - `architecture_complete = false`;
 - Production Core remains `BLOCKED`;
 - `production_ready = false`;
@@ -70,7 +73,7 @@ Until the separate closeout step accepts the merged implementation:
 
 ## Verification contract
 
-The candidate must pass, at minimum:
+The implementation candidate was required to pass, at minimum:
 
 ```text
 cargo fmt --all -- --check

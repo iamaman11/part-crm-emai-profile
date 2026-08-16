@@ -113,7 +113,7 @@ CAPABILITY_OWNERSHIP: list[dict[str, Any]] = [
         "application_owner": "crates/use-cases-mailboxes::outbound_mail",
         "ports_owner": "crates/application-ports",
         "composition_seam": "apps/control-plane-worker/src/composition.rs::{client_mail_eligibility_repository,query_repository,client_mail_query_provider,outbound_mail_intent_repository,client_mail_outbound_provider}",
-        "status": "AR4C_COMPOSITION_EXTRACTION_CANDIDATE",
+        "status": "AR4C_COMPOSITION_EXTRACTION_ACCEPTED",
         "remediation_slice": "AR-4C",
     },
     {
@@ -225,7 +225,7 @@ COMPOSITION_FINDINGS: list[dict[str, Any]] = [
     },
     {
         "id": "outbound_mail_composition",
-        "status": "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
+        "status": "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED",
         "owner_slice": "AR-4C",
         "evidence": [
             "apps/control-plane-worker/src/composition/outbound_mail.rs::outbound_mail_intent_repository",
@@ -322,7 +322,7 @@ _REQUIRED_SNIPPETS: dict[str, list[str]] = {
     ],
     AR4C_EVIDENCE: [
         "AR-4C Outbound Mail composition extraction",
-        "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
+        "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED",
         "AR-5",
         "Production Core remains `BLOCKED`",
     ],
@@ -466,10 +466,10 @@ def build_projection(root: Path) -> dict[str, Any]:
 
     return {
         "schema_version": 1,
-        "status": "ACCEPTED_AR4B_APPLICATION_ARCHITECTURE_REMEDIATION",
+        "status": "ACCEPTED_AR4C_APPLICATION_ARCHITECTURE_REMEDIATION",
         "topology_source": RUNTIME_TOPOLOGY,
         "base_contract_evidence": AR3_EVIDENCE,
-        "evidence": AR4B_EVIDENCE,
+        "evidence": AR4C_EVIDENCE,
         "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
         "composition_taxonomy": [
             "CONFORMING_COMPOSITION_SEAM",
@@ -479,25 +479,24 @@ def build_projection(root: Path) -> dict[str, Any]:
             "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
             "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
             "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
-            "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
+            "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED",
         ],
         "runtime_resources": copy.deepcopy(topology["resources"]),
         "runtime_processes": copy.deepcopy(PROCESS_OWNERSHIP),
         "capability_ownership": copy.deepcopy(CAPABILITY_OWNERSHIP),
         "composition_findings": copy.deepcopy(COMPOSITION_FINDINGS),
         "remediation_state": {
-            "accepted_through": "AR-4B",
-            "candidate": "AR-4C",
-            "candidate_status": "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
+            "accepted_through": "AR-4C",
+            "status": "ACCEPTED",
             "evidence": AR4C_EVIDENCE,
-            "next_after_acceptance": "AR-5",
+            "next_required_slice": "AR-5",
         },
         "conditional_ar4d": {
             "decision": "NOT_REQUIRED",
             "reason": "Profile and Generation transports already use explicit composition seams; no measurable dependency-isolation benefit currently justifies extraction",
             "reopen_policy": "ONLY_BY_LATER_ACCEPTED_EVIDENCE",
         },
-        "next_required_slice_after_ar4b": "AR-4C",
+        "next_required_slice_after_ar4c": "AR-5",
         "production_mutation": False,
     }
 
@@ -569,13 +568,14 @@ def negative_self_test(root: Path) -> None:
     remediation = copy.deepcopy(expected)
     remediation["remediation_state"] = {
         "accepted_through": "AR-4B",
-        "status": "ACCEPTED",
-        "evidence": AR4B_EVIDENCE,
-        "next_required_slice": "AR-4C",
+        "candidate": "AR-4C",
+        "candidate_status": "OUTBOUND_MAIL_COMPOSITION_EXTRACTION_CANDIDATE",
+        "evidence": AR4C_EVIDENCE,
+        "next_after_acceptance": "AR-5",
     }
     if remediation == expected:
         raise SystemExit(
-            "AR-4C negative self-test failed to distinguish candidate and accepted remediation state"
+            "AR-4C negative self-test failed to detect accepted-state rollback to candidate remediation state"
         )
 
     missing_resource = copy.deepcopy(expected)
@@ -599,4 +599,4 @@ def negative_self_test(root: Path) -> None:
     if gate == expected:
         raise SystemExit("AR-3 negative self-test failed to distinguish production mutation")
 
-    print("AR-4C Outbound Mail composition candidate negative self-tests passed.")
+    print("AR-4C accepted Outbound Mail composition negative self-tests passed.")

@@ -6,8 +6,8 @@
 **Subordinate pre-production/tooling issue:** #268  
 **Accepted activation prerequisite:** AR-0 / PR #267  
 **Accepted AR-0 main:** `e00420704950af5ca9352d2f0f02d3a9c9688527`  
-**Current accepted architecture checkpoint:** AR-4B — Client Mail route ownership
-**Next slice:** AR-4C — Outbound Mail composition extraction
+**Current accepted architecture checkpoint:** AR-4C — Outbound Mail composition extraction
+**Next slice:** AR-5 — Wrangler / Runtime Authority Cleanup
 **Accepted product phase:** Phase 2I  
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
@@ -15,7 +15,7 @@
 
 ## 1. Authority
 
-This file is the single current architecture/program execution authority after the AR-1 authority cutover. AR-4B is the latest accepted checkpoint. Its Client Mail route-ownership remediation extends the AR-4A-remediated accepted AR-3 application/runtime ownership contract in `architecture/inventory.json`, with AR-4B acceptance evidence in `docs/ARCHITECTURE_REBASELINE_V3_AR4B.md`, AR-4A evidence preserved in `docs/ARCHITECTURE_REBASELINE_V3_AR4A.md`, and the AR-3 base contract preserved in `docs/ARCHITECTURE_REBASELINE_V3_AR3.md`; the accepted AR-2 runtime-topology decision remains `architecture/runtime-topology-ar2.json`.
+This file is the single current architecture/program execution authority after the AR-1 authority cutover. AR-4C is the latest accepted checkpoint. Its Outbound Mail composition extraction extends the AR-4B-remediated accepted AR-3 application/runtime ownership contract in `architecture/inventory.json`, with AR-4C acceptance evidence in `docs/ARCHITECTURE_REBASELINE_V3_AR4C.md`, AR-4B and AR-4A evidence preserved in their evidence documents, and the AR-3 base contract preserved in `docs/ARCHITECTURE_REBASELINE_V3_AR3.md`; the accepted AR-2 runtime-topology decision remains `architecture/runtime-topology-ar2.json`. AR-4D remains `NOT_REQUIRED` unless later accepted evidence reopens it.
 
 The accepted AR-0 research package is preserved without rewriting:
 
@@ -68,10 +68,10 @@ AR-1   Architecture Authority Re-baseline                        DONE
 AR-2   Runtime Topology + D3 Compatibility                       DONE / ACCEPTED
 AR-3   Application Architecture Contract                         DONE / ACCEPTED
 AR-4A  Composition-root consolidation                            DONE / ACCEPTED
-AR-4B  Client Mail route ownership                               CURRENT / ACCEPTED CHECKPOINT
-AR-4C  Outbound Mail composition extraction                      NEXT
+AR-4B  Client Mail route ownership                               DONE / ACCEPTED
+AR-4C  Outbound Mail composition extraction                      CURRENT / ACCEPTED CHECKPOINT
 AR-4D  Profile extraction — NOT REQUIRED by AR-3; reopen only by later accepted evidence
-AR-5   Wrangler / Runtime Authority Cleanup
+AR-5   Wrangler / Runtime Authority Cleanup                     NEXT
 AR-6   Full Python Estate + read-only Rust opsctl
 AR-7   Environments + GitHub Governance + Operational Boundaries
 AR-8   Secrets / Keys / OAuth Refresh Concurrency

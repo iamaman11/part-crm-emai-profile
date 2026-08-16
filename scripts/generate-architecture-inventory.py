@@ -28,9 +28,9 @@ AR4A_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md"
 AR4B_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md"
 AR4C_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md"
 TRACKING_ISSUE = 266
-ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B"]
-CURRENT_SLICE = "AR-4B"
-NEXT_SLICE = "AR-4C"
+ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C"]
+CURRENT_SLICE = "AR-4C"
+NEXT_SLICE = "AR-5"
 
 DOCUMENT_STATUS = [
     {"path": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md", "status": "CURRENT_AUTHORITY", "scope": "architecture_program_execution"},
@@ -53,7 +53,7 @@ DOCUMENT_STATUS = [
     {"path": ar3.AR3_EVIDENCE, "status": "EVIDENCE", "scope": "ar3_application_architecture_contract_accepted"},
     {"path": AR4A_EVIDENCE, "status": "EVIDENCE", "scope": "ar4a_composition_root_consolidation_accepted"},
     {"path": AR4B_EVIDENCE, "status": "EVIDENCE", "scope": "ar4b_client_mail_route_ownership_accepted"},
-    {"path": AR4C_EVIDENCE, "status": "EVIDENCE", "scope": "ar4c_outbound_mail_composition_candidate"},
+    {"path": AR4C_EVIDENCE, "status": "EVIDENCE", "scope": "ar4c_outbound_mail_composition_accepted"},
     {"path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "superseded_predecessor_forward_execution"},
     {"path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "accepted_r1_r9_closeout"},
     {"path": "IMPLEMENTATION_PLAN.md", "status": "SUPERSEDED", "scope": "compatibility_entrypoint_to_preserved_history"},
@@ -79,13 +79,13 @@ def validate_docs() -> None:
     current = status.get("current", {})
     program = current.get("architecture_program", {}) if isinstance(current, dict) else {}
     if status.get("production_ready") is not False:
-        raise SystemExit("docs/status.json must remain production_ready=false during accepted AR-4B")
+        raise SystemExit("docs/status.json must remain production_ready=false during accepted AR-4C")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
-        raise SystemExit("docs/status.json must keep accepted AR-4B architecture/gate state fail closed")
+        raise SystemExit("docs/status.json must keep accepted AR-4C architecture/gate state fail closed")
     if program.get("authority") != CURRENT_AUTHORITY or program.get("tracking_issue") != TRACKING_ISSUE:
         raise SystemExit("docs/status.json current architecture authority drifted")
     if program.get("accepted_slices") != ACCEPTED_SLICES or program.get("current_slice") != CURRENT_SLICE or program.get("next_slice_after_acceptance") != NEXT_SLICE:
-        raise SystemExit("docs/status.json must project accepted AR-4B -> next AR-4C sequencing")
+        raise SystemExit("docs/status.json must project accepted AR-4C -> next AR-5 sequencing")
     if program.get("runtime_topology_decision") != RUNTIME_TOPOLOGY:
         raise SystemExit("docs/status.json must project the accepted AR-2 topology decision")
 
@@ -125,8 +125,7 @@ def build_inventory() -> dict[str, object]:
             "runtime_topology_decision": RUNTIME_TOPOLOGY,
             "runtime_topology_evidence": AR2_EVIDENCE,
             "runtime_topology_projection_owner": "AR-3",
-            "application_architecture_evidence": AR4B_EVIDENCE,
-            "application_architecture_candidate_evidence": AR4C_EVIDENCE,
+            "application_architecture_evidence": AR4C_EVIDENCE,
             "application_architecture_base_evidence": ar3.AR3_EVIDENCE,
             "application_architecture_projection": "architecture/inventory.json::application_architecture",
             "development_projection": "docs/DEVELOPMENT_PLAN.md",
@@ -213,7 +212,7 @@ def self_test(expected: dict[str, object]) -> None:
         raise SystemExit(f"documentation authority negative self-test failed:\n{details}")
     if documentation.stdout.strip():
         print(documentation.stdout.strip())
-    print("Architecture inventory AR-4C candidate negative self-test passed.")
+    print("Architecture inventory accepted AR-4C negative self-test passed.")
 
 
 def main() -> int:
@@ -230,7 +229,7 @@ def main() -> int:
         print(f"Wrote {INVENTORY_PATH.relative_to(ROOT)}")
     elif args.check:
         check_current(expected)
-        print("Architecture inventory and AR-4C candidate composition projection are current.")
+        print("Architecture inventory and accepted AR-4C composition projection are current.")
     else:
         self_test(expected)
     return 0
