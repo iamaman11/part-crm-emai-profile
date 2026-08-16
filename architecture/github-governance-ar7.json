@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "slice": "AR-7",
+  "status": "CANDIDATE_UNTIL_HOSTED_GOVERNANCE_PROVEN",
+  "repository": "iamaman11/part-crm-emai-profile",
+  "baseline_main": "dde7123586b080c1c053e90ad0ba489d4620e4d2",
+  "issue": 298,
+  "source_authority": {
+    "accepted_branch": "main",
+    "production_ref": "refs/heads/main",
+    "immutable_bits_across_promotion": true,
+    "rebuild_on_promotion": false
+  },
+  "promotion": {
+    "order": [
+      "dev",
+      "rehearsal",
+      "staging",
+      "production"
+    ],
+    "hosted_environments": [
+      "rehearsal",
+      "staging",
+      "production"
+    ],
+    "dev_authority": "local_or_pull_request_candidate"
+  },
+  "main_governance": {
+    "protection_mechanism": "classic_branch_protection",
+    "require_pull_request": true,
+    "require_conversation_resolution": true,
+    "enforce_admins": true,
+    "strict_required_status_checks": true,
+    "allow_force_pushes": false,
+    "allow_deletions": false,
+    "required_checks": [
+      "Certification Linux And WASM",
+      "Certification Windows",
+      "Cloudflare Worker Release Build",
+      "D1 Catalog Migrations",
+      "Encrypted Generation Linux And WASM",
+      "Encrypted Generation Windows",
+      "External Evidence Metadata",
+      "External Readiness Projection",
+      "External Review Attestations",
+      "GitHub Governance Contract",
+      "Invariants And Fail-Closed Boundaries",
+      "Local Profile Linux",
+      "Local Profile Windows",
+      "React Operator UI",
+      "Registry Domain D1 Adapter Worker And Contract",
+      "Repository-Local Standalone Flow",
+      "Resolver D1 first-bootstrap implementation",
+      "Runtime Bundle Linux",
+      "Runtime Bundle Windows",
+      "Rust Linux and WASM",
+      "Rust Windows And Profile Bridge Artifact"
+    ]
+  },
+  "environments": {
+    "rehearsal": {
+      "required": true,
+      "allowed_branches": [
+        "main"
+      ],
+      "minimum_reviewers": 0
+    },
+    "staging": {
+      "required": true,
+      "allowed_branches": [
+        "main"
+      ],
+      "minimum_reviewers": 0
+    },
+    "production": {
+      "required": true,
+      "allowed_branches": [
+        "main"
+      ],
+      "minimum_reviewers": 1,
+      "can_admins_bypass": false
+    }
+  },
+  "acceptance": {
+    "direct_main_negative_probe_required": true,
+    "live_audit_required": true,
+    "production_ready": false
+  }
+}
