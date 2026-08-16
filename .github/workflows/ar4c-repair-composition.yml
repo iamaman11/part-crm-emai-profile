@@ -1,0 +1,48 @@
+name: AR-4C Repair Composition
+
+on:
+  push:
+    branches:
+      - ar4c-outbound-mail-composition
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout candidate branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ar4c-outbound-mail-composition
+          fetch-depth: 0
+      - name: Restore composition root from main plus AR-4C seam only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git show origin/main:apps/control-plane-worker/src/composition.rs > /tmp/composition-main.rs
+          python - <<'PY'
+          from pathlib import Path
+          main = Path('/tmp/composition-main.rs').read_text(encoding='utf-8')
+          prefix = (
+              'mod outbound_mail;\n\n'
+              'pub use outbound_mail::{client_mail_outbound_provider, outbound_mail_intent_repository};\n\n'
+          )
+          Path('apps/control-plane-worker/src/composition.rs').write_text(
+              prefix + main,
+              encoding='utf-8',
+              newline='\n',
+          )
+          PY
+          git diff --check
+      - name: Commit exact repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add apps/control-plane-worker/src/composition.rs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'AR-4C restore composition root and keep only outbound seam'
+          git push origin HEAD:ar4c-outbound-mail-composition
