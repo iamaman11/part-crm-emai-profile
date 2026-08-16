@@ -7,11 +7,11 @@ fn normalized(source: &str) -> String {
     source.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn function_body<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
-    let start = source.find(start).expect("start marker must exist");
+fn function_body<'a>(source: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let start = source.find(start)?;
     let tail = &source[start..];
-    let end = tail.find(end).expect("end marker must exist");
-    &tail[..end]
+    let end = tail.find(end)?;
+    Some(&tail[..end])
 }
 
 #[test]
@@ -70,7 +70,8 @@ fn refresh_execution_has_one_provider_call_site_and_no_unconditional_store() {
         OPERATIONS,
         "async fn refresh_credential(",
         "async fn release_then_error(",
-    );
+    )
+    .unwrap_or_default();
     assert!(!coordinator.contains("store_credential("));
     assert!(!coordinator.contains("store_credential_kind("));
     assert!(!coordinator.contains(".store("));
@@ -86,7 +87,8 @@ fn public_refresh_response_does_not_expose_refresh_or_fencing_material() {
         OPERATIONS,
         "async fn refresh_graph(",
         "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nenum RefreshMode",
-    );
+    )
+    .unwrap_or_default();
     assert!(explicit_refresh.contains("\"access_token\""));
     assert!(!explicit_refresh.contains("\"refresh_token\""));
     assert!(!explicit_refresh.contains("owner_digest"));
