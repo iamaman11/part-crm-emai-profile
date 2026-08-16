@@ -1,0 +1,200 @@
+name: AR-8C One-Shot Bootstrap Lifecycle Sync
+
+on:
+  push:
+    branches:
+      - agent/ar8c-staging-bootstrap-preflight
+    paths:
+      - '.github/workflows/ar8c-sync-bootstrap-lifecycle-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Synchronize bootstrap lifecycle and inventory once
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Add canonical bootstrap lifecycle concerns
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('architecture/credential-authority-ar8b.json')
+          authority = json.loads(path.read_text(encoding='utf-8'))
+          lifecycle = authority['ar8c_operational_lifecycle']
+          concerns = lifecycle['concerns']
+          existing = {item['id'] for item in concerns}
+
+          additions = [
+            {
+              'id': 'github.ar8c-staging-bootstrap-admin',
+              'externally_issued': True,
+              'external_issuance_constraint': 'The temporary GitHub bootstrap administrator credential is issued outside repository state and cannot depend on repository code for its own issuance or recovery.',
+              'allowed_mutator': 'external-github-staging-bootstrap-admin-issuance-and-environment-binding-ceremony',
+              'exposure_boundary': 'Accepted-main workflow_dispatch jobs protected by the staging GitHub Environment only; pull_request exposure and production use are forbidden.',
+              'stages': {
+                'issue_or_import': 'Issue the temporary repository-scoped GitHub bootstrap administrator credential externally with only the permissions required for staging Environment secret binding and Actions orchestration.',
+                'validate': 'Authenticate the credential and validate access to the staging Environment public-key surface and Actions metadata without modifying repository or Environment state.',
+                'bind': 'Write-only bind the credential to GH_BOOTSTRAP_ADMIN_TOKEN in the protected staging GitHub Environment.',
+                'switch': 'Accepted-main protected AR-8C bootstrap execution consumes GH_BOOTSTRAP_ADMIN_TOKEN only after the read-only preflight succeeds.',
+                'verify': 'Require successful accepted-main staging preflight and successful handoff of all generated steady-state GitHub Environment bindings before retirement.',
+                'revoke_previous': 'Revoke the external bootstrap credential and remove its staging Environment binding after the verified AR-8C staging handoff no longer requires bootstrap administration.'
+              },
+              'revoke_previous_required': True,
+              'revoke_previous_requires_verified_replacement': True,
+              'recovery': 'If validation or handoff fails, keep provider mutation closed, externally reissue a bounded GitHub bootstrap administrator credential, rebind it to staging, and repeat the read-only preflight before any mutation.',
+              'metadata_evidence': [
+                'GitHub staging Environment binding name metadata',
+                'authenticated GitHub principal identity',
+                'staging Environment public-key access outcome',
+                'accepted-main protected bootstrap preflight outcome'
+              ]
+            },
+            {
+              'id': 'cloudflare.ar8c-staging-bootstrap',
+              'externally_issued': True,
+              'external_issuance_constraint': "Cloudflare issues the temporary infrastructure bootstrap token outside Git; its authority is bounded to Pvisakp@gmail.com's Account and the alegria.by zone and it must never become CLOUDFLARE_API_TOKEN.",
+              'allowed_mutator': 'external-cloudflare-staging-bootstrap-issuance-plus-protected-main-bootstrap-ceremony',
+              'exposure_boundary': 'Accepted-main workflow_dispatch jobs protected by the staging GitHub Environment only; production mutation, pull_request exposure and routine deployment use are forbidden.',
+              'stages': {
+                'issue_or_import': "Issue CLOUDFLARE_BOOTSTRAP_TOKEN externally with the accepted staging bootstrap permission set for Pvisakp@gmail.com's Account and alegria.by.",
+                'validate': 'Require active token status, exact alegria.by and account identity discovery, and successful read-only access to every Cloudflare resource class needed by the accepted staging bootstrap.',
+                'bind': 'Write-only bind CLOUDFLARE_BOOTSTRAP_TOKEN to the protected staging GitHub Environment; never bind it as CLOUDFLARE_API_TOKEN.',
+                'switch': 'After read-only preflight succeeds, the protected accepted-main bootstrap ceremony may use this token only for create-only-MISSING staging operations authorized by the bootstrap contract.',
+                'verify': 'Require real staging resource identities, Worker secret-name presence, steady-state credential bindings, Access identity and deploy-manifest handoff to verify before retirement.',
+                'revoke_previous': 'Revoke CLOUDFLARE_BOOTSTRAP_TOKEN after the verified staging handoff and remove the temporary GitHub Environment binding so routine deployment cannot consume bootstrap authority.'
+              },
+              'revoke_previous_required': True,
+              'revoke_previous_requires_verified_replacement': True,
+              'recovery': 'If validation, creation or handoff fails, stop before further mutation, preserve discovered provider facts, externally reissue a bounded staging bootstrap token if necessary, and rerun discovery before resuming create-only-MISSING work.',
+              'metadata_evidence': [
+                'Cloudflare token active status',
+                'exact alegria.by zone and account identity',
+                'read-only Workers D1 Queues R2 Access and Routes preflight outcomes',
+                'verified steady-state staging handoff outcome'
+              ]
+            },
+            {
+              'id': 'cloudflare.ar8c-token-issuer-bootstrap',
+              'externally_issued': True,
+              'external_issuance_constraint': 'Cloudflare issues the temporary Create Additional Tokens credential outside Git; it is issuer-only and must not receive Workers, D1, R2, Queues, Access, Routes or production infrastructure mutation authority.',
+              'allowed_mutator': 'external-cloudflare-token-issuer-issuance-plus-protected-staging-credential-issuance-ceremony',
+              'exposure_boundary': 'Accepted-main workflow_dispatch jobs protected by the staging GitHub Environment only; the credential may issue only explicitly authorized AR-8C staging credentials and is never exposed to pull_request code.',
+              'stages': {
+                'issue_or_import': 'Issue CLOUDFLARE_TOKEN_ISSUER_TOKEN externally from the Cloudflare Create Additional Tokens profile with API Tokens Write and no infrastructure permissions.',
+                'validate': 'Require active token status and preserve issuer-only separation before any credential issuance.',
+                'bind': 'Write-only bind CLOUDFLARE_TOKEN_ISSUER_TOKEN to the protected staging GitHub Environment.',
+                'switch': 'The accepted-main protected bootstrap credential-issuance step consumes the issuer only when a specific bounded steady-state staging credential must be created.',
+                'verify': 'Verify the newly issued bounded credential is active, has been write-only bound to its intended protected authority and passes its read-only staging checks before issuer retirement.',
+                'revoke_previous': 'Revoke CLOUDFLARE_TOKEN_ISSUER_TOKEN and remove the temporary staging binding after all explicitly authorized staging credentials have been issued and verified.'
+              },
+              'revoke_previous_required': True,
+              'revoke_previous_requires_verified_replacement': True,
+              'recovery': 'If issuance or replacement verification fails, do not widen issuer permissions; retain or externally reissue the issuer-only credential and repeat the bounded issuance and verification ceremony.',
+              'metadata_evidence': [
+                'Cloudflare issuer token active status',
+                'issuer-only authority declaration',
+                'new steady-state credential active-status evidence',
+                'protected staging binding and handoff verification outcome'
+              ]
+            }
+          ]
+
+          for concern in additions:
+              if concern['id'] in existing:
+                  raise SystemExit(f"bootstrap lifecycle concern already exists: {concern['id']}")
+              concerns.append(concern)
+
+          path.write_text(json.dumps(authority, indent=2, ensure_ascii=False) + '\n', encoding='utf-8', newline='\n')
+          PY
+
+      - name: Validate canonical AR-8C lifecycle
+        run: |
+          node .github/scripts/credential-lifecycle.mjs contract
+          node .github/scripts/credential-lifecycle.mjs self-test
+
+      - name: Regenerate canonical inventory
+        run: python scripts/generate-architecture-inventory.py --write
+
+      - name: Enforce exact two-file generated diff
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' architecture/credential-authority-ar8b.json architecture/inventory.json | sort)"
+          test "$changed" = "$expected"
+          git diff --check -- architecture/credential-authority-ar8b.json architecture/inventory.json
+
+      - name: Commit canonical lifecycle and inventory atomically to this branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_REPOSITORY: iamaman11/part-crm-emai-profile
+          EXPECTED_BRANCH: agent/ar8c-staging-bootstrap-preflight
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['EXPECTED_REPOSITORY']
+          branch = os.environ['EXPECTED_BRANCH']
+          expected_sha = os.environ['EXPECTED_SHA']
+          token = os.environ['GH_TOKEN']
+          api = 'https://api.github.com'
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'ar8c-one-shot-lifecycle-sync',
+          }
+
+          def request(path, *, method='GET', payload=None):
+              data = None if payload is None else json.dumps(payload).encode()
+              req = urllib.request.Request(api + path, data=data, headers=headers, method=method)
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.load(response)
+
+          ref_path = f'/repos/{repository}/git/ref/heads/{urllib.parse.quote(branch, safe="")}'
+          ref = request(ref_path)
+          if ref['object']['sha'] != expected_sha:
+              raise SystemExit(f"branch moved: expected {expected_sha}, got {ref['object']['sha']}")
+
+          base_commit = request(f'/repos/{repository}/git/commits/{expected_sha}')
+          tree_entries = []
+          for file_path in ['architecture/credential-authority-ar8b.json', 'architecture/inventory.json']:
+              content = open(file_path, encoding='utf-8').read()
+              blob = request(f'/repos/{repository}/git/blobs', method='POST', payload={'content': content, 'encoding': 'utf-8'})
+              tree_entries.append({'path': file_path, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
+
+          tree = request(
+              f'/repos/{repository}/git/trees',
+              method='POST',
+              payload={'base_tree': base_commit['tree']['sha'], 'tree': tree_entries},
+          )
+          commit = request(
+              f'/repos/{repository}/git/commits',
+              method='POST',
+              payload={
+                  'message': 'Complete AR-8C bootstrap credential lifecycle authority',
+                  'tree': tree['sha'],
+                  'parents': [expected_sha],
+              },
+          )
+          request(ref_path, method='PATCH', payload={'sha': commit['sha'], 'force': False})
+          print(f"Canonical AR-8C bootstrap lifecycle synchronized at {commit['sha']}")
+          PY
