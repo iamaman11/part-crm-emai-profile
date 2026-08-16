@@ -80,15 +80,18 @@ where
     let mut command: Option<ReadCommand> = None;
 
     while let Some(argument) = iterator.next() {
-        let text = argument
-            .to_str()
-            .ok_or_else(|| OpsctlError::new("parse", "flags and command names must be valid UTF-8"))?;
+        let text = argument.to_str().ok_or_else(|| {
+            OpsctlError::new("parse", "flags and command names must be valid UTF-8")
+        })?;
         match text {
             "-h" | "--help" => return Ok(Invocation::Help),
             "-V" | "--version" => return Ok(Invocation::Version),
             "--root" => {
                 if root.is_some() {
-                    return Err(OpsctlError::new("parse", "--root may be supplied only once"));
+                    return Err(OpsctlError::new(
+                        "parse",
+                        "--root may be supplied only once",
+                    ));
                 }
                 let value = iterator
                     .next()
@@ -97,14 +100,18 @@ where
             }
             value => {
                 if command.is_some() {
-                    return Err(OpsctlError::new("parse", format!("unexpected extra argument: {value}")));
+                    return Err(OpsctlError::new(
+                        "parse",
+                        format!("unexpected extra argument: {value}"),
+                    ));
                 }
                 command = Some(parse_command(value)?);
             }
         }
     }
 
-    let command = command.ok_or_else(|| OpsctlError::new("parse", "missing command; use --help"))?;
+    let command =
+        command.ok_or_else(|| OpsctlError::new("parse", "missing command; use --help"))?;
     Ok(Invocation::Run { root, command })
 }
 
@@ -128,7 +135,9 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             let repo_root = resolve_repo_root(root.as_deref(), command.name())?;
             match command {
                 ReadCommand::Doctor => doctor(&repo_root),
-                ReadCommand::Status => canonical_json_document(&repo_root, "docs/status.json", "status"),
+                ReadCommand::Status => {
+                    canonical_json_document(&repo_root, "docs/status.json", "status")
+                }
                 ReadCommand::Inventory => {
                     canonical_json_document(&repo_root, "architecture/inventory.json", "inventory")
                 }
@@ -137,42 +146,65 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
     }
 }
 
-fn resolve_repo_root(explicit: Option<&Path>, command: &'static str) -> Result<PathBuf, OpsctlError> {
+fn resolve_repo_root(
+    explicit: Option<&Path>,
+    command: &'static str,
+) -> Result<PathBuf, OpsctlError> {
     if let Some(root) = explicit {
         let canonical = fs::canonicalize(root).map_err(|error| {
-            OpsctlError::new(command, format!("cannot resolve repository root {}: {error}", root.display()))
+            OpsctlError::new(
+                command,
+                format!("cannot resolve repository root {}: {error}", root.display()),
+            )
         })?;
         if is_repo_root(&canonical) {
             return Ok(canonical);
         }
-        return Err(OpsctlError::new(command, "explicit path is not the canonical repository root"));
+        return Err(OpsctlError::new(
+            command,
+            "explicit path is not the canonical repository root",
+        ));
     }
 
-    let current = fs::canonicalize(env::current_dir().map_err(|error| OpsctlError::new(command, error.to_string()))?)
-        .map_err(|error| OpsctlError::new(command, error.to_string()))?;
+    let current = fs::canonicalize(
+        env::current_dir().map_err(|error| OpsctlError::new(command, error.to_string()))?,
+    )
+    .map_err(|error| OpsctlError::new(command, error.to_string()))?;
     for candidate in current.ancestors() {
         if is_repo_root(candidate) {
             return Ok(candidate.to_path_buf());
         }
     }
-    Err(OpsctlError::new(command, "repository root not found; provide --root PATH"))
+    Err(OpsctlError::new(
+        command,
+        "repository root not found; provide --root PATH",
+    ))
 }
 
 fn is_repo_root(path: &Path) -> bool {
     path.join("Cargo.toml").is_file()
         && path.join("architecture/inventory.json").is_file()
         && path.join("architecture/python-estate-ar6.json").is_file()
-        && path.join("scripts/generate-architecture-inventory.py").is_file()
+        && path
+            .join("scripts/generate-architecture-inventory.py")
+            .is_file()
         && path.join("scripts/python-estate-ar6.py").is_file()
 }
 
-fn canonical_json_document(root: &Path, relative: &str, command: &'static str) -> Result<String, OpsctlError> {
+fn canonical_json_document(
+    root: &Path,
+    relative: &str,
+    command: &'static str,
+) -> Result<String, OpsctlError> {
     let path = root.join(relative);
     let mut contents = fs::read_to_string(&path)
         .map_err(|error| OpsctlError::new(command, format!("cannot read {relative}: {error}")))?;
     let trimmed = contents.trim_start();
     if !trimmed.starts_with('{') || !contents.trim_end().ends_with('}') {
-        return Err(OpsctlError::new(command, format!("canonical JSON authority is malformed: {relative}")));
+        return Err(OpsctlError::new(
+            command,
+            format!("canonical JSON authority is malformed: {relative}"),
+        ));
     }
     if !contents.ends_with('\n') {
         contents.push('\n');
@@ -189,10 +221,17 @@ fn doctor(root: &Path) -> Result<String, OpsctlError> {
         "scripts/python-estate-ar6.py",
     ] {
         if !root.join(relative).is_file() {
-            return Err(OpsctlError::new("doctor", format!("required canonical authority is missing: {relative}")));
+            return Err(OpsctlError::new(
+                "doctor",
+                format!("required canonical authority is missing: {relative}"),
+            ));
         }
     }
-    run_python_check(root, "scripts/generate-architecture-inventory.py", &["--check"])?;
+    run_python_check(
+        root,
+        "scripts/generate-architecture-inventory.py",
+        &["--check"],
+    )?;
     run_python_check(root, "scripts/python-estate-ar6.py", &["--check"])?;
     Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/python-estate-ar6.json\",\"docs/status.json\"]}\n".to_owned())
 }
@@ -210,8 +249,15 @@ fn run_python_check(root: &Path, script: &str, arguments: &[&str]) -> Result<(),
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let detail = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
-    Err(OpsctlError::new("doctor", format!("canonical validator failed: {script}: {detail}")))
+    let detail = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    Err(OpsctlError::new(
+        "doctor",
+        format!("canonical validator failed: {script}: {detail}"),
+    ))
 }
 
 fn json_escape(value: &str) -> String {
@@ -249,7 +295,10 @@ mod tests {
         ] {
             assert_eq!(
                 parse_invocation(args(&["opsctl", name])),
-                Ok(Invocation::Run { root: None, command: expected })
+                Ok(Invocation::Run {
+                    root: None,
+                    command: expected
+                })
             );
         }
     }
@@ -267,7 +316,14 @@ mod tests {
 
     #[test]
     fn rejects_mutation_commands() {
-        for command in ["deploy", "provision", "promote", "delete", "rotate", "migrate"] {
+        for command in [
+            "deploy",
+            "provision",
+            "promote",
+            "delete",
+            "rotate",
+            "migrate",
+        ] {
             assert!(parse_invocation(args(&["opsctl", command])).is_err());
         }
     }
