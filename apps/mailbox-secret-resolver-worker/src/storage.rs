@@ -3,9 +3,27 @@ use crate::crypto::{
 };
 use crate::model::MAX_SECRET_DOCUMENT_BYTES;
 use serde::Deserialize;
-use worker::d1::D1Database;
+use worker::d1::{D1Database, D1ResultMeta};
 use worker::query;
 use zeroize::Zeroizing;
+
+const REFRESH_LEASE_TTL_MS: u64 = 30_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CredentialLifecycleState {
+    Active,
+    ReauthRequired,
+}
+
+impl CredentialLifecycleState {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ACTIVE" => Some(Self::Active),
+            "REAUTH_REQUIRED" => Some(Self::ReauthRequired),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecordStoreError {
@@ -22,6 +40,21 @@ pub enum RecordStoreError {
 pub struct StoredSecret {
     pub document: Zeroizing<Vec<u8>>,
     pub reencrypted: bool,
+    pub(crate) mutation_generation: u64,
+    pub(crate) lifecycle: CredentialLifecycleState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RefreshLease {
+    mutation_generation: u64,
+    owner_digest: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RefreshAcquireError {
+    Busy,
+    ReauthRequired,
+    Store(RecordStoreError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -174,7 +207,12 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
                 updated_at_ms = excluded.updated_at_ms,
                 expires_at_ms = excluded.expires_at_ms,
                 consumed_at_ms = NULL,
-                discarded_at_ms = NULL
+                discarded_at_ms = NULL,
+                mutation_generation = resolver_encrypted_records.mutation_generation + 1,
+                credential_state = 'ACTIVE',
+                refresh_owner_digest = NULL,
+                refresh_started_at_ms = NULL,
+                refresh_expires_at_ms = NULL
             "#,
             identity.tenant_id,
             lookup_digest.as_str(),
@@ -209,7 +247,7 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             &self.database,
             r#"
             SELECT provider, logical_id, key_version, nonce_hex, ciphertext_hex,
-                   expires_at_ms, discarded_at_ms
+                   expires_at_ms, discarded_at_ms, mutation_generation, credential_state
             FROM resolver_encrypted_records
             WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ?
             "#,
@@ -235,6 +273,13 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             return Err(RecordStoreError::Expired);
         }
         let key_version = u32::try_from(row.key_version).map_err(|_| RecordStoreError::Crypto)?;
+        let mutation_generation =
+            u64::try_from(row.mutation_generation).map_err(|_| RecordStoreError::Crypto)?;
+        if mutation_generation == 0 {
+            return Err(RecordStoreError::Crypto);
+        }
+        let lifecycle = CredentialLifecycleState::parse(&row.credential_state)
+            .ok_or(RecordStoreError::Crypto)?;
         let encrypted = EncryptedValue {
             key_version,
             nonce_hex: row.nonce_hex,
@@ -265,7 +310,284 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         Ok(StoredSecret {
             document,
             reencrypted,
+            mutation_generation,
+            lifecycle,
         })
+    }
+
+    pub(crate) async fn acquire_refresh_lease(
+        &self,
+        identity: &RecordIdentity<'_>,
+        expected_generation: u64,
+        now_ms: u64,
+    ) -> Result<RefreshLease, RefreshAcquireError> {
+        validate_identity(identity).map_err(RefreshAcquireError::Store)?;
+        if expected_generation == 0 || now_ms == 0 {
+            return Err(RefreshAcquireError::Store(RecordStoreError::InvalidInput));
+        }
+        let lookup_digest = self
+            .crypto
+            .lookup_digest(identity.tenant_id, identity.raw_handle)
+            .map_err(map_crypto_error)
+            .map_err(RefreshAcquireError::Store)?;
+        let owner = Zeroizing::new(
+            self.crypto
+                .random_handle("refresh_", 24)
+                .map_err(map_crypto_error)
+                .map_err(RefreshAcquireError::Store)?,
+        );
+        let owner_digest = self
+            .crypto
+            .lookup_digest(identity.tenant_id, owner.as_str())
+            .map_err(map_crypto_error)
+            .map_err(RefreshAcquireError::Store)?;
+        let now = sqlite_millis(now_ms).map_err(RefreshAcquireError::Store)?;
+        let expires_at_ms = now_ms.saturating_add(REFRESH_LEASE_TTL_MS);
+        let expires = sqlite_millis(expires_at_ms).map_err(RefreshAcquireError::Store)?;
+        let generation = i64::try_from(expected_generation)
+            .map_err(|_| RefreshAcquireError::Store(RecordStoreError::InvalidInput))?;
+        let acquired = query!(
+            &self.database,
+            r#"
+            UPDATE resolver_encrypted_records
+            SET refresh_owner_digest = ?, refresh_started_at_ms = ?, refresh_expires_at_ms = ?,
+                updated_at_ms = ?
+            WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ? AND provider = ?
+              AND mutation_generation = ? AND credential_state = 'ACTIVE'
+              AND discarded_at_ms IS NULL
+              AND (refresh_owner_digest IS NULL OR refresh_expires_at_ms <= ?)
+            RETURNING mutation_generation, refresh_owner_digest, refresh_expires_at_ms
+            "#,
+            owner_digest.as_str(),
+            now,
+            expires,
+            now,
+            identity.tenant_id,
+            lookup_digest.as_str(),
+            identity.record_kind,
+            identity.provider,
+            generation,
+            now
+        )
+        .map_err(|_| RefreshAcquireError::Store(RecordStoreError::StorageUnavailable))?
+        .first::<RefreshLeaseRow>(None)
+        .await
+        .map_err(|_| RefreshAcquireError::Store(RecordStoreError::StorageUnavailable))?;
+        if let Some(row) = acquired {
+            let stored_generation = u64::try_from(row.mutation_generation)
+                .map_err(|_| RefreshAcquireError::Store(RecordStoreError::Crypto))?;
+            let stored_expiry = u64::try_from(row.refresh_expires_at_ms)
+                .map_err(|_| RefreshAcquireError::Store(RecordStoreError::Crypto))?;
+            if stored_generation != expected_generation
+                || row.refresh_owner_digest != owner_digest
+                || stored_expiry != expires_at_ms
+            {
+                return Err(RefreshAcquireError::Store(RecordStoreError::Crypto));
+            }
+            return Ok(RefreshLease {
+                mutation_generation: expected_generation,
+                owner_digest,
+            });
+        }
+
+        let row = query!(
+            &self.database,
+            r#"
+            SELECT mutation_generation, credential_state, refresh_owner_digest, refresh_expires_at_ms
+            FROM resolver_encrypted_records
+            WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ? AND provider = ?
+              AND discarded_at_ms IS NULL
+            "#,
+            identity.tenant_id,
+            lookup_digest,
+            identity.record_kind,
+            identity.provider
+        )
+        .map_err(|_| RefreshAcquireError::Store(RecordStoreError::StorageUnavailable))?
+        .first::<RefreshStateRow>(None)
+        .await
+        .map_err(|_| RefreshAcquireError::Store(RecordStoreError::StorageUnavailable))?
+        .ok_or(RefreshAcquireError::Store(RecordStoreError::NotFound))?;
+        if row.credential_state == "REAUTH_REQUIRED" {
+            return Err(RefreshAcquireError::ReauthRequired);
+        }
+        if row.credential_state != "ACTIVE" {
+            return Err(RefreshAcquireError::Store(RecordStoreError::Crypto));
+        }
+        let current_generation = u64::try_from(row.mutation_generation)
+            .map_err(|_| RefreshAcquireError::Store(RecordStoreError::Crypto))?;
+        if current_generation != expected_generation {
+            return Err(RefreshAcquireError::Store(
+                RecordStoreError::ConcurrentMutation,
+            ));
+        }
+        if row.refresh_owner_digest.is_some()
+            && row.refresh_expires_at_ms.is_some_and(|value| value > now)
+        {
+            return Err(RefreshAcquireError::Busy);
+        }
+        Err(RefreshAcquireError::Store(
+            RecordStoreError::ConcurrentMutation,
+        ))
+    }
+
+    pub(crate) async fn commit_refresh(
+        &self,
+        identity: &RecordIdentity<'_>,
+        lease: &RefreshLease,
+        document: &[u8],
+        now_ms: u64,
+    ) -> Result<u64, RecordStoreError> {
+        validate_record_input(identity, document, now_ms, None)?;
+        let lookup_digest = self
+            .crypto
+            .lookup_digest(identity.tenant_id, identity.raw_handle)
+            .map_err(map_crypto_error)?;
+        let context = AuthenticatedContext {
+            tenant_id: identity.tenant_id,
+            provider: identity.provider,
+            record_kind: identity.record_kind,
+            logical_id: &lookup_digest,
+        };
+        let encrypted = self
+            .crypto
+            .encrypt(document, &context)
+            .map_err(map_crypto_error)?;
+        let now = sqlite_millis(now_ms)?;
+        let generation =
+            i64::try_from(lease.mutation_generation).map_err(|_| RecordStoreError::InvalidInput)?;
+        let next_generation = lease
+            .mutation_generation
+            .checked_add(1)
+            .ok_or(RecordStoreError::InvalidInput)?;
+        let next_generation_sql =
+            i64::try_from(next_generation).map_err(|_| RecordStoreError::InvalidInput)?;
+        let result = query!(
+            &self.database,
+            r#"
+            UPDATE resolver_encrypted_records
+            SET key_version = ?, nonce_hex = ?, ciphertext_hex = ?, updated_at_ms = ?,
+                mutation_generation = ?, refresh_owner_digest = NULL,
+                refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL
+            WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ? AND provider = ?
+              AND mutation_generation = ? AND credential_state = 'ACTIVE'
+              AND refresh_owner_digest = ? AND refresh_expires_at_ms > ?
+              AND discarded_at_ms IS NULL AND key_version <= ?
+            "#,
+            i64::from(encrypted.key_version),
+            encrypted.nonce_hex.as_str(),
+            encrypted.ciphertext_hex.as_str(),
+            now,
+            next_generation_sql,
+            identity.tenant_id,
+            lookup_digest.as_str(),
+            identity.record_kind,
+            identity.provider,
+            generation,
+            lease.owner_digest.as_str(),
+            now,
+            i64::from(encrypted.key_version)
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .run()
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?;
+        require_one_change(
+            result
+                .meta()
+                .map_err(|_| RecordStoreError::StorageUnavailable)?,
+        )?;
+        Ok(next_generation)
+    }
+
+    pub(crate) async fn release_refresh_lease(
+        &self,
+        identity: &RecordIdentity<'_>,
+        lease: &RefreshLease,
+        now_ms: u64,
+    ) -> Result<(), RecordStoreError> {
+        validate_identity(identity)?;
+        let lookup_digest = self.lookup_digest(identity.tenant_id, identity.raw_handle)?;
+        let now = sqlite_millis(now_ms)?;
+        let generation =
+            i64::try_from(lease.mutation_generation).map_err(|_| RecordStoreError::InvalidInput)?;
+        let result = query!(
+            &self.database,
+            r#"
+            UPDATE resolver_encrypted_records
+            SET refresh_owner_digest = NULL, refresh_started_at_ms = NULL,
+                refresh_expires_at_ms = NULL, updated_at_ms = ?
+            WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ? AND provider = ?
+              AND mutation_generation = ? AND refresh_owner_digest = ?
+            "#,
+            now,
+            identity.tenant_id,
+            lookup_digest,
+            identity.record_kind,
+            identity.provider,
+            generation,
+            lease.owner_digest.as_str()
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .run()
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?;
+        require_one_change(
+            result
+                .meta()
+                .map_err(|_| RecordStoreError::StorageUnavailable)?,
+        )
+    }
+
+    pub(crate) async fn mark_reauth_required(
+        &self,
+        identity: &RecordIdentity<'_>,
+        lease: &RefreshLease,
+        now_ms: u64,
+    ) -> Result<u64, RecordStoreError> {
+        validate_identity(identity)?;
+        let lookup_digest = self.lookup_digest(identity.tenant_id, identity.raw_handle)?;
+        let now = sqlite_millis(now_ms)?;
+        let generation =
+            i64::try_from(lease.mutation_generation).map_err(|_| RecordStoreError::InvalidInput)?;
+        let next_generation = lease
+            .mutation_generation
+            .checked_add(1)
+            .ok_or(RecordStoreError::InvalidInput)?;
+        let next_generation_sql =
+            i64::try_from(next_generation).map_err(|_| RecordStoreError::InvalidInput)?;
+        let result = query!(
+            &self.database,
+            r#"
+            UPDATE resolver_encrypted_records
+            SET credential_state = 'REAUTH_REQUIRED', mutation_generation = ?,
+                refresh_owner_digest = NULL, refresh_started_at_ms = NULL,
+                refresh_expires_at_ms = NULL, updated_at_ms = ?
+            WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ? AND provider = ?
+              AND mutation_generation = ? AND credential_state = 'ACTIVE'
+              AND refresh_owner_digest = ? AND refresh_expires_at_ms > ?
+              AND discarded_at_ms IS NULL
+            "#,
+            next_generation_sql,
+            now,
+            identity.tenant_id,
+            lookup_digest,
+            identity.record_kind,
+            identity.provider,
+            generation,
+            lease.owner_digest.as_str(),
+            now
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .run()
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?;
+        require_one_change(
+            result
+                .meta()
+                .map_err(|_| RecordStoreError::StorageUnavailable)?,
+        )?;
+        Ok(next_generation)
     }
 
     pub async fn discard(
@@ -284,7 +606,9 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             &self.database,
             r#"
             UPDATE resolver_encrypted_records
-            SET discarded_at_ms = COALESCE(discarded_at_ms, ?), updated_at_ms = ?
+            SET discarded_at_ms = COALESCE(discarded_at_ms, ?), updated_at_ms = ?,
+                refresh_owner_digest = NULL, refresh_started_at_ms = NULL,
+                refresh_expires_at_ms = NULL
             WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ?
             "#,
             now,
@@ -320,7 +644,7 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
               AND provider = ? AND consumed_at_ms IS NULL AND discarded_at_ms IS NULL
               AND (expires_at_ms IS NULL OR expires_at_ms > ?)
             RETURNING provider, logical_id, key_version, nonce_hex, ciphertext_hex,
-                      expires_at_ms, discarded_at_ms
+                      expires_at_ms, discarded_at_ms, mutation_generation, credential_state
             "#,
             now,
             now,
@@ -339,6 +663,13 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             return Err(RecordStoreError::NotFound);
         }
         let key_version = u32::try_from(row.key_version).map_err(|_| RecordStoreError::Crypto)?;
+        let mutation_generation =
+            u64::try_from(row.mutation_generation).map_err(|_| RecordStoreError::Crypto)?;
+        if mutation_generation == 0 {
+            return Err(RecordStoreError::Crypto);
+        }
+        let lifecycle = CredentialLifecycleState::parse(&row.credential_state)
+            .ok_or(RecordStoreError::Crypto)?;
         let context = AuthenticatedContext {
             tenant_id: identity.tenant_id,
             provider: identity.provider,
@@ -359,6 +690,8 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         Ok(StoredSecret {
             document,
             reencrypted: false,
+            mutation_generation,
+            lifecycle,
         })
     }
 
@@ -608,6 +941,23 @@ struct EncryptedRecordRow {
     ciphertext_hex: String,
     expires_at_ms: Option<i64>,
     discarded_at_ms: Option<i64>,
+    mutation_generation: i64,
+    credential_state: String,
+}
+
+#[derive(Deserialize)]
+struct RefreshLeaseRow {
+    mutation_generation: i64,
+    refresh_owner_digest: String,
+    refresh_expires_at_ms: i64,
+}
+
+#[derive(Deserialize)]
+struct RefreshStateRow {
+    mutation_generation: i64,
+    credential_state: String,
+    refresh_owner_digest: Option<String>,
+    refresh_expires_at_ms: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -630,6 +980,15 @@ struct CountRow {
 #[derive(Deserialize)]
 struct IdempotencyRow {
     request_sha256: String,
+}
+
+fn require_one_change(meta: Option<D1ResultMeta>) -> Result<(), RecordStoreError> {
+    let changes = meta.and_then(|value| value.changes).unwrap_or_default();
+    if changes == 1 {
+        Ok(())
+    } else {
+        Err(RecordStoreError::ConcurrentMutation)
+    }
 }
 
 fn validate_record_input(
