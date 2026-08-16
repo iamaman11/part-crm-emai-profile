@@ -1,6 +1,6 @@
 {
   "schema_version": 10,
-  "status": "ACTIVE_AFTER_ACCEPTED_AR7_MERGE",
+  "status": "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8A",
   "program": "Architecture Re-baseline v3",
   "tracking_issue": 266,
   "subordinate_preproduction_issue": 268,
@@ -18,8 +18,28 @@
     "AR-6",
     "AR-7"
   ],
-  "current_slice": "AR-7",
-  "next_slice_after_acceptance": "AR-8",
+  "current_slice": "AR-8",
+  "next_slice_after_acceptance": "AR-9",
+  "ar8_progress": {
+    "umbrella_issue": 308,
+    "accepted_subslices": [
+      "AR-8A"
+    ],
+    "current_subslice": "AR-8B",
+    "current_implementation_issue": 309,
+    "mandatory_remaining": [
+      "AR-8B",
+      "AR-8C",
+      "AR-8D",
+      "AR-8E",
+      "AR-8F"
+    ],
+    "full_ar8_accepted": false,
+    "ar9_blocked": true,
+    "production_mutation": false,
+    "credential_authority_source": "architecture/credential-authority-ar8b.json",
+    "canonical_projection": "architecture/inventory.json::credential_authority"
+  },
   "state_model": {
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
@@ -157,7 +177,8 @@
     "ar4c_remediation": "ACCEPTED_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_IN_CANONICAL_INVENTORY",
     "ar5_remediation": "ACCEPTED_RUNTIME_AUTHORITY_CLEANUP_IN_CANONICAL_INVENTORY",
     "ar6_remediation": "ACCEPTED_FULL_PYTHON_ESTATE_AND_READ_ONLY_OPSCTL_IN_CANONICAL_INVENTORY",
-    "ar7_remediation": "ACCEPTED_GITHUB_GOVERNANCE_AND_OPERATIONAL_BOUNDARIES_IN_CANONICAL_INVENTORY"
+    "ar7_remediation": "ACCEPTED_GITHUB_GOVERNANCE_AND_OPERATIONAL_BOUNDARIES_IN_CANONICAL_INVENTORY",
+    "ar8b_current_projection": "CANDIDATE_METADATA_ONLY_CREDENTIAL_AUTHORITY_IN_CANONICAL_INVENTORY"
   },
   "preserve_accepted_history": [
     "repository_steps_0_10",
@@ -231,8 +252,8 @@
     "implementation_issue": 286,
     "applicable_permanent_workflows": "13/13",
     "next_required_slice": "AR-5",
-    "program_handoff_status": "AR-7_ACCEPTED",
-    "program_next_required_slice": "AR-8"
+    "program_handoff_status": "AR8_ACTIVE_AFTER_AR8A_ACCEPTED",
+    "program_next_required_subslice": "AR-8B"
   },
   "runtime_authority_cleanup": {
     "status": "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP",

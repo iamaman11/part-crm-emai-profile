@@ -52,8 +52,26 @@
         "AR-6",
         "AR-7"
       ],
-      "current_slice": "AR-7",
-      "next_slice_after_acceptance": "AR-8",
+      "current_slice": "AR-8",
+      "next_slice_after_acceptance": "AR-9",
+      "ar8_progress": {
+        "umbrella_issue": 308,
+        "accepted_subslices": [
+          "AR-8A"
+        ],
+        "current_subslice": "AR-8B",
+        "current_implementation_issue": 309,
+        "mandatory_remaining": [
+          "AR-8B",
+          "AR-8C",
+          "AR-8D",
+          "AR-8E",
+          "AR-8F"
+        ],
+        "full_ar8_accepted": false,
+        "ar9_blocked": true,
+        "production_mutation": false
+      },
       "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
       "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
       "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
@@ -161,9 +179,11 @@
   },
   "next_repository_step": {
     "number": null,
-    "name": "Architecture Re-baseline v3 AR-8",
-    "status": "next_after_accepted_ar7_merge",
+    "name": "Architecture Re-baseline v3 AR-8B",
+    "status": "current_ar8_subslice_after_accepted_ar8a",
     "tracking_issue": 266,
+    "umbrella_issue": 308,
+    "implementation_issue": 309,
     "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
   },
   "accepted_steps": [
@@ -286,7 +306,7 @@
     "repository_local_product_phase": "accepted_phase_2i",
     "pre2j_architecture_remediation": "closed_r1_r9",
     "pre2j_product_readiness_remediation": "historical_issue_203_superseded_by_ar_v3",
-    "architecture_rebaseline_v3": "active_issue_266_ar7_accepted_next_ar8",
+    "architecture_rebaseline_v3": "active_issue_266_ar8_after_ar8a_accepted_current_ar8b_ar9_blocked",
     "application_ownership": "r5_accepted_capability_owners_without_compatibility_facades",
     "frontend_api_ownership": "r6_accepted_feature_owned_capability_api"
   },
