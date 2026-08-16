@@ -47,6 +47,12 @@ jobs:
       - name: Prove AR-7 governance drift fails closed
         run: node .github/scripts/github-governance.mjs self-test
 
+      - name: Validate AR-8C operational credential lifecycle
+        run: node .github/scripts/credential-lifecycle.mjs contract
+
+      - name: Prove AR-8C credential lifecycle drift fails closed
+        run: node .github/scripts/credential-lifecycle.mjs self-test
+
   hosted-state:
     name: GitHub Governance Hosted State
     if: github.event_name != 'pull_request'
@@ -77,3 +83,41 @@ jobs:
 
       - name: Audit live hosted GitHub governance
         run: node .github/scripts/github-governance.mjs live
+
+      - name: Reconcile GitHub credential binding metadata
+        env:
+          GH_ADMIN_OPERATOR_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
+        run: node .github/scripts/credential-lifecycle.mjs github-live
+
+  operational-credential-state:
+    name: Operational Credential Hosted State
+    if: github.event_name != 'pull_request'
+    needs: contract
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout accepted source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node version
+        run: test "$(node --version)" = "v24.19.0"
+
+      - name: Audit staging Cloudflare operational credential metadata
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AR8C_AUDIT_ENVIRONMENT: staging
+        run: node .github/scripts/credential-lifecycle.mjs cloudflare-live
