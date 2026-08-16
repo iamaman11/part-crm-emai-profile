@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "status": "CANDIDATE_AR8C_HOSTED_PREREQUISITE",
+  "parent_issue": 308,
+  "implementation_issue": 314,
+  "environment": "staging",
+  "role": "EXECUTION_PREREQUISITE_ONLY_NOT_CREDENTIAL_REGISTRY",
+  "canonical_credential_authority": "architecture/credential-authority-ar8b.json",
+  "canonical_architecture_inventory": "architecture/inventory.json",
+  "accepted_bootstrap_design_authority": "architecture/pre2j-d3-resolver-bootstrap-authority.json",
+  "decision_record": "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md",
+  "invariants": {
+    "plaintext_in_git": "FORBIDDEN",
+    "placeholder_or_guessed_provider_state": "FORBIDDEN",
+    "secret_value_readback": "FORBIDDEN",
+    "production_mutation": false,
+    "terraform": false,
+    "automatic_resource_provisioning": false,
+    "explicit_external_staging_bootstrap_mutation": true,
+    "read_only_discovery_before_mutation": true,
+    "reuse_matching_accepted_resources": true,
+    "bootstrap_credential_must_differ_from_steady_state": true,
+    "bootstrap_credential_must_be_revoked_after_verified_cutover": true,
+    "routine_deploy_must_not_rotate_runtime_secrets": true,
+    "ar8c_reconciliation_remains_read_only": true,
+    "ar9_blocked_until_full_ar8_acceptance": true
+  },
+  "bootstrap_model": {
+    "purpose": "Materialize or discover the real staging provider state required by AR-8C without weakening the AR-8C read-only acceptance audit.",
+    "execution_boundary": "Explicit protected external/provider ceremony only. It is not a pull-request job, not routine deployment, not opsctl mutation authority and not automatic IaC provisioning.",
+    "discovery": {
+      "mode": "READ_ONLY_FIRST",
+      "rules": [
+        "Inventory the selected staging Cloudflare account and zone before any create operation.",
+        "Reuse an existing resource only when its identity and purpose match accepted authority.",
+        "Never infer absence from a missing GitHub secret alone.",
+        "Never create duplicate resources from guessed names or placeholder identifiers."
+      ]
+    },
+    "bootstrap_authentication": {
+      "kind": "EPHEMERAL_EXTERNAL_PROVIDER_AUTHORITY",
+      "accepted_sources": [
+        "authenticated connected Cloudflare provider session with the accepted bounded bootstrap permissions",
+        "temporary environment-scoped Cloudflare bootstrap API token supplied outside Git, issues and chat"
+      ],
+      "forbidden_bindings": [
+        "CLOUDFLARE_API_TOKEN"
+      ],
+      "lifecycle": [
+        "acquire_outside_repository",
+        "validate_scope",
+        "discover",
+        "create_only_missing_accepted_staging_resources",
+        "issue_and_bind_steady_state_credentials",
+        "verify_outputs",
+        "revoke_bootstrap"
+      ]
+    },
+    "external_facts_that_must_not_be_guessed": [
+      "selected Cloudflare account and owned DNS zone",
+      "accepted staging hostname/custom domain when not already fixed by provider state",
+      "Google staging OAuth application identity and client secret when the resolver is deployed with Google OAuth enabled",
+      "Microsoft staging OAuth application identity and client secret when the resolver is deployed with Microsoft OAuth enabled"
+    ],
+    "project_generated_secret_classes": [
+      "CLIENT_CONTACT_PROTECTION_KEYRING",
+      "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
+      "MAILBOX_RESOLVER_ENCRYPTION_KEYRING",
+      "MAILBOX_RESOLVER_HANDLE_HMAC_KEY"
+    ],
+    "provider_issued_secret_classes": [
+      "R2_GENERATION_ACCESS_KEY_ID",
+      "R2_GENERATION_SECRET_ACCESS_KEY",
+      "GOOGLE_OAUTH_CLIENT_SECRET",
+      "MICROSOFT_OAUTH_CLIENT_SECRET",
+      "CLOUDFLARE_API_TOKEN",
+      "CLOUDFLARE_ACCESS_CLIENT_ID",
+      "CLOUDFLARE_ACCESS_CLIENT_SECRET"
+    ],
+    "runtime_secret_destination": "Cloudflare Worker secret stores. Runtime secret values are not steady-state GitHub release inputs after AR-8 normalization.",
+    "resource_creation_order": [
+      "accepted_resolver_release_artifact",
+      "dedicated_resolver_d1",
+      "catalog_d1_and_d3a_bootstrap",
+      "profile_r2_and_queues",
+      "r2_s3_credentials",
+      "resolver_worker_with_secrets",
+      "access_application_service_auth_policy_and_token",
+      "github_staging_environment_inputs",
+      "d3_control_plane_first_deploy_with_secrets_and_custom_domain",
+      "d3_staging_smoke_and_attestation"
+    ]
+  },
+  "staging_outputs": {
+    "github_environment": "staging",
+    "required_new_or_verified_bindings": [
+      "CLOUDFLARE_API_TOKEN",
+      "CLOUDFLARE_ACCESS_CLIENT_ID",
+      "CLOUDFLARE_ACCESS_CLIENT_SECRET",
+      "CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+    ],
+    "transitional_existing_bundle_bindings": [
+      "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON",
+      "CLOUDFLARE_RESOLVER_SECRETS_JSON"
+    ],
+    "steady_state_direction": "The two bundle bindings are bootstrap/rotation transport only and must be removed from routine application deployment exposure by final AR-8 acceptance; runtime secret presence is then verified by name/metadata through wrangler.secrets.required and provider metadata APIs.",
+    "manifest_source": "Real discovered/created staging provider identities only; no placeholder, synthetic or pre-guessed IDs."
+  },
+  "ar8c_handoff": {
+    "preconditions": [
+      "real staging provider substrate exists and matches accepted authority",
+      "required Worker secrets are bound in Cloudflare protected secret stores",
+      "steady-state staging Cloudflare API token is active and bound to the staging GitHub Environment",
+      "staging Access service-token pair is bound to the staging GitHub Environment",
+      "CLOUDFLARE_DEPLOY_MANIFEST_JSON contains the real validated staging identities",
+      "bootstrap credential is revoked or otherwise removed from active project deployment authority"
+    ],
+    "next_executor": ".github/scripts/credential-lifecycle.mjs cloudflare-live",
+    "mode": "READ_ONLY_METADATA_RECONCILIATION",
+    "failure_policy": "Fail closed and report the exact missing external fact, binding or provider metadata. Never fabricate a value, use a placeholder, create a production resource or widen privileges to make the gate green."
+  },
+  "remaining_ar8_after_ar8c": [
+    {
+      "stage": "AR-8D",
+      "objective": "Encryption keyring, handle-HMAC and inter-Worker service-auth lifecycle hardening with bounded transition, recovery and negative tests."
+    },
+    {
+      "stage": "AR-8E",
+      "objective": "Google/Microsoft OAuth application credential validation, rotation/cutover/recovery and provider-constraint hardening without replacing the AR-8A mailbox OAuth state machine."
+    },
+    {
+      "stage": "AR-8F",
+      "objective": "Metadata-only operator UX, rehearsal, drift/rotation-readiness reporting and the project-wide negative matrix."
+    },
+    {
+      "stage": "AR-8 steady-state normalization",
+      "objective": "Decouple routine immutable application deployment from runtime-secret value transport; retain a separate protected bootstrap/rotation mutation path and name-only required-secret validation."
+    },
+    {
+      "stage": "AR-8 final closeout",
+      "objective": "Freeze one exact candidate SHA, require every applicable permanent check and rehearsal green, merge once with guarded exact-head semantics, close #308 and only then permit AR-9 to start."
+    }
+  ]
+}
