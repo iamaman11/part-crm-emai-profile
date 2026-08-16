@@ -10,9 +10,9 @@ privacy boundaries.
 - **Accepted repository-local product phase:** Phase 2I. Immutable provenance is
   [`architecture/accepted-phases.json`](architecture/accepted-phases.json).
 - **Architecture Re-baseline v3:** active program, tracked by issue #266.
-- **Accepted architecture slices:** AR-0, AR-1, AR-2, AR-3, AR-4A, AR-4B, AR-4C and AR-5.
-- **Current accepted checkpoint:** AR-5 — Wrangler / Runtime Authority Cleanup.
-- **Next slice:** AR-6 — Full Python Estate + read-only Rust opsctl.
+- **Accepted architecture slices:** AR-0, AR-1, AR-2, AR-3, AR-4A, AR-4B, AR-4C, AR-5 and AR-6.
+- **Current accepted checkpoint:** AR-6 — Full Python Estate + read-only Rust opsctl.
+- **Next slice:** AR-7 — Environments + GitHub Governance + Operational Boundaries.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
@@ -21,7 +21,7 @@ privacy boundaries.
 
 The single current architecture/program execution authority is
 [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md), tracked by issue
-#266. AR-5 Wrangler / Runtime Authority Cleanup accepts the AR-2 generation-verification deletion in canonical runtime/deployment authority while the AR-4C-remediated accepted AR-3 application/runtime ownership contract remains in
+#266. AR-6 accepts the full Python estate and read-only Rust `opsctl` foundation while AR-5 remains the accepted runtime-authority cleanup and the AR-4C-remediated application/runtime ownership contract remains in
 [`architecture/inventory.json`](architecture/inventory.json), with AR-4C acceptance evidence in
 [`docs/ARCHITECTURE_REBASELINE_V3_AR4C.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4C.md), AR-4B evidence preserved in
 [`docs/ARCHITECTURE_REBASELINE_V3_AR4B.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4B.md), AR-4A evidence preserved in
@@ -51,6 +51,8 @@ Start with [`docs/INDEX.md`](docs/INDEX.md). The main current sources are:
 
 - [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md) — single current
   architecture/program execution authority, issue #266;
+- [`docs/ARCHITECTURE_REBASELINE_V3_AR6.md`](docs/ARCHITECTURE_REBASELINE_V3_AR6.md) — accepted AR-6 Python-estate/read-only-opsctl evidence;
+- [`architecture/python-estate-ar6.json`](architecture/python-estate-ar6.json) — accepted full tracked Python disposition;
 - [`docs/ARCHITECTURE_REBASELINE_V3_AR5.md`](docs/ARCHITECTURE_REBASELINE_V3_AR5.md) — accepted AR-5 Wrangler/runtime-authority cleanup evidence;
 - [`docs/ARCHITECTURE_REBASELINE_V3_AR4C.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4C.md) — accepted AR-4C Outbound Mail composition-extraction evidence;
 - [`docs/ARCHITECTURE_REBASELINE_V3_AR4B.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4B.md) — accepted AR-4B Client Mail route-ownership evidence;

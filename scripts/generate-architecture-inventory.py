@@ -28,10 +28,12 @@ AR4A_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md"
 AR4B_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md"
 AR4C_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md"
 AR5_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR5.md"
+AR6_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR6.md"
+PYTHON_ESTATE = "architecture/python-estate-ar6.json"
 TRACKING_ISSUE = 266
-ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5"]
-CURRENT_SLICE = "AR-5"
-NEXT_SLICE = "AR-6"
+ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5", "AR-6"]
+CURRENT_SLICE = "AR-6"
+NEXT_SLICE = "AR-7"
 
 DOCUMENT_STATUS = [
     {"path": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md", "status": "CURRENT_AUTHORITY", "scope": "architecture_program_execution"},
@@ -56,6 +58,8 @@ DOCUMENT_STATUS = [
     {"path": AR4B_EVIDENCE, "status": "EVIDENCE", "scope": "ar4b_client_mail_route_ownership_accepted"},
     {"path": AR4C_EVIDENCE, "status": "EVIDENCE", "scope": "ar4c_outbound_mail_composition_accepted"},
     {"path": AR5_EVIDENCE, "status": "EVIDENCE", "scope": "ar5_runtime_authority_cleanup_accepted"},
+    {"path": AR6_EVIDENCE, "status": "EVIDENCE", "scope": "ar6_python_estate_and_read_only_opsctl_accepted"},
+    {"path": PYTHON_ESTATE, "status": "STABLE_AUTHORITY", "scope": "accepted_ar6_full_python_disposition"},
     {"path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "superseded_predecessor_forward_execution"},
     {"path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "accepted_r1_r9_closeout"},
     {"path": "IMPLEMENTATION_PLAN.md", "status": "SUPERSEDED", "scope": "compatibility_entrypoint_to_preserved_history"},
@@ -81,17 +85,19 @@ def validate_docs() -> None:
     current = status.get("current", {})
     program = current.get("architecture_program", {}) if isinstance(current, dict) else {}
     if status.get("production_ready") is not False:
-        raise SystemExit("docs/status.json must remain production_ready=false during accepted AR-5")
+        raise SystemExit("docs/status.json must remain production_ready=false during accepted AR-6")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
-        raise SystemExit("docs/status.json must keep accepted AR-5 architecture/gate state fail closed")
+        raise SystemExit("docs/status.json must keep accepted AR-6 architecture/gate state fail closed")
     if program.get("authority") != CURRENT_AUTHORITY or program.get("tracking_issue") != TRACKING_ISSUE:
         raise SystemExit("docs/status.json current architecture authority drifted")
     if program.get("accepted_slices") != ACCEPTED_SLICES or program.get("current_slice") != CURRENT_SLICE or program.get("next_slice_after_acceptance") != NEXT_SLICE:
-        raise SystemExit("docs/status.json must project accepted AR-5 -> next AR-6 sequencing")
+        raise SystemExit("docs/status.json must project accepted AR-6 -> next AR-7 sequencing")
     if program.get("runtime_topology_decision") != RUNTIME_TOPOLOGY:
         raise SystemExit("docs/status.json must project the accepted AR-2 topology decision")
     if program.get("runtime_authority_cleanup_evidence") != AR5_EVIDENCE:
         raise SystemExit("docs/status.json must project accepted AR-5 runtime-authority cleanup evidence")
+    if program.get("python_operational_evidence") != AR6_EVIDENCE or program.get("python_estate") != PYTHON_ESTATE:
+        raise SystemExit("docs/status.json must project accepted AR-6 Python/opsctl authority")
     runtime_gate = subprocess.run(
         [sys.executable, str(ROOT / "scripts/check-cloudflare-runtime-bindings.py")],
         cwd=ROOT, text=True, capture_output=True, check=False,
@@ -152,6 +158,36 @@ def build_inventory() -> dict[str, object]:
             "production_mutation": False,
             "next_required_slice": "AR-6",
         },
+        "python_operational_authority": {
+            "schema_version": 1,
+            "status": "ACCEPTED_AR6_PYTHON_OPSCTL_FOUNDATION",
+            "evidence": AR6_EVIDENCE,
+            "python_estate": PYTHON_ESTATE,
+            "implementation_issue": 294,
+            "implementation_pr": 295,
+            "exact_green_head": "9b06d542873ffa3122e53e107105098e21f5933c",
+            "implementation_merge": "d0229fedd81ee870822b6d9394bc4ee313ea3a3c",
+            "applicable_permanent_workflows": "13/13",
+            "python_summary": {
+                "tracked_python_files": 116,
+                "KEEP_PYTHON": 108,
+                "MIGRATE_TO_RUST": 2,
+                "DELETE_AFTER_SEQUENCE": 6,
+                "WRAP_WITH_RUST": 0,
+            },
+            "opsctl": {
+                "path": "tools/opsctl",
+                "mode": "READ_ONLY_FOUNDATION",
+                "commands": ["doctor", "status", "inventory"],
+                "third_party_dependencies": False,
+                "provider_mutation": False,
+            },
+            "future_cutovers": {"AR-10": "DELETE_AFTER_SEQUENCE", "AR-11": "MIGRATE_TO_RUST"},
+            "application_architecture_accepted_through": "AR-4C",
+            "runtime_authority_cleanup_accepted_through": "AR-5",
+            "production_mutation": False,
+            "next_required_slice": "AR-7",
+        },
         "documentation_authority": {
             "current_program": CURRENT_AUTHORITY,
             "tracking_issue": TRACKING_ISSUE,
@@ -161,6 +197,8 @@ def build_inventory() -> dict[str, object]:
             "runtime_topology_evidence": AR2_EVIDENCE,
             "runtime_topology_projection_owner": "AR-3",
             "runtime_authority_cleanup_evidence": AR5_EVIDENCE,
+            "python_operational_evidence": AR6_EVIDENCE,
+            "python_estate": PYTHON_ESTATE,
             "application_architecture_evidence": AR4C_EVIDENCE,
             "application_architecture_base_evidence": ar3.AR3_EVIDENCE,
             "application_architecture_projection": "architecture/inventory.json::application_architecture",
@@ -252,7 +290,11 @@ def self_test(expected: dict[str, object]) -> None:
         raise SystemExit(f"documentation authority negative self-test failed:\n{details}")
     if documentation.stdout.strip():
         print(documentation.stdout.strip())
-    print("Architecture inventory accepted AR-5 runtime-authority negative self-test passed.")
+    python_ops = copy.deepcopy(expected)
+    python_ops["python_operational_authority"]["status"] = "AR6_CANDIDATE"
+    if serialized(python_ops) == serialized(expected):
+        raise SystemExit("inventory self-test failed to detect AR-6 Python/opsctl acceptance rollback")
+    print("Architecture inventory accepted AR-6 Python/opsctl negative self-test passed.")
 
 
 def main() -> int:
@@ -269,7 +311,7 @@ def main() -> int:
         print(f"Wrote {INVENTORY_PATH.relative_to(ROOT)}")
     elif args.check:
         check_current(expected)
-        print("Architecture inventory and accepted AR-5 runtime-authority projection are current.")
+        print("Architecture inventory and accepted AR-6 Python/opsctl projection are current.")
     else:
         self_test(expected)
     return 0

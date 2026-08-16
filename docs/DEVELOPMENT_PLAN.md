@@ -4,8 +4,8 @@
 **Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Tracking:** issue #266  
 **Accepted product phase:** Phase 2I  
-**Current accepted architecture checkpoint:** AR-5 — Wrangler / Runtime Authority Cleanup
-**Next architecture slice:** AR-6 — Full Python Estate + read-only Rust opsctl
+**Current accepted architecture checkpoint:** AR-6 — Full Python Estate + read-only Rust opsctl
+**Next architecture slice:** AR-7 — Environments + GitHub Governance + Operational Boundaries
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `production_ready=false`
@@ -38,9 +38,10 @@ advance during Architecture Re-baseline v3.
 - AR-4B — Client Mail route ownership: **DONE / ACCEPTED**.
 - AR-4C — Outbound Mail composition extraction: **DONE / ACCEPTED**.
 - AR-4D remains **NOT REQUIRED** unless later accepted evidence reopens it.
-- AR-5 — Wrangler / Runtime Authority Cleanup: **CURRENT ACCEPTED CHECKPOINT**.
-- AR-6 — Full Python Estate + read-only Rust opsctl: **NEXT**.
-- AR-7…AR-17: ordered future architecture slices.
+- AR-5 — Wrangler / Runtime Authority Cleanup: **DONE / ACCEPTED**.
+- AR-6 — Full Python Estate + read-only Rust opsctl: **CURRENT ACCEPTED CHECKPOINT**.
+- AR-7 — Environments + GitHub Governance + Operational Boundaries: **NEXT**.
+- AR-8…AR-17: ordered future architecture slices.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
@@ -48,7 +49,7 @@ advance during Architecture Re-baseline v3.
 - AR-2 decision authority: `architecture/runtime-topology-ar2.json`.
 - `GENERATION_VERIFICATION=DELETE`; AR-5 accepted source/Wrangler/deployment authority cleanup while preserving synchronous verification semantics.
 - Historical D3/#251 repository-side machinery is preserved; its old production lane is disabled for forward execution.
-- Draft PR #269: feasibility evidence only; canonical read-only `opsctl` integration remains AR-6.
+- AR-6 accepted `architecture/python-estate-ar6.json` and the capability-bounded read-only `tools/opsctl` foundation; Draft PR #269 remains feasibility history only.
 
 ## 3. Accepted product phase ledger
 
@@ -81,9 +82,9 @@ AR-4A  Composition-root consolidation                            DONE / ACCEPTED
 AR-4B  Client Mail route ownership                               DONE / ACCEPTED
 AR-4C  Outbound Mail composition extraction                      DONE / ACCEPTED
 AR-4D  Profile extraction — NOT REQUIRED by AR-3; reopen only by later accepted evidence
-AR-5   Wrangler / Runtime Authority Cleanup                     CURRENT / ACCEPTED CHECKPOINT
-AR-6   Full Python Estate + read-only Rust opsctl                NEXT
-AR-7   Environments + GitHub Governance + Operational Boundaries
+AR-5   Wrangler / Runtime Authority Cleanup                      DONE / ACCEPTED
+AR-6   Full Python Estate + read-only Rust opsctl                CURRENT / ACCEPTED CHECKPOINT
+AR-7   Environments + GitHub Governance + Operational Boundaries NEXT
 AR-8   Secrets / Keys / OAuth Refresh Concurrency
 AR-9   D1 Evolution / Schema Compatibility
 AR-10  Runtime and Historical Executable Simplification
