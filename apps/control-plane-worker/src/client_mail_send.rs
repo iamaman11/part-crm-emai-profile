@@ -92,11 +92,11 @@ pub async fn dispatch(request: &mut Request, env: &Env) -> Result<Response> {
         Ok(value) => value,
         Err(_) => return invalid_request(actor.actor().correlation_id().as_str()),
     };
-    let provider = match client_mail_outbound_provider(env, actor.actor(), intent.binding_id()).await?
-    {
-        Some(value) => value,
-        None => return neutral_not_found(actor.actor().correlation_id().as_str()),
-    };
+    let provider =
+        match client_mail_outbound_provider(env, actor.actor(), intent.binding_id()).await? {
+            Some(value) => value,
+            None => return neutral_not_found(actor.actor().correlation_id().as_str()),
+        };
     let store = outbound_mail_intent_repository(env)?;
     match execute_outbound_mail(
         actor.actor(),
