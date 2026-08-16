@@ -1,6 +1,7 @@
 const STORAGE: &str = include_str!("storage.rs");
 const OPERATIONS: &str = include_str!("operations.rs");
-const MIGRATION: &str = include_str!("../../../migrations/resolver-d1/0002_oauth_refresh_fencing.sql");
+const MIGRATION: &str =
+    include_str!("../../../migrations/resolver-d1/0002_oauth_refresh_fencing.sql");
 
 fn normalized(source: &str) -> String {
     source.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -16,9 +17,15 @@ fn function_body<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 #[test]
 fn migration_persists_generation_lifecycle_and_bounded_lease_state() {
     let migration = normalized(MIGRATION);
-    assert!(migration.contains("ADD COLUMN mutation_generation INTEGER NOT NULL DEFAULT 1 CHECK (mutation_generation > 0)"));
-    assert!(migration.contains("ADD COLUMN credential_state TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (credential_state IN ('ACTIVE', 'REAUTH_REQUIRED'))"));
-    assert!(migration.contains("ADD COLUMN refresh_owner_digest TEXT CHECK (refresh_owner_digest IS NULL OR length(refresh_owner_digest) = 64)"));
+    assert!(migration.contains(
+        "ADD COLUMN mutation_generation INTEGER NOT NULL DEFAULT 1 CHECK (mutation_generation > 0)"
+    ));
+    assert!(migration.contains(
+        "ADD COLUMN credential_state TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (credential_state IN ('ACTIVE', 'REAUTH_REQUIRED'))"
+    ));
+    assert!(migration.contains(
+        "ADD COLUMN refresh_owner_digest TEXT CHECK (refresh_owner_digest IS NULL OR length(refresh_owner_digest) = 64)"
+    ));
     assert!(migration.contains("ADD COLUMN refresh_started_at_ms INTEGER"));
     assert!(migration.contains("ADD COLUMN refresh_expires_at_ms INTEGER"));
 }
@@ -26,22 +33,34 @@ fn migration_persists_generation_lifecycle_and_bounded_lease_state() {
 #[test]
 fn lease_acquire_is_generation_scoped_single_flight_and_crash_recoverable() {
     let storage = normalized(STORAGE);
-    assert!(storage.contains("mutation_generation = ? AND credential_state = 'ACTIVE' AND discarded_at_ms IS NULL AND (refresh_owner_digest IS NULL OR refresh_expires_at_ms <= ?) RETURNING mutation_generation, refresh_owner_digest, refresh_expires_at_ms"));
-    assert!(storage.contains("if row.refresh_owner_digest.is_some() && row.refresh_expires_at_ms.is_some_and(|value| value > now) { return Err(RefreshAcquireError::Busy); }"));
+    assert!(storage.contains(
+        "mutation_generation = ? AND credential_state = 'ACTIVE' AND discarded_at_ms IS NULL AND (refresh_owner_digest IS NULL OR refresh_expires_at_ms <= ?) RETURNING mutation_generation, refresh_owner_digest, refresh_expires_at_ms"
+    ));
+    assert!(storage.contains(
+        "if row.refresh_owner_digest.is_some() && row.refresh_expires_at_ms.is_some_and(|value| value > now) { return Err(RefreshAcquireError::Busy); }"
+    ));
 }
 
 #[test]
 fn refresh_commit_requires_generation_owner_live_lease_and_no_key_downgrade() {
     let storage = normalized(STORAGE);
-    assert!(storage.contains("mutation_generation = ? AND credential_state = 'ACTIVE' AND refresh_owner_digest = ? AND refresh_expires_at_ms > ? AND discarded_at_ms IS NULL AND key_version <= ?"));
-    assert!(storage.contains("mutation_generation = ?, refresh_owner_digest = NULL, refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL"));
+    assert!(storage.contains(
+        "mutation_generation = ? AND credential_state = 'ACTIVE' AND refresh_owner_digest = ? AND refresh_expires_at_ms > ? AND discarded_at_ms IS NULL AND key_version <= ?"
+    ));
+    assert!(storage.contains(
+        "mutation_generation = ?, refresh_owner_digest = NULL, refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL"
+    ));
 }
 
 #[test]
 fn reauth_transition_is_fenced_by_the_same_live_lease() {
     let storage = normalized(STORAGE);
-    assert!(storage.contains("SET credential_state = 'REAUTH_REQUIRED', mutation_generation = ?, refresh_owner_digest = NULL, refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL, updated_at_ms = ?"));
-    assert!(storage.contains("mutation_generation = ? AND credential_state = 'ACTIVE' AND refresh_owner_digest = ? AND refresh_expires_at_ms > ? AND discarded_at_ms IS NULL"));
+    assert!(storage.contains(
+        "SET credential_state = 'REAUTH_REQUIRED', mutation_generation = ?, refresh_owner_digest = NULL, refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL, updated_at_ms = ?"
+    ));
+    assert!(storage.contains(
+        "mutation_generation = ? AND credential_state = 'ACTIVE' AND refresh_owner_digest = ? AND refresh_expires_at_ms > ? AND discarded_at_ms IS NULL"
+    ));
 }
 
 #[test]
