@@ -21,7 +21,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
       - name: Show pinned toolchain
         run: rustup show active-toolchain
@@ -59,13 +65,34 @@ jobs:
           python -m py_compile scripts/test-integration-event-foundation.py
           python -m py_compile scripts/test-notification-delivery-foundation.py
 
-      - name: Enforce GitHub Actions Node 24 checkout runtime
+      - name: Enforce exact-source and immutable GitHub Actions policy
         run: python scripts/check-github-actions-runtime.py
 
       - name: Prove deprecated Node 20 checkout fixture is rejected
         run: |
           if python scripts/check-github-actions-runtime.py --root tests/github-actions-runtime/fixtures/node20-checkout; then
             echo 'Deprecated Node 20 checkout fixture unexpectedly passed.' >&2
+            exit 1
+          fi
+
+      - name: Prove floating external action pins are rejected
+        run: |
+          if python scripts/check-github-actions-runtime.py --root tests/github-actions-runtime/fixtures/floating-action; then
+            echo 'Floating external action fixture unexpectedly passed.' >&2
+            exit 1
+          fi
+
+      - name: Prove implicit pull-request merge-ref checkout is rejected
+        run: |
+          if python scripts/check-github-actions-runtime.py --root tests/github-actions-runtime/fixtures/implicit-pr-checkout; then
+            echo 'Implicit PR checkout fixture unexpectedly passed.' >&2
+            exit 1
+          fi
+
+      - name: Prove pull_request_target is rejected
+        run: |
+          if python scripts/check-github-actions-runtime.py --root tests/github-actions-runtime/fixtures/pull-request-target; then
+            echo 'pull_request_target fixture unexpectedly passed.' >&2
             exit 1
           fi
 

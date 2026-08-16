@@ -128,7 +128,7 @@ Because the current Production Core v1 scope includes Camoufox/profile runtime t
 Target responsibility split:
 
 - **GitHub Actions / Environments:** orchestration, CI, approvals, workflow concurrency, credential exposure boundary, exact-head evidence and artifact/evidence retention;
-- **Rust `opsctl`:** typed project-specific operational semantics after its owning cutover;
+- **Rust `opsctl`:** typed project-specific operational semantics after its owning cutover; it is not CI, GitHub merge or workflow orchestration authority;
 - **Wrangler / provider APIs:** actual allowed Cloudflare/provider mutation execution;
 - **Python:** validators, generators, fixtures/tests, research/evidence and other explicitly classified helpers.
 
@@ -312,7 +312,7 @@ No mega-PR and no opportunistic future-slice work. New findings are classified i
 
 A slice is not accepted from isolated green jobs. Acceptance requires the complete applicable permanent workflow set on one unchanged exact PR head, `behind_by=0`, clean reviews/threads/Conversation, no unrelated diff, and revalidation of the base immediately before guarded merge.
 
-Any new commit invalidates prior exact-head evidence.
+Any new commit invalidates prior exact-head evidence. Permanent `pull_request` jobs must bind their checkout to the literal PR head SHA; a synthetic GitHub merge ref may be exercised only as an explicitly named integration proof and may not substitute for exact-head acceptance. Guarded architecture/program merges bind the expected head SHA and use a merge commit so the exact-green candidate remains an auditable parent of accepted `main`.
 
 ## 10. AR-2 exit / AR-3 entry
 

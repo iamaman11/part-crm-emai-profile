@@ -157,9 +157,12 @@ the backend. The project retains one `main`, one architecture and one schema/com
 
 ## 7. Operational authority
 
-The target split is GitHub Actions/Environments for orchestration and approvals, Rust `opsctl` for typed
-project-specific operational semantics after bounded cutover, Wrangler/provider APIs for actual provider
-mutation, and Python for validators/generators/fixtures/research and explicitly classified helpers.
+The target split is GitHub Actions/Environments for CI orchestration, merge/deployment gates and approvals,
+Rust `opsctl` for typed project-specific operational semantics after bounded cutover, Wrangler/provider APIs
+for actual provider mutation, and Python for validators/generators/fixtures/research and explicitly classified
+helpers. `opsctl` is not a GitHub workflow wrapper or merge authority. AR-6 already classifies the resolver
+promotion core for migration into an `opsctl release/promotion` command family in AR-11; that later cutover
+must preserve one mutable authority rather than duplicating the current Python/provider path.
 
 For each mutable concern there is exactly one legitimate mutable authority. Terraform and hidden generic
 IaC state are not part of this architecture.
@@ -201,16 +204,15 @@ Every bounded AR candidate follows one immutable-head protocol:
 7. require every applicable workflow to complete successfully on one unchanged exact candidate SHA;
 8. treat any new commit as invalidating all prior exact-head CI evidence;
 9. re-read docs ↔ machine state ↔ issue ledger on the candidate head;
-10. guarded squash merge only after the final base-currentness and mergeability check;
+10. guarded merge commit only after the final base-currentness/mergeability check, binding the expected exact PR head SHA;
 11. re-read accepted `main` after merge before starting the next slice.
 
 ## 11. Immediate next action
 
-After AR-2 is accepted, begin AR-3 — Application Architecture Contract — from the resulting `main`.
-AR-3 consumes `architecture/runtime-topology-ar2.json` and owns canonical runtime-resource/application
-ownership projection. Do not jump to AR-5 cleanup, AR-6/opsctl, production provisioning or a later
-capability gate. PR #269 remains feasibility/source material for AR-6 and must not become authority
-merely because its old candidate was green.
+Accept issue #302 — post-AR-7 exact-head CI and GitHub Actions supply-chain hardening — from the
+current accepted AR-7 `main`. This is a bounded correction to acceptance mechanics, not AR-8
+implementation and not a new architecture slice. After #302 is exact-green and merged through protected
+`main`, begin **AR-8 — Secrets / Keys / OAuth Refresh Concurrency** from that resulting accepted main.
 
 Throughout AR-0…AR-17:
 

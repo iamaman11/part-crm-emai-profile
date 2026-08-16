@@ -170,8 +170,15 @@ repair, migrate, clean or open their SQLite files in place.
 
 ## Pull Request Acceptance
 
-Preferred merge method is guarded squash after green CI. An increment is complete only
-after merge; branch or draft evidence is not the accepted baseline. Final acceptance uses one
-unchanged head, `behind_by=0`, all applicable permanent workflows green, and no unresolved
-blocking review. Update `docs/status.json` in the same PR only for properties directly proven
-by that PR.
+Permanent pull-request jobs must checkout the literal candidate SHA `${{ github.event.pull_request.head.sha || github.sha }}`; GitHub's
+synthetic pull-request merge ref is not accepted as a substitute for exact-head evidence. A runtime
+`git rev-parse HEAD` assertion accompanies each checkout. `behind_by=0` remains mandatory so the
+accepted base is an ancestor of the tested candidate before merge.
+
+Architecture/program acceptance uses a guarded **merge commit** with the exact expected PR head SHA.
+This preserves the exact-green candidate as a parent of accepted `main` and makes provenance
+mechanically auditable. Squash/rebase must not be used for architecture acceptance unless an explicit
+future authority changes the provenance model. An increment is complete only after merge; branch or
+draft evidence is not the accepted baseline. Final acceptance uses one unchanged head, `behind_by=0`,
+all applicable permanent workflows green, and no unresolved blocking review. Update
+`docs/status.json` in the same PR only for properties directly proven by that PR.
