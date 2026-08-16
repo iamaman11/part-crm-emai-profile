@@ -1,10 +1,14 @@
 # AR-7 — Environments + GitHub Governance + Operational Boundaries
 
-**Document status:** IMPLEMENTATION_CANDIDATE / NOT_ACCEPTED  
+**Document status:** EVIDENCE / AR-7 accepted  
 **Architecture program:** Architecture Re-baseline v3  
 **Implementation issue:** #298  
 **Parent acceptance gate:** #268  
 **Baseline `main`:** `dde7123586b080c1c053e90ad0ba489d4620e4d2`  
+**Implementation exact-green head:** `1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7`  
+**Implementation merge:** `3492273cb9237850e3fa27343cc5edbdb0f66aa1`  
+**Hosted governance run:** `31953316327`  
+**Closeout issue:** #300  
 **Production readiness:** `false`
 
 ## 1. Purpose
@@ -129,7 +133,7 @@ AR-7 does not:
 - advance AR-8 or later slices;
 - set `production_ready=true`.
 
-## 9. Candidate Definition of Done
+## 9. Acceptance Definition of Done
 
 The implementation candidate is ready for final AR-7 acceptance only when:
 
@@ -142,5 +146,28 @@ The implementation candidate is ready for final AR-7 acceptance only when:
 - the branch is not behind accepted `main`;
 - no blocking review or unresolved thread remains.
 
-Until all of those conditions are simultaneously true, this document remains
-`IMPLEMENTATION_CANDIDATE / NOT_ACCEPTED` and AR-8 must not start.
+All conditions were simultaneously proven before closeout. The implementation head
+`1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7` passed **14/14 success** applicable permanent PR workflows,
+merged as `3492273cb9237850e3fa27343cc5edbdb0f66aa1`, and the post-merge hosted audit run `31953316327`
+completed both governance jobs successfully. The direct-main probe was rejected with **HTTP 409** and
+the sentinel remained absent. AR-7 is therefore accepted; `architecture_complete=false`,
+`production_core_gate = BLOCKED`, and `production_ready=false` remain unchanged. AR-8 is the next
+required slice.
+
+## 10. Accepted evidence
+
+- implementation issue: #298;
+- implementation PR: #299;
+- exact-green candidate: `1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7`;
+- implementation merge: `3492273cb9237850e3fa27343cc5edbdb0f66aa1`;
+- PR permanent workflows: **14/14 success** on one unchanged candidate;
+- protected `main`: exact 21 required checks, PR-only flow, strict checks, conversation resolution,
+  administrator enforcement, no force pushes, no deletion;
+- hosted Environments: `rehearsal`, `staging`, `production`, each restricted exactly to `main`;
+- production: one required reviewer and `can_admins_bypass=false`;
+- hosted governance run `31953316327`: `GitHub Governance Contract` and
+  `GitHub Governance Hosted State` both success;
+- direct-main negative probe: **HTTP 409** rejected, no sentinel persisted;
+- closeout authority issue: #300;
+- production mutation: none.
+

@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "as_of": "2026-08-16",
   "current": {
     "accepted_product_phase": "Phase 2I",
@@ -49,10 +49,11 @@
         "AR-4B",
         "AR-4C",
         "AR-5",
-        "AR-6"
+        "AR-6",
+        "AR-7"
       ],
-      "current_slice": "AR-6",
-      "next_slice_after_acceptance": "AR-7",
+      "current_slice": "AR-7",
+      "next_slice_after_acceptance": "AR-8",
       "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
       "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
       "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
@@ -97,6 +98,21 @@
         "implementation_merge": "d0229fedd81ee870822b6d9394bc4ee313ea3a3c",
         "applicable_permanent_workflows": "13/13",
         "closeout_issue": 296
+      },
+      "github_governance_contract": "architecture/github-governance-ar7.json",
+      "github_governance_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR7.md",
+      "ar7_acceptance": {
+        "issue": 298,
+        "implementation_pr": 299,
+        "exact_green_head": "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7",
+        "implementation_merge": "3492273cb9237850e3fa27343cc5edbdb0f66aa1",
+        "applicable_permanent_workflows": "14/14",
+        "hosted_audit_run_id": 31953316327,
+        "hosted_contract_job": "success",
+        "hosted_state_job": "success",
+        "direct_main_negative_probe": "HTTP_409_REJECTED_NO_SENTINEL",
+        "required_status_checks": 21,
+        "closeout_issue": 300
       }
     },
     "architecture_complete": false,
@@ -145,8 +161,8 @@
   },
   "next_repository_step": {
     "number": null,
-    "name": "Architecture Re-baseline v3 AR-6",
-    "status": "next_after_accepted_ar5_merge",
+    "name": "Architecture Re-baseline v3 AR-8",
+    "status": "next_after_accepted_ar7_merge",
     "tracking_issue": 266,
     "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
   },
@@ -270,7 +286,7 @@
     "repository_local_product_phase": "accepted_phase_2i",
     "pre2j_architecture_remediation": "closed_r1_r9",
     "pre2j_product_readiness_remediation": "historical_issue_203_superseded_by_ar_v3",
-    "architecture_rebaseline_v3": "active_issue_266_ar5_accepted_next_ar6",
+    "architecture_rebaseline_v3": "active_issue_266_ar7_accepted_next_ar8",
     "application_ownership": "r5_accepted_capability_owners_without_compatibility_facades",
     "frontend_api_ownership": "r6_accepted_feature_owned_capability_api"
   },

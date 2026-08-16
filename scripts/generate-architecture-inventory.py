@@ -29,11 +29,13 @@ AR4B_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md"
 AR4C_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md"
 AR5_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR5.md"
 AR6_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR6.md"
+AR7_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR7.md"
+GOVERNANCE_CONTRACT = "architecture/github-governance-ar7.json"
 PYTHON_ESTATE = "architecture/python-estate-ar6.json"
 TRACKING_ISSUE = 266
-ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5", "AR-6"]
-CURRENT_SLICE = "AR-6"
-NEXT_SLICE = "AR-7"
+ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5", "AR-6", "AR-7"]
+CURRENT_SLICE = "AR-7"
+NEXT_SLICE = "AR-8"
 
 DOCUMENT_STATUS = [
     {"path": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md", "status": "CURRENT_AUTHORITY", "scope": "architecture_program_execution"},
@@ -60,6 +62,8 @@ DOCUMENT_STATUS = [
     {"path": AR5_EVIDENCE, "status": "EVIDENCE", "scope": "ar5_runtime_authority_cleanup_accepted"},
     {"path": AR6_EVIDENCE, "status": "EVIDENCE", "scope": "ar6_python_estate_and_read_only_opsctl_accepted"},
     {"path": PYTHON_ESTATE, "status": "STABLE_AUTHORITY", "scope": "accepted_ar6_full_python_disposition"},
+    {"path": AR7_EVIDENCE, "status": "EVIDENCE", "scope": "ar7_github_governance_and_operational_boundaries_accepted"},
+    {"path": GOVERNANCE_CONTRACT, "status": "STABLE_AUTHORITY", "scope": "accepted_ar7_github_governance_contract"},
     {"path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "superseded_predecessor_forward_execution"},
     {"path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "accepted_r1_r9_closeout"},
     {"path": "IMPLEMENTATION_PLAN.md", "status": "SUPERSEDED", "scope": "compatibility_entrypoint_to_preserved_history"},
@@ -85,19 +89,21 @@ def validate_docs() -> None:
     current = status.get("current", {})
     program = current.get("architecture_program", {}) if isinstance(current, dict) else {}
     if status.get("production_ready") is not False:
-        raise SystemExit("docs/status.json must remain production_ready=false during accepted AR-6")
+        raise SystemExit("docs/status.json must remain production_ready=false during accepted AR-7")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
-        raise SystemExit("docs/status.json must keep accepted AR-6 architecture/gate state fail closed")
+        raise SystemExit("docs/status.json must keep accepted AR-7 architecture/gate state fail closed")
     if program.get("authority") != CURRENT_AUTHORITY or program.get("tracking_issue") != TRACKING_ISSUE:
         raise SystemExit("docs/status.json current architecture authority drifted")
     if program.get("accepted_slices") != ACCEPTED_SLICES or program.get("current_slice") != CURRENT_SLICE or program.get("next_slice_after_acceptance") != NEXT_SLICE:
-        raise SystemExit("docs/status.json must project accepted AR-6 -> next AR-7 sequencing")
+        raise SystemExit("docs/status.json must project accepted AR-7 -> next AR-8 sequencing")
     if program.get("runtime_topology_decision") != RUNTIME_TOPOLOGY:
         raise SystemExit("docs/status.json must project the accepted AR-2 topology decision")
     if program.get("runtime_authority_cleanup_evidence") != AR5_EVIDENCE:
         raise SystemExit("docs/status.json must project accepted AR-5 runtime-authority cleanup evidence")
     if program.get("python_operational_evidence") != AR6_EVIDENCE or program.get("python_estate") != PYTHON_ESTATE:
         raise SystemExit("docs/status.json must project accepted AR-6 Python/opsctl authority")
+    if program.get("github_governance_evidence") != AR7_EVIDENCE or program.get("github_governance_contract") != GOVERNANCE_CONTRACT:
+        raise SystemExit("docs/status.json must project accepted AR-7 GitHub governance authority")
     runtime_gate = subprocess.run(
         [sys.executable, str(ROOT / "scripts/check-cloudflare-runtime-bindings.py")],
         cwd=ROOT, text=True, capture_output=True, check=False,
@@ -188,6 +194,35 @@ def build_inventory() -> dict[str, object]:
             "production_mutation": False,
             "next_required_slice": "AR-7",
         },
+        "github_governance_authority": {'schema_version': 1,
+         'status': 'ACCEPTED_AR7_GITHUB_GOVERNANCE',
+         'evidence': 'docs/ARCHITECTURE_REBASELINE_V3_AR7.md',
+         'contract': 'architecture/github-governance-ar7.json',
+         'validator': '.github/scripts/github-governance.mjs',
+         'workflow': '.github/workflows/github-governance-gate.yml',
+         'implementation_issue': 298,
+         'implementation_pr': 299,
+         'exact_green_head': '1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7',
+         'implementation_merge': '3492273cb9237850e3fa27343cc5edbdb0f66aa1',
+         'applicable_permanent_workflows': '14/14',
+         'hosted_audit': {'run_id': 31953316327, 'contract_job': 'success', 'hosted_state_job': 'success'},
+         'direct_main_negative_probe': {'result': 'HTTP_409_REJECTED',
+                                        'message': 'Changes must be made through a pull request. 21 of 21 required status '
+                                                   'checks are expected.',
+                                        'sentinel_present_after_probe': False},
+         'main_protection': {'mechanism': 'classic_branch_protection',
+                             'required_check_count': 21,
+                             'require_pull_request': True,
+                             'require_conversation_resolution': True,
+                             'enforce_admins': True,
+                             'strict_required_status_checks': True,
+                             'allow_force_pushes': False,
+                             'allow_deletions': False},
+         'environments': {'rehearsal': {'allowed_branches': ['main'], 'minimum_reviewers': 0},
+                          'staging': {'allowed_branches': ['main'], 'minimum_reviewers': 0},
+                          'production': {'allowed_branches': ['main'], 'minimum_reviewers': 1, 'can_admins_bypass': False}},
+         'production_mutation': False,
+         'next_required_slice': 'AR-8'},
         "documentation_authority": {
             "current_program": CURRENT_AUTHORITY,
             "tracking_issue": TRACKING_ISSUE,
@@ -199,6 +234,8 @@ def build_inventory() -> dict[str, object]:
             "runtime_authority_cleanup_evidence": AR5_EVIDENCE,
             "python_operational_evidence": AR6_EVIDENCE,
             "python_estate": PYTHON_ESTATE,
+            "github_governance_evidence": AR7_EVIDENCE,
+            "github_governance_contract": GOVERNANCE_CONTRACT,
             "application_architecture_evidence": AR4C_EVIDENCE,
             "application_architecture_base_evidence": ar3.AR3_EVIDENCE,
             "application_architecture_projection": "architecture/inventory.json::application_architecture",
@@ -294,7 +331,7 @@ def self_test(expected: dict[str, object]) -> None:
     python_ops["python_operational_authority"]["status"] = "AR6_CANDIDATE"
     if serialized(python_ops) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect AR-6 Python/opsctl acceptance rollback")
-    print("Architecture inventory accepted AR-6 Python/opsctl negative self-test passed.")
+    print("Architecture inventory accepted AR-7 governance and AR-6 Python/opsctl negative self-test passed.")
 
 
 def main() -> int:
@@ -311,7 +348,7 @@ def main() -> int:
         print(f"Wrote {INVENTORY_PATH.relative_to(ROOT)}")
     elif args.check:
         check_current(expected)
-        print("Architecture inventory and accepted AR-6 Python/opsctl projection are current.")
+        print("Architecture inventory with accepted AR-7 governance and AR-6 Python/opsctl projections is current.")
     else:
         self_test(expected)
     return 0
