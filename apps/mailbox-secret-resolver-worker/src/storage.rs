@@ -2,11 +2,28 @@ use crate::crypto::{
     AuthenticatedContext, CryptoError, EncryptedValue, NonceSource, ResolverCrypto,
 };
 use crate::model::MAX_SECRET_DOCUMENT_BYTES;
-use crate::refresh_fencing::{CredentialLifecycleState, REFRESH_LEASE_TTL_MS};
 use serde::Deserialize;
 use worker::d1::D1Database;
 use worker::query;
 use zeroize::Zeroizing;
+
+const REFRESH_LEASE_TTL_MS: u64 = 30_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CredentialLifecycleState {
+    Active,
+    ReauthRequired,
+}
+
+impl CredentialLifecycleState {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ACTIVE" => Some(Self::Active),
+            "REAUTH_REQUIRED" => Some(Self::ReauthRequired),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecordStoreError {
@@ -23,36 +40,19 @@ pub enum RecordStoreError {
 pub struct StoredSecret {
     pub document: Zeroizing<Vec<u8>>,
     pub reencrypted: bool,
-    pub mutation_generation: u64,
-    pub lifecycle: CredentialLifecycleState,
+    pub(crate) mutation_generation: u64,
+    pub(crate) lifecycle: CredentialLifecycleState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RefreshLease {
+pub(crate) struct RefreshLease {
     mutation_generation: u64,
     owner_digest: String,
     expires_at_ms: u64,
 }
 
-impl RefreshLease {
-    #[must_use]
-    pub const fn mutation_generation(&self) -> u64 {
-        self.mutation_generation
-    }
-
-    #[must_use]
-    pub fn owner_digest(&self) -> &str {
-        &self.owner_digest
-    }
-
-    #[must_use]
-    pub const fn expires_at_ms(&self) -> u64 {
-        self.expires_at_ms
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RefreshAcquireError {
+pub(crate) enum RefreshAcquireError {
     Busy,
     ReauthRequired,
     Store(RecordStoreError),
@@ -316,7 +316,7 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         })
     }
 
-    pub async fn acquire_refresh_lease(
+    pub(crate) async fn acquire_refresh_lease(
         &self,
         identity: &RecordIdentity<'_>,
         expected_generation: u64,
@@ -433,7 +433,7 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         ))
     }
 
-    pub async fn commit_refresh(
+    pub(crate) async fn commit_refresh(
         &self,
         identity: &RecordIdentity<'_>,
         lease: &RefreshLease,
@@ -502,7 +502,7 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         Ok(next_generation)
     }
 
-    pub async fn release_refresh_lease(
+    pub(crate) async fn release_refresh_lease(
         &self,
         identity: &RecordIdentity<'_>,
         lease: &RefreshLease,
@@ -541,7 +541,7 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         )
     }
 
-    pub async fn mark_reauth_required(
+    pub(crate) async fn mark_reauth_required(
         &self,
         identity: &RecordIdentity<'_>,
         lease: &RefreshLease,
