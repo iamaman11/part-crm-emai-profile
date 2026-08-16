@@ -52,18 +52,12 @@ pub async fn client_mail_outbound_provider<'a>(
     };
 
     let provider = match binding.provider() {
-        MailboxProvider::GmailApi => {
-            ClientMailOutboundProvider::Gmail(CloudflareGmailOutboundMailProvider::new(
-                env,
-                env.d1(D1_CATALOG_BINDING)?,
-            ))
-        }
-        MailboxProvider::Imap => {
-            ClientMailOutboundProvider::Smtp(CloudflareSmtpOutboundMailProvider::new(
-                env,
-                env.d1(D1_CATALOG_BINDING)?,
-            ))
-        }
+        MailboxProvider::GmailApi => ClientMailOutboundProvider::Gmail(
+            CloudflareGmailOutboundMailProvider::new(env, env.d1(D1_CATALOG_BINDING)?),
+        ),
+        MailboxProvider::Imap => ClientMailOutboundProvider::Smtp(
+            CloudflareSmtpOutboundMailProvider::new(env, env.d1(D1_CATALOG_BINDING)?),
+        ),
         MailboxProvider::BrowserFallback | MailboxProvider::MicrosoftGraph => {
             ClientMailOutboundProvider::Unsupported
         }
