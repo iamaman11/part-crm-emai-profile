@@ -1,0 +1,90 @@
+name: AR-8C One-Shot Inventory Sync
+
+on:
+  push:
+    branches:
+      - agent/ar8c-staging-bootstrap-preflight
+    paths:
+      - '.github/workflows/ar8c-sync-inventory-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Generate canonical inventory once
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Generate canonical inventory
+        run: python scripts/generate-architecture-inventory.py --write
+
+      - name: Enforce one-file generated diff
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only)"
+          test "$changed" = "architecture/inventory.json"
+          git diff --check -- architecture/inventory.json
+
+      - name: Write generated inventory to this branch only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_REPOSITORY: iamaman11/part-crm-emai-profile
+          EXPECTED_BRANCH: agent/ar8c-staging-bootstrap-preflight
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['EXPECTED_REPOSITORY']
+          branch = os.environ['EXPECTED_BRANCH']
+          expected_sha = os.environ['EXPECTED_SHA']
+          token = os.environ['GH_TOKEN']
+          api = 'https://api.github.com'
+          headers = {
+              'Authorization': f'Bearer {token}',
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'ar8c-one-shot-inventory-sync',
+          }
+
+          def request(path, *, method='GET', payload=None):
+              data = None if payload is None else json.dumps(payload).encode()
+              req = urllib.request.Request(api + path, data=data, headers=headers, method=method)
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.load(response)
+
+          ref = request(f'/repos/{repository}/git/ref/heads/{urllib.parse.quote(branch, safe="")}')
+          actual_sha = ref['object']['sha']
+          if actual_sha != expected_sha:
+              raise SystemExit(f'branch moved: expected {expected_sha}, got {actual_sha}')
+
+          current = request(f'/repos/{repository}/contents/architecture/inventory.json?ref={urllib.parse.quote(branch, safe="")}')
+          content = open('architecture/inventory.json', 'rb').read()
+          request(
+              f'/repos/{repository}/contents/architecture/inventory.json',
+              method='PUT',
+              payload={
+                  'message': 'Regenerate architecture inventory for AR-8C bootstrap credentials',
+                  'content': base64.b64encode(content).decode(),
+                  'sha': current['sha'],
+                  'branch': branch,
+              },
+          )
+          print('Canonical architecture inventory synchronized on the AR-8C prerequisite branch.')
+          PY
