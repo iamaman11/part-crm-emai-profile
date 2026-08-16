@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 import re
 import subprocess
@@ -492,9 +491,19 @@ def print_credential_check_summary(detected: dict[str, set[str]], *, self_tested
 
 
 def git_blob_sha(path: Path) -> str:
-    data = path.read_bytes()
-    header = f"blob {len(data)}\0".encode("ascii")
-    return hashlib.sha1(header + data).hexdigest()
+    relative = path.relative_to(ROOT).as_posix()
+    result = subprocess.run(
+        ["git", "hash-object", f"--path={relative}", "--", relative],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    digest = result.stdout.strip().lower()
+    if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", digest) is None:
+        details = result.stderr.strip()
+        raise ValueError(f"git hash-object failed for {relative}: {details or digest or result.returncode}")
+    return digest
 
 
 def build_credential_projection(payload: dict[str, Any]) -> dict[str, object]:
