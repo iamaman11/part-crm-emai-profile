@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Generate and verify the canonical architecture inventory during AR-3.
+"""Generate and verify the canonical Architecture Re-baseline v3 inventory.
 
 The proven workspace/migration/route/generated-contract core remains in
-`_architecture_inventory_core.py`. AR-3 consumes the accepted AR-2 topology and projects
-runtime-resource/application ownership into the same canonical architecture inventory.
+`_architecture_inventory_core.py`. Later AR slices extend the same canonical hierarchy;
+AR-8B projects one metadata-only credential authority without creating a competing registry.
 """
 
 from __future__ import annotations
@@ -32,10 +32,16 @@ AR6_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR6.md"
 AR7_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR7.md"
 GOVERNANCE_CONTRACT = "architecture/github-governance-ar7.json"
 PYTHON_ESTATE = "architecture/python-estate-ar6.json"
+CREDENTIAL_AUTHORITY = "architecture/credential-authority-ar8b.json"
 TRACKING_ISSUE = 266
+AR8_UMBRELLA_ISSUE = 308
+AR8B_IMPLEMENTATION_ISSUE = 309
 ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5", "AR-6", "AR-7"]
-CURRENT_SLICE = "AR-7"
-NEXT_SLICE = "AR-8"
+CURRENT_SLICE = "AR-8"
+NEXT_SLICE = "AR-9"
+AR8_ACCEPTED_SUBSLICES = ["AR-8A"]
+AR8_CURRENT_SUBSLICE = "AR-8B"
+AR8_MANDATORY_REMAINING = ["AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"]
 
 DOCUMENT_STATUS = [
     {"path": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md", "status": "CURRENT_AUTHORITY", "scope": "architecture_program_execution"},
@@ -71,6 +77,19 @@ DOCUMENT_STATUS = [
 ]
 
 
+def expected_ar8_progress() -> dict[str, object]:
+    return {
+        "umbrella_issue": AR8_UMBRELLA_ISSUE,
+        "accepted_subslices": AR8_ACCEPTED_SUBSLICES,
+        "current_subslice": AR8_CURRENT_SUBSLICE,
+        "current_implementation_issue": AR8B_IMPLEMENTATION_ISSUE,
+        "mandatory_remaining": AR8_MANDATORY_REMAINING,
+        "full_ar8_accepted": False,
+        "ar9_blocked": True,
+        "production_mutation": False,
+    }
+
+
 def validate_docs() -> None:
     authority = subprocess.run(
         [sys.executable, str(ROOT / "scripts/check-documentation-authority.py"), "--root", str(ROOT)],
@@ -89,34 +108,64 @@ def validate_docs() -> None:
     current = status.get("current", {})
     program = current.get("architecture_program", {}) if isinstance(current, dict) else {}
     if status.get("production_ready") is not False:
-        raise SystemExit("docs/status.json must remain production_ready=false during accepted AR-7")
+        raise SystemExit("docs/status.json must remain production_ready=false during AR-8")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
-        raise SystemExit("docs/status.json must keep accepted AR-7 architecture/gate state fail closed")
+        raise SystemExit("docs/status.json must keep AR-8 architecture/gate state fail closed")
     if program.get("authority") != CURRENT_AUTHORITY or program.get("tracking_issue") != TRACKING_ISSUE:
         raise SystemExit("docs/status.json current architecture authority drifted")
     if program.get("accepted_slices") != ACCEPTED_SLICES or program.get("current_slice") != CURRENT_SLICE or program.get("next_slice_after_acceptance") != NEXT_SLICE:
-        raise SystemExit("docs/status.json must project accepted AR-7 -> next AR-8 sequencing")
+        raise SystemExit("docs/status.json must project accepted through AR-7 with active AR-8 and AR-9 blocked")
+    if program.get("ar8_progress") != expected_ar8_progress():
+        raise SystemExit("docs/status.json must project AR-8A accepted / AR-8B current / AR-8C..F mandatory")
     if program.get("runtime_topology_decision") != RUNTIME_TOPOLOGY:
         raise SystemExit("docs/status.json must project the accepted AR-2 topology decision")
     if program.get("runtime_authority_cleanup_evidence") != AR5_EVIDENCE:
-        raise SystemExit("docs/status.json must project accepted AR-5 runtime-authority cleanup evidence")
+        raise SystemExit("docs/status.json must project the accepted AR-5 runtime-authority cleanup evidence")
     if program.get("python_operational_evidence") != AR6_EVIDENCE or program.get("python_estate") != PYTHON_ESTATE:
         raise SystemExit("docs/status.json must project accepted AR-6 Python/opsctl authority")
     if program.get("github_governance_evidence") != AR7_EVIDENCE or program.get("github_governance_contract") != GOVERNANCE_CONTRACT:
         raise SystemExit("docs/status.json must project accepted AR-7 GitHub governance authority")
     runtime_gate = subprocess.run(
         [sys.executable, str(ROOT / "scripts/check-cloudflare-runtime-bindings.py")],
-        cwd=ROOT, text=True, capture_output=True, check=False,
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
     )
     if runtime_gate.returncode != 0:
         details = "\n".join(value.strip() for value in (runtime_gate.stdout, runtime_gate.stderr) if value.strip())
         raise SystemExit(f"AR-5 runtime authority gate failed:\n{details}")
 
 
+def load_credential_authority() -> dict[str, object]:
+    path = ROOT / CREDENTIAL_AUTHORITY
+    if not path.is_file():
+        raise SystemExit(f"AR-8B credential source authority missing: {CREDENTIAL_AUTHORITY}")
+    gate = subprocess.run(
+        ["bash", str(ROOT / "scripts/check-tracked-secrets.sh")],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if gate.returncode != 0:
+        details = "\n".join(value.strip() for value in (gate.stdout, gate.stderr) if value.strip())
+        raise SystemExit(f"AR-8B credential authority gate failed:\n{details}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise SystemExit("AR-8B credential authority must be one JSON object")
+    if payload.get("canonical_inventory") != "architecture/inventory.json" or payload.get("metadata_only") is not True:
+        raise SystemExit("AR-8B credential authority must remain metadata-only and project into canonical inventory")
+    if payload.get("parent_issue") != AR8_UMBRELLA_ISSUE or payload.get("implementation_issue") != AR8B_IMPLEMENTATION_ISSUE:
+        raise SystemExit("AR-8B credential authority issue provenance drifted")
+    return payload
+
+
 def build_inventory() -> dict[str, object]:
     core.validate_route_ownership()
     validate_docs()
     application_architecture = ar3.build_projection(ROOT)
+    credential_authority = load_credential_authority()
     routes = [
         {
             "route_class": route_class,
@@ -194,35 +243,43 @@ def build_inventory() -> dict[str, object]:
             "production_mutation": False,
             "next_required_slice": "AR-7",
         },
-        "github_governance_authority": {'schema_version': 1,
-         'status': 'ACCEPTED_AR7_GITHUB_GOVERNANCE',
-         'evidence': 'docs/ARCHITECTURE_REBASELINE_V3_AR7.md',
-         'contract': 'architecture/github-governance-ar7.json',
-         'validator': '.github/scripts/github-governance.mjs',
-         'workflow': '.github/workflows/github-governance-gate.yml',
-         'implementation_issue': 298,
-         'implementation_pr': 299,
-         'exact_green_head': '1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7',
-         'implementation_merge': '3492273cb9237850e3fa27343cc5edbdb0f66aa1',
-         'applicable_permanent_workflows': '14/14',
-         'hosted_audit': {'run_id': 31953316327, 'contract_job': 'success', 'hosted_state_job': 'success'},
-         'direct_main_negative_probe': {'result': 'HTTP_409_REJECTED',
-                                        'message': 'Changes must be made through a pull request. 21 of 21 required status '
-                                                   'checks are expected.',
-                                        'sentinel_present_after_probe': False},
-         'main_protection': {'mechanism': 'classic_branch_protection',
-                             'required_check_count': 21,
-                             'require_pull_request': True,
-                             'require_conversation_resolution': True,
-                             'enforce_admins': True,
-                             'strict_required_status_checks': True,
-                             'allow_force_pushes': False,
-                             'allow_deletions': False},
-         'environments': {'rehearsal': {'allowed_branches': ['main'], 'minimum_reviewers': 0},
-                          'staging': {'allowed_branches': ['main'], 'minimum_reviewers': 0},
-                          'production': {'allowed_branches': ['main'], 'minimum_reviewers': 1, 'can_admins_bypass': False}},
-         'production_mutation': False,
-         'next_required_slice': 'AR-8'},
+        "github_governance_authority": {
+            "schema_version": 1,
+            "status": "ACCEPTED_AR7_GITHUB_GOVERNANCE",
+            "evidence": AR7_EVIDENCE,
+            "contract": GOVERNANCE_CONTRACT,
+            "validator": ".github/scripts/github-governance.mjs",
+            "workflow": ".github/workflows/github-governance-gate.yml",
+            "implementation_issue": 298,
+            "implementation_pr": 299,
+            "exact_green_head": "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7",
+            "implementation_merge": "3492273cb9237850e3fa27343cc5edbdb0f66aa1",
+            "applicable_permanent_workflows": "14/14",
+            "hosted_audit": {"run_id": 31953316327, "contract_job": "success", "hosted_state_job": "success"},
+            "direct_main_negative_probe": {
+                "result": "HTTP_409_REJECTED",
+                "message": "Changes must be made through a pull request. 21 of 21 required status checks are expected.",
+                "sentinel_present_after_probe": False,
+            },
+            "main_protection": {
+                "mechanism": "classic_branch_protection",
+                "required_check_count": 21,
+                "require_pull_request": True,
+                "require_conversation_resolution": True,
+                "enforce_admins": True,
+                "strict_required_status_checks": True,
+                "allow_force_pushes": False,
+                "allow_deletions": False,
+            },
+            "environments": {
+                "rehearsal": {"allowed_branches": ["main"], "minimum_reviewers": 0},
+                "staging": {"allowed_branches": ["main"], "minimum_reviewers": 0},
+                "production": {"allowed_branches": ["main"], "minimum_reviewers": 1, "can_admins_bypass": False},
+            },
+            "production_mutation": False,
+            "next_required_slice": "AR-8",
+        },
+        "credential_authority": credential_authority,
         "documentation_authority": {
             "current_program": CURRENT_AUTHORITY,
             "tracking_issue": TRACKING_ISSUE,
@@ -236,6 +293,9 @@ def build_inventory() -> dict[str, object]:
             "python_estate": PYTHON_ESTATE,
             "github_governance_evidence": AR7_EVIDENCE,
             "github_governance_contract": GOVERNANCE_CONTRACT,
+            "credential_authority_source": CREDENTIAL_AUTHORITY,
+            "credential_authority_projection": "architecture/inventory.json::credential_authority",
+            "ar8_umbrella_issue": AR8_UMBRELLA_ISSUE,
             "application_architecture_evidence": AR4C_EVIDENCE,
             "application_architecture_base_evidence": ar3.AR3_EVIDENCE,
             "application_architecture_projection": "architecture/inventory.json::application_architecture",
@@ -257,6 +317,7 @@ def build_inventory() -> dict[str, object]:
             "accepted_architecture_slices": ACCEPTED_SLICES,
             "current_architecture_slice": CURRENT_SLICE,
             "next_architecture_slice_after_acceptance": NEXT_SLICE,
+            "ar8_progress": expected_ar8_progress(),
             "architecture_complete": False,
             "production_core_gate": "BLOCKED",
             "production_ready": False,
@@ -287,9 +348,17 @@ def self_test(expected: dict[str, object]) -> None:
     if serialized(authority) == serialized(expected):
         raise SystemExit("inventory self-test failed to distinguish current/historical program authority")
     state = copy.deepcopy(expected)
-    state["program_state"]["current_architecture_slice"] = "AR-1"
+    state["program_state"]["current_architecture_slice"] = "AR-7"
     if serialized(state) == serialized(expected):
-        raise SystemExit("inventory self-test failed to detect accepted checkpoint rollback")
+        raise SystemExit("inventory self-test failed to detect active AR-8 rollback")
+    ar8_state = copy.deepcopy(expected)
+    ar8_state["program_state"]["ar8_progress"]["current_subslice"] = "AR-8C"
+    if serialized(ar8_state) == serialized(expected):
+        raise SystemExit("inventory self-test failed to detect AR-8B sequencing drift")
+    credential = copy.deepcopy(expected)
+    credential["credential_authority"]["metadata_only"] = False
+    if serialized(credential) == serialized(expected):
+        raise SystemExit("inventory self-test failed to detect credential-authority projection drift")
     topology = copy.deepcopy(expected)
     topology["documentation_authority"]["runtime_topology_decision"] = "architecture/other.json"
     if serialized(topology) == serialized(expected):
@@ -331,7 +400,7 @@ def self_test(expected: dict[str, object]) -> None:
     python_ops["python_operational_authority"]["status"] = "AR6_CANDIDATE"
     if serialized(python_ops) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect AR-6 Python/opsctl acceptance rollback")
-    print("Architecture inventory accepted AR-7 governance and AR-6 Python/opsctl negative self-test passed.")
+    print("Architecture inventory active AR-8 / current AR-8B negative self-test passed.")
 
 
 def main() -> int:
@@ -348,7 +417,7 @@ def main() -> int:
         print(f"Wrote {INVENTORY_PATH.relative_to(ROOT)}")
     elif args.check:
         check_current(expected)
-        print("Architecture inventory with accepted AR-7 governance and AR-6 Python/opsctl projections is current.")
+        print("Architecture inventory projects active AR-8 with AR-8A accepted and AR-8B current.")
     else:
         self_test(expected)
     return 0
