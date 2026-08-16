@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import tempfile
@@ -119,6 +120,45 @@ def validate_ar8_progress(value: object, label: str, errors: list[str], *, allow
             errors.append(f"{label}.credential_authority_source must point to AR-8B source authority")
         if progress.get("canonical_projection") != "architecture/inventory.json::credential_authority":
             errors.append(f"{label}.canonical_projection must remain inside canonical inventory")
+
+
+def expected_credential_projection(root: Path, payload: dict[str, Any]) -> dict[str, object]:
+    sections = ("credentials", "dynamic_credential_domains", "future_trust_domains")
+    entries: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    for section in sections:
+        raw = payload.get(section)
+        if not isinstance(raw, list) or any(not isinstance(entry, dict) for entry in raw):
+            raise ValueError(f"AR-8B credential authority {section} must be a list of objects")
+        counts[section] = len(raw)
+        entries.extend(raw)
+    ids = [entry.get("id") for entry in entries]
+    if any(not isinstance(value, str) or not value for value in ids):
+        raise ValueError("AR-8B credential authority projection requires stable logical ids")
+    binding_names = sorted(
+        {
+            binding.get("name")
+            for entry in entries
+            for binding in entry.get("bindings", [])
+            if isinstance(binding, dict) and isinstance(binding.get("name"), str) and binding.get("name")
+        }
+    )
+    future_cutovers = {str(entry["id"]): entry.get("future_cutover") for entry in entries}
+    if any(not isinstance(value, str) or not value for value in future_cutovers.values()):
+        raise ValueError("AR-8B credential authority projection requires future_cutover for every authority")
+    return {
+        "schema_version": int(payload["schema_version"]),
+        "status": str(payload["status"]),
+        "source_authority": CREDENTIAL_AUTHORITY.as_posix(),
+        "source_sha256": hashlib.sha256((root / CREDENTIAL_AUTHORITY).read_bytes()).hexdigest(),
+        "metadata_only": True,
+        "canonical_environments": payload["canonical_environments"],
+        "invariants": payload["invariants"],
+        "authority_counts": counts,
+        "authority_ids": ids,
+        "static_binding_names": binding_names,
+        "future_cutovers": future_cutovers,
+    }
 
 
 def validate(root: Path) -> list[str]:
@@ -373,8 +413,13 @@ def validate(root: Path) -> list[str]:
     if program_state.get("production_ready") is not False or program_state.get("production_core_gate") != "BLOCKED":
         errors.append("architecture inventory must remain fail closed")
     projected_credential = inventory.get("credential_authority") if isinstance(inventory.get("credential_authority"), dict) else {}
-    if projected_credential != credential_authority:
-        errors.append("architecture inventory credential_authority must be the exact generated projection of AR-8B source authority")
+    try:
+        expected_projection = expected_credential_projection(root, credential_authority)
+    except ValueError as exc:
+        errors.append(str(exc))
+    else:
+        if projected_credential != expected_projection:
+            errors.append("architecture inventory credential_authority projection/digest is stale")
 
     inventory_cleanup = inventory.get("runtime_authority_cleanup") if isinstance(inventory.get("runtime_authority_cleanup"), dict) else {}
     if (
