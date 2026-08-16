@@ -285,8 +285,8 @@ def credential_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
 def validate_credential_authority(payload: dict[str, Any], detected: dict[str, set[str]]) -> None:
     if payload.get("schema_version") != 1:
         raise ValueError("credential authority schema_version must be 1")
-    if payload.get("status") != "CANDIDATE_AR8B_CREDENTIAL_METADATA_AUTHORITY":
-        raise ValueError("credential authority must remain candidate until AR-8B acceptance")
+    if payload.get("status") != "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY":
+        raise ValueError("credential authority must be accepted for AR-8B merge")
     if payload.get("parent_issue") != AR8_UMBRELLA_ISSUE or payload.get("implementation_issue") != AR8B_IMPLEMENTATION_ISSUE:
         raise ValueError("AR-8B credential authority issue provenance drifted")
     if payload.get("canonical_inventory") != "architecture/inventory.json":
