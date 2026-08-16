@@ -3,7 +3,7 @@
 
 The proven workspace/migration/route/generated-contract core remains in
 `_architecture_inventory_core.py`. Later AR slices extend the same canonical hierarchy;
-AR-8B projects one metadata-only credential authority without creating a competing registry.
+AR-8B projects the accepted metadata-only credential authority; AR-8C projects its bounded operational lifecycle without creating a competing registry.
 """
 
 from __future__ import annotations
@@ -38,12 +38,13 @@ CREDENTIAL_AUTHORITY = "architecture/credential-authority-ar8b.json"
 TRACKING_ISSUE = 266
 AR8_UMBRELLA_ISSUE = 308
 AR8B_IMPLEMENTATION_ISSUE = 309
+AR8C_IMPLEMENTATION_ISSUE = 314
 ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5", "AR-6", "AR-7"]
 CURRENT_SLICE = "AR-8"
 NEXT_SLICE = "AR-9"
-AR8_ACCEPTED_SUBSLICES = ["AR-8A"]
-AR8_CURRENT_SUBSLICE = "AR-8B"
-AR8_MANDATORY_REMAINING = ["AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"]
+AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B"]
+AR8_CURRENT_SUBSLICE = "AR-8C"
+AR8_MANDATORY_REMAINING = ["AR-8C", "AR-8D", "AR-8E", "AR-8F"]
 
 CANONICAL_ENVIRONMENTS = {"rehearsal", "staging", "production"}
 REQUIRED_CREDENTIAL_ENTRY_FIELDS = {
@@ -128,12 +129,22 @@ DOCUMENT_STATUS = [
 ]
 
 
+def ar8b_acceptance() -> dict[str, object]:
+    return {
+        "issue": 309,
+        "implementation_pr": 312,
+        "exact_green_head": "743276b578bb15042e8a42beff0e14f7698e61b0",
+        "implementation_merge": "4e4d1c25226384858ca8905377ee155bedabc6d4",
+        "applicable_permanent_workflows": "14/14",
+    }
+
+
 def expected_ar8_progress() -> dict[str, object]:
     return {
         "umbrella_issue": AR8_UMBRELLA_ISSUE,
         "accepted_subslices": AR8_ACCEPTED_SUBSLICES,
         "current_subslice": AR8_CURRENT_SUBSLICE,
-        "current_implementation_issue": AR8B_IMPLEMENTATION_ISSUE,
+        "current_implementation_issue": AR8C_IMPLEMENTATION_ISSUE,
         "mandatory_remaining": AR8_MANDATORY_REMAINING,
         "full_ar8_accepted": False,
         "ar9_blocked": True,
@@ -157,7 +168,7 @@ def validate_source_documents() -> None:
     if program.get("accepted_slices") != ACCEPTED_SLICES or program.get("current_slice") != CURRENT_SLICE or program.get("next_slice_after_acceptance") != NEXT_SLICE:
         raise SystemExit("docs/status.json must project accepted through AR-7 with active AR-8 and AR-9 blocked")
     if program.get("ar8_progress") != expected_ar8_progress():
-        raise SystemExit("docs/status.json must project AR-8A accepted / AR-8B current / AR-8C..F mandatory")
+        raise SystemExit("docs/status.json must project AR-8A/B accepted / AR-8C current / AR-8D..F mandatory")
     if program.get("runtime_topology_decision") != RUNTIME_TOPOLOGY:
         raise SystemExit("docs/status.json must project the accepted AR-2 topology decision")
     if program.get("runtime_authority_cleanup_evidence") != AR5_EVIDENCE:
@@ -506,6 +517,56 @@ def git_blob_sha(path: Path) -> str:
     return digest
 
 
+def build_ar8c_operational_lifecycle_projection(payload: dict[str, Any]) -> dict[str, object]:
+    lifecycle = payload.get("ar8c_operational_lifecycle")
+    if not isinstance(lifecycle, dict):
+        raise SystemExit("AR-8C operational lifecycle source is missing")
+    concerns = lifecycle.get("concerns")
+    hosted = lifecycle.get("hosted_reconciliation")
+    github = hosted.get("github") if isinstance(hosted, dict) else None
+    cloudflare = hosted.get("cloudflare") if isinstance(hosted, dict) else None
+    if not isinstance(concerns, list) or any(not isinstance(item, dict) for item in concerns):
+        raise SystemExit("AR-8C operational lifecycle concerns must be a list of objects")
+    if not isinstance(github, dict) or not isinstance(cloudflare, dict):
+        raise SystemExit("AR-8C hosted reconciliation source is incomplete")
+    concern_ids = sorted(
+        str(item.get("id"))
+        for item in concerns
+        if isinstance(item.get("id"), str) and item.get("id")
+    )
+    if len(concern_ids) != len(concerns) or len(set(concern_ids)) != len(concern_ids):
+        raise SystemExit("AR-8C operational lifecycle requires unique stable concern ids")
+    return {
+        "schema_version": int(lifecycle["schema_version"]),
+        "status": str(lifecycle["status"]),
+        "implementation_issue": int(lifecycle["implementation_issue"]),
+        "accepted_base": str(lifecycle["accepted_base"]),
+        "metadata_only": lifecycle.get("metadata_only") is True,
+        "stage_order": lifecycle["stage_order"],
+        "concern_ids": concern_ids,
+        "hosted_reconciliation": {
+            "github": {
+                "accepted_main_only": github.get("accepted_main_only") is True,
+                "pull_request_exposure": github.get("pull_request_exposure") is True,
+                "metadata_only": github.get("metadata_only") is True,
+                "readback_values": github.get("readback_values") is True,
+                "executor_binding": github.get("executor_binding"),
+            },
+            "cloudflare": {
+                "accepted_main_only": cloudflare.get("accepted_main_only") is True,
+                "audit_environment": cloudflare.get("audit_environment"),
+                "read_only": cloudflare.get("read_only") is True,
+                "api_token_binding": cloudflare.get("api_token_binding"),
+                "verify_endpoint": cloudflare.get("verify_endpoint"),
+                "required_token_status": cloudflare.get("required_token_status"),
+                "worker_secret_contract_source": cloudflare.get("worker_secret_contract_source"),
+            },
+        },
+        "production_mutation": lifecycle.get("production_mutation") is True,
+        "opsctl_mutation": lifecycle.get("opsctl_mutation") is True,
+    }
+
+
 def build_credential_projection(payload: dict[str, Any]) -> dict[str, object]:
     path = ROOT / CREDENTIAL_AUTHORITY
     sections = ("credentials", "dynamic_credential_domains", "future_trust_domains")
@@ -543,6 +604,7 @@ def build_credential_projection(payload: dict[str, Any]) -> dict[str, object]:
         "authority_ids": ids,
         "static_binding_names": binding_names,
         "future_cutovers": future_cutovers,
+        "operational_lifecycle": build_ar8c_operational_lifecycle_projection(payload),
     }
 
 
@@ -704,6 +766,7 @@ def build_inventory() -> dict[str, object]:
             "current_architecture_slice": CURRENT_SLICE,
             "next_architecture_slice_after_acceptance": NEXT_SLICE,
             "ar8_progress": expected_ar8_progress(),
+            "ar8b_acceptance": ar8b_acceptance(),
             "architecture_complete": False,
             "production_core_gate": "BLOCKED",
             "production_ready": False,
@@ -738,9 +801,9 @@ def self_test(expected: dict[str, object]) -> None:
     if serialized(state) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect active AR-8 rollback")
     ar8_state = copy.deepcopy(expected)
-    ar8_state["program_state"]["ar8_progress"]["current_subslice"] = "AR-8C"
+    ar8_state["program_state"]["ar8_progress"]["current_subslice"] = "AR-8D"
     if serialized(ar8_state) == serialized(expected):
-        raise SystemExit("inventory self-test failed to detect AR-8B sequencing drift")
+        raise SystemExit("inventory self-test failed to detect AR-8C sequencing drift")
     credential = copy.deepcopy(expected)
     credential["credential_authority"]["metadata_only"] = False
     if serialized(credential) == serialized(expected):

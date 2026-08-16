@@ -57,12 +57,12 @@
       "ar8_progress": {
         "umbrella_issue": 308,
         "accepted_subslices": [
-          "AR-8A"
+          "AR-8A",
+          "AR-8B"
         ],
-        "current_subslice": "AR-8B",
-        "current_implementation_issue": 309,
+        "current_subslice": "AR-8C",
+        "current_implementation_issue": 314,
         "mandatory_remaining": [
-          "AR-8B",
           "AR-8C",
           "AR-8D",
           "AR-8E",
@@ -131,6 +131,13 @@
         "direct_main_negative_probe": "HTTP_409_REJECTED_NO_SENTINEL",
         "required_status_checks": 21,
         "closeout_issue": 300
+      },
+      "ar8b_acceptance": {
+        "issue": 309,
+        "implementation_pr": 312,
+        "exact_green_head": "743276b578bb15042e8a42beff0e14f7698e61b0",
+        "implementation_merge": "4e4d1c25226384858ca8905377ee155bedabc6d4",
+        "applicable_permanent_workflows": "14/14"
       }
     },
     "architecture_complete": false,
@@ -179,11 +186,11 @@
   },
   "next_repository_step": {
     "number": null,
-    "name": "Architecture Re-baseline v3 AR-8B",
-    "status": "current_ar8_subslice_after_accepted_ar8a",
+    "name": "Architecture Re-baseline v3 AR-8C",
+    "status": "current_ar8_subslice_after_accepted_ar8b",
     "tracking_issue": 266,
     "umbrella_issue": 308,
-    "implementation_issue": 309,
+    "implementation_issue": 314,
     "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
   },
   "accepted_steps": [

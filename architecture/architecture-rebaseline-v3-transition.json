@@ -1,6 +1,6 @@
 {
-  "schema_version": 10,
-  "status": "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8A",
+  "schema_version": 11,
+  "status": "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8B",
   "program": "Architecture Re-baseline v3",
   "tracking_issue": 266,
   "subordinate_preproduction_issue": 268,
@@ -23,12 +23,12 @@
   "ar8_progress": {
     "umbrella_issue": 308,
     "accepted_subslices": [
-      "AR-8A"
+      "AR-8A",
+      "AR-8B"
     ],
-    "current_subslice": "AR-8B",
-    "current_implementation_issue": 309,
+    "current_subslice": "AR-8C",
+    "current_implementation_issue": 314,
     "mandatory_remaining": [
-      "AR-8B",
       "AR-8C",
       "AR-8D",
       "AR-8E",
@@ -178,7 +178,8 @@
     "ar5_remediation": "ACCEPTED_RUNTIME_AUTHORITY_CLEANUP_IN_CANONICAL_INVENTORY",
     "ar6_remediation": "ACCEPTED_FULL_PYTHON_ESTATE_AND_READ_ONLY_OPSCTL_IN_CANONICAL_INVENTORY",
     "ar7_remediation": "ACCEPTED_GITHUB_GOVERNANCE_AND_OPERATIONAL_BOUNDARIES_IN_CANONICAL_INVENTORY",
-    "ar8b_current_projection": "CANDIDATE_METADATA_ONLY_CREDENTIAL_AUTHORITY_IN_CANONICAL_INVENTORY"
+    "ar8b_accepted_projection": "ACCEPTED_METADATA_ONLY_CREDENTIAL_AUTHORITY_IN_CANONICAL_INVENTORY",
+    "ar8c_current_projection": "CANDIDATE_OPERATIONAL_CREDENTIAL_LIFECYCLE_IN_CANONICAL_INVENTORY"
   },
   "preserve_accepted_history": [
     "repository_steps_0_10",
@@ -252,8 +253,8 @@
     "implementation_issue": 286,
     "applicable_permanent_workflows": "13/13",
     "next_required_slice": "AR-5",
-    "program_handoff_status": "AR8_ACTIVE_AFTER_AR8A_ACCEPTED",
-    "program_next_required_subslice": "AR-8B"
+    "program_handoff_status": "AR8_ACTIVE_AFTER_AR8B_ACCEPTED",
+    "program_next_required_subslice": "AR-8C"
   },
   "runtime_authority_cleanup": {
     "status": "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP",
@@ -369,5 +370,12 @@
     },
     "production_mutation": false,
     "next_required_slice": "AR-8"
+  },
+  "ar8b_acceptance": {
+    "issue": 309,
+    "implementation_pr": 312,
+    "exact_green_head": "743276b578bb15042e8a42beff0e14f7698e61b0",
+    "implementation_merge": "4e4d1c25226384858ca8905377ee155bedabc6d4",
+    "applicable_permanent_workflows": "14/14"
   }
 }
