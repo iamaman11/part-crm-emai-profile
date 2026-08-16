@@ -643,7 +643,7 @@
     "status": "ACCEPTED_AR4B_APPLICATION_ARCHITECTURE_REMEDIATION",
     "topology_source": "architecture/runtime-topology-ar2.json",
     "base_contract_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md",
+    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md",
     "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
     "composition_taxonomy": [
       "CONFORMING_COMPOSITION_SEAM",

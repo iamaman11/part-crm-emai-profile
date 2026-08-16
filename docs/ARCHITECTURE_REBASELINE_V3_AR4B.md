@@ -3,7 +3,6 @@
 Status: **EVIDENCE / AR-4B accepted**
 
 Parent program: #266  
-Bounded implementation issue: #282  
 Accepted baseline: `c705dc45c9e923582daf531242bd2c6af2239597` (`main`, AR-4A accepted)  
 Implementation issue: #282  
 Implementation PR: #283  
@@ -68,7 +67,7 @@ After post-merge authority closeout:
 
 ## Verification contract
 
-The candidate must pass, at minimum:
+The implementation candidate was required to pass, at minimum:
 
 ```text
 cargo fmt --all -- --check

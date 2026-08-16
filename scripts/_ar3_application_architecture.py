@@ -431,7 +431,7 @@ def build_projection(root: Path) -> dict[str, Any]:
         "status": "ACCEPTED_AR4B_APPLICATION_ARCHITECTURE_REMEDIATION",
         "topology_source": RUNTIME_TOPOLOGY,
         "base_contract_evidence": AR3_EVIDENCE,
-        "evidence": AR4A_EVIDENCE,
+        "evidence": AR4B_EVIDENCE,
         "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
         "composition_taxonomy": [
             "CONFORMING_COMPOSITION_SEAM",
