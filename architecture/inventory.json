@@ -1263,7 +1263,7 @@
     "schema_version": 1,
     "status": "CANDIDATE_AR8B_CREDENTIAL_METADATA_AUTHORITY",
     "source_authority": "architecture/credential-authority-ar8b.json",
-    "source_git_blob_sha1": "1407a07f42e2d11463597f14d0bf8cc358e7d12b",
+    "source_git_blob_sha1": "5f7172d966f5bf4ca7169f10752c00ed78259cfd",
     "metadata_only": true,
     "canonical_environments": [
       "rehearsal",
