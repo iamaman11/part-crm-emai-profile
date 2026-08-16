@@ -7,9 +7,9 @@ current-authority hierarchy live in [`INDEX.md`](INDEX.md).
 
 - **Accepted repository-local product phase:** Phase 2I.
 - **Architecture Re-baseline v3:** active, tracked by issue #266.
-- **Accepted architecture slices:** AR-0, AR-1, AR-2, AR-3, AR-4A, AR-4B and AR-4C.
-- **Current accepted checkpoint:** AR-4C — Outbound Mail composition extraction.
-- **Next slice:** AR-5 — Wrangler / Runtime Authority Cleanup.
+- **Accepted architecture slices:** AR-0, AR-1, AR-2, AR-3, AR-4A, AR-4B, AR-4C and AR-5.
+- **Current accepted checkpoint:** AR-5 — Wrangler / Runtime Authority Cleanup.
+- **Next slice:** AR-6 — Full Python Estate + read-only Rust opsctl.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
@@ -27,6 +27,7 @@ first program step that may perform real Production Core mutation.
 ## Current sources
 
 - [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — CURRENT_AUTHORITY, issue #266;
+- [`ARCHITECTURE_REBASELINE_V3_AR5.md`](ARCHITECTURE_REBASELINE_V3_AR5.md) — accepted AR-5 Wrangler/runtime-authority cleanup evidence;
 - [`ARCHITECTURE_REBASELINE_V3_AR4C.md`](ARCHITECTURE_REBASELINE_V3_AR4C.md) — accepted AR-4C Outbound Mail composition-extraction evidence;
 - [`ARCHITECTURE_REBASELINE_V3_AR4B.md`](ARCHITECTURE_REBASELINE_V3_AR4B.md) — accepted AR-4B Client Mail route-ownership evidence;
 - [`ARCHITECTURE_REBASELINE_V3_AR4A.md`](ARCHITECTURE_REBASELINE_V3_AR4A.md) — accepted AR-4A composition-root remediation evidence;
@@ -56,6 +57,6 @@ first program step that may perform real Production Core mutation.
 
 Issue #203 remains a predecessor blocker lifecycle rather than the forward program tracker after AR-1.
 AR-2 classified issue #251's old production-promotion sequence as superseded forward execution while
-preserving its repository-side D3 foundation; AR-4C is accepted, AR-4D remains NOT_REQUIRED, and AR-5 is the only next architecture slice.
+preserving its repository-side D3 foundation; AR-5 is accepted, AR-4C remains the latest application-architecture remediation, AR-4D remains NOT_REQUIRED, and AR-6 is the only next architecture slice.
 
 For contributor commands and exact-head acceptance discipline see [`../CONTRIBUTING.md`](../CONTRIBUTING.md).

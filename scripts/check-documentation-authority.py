@@ -15,16 +15,17 @@ CURRENT_PROGRAM = "Architecture Re-baseline v3"
 CURRENT_AUTHORITY = "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
 TRACKING_ISSUE = 266
 SUBORDINATE_ISSUE = 268
-CURRENT_SLICE = "AR-4C"
-NEXT_SLICE = "AR-5"
+CURRENT_SLICE = "AR-5"
+NEXT_SLICE = "AR-6"
 STATUS_DATE = "2026-08-16"
-ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C"]
+ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5"]
 TOPOLOGY = Path("architecture/runtime-topology-ar2.json")
 AR2_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR2.md")
 AR3_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR3.md")
 AR4A_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR4A.md")
 AR4B_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR4B.md")
 AR4C_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR4C.md")
+AR5_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR5.md")
 
 REQUIRED_FILES = (
     Path("README.md"),
@@ -46,6 +47,7 @@ REQUIRED_FILES = (
     AR4A_EVIDENCE,
     AR4B_EVIDENCE,
     AR4C_EVIDENCE,
+    AR5_EVIDENCE,
     Path("docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md"),
     Path("docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md"),
     Path("docs/THREAT_MODEL.md"),
@@ -102,6 +104,7 @@ def validate(root: Path) -> list[str]:
         ar4a_evidence = read(root, AR4A_EVIDENCE)
         ar4b_evidence = read(root, AR4B_EVIDENCE)
         ar4c_evidence = read(root, AR4C_EVIDENCE)
+        ar5_evidence = read(root, AR5_EVIDENCE)
         pre2j_stub = read(root, Path("docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md"))
         implementation_stub = read(root, Path("IMPLEMENTATION_PLAN.md"))
         lifecycle_stub = read(root, Path("PROFILE_LIFECYCLE_PLAN.md"))
@@ -116,14 +119,14 @@ def validate(root: Path) -> list[str]:
         errors.append(f"accepted phase ledger must end at {ACCEPTED_PHASE}; observed {accepted_phase!r}")
 
     if status.get("schema_version") != 4 or status.get("as_of") != STATUS_DATE:
-        errors.append("docs/status.json must be the current AR-4C schema/date projection")
+        errors.append("docs/status.json must be the current AR-5 schema/date projection")
     if status.get("production_ready") is not False:
-        errors.append("production_ready must remain false throughout accepted AR-4C")
+        errors.append("production_ready must remain false throughout accepted AR-5")
     current = status.get("current") if isinstance(status.get("current"), dict) else {}
     if current.get("accepted_product_phase") != ACCEPTED_PHASE:
         errors.append("docs/status.json accepted product phase must remain Phase 2I")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
-        errors.append("AR-4C architecture_complete/Production Core gate state must remain fail closed")
+        errors.append("AR-5 architecture_complete/Production Core gate state must remain fail closed")
 
     program = current.get("architecture_program") if isinstance(current.get("architecture_program"), dict) else {}
     expected_program = {
@@ -142,6 +145,16 @@ def validate(root: Path) -> list[str]:
             errors.append(f"docs/status.json architecture_program.{key} must be {expected!r}")
     if program.get("accepted_slices") != ACCEPTED_SLICES:
         errors.append(f"docs/status.json accepted_slices must be {ACCEPTED_SLICES!r}")
+    ar5 = program.get("ar5_acceptance") if isinstance(program.get("ar5_acceptance"), dict) else {}
+    if (
+        program.get("runtime_authority_cleanup_evidence") != str(AR5_EVIDENCE)
+        or ar5.get("issue") != 290
+        or ar5.get("implementation_pr") != 291
+        or ar5.get("exact_green_head") != "afed435bb714794d6c4f252be6b44c592ee31b2b"
+        or ar5.get("implementation_merge") != "82d251a1d6666199c6eace393eedc1766157fcee"
+        or ar5.get("applicable_permanent_workflows") != "13/13"
+    ):
+        errors.append("docs/status.json AR-5 acceptance provenance drifted")
 
     predecessor = current.get("predecessor_external_d3") if isinstance(current.get("predecessor_external_d3"), dict) else {}
     if predecessor.get("issue") != 251:
@@ -165,20 +178,33 @@ def validate(root: Path) -> list[str]:
     if phase2j.get("status") != "blocked_pending_repository_remediation" or phase2j.get("forward_execution_authority") is not False:
         errors.append("historical Phase 2J state must remain blocked/non-forward")
 
-    if transition.get("schema_version") != 7 or transition.get("status") != "ACTIVE_AFTER_ACCEPTED_AR4C_MERGE":
-        errors.append("architecture transition must encode accepted AR-4C state")
+    if transition.get("schema_version") != 8 or transition.get("status") != "ACTIVE_AFTER_ACCEPTED_AR5_MERGE":
+        errors.append("architecture transition must encode accepted AR-5 state")
     if transition.get("tracking_issue") != TRACKING_ISSUE or transition.get("current_authority") != CURRENT_AUTHORITY:
         errors.append("architecture transition authority drifted")
     if transition.get("accepted_slices") != ACCEPTED_SLICES:
         errors.append("architecture transition accepted_slices drifted")
     if transition.get("current_slice") != CURRENT_SLICE or transition.get("next_slice_after_acceptance") != NEXT_SLICE:
-        errors.append("architecture transition must encode AR-4C -> AR-5 sequencing")
+        errors.append("architecture transition must encode AR-5 -> AR-6 sequencing")
     transition_state = transition.get("state_model") if isinstance(transition.get("state_model"), dict) else {}
     if transition_state.get("architecture_complete") is not False or transition_state.get("production_core_gate") != "BLOCKED" or transition_state.get("production_ready") is not False:
-        errors.append("transition state must remain fail closed through AR-4C")
+        errors.append("transition state must remain fail closed through AR-5")
     runtime = transition.get("runtime_topology") if isinstance(transition.get("runtime_topology"), dict) else {}
     if runtime.get("decision_authority") != str(TOPOLOGY) or runtime.get("generation_verification_decision") != "DELETE" or runtime.get("legacy_d3_production_forward_execution") != "DISABLED":
         errors.append("transition lost accepted AR-2 runtime-topology decisions")
+    cleanup = transition.get("runtime_authority_cleanup") if isinstance(transition.get("runtime_authority_cleanup"), dict) else {}
+    if (
+        runtime.get("generation_verification_source_binding_removal") != "ACCEPTED_AR5"
+        or runtime.get("runtime_authority_cleanup_evidence") != str(AR5_EVIDENCE)
+        or cleanup.get("status") != "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP"
+        or cleanup.get("evidence") != str(AR5_EVIDENCE)
+        or cleanup.get("implementation_pr") != 291
+        or cleanup.get("exact_green_head") != "afed435bb714794d6c4f252be6b44c592ee31b2b"
+        or cleanup.get("implementation_merge") != "82d251a1d6666199c6eace393eedc1766157fcee"
+        or cleanup.get("next_required_slice") != "AR-6"
+        or cleanup.get("production_mutation") is not False
+    ):
+        errors.append("transition AR-5 runtime-authority cleanup acceptance drifted")
 
     if topology.get("slice") != "AR-2" or topology.get("production_mutation") is not False:
         errors.append("AR-2 topology authority must remain non-mutating")
@@ -196,21 +222,33 @@ def validate(root: Path) -> list[str]:
     if doc_authority.get("runtime_topology_decision") != str(TOPOLOGY):
         errors.append("architecture inventory must point to the accepted AR-2 topology decision")
     if program_state.get("accepted_architecture_slices") != ACCEPTED_SLICES or program_state.get("current_architecture_slice") != CURRENT_SLICE or program_state.get("next_architecture_slice_after_acceptance") != NEXT_SLICE:
-        errors.append("architecture inventory AR-4C program state is stale")
+        errors.append("architecture inventory AR-5 program state is stale")
     if program_state.get("production_ready") is not False or program_state.get("production_core_gate") != "BLOCKED":
         errors.append("architecture inventory must remain fail closed")
+    inventory_cleanup = inventory.get("runtime_authority_cleanup") if isinstance(inventory.get("runtime_authority_cleanup"), dict) else {}
+    if (
+        inventory_cleanup.get("status") != "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP"
+        or inventory_cleanup.get("evidence") != str(AR5_EVIDENCE)
+        or inventory_cleanup.get("implementation_pr") != 291
+        or inventory_cleanup.get("exact_green_head") != "afed435bb714794d6c4f252be6b44c592ee31b2b"
+        or inventory_cleanup.get("implementation_merge") != "82d251a1d6666199c6eace393eedc1766157fcee"
+        or inventory_cleanup.get("next_required_slice") != "AR-6"
+        or inventory_cleanup.get("production_mutation") is not False
+    ):
+        errors.append("architecture inventory AR-5 runtime-authority cleanup projection drifted")
 
-    common = ("Architecture Re-baseline v3", "issue #266", "AR-4C", "AR-5", "production_ready=false")
+    common = ("Architecture Re-baseline v3", "issue #266", "AR-5", "AR-6", "production_ready=false")
     require(root_readme, common, "README.md", errors)
     require(docs_readme, common, "docs/README.md", errors)
-    require(index, ("CURRENT_AUTHORITY", "ARCHITECTURE_REBASELINE_V3_PLAN.md", "issue #266", "AR-4C", "AR-5"), "docs/INDEX.md", errors)
-    require(development, ("Document status:** GENERATED_PROJECTION", "AR-4B  Client Mail route ownership", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "production_ready=false", "Immutable Accepted Phase Provenance"), "docs/DEVELOPMENT_PLAN.md", errors)
-    require(plan, ("Document status:** CURRENT_AUTHORITY", "Tracking issue:** #266", "Current accepted architecture checkpoint:** AR-4C", "Next slice:** AR-5", "AR-4B  Client Mail route ownership", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "source_present != production_enabled", "No production provisioning, promotion or other real production mutation is an AR-0…AR-17 activity"), "current v3 plan", errors)
+    require(index, ("CURRENT_AUTHORITY", "ARCHITECTURE_REBASELINE_V3_PLAN.md", "issue #266", "AR-5", "AR-6"), "docs/INDEX.md", errors)
+    require(development, ("Document status:** GENERATED_PROJECTION", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "production_ready=false", "Immutable Accepted Phase Provenance"), "docs/DEVELOPMENT_PLAN.md", errors)
+    require(plan, ("Document status:** CURRENT_AUTHORITY", "Tracking issue:** #266", "Current accepted architecture checkpoint:** AR-5", "Next slice:** AR-6", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "source_present != production_enabled", "No production provisioning, promotion or other real production mutation is an AR-0…AR-17 activity"), "current v3 plan", errors)
     require(ar2_evidence, ("AR-2 Runtime Topology + D3 Compatibility", "GENERATION_VERIFICATION = DELETE", "legacy D3 production lane", "AR-5", "AR-11", "PC-1"), "AR-2 evidence", errors)
     require(ar3_evidence, ("AR-3 Application Architecture Contract", "EVIDENCE / AR-3 accepted", "AR-4A", "AR-4B", "AR-4C", "NOT_REQUIRED", "architecture/inventory.json"), "AR-3 evidence", errors)
     require(ar4a_evidence, ("AR-4A Composition-root consolidation", "EVIDENCE / AR-4A accepted", "f257a30a1df437812edb5c9e4b33c3de7e0740bc", "74672285ef0146c2dc6da298024b378438e5a75d", "AR-4B", "AR-4C", "Production Core remains `BLOCKED`"), "AR-4A evidence", errors)
     require(ar4b_evidence, ("AR-4B Client Mail route ownership", "EVIDENCE / AR-4B accepted", "7ccdd1b0ed0c0eae974cd9bde15c87524315c023", "04b62c97813010ac283d8b70c81089f1c16f5672", "AR-4C", "Production Core remains `BLOCKED`"), "AR-4B evidence", errors)
     require(ar4c_evidence, ("AR-4C Outbound Mail composition extraction", "EVIDENCE / AR-4C accepted", "c62f3a7fb00acf16fa1a8a00d9d2f101949cf8a3", "d8382d1578c4911287fb76dd0b9966b23aa85c25", "AR-5", "Production Core remains `BLOCKED`"), "AR-4C evidence", errors)
+    require(ar5_evidence, ("AR-5 Wrangler / Runtime Authority Cleanup", "EVIDENCE / AR-5 accepted", "afed435bb714794d6c4f252be6b44c592ee31b2b", "82d251a1d6666199c6eace393eedc1766157fcee", "13/13 success", "AR-6", "Production Core remains `BLOCKED`"), "AR-5 evidence", errors)
     require(pre2j_stub, ("ACCEPTED_HISTORICAL", "SUPERSEDED_FOR_FORWARD_EXECUTION", "Former tracking issue:** #203", "Current program authority"), "pre-2J compatibility stub", errors)
     require(implementation_stub, ("Document status:** SUPERSEDED", "history/IMPLEMENTATION_PLAN_PRE_AR_V3_2026-08-15.md", "ARCHITECTURE_REBASELINE_V3_PLAN.md"), "IMPLEMENTATION_PLAN.md", errors)
     require(lifecycle_stub, ("Document status:** SUPERSEDED", "history/PROFILE_LIFECYCLE_PLAN_PRE_AR_V3_2026-08-15.md", "ARCHITECTURE_REBASELINE_V3_PLAN.md"), "PROFILE_LIFECYCLE_PLAN.md", errors)
@@ -242,7 +280,7 @@ def self_test(root: Path) -> bool:
         return False
     fixtures = [
         ("tracking rollback", Path("docs/status.json"), '"tracking_issue": 266', '"tracking_issue": 203', "tracking_issue"),
-        ("slice rollback", Path("docs/status.json"), '"current_slice": "AR-4C"', '"current_slice": "AR-4B"', "current_slice"),
+        ("slice rollback", Path("docs/status.json"), '"current_slice": "AR-5"', '"current_slice": "AR-4C"', "current_slice"),
         ("premature architecture closeout", Path("docs/status.json"), '"architecture_complete": false', '"architecture_complete": true', "architecture_complete"),
         ("premature gate authorization", Path("docs/status.json"), '"production_core_gate": "BLOCKED"', '"production_core_gate": "AUTHORIZED"', "Production"),
         ("premature production readiness", Path("docs/status.json"), '"production_ready": false', '"production_ready": true', "production_ready"),
@@ -262,7 +300,7 @@ def self_test(root: Path) -> bool:
             if not errors or not any(expected.lower() in error.lower() for error in errors):
                 print(f"negative fixture {label} was not rejected by the expected invariant: {errors}")
                 return False
-    print("Architecture Re-baseline v3 AR-4C documentation authority negative fixtures passed.")
+    print("Architecture Re-baseline v3 AR-5 documentation authority negative fixtures passed.")
     return True
 
 
@@ -279,7 +317,7 @@ def main() -> int:
         for error in errors:
             print(error)
         return 1
-    print("Architecture Re-baseline v3 AR-4C documentation/program authority is consistent.")
+    print("Architecture Re-baseline v3 AR-5 documentation/program authority is consistent.")
     return 0
 
 
