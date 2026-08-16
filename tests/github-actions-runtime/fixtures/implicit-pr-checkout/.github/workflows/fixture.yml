@@ -1,0 +1,16 @@
+name: Implicit PR Checkout Fixture
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout without explicit candidate ref
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          persist-credentials: false
