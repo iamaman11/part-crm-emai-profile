@@ -61,12 +61,12 @@ WORKFLOW_SECRET = re.compile(r"\bsecrets\.([A-Z][A-Z0-9_]*)\b")
 WRANGLER_REQUIRED = re.compile(r'"required"\s*:\s*\[(.*?)\]', re.DOTALL)
 QUOTED_IDENTIFIER = re.compile(r'"([A-Z][A-Z0-9_]*)"')
 RUST_WORKER_SECRET = re.compile(r"\.secret\(\s*\"([A-Z][A-Z0-9_]*)\"\s*\)")
-PY_ENV_LOOKUP = re.compile(
-    r"(?:os\.environ(?:\.get)?\[?\s*|os\.getenv\(\s*)[\"']([A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PRIVATE_KEY|API_KEY|AUTH_KEY|KEYRING)[A-Z0-9_]*)[\"']"
-)
-JS_ENV_LOOKUP = re.compile(
-    r"(?:process\.env\.|env\.)(([A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PRIVATE_KEY|API_KEY|AUTH_KEY|KEYRING)[A-Z0-9_]*))"
-)
+CREDENTIAL_NAME = r"([A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PRIVATE_KEY|API_KEY|AUTH_KEY|KEYRING)[A-Z0-9_]*)"
+PY_ENV_ITEM = re.compile(rf"os\.environ\[\s*[\"']{CREDENTIAL_NAME}[\"']\s*\]")
+PY_ENV_GET = re.compile(rf"os\.environ\.get\(\s*[\"']{CREDENTIAL_NAME}[\"']")
+PY_GETENV = re.compile(rf"os\.getenv\(\s*[\"']{CREDENTIAL_NAME}[\"']")
+JS_ENV_LOOKUP = re.compile(rf"(?:process\.env\.|env\.){CREDENTIAL_NAME}")
+ENVIRONMENT_BOUND_SURFACES = {"github_environment_secret", "cloudflare_worker_secret"}
 
 
 def tracked_files() -> list[Path]:
@@ -103,11 +103,12 @@ def discover() -> dict[str, set[str]]:
             for name in RUST_WORKER_SECRET.findall(source):
                 add(name, path)
         if relative.startswith(("scripts/", "tools/")) and path.suffix == ".py":
-            for name in PY_ENV_LOOKUP.findall(source):
-                add(name, path)
+            for pattern in (PY_ENV_ITEM, PY_ENV_GET, PY_GETENV):
+                for name in pattern.findall(source):
+                    add(name, path)
         if relative.startswith(("scripts/", "tools/", ".github/")) and path.suffix in {".js", ".mjs", ".cjs", ".ts"}:
-            for match in JS_ENV_LOOKUP.finditer(source):
-                add(match.group(1), path)
+            for name in JS_ENV_LOOKUP.findall(source):
+                add(name, path)
     return detected
 
 
@@ -216,6 +217,12 @@ def validate(payload: dict[str, Any], detected: dict[str, set[str]]) -> None:
             if identity in seen:
                 raise ValueError(f"{logical_id}: duplicate binding tuple {identity!r}")
             seen.add(identity)
+            if surface in ENVIRONMENT_BOUND_SURFACES:
+                binding_envs = binding.get("environments")
+                if kind != "environment" or not isinstance(binding_envs, list) or set(binding_envs) != set(environments):
+                    raise ValueError(f"{logical_id}/{name}: binding environments must exactly match logical environment scope")
+            elif binding.get("environments"):
+                raise ValueError(f"{logical_id}/{name}: repository/non-environment binding cannot declare environments")
             previous = owners.get(name)
             if previous is not None and previous != logical_id:
                 raise ValueError(f"binding {name} belongs to multiple authorities: {previous}, {logical_id}")
@@ -240,25 +247,47 @@ if not isinstance(payload, dict):
 detected = discover()
 validate(payload, detected)
 
-negative = copy.deepcopy(payload)
-negative["credentials"][0]["value"] = "forbidden"
-try:
-    validate(negative, detected)
-except ValueError:
-    pass
-else:
-    raise SystemExit("AR-8B negative value-bearing fixture unexpectedly passed")
+
+def must_reject(label: str, candidate: dict[str, Any], detected_override: dict[str, set[str]] | None = None) -> None:
+    try:
+        validate(candidate, detected if detected_override is None else detected_override)
+    except ValueError:
+        return
+    raise SystemExit(f"AR-8B negative fixture unexpectedly passed: {label}")
+
+
+plaintext = copy.deepcopy(payload)
+plaintext["credentials"][0]["value"] = "forbidden"
+must_reject("plaintext/value-bearing field", plaintext)
+
+unknown_environment = copy.deepcopy(payload)
+unknown_environment["credentials"][2]["environment_scope"]["environments"] = ["prod"]
+must_reject("unknown environment", unknown_environment)
+
+missing_lifecycle = copy.deepcopy(payload)
+missing_lifecycle["credentials"][0].pop("rotation_recovery_policy")
+must_reject("missing lifecycle metadata", missing_lifecycle)
+
+duplicate_id = copy.deepcopy(payload)
+duplicate_id["credentials"].append(copy.deepcopy(duplicate_id["credentials"][0]))
+must_reject("duplicate logical authority", duplicate_id)
+
+dual_authority = copy.deepcopy(payload)
+dual_authority["credentials"][1]["bindings"].append(copy.deepcopy(dual_authority["credentials"][0]["bindings"][0]))
+must_reject("dual authority for one binding", dual_authority)
+
+wrong_binding_environment = copy.deepcopy(payload)
+wrong_binding_environment["credentials"][2]["bindings"][0]["environments"] = ["production"]
+must_reject("binding/environment scope mismatch", wrong_binding_environment)
 
 synthetic = copy.deepcopy(detected)
 synthetic["AR8B_UNKNOWN_TRACKED_SECRET"] = {"tests/synthetic-workflow.yml"}
-try:
-    validate(payload, synthetic)
-except ValueError:
-    pass
-else:
-    raise SystemExit("AR-8B unknown-binding fixture unexpectedly passed")
+must_reject("unknown tracked credential binding", payload, synthetic)
 
-print(f"AR-8B credential metadata authority covers {len(detected)} tracked static bindings and rejects negative fixtures.")
+print(
+    f"AR-8B credential metadata authority covers {len(detected)} tracked static bindings and rejects "
+    "plaintext, missing-metadata, duplicate/dual-authority, unknown-environment and unknown-binding fixtures."
+)
 PY
 
 echo "No high-confidence credential patterns found in tracked files, and AR-8B metadata authority is consistent."
