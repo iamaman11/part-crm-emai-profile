@@ -60,6 +60,34 @@ jobs:
       - name: Build release Profile Bridge executable
         run: cargo build --locked --release -p profile-bridge
 
+      - name: Test and build AR-6 opsctl on Windows
+        run: |
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml
+          cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+
+      - name: Exercise AR-6 opsctl read-only commands on Windows
+        shell: pwsh
+        run: |
+          $bin = 'tools/opsctl/target/debug/opsctl.exe'
+          if (-not (Test-Path $bin)) {
+            throw "opsctl.exe was not produced"
+          }
+          foreach ($command in @('doctor', 'status', 'inventory')) {
+            $output = (& $bin --root . $command) -join "`n"
+            if ($LASTEXITCODE -ne 0) {
+              throw "opsctl $command failed with exit code $LASTEXITCODE"
+            }
+            $parsed = $output | ConvertFrom-Json
+            if ($null -eq $parsed) {
+              throw "opsctl $command did not return JSON"
+            }
+            if ($command -eq 'doctor') {
+              if ($parsed.status -ne 'ok' -or $parsed.mode -ne 'read-only' -or $parsed.mutation_executed -ne $false) {
+                throw "opsctl doctor lost the AR-6 read-only contract"
+              }
+            }
+          }
+
       - name: Verify Windows Profile Bridge artifact
         shell: pwsh
         run: |

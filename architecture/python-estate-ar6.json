@@ -1,0 +1,995 @@
+{
+  "schema_version": 1,
+  "status": "AR6_CANDIDATE_PYTHON_ESTATE",
+  "scope": "ALL_GIT_TRACKED_PYTHON_STRONGER_THAN_EXECUTABLE_ONLY",
+  "accepted_program_checkpoint_remains": "AR-5",
+  "owning_slice": "AR-6",
+  "classification_vocabulary": [
+    "DELETE_AFTER_SEQUENCE",
+    "KEEP_PYTHON",
+    "MIGRATE_TO_RUST",
+    "WRAP_WITH_RUST"
+  ],
+  "policy": {
+    "global_python_to_rust_rewrite": false,
+    "unknown_path_policy": "FAIL_CLOSED",
+    "python_allowed_for": [
+      "validators",
+      "generators",
+      "tests_fixtures",
+      "research_evidence",
+      "explicit_helpers"
+    ],
+    "mutable_authority_rule": "ONE_MUTABLE_CONCERN_ONE_LEGITIMATE_AUTHORITY",
+    "production_mutation": false
+  },
+  "summary": {
+    "tracked_python_files": 116,
+    "DELETE_AFTER_SEQUENCE": 6,
+    "KEEP_PYTHON": 108,
+    "MIGRATE_TO_RUST": 2,
+    "WRAP_WITH_RUST": 0
+  },
+  "files": [
+    {
+      "path": "check_mail.py",
+      "authority": "FUTURE_CUTOVER_REQUIRED",
+      "classification": "DELETE_AFTER_SEQUENCE",
+      "role": "retired_legacy_marker",
+      "side_effect_class": "none_retired_fail_closed",
+      "rust_target": "existing mailbox application/control-plane + Profile Bridge authorities",
+      "artifact_type": "retired compatibility marker",
+      "cutover_slice": "AR-10",
+      "compatibility_requirement": "no accepted workflow or operator contract may depend on this retired launcher marker",
+      "retirement_proof": "repository reference scan + permanent mailbox/Profile Bridge gates pass after deletion"
+    },
+    {
+      "path": "profile_manager.py",
+      "authority": "FUTURE_CUTOVER_REQUIRED",
+      "classification": "DELETE_AFTER_SEQUENCE",
+      "role": "retired_legacy_marker",
+      "side_effect_class": "none_retired_fail_closed",
+      "rust_target": "apps/profile-bridge",
+      "artifact_type": "retired compatibility marker",
+      "cutover_slice": "AR-10",
+      "compatibility_requirement": "Profile Bridge remains the only accepted local profile lifecycle authority",
+      "retirement_proof": "repository reference scan + Windows/Profile Bridge permanent gates pass after deletion"
+    },
+    {
+      "path": "runtime/camouhost/main.py",
+      "classification": "KEEP_PYTHON",
+      "role": "synthetic_runtime_fixture",
+      "side_effect_class": "synthetic_local_fixture_state_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "repository contract evidence fake; not production Camoufox authority"
+    },
+    {
+      "path": "scripts/_ar3_application_architecture.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator_core",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validator core remains legitimate Python"
+    },
+    {
+      "path": "scripts/_architecture_inventory_core.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator_core",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validator core remains legitimate Python"
+    },
+    {
+      "path": "scripts/_cloudflare_runtime_bindings_core.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator_core",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validator core remains legitimate Python"
+    },
+    {
+      "path": "scripts/_mailbox_secret_resolver_promotion_core.py",
+      "authority": "FUTURE_CUTOVER_REQUIRED",
+      "classification": "MIGRATE_TO_RUST",
+      "role": "legacy_d3_operational_promotion_core",
+      "side_effect_class": "environment_gated_provider_promotion",
+      "rust_target": "opsctl release/promotion command family",
+      "artifact_type": "typed operational library",
+      "cutover_slice": "AR-11",
+      "compatibility_requirement": "preserve accepted D3 validation, identity, deployment-closure and same-bits invariants exactly through cutover",
+      "retirement_proof": "Rust AR-11 positive/negative fixtures cover accepted D3 invariants and no accepted Python wrapper imports this core"
+    },
+    {
+      "path": "scripts/accepted_phase_provenance.py",
+      "classification": "KEEP_PYTHON",
+      "role": "provenance_validator",
+      "side_effect_class": "repository_read_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "accepted provenance validation remains legitimate Python"
+    },
+    {
+      "path": "scripts/check-architecture.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-capability-module-layout.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-cloudflare-runtime-bindings.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-contract-compatibility.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-d1-boundary.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-device-generation-commit-boundary.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-documentation-authority.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-external-evidence-scope.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-external-evidence.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-external-readiness-summary.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-external-review-attestations.py",
+      "classification": "KEEP_PYTHON",
+      "role": "external_review_attestation_verifier",
+      "side_effect_class": "github_api_read_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "terminal external-evidence verification performs bounded GitHub API GETs and may consume a workflow-scoped token; it has no mutation surface"
+    },
+    {
+      "path": "scripts/check-external-runbook.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-frontend-feature-boundaries.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-generation-worker-application-boundary.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-github-actions-runtime.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-mailbox-binding-worker-application-boundary.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-mailbox-job-worker-application-boundary.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-no-temporary-step4.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-opsctl-readonly.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase1a-event-boundaries.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase1b-notification-boundaries.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2a-client-boundaries.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2b-client-boundaries.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2c-client-boundaries.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2d-query-boundaries.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2e-mailbox-boundaries.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2f-retained-operator.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2g-realtime-boundaries.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2h-ui-boundaries.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2i-hardening.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2i-operational-bounds.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2i-supply-chain.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-phase2i-support-bundle.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-pre2j-b4-contract-authority.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-pre2j-c2-contract-authority.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-pre2j-c3-contract-authority.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-pre2j-c3g-contract-authority.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-pre2j-d3-resolver-bootstrap-authority.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-pre2j-d3-resolver-bootstrap-implementation.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-pre2j-d3-resolver-d1-first-bootstrap-implementation.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-profile-worker-application-boundary.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-r2-generation-objects.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-step10-certification.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-step4-governed-writes.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-step5-profile-coordinator.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-step6-windows-bridge.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-step7-runtime-bundle.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-step8-local-profile.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-step9-encrypted-generation.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-worker-application-boundary.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/cloudflare-d1-bootstrap.py",
+      "classification": "KEEP_PYTHON",
+      "role": "bootstrap_sql_generator",
+      "side_effect_class": "artifact_generation_and_local_sqlite_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "builds/verifies SQL; remote execution remains Wrangler/workflow authority"
+    },
+    {
+      "path": "scripts/cloudflare-deploy-config.py",
+      "classification": "KEEP_PYTHON",
+      "role": "deployment_config_generator",
+      "side_effect_class": "artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "renderer/validator remains legitimate Python; it does not deploy"
+    },
+    {
+      "path": "scripts/cloudflare-release.py",
+      "classification": "KEEP_PYTHON",
+      "role": "immutable_release_generator",
+      "side_effect_class": "artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "release artifact/provenance generator remains Python; AR-11 owns later operational release-set semantics"
+    },
+    {
+      "path": "scripts/generate-architecture-inventory.py",
+      "classification": "KEEP_PYTHON",
+      "role": "generator",
+      "side_effect_class": "artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "deterministic generators remain legitimate Python"
+    },
+    {
+      "path": "scripts/generate-c7-contracts.py",
+      "classification": "KEEP_PYTHON",
+      "role": "generator",
+      "side_effect_class": "artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "deterministic generators remain legitimate Python"
+    },
+    {
+      "path": "scripts/generate-frontend-contracts.py",
+      "classification": "KEEP_PYTHON",
+      "role": "generator",
+      "side_effect_class": "artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "deterministic generators remain legitimate Python"
+    },
+    {
+      "path": "scripts/generate-mailbox-client-association-contract.py",
+      "classification": "KEEP_PYTHON",
+      "role": "generator",
+      "side_effect_class": "artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "deterministic generators remain legitimate Python"
+    },
+    {
+      "path": "scripts/mailbox-secret-resolver-d1-bootstrap.py",
+      "classification": "KEEP_PYTHON",
+      "role": "bootstrap_sql_generator",
+      "side_effect_class": "artifact_generation_and_local_sqlite_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "builds/verifies resolver bootstrap SQL; remote execution remains Wrangler/workflow authority"
+    },
+    {
+      "path": "scripts/mailbox-secret-resolver-promotion.py",
+      "authority": "FUTURE_CUTOVER_REQUIRED",
+      "classification": "MIGRATE_TO_RUST",
+      "role": "legacy_d3_operational_promotion_entrypoint",
+      "side_effect_class": "environment_gated_provider_promotion",
+      "rust_target": "opsctl release/promotion command family",
+      "artifact_type": "typed operational command",
+      "cutover_slice": "AR-11",
+      "compatibility_requirement": "preserve D3 preflight/attestation/same-bits semantics and AR-2 production fail-closed interlock until AR-11 replacement is accepted",
+      "retirement_proof": "GitHub workflows call only accepted Rust operational authority; Python entrypoint has zero legitimate callers and can be removed without weakening D3/AR-11 gates"
+    },
+    {
+      "path": "scripts/mailbox-secret-resolver-release.py",
+      "classification": "KEEP_PYTHON",
+      "role": "immutable_release_generator",
+      "side_effect_class": "artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "resolver artifact/provenance generator remains Python; AR-11 owns later operational release-set semantics"
+    },
+    {
+      "path": "scripts/prepare-external-evidence.py",
+      "classification": "KEEP_PYTHON",
+      "role": "evidence_preparer",
+      "side_effect_class": "evidence_artifact_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "research/evidence helper remains legitimate Python"
+    },
+    {
+      "path": "scripts/python-estate-ar6.py",
+      "classification": "KEEP_PYTHON",
+      "role": "estate_generator",
+      "side_effect_class": "repository_validation_and_inventory_generation",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "AR-6 canonical Python estate generator/checker remains legitimate Python"
+    },
+    {
+      "path": "scripts/render-openapi.py",
+      "classification": "KEEP_PYTHON",
+      "role": "contract_generator",
+      "side_effect_class": "artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "deterministic contract rendering remains legitimate Python"
+    },
+    {
+      "path": "scripts/test-architecture-inventory-negative.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-browser-mail-execution-d1.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-client-creator-grant.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-cross-component-acceptance.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-d1-schema.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-device-generation-commit-d1.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-device-job-d1.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-gmail-oauth-onboarding.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-integration-event-foundation.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-mailbox-client-association-surface.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-mailbox-client-associations.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-mailbox-onboarding-lifecycle.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-mailbox-vertical-slice.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-notification-delivery-foundation.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-openapi-fragments.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-phase2b-client-contacts.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-phase2c-client-merge-assignment.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-phase2d-query-projections.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-phase2i-d1-backup-restore.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-pre2j-c5-gmail-send.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-pre2j-c6-smtp-send.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-profile-creator-grant.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-profile-generation-integrity-guards.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-profile-generation-registry-edge-cases.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-profile-generation-registry.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-profile-generation-state-guards.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-step4-command-guards.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-step4-identity-acl.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-step5-coordinator-projection.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-step6-bridge-local.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-step7-fake-camouhost.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test-step7-runtime-bundle.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/test_step4_error_taxonomy.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests remain legitimate Python"
+    },
+    {
+      "path": "scripts/verify-fast.py",
+      "classification": "KEEP_PYTHON",
+      "role": "developer_verifier",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "developer verification orchestration is non-authoritative/read-only"
+    },
+    {
+      "path": "test_fingerprint_consistency.py",
+      "authority": "FUTURE_CUTOVER_REQUIRED",
+      "classification": "DELETE_AFTER_SEQUENCE",
+      "role": "retired_legacy_marker",
+      "side_effect_class": "none_retired_fail_closed",
+      "rust_target": "certification application port + accepted Profile Bridge runtime boundary",
+      "artifact_type": "retired compatibility marker",
+      "cutover_slice": "AR-10",
+      "compatibility_requirement": "accepted certification evidence must not depend on this retired launcher marker",
+      "retirement_proof": "zero accepted references + certification/Profile Bridge permanent gates green after deletion"
+    },
+    {
+      "path": "tests/external-evidence-tooling/test-draft-tool.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test_or_fixture",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests and fixtures remain legitimate Python"
+    },
+    {
+      "path": "tests/external-evidence-tooling/test-runbook-coverage.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test_or_fixture",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests and fixtures remain legitimate Python"
+    },
+    {
+      "path": "tests/external-readiness/test-summary.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test_or_fixture",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests and fixtures remain legitimate Python"
+    },
+    {
+      "path": "tests/external-review-attestations/test-attestations.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test_or_fixture",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests and fixtures remain legitimate Python"
+    },
+    {
+      "path": "tests/runtime-bundle/fixtures/legacy-corpus-reference/tools/runtime_bundle.py",
+      "classification": "KEEP_PYTHON",
+      "role": "test_or_fixture",
+      "side_effect_class": "test_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "tests and fixtures remain legitimate Python"
+    },
+    {
+      "path": "tools/cloud_profile_smoke.py",
+      "authority": "FUTURE_CUTOVER_REQUIRED",
+      "classification": "DELETE_AFTER_SEQUENCE",
+      "role": "legacy_direct_profile_r2_smoke_tool",
+      "side_effect_class": "external_profile_object_and_pointer_mutation",
+      "rust_target": "Profile Bridge + control-plane generation APIs + bounded R2 canary evidence",
+      "artifact_type": "legacy direct profile/R2 smoke executable",
+      "cutover_slice": "AR-10",
+      "compatibility_requirement": "profile generation, restore and synchronization evidence remains covered without direct Python profile lifecycle or profiles/v1 pointer mutation authority",
+      "retirement_proof": "zero accepted workflow/operator references + Profile Bridge/generation/R2 canary gates green after deletion"
+    },
+    {
+      "path": "tools/fingerprint_certify.py",
+      "authority": "FUTURE_CUTOVER_REQUIRED",
+      "classification": "DELETE_AFTER_SEQUENCE",
+      "role": "legacy_direct_browser_certification_tool",
+      "side_effect_class": "disposable_profile_clone_browser_execution",
+      "rust_target": "certification application port + accepted Profile Bridge/Camoufox runtime boundary",
+      "artifact_type": "legacy direct browser certification executable",
+      "cutover_slice": "AR-10",
+      "compatibility_requirement": "fingerprint certification remains available through the accepted certification/runtime boundary without importing the legacy direct browser launcher",
+      "retirement_proof": "zero accepted workflow/operator references + certification/Profile Bridge permanent gates green after deletion"
+    },
+    {
+      "path": "tools/profile_browser.py",
+      "authority": "FUTURE_CUTOVER_REQUIRED",
+      "classification": "DELETE_AFTER_SEQUENCE",
+      "role": "legacy_direct_browser_runtime_tool",
+      "side_effect_class": "local_profile_runtime_mutation",
+      "rust_target": "apps/profile-bridge + accepted Camoufox runtime boundary",
+      "artifact_type": "legacy direct runtime executable",
+      "cutover_slice": "AR-10",
+      "compatibility_requirement": "all accepted browser/profile execution remains available through Profile Bridge without direct Python lifecycle authority",
+      "retirement_proof": "zero accepted workflow/runtime references + Profile Bridge/runtime-bundle gates green after deletion"
+    },
+    {
+      "path": "tools/r2_s3_canary.py",
+      "classification": "KEEP_PYTHON",
+      "role": "external_provider_canary",
+      "side_effect_class": "disposable_canary_object_put_delete",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "bounded canary mutation is test/evidence only and must never become production object lifecycle authority"
+    },
+    {
+      "path": "tools/runtime_bundle.py",
+      "classification": "KEEP_PYTHON",
+      "role": "runtime_bundle_generator",
+      "side_effect_class": "artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "deterministic artifact generator remains legitimate Python"
+    }
+  ]
+}
