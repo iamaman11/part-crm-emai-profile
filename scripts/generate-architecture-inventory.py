@@ -163,6 +163,12 @@ def load_credential_authority() -> dict[str, Any]:
     return payload
 
 
+def git_blob_sha(path: Path) -> str:
+    data = path.read_bytes()
+    header = f"blob {len(data)}\0".encode("ascii")
+    return hashlib.sha1(header + data).hexdigest()
+
+
 def build_credential_projection(payload: dict[str, Any]) -> dict[str, object]:
     path = ROOT / CREDENTIAL_AUTHORITY
     sections = ("credentials", "dynamic_credential_domains", "future_trust_domains")
@@ -192,7 +198,7 @@ def build_credential_projection(payload: dict[str, Any]) -> dict[str, object]:
         "schema_version": int(payload["schema_version"]),
         "status": str(payload["status"]),
         "source_authority": CREDENTIAL_AUTHORITY,
-        "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "source_git_blob_sha1": git_blob_sha(path),
         "metadata_only": True,
         "canonical_environments": payload["canonical_environments"],
         "invariants": payload["invariants"],
@@ -402,10 +408,10 @@ def self_test(expected: dict[str, object]) -> None:
     credential["credential_authority"]["metadata_only"] = False
     if serialized(credential) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect credential-authority projection drift")
-    credential_digest = copy.deepcopy(expected)
-    credential_digest["credential_authority"]["source_sha256"] = "0" * 64
-    if serialized(credential_digest) == serialized(expected):
-        raise SystemExit("inventory self-test failed to detect credential-authority source digest drift")
+    credential_identity = copy.deepcopy(expected)
+    credential_identity["credential_authority"]["source_git_blob_sha1"] = "0" * 40
+    if serialized(credential_identity) == serialized(expected):
+        raise SystemExit("inventory self-test failed to detect credential-authority source identity drift")
     topology = copy.deepcopy(expected)
     topology["documentation_authority"]["runtime_topology_decision"] = "architecture/other.json"
     if serialized(topology) == serialized(expected):
