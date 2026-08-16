@@ -858,7 +858,7 @@ def self_test(expected: dict[str, object]) -> None:
     python_ops["python_operational_authority"]["status"] = "AR6_CANDIDATE"
     if serialized(python_ops) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect AR-6 Python/opsctl acceptance rollback")
-    print("Architecture inventory active AR-8 / current AR-8B negative self-test passed.")
+    print("Architecture inventory active AR-8 / AR-8A+B accepted / current AR-8C negative self-test passed.")
 
 
 def main() -> int:
@@ -884,7 +884,7 @@ def main() -> int:
     elif args.check:
         check_current(expected)
         validate_full_documentation_authority()
-        print("Architecture inventory projects active AR-8 with AR-8A accepted and AR-8B current.")
+        print("Architecture inventory projects active AR-8 with AR-8A+B accepted and AR-8C current.")
     else:
         self_test(expected)
     return 0
