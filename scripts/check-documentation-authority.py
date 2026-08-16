@@ -15,10 +15,15 @@ CURRENT_PROGRAM = "Architecture Re-baseline v3"
 CURRENT_AUTHORITY = "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
 TRACKING_ISSUE = 266
 SUBORDINATE_ISSUE = 268
-CURRENT_SLICE = "AR-7"
-NEXT_SLICE = "AR-8"
+CURRENT_SLICE = "AR-8"
+NEXT_SLICE = "AR-9"
 STATUS_DATE = "2026-08-16"
 ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5", "AR-6", "AR-7"]
+AR8_UMBRELLA_ISSUE = 308
+AR8B_IMPLEMENTATION_ISSUE = 309
+AR8_ACCEPTED_SUBSLICES = ["AR-8A"]
+AR8_CURRENT_SUBSLICE = "AR-8B"
+AR8_MANDATORY_REMAINING = ["AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"]
 TOPOLOGY = Path("architecture/runtime-topology-ar2.json")
 AR2_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR2.md")
 AR3_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR3.md")
@@ -30,6 +35,7 @@ AR6_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR6.md")
 AR7_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR7.md")
 GOVERNANCE_CONTRACT = Path("architecture/github-governance-ar7.json")
 PYTHON_ESTATE = Path("architecture/python-estate-ar6.json")
+CREDENTIAL_AUTHORITY = Path("architecture/credential-authority-ar8b.json")
 
 REQUIRED_FILES = (
     Path("README.md"),
@@ -38,6 +44,7 @@ REQUIRED_FILES = (
     Path("architecture/accepted-phases.json"),
     Path("architecture/architecture-rebaseline-v3-transition.json"),
     Path("architecture/inventory.json"),
+    CREDENTIAL_AUTHORITY,
     TOPOLOGY,
     Path("docs/README.md"),
     Path("docs/INDEX.md"),
@@ -92,6 +99,28 @@ def require(text: str, markers: tuple[str, ...], label: str, errors: list[str]) 
             errors.append(f"{label} missing authority marker: {marker}")
 
 
+def validate_ar8_progress(value: object, label: str, errors: list[str], *, allow_projection_fields: bool) -> None:
+    progress = value if isinstance(value, dict) else {}
+    expected = {
+        "umbrella_issue": AR8_UMBRELLA_ISSUE,
+        "accepted_subslices": AR8_ACCEPTED_SUBSLICES,
+        "current_subslice": AR8_CURRENT_SUBSLICE,
+        "current_implementation_issue": AR8B_IMPLEMENTATION_ISSUE,
+        "mandatory_remaining": AR8_MANDATORY_REMAINING,
+        "full_ar8_accepted": False,
+        "ar9_blocked": True,
+        "production_mutation": False,
+    }
+    for key, wanted in expected.items():
+        if progress.get(key) != wanted:
+            errors.append(f"{label}.{key} must be {wanted!r}")
+    if allow_projection_fields:
+        if progress.get("credential_authority_source") != CREDENTIAL_AUTHORITY.as_posix():
+            errors.append(f"{label}.credential_authority_source must point to AR-8B source authority")
+        if progress.get("canonical_projection") != "architecture/inventory.json::credential_authority":
+            errors.append(f"{label}.canonical_projection must remain inside canonical inventory")
+
+
 def validate(root: Path) -> list[str]:
     errors: list[str] = []
     try:
@@ -102,6 +131,7 @@ def validate(root: Path) -> list[str]:
         transition = load_json(root, Path("architecture/architecture-rebaseline-v3-transition.json"))
         topology = load_json(root, TOPOLOGY)
         inventory = load_json(root, Path("architecture/inventory.json"))
+        credential_authority = load_json(root, CREDENTIAL_AUTHORITY)
         root_readme = read(root, Path("README.md"))
         docs_readme = read(root, Path("docs/README.md"))
         index = read(root, Path("docs/INDEX.md"))
@@ -131,14 +161,14 @@ def validate(root: Path) -> list[str]:
         errors.append(f"accepted phase ledger must end at {ACCEPTED_PHASE}; observed {accepted_phase!r}")
 
     if status.get("schema_version") != 5 or status.get("as_of") != STATUS_DATE:
-        errors.append("docs/status.json must be the current AR-7 schema/date projection")
+        errors.append("docs/status.json must be the current AR-8 schema/date projection")
     if status.get("production_ready") is not False:
-        errors.append("production_ready must remain false throughout accepted AR-7")
+        errors.append("production_ready must remain false throughout AR-8")
     current = status.get("current") if isinstance(status.get("current"), dict) else {}
     if current.get("accepted_product_phase") != ACCEPTED_PHASE:
         errors.append("docs/status.json accepted product phase must remain Phase 2I")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
-        errors.append("AR-7 architecture_complete/Production Core gate state must remain fail closed")
+        errors.append("AR-8 architecture_complete/Production Core gate state must remain fail closed")
 
     program = current.get("architecture_program") if isinstance(current.get("architecture_program"), dict) else {}
     expected_program = {
@@ -156,7 +186,9 @@ def validate(root: Path) -> list[str]:
         if program.get(key) != expected:
             errors.append(f"docs/status.json architecture_program.{key} must be {expected!r}")
     if program.get("accepted_slices") != ACCEPTED_SLICES:
-        errors.append(f"docs/status.json accepted_slices must be {ACCEPTED_SLICES!r}")
+        errors.append(f"docs/status.json accepted_slices must remain fully accepted top-level slices only: {ACCEPTED_SLICES!r}")
+    validate_ar8_progress(program.get("ar8_progress"), "docs/status.json architecture_program.ar8_progress", errors, allow_projection_fields=False)
+
     ar5 = program.get("ar5_acceptance") if isinstance(program.get("ar5_acceptance"), dict) else {}
     if (
         program.get("runtime_authority_cleanup_evidence") != AR5_EVIDENCE.as_posix()
@@ -203,6 +235,7 @@ def validate(root: Path) -> list[str]:
         or ar7.get("closeout_issue") != 300
     ):
         errors.append("docs/status.json AR-7 acceptance provenance drifted")
+
     acceptance = governance.get("acceptance") if isinstance(governance.get("acceptance"), dict) else {}
     if (
         governance.get("status") != "ACCEPTED_AR7_GITHUB_GOVERNANCE"
@@ -220,6 +253,15 @@ def validate(root: Path) -> list[str]:
         or python_estate.get("summary") != expected_python_summary
     ):
         errors.append("accepted AR-6 Python estate authority drifted")
+
+    if (
+        credential_authority.get("status") != "CANDIDATE_AR8B_CREDENTIAL_METADATA_AUTHORITY"
+        or credential_authority.get("parent_issue") != AR8_UMBRELLA_ISSUE
+        or credential_authority.get("implementation_issue") != AR8B_IMPLEMENTATION_ISSUE
+        or credential_authority.get("canonical_inventory") != "architecture/inventory.json"
+        or credential_authority.get("metadata_only") is not True
+    ):
+        errors.append("AR-8B credential source authority provenance/policy drifted")
 
     predecessor = current.get("predecessor_external_d3") if isinstance(current.get("predecessor_external_d3"), dict) else {}
     if predecessor.get("issue") != 251:
@@ -243,17 +285,18 @@ def validate(root: Path) -> list[str]:
     if phase2j.get("status") != "blocked_pending_repository_remediation" or phase2j.get("forward_execution_authority") is not False:
         errors.append("historical Phase 2J state must remain blocked/non-forward")
 
-    if transition.get("schema_version") != 10 or transition.get("status") != "ACTIVE_AFTER_ACCEPTED_AR7_MERGE":
-        errors.append("architecture transition must encode accepted AR-7 state")
+    if transition.get("schema_version") != 10 or transition.get("status") != "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8A":
+        errors.append("architecture transition must encode active AR-8 after accepted AR-8A")
     if transition.get("tracking_issue") != TRACKING_ISSUE or transition.get("current_authority") != CURRENT_AUTHORITY:
         errors.append("architecture transition authority drifted")
     if transition.get("accepted_slices") != ACCEPTED_SLICES:
         errors.append("architecture transition accepted_slices drifted")
     if transition.get("current_slice") != CURRENT_SLICE or transition.get("next_slice_after_acceptance") != NEXT_SLICE:
-        errors.append("architecture transition must encode AR-7 -> AR-8 sequencing")
+        errors.append("architecture transition must encode active AR-8 with AR-9 only after full acceptance")
+    validate_ar8_progress(transition.get("ar8_progress"), "architecture transition ar8_progress", errors, allow_projection_fields=True)
     transition_state = transition.get("state_model") if isinstance(transition.get("state_model"), dict) else {}
     if transition_state.get("architecture_complete") is not False or transition_state.get("production_core_gate") != "BLOCKED" or transition_state.get("production_ready") is not False:
-        errors.append("transition state must remain fail closed through AR-7")
+        errors.append("transition state must remain fail closed through AR-8")
     runtime = transition.get("runtime_topology") if isinstance(transition.get("runtime_topology"), dict) else {}
     if runtime.get("decision_authority") != TOPOLOGY.as_posix() or runtime.get("generation_verification_decision") != "DELETE" or runtime.get("legacy_d3_production_forward_execution") != "DISABLED":
         errors.append("transition lost accepted AR-2 runtime-topology decisions")
@@ -322,10 +365,17 @@ def validate(root: Path) -> list[str]:
         errors.append("architecture inventory documentation authority is stale")
     if doc_authority.get("runtime_topology_decision") != TOPOLOGY.as_posix():
         errors.append("architecture inventory must point to the accepted AR-2 topology decision")
+    if doc_authority.get("credential_authority_source") != CREDENTIAL_AUTHORITY.as_posix() or doc_authority.get("credential_authority_projection") != "architecture/inventory.json::credential_authority":
+        errors.append("architecture inventory must identify AR-8B source/projection authority")
     if program_state.get("accepted_architecture_slices") != ACCEPTED_SLICES or program_state.get("current_architecture_slice") != CURRENT_SLICE or program_state.get("next_architecture_slice_after_acceptance") != NEXT_SLICE:
-        errors.append("architecture inventory AR-7 program state is stale")
+        errors.append("architecture inventory active AR-8 program state is stale")
+    validate_ar8_progress(program_state.get("ar8_progress"), "architecture inventory program_state.ar8_progress", errors, allow_projection_fields=False)
     if program_state.get("production_ready") is not False or program_state.get("production_core_gate") != "BLOCKED":
         errors.append("architecture inventory must remain fail closed")
+    projected_credential = inventory.get("credential_authority") if isinstance(inventory.get("credential_authority"), dict) else {}
+    if projected_credential != credential_authority:
+        errors.append("architecture inventory credential_authority must be the exact generated projection of AR-8B source authority")
+
     inventory_cleanup = inventory.get("runtime_authority_cleanup") if isinstance(inventory.get("runtime_authority_cleanup"), dict) else {}
     if (
         inventory_cleanup.get("status") != "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP"
@@ -381,7 +431,7 @@ def validate(root: Path) -> list[str]:
     require(ar5_evidence, ("AR-5 Wrangler / Runtime Authority Cleanup", "EVIDENCE / AR-5 accepted", "afed435bb714794d6c4f252be6b44c592ee31b2b", "82d251a1d6666199c6eace393eedc1766157fcee", "13/13 success", "AR-6", "Production Core remains `BLOCKED`"), "AR-5 evidence", errors)
     require(ar6_evidence, ("AR-6 Full Python Estate + read-only Rust opsctl", "EVIDENCE / AR-6 accepted", "9b06d542873ffa3122e53e107105098e21f5933c", "d0229fedd81ee870822b6d9394bc4ee313ea3a3c", "13/13 success", "108", "AR-7", "production_core_gate = BLOCKED"), "AR-6 evidence", errors)
     require(ar7_evidence, ("AR-7 — Environments + GitHub Governance + Operational Boundaries", "EVIDENCE / AR-7 accepted", "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7", "3492273cb9237850e3fa27343cc5edbdb0f66aa1", "14/14 success", "31953316327", "HTTP 409", "AR-8", "production_core_gate = BLOCKED"), "AR-7 evidence", errors)
-    require(pre2j_stub, ("ACCEPTED_HISTORICAL", "SUPERSEDED_FOR_FORWARD_EXECUTION", "Former tracking issue:** #203", "Current program authority"), "pre-2J compatibility stub", errors)
+    require(pre2j_stub, ("ACCEPTED_HISTORICAL", "SUPERSEDED_FOR_FORWARD_EXECUTION", "Former tracking issue:** #203", "Current program authority"), "pre2J compatibility stub", errors)
     require(implementation_stub, ("Document status:** SUPERSEDED", "history/IMPLEMENTATION_PLAN_PRE_AR_V3_2026-08-15.md", "ARCHITECTURE_REBASELINE_V3_PLAN.md"), "IMPLEMENTATION_PLAN.md", errors)
     require(lifecycle_stub, ("Document status:** SUPERSEDED", "history/PROFILE_LIFECYCLE_PLAN_PRE_AR_V3_2026-08-15.md", "ARCHITECTURE_REBASELINE_V3_PLAN.md"), "PROFILE_LIFECYCLE_PLAN.md", errors)
     return errors
@@ -412,7 +462,10 @@ def self_test(root: Path) -> bool:
         return False
     fixtures = [
         ("tracking rollback", Path("docs/status.json"), '"tracking_issue": 266', '"tracking_issue": 203', "tracking_issue"),
-        ("slice rollback", Path("docs/status.json"), '"current_slice": "AR-7"', '"current_slice": "AR-6"', "current_slice"),
+        ("active slice rollback", Path("docs/status.json"), '"current_slice": "AR-8"', '"current_slice": "AR-7"', "current_slice"),
+        ("AR-8 subslice skip", Path("docs/status.json"), '"current_subslice": "AR-8B"', '"current_subslice": "AR-8C"', "current_subslice"),
+        ("premature AR-8 acceptance", Path("docs/status.json"), '"full_ar8_accepted": false', '"full_ar8_accepted": true', "full_ar8_accepted"),
+        ("premature AR-9 unblock", Path("docs/status.json"), '"ar9_blocked": true', '"ar9_blocked": false', "ar9_blocked"),
         ("premature architecture closeout", Path("docs/status.json"), '"architecture_complete": false', '"architecture_complete": true', "architecture_complete"),
         ("premature gate authorization", Path("docs/status.json"), '"production_core_gate": "BLOCKED"', '"production_core_gate": "AUTHORIZED"', "Production"),
         ("premature production readiness", Path("docs/status.json"), '"production_ready": false', '"production_ready": true', "production_ready"),
@@ -432,7 +485,7 @@ def self_test(root: Path) -> bool:
             if not errors or not any(expected.lower() in error.lower() for error in errors):
                 print(f"negative fixture {label} was not rejected by the expected invariant: {errors}")
                 return False
-    print("Architecture Re-baseline v3 AR-7 documentation authority negative fixtures passed.")
+    print("Architecture Re-baseline v3 active AR-8 / current AR-8B documentation authority negative fixtures passed.")
     return True
 
 
@@ -449,7 +502,7 @@ def main() -> int:
         for error in errors:
             print(error)
         return 1
-    print("Architecture Re-baseline v3 AR-7 documentation/program authority is consistent.")
+    print("Architecture Re-baseline v3 active AR-8 / current AR-8B documentation/program authority is consistent.")
     return 0
 
 
