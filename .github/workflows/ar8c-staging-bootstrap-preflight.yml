@@ -62,7 +62,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - name: Verify exact accepted source checkout
+      - name: Verify exact source checkout
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
