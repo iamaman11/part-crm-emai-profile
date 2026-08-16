@@ -1,0 +1,46 @@
+name: AR8C Cloudflare Binding Audit Scratch
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.event.pull_request.head.ref == 'scratch/ar8c-cloudflare-binding-audit'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout scratch source branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: scratch/ar8c-cloudflare-binding-audit
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply AR-8C Cloudflare metadata audit hardening
+        run: python .scratch/ar8c_cloudflare_binding_audit_sync.py
+
+      - name: Validate contract, projections and syntax
+        run: |
+          node --check .github/scripts/credential-lifecycle.mjs
+          node .github/scripts/credential-lifecycle.mjs contract
+          node .github/scripts/credential-lifecycle.mjs self-test
+          python scripts/generate-architecture-inventory.py --write
+          python scripts/check-documentation-authority.py --root .
+          python scripts/check-documentation-authority.py --root . --self-test
+          python scripts/generate-architecture-inventory.py --check
+          python -m json.tool architecture/credential-authority-ar8b.json >/dev/null
+          python -m json.tool architecture/inventory.json >/dev/null
+          git diff --check
+
+      - name: Commit only AR-8C canonical audit changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/scripts/credential-lifecycle.mjs .github/workflows/github-governance-gate.yml architecture/credential-authority-ar8b.json architecture/inventory.json scripts/check-documentation-authority.py scripts/generate-architecture-inventory.py
+          changed="$(git diff --cached --name-only)"
+          expected=$'.github/scripts/credential-lifecycle.mjs\n.github/workflows/github-governance-gate.yml\narchitecture/credential-authority-ar8b.json\narchitecture/inventory.json\nscripts/check-documentation-authority.py\nscripts/generate-architecture-inventory.py'
+          test "$changed" = "$expected"
+          git commit -m 'chore: harden AR-8C Cloudflare metadata reconciliation'
+          git push origin HEAD:scratch/ar8c-cloudflare-binding-audit
