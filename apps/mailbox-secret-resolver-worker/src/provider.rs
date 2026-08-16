@@ -326,9 +326,7 @@ async fn parse_token_error(
     Ok(classify_oauth_error(grant_kind, &document.error))
 }
 
-async fn read_provider_response(
-    response: &mut worker::Response,
-) -> Result<Vec<u8>, ProviderError> {
+async fn read_provider_response(response: &mut worker::Response) -> Result<Vec<u8>, ProviderError> {
     if content_length_exceeds(response, MAX_PROVIDER_RESPONSE_BYTES)? {
         return Err(ProviderError::ResponseTooLarge);
     }
@@ -343,7 +341,7 @@ async fn read_provider_response(
     Ok(bytes)
 }
 
-const fn classify_oauth_error(grant_kind: TokenGrantKind, error: &str) -> ProviderError {
+fn classify_oauth_error(grant_kind: TokenGrantKind, error: &str) -> ProviderError {
     if matches!(grant_kind, TokenGrantKind::RefreshToken) && matches!(error, "invalid_grant") {
         return ProviderError::CredentialRejected;
     }
