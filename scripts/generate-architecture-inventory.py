@@ -49,6 +49,9 @@ AR8_CURRENT_SUBSLICE = "AR-8D"
 AR8D_IMPLEMENTATION_ISSUE = None
 AR8_IMPLEMENTATION_ENTRY_GATE = "POST_AR8C_CLEANUP_DX_ACCEPTANCE_REQUIRED_BEFORE_AR8D_IMPLEMENTATION"
 AR8_MANDATORY_REMAINING = ["AR-8D", "AR-8E", "AR-8F"]
+POST_AR8C_CLEANUP_ISSUE = 352
+CURRENT_DELIVERY_CHECKPOINT = "AR-8C"
+AR8C_HOSTED_VERIFIED_MAIN = "29519fbf05f8e4c228a0907ee0dafd2c85e3749b"
 
 CANONICAL_ENVIRONMENTS = {"rehearsal", "staging", "production"}
 REQUIRED_CREDENTIAL_ENTRY_FIELDS = {
@@ -166,13 +169,75 @@ def expected_ar8_progress() -> dict[str, object]:
     }
 
 
+def current_delivery_map() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "canonical_authority": "architecture/inventory.json::current_delivery_map",
+        "program": "Architecture Re-baseline v3",
+        "accepted_checkpoint": CURRENT_DELIVERY_CHECKPOINT,
+        "current_work": "POST_AR8C_CLEANUP_DX",
+        "source_implemented": {
+            "status": "PARTIAL",
+            "through": CURRENT_DELIVERY_CHECKPOINT,
+            "current_subslice": AR8_CURRENT_SUBSLICE,
+            "current_subslice_source": "NOT_STARTED_BY_GATE",
+        },
+        "accepted_on_main": {
+            "status": "PARTIAL",
+            "through": CURRENT_DELIVERY_CHECKPOINT,
+            "full_ar8_accepted": False,
+        },
+        "staging_live": {
+            "status": "PARTIAL",
+            "scope": "AR-8C_STAGING_PROVIDER_AND_CREDENTIAL_FOUNDATION_ONLY",
+            "evidence": AR8C_PROVIDER_EXECUTION_EVIDENCE,
+            "hosted_verified_main": AR8C_HOSTED_VERIFIED_MAIN,
+        },
+        "production_authorized": {
+            "status": False,
+            "gate": "AR-17_ARCHITECTURE_CLOSEOUT_AND_PRODUCTION_CORE_AUTHORIZATION",
+        },
+        "production_enabled": {
+            "status": False,
+            "gate": "PC-1_AFTER_AR-17_AUTHORIZATION",
+            "scope": "NONE",
+        },
+        "current_blocker": {
+            "issue": POST_AR8C_CLEANUP_ISSUE,
+            "status": "OPEN_ACCEPTANCE_REQUIRED",
+            "blocks": "AR-8D_IMPLEMENTATION",
+        },
+        "next_gate": {
+            "id": "POST_AR8C_CLEANUP_DX_ACCEPTANCE",
+            "issue": POST_AR8C_CLEANUP_ISSUE,
+            "on_success": "AR-8D_IMPLEMENTATION_MAY_BEGIN",
+        },
+        "invariants": {
+            "source_present_not_equal_production_enabled": True,
+            "full_ar8_accepted": False,
+            "ar9_blocked": True,
+            "architecture_complete": False,
+            "production_core_gate": "BLOCKED",
+            "production_ready": False,
+            "production_mutation": False,
+        },
+    }
+
+
 def validate_source_documents() -> None:
     for item in DOCUMENT_STATUS:
         if not (ROOT / item["path"]).is_file():
             raise SystemExit(f"document-status inventory path missing: {item['path']}")
     status = json.loads((ROOT / "docs/status.json").read_text(encoding="utf-8"))
+    transition = json.loads((ROOT / TRANSITION).read_text(encoding="utf-8"))
     current = status.get("current", {})
     program = current.get("architecture_program", {}) if isinstance(current, dict) else {}
+    if status.get("schema_version") != 6:
+        raise SystemExit("docs/status.json schema_version must be 6 after CURRENT_DELIVERY_MAP acceptance")
+    if current.get("current_delivery_map") != current_delivery_map():
+        raise SystemExit("docs/status.json current_delivery_map drifted from canonical generator projection")
+    if transition.get("schema_version") != 13 or transition.get("current_delivery_map") != current_delivery_map():
+        raise SystemExit("architecture transition CURRENT_DELIVERY_MAP projection drifted")
     if status.get("production_ready") is not False:
         raise SystemExit("docs/status.json must remain production_ready=false during AR-8")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
@@ -746,6 +811,7 @@ def build_inventory() -> dict[str, object]:
             "next_required_slice": "AR-8",
         },
         "credential_authority": credential_projection,
+        "current_delivery_map": current_delivery_map(),
         "documentation_authority": {
             "current_program": CURRENT_AUTHORITY,
             "tracking_issue": TRACKING_ISSUE,
@@ -761,6 +827,7 @@ def build_inventory() -> dict[str, object]:
             "github_governance_contract": GOVERNANCE_CONTRACT,
             "credential_authority_source": CREDENTIAL_AUTHORITY,
             "credential_authority_projection": "architecture/inventory.json::credential_authority",
+            "current_delivery_map": "architecture/inventory.json::current_delivery_map",
             "ar8_umbrella_issue": AR8_UMBRELLA_ISSUE,
             "application_architecture_evidence": AR4C_EVIDENCE,
             "application_architecture_base_evidence": ar3.AR3_EVIDENCE,
@@ -786,6 +853,7 @@ def build_inventory() -> dict[str, object]:
             "ar8_progress": expected_ar8_progress(),
             "ar8b_acceptance": ar8b_acceptance(),
             "ar8c_acceptance": ar8c_acceptance(),
+            "current_delivery_map": "architecture/inventory.json::current_delivery_map",
             "architecture_complete": False,
             "production_core_gate": "BLOCKED",
             "production_ready": False,
@@ -851,6 +919,10 @@ def self_test(expected: dict[str, object]) -> None:
     ar4d["application_architecture"]["conditional_ar4d"]["decision"] = "REQUIRED"
     if serialized(ar4d) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect unsupported AR-4D activation")
+    delivery = copy.deepcopy(expected)
+    delivery["current_delivery_map"]["production_enabled"]["status"] = True
+    if serialized(delivery) == serialized(expected):
+        raise SystemExit("inventory self-test failed to detect premature production enablement in CURRENT_DELIVERY_MAP")
     gate = copy.deepcopy(expected)
     gate["program_state"]["production_core_gate"] = "AUTHORIZED"
     if serialized(gate) == serialized(expected):
@@ -875,7 +947,7 @@ def self_test(expected: dict[str, object]) -> None:
     python_ops["python_operational_authority"]["status"] = "AR6_CANDIDATE"
     if serialized(python_ops) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect AR-6 Python/opsctl acceptance rollback")
-    print("Architecture inventory active AR-8 / AR-8A+B+C accepted / AR-8D gated by cleanup/DX negative self-test passed.")
+    print("Architecture inventory CURRENT_DELIVERY_MAP and active AR-8 fail-closed negative self-tests passed.")
 
 
 def main() -> int:
@@ -901,7 +973,7 @@ def main() -> int:
     elif args.check:
         check_current(expected)
         validate_full_documentation_authority()
-        print("Architecture inventory projects active AR-8 with AR-8A+B+C accepted and AR-8D gated by cleanup/DX.")
+        print("Architecture inventory CURRENT_DELIVERY_MAP projects AR-8C accepted, #352 blocking AR-8D, and production disabled.")
     else:
         self_test(expected)
     return 0

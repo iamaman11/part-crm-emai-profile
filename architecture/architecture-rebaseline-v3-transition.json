@@ -1,5 +1,5 @@
 {
-  "schema_version": 12,
+  "schema_version": 13,
   "status": "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8C",
   "program": "Architecture Re-baseline v3",
   "tracking_issue": 266,
@@ -180,7 +180,8 @@
     "ar6_remediation": "ACCEPTED_FULL_PYTHON_ESTATE_AND_READ_ONLY_OPSCTL_IN_CANONICAL_INVENTORY",
     "ar7_remediation": "ACCEPTED_GITHUB_GOVERNANCE_AND_OPERATIONAL_BOUNDARIES_IN_CANONICAL_INVENTORY",
     "ar8b_accepted_projection": "ACCEPTED_METADATA_ONLY_CREDENTIAL_AUTHORITY_IN_CANONICAL_INVENTORY",
-    "ar8c_current_projection": "CANDIDATE_OPERATIONAL_CREDENTIAL_LIFECYCLE_IN_CANONICAL_INVENTORY"
+    "ar8c_accepted_projection": "ACCEPTED_OPERATIONAL_CREDENTIAL_LIFECYCLE_IN_CANONICAL_INVENTORY",
+    "current_delivery_map_projection": "architecture/inventory.json::current_delivery_map"
   },
   "preserve_accepted_history": [
     "repository_steps_0_10",
@@ -433,5 +434,57 @@
     },
     "metadata_only": true,
     "production_mutation": false
+  },
+  "current_delivery_map": {
+    "schema_version": 1,
+    "canonical_authority": "architecture/inventory.json::current_delivery_map",
+    "program": "Architecture Re-baseline v3",
+    "accepted_checkpoint": "AR-8C",
+    "current_work": "POST_AR8C_CLEANUP_DX",
+    "source_implemented": {
+      "status": "PARTIAL",
+      "through": "AR-8C",
+      "current_subslice": "AR-8D",
+      "current_subslice_source": "NOT_STARTED_BY_GATE"
+    },
+    "accepted_on_main": {
+      "status": "PARTIAL",
+      "through": "AR-8C",
+      "full_ar8_accepted": false
+    },
+    "staging_live": {
+      "status": "PARTIAL",
+      "scope": "AR-8C_STAGING_PROVIDER_AND_CREDENTIAL_FOUNDATION_ONLY",
+      "evidence": "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md",
+      "hosted_verified_main": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b"
+    },
+    "production_authorized": {
+      "status": false,
+      "gate": "AR-17_ARCHITECTURE_CLOSEOUT_AND_PRODUCTION_CORE_AUTHORIZATION"
+    },
+    "production_enabled": {
+      "status": false,
+      "gate": "PC-1_AFTER_AR-17_AUTHORIZATION",
+      "scope": "NONE"
+    },
+    "current_blocker": {
+      "issue": 352,
+      "status": "OPEN_ACCEPTANCE_REQUIRED",
+      "blocks": "AR-8D_IMPLEMENTATION"
+    },
+    "next_gate": {
+      "id": "POST_AR8C_CLEANUP_DX_ACCEPTANCE",
+      "issue": 352,
+      "on_success": "AR-8D_IMPLEMENTATION_MAY_BEGIN"
+    },
+    "invariants": {
+      "source_present_not_equal_production_enabled": true,
+      "full_ar8_accepted": false,
+      "ar9_blocked": true,
+      "architecture_complete": false,
+      "production_core_gate": "BLOCKED",
+      "production_ready": false,
+      "production_mutation": false
+    }
   }
 }
