@@ -1263,7 +1263,7 @@
     "schema_version": 1,
     "status": "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY",
     "source_authority": "architecture/credential-authority-ar8b.json",
-    "source_git_blob_sha1": "6a329aac40c8e7ad6763bff09b5f1a6f9a83d1fc",
+    "source_git_blob_sha1": "d12e742c2fd5b9067bec7e68fc629f47963cc972",
     "metadata_only": true,
     "canonical_environments": [
       "rehearsal",
@@ -1365,10 +1365,13 @@
       ],
       "concern_ids": [
         "cloudflare.access-service-auth",
+        "cloudflare.ar8c-staging-bootstrap",
+        "cloudflare.ar8c-token-issuer-bootstrap",
         "cloudflare.control-plane-secret-bundle-transport",
         "cloudflare.deploy-manifest-protected-input",
         "cloudflare.platform-api",
         "cloudflare.resolver-secret-bundle-transport",
+        "github.ar8c-staging-bootstrap-admin",
         "github.governance-audit",
         "github.hosted-admin-operator",
         "profile-generation.r2-access"
