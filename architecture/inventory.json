@@ -1566,6 +1566,16 @@
       "scope": "accepted_ar7_github_governance_contract"
     },
     {
+      "path": "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md",
+      "status": "EVIDENCE",
+      "scope": "ar8c_protected_staging_provider_execution_authority"
+    },
+    {
+      "path": "architecture/ar8-staging-provider-bootstrap-contract.json",
+      "status": "STABLE_AUTHORITY",
+      "scope": "ar8c_staging_provider_execution_contract"
+    },
+    {
       "path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
       "status": "ACCEPTED_HISTORICAL",
       "scope": "superseded_predecessor_forward_execution"
