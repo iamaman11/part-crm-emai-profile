@@ -70,7 +70,7 @@ async function validate() {
   invariant(provider.indexOf("cfRequest(tokenValue, '/user/tokens/verify')") < provider.indexOf('await validateR2Credential({ accountId, ...result })'), 'R2 API token must verify active before S3 credential validation');
   invariant(common.includes('R2_CREDENTIAL_VALIDATION_POLICY') && common.includes('isRetryableR2ValidationStatus'), 'bounded R2 validation retry policy is missing');
   invariant(common.includes('SignatureDoesNotMatch') && common.includes('R2_ACTIVATION_PROPAGATION_DELAY_MS'), 'bounded R2 activation propagation handling is missing');
-  invariant(common.includes("gh', ['secret', 'set'") && common.includes("'--body', '-'") && common.includes('input: value'), 'GitHub Environment secret binding must remain write-only over stdin');
+  invariant(common.includes("gh', ['secret', 'set'") && !common.includes("'--body'") && common.includes('input: value'), 'GitHub Environment secret binding must feed exact value on stdin with --body omitted');
   invariant(common.includes('githubReadJson') && !common.includes('retryEnvironmentSecret'), 'GitHub retry helper must remain scoped to read requests, not Environment writes');
   invariant(execution.includes('verifyEnvironmentBindings') && execution.includes('FINAL_ENV_BINDINGS'), 'post-bind metadata verification is missing');
   invariant(execution.includes('CLOUDFLARE_API_TOKEN') && execution.includes('CLOUDFLARE_DEPLOY_MANIFEST_JSON'), 'steady-state handoff outputs are incomplete');
@@ -179,7 +179,7 @@ async function validate() {
   }
   invariant(r2FailFastCalls === 1 && /HTTP 403 \(AccessDenied\)/.test(r2FailFastError?.message ?? ''), 'R2 AccessDenied must fail on the first attempt with safe error code');
 
-  for (const forbidden of ['wrangler deploy', 'wrangler secret', 'terraform', 'method: \'DELETE\'', '/workers/scripts/', '/workers/routes']) {
+  for (const forbidden of ['wrangler deploy', 'wrangler secret', 'terraform', "method: 'DELETE'", '/workers/scripts/', '/workers/routes']) {
     invariant(!providerCombined.toLowerCase().includes(forbidden.toLowerCase()), `provider bootstrap contains forbidden mutable surface: ${forbidden}`);
   }
   console.log('AR-8C staging provider bootstrap execution contract: PASS');
