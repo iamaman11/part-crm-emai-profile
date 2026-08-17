@@ -39,7 +39,7 @@ jobs:
             --header 'X-GitHub-Api-Version: 2022-11-28' \
             --header 'Content-Type: application/json' \
             --data "$payload" \
-            "https://api.github.com/repos/${EXPECTED_REPOSITORY}/actions/workflows/${EXPECTED_WORKFLOW_ID}/dispatches")
+            "https://api.github.com/repos/${EXPECTED_REPOSITORY}/actions/workflows/${EXPECTED_WORKFLOW_ID}/dispatches")"
           if [ "$status" != '204' ]; then
             echo "workflow dispatch failed with HTTP $status" >&2
             cat "$RUNNER_TEMP/dispatch-response.txt" >&2
