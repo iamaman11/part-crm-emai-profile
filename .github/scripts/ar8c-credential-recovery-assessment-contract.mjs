@@ -5,6 +5,8 @@ const WORKFLOW_PATH = '.github/workflows/ar8c-credential-recovery-assessment.yml
 const ASSESSMENT_PATH = '.github/scripts/ar8c-credential-recovery-assessment.mjs';
 const CHECKOUT_PIN = 'actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a';
 const NODE_PIN = 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e';
+const SELF_TEST_COMMAND = 'node .github/scripts/ar8c-credential-recovery-assessment.mjs self-test';
+const LIVE_ASSESSMENT_COMMAND = 'node .github/scripts/ar8c-credential-recovery-assessment.mjs recovery-assess';
 
 function count(source, fragment) {
   return source.split(fragment).length - 1;
@@ -31,7 +33,8 @@ async function validate() {
   invariant(workflow.includes("node-version: '24.19.0'") && workflow.includes('test "$(node --version)" = "v24.19.0"'), 'credential recovery Node runtime pin drifted');
   invariant(workflow.includes('secrets.CLOUDFLARE_BOOTSTRAP_TOKEN'), 'credential recovery assessment must use the protected read-capable bootstrap token');
   invariant(!workflow.includes('inputs:'), 'credential recovery assessment must not accept user-supplied values or secret material');
-  invariant(workflow.indexOf('self-test') < workflow.indexOf('recovery-assess'), 'credential recovery self-test must precede live read-only assessment');
+  invariant(workflow.includes(SELF_TEST_COMMAND) && workflow.includes(LIVE_ASSESSMENT_COMMAND), 'credential recovery workflow commands are incomplete');
+  invariant(workflow.indexOf(SELF_TEST_COMMAND) < workflow.indexOf(LIVE_ASSESSMENT_COMMAND), 'credential recovery self-test must precede live read-only assessment');
 
   for (const forbiddenBinding of [
     'GH_BOOTSTRAP_ADMIN_TOKEN',
