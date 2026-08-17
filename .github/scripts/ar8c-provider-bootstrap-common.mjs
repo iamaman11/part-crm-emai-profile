@@ -58,6 +58,7 @@ export const R2_CREDENTIAL_VALIDATION_POLICY = Object.freeze({
   maxDelayMs: 8_000,
 });
 
+const R2_ACTIVATION_PROPAGATION_DELAY_MS = 15_000;
 const CF_API = 'https://api.cloudflare.com/client/v4';
 const GITHUB_API_VERSION = '2026-03-10';
 
@@ -188,6 +189,17 @@ function safeR2ErrorCode(body) {
   return /^[A-Za-z0-9_.-]+$/.test(value) ? value : null;
 }
 
+function isRetryableR2ActivationFailure(status, code) {
+  return isRetryableR2ValidationStatus(status) || (status === 403 && code === 'SignatureDoesNotMatch');
+}
+
+function r2ActivationDelayMs(status, code, attempt) {
+  const normalDelay = r2CredentialValidationDelayMs(attempt);
+  return status === 403 && code === 'SignatureDoesNotMatch'
+    ? Math.max(R2_ACTIVATION_PROPAGATION_DELAY_MS, normalDelay)
+    : normalDelay;
+}
+
 async function defaultSleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -240,10 +252,10 @@ export async function validateR2Credential({
     try { body = await response.text(); } catch { body = ''; }
     const code = safeR2ErrorCode(body);
     const detail = code ? ` (${code})` : '';
-    if (!isRetryableR2ValidationStatus(response.status) || attempt === R2_CREDENTIAL_VALIDATION_POLICY.maxAttempts) {
+    if (!isRetryableR2ActivationFailure(response.status, code) || attempt === R2_CREDENTIAL_VALIDATION_POLICY.maxAttempts) {
       throw new Error(`new R2 credential failed bounded bucket validation with HTTP ${response.status}${detail} after ${attempt} attempt(s)`);
     }
-    await sleepImpl(r2CredentialValidationDelayMs(attempt));
+    await sleepImpl(r2ActivationDelayMs(response.status, code, attempt));
   }
   throw new Error('new R2 credential validation exhausted unexpectedly');
 }
