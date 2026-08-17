@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '.github/scripts/ar8c-staging-bootstrap-preflight.mjs'
+      - '.github/scripts/ar8c-staging-d1-classification.mjs'
       - '.github/workflows/ar8c-staging-bootstrap-preflight.yml'
   workflow_dispatch:
 
@@ -41,7 +42,9 @@ jobs:
         run: test "$(node --version)" = "v24.19.0"
 
       - name: Prove preflight authority is staging-only and deterministic
-        run: node .github/scripts/ar8c-staging-bootstrap-preflight.mjs self-test
+        run: |
+          node .github/scripts/ar8c-staging-bootstrap-preflight.mjs self-test
+          node .github/scripts/ar8c-staging-d1-classification.mjs self-test
 
   preflight:
     name: AR-8C Protected Staging Bootstrap Preflight
@@ -78,3 +81,6 @@ jobs:
 
       - name: Verify protected bootstrap credentials and discover provider identity
         run: node .github/scripts/ar8c-staging-bootstrap-preflight.mjs preflight
+
+      - name: Classify staging D1 candidates without mutation
+        run: node .github/scripts/ar8c-staging-d1-classification.mjs classify
