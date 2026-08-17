@@ -19,11 +19,11 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_classes": ["ProfileCoordinator"]
+      "new_sqlite_classes": ["ProfileCoordinator"]
     },
     {
       "tag": "v2",
-      "new_classes": ["NotificationHub"]
+      "new_sqlite_classes": ["NotificationHub"]
     }
   ],
   "env": {
