@@ -88,7 +88,6 @@ ALLOWED_IMPLEMENTATION_PATHS = {
     "scripts/cloudflare-deploy-config.py",
     "scripts/check-phase2i-release-freeze.sh",
     "scripts/check-phase2e-mailbox-boundaries.py",
-    "scripts/github-raw-artifact-download.py",
     "scripts/mailbox-secret-resolver-promotion.py",
     "scripts/mailbox-secret-resolver-release.py",
     "scripts/verify-fast.py",
@@ -349,7 +348,7 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
         "staging_evidence_confirmation:",
         "confirmation:",
         "github-preflight",
-        "github-raw-artifact-download.py download",
+        "mailbox-secret-resolver-promotion.py download-raw-artifact",
         "--expected-digest",
         "--expected-name",
         "download-artifact@",
@@ -380,8 +379,8 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
         errors.append("production must accept immutable staging evidence artifacts, never tracked Git evidence")
     if promotion.count("--secrets-file") != 4:
         errors.append("both immutable artifact dry-runs and both Worker deploys must each use --secrets-file")
-    if promotion.count("github-raw-artifact-download.py download") != 4:
-        errors.append("preflight and deployment must each acquire resolver/control-plane raw release artifacts through the one bounded REST helper")
+    if promotion.count("mailbox-secret-resolver-promotion.py download-raw-artifact") != 4:
+        errors.append("preflight and deployment must each acquire resolver/control-plane raw release artifacts through the one canonical promotion authority")
     if promotion.count("--expected-digest") != 4 or promotion.count("--expected-name") != 4:
         errors.append("every raw release artifact acquisition must bind exact digest and canonical raw TAR name")
     if promotion.count("artifact-ids:") != 1 or promotion.count("actions/download-artifact@") != 1:
@@ -466,6 +465,9 @@ def release_script_errors() -> list[str]:
         "validate_staging_evidence_artifact",
         "validate_deployment_closures",
         "Production same-bits artifacts match immutable passed staging evidence",
+        "download_raw_artifact",
+        "request_with_retry",
+        "validate_raw_tar",
     ):
         if marker not in promotion:
             errors.append(f"resolver promotion verifier is missing {marker!r}")
@@ -547,7 +549,7 @@ def self_test() -> None:
     if errors:
         raise AssertionError(errors)
     helper = subprocess.run(
-        ["python", "scripts/github-raw-artifact-download.py", "self-test"],
+        ["python", "scripts/mailbox-secret-resolver-promotion.py", "self-test"],
         cwd=ROOT,
         check=False,
         capture_output=True,
@@ -555,7 +557,7 @@ def self_test() -> None:
     )
     if helper.returncode != 0:
         raise AssertionError(
-            "raw GitHub artifact acquisition self-test failed: "
+            "canonical promotion raw-artifact self-test failed: "
             + (helper.stderr.strip() or helper.stdout.strip())
         )
     marker = copy.deepcopy(EXPECTED_MARKER)
@@ -575,8 +577,8 @@ def self_test() -> None:
     assert workflow_errors(
         release,
         promotion.replace(
-            "github-raw-artifact-download.py download",
-            "unchecked-artifact-download.py download",
+            "mailbox-secret-resolver-promotion.py download-raw-artifact",
+            "mailbox-secret-resolver-promotion.py unchecked-artifact-download",
             1,
         ),
     )
