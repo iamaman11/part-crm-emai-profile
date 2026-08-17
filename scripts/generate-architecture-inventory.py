@@ -35,6 +35,8 @@ AR7_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR7.md"
 GOVERNANCE_CONTRACT = "architecture/github-governance-ar7.json"
 PYTHON_ESTATE = "architecture/python-estate-ar6.json"
 CREDENTIAL_AUTHORITY = "architecture/credential-authority-ar8b.json"
+AR8C_PROVIDER_EXECUTION_AUTHORITY = "architecture/ar8-staging-provider-bootstrap-contract.json"
+AR8C_PROVIDER_EXECUTION_EVIDENCE = "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md"
 TRACKING_ISSUE = 266
 AR8_UMBRELLA_ISSUE = 308
 AR8B_IMPLEMENTATION_ISSUE = 309
@@ -122,6 +124,8 @@ DOCUMENT_STATUS = [
     {"path": PYTHON_ESTATE, "status": "STABLE_AUTHORITY", "scope": "accepted_ar6_full_python_disposition"},
     {"path": AR7_EVIDENCE, "status": "EVIDENCE", "scope": "ar7_github_governance_and_operational_boundaries_accepted"},
     {"path": GOVERNANCE_CONTRACT, "status": "STABLE_AUTHORITY", "scope": "accepted_ar7_github_governance_contract"},
+    {"path": AR8C_PROVIDER_EXECUTION_EVIDENCE, "status": "EVIDENCE", "scope": "ar8c_protected_staging_provider_execution_authority"},
+    {"path": AR8C_PROVIDER_EXECUTION_AUTHORITY, "status": "STABLE_AUTHORITY", "scope": "ar8c_staging_provider_execution_contract"},
     {"path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "superseded_predecessor_forward_execution"},
     {"path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "accepted_r1_r9_closeout"},
     {"path": "IMPLEMENTATION_PLAN.md", "status": "SUPERSEDED", "scope": "compatibility_entrypoint_to_preserved_history"},
