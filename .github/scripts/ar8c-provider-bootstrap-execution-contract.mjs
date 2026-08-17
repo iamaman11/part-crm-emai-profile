@@ -24,7 +24,7 @@ async function validate() {
     readFile(WORKFLOW_PATH, 'utf8'), readFile(PREFLIGHT_PATH, 'utf8'), readFile(EXECUTION_PATH, 'utf8'),
     readFile(PROVIDER_PATH, 'utf8'), readFile(COMMON_PATH, 'utf8'), readFile(RETRY_PATH, 'utf8'),
   ]);
-  const combined = `${workflow}\n${preflight}\n${execution}\n${provider}\n${common}\n${retry}`;
+  const providerCombined = `${workflow}\n${execution}\n${provider}\n${common}\n${retry}`;
 
   invariant(workflow.startsWith('name: AR-8C Staging Provider Bootstrap Execution\n'), 'provider bootstrap workflow name drifted');
   invariant(count(workflow, 'workflow_dispatch:') === 1, 'provider bootstrap workflow must expose exactly one workflow_dispatch trigger');
@@ -67,7 +67,7 @@ async function validate() {
   invariant(execution.includes('CLOUDFLARE_API_TOKEN') && execution.includes('CLOUDFLARE_DEPLOY_MANIFEST_JSON'), 'steady-state handoff outputs are incomplete');
   invariant(execution.includes('buildManifest') && execution.includes('schema_version: 1'), 'canonical deploy manifest construction is missing');
   invariant(common.includes("hostname: 'staging.alegria.by'") && !JSON.stringify({ common, execution, provider }).toLowerCase().includes('part-crm-catalog-production'), 'production target leaked into provider bootstrap implementation');
-  invariant(!combined.includes('/access/organizations'), 'provider bootstrap must not widen the accepted bootstrap token with Access Organizations read');
+  invariant(!providerCombined.includes('/access/organizations'), 'provider bootstrap must not widen the accepted bootstrap token with Access Organizations read');
 
   invariant(GITHUB_READ_RETRY_POLICY.maxAttempts === 5, 'GitHub read retry attempt bound drifted');
   invariant(GITHUB_READ_RETRY_POLICY.baseDelayMs === 1_000 && GITHUB_READ_RETRY_POLICY.maxDelayMs === 8_000, 'GitHub read retry backoff bounds drifted');
@@ -110,7 +110,7 @@ async function validate() {
   invariant(failFastCalls === 1 && /HTTP 403/.test(failFastError?.message ?? ''), 'GitHub non-retryable 4xx must fail on the first attempt');
 
   for (const forbidden of ['wrangler deploy', 'wrangler secret', 'terraform', 'method: \'DELETE\'', '/workers/scripts/', '/workers/routes']) {
-    invariant(!combined.toLowerCase().includes(forbidden.toLowerCase()), `provider bootstrap contains forbidden mutable surface: ${forbidden}`);
+    invariant(!providerCombined.toLowerCase().includes(forbidden.toLowerCase()), `provider bootstrap contains forbidden mutable surface: ${forbidden}`);
   }
   console.log('AR-8C staging provider bootstrap execution contract: PASS');
 }
