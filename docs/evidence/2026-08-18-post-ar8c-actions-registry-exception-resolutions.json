@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "cleanup_issue": 352,
+  "baseline_main": "85c6d42d877108274bfac3b30042164dca0bec41",
+  "metadata_only": true,
+  "production_mutation": false,
+  "resolutions": [
+    {
+      "registration_id": 336458189,
+      "path": ".github/workflows/ar8c-credential-bundle-recovery.yml",
+      "classification": "HISTORICAL_ONE_SHOT",
+      "accepted_run_ids": [32063368209],
+      "resolution": "Accepted AR-8C credential-bundle recovery evidence is preserved in Actions history. The temporary bootstrap credentials used by this ceremony were later revoked and their staging bindings removed. This workflow is no longer a steady-state authority."
+    },
+    {
+      "registration_id": 336440298,
+      "path": ".github/workflows/ar8c-credential-recovery-assessment.yml",
+      "classification": "HISTORICAL_ONE_SHOT",
+      "accepted_run_ids": [32060522333],
+      "resolution": "The read-only recovery assessment served the completed AR-8C recovery ceremony and depended on a temporary bootstrap credential that has been retired. Historical runs remain evidence; the workflow is not a current operator path."
+    },
+    {
+      "registration_id": 336271160,
+      "path": ".github/workflows/ar8c-provider-bootstrap-execution.yml",
+      "classification": "HISTORICAL_ONE_SHOT",
+      "accepted_run_ids": [32063820617],
+      "resolution": "The protected staging provider bootstrap completed successfully, handed off to steady-state credentials, and all temporary bootstrap roots were later revoked. Provider bootstrap is not a steady-state deployment authority."
+    },
+    {
+      "registration_id": 336190565,
+      "path": ".github/workflows/ar8c-resolver-schema-convergence.yml",
+      "classification": "HISTORICAL_ONE_SHOT",
+      "accepted_run_ids": [32029397331],
+      "resolution": "Resolver schema convergence completed before the accepted same-bits staging promotion, which later proved exact D1 migration match. The workflow depends on retired bootstrap authority and must not remain executable."
+    },
+    {
+      "registration_id": 335828549,
+      "path": ".github/workflows/ar8c-staging-bootstrap-preflight.yml",
+      "classification": "HISTORICAL_ONE_SHOT",
+      "accepted_run_ids": [32041820969],
+      "resolution": "Accepted bootstrap preflight evidence is preserved. References from the AR-8 credential inventory are historical provenance for retired bootstrap credentials, not current execution authority."
+    },
+    {
+      "registration_id": 336180935,
+      "path": ".github/workflows/ar8c-staging-provider-bootstrap.yml",
+      "classification": "SUPERSEDED",
+      "accepted_run_ids": [],
+      "resolution": "The PR-only provider-bootstrap contract surface is superseded as an executable workflow. Its lasting machine contract remains validated by the permanent GitHub Governance Gate through .github/scripts/ar8-staging-provider-bootstrap.mjs."
+    }
+  ],
+  "invariants": {
+    "historical_run_provenance_preserved": true,
+    "required_checks_weakened": false,
+    "canonical_promotion_authority_preserved": true,
+    "canonical_release_authority_preserved": true,
+    "secret_readback": false,
+    "production_mutation": false
+  }
+}
