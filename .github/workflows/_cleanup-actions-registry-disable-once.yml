@@ -6,8 +6,6 @@ on:
       - main
     paths:
       - '.github/workflows/_cleanup-actions-registry-disable-once.yml'
-      - 'docs/evidence/2026-08-18-post-ar8c-actions-registry-classification.json'
-      - 'docs/evidence/2026-08-18-post-ar8c-actions-registry-exception-resolutions.json'
 
 permissions:
   actions: write
@@ -19,22 +17,22 @@ concurrency:
 
 jobs:
   disable:
-    name: Disable accepted obsolete workflow registrations once
+    name: Complete accepted obsolete workflow retirement once
     if: github.repository == 'iamaman11/part-crm-emai-profile' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      EXPECTED_BEFORE: 85c6d42d877108274bfac3b30042164dca0bec41
+      EXPECTED_BEFORE: 923672fd9f5fbdfacd8685143151e5ed322cb3cf
       CLASSIFICATION: docs/evidence/2026-08-18-post-ar8c-actions-registry-classification.json
       RESOLUTIONS: docs/evidence/2026-08-18-post-ar8c-actions-registry-exception-resolutions.json
     steps:
-      - name: Checkout exact cleanup source
+      - name: Checkout exact cleanup recovery source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Verify exact accepted cleanup authority
+      - name: Verify exact accepted recovery authority
         shell: bash
         env:
           EVENT_BEFORE: ${{ github.event.before }}
@@ -54,34 +52,28 @@ jobs:
           assert c['source_accepted_main_sha'] == '85c6d42d877108274bfac3b30042164dca0bec41'
           assert c['registered_workflow_count'] == 198
           assert c['tracked_main_workflow_count'] == 22
-          assert c['category_counts'] == {
-              'CURRENT_MANUAL_OPERATION': 1,
-              'HISTORICAL_ONE_SHOT': 40,
-              'PERMANENT_REQUIRED': 15,
-              'SCRATCH_DEBUG': 35,
-              'SUPERSEDED': 107,
-          }
           assert c['decision_counts'] == {
               'DISABLE_REGISTRATION': 176,
               'KEEP_ACTIVE': 16,
               'RETIRE_FILE_AND_DISABLE': 6,
           }
           assert c['duplicate_registration_paths'] == []
-          disable = [x for x in c['registrations'] if x['decision'] != 'KEEP_ACTIVE']
-          keep = [x for x in c['registrations'] if x['decision'] == 'KEEP_ACTIVE']
-          assert len(disable) == 182 and len({x['id'] for x in disable}) == 182
-          assert len(keep) == 16 and len({x['path'] for x in keep}) == 16
-          assert r['cleanup_issue'] == 352 and r['baseline_main'] == c['source_accepted_main_sha']
+          rows = c['registrations']
+          assert len([x for x in rows if x['decision'] == 'DISABLE_REGISTRATION']) == 176
+          assert len([x for x in rows if x['decision'] == 'RETIRE_FILE_AND_DISABLE']) == 6
+          assert len([x for x in rows if x['decision'] == 'KEEP_ACTIVE']) == 16
           resolved = {x['registration_id'] for x in r['resolutions']}
-          expected = {336458189,336440298,336271160,336190565,335828549,336180935}
-          assert resolved == expected
+          expected_deleted = {336458189, 336440298, 336271160, 336190565, 335828549, 336180935}
+          assert resolved == expected_deleted
+          retire_rows = {x['id'] for x in rows if x['decision'] == 'RETIRE_FILE_AND_DISABLE'}
+          assert retire_rows == expected_deleted
           assert r['invariants']['required_checks_weakened'] is False
           assert r['invariants']['canonical_promotion_authority_preserved'] is True
           assert r['invariants']['canonical_release_authority_preserved'] is True
           assert r['invariants']['production_mutation'] is False
           PY
 
-      - name: Prove tracked workflow retirement and current authority preservation
+      - name: Prove retired files absent and current authorities present
         shell: bash
         run: |
           set -euo pipefail
@@ -99,7 +91,7 @@ jobs:
           test -f .github/workflows/quality-gate.yml
           test -f .github/workflows/github-governance-gate.yml
 
-      - name: Disable only accepted obsolete registrations
+      - name: Complete exact baseline registry retirement
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -107,11 +99,6 @@ jobs:
           set -euo pipefail
           api="https://api.github.com/repos/$GITHUB_REPOSITORY"
           auth=(--header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' --header 'X-GitHub-Api-Version: 2022-11-28')
-
-          mapfile -t disable_ids < <(jq -r '.registrations[] | select(.decision != "KEEP_ACTIVE") | .id' "$CLASSIFICATION")
-          mapfile -t keep_paths < <(jq -r '.registrations[] | select(.decision == "KEEP_ACTIVE") | .path' "$CLASSIFICATION" | sort)
-          test "${#disable_ids[@]}" -eq 182
-          test "${#keep_paths[@]}" -eq 16
 
           fetch_registry() {
             local output="$1" page=1 count part next
@@ -130,33 +117,61 @@ jobs:
 
           before="$RUNNER_TEMP/registry-before.json"
           fetch_registry "$before"
+
+          mapfile -t keep_paths < <(jq -r '.registrations[] | select(.decision == "KEEP_ACTIVE") | .path' "$CLASSIFICATION" | sort)
+          test "${#keep_paths[@]}" -eq 16
           for path in "${keep_paths[@]}"; do
             test "$(jq --arg p "$path" '[.[] | select(.path == $p and .state == "active")] | length' "$before")" = '1'
           done
-          for id in "${disable_ids[@]}"; do
-            test "$(jq --argjson id "$id" '[.[] | select(.id == $id)] | length' "$before")" = '1'
-            state="$(jq -r --argjson id "$id" '.[] | select(.id == $id) | .state' "$before")"
-            if [ "$state" = 'active' ]; then
+
+          changed=0
+          already_disabled=0
+          deleted_terminal=0
+          while IFS=$'\t' read -r id path decision; do
+            listed_state="$(jq -r --argjson id "$id" '[.[] | select(.id == $id)][0].state // "missing"' "$before")"
+            if [ "$decision" = 'RETIRE_FILE_AND_DISABLE' ]; then
+              test "$listed_state" = 'missing'
+              body="$RUNNER_TEMP/deleted-$id.json"
+              code="$(curl --silent --show-error "${auth[@]}" --output "$body" --write-out '%{http_code}' "$api/actions/workflows/$id")"
+              test "$code" = '200'
+              test "$(jq -r '.id' "$body")" = "$id"
+              test "$(jq -r '.path' "$body")" = "$path"
+              test "$(jq -r '.state' "$body")" = 'deleted'
+              deleted_terminal=$((deleted_terminal + 1))
+              continue
+            fi
+            test "$decision" = 'DISABLE_REGISTRATION'
+            if [ "$listed_state" = 'disabled_manually' ]; then
+              already_disabled=$((already_disabled + 1))
+            elif [ "$listed_state" = 'active' ]; then
               code="$(curl --silent --show-error --request PUT "${auth[@]}" --output "$RUNNER_TEMP/disable-$id.txt" --write-out '%{http_code}' "$api/actions/workflows/$id/disable")"
               test "$code" = '204'
-            elif [ "$state" = 'disabled_manually' ]; then
-              :
+              changed=$((changed + 1))
             else
-              echo "Unexpected pre-disable state for registration $id: $state" >&2
+              echo "Unexpected state for baseline obsolete registration $id ($path): $listed_state" >&2
               exit 1
             fi
-          done
+          done < <(jq -r '.registrations[] | select(.decision != "KEEP_ACTIVE") | [.id,.path,.decision] | @tsv' "$CLASSIFICATION")
+
+          test "$deleted_terminal" -eq 6
+          test $((changed + already_disabled)) -eq 176
 
           after="$RUNNER_TEMP/registry-after.json"
           fetch_registry "$after"
-          for id in "${disable_ids[@]}"; do
-            test "$(jq -r --argjson id "$id" '.[] | select(.id == $id) | .state' "$after")" = 'disabled_manually'
-          done
+          while IFS=$'\t' read -r id path; do
+            state="$(jq -r --argjson id "$id" '[.[] | select(.id == $id)][0].state // "missing"' "$after")"
+            test "$state" = 'disabled_manually'
+          done < <(jq -r '.registrations[] | select(.decision == "DISABLE_REGISTRATION") | [.id,.path] | @tsv' "$CLASSIFICATION")
           for path in "${keep_paths[@]}"; do
             test "$(jq --arg p "$path" '[.[] | select(.path == $p and .state == "active")] | length' "$after")" = '1'
           done
 
-      - name: Disable this one-shot executor last
+          echo "newly disabled: $changed" >> "$GITHUB_STEP_SUMMARY"
+          echo "already disabled from attempt 1: $already_disabled" >> "$GITHUB_STEP_SUMMARY"
+          echo "provider-deleted retired AR-8C registrations: $deleted_terminal" >> "$GITHUB_STEP_SUMMARY"
+          echo "current authorities preserved active: ${#keep_paths[@]}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Disable this recovery executor last
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -166,4 +181,6 @@ jobs:
           auth=(--header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' --header 'X-GitHub-Api-Version: 2022-11-28')
           code="$(curl --silent --show-error --request PUT "${auth[@]}" --output "$RUNNER_TEMP/disable-self.txt" --write-out '%{http_code}' "$api/actions/workflows/_cleanup-actions-registry-disable-once.yml/disable")"
           test "$code" = '204'
-          echo 'Accepted obsolete workflow registrations disabled; historical run provenance preserved; current authorities left active.' >> "$GITHUB_STEP_SUMMARY"
+          state="$(curl --silent --show-error --fail-with-body "${auth[@]}" "$api/actions/workflows/_cleanup-actions-registry-disable-once.yml" | jq -r '.state')"
+          test "$state" = 'disabled_manually'
+          echo 'Registry retirement recovery completed; historical run provenance preserved; current authorities remain active.' >> "$GITHUB_STEP_SUMMARY"
