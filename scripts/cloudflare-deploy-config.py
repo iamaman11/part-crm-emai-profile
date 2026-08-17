@@ -162,10 +162,12 @@ def validate_template() -> dict[str, object]:
 
     migrations = require_array(document.get("migrations"), "migrations")
     if migrations != [
-        {"tag": "v1", "new_classes": ["ProfileCoordinator"]},
-        {"tag": "v2", "new_classes": ["NotificationHub"]},
+        {"tag": "v1", "new_sqlite_classes": ["ProfileCoordinator"]},
+        {"tag": "v2", "new_sqlite_classes": ["NotificationHub"]},
     ]:
-        raise ConfigError("Durable Object migration lineage must preserve ProfileCoordinator v1 and NotificationHub v2")
+        raise ConfigError(
+            "Durable Object migration lineage must preserve SQLite-backed ProfileCoordinator v1 and NotificationHub v2"
+        )
 
     envs = require_object(document.get("env"), "env")
     if set(envs) != set(ENVIRONMENTS):
