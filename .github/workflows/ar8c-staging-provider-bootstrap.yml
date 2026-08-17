@@ -12,10 +12,13 @@ on:
       - '.github/scripts/ar8c-provider-bootstrap-execution-contract.mjs'
       - '.github/scripts/ar8c-credential-recovery-assessment.mjs'
       - '.github/scripts/ar8c-credential-recovery-assessment-contract.mjs'
+      - '.github/scripts/ar8c-credential-bundle-recovery.mjs'
+      - '.github/scripts/ar8c-credential-bundle-recovery-contract.mjs'
       - '.github/workflows/ar8c-staging-provider-bootstrap.yml'
       - '.github/workflows/ar8c-resolver-schema-convergence.yml'
       - '.github/workflows/ar8c-provider-bootstrap-execution.yml'
       - '.github/workflows/ar8c-credential-recovery-assessment.yml'
+      - '.github/workflows/ar8c-credential-bundle-recovery.yml'
 
 permissions:
   contents: read
@@ -72,3 +75,10 @@ jobs:
           node --check .github/scripts/ar8c-credential-recovery-assessment-contract.mjs
           node .github/scripts/ar8c-credential-recovery-assessment.mjs self-test
           node .github/scripts/ar8c-credential-recovery-assessment-contract.mjs
+
+      - name: Validate bounded credential bundle recovery execution surface
+        run: |
+          node --check .github/scripts/ar8c-credential-bundle-recovery.mjs
+          node --check .github/scripts/ar8c-credential-bundle-recovery-contract.mjs
+          node .github/scripts/ar8c-credential-bundle-recovery.mjs self-test
+          node .github/scripts/ar8c-credential-bundle-recovery-contract.mjs
