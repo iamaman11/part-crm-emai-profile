@@ -8,7 +8,17 @@ import {
   issueR2Credential, permissionGroups, reconcileAccess,
 } from './ar8c-provider-bootstrap-provider.mjs';
 
-function buildManifest({ accountId, access, prerequisites, googleClientId, microsoftClientId }) {
+function validateAccessIssuer(raw) {
+  let url;
+  try { url = new URL(raw); } catch { throw new Error('AR8C_ACCESS_ISSUER must be a valid HTTPS origin'); }
+  invariant(url.protocol === 'https:', 'AR8C_ACCESS_ISSUER must use HTTPS');
+  invariant(url.username === '' && url.password === '' && url.port === '', 'AR8C_ACCESS_ISSUER must not contain credentials or an explicit port');
+  invariant((url.pathname === '' || url.pathname === '/') && url.search === '' && url.hash === '', 'AR8C_ACCESS_ISSUER must be one origin without path/query/fragment');
+  invariant(url.hostname.endsWith('.cloudflareaccess.com') && url.hostname.split('.').length >= 3, 'AR8C_ACCESS_ISSUER must be the authoritative Cloudflare Access team domain');
+  return url.origin;
+}
+
+function buildManifest({ accountId, access, accessIssuer, prerequisites, googleClientId, microsoftClientId }) {
   return {
     schema_version: 1,
     environment: EXPECTED.environment,
@@ -16,7 +26,7 @@ function buildManifest({ accountId, access, prerequisites, googleClientId, micro
       worker_name: EXPECTED.controlPlaneWorker,
       account_id: accountId,
       custom_domain: EXPECTED.hostname,
-      access_issuer: access.issuer,
+      access_issuer: accessIssuer,
       access_audience: access.audience,
       d1_database_name: EXPECTED.catalogD1,
       d1_database_id: prerequisites.catalogId,
@@ -78,14 +88,17 @@ function selfTest() {
   invariant(CONTROL_PLANE_KEYS.length === 4, 'control-plane bundle key set drifted');
   invariant(RESOLVER_KEYS.length === 5, 'resolver bundle key set drifted');
   invariant(FINAL_ENV_BINDINGS.length === 6, 'final Environment binding set drifted');
+  const accessIssuer = validateAccessIssuer('https://accepted-team.cloudflareaccess.com');
   const manifest = buildManifest({
     accountId: '0123456789abcdef0123456789abcdef',
-    access: { issuer: 'https://example.cloudflareaccess.com', audience: 'aud' },
+    access: { audience: 'accepted_audience_value_1234' },
+    accessIssuer,
     prerequisites: { catalogId: 'catalog-id', resolverId: 'resolver-id' },
     googleClientId: 'google-client-id.apps.googleusercontent.com',
     microsoftClientId: '00000000-0000-4000-8000-000000000000',
   });
   invariant(manifest.schema_version === 1 && manifest.environment === 'staging', 'manifest envelope drifted');
+  invariant(manifest.control_plane.access_issuer === 'https://accepted-team.cloudflareaccess.com', 'Access issuer normalization drifted');
   invariant(manifest.resolver.google_oauth_redirect_uri === EXPECTED.googleRedirect, 'Google redirect drifted');
   invariant(manifest.resolver.microsoft_oauth_redirect_uri === EXPECTED.microsoftRedirect, 'Microsoft redirect drifted');
   console.log('AR-8C staging provider bootstrap execution self-test: PASS');
@@ -106,6 +119,7 @@ async function execute() {
   const controlBundleRaw = secret('CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON');
   const resolverBundle = parseExactBundle(resolverBundleRaw, RESOLVER_KEYS, 'CLOUDFLARE_RESOLVER_SECRETS_JSON');
   const controlBundle = parseExactBundle(controlBundleRaw, CONTROL_PLANE_KEYS, 'CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON');
+  const accessIssuer = validateAccessIssuer(publicInput('AR8C_ACCESS_ISSUER'));
   const googleClientId = publicInput('AR8C_GOOGLE_OAUTH_CLIENT_ID');
   const microsoftClientId = publicInput('AR8C_MICROSOFT_OAUTH_CLIENT_ID');
 
@@ -126,7 +140,7 @@ async function execute() {
   const deploy = await issueDeployToken({ issuerToken, groups, accountId, zoneId });
   invariant(deploy.value !== bootstrapToken && deploy.value !== issuerToken, 'steady-state deploy credential must differ from both bootstrap credentials');
 
-  const manifest = buildManifest({ accountId, access, prerequisites, googleClientId, microsoftClientId });
+  const manifest = buildManifest({ accountId, access, accessIssuer, prerequisites, googleClientId, microsoftClientId });
   const manifestJson = JSON.stringify(manifest);
   invariant(!/(client_secret|secret_access_key|authorization|api_token)/i.test(manifestJson), 'deploy manifest contains a forbidden secret-bearing field');
 
