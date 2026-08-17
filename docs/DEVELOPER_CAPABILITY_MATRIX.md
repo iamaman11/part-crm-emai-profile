@@ -1,13 +1,14 @@
 # Developer Capability and Module Matrix
 
 **Status:** normative accepted implementation/evidence orientation  
-**Date:** 2026-08-11  
-**Execution order:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
+**Date:** 2026-08-18
+**Execution authority:** [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](./ARCHITECTURE_REBASELINE_V3_PLAN.md)
+**Generated projection:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
 
 ## 1. Purpose
 
 This matrix answers **what is actually implemented on accepted `main` and at what evidence level**.
-It does not define execution order; `DEVELOPMENT_PLAN.md` does.
+It does not define execution order. `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` is the single execution authority; `DEVELOPMENT_PLAN.md` is only its generated projection.
 
 A feature branch, queued branch, issue or PR description is not accepted implementation evidence.
 A capability becomes an accepted `main` claim only after guarded merge under the exact-head policy.
@@ -23,6 +24,22 @@ A capability becomes an accepted `main` claim only after guarded merge under the
 | **External** | Requires real provider, physical host, signing, policy or independent evidence. |
 
 No level by itself means production readiness.
+
+## 2A. CURRENT_DELIVERY_MAP
+
+Canonical machine projection: `architecture/inventory.json::current_delivery_map`. This section is a human-readable projection, not a second roadmap or release authority.
+
+| Delivery dimension | Current status | Scope / gate |
+|---|---|---|
+| Source implemented | **PARTIAL** | Accepted source exists through AR-8C; AR-8D source is `NOT_STARTED_BY_GATE`. |
+| Accepted on main | **PARTIAL** | AR-8A/AR-8B/AR-8C are accepted; `full_ar8_accepted=false`. |
+| Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; this is not a full-product or production claim. |
+| Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
+| Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
+| Current blocker | **#352 OPEN** | Post-AR-8C cleanup / DX acceptance blocks AR-8D implementation. |
+| Next gate | **#352 acceptance** | Only after #352 acceptance may AR-8D implementation begin. |
+
+`source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
 ## 3. Accepted Capability Matrix
 
@@ -53,7 +70,7 @@ No level by itself means production readiness.
 | Complete standalone UI | Composed / Synthetic | Phase 2H implementation PR #164 was accepted from exact source head `9add9b94d0de255b93e5a7c24584fcf6756462a7` and guarded squash merge `a32768feddb3da69b872e701bc529aad3521e1b0`, with exactly 12/12 permanent workflows success, `behind_by=0`, reviews=0 and unresolved review threads=0. | Phase 2I integrated E2E/security/recovery/operations hardening is accepted; Phase 2J closes real rollout evidence. |
 | Integrated release-candidate hardening | Composed / Synthetic | Phase 2I implementation PR #168 was accepted from exact source head `c1075337cfc582d0f4c00ec34b1aa7cda9ac1101` and guarded squash merge `800c634147d6300ea3989ff0cf87ade6e2387ee9`, with exactly 12/12 permanent workflows success, `behind_by=0`, reviews=0 and unresolved review threads=0. Repository-owned scope includes executable security/failure/recovery/DR, metadata-safe operations/capacity, dependency/license/threat-model, support-bundle and release-freeze evidence. | Real Cloudflare/provider/Camoufox/physical-device/signing/key/independent-review evidence remains Phase 2J External; `production_ready=false` remains unchanged. |
 | External CRM integration | Target / Future | Future-only contract-isolated Party/adapter direction is documented separately. | No active CRM implementation; it may be considered only after standalone Phase 2J. |
-| Production readiness | External | Evidence intake/readiness interlocks exist. | Mandatory external evidence is incomplete; `production_ready=false` until Phase 2J acceptance. |
+| Production readiness | External | Repository/source evidence and the AR-8C staging foundation exist independently from production state. | `production_core_gate=BLOCKED` and `production_ready=false`; only AR-17 may authorize the Core gate and only successful PC-1 may enable accepted `production-core-v1` scope. |
 
 ## 4. Architecture Obligation Status
 

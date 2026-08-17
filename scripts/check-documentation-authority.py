@@ -29,6 +29,9 @@ AR8_CURRENT_SUBSLICE = "AR-8D"
 AR8D_IMPLEMENTATION_ISSUE = None
 AR8_IMPLEMENTATION_ENTRY_GATE = "POST_AR8C_CLEANUP_DX_ACCEPTANCE_REQUIRED_BEFORE_AR8D_IMPLEMENTATION"
 AR8_MANDATORY_REMAINING = ["AR-8D", "AR-8E", "AR-8F"]
+POST_AR8C_CLEANUP_ISSUE = 352
+CURRENT_DELIVERY_CHECKPOINT = "AR-8C"
+AR8C_HOSTED_VERIFIED_MAIN = "29519fbf05f8e4c228a0907ee0dafd2c85e3749b"
 AR8B_ACCEPTANCE = {
     "issue": 309,
     "implementation_pr": 312,
@@ -63,6 +66,7 @@ REQUIRED_FILES = (
     Path("docs/INDEX.md"),
     Path("docs/status.json"),
     Path("docs/DEVELOPMENT_PLAN.md"),
+    Path("docs/DEVELOPER_CAPABILITY_MATRIX.md"),
     Path("docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"),
     Path("docs/ARCHITECTURE_REBASELINE_V3_AR0.md"),
     Path("docs/ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md"),
@@ -133,6 +137,61 @@ def validate_ar8_progress(value: object, label: str, errors: list[str], *, allow
             errors.append(f"{label}.credential_authority_source must point to AR-8B source authority")
         if progress.get("canonical_projection") != "architecture/inventory.json::credential_authority":
             errors.append(f"{label}.canonical_projection must remain inside canonical inventory")
+
+
+def expected_current_delivery_map() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "canonical_authority": "architecture/inventory.json::current_delivery_map",
+        "program": CURRENT_PROGRAM,
+        "accepted_checkpoint": CURRENT_DELIVERY_CHECKPOINT,
+        "current_work": "POST_AR8C_CLEANUP_DX",
+        "source_implemented": {
+            "status": "PARTIAL",
+            "through": CURRENT_DELIVERY_CHECKPOINT,
+            "current_subslice": AR8_CURRENT_SUBSLICE,
+            "current_subslice_source": "NOT_STARTED_BY_GATE",
+        },
+        "accepted_on_main": {
+            "status": "PARTIAL",
+            "through": CURRENT_DELIVERY_CHECKPOINT,
+            "full_ar8_accepted": False,
+        },
+        "staging_live": {
+            "status": "PARTIAL",
+            "scope": "AR-8C_STAGING_PROVIDER_AND_CREDENTIAL_FOUNDATION_ONLY",
+            "evidence": "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md",
+            "hosted_verified_main": AR8C_HOSTED_VERIFIED_MAIN,
+        },
+        "production_authorized": {
+            "status": False,
+            "gate": "AR-17_ARCHITECTURE_CLOSEOUT_AND_PRODUCTION_CORE_AUTHORIZATION",
+        },
+        "production_enabled": {
+            "status": False,
+            "gate": "PC-1_AFTER_AR-17_AUTHORIZATION",
+            "scope": "NONE",
+        },
+        "current_blocker": {
+            "issue": POST_AR8C_CLEANUP_ISSUE,
+            "status": "OPEN_ACCEPTANCE_REQUIRED",
+            "blocks": "AR-8D_IMPLEMENTATION",
+        },
+        "next_gate": {
+            "id": "POST_AR8C_CLEANUP_DX_ACCEPTANCE",
+            "issue": POST_AR8C_CLEANUP_ISSUE,
+            "on_success": "AR-8D_IMPLEMENTATION_MAY_BEGIN",
+        },
+        "invariants": {
+            "source_present_not_equal_production_enabled": True,
+            "full_ar8_accepted": False,
+            "ar9_blocked": True,
+            "architecture_complete": False,
+            "production_core_gate": "BLOCKED",
+            "production_ready": False,
+            "production_mutation": False,
+        },
+    }
 
 
 def git_blob_sha(root: Path, path: Path) -> str:
@@ -261,6 +320,7 @@ def validate(root: Path) -> list[str]:
         docs_readme = read(root, Path("docs/README.md"))
         index = read(root, Path("docs/INDEX.md"))
         development = read(root, Path("docs/DEVELOPMENT_PLAN.md"))
+        capability_matrix = read(root, Path("docs/DEVELOPER_CAPABILITY_MATRIX.md"))
         plan = read(root, Path("docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"))
         ar2_evidence = read(root, AR2_EVIDENCE)
         ar3_evidence = read(root, AR3_EVIDENCE)
@@ -285,7 +345,7 @@ def validate(root: Path) -> list[str]:
     if accepted_phase != ACCEPTED_PHASE:
         errors.append(f"accepted phase ledger must end at {ACCEPTED_PHASE}; observed {accepted_phase!r}")
 
-    if status.get("schema_version") != 5 or status.get("as_of") != STATUS_DATE:
+    if status.get("schema_version") != 6 or status.get("as_of") != STATUS_DATE:
         errors.append("docs/status.json must be the current AR-8 schema/date projection")
     if status.get("production_ready") is not False:
         errors.append("production_ready must remain false throughout AR-8")
@@ -317,6 +377,9 @@ def validate(root: Path) -> list[str]:
         errors.append("docs/status.json AR-8B acceptance provenance drifted")
     if program.get("ar8c_acceptance") != AR8C_ACCEPTANCE:
         errors.append("docs/status.json AR-8C acceptance provenance drifted")
+    expected_delivery = expected_current_delivery_map()
+    if current.get("current_delivery_map") != expected_delivery:
+        errors.append("docs/status.json current_delivery_map drifted from canonical CURRENT_DELIVERY_MAP")
 
     ar5 = program.get("ar5_acceptance") if isinstance(program.get("ar5_acceptance"), dict) else {}
     if (
@@ -426,7 +489,7 @@ def validate(root: Path) -> list[str]:
     if phase2j.get("status") != "blocked_pending_repository_remediation" or phase2j.get("forward_execution_authority") is not False:
         errors.append("historical Phase 2J state must remain blocked/non-forward")
 
-    if transition.get("schema_version") != 12 or transition.get("status") != "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8C":
+    if transition.get("schema_version") != 13 or transition.get("status") != "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8C":
         errors.append("architecture transition must encode active AR-8 after accepted AR-8C")
     if transition.get("tracking_issue") != TRACKING_ISSUE or transition.get("current_authority") != CURRENT_AUTHORITY:
         errors.append("architecture transition authority drifted")
@@ -439,6 +502,8 @@ def validate(root: Path) -> list[str]:
         errors.append("architecture transition AR-8B acceptance provenance drifted")
     if transition.get("ar8c_acceptance") != AR8C_ACCEPTANCE:
         errors.append("architecture transition AR-8C acceptance provenance drifted")
+    if transition.get("current_delivery_map") != expected_delivery:
+        errors.append("architecture transition CURRENT_DELIVERY_MAP drifted")
     transition_state = transition.get("state_model") if isinstance(transition.get("state_model"), dict) else {}
     if transition_state.get("architecture_complete") is not False or transition_state.get("production_core_gate") != "BLOCKED" or transition_state.get("production_ready") is not False:
         errors.append("transition state must remain fail closed through AR-8")
@@ -512,6 +577,10 @@ def validate(root: Path) -> list[str]:
         errors.append("architecture inventory must point to the accepted AR-2 topology decision")
     if doc_authority.get("credential_authority_source") != CREDENTIAL_AUTHORITY.as_posix() or doc_authority.get("credential_authority_projection") != "architecture/inventory.json::credential_authority":
         errors.append("architecture inventory must identify AR-8B source/projection authority")
+    if doc_authority.get("current_delivery_map") != "architecture/inventory.json::current_delivery_map":
+        errors.append("architecture inventory documentation authority must point to CURRENT_DELIVERY_MAP")
+    if inventory.get("current_delivery_map") != expected_delivery:
+        errors.append("architecture inventory canonical CURRENT_DELIVERY_MAP drifted")
     if program_state.get("accepted_architecture_slices") != ACCEPTED_SLICES or program_state.get("current_architecture_slice") != CURRENT_SLICE or program_state.get("next_architecture_slice_after_acceptance") != NEXT_SLICE:
         errors.append("architecture inventory active AR-8 program state is stale")
     validate_ar8_progress(program_state.get("ar8_progress"), "architecture inventory program_state.ar8_progress", errors, allow_projection_fields=False)
@@ -571,12 +640,13 @@ def validate(root: Path) -> list[str]:
     ):
         errors.append("architecture inventory AR-7 GitHub governance projection drifted")
 
-    common = ("Architecture Re-baseline v3", "issue #266", "AR-7", "AR-8", "production_ready=false")
+    common = ("Architecture Re-baseline v3", "issue #266", "AR-8C", "AR-8D", "#352", "CURRENT_DELIVERY_MAP", "production_ready=false")
     require(root_readme, common, "README.md", errors)
     require(docs_readme, common, "docs/README.md", errors)
-    require(index, ("CURRENT_AUTHORITY", "ARCHITECTURE_REBASELINE_V3_PLAN.md", "issue #266", "AR-7", "AR-8"), "docs/INDEX.md", errors)
-    require(development, ("Document status:** GENERATED_PROJECTION", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-7   Environments + GitHub Governance + Operational Boundaries", "AR-8   Secrets / Keys / OAuth Refresh Concurrency", "production_ready=false", "Immutable Accepted Phase Provenance"), "docs/DEVELOPMENT_PLAN.md", errors)
-    require(plan, ("Document status:** CURRENT_AUTHORITY", "Tracking issue:** #266", "Current accepted architecture checkpoint:** AR-7", "Next slice:** AR-8", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "source_present != production_enabled", "No production provisioning, promotion or other real production mutation is an AR-0…AR-17 activity"), "current v3 plan", errors)
+    require(index, ("CURRENT_AUTHORITY", "ARCHITECTURE_REBASELINE_V3_PLAN.md", "issue #266", "AR-8C", "AR-8D", "#352", "CURRENT_DELIVERY_MAP"), "docs/INDEX.md", errors)
+    require(development, ("Document status:** GENERATED_PROJECTION", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-7   Environments + GitHub Governance + Operational Boundaries", "AR-8C", "AR-8D", "#352", "CURRENT_DELIVERY_MAP", "production_ready=false", "Immutable Accepted Phase Provenance"), "docs/DEVELOPMENT_PLAN.md", errors)
+    require(plan, ("Document status:** CURRENT_AUTHORITY", "Tracking issue:** #266", "Current accepted architecture checkpoint:** AR-8C", "Current gate:** Post-AR-8C cleanup / DX — issue #352", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-8D", "CURRENT_DELIVERY_MAP", "source_present != production_enabled", "No production provisioning, promotion or other real production mutation is an AR-0…AR-17 activity"), "current v3 plan", errors)
+    require(capability_matrix, ("CURRENT_DELIVERY_MAP", "Source implemented", "Accepted on main", "Staging live", "Production authorized", "Production enabled", "#352", "AR-8D", "production_ready=false"), "docs/DEVELOPER_CAPABILITY_MATRIX.md", errors)
     require(ar2_evidence, ("AR-2 Runtime Topology + D3 Compatibility", "GENERATION_VERIFICATION = DELETE", "legacy D3 production lane", "AR-5", "AR-11", "PC-1"), "AR-2 evidence", errors)
     require(ar3_evidence, ("AR-3 Application Architecture Contract", "EVIDENCE / AR-3 accepted", "AR-4A", "AR-4B", "AR-4C", "NOT_REQUIRED", "architecture/inventory.json"), "AR-3 evidence", errors)
     require(ar4a_evidence, ("AR-4A Composition-root consolidation", "EVIDENCE / AR-4A accepted", "f257a30a1df437812edb5c9e4b33c3de7e0740bc", "74672285ef0146c2dc6da298024b378438e5a75d", "AR-4B", "AR-4C", "Production Core remains `BLOCKED`"), "AR-4A evidence", errors)
@@ -622,7 +692,8 @@ def self_test(root: Path) -> bool:
         ("premature AR-9 unblock", Path("docs/status.json"), '"ar9_blocked": true', '"ar9_blocked": false', "ar9_blocked"),
         ("premature architecture closeout", Path("docs/status.json"), '"architecture_complete": false', '"architecture_complete": true', "architecture_complete"),
         ("premature gate authorization", Path("docs/status.json"), '"production_core_gate": "BLOCKED"', '"production_core_gate": "AUTHORIZED"', "Production"),
-        ("premature production readiness", Path("docs/status.json"), '"production_ready": false', '"production_ready": true', "production_ready"),
+        ("premature production readiness", Path("docs/status.json"), '"production_ready": false', '"production_ready": true', "CURRENT_DELIVERY_MAP"),
+        ("premature delivery-map production enablement", Path("docs/status.json"), '"gate": "PC-1_AFTER_AR-17_AUTHORIZATION"', '"status": true, "gate": "PC-1_AFTER_AR-17_AUTHORIZATION"', "CURRENT_DELIVERY_MAP"),
         ("generation queue resurrection", TOPOLOGY, '"decision": "DELETE"', '"decision": "KEEP"', "GENERATION_VERIFICATION"),
         ("legacy D3 production resurrection", TOPOLOGY, '"legacy_d3_production_lane": "DISABLE_FORWARD_EXECUTION"', '"legacy_d3_production_lane": "KEEP"', "D3"),
         ("historical #203 resurrected", Path("docs/status.json"), '"forward_execution_authority": false', '"forward_execution_authority": true', "#203"),
@@ -639,7 +710,7 @@ def self_test(root: Path) -> bool:
             if not errors or not any(expected.lower() in error.lower() for error in errors):
                 print(f"negative fixture {label} was not rejected by the expected invariant: {errors}")
                 return False
-    print("Architecture Re-baseline v3 active AR-8 / AR-8C accepted / AR-8D cleanup-gated documentation authority negative fixtures passed.")
+    print("Architecture Re-baseline v3 CURRENT_DELIVERY_MAP / AR-8C accepted / #352-gated AR-8D documentation authority negative fixtures passed.")
     return True
 
 
@@ -656,7 +727,7 @@ def main() -> int:
         for error in errors:
             print(error)
         return 1
-    print("Architecture Re-baseline v3 active AR-8 / AR-8C accepted / AR-8D cleanup-gated documentation/program authority is consistent.")
+    print("Architecture Re-baseline v3 CURRENT_DELIVERY_MAP and #352-gated AR-8D documentation/program authority are consistent.")
     return 0
 
 
