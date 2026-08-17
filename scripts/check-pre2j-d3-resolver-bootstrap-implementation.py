@@ -88,6 +88,7 @@ ALLOWED_IMPLEMENTATION_PATHS = {
     "scripts/cloudflare-deploy-config.py",
     "scripts/check-phase2i-release-freeze.sh",
     "scripts/check-phase2e-mailbox-boundaries.py",
+    "scripts/github-raw-artifact-download.py",
     "scripts/mailbox-secret-resolver-promotion.py",
     "scripts/mailbox-secret-resolver-release.py",
     "scripts/verify-fast.py",
@@ -348,6 +349,9 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
         "staging_evidence_confirmation:",
         "confirmation:",
         "github-preflight",
+        "github-raw-artifact-download.py download",
+        "--expected-digest",
+        "--expected-name",
         "download-artifact@",
         "artifact-ids:",
         "deploy --dry-run",
@@ -376,8 +380,12 @@ def workflow_errors(release: str, promotion: str) -> list[str]:
         errors.append("production must accept immutable staging evidence artifacts, never tracked Git evidence")
     if promotion.count("--secrets-file") != 4:
         errors.append("both immutable artifact dry-runs and both Worker deploys must each use --secrets-file")
-    if promotion.count("artifact-ids:") != 5:
-        errors.append("preflight and deployment must download exact release artifacts, plus production staging evidence, by GitHub artifact id")
+    if promotion.count("github-raw-artifact-download.py download") != 4:
+        errors.append("preflight and deployment must each acquire resolver/control-plane raw release artifacts through the one bounded REST helper")
+    if promotion.count("--expected-digest") != 4 or promotion.count("--expected-name") != 4:
+        errors.append("every raw release artifact acquisition must bind exact digest and canonical raw TAR name")
+    if promotion.count("artifact-ids:") != 1 or promotion.count("actions/download-artifact@") != 1:
+        errors.append("actions/download-artifact must remain only for the unchanged production staging-evidence artifact")
     if promotion.count("--strict") != 4:
         errors.append("both immutable artifact dry-runs and both Worker deployments must use strict validation")
     if promotion.count("--experimental-autoconfig=false") != 4:
@@ -538,6 +546,18 @@ def self_test() -> None:
     errors = current_errors()
     if errors:
         raise AssertionError(errors)
+    helper = subprocess.run(
+        ["python", "scripts/github-raw-artifact-download.py", "self-test"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if helper.returncode != 0:
+        raise AssertionError(
+            "raw GitHub artifact acquisition self-test failed: "
+            + (helper.stderr.strip() or helper.stdout.strip())
+        )
     marker = copy.deepcopy(EXPECTED_MARKER)
     marker["production_ready"] = True
     assert marker_errors(marker)
@@ -552,6 +572,15 @@ def self_test() -> None:
     assert workflow_errors(release, promotion + "\nworker-build --release")
     assert workflow_errors(release, promotion.replace("--secrets-file", "--secret-file"))
     assert workflow_errors(release, promotion.replace("artifact-ids:", "pattern:", 1))
+    assert workflow_errors(
+        release,
+        promotion.replace(
+            "github-raw-artifact-download.py download",
+            "unchecked-artifact-download.py download",
+            1,
+        ),
+    )
+    assert workflow_errors(release, promotion.replace("--expected-digest", "--unchecked-digest", 1))
     assert workflow_errors(release, promotion.replace("github-preflight", "unchecked-preflight", 1))
     assert workflow_errors(release, promotion + "\n--no-bundle")
     assert workflow_errors(release, promotion.replace("staging_evidence_artifact_id", "tracked_evidence_path", 1))
