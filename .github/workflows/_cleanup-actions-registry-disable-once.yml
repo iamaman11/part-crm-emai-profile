@@ -1,0 +1,169 @@
+name: Cleanup Actions Registry Disable Once
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/_cleanup-actions-registry-disable-once.yml'
+      - 'docs/evidence/2026-08-18-post-ar8c-actions-registry-classification.json'
+      - 'docs/evidence/2026-08-18-post-ar8c-actions-registry-exception-resolutions.json'
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cleanup-actions-registry-disable-once
+  cancel-in-progress: false
+
+jobs:
+  disable:
+    name: Disable accepted obsolete workflow registrations once
+    if: github.repository == 'iamaman11/part-crm-emai-profile' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EXPECTED_BEFORE: 85c6d42d877108274bfac3b30042164dca0bec41
+      CLASSIFICATION: docs/evidence/2026-08-18-post-ar8c-actions-registry-classification.json
+      RESOLUTIONS: docs/evidence/2026-08-18-post-ar8c-actions-registry-exception-resolutions.json
+    steps:
+      - name: Checkout exact cleanup source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact accepted cleanup authority
+        shell: bash
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = 'push'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$EVENT_BEFORE" = "$EXPECTED_BEFORE"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          c = json.loads(Path('docs/evidence/2026-08-18-post-ar8c-actions-registry-classification.json').read_text())
+          r = json.loads(Path('docs/evidence/2026-08-18-post-ar8c-actions-registry-exception-resolutions.json').read_text())
+          assert c['schema_version'] == 1
+          assert c['source_accepted_main_sha'] == '85c6d42d877108274bfac3b30042164dca0bec41'
+          assert c['registered_workflow_count'] == 198
+          assert c['tracked_main_workflow_count'] == 22
+          assert c['category_counts'] == {
+              'CURRENT_MANUAL_OPERATION': 1,
+              'HISTORICAL_ONE_SHOT': 40,
+              'PERMANENT_REQUIRED': 15,
+              'SCRATCH_DEBUG': 35,
+              'SUPERSEDED': 107,
+          }
+          assert c['decision_counts'] == {
+              'DISABLE_REGISTRATION': 176,
+              'KEEP_ACTIVE': 16,
+              'RETIRE_FILE_AND_DISABLE': 6,
+          }
+          assert c['duplicate_registration_paths'] == []
+          disable = [x for x in c['registrations'] if x['decision'] != 'KEEP_ACTIVE']
+          keep = [x for x in c['registrations'] if x['decision'] == 'KEEP_ACTIVE']
+          assert len(disable) == 182 and len({x['id'] for x in disable}) == 182
+          assert len(keep) == 16 and len({x['path'] for x in keep}) == 16
+          assert r['cleanup_issue'] == 352 and r['baseline_main'] == c['source_accepted_main_sha']
+          resolved = {x['registration_id'] for x in r['resolutions']}
+          expected = {336458189,336440298,336271160,336190565,335828549,336180935}
+          assert resolved == expected
+          assert r['invariants']['required_checks_weakened'] is False
+          assert r['invariants']['canonical_promotion_authority_preserved'] is True
+          assert r['invariants']['canonical_release_authority_preserved'] is True
+          assert r['invariants']['production_mutation'] is False
+          PY
+
+      - name: Prove tracked workflow retirement and current authority preservation
+        shell: bash
+        run: |
+          set -euo pipefail
+          retired=(
+            .github/workflows/ar8c-credential-bundle-recovery.yml
+            .github/workflows/ar8c-credential-recovery-assessment.yml
+            .github/workflows/ar8c-provider-bootstrap-execution.yml
+            .github/workflows/ar8c-resolver-schema-convergence.yml
+            .github/workflows/ar8c-staging-bootstrap-preflight.yml
+            .github/workflows/ar8c-staging-provider-bootstrap.yml
+          )
+          for path in "${retired[@]}"; do test ! -e "$path"; done
+          test -f .github/workflows/mailbox-secret-resolver-promotion.yml
+          test -f .github/workflows/mailbox-secret-resolver-release.yml
+          test -f .github/workflows/quality-gate.yml
+          test -f .github/workflows/github-governance-gate.yml
+
+      - name: Disable only accepted obsolete registrations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          auth=(--header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' --header 'X-GitHub-Api-Version: 2022-11-28')
+
+          mapfile -t disable_ids < <(jq -r '.registrations[] | select(.decision != "KEEP_ACTIVE") | .id' "$CLASSIFICATION")
+          mapfile -t keep_paths < <(jq -r '.registrations[] | select(.decision == "KEEP_ACTIVE") | .path' "$CLASSIFICATION" | sort)
+          test "${#disable_ids[@]}" -eq 182
+          test "${#keep_paths[@]}" -eq 16
+
+          fetch_registry() {
+            local output="$1" page=1 count part next
+            printf '[]\n' > "$output"
+            while :; do
+              part="$RUNNER_TEMP/registry-$page.json"
+              curl --silent --show-error --fail-with-body "${auth[@]}" "$api/actions/workflows?per_page=100&page=$page" > "$part"
+              count="$(jq '.workflows | length' "$part")"
+              next="$RUNNER_TEMP/registry-next.json"
+              jq -s '.[0] + .[1].workflows' "$output" "$part" > "$next"
+              mv "$next" "$output"
+              [ "$count" -lt 100 ] && break
+              page=$((page + 1))
+            done
+          }
+
+          before="$RUNNER_TEMP/registry-before.json"
+          fetch_registry "$before"
+          for path in "${keep_paths[@]}"; do
+            test "$(jq --arg p "$path" '[.[] | select(.path == $p and .state == "active")] | length' "$before")" = '1'
+          done
+          for id in "${disable_ids[@]}"; do
+            test "$(jq --argjson id "$id" '[.[] | select(.id == $id)] | length' "$before")" = '1'
+            state="$(jq -r --argjson id "$id" '.[] | select(.id == $id) | .state' "$before")"
+            if [ "$state" = 'active' ]; then
+              code="$(curl --silent --show-error --request PUT "${auth[@]}" --output "$RUNNER_TEMP/disable-$id.txt" --write-out '%{http_code}' "$api/actions/workflows/$id/disable")"
+              test "$code" = '204'
+            elif [ "$state" = 'disabled_manually' ]; then
+              :
+            else
+              echo "Unexpected pre-disable state for registration $id: $state" >&2
+              exit 1
+            fi
+          done
+
+          after="$RUNNER_TEMP/registry-after.json"
+          fetch_registry "$after"
+          for id in "${disable_ids[@]}"; do
+            test "$(jq -r --argjson id "$id" '.[] | select(.id == $id) | .state' "$after")" = 'disabled_manually'
+          done
+          for path in "${keep_paths[@]}"; do
+            test "$(jq --arg p "$path" '[.[] | select(.path == $p and .state == "active")] | length' "$after")" = '1'
+          done
+
+      - name: Disable this one-shot executor last
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          auth=(--header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' --header 'X-GitHub-Api-Version: 2022-11-28')
+          code="$(curl --silent --show-error --request PUT "${auth[@]}" --output "$RUNNER_TEMP/disable-self.txt" --write-out '%{http_code}' "$api/actions/workflows/_cleanup-actions-registry-disable-once.yml/disable")"
+          test "$code" = '204'
+          echo 'Accepted obsolete workflow registrations disabled; historical run provenance preserved; current authorities left active.' >> "$GITHUB_STEP_SUMMARY"
