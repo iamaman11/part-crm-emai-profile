@@ -6,6 +6,7 @@ const EXECUTOR_PATH = '.github/scripts/ar8c-credential-bundle-recovery.mjs';
 const ASSESSMENT_PATH = '.github/scripts/ar8c-credential-recovery-assessment.mjs';
 const PROVIDER_PATH = '.github/scripts/ar8c-provider-bootstrap-provider.mjs';
 const COMMON_PATH = '.github/scripts/ar8c-provider-bootstrap-common.mjs';
+const CREDENTIAL_AUTHORITY_PATH = 'architecture/credential-authority-ar8b.json';
 const CHECKOUT_PIN = 'actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a';
 const NODE_PIN = 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e';
 
@@ -13,14 +14,32 @@ function count(source, fragment) {
   return source.split(fragment).length - 1;
 }
 
+function exactCredential(authority, id) {
+  const credentials = Array.isArray(authority?.credentials) ? authority.credentials : [];
+  const matches = credentials.filter((entry) => entry?.id === id);
+  invariant(matches.length === 1, `canonical credential authority must contain exactly one ${id} entry`);
+  return matches[0];
+}
+
+function assertCanonicalOAuthCredential(entry, expectedBinding, providerSystem) {
+  invariant(entry.class === 'OAUTH_APPLICATION_CREDENTIAL', `${entry.id} class drifted`);
+  invariant(entry.provider_system === providerSystem, `${entry.id} provider drifted`);
+  invariant(entry.externally_issued === true, `${entry.id} must remain provider-issued`);
+  invariant(entry.future_cutover === 'AR-8E', `${entry.id} lifecycle ownership must remain AR-8E`);
+  const names = (Array.isArray(entry.bindings) ? entry.bindings : []).map((binding) => binding?.name);
+  invariant(names.includes(expectedBinding), `${entry.id} canonical binding ${expectedBinding} is missing`);
+}
+
 async function validate() {
-  const [workflow, executor, assessment, provider, common] = await Promise.all([
+  const [workflow, executor, assessment, provider, common, authorityRaw] = await Promise.all([
     readFile(WORKFLOW_PATH, 'utf8'),
     readFile(EXECUTOR_PATH, 'utf8'),
     readFile(ASSESSMENT_PATH, 'utf8'),
     readFile(PROVIDER_PATH, 'utf8'),
     readFile(COMMON_PATH, 'utf8'),
+    readFile(CREDENTIAL_AUTHORITY_PATH, 'utf8'),
   ]);
+  const authority = JSON.parse(authorityRaw);
 
   invariant(workflow.startsWith('name: AR-8C Staging Credential Bundle Recovery\n'), 'credential bundle recovery workflow name drifted');
   invariant(count(workflow, 'workflow_dispatch:') === 1, 'credential bundle recovery must expose exactly one workflow_dispatch trigger');
@@ -38,11 +57,11 @@ async function validate() {
 
   const referencedSecrets = [...workflow.matchAll(/secrets\.([A-Z0-9_]+)/g)].map((match) => match[1]).sort();
   const expectedSecrets = [
-    'AR8C_RECOVERY_GOOGLE_OAUTH_CLIENT_SECRET',
-    'AR8C_RECOVERY_MICROSOFT_OAUTH_CLIENT_SECRET',
     'CLOUDFLARE_BOOTSTRAP_TOKEN',
     'CLOUDFLARE_TOKEN_ISSUER_TOKEN',
     'GH_BOOTSTRAP_ADMIN_TOKEN',
+    'GOOGLE_OAUTH_CLIENT_SECRET',
+    'MICROSOFT_OAUTH_CLIENT_SECRET',
   ].sort();
   invariant(JSON.stringify(referencedSecrets) === JSON.stringify(expectedSecrets), 'credential bundle recovery protected input set drifted');
   for (const forbidden of [
@@ -56,7 +75,19 @@ async function validate() {
     invariant(!workflow.includes(`secrets.${forbidden}`), `credential bundle recovery must not read final/runtime binding ${forbidden}`);
   }
 
-  const assessmentCall = "runCanonicalRecoveryAssessment()";
+  assertCanonicalOAuthCredential(
+    exactCredential(authority, 'resolver.google-oauth-application'),
+    'GOOGLE_OAUTH_CLIENT_SECRET',
+    'GOOGLE_OAUTH',
+  );
+  assertCanonicalOAuthCredential(
+    exactCredential(authority, 'resolver.microsoft-oauth-application'),
+    'MICROSOFT_OAUTH_CLIENT_SECRET',
+    'MICROSOFT_IDENTITY',
+  );
+  invariant(!executor.includes('AR8C_RECOVERY_GOOGLE_OAUTH_CLIENT_SECRET') && !executor.includes('AR8C_RECOVERY_MICROSOFT_OAUTH_CLIENT_SECRET'), 'recovery must not create alias OAuth credential identities');
+
+  const assessmentCall = 'runCanonicalRecoveryAssessment()';
   const providerClassification = 'await classifyBeforeMutation({';
   const r2Issuance = 'await issueR2Credential({';
   const firstFinalWrite = 'bindEnvironmentSecret(ghToken, FINAL_RECOVERY_BINDINGS[0]';
@@ -66,14 +97,15 @@ async function validate() {
   invariant(executor.includes("spawnSync(process.execPath, [ASSESSMENT_SCRIPT, 'recovery-assess']"), 'recovery executor must reuse canonical assessment process');
   invariant(executor.includes("evidence?.classification === 'FRESH_PROJECT_SECRET_ISSUANCE_SAFE'"), 'recovery must require fresh-issuance-safe classification');
   invariant(executor.includes("evidence?.external_oauth_secret_authority === 'PROVIDER_OWNED_INPUT_REQUIRED'"), 'recovery must preserve provider-owned OAuth secret authority');
-  invariant(assessment.includes("classification: keyPreservationRequired") && assessment.includes("'KEY_PRESERVATION_REQUIRED'") && assessment.includes("'FRESH_PROJECT_SECRET_ISSUANCE_SAFE'"), 'canonical assessment classification states drifted');
+  invariant(assessment.includes('classification: keyPreservationRequired') && assessment.includes("'KEY_PRESERVATION_REQUIRED'") && assessment.includes("'FRESH_PROJECT_SECRET_ISSUANCE_SAFE'"), 'canonical assessment classification states drifted');
 
   invariant(executor.includes("'CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON'") && executor.includes("'CLOUDFLARE_RESOLVER_SECRETS_JSON'"), 'recovery final binding set is incomplete');
-  invariant(executor.includes('FINAL_RECOVERY_BINDINGS.length') || executor.includes('JSON.stringify(FINAL_RECOVERY_BINDINGS)'), 'recovery final binding set lacks self-test coverage');
+  invariant(executor.includes('JSON.stringify(FINAL_RECOVERY_BINDINGS)'), 'recovery final binding set lacks self-test coverage');
   invariant(count(executor, 'bindEnvironmentSecret(ghToken, FINAL_RECOVERY_BINDINGS[') === 2, 'recovery must perform exactly two canonical final Environment writes');
-  invariant(executor.includes('deleteRecoveryInputBinding(ghToken, name)'), 'consumed recovery OAuth bindings must be removed after successful final writes');
+  invariant(executor.includes('deleteRecoveryInputBinding(ghToken, name)'), 'consumed temporary OAuth bindings must be removed after successful final writes');
   invariant(executor.includes("['secret', 'delete', name, '--env', EXPECTED.environment, '--repo', EXPECTED.repository]"), 'recovery cleanup must be restricted to exact staging Environment secret deletion');
   invariant(executor.includes('RECOVERY_INPUT_BINDINGS.includes(name)'), 'recovery cleanup must fail closed for non-recovery binding names');
+  invariant(executor.includes("'GOOGLE_OAUTH_CLIENT_SECRET'") && executor.includes("'MICROSOFT_OAUTH_CLIENT_SECRET'"), 'recovery must use canonical OAuth credential identities');
 
   invariant(executor.includes('CLIENT_CONTACT_PROTECTION_KEYRING') && executor.includes('MAILBOX_RESOLVER_ENCRYPTION_KEYRING'), 'project-generated keyring material is incomplete');
   invariant(executor.includes('MAILBOX_RESOLVER_CALLER_AUTH_KEY') && executor.includes('MAILBOX_RESOLVER_HANDLE_HMAC_KEY'), 'project-generated resolver authentication/HMAC material is incomplete');
