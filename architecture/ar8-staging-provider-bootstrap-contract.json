@@ -1,0 +1,185 @@
+{
+  "schema_version": 2,
+  "status": "AR8C_STAGING_PROVIDER_EXECUTION_AUTHORITY",
+  "parent_issue": 308,
+  "implementation_issue": 314,
+  "environment": "staging",
+  "role": "EXECUTION_PREREQUISITE_ONLY_NOT_CREDENTIAL_REGISTRY",
+  "canonical_credential_authority": "architecture/credential-authority-ar8b.json",
+  "canonical_architecture_inventory": "architecture/inventory.json",
+  "accepted_bootstrap_design_authority": "architecture/pre2j-d3-resolver-bootstrap-authority.json",
+  "decision_record": "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md",
+  "accepted_main_evidence": {
+    "bootstrap_credential_preflight_run": 31982007799,
+    "provider_inventory_run": 31982654955,
+    "d1_classification_run": 31983168653,
+    "provider_identifiers_in_git": "FORBIDDEN"
+  },
+  "invariants": {
+    "plaintext_in_git": "FORBIDDEN",
+    "placeholder_or_guessed_provider_state": "FORBIDDEN",
+    "secret_value_readback": "FORBIDDEN",
+    "production_read_or_mutation": "FORBIDDEN",
+    "terraform": "FORBIDDEN",
+    "scheduled_or_routine_provisioning": "FORBIDDEN",
+    "workflow_dispatch_only": true,
+    "protected_staging_environment_required": true,
+    "accepted_main_only": true,
+    "read_only_discovery_before_mutation": true,
+    "create_only_missing": true,
+    "conflicting_resource_creation": "FORBIDDEN",
+    "resource_delete_or_rename": "FORBIDDEN",
+    "bootstrap_credential_equals_steady_state_credential": "FORBIDDEN",
+    "runtime_secret_readback": "FORBIDDEN",
+    "ar8c_reconciliation_mutation": "FORBIDDEN",
+    "ar9_before_full_ar8_acceptance": "FORBIDDEN"
+  },
+  "classification_contract": {
+    "allowed_states": [
+      "PRESENT_AND_MATCHING",
+      "MISSING",
+      "PRESENT_BUT_CONFLICTING",
+      "UNKNOWN_DUE_TO_AUTHORIZATION"
+    ],
+    "create_allowed_only_for": "MISSING",
+    "reuse_allowed_only_for": "PRESENT_AND_MATCHING",
+    "fail_closed_states": [
+      "PRESENT_BUT_CONFLICTING",
+      "UNKNOWN_DUE_TO_AUTHORIZATION"
+    ],
+    "exception": "The dedicated historical resolver D1 may receive exact-prefix append-only schema convergence under resolver_schema_convergence; it is never treated as MISSING and a duplicate resolver D1 is forbidden."
+  },
+  "accepted_staging_resource_roles": {
+    "resolver_d1": {
+      "accepted_name": "mailbox-secret-resolver-gate-b-bootstrap-20260815-033400",
+      "current_live_state": "EXISTING_REQUIRES_AR8A_SCHEMA_CONVERGENCE",
+      "duplicate_creation": "FORBIDDEN"
+    },
+    "catalog_d1": {
+      "accepted_name": "part-crm-catalog-staging-d3-20260815",
+      "required_state": "PRESENT_AND_MATCHING",
+      "current_live_migration_match": "26_OF_26",
+      "duplicate_creation": "FORBIDDEN"
+    },
+    "forbidden_catalog_targets": [
+      "part-crm-catalog-staging",
+      "part-crm-catalog-production",
+      "part-crm-d3a-bootstrap-proof"
+    ],
+    "profile_r2": {
+      "accepted_name": "part-crm-profile-objects-staging-d3",
+      "current_live_state": "PRESENT",
+      "unclaimed_existing_bucket": "part-crm-browser-profiles"
+    },
+    "queues": {
+      "generation_verification": "part-crm-generation-verification-staging-d3",
+      "integration_events": "part-crm-integration-events-staging-d3",
+      "mailbox_jobs": "part-crm-mailbox-jobs-staging-d3",
+      "mailbox_jobs_dlq": "part-crm-mailbox-jobs-dlq-staging-d3"
+    },
+    "resolver_worker": {
+      "accepted_name": "mailbox-secret-resolver-staging",
+      "current_live_state": "MISSING"
+    },
+    "control_plane_worker": {
+      "accepted_name": "browser-profile-control-plane-staging",
+      "current_live_state": "MISSING"
+    },
+    "custom_domain": "staging.alegria.by",
+    "access": {
+      "application_name": "part-crm-staging-control-plane",
+      "service_token_name": "part-crm-staging-github-service-auth",
+      "service_auth_policy_name": "part-crm-staging-service-auth",
+      "current_live_state": "MISSING"
+    }
+  },
+  "resolver_schema_convergence": {
+    "target_name": "mailbox-secret-resolver-gate-b-bootstrap-20260815-033400",
+    "migration_source": "migrations/resolver-d1",
+    "precondition": "Remote d1_migrations names must be an exact ordered prefix of the current repository resolver migration inventory and the target must contain the accepted resolver base tables.",
+    "allowed_operation": "Apply only the exact missing ordered suffix migration files from the accepted-main checkout.",
+    "current_expected_missing_migration": "0002_oauth_refresh_fencing.sql",
+    "allowed_sql_classes": [
+      "PRAGMA foreign_keys",
+      "ALTER TABLE resolver_encrypted_records ADD COLUMN",
+      "CREATE INDEX"
+    ],
+    "forbidden_sql_tokens": [
+      "DROP",
+      "DELETE",
+      "UPDATE",
+      "INSERT",
+      "REPLACE",
+      "VACUUM",
+      "ATTACH",
+      "DETACH"
+    ],
+    "postcondition": "Re-run the protected read-only D1 classifier and require PRESENT_AND_MATCHING before any resolver Worker deployment.",
+    "rollback_model": "No reverse/destructive migration is authorized. On failure stop immediately, preserve the dedicated D1, and require a new remediation authority."
+  },
+  "bootstrap_execution_order": [
+    "accepted_resolver_release_artifact",
+    "resolver_d1_schema_convergence_if_exact_prefix",
+    "catalog_d1_reuse_only_if_present_and_matching",
+    "profile_r2_and_queues_reuse_or_create_only_if_missing",
+    "r2_s3_credentials",
+    "resolver_worker_with_direct_secret_store_bindings",
+    "access_application_service_auth_policy_and_token",
+    "steady_state_cloudflare_api_token",
+    "github_staging_environment_outputs",
+    "control_plane_first_deploy_with_direct_secret_store_bindings_and_custom_domain",
+    "staging_smoke_and_attestation",
+    "bootstrap_credential_revocation",
+    "ar8c_read_only_reconciliation"
+  ],
+  "external_facts_that_must_not_be_guessed": [
+    "Cloudflare Access issuer/team domain discovered from the account",
+    "Google staging OAuth application client id and client secret when Google OAuth is enabled",
+    "Microsoft staging OAuth application client id and client secret when Microsoft OAuth is enabled"
+  ],
+  "project_generated_secret_classes": [
+    "CLIENT_CONTACT_PROTECTION_KEYRING",
+    "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
+    "MAILBOX_RESOLVER_ENCRYPTION_KEYRING",
+    "MAILBOX_RESOLVER_HANDLE_HMAC_KEY"
+  ],
+  "provider_issued_secret_classes": [
+    "R2_GENERATION_ACCESS_KEY_ID",
+    "R2_GENERATION_SECRET_ACCESS_KEY",
+    "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_ACCESS_CLIENT_ID",
+    "CLOUDFLARE_ACCESS_CLIENT_SECRET"
+  ],
+  "runtime_secret_destination": "Cloudflare Worker secret stores; value readback is forbidden.",
+  "staging_outputs": {
+    "github_environment": "staging",
+    "required_new_or_verified_bindings": [
+      "CLOUDFLARE_API_TOKEN",
+      "CLOUDFLARE_ACCESS_CLIENT_ID",
+      "CLOUDFLARE_ACCESS_CLIENT_SECRET",
+      "CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+    ],
+    "transitional_existing_bundle_bindings": [
+      "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON",
+      "CLOUDFLARE_RESOLVER_SECRETS_JSON"
+    ],
+    "manifest_source": "Real protected-execution provider outputs only; provider IDs are never precommitted or guessed."
+  },
+  "failure_policy": {
+    "missing_external_fact": "STOP_AND_REPORT_EXACT_AUTHORITY_SOURCE",
+    "authorization_unknown": "STOP_NO_MUTATION",
+    "resource_conflict": "STOP_NO_DUPLICATE_CREATION",
+    "resolver_non_prefix_schema": "STOP_REQUIRE_NEW_REMEDIATION_AUTHORITY",
+    "production_match": "STOP_IMMEDIATELY",
+    "secret_readback_required": "STOP_AND_REDESIGN"
+  },
+  "remaining_sequence": [
+    "AR-8C hosted staging handoff green",
+    "AR-8D",
+    "AR-8E",
+    "AR-8F",
+    "AR-8 steady-state deploy secret decoupling",
+    "AR-8 final exact-head closeout",
+    "AR-9 only after full AR-8 acceptance"
+  ]
+}
