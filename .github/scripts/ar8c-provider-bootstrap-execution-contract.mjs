@@ -1,5 +1,11 @@
 import { readFile } from 'node:fs/promises';
-import { invariant } from './ar8c-provider-bootstrap-common.mjs';
+import {
+  R2_CREDENTIAL_VALIDATION_POLICY,
+  invariant,
+  isRetryableR2ValidationStatus,
+  r2CredentialValidationDelayMs,
+  validateR2Credential,
+} from './ar8c-provider-bootstrap-common.mjs';
 import {
   GITHUB_READ_RETRY_POLICY,
   githubReadJson,
@@ -61,6 +67,8 @@ async function validate() {
   invariant(execution.indexOf('classifyBeforeMutation') < execution.indexOf('issueR2Credential'), 'execution must classify provider state before first mutation');
   invariant(provider.includes("/user/tokens/${existing.id}/value") && provider.includes('/access/service_tokens/${existing.id}/rotate'), 'recovery-safe token rotation surfaces are missing');
   invariant(common.includes("createHash('sha256').update(tokenValue") && common.includes('validateR2Credential'), 'R2 derivation/bounded validation contract is missing');
+  invariant(provider.indexOf("cfRequest(tokenValue, '/user/tokens/verify')") < provider.indexOf('await validateR2Credential({ accountId, ...result })'), 'R2 API token must verify active before S3 credential validation');
+  invariant(common.includes('R2_CREDENTIAL_VALIDATION_POLICY') && common.includes('isRetryableR2ValidationStatus'), 'bounded R2 validation retry policy is missing');
   invariant(common.includes("gh', ['secret', 'set'") && common.includes("'--body', '-'") && common.includes('input: value'), 'GitHub Environment secret binding must remain write-only over stdin');
   invariant(common.includes('githubReadJson') && !common.includes('retryEnvironmentSecret'), 'GitHub retry helper must remain scoped to read requests, not Environment writes');
   invariant(execution.includes('verifyEnvironmentBindings') && execution.includes('FINAL_ENV_BINDINGS'), 'post-bind metadata verification is missing');
@@ -108,6 +116,50 @@ async function validate() {
     failFastError = error;
   }
   invariant(failFastCalls === 1 && /HTTP 403/.test(failFastError?.message ?? ''), 'GitHub non-retryable 4xx must fail on the first attempt');
+
+  invariant(R2_CREDENTIAL_VALIDATION_POLICY.maxAttempts === 5, 'R2 validation retry attempt bound drifted');
+  invariant(R2_CREDENTIAL_VALIDATION_POLICY.baseDelayMs === 1_000 && R2_CREDENTIAL_VALIDATION_POLICY.maxDelayMs === 8_000, 'R2 validation retry backoff bounds drifted');
+  for (const status of [401, 429, 500, 503, 599]) invariant(isRetryableR2ValidationStatus(status), `R2 validation HTTP ${status} must remain retryable`);
+  for (const status of [400, 403, 404, 409, 422]) invariant(!isRetryableR2ValidationStatus(status), `R2 validation HTTP ${status} must remain fail-fast`);
+  invariant(r2CredentialValidationDelayMs(1) === 1_000 && r2CredentialValidationDelayMs(4) === 8_000, 'R2 validation exponential backoff drifted');
+
+  let r2RetryCalls = 0;
+  const r2RetrySleeps = [];
+  await validateR2Credential({
+    accountId: 'a'.repeat(32),
+    accessKeyId: 'b'.repeat(32),
+    secretAccessKey: 'c'.repeat(64),
+    nowImpl: () => new Date('2026-08-17T16:00:00.000Z'),
+    fetchImpl: async (url, options) => {
+      r2RetryCalls += 1;
+      invariant(url.includes('.r2.cloudflarestorage.com/part-crm-profile-objects-staging-d3?'), 'R2 validation target drifted');
+      invariant(String(options?.headers?.Authorization ?? '').startsWith('AWS4-HMAC-SHA256 Credential='), 'R2 validation must remain SigV4 authenticated');
+      if (r2RetryCalls < 3) return new Response('<Error><Code>Unauthorized</Code></Error>', { status: 401 });
+      return new Response('', { status: 200 });
+    },
+    sleepImpl: async (ms) => { r2RetrySleeps.push(ms); },
+  });
+  invariant(r2RetryCalls === 3, 'R2 transient 401 validation retry loop did not recover deterministically');
+  invariant(JSON.stringify(r2RetrySleeps) === JSON.stringify([1_000, 2_000]), 'R2 validation retry backoff sequence drifted');
+
+  let r2FailFastCalls = 0;
+  let r2FailFastError = null;
+  try {
+    await validateR2Credential({
+      accountId: 'a'.repeat(32),
+      accessKeyId: 'b'.repeat(32),
+      secretAccessKey: 'c'.repeat(64),
+      nowImpl: () => new Date('2026-08-17T16:00:00.000Z'),
+      fetchImpl: async () => {
+        r2FailFastCalls += 1;
+        return new Response('<Error><Code>AccessDenied</Code></Error>', { status: 403 });
+      },
+      sleepImpl: async () => { throw new Error('non-retryable R2 403 must not sleep'); },
+    });
+  } catch (error) {
+    r2FailFastError = error;
+  }
+  invariant(r2FailFastCalls === 1 && /HTTP 403 \(AccessDenied\)/.test(r2FailFastError?.message ?? ''), 'R2 AccessDenied must fail on the first attempt with safe error code');
 
   for (const forbidden of ['wrangler deploy', 'wrangler secret', 'terraform', 'method: \'DELETE\'', '/workers/scripts/', '/workers/routes']) {
     invariant(!providerCombined.toLowerCase().includes(forbidden.toLowerCase()), `provider bootstrap contains forbidden mutable surface: ${forbidden}`);

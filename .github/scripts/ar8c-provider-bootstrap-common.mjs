@@ -52,6 +52,12 @@ export const FINAL_ENV_BINDINGS = Object.freeze([
   'CLOUDFLARE_RESOLVER_SECRETS_JSON',
 ]);
 
+export const R2_CREDENTIAL_VALIDATION_POLICY = Object.freeze({
+  maxAttempts: 5,
+  baseDelayMs: 1_000,
+  maxDelayMs: 8_000,
+});
+
 const CF_API = 'https://api.cloudflare.com/client/v4';
 const GITHUB_API_VERSION = '2026-03-10';
 
@@ -159,29 +165,87 @@ export function deriveR2Secret(tokenValue) {
   return createHash('sha256').update(tokenValue, 'utf8').digest('hex');
 }
 
-export async function validateR2Credential({ accountId, accessKeyId, secretAccessKey }) {
+export function isRetryableR2ValidationStatus(status) {
+  return status === 401 || status === 429 || (status >= 500 && status <= 599);
+}
+
+export function r2CredentialValidationDelayMs(attempt) {
+  return Math.min(
+    R2_CREDENTIAL_VALIDATION_POLICY.maxDelayMs,
+    R2_CREDENTIAL_VALIDATION_POLICY.baseDelayMs * (2 ** Math.max(0, attempt - 1)),
+  );
+}
+
+function isRetryableR2TransportError(error) {
+  return error instanceof TypeError || ['AbortError', 'TimeoutError'].includes(error?.name);
+}
+
+function safeR2ErrorCode(body) {
+  if (typeof body !== 'string') return null;
+  const match = body.slice(0, 8_192).match(/<Code>([^<]{1,80})<\/Code>/i);
+  if (!match) return null;
+  const value = match[1].trim();
+  return /^[A-Za-z0-9_.-]+$/.test(value) ? value : null;
+}
+
+async function defaultSleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function validateR2Credential({
+  accountId,
+  accessKeyId,
+  secretAccessKey,
+  fetchImpl = fetch,
+  sleepImpl = defaultSleep,
+  nowImpl = () => new Date(),
+}) {
   const host = `${accountId}.r2.cloudflarestorage.com`;
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
-  const dateStamp = amzDate.slice(0, 8);
   const query = 'list-type=2&max-keys=1&prefix=ar8c-bootstrap-validation%2F';
   const payloadHash = createHash('sha256').update('').digest('hex');
-  const headers = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
-  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
-  const canonical = `GET\n/${EXPECTED.r2Bucket}\n${query}\n${headers}\n${signedHeaders}\n${payloadHash}`;
-  const scope = `${dateStamp}/auto/s3/aws4_request`;
-  const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${createHash('sha256').update(canonical).digest('hex')}`;
-  const kDate = awsHmac(Buffer.from(`AWS4${secretAccessKey}`, 'utf8'), dateStamp);
-  const kRegion = awsHmac(kDate, 'auto');
-  const kService = awsHmac(kRegion, 's3');
-  const kSigning = awsHmac(kService, 'aws4_request');
-  const signature = createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex');
-  const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-  const response = await fetch(`https://${host}/${EXPECTED.r2Bucket}?${query}`, {
-    headers: { Authorization: authorization, 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate },
-    signal: AbortSignal.timeout(20_000),
-  });
-  invariant(response.ok, `new R2 credential failed bounded bucket validation with HTTP ${response.status}`);
+
+  for (let attempt = 1; attempt <= R2_CREDENTIAL_VALIDATION_POLICY.maxAttempts; attempt += 1) {
+    const now = nowImpl();
+    invariant(now instanceof Date && Number.isFinite(now.getTime()), 'R2 validation clock returned an invalid date');
+    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+    const dateStamp = amzDate.slice(0, 8);
+    const headers = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+    const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+    const canonical = `GET\n/${EXPECTED.r2Bucket}\n${query}\n${headers}\n${signedHeaders}\n${payloadHash}`;
+    const scope = `${dateStamp}/auto/s3/aws4_request`;
+    const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${createHash('sha256').update(canonical).digest('hex')}`;
+    const kDate = awsHmac(Buffer.from(`AWS4${secretAccessKey}`, 'utf8'), dateStamp);
+    const kRegion = awsHmac(kDate, 'auto');
+    const kService = awsHmac(kRegion, 's3');
+    const kSigning = awsHmac(kService, 'aws4_request');
+    const signature = createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex');
+    const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+    let response;
+    try {
+      response = await fetchImpl(`https://${host}/${EXPECTED.r2Bucket}?${query}`, {
+        headers: { Authorization: authorization, 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate },
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch (error) {
+      if (!isRetryableR2TransportError(error) || attempt === R2_CREDENTIAL_VALIDATION_POLICY.maxAttempts) {
+        throw new Error(`new R2 credential validation transport failed after ${attempt} attempt(s)`);
+      }
+      await sleepImpl(r2CredentialValidationDelayMs(attempt));
+      continue;
+    }
+
+    if (response.ok) return;
+    let body = '';
+    try { body = await response.text(); } catch { body = ''; }
+    const code = safeR2ErrorCode(body);
+    const detail = code ? ` (${code})` : '';
+    if (!isRetryableR2ValidationStatus(response.status) || attempt === R2_CREDENTIAL_VALIDATION_POLICY.maxAttempts) {
+      throw new Error(`new R2 credential failed bounded bucket validation with HTTP ${response.status}${detail} after ${attempt} attempt(s)`);
+    }
+    await sleepImpl(r2CredentialValidationDelayMs(attempt));
+  }
+  throw new Error('new R2 credential validation exhausted unexpectedly');
 }
 
 export function bindEnvironmentSecret(ghToken, name, value) {

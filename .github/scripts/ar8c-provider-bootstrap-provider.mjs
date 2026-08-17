@@ -136,6 +136,8 @@ export async function issueR2Credential({ issuerToken, groups, accountId, bucket
     tokenValue = created?.result?.value;
   }
   invariant(typeof tokenId === 'string' && typeof tokenValue === 'string' && tokenValue.length >= 40, 'R2 token issuance produced incomplete result');
+  const verified = await cfRequest(tokenValue, '/user/tokens/verify');
+  invariant(verified?.result?.status === 'active', 'new R2 API token is not active');
   const result = { accessKeyId: tokenId, secretAccessKey: deriveR2Secret(tokenValue), tokenId };
   await validateR2Credential({ accountId, ...result });
   return result;
