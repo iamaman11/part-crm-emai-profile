@@ -138,7 +138,7 @@ jobs:
           test "$changed" = "$expected"
           git diff --check -- architecture/credential-authority-ar8b.json architecture/inventory.json
 
-      - name: Commit canonical lifecycle and inventory atomically to this branch
+      - name: Write canonical lifecycle and inventory to this branch only
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_REPOSITORY: iamaman11/part-crm-emai-profile
@@ -146,6 +146,7 @@ jobs:
           EXPECTED_SHA: ${{ github.sha }}
         run: |
           python - <<'PY'
+          import base64
           import json
           import os
           import urllib.parse
@@ -169,32 +170,25 @@ jobs:
               with urllib.request.urlopen(req, timeout=30) as response:
                   return json.load(response)
 
-          ref_path = f'/repos/{repository}/git/ref/heads/{urllib.parse.quote(branch, safe="")}'
-          ref = request(ref_path)
+          ref = request(f'/repos/{repository}/git/ref/heads/{urllib.parse.quote(branch, safe="")}')
           if ref['object']['sha'] != expected_sha:
               raise SystemExit(f"branch moved: expected {expected_sha}, got {ref['object']['sha']}")
 
-          base_commit = request(f'/repos/{repository}/git/commits/{expected_sha}')
-          tree_entries = []
-          for file_path in ['architecture/credential-authority-ar8b.json', 'architecture/inventory.json']:
-              content = open(file_path, encoding='utf-8').read()
-              blob = request(f'/repos/{repository}/git/blobs', method='POST', payload={'content': content, 'encoding': 'utf-8'})
-              tree_entries.append({'path': file_path, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
-
-          tree = request(
-              f'/repos/{repository}/git/trees',
-              method='POST',
-              payload={'base_tree': base_commit['tree']['sha'], 'tree': tree_entries},
-          )
-          commit = request(
-              f'/repos/{repository}/git/commits',
-              method='POST',
-              payload={
-                  'message': 'Complete AR-8C bootstrap credential lifecycle authority',
-                  'tree': tree['sha'],
-                  'parents': [expected_sha],
-              },
-          )
-          request(ref_path, method='PATCH', payload={'sha': commit['sha'], 'force': False})
-          print(f"Canonical AR-8C bootstrap lifecycle synchronized at {commit['sha']}")
+          for file_path, message in [
+              ('architecture/credential-authority-ar8b.json', 'Complete AR-8C bootstrap credential lifecycle authority'),
+              ('architecture/inventory.json', 'Regenerate architecture inventory for AR-8C bootstrap lifecycle'),
+          ]:
+              current = request(f'/repos/{repository}/contents/{file_path}?ref={urllib.parse.quote(branch, safe="")}')
+              content = open(file_path, 'rb').read()
+              request(
+                  f'/repos/{repository}/contents/{file_path}',
+                  method='PUT',
+                  payload={
+                      'message': message,
+                      'content': base64.b64encode(content).decode(),
+                      'sha': current['sha'],
+                      'branch': branch,
+                  },
+              )
+          print('Canonical AR-8C bootstrap lifecycle and inventory synchronized.')
           PY
