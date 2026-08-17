@@ -12,7 +12,7 @@ const CONTROL_CONFIG_RELATIVE = 'deploy/cloudflare/wrangler.jsonc';
 const RESOLVER_CONFIG_RELATIVE = 'deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc';
 const ACCEPTED_BASE = '4e4d1c25226384858ca8905377ee155bedabc6d4';
 const IMPLEMENTATION_ISSUE = 314;
-const EXPECTED_STATUS = 'CANDIDATE_AR8C_OPERATIONAL_CREDENTIAL_LIFECYCLE';
+const EXPECTED_STATUS = 'ACCEPTED_AR8C_OPERATIONAL_CREDENTIAL_LIFECYCLE';
 const CANONICAL_ENVIRONMENTS = ['rehearsal', 'staging', 'production'];
 const STAGE_ORDER = ['issue_or_import', 'validate', 'bind', 'switch', 'verify', 'revoke_previous'];
 const EXPECTED_REPOSITORY_SECRETS = ['GOVERNANCE_AUDIT_TOKEN', 'GH_ADMIN_OPERATOR_TOKEN'];
@@ -111,6 +111,23 @@ function validateLifecycle(authority) {
   expect(lifecycle.production_mutation === false, 'AR-8C production mutation must be false');
   expect(lifecycle.opsctl_mutation === false, 'AR-8C must not grant mutable opsctl credential authority');
   expect(lifecycle.pull_request_privileged_exposure === false, 'privileged credential exposure to pull_request code is forbidden');
+  const acceptance = lifecycle.acceptance;
+  expect(object(acceptance), 'AR-8C accepted lifecycle requires metadata-only acceptance evidence');
+  if (object(acceptance)) {
+    expect(acceptance.issue === 314, 'AR-8C acceptance issue must be #314');
+    expect(acceptance.implementation_pr === 315, 'AR-8C implementation PR must be #315');
+    expect(acceptance.implementation_exact_green_head === '8e2e699156bdbca085b44a73b331cf3922b79c54', 'AR-8C implementation exact-green head drifted');
+    expect(acceptance.implementation_merge === '7cdfdfc3982f23635017d9352a8c08a903e00f33', 'AR-8C implementation merge drifted');
+    expect(acceptance.applicable_permanent_workflows === '14/14', 'AR-8C implementation workflow evidence drifted');
+    expect(acceptance.hosted_verified_main === '29519fbf05f8e4c228a0907ee0dafd2c85e3749b', 'AR-8C hosted verified main drifted');
+    expect(acceptance.provider_bootstrap?.run_id === 32063820617 && acceptance.provider_bootstrap?.conclusion === 'success', 'AR-8C provider bootstrap acceptance evidence drifted');
+    expect(acceptance.promotion?.run_id === 32068326946 && acceptance.promotion?.run_attempt === 2 && acceptance.promotion?.conclusion === 'success', 'AR-8C canonical staging promotion evidence drifted');
+    expect(acceptance.promotion?.evidence_artifact?.artifact_id === 9300866099, 'AR-8C immutable promotion evidence artifact drifted');
+    expect(acceptance.promotion?.d1_exact_match === true && acceptance.promotion?.access_health_smoke === 'success', 'AR-8C D1/smoke evidence drifted');
+    expect(acceptance.bootstrap_retirement?.run_id === 32070555089 && acceptance.bootstrap_retirement?.conclusion === 'success', 'AR-8C bootstrap retirement evidence drifted');
+    expect(acceptance.steady_state_governance?.run_id === 32071104508 && acceptance.steady_state_governance?.source_sha === acceptance.hosted_verified_main, 'AR-8C steady-state Governance evidence drifted');
+    expect(acceptance.metadata_only === true && acceptance.production_mutation === false, 'AR-8C acceptance must remain metadata-only and non-production');
+  }
   expect(sameStringSet(lifecycle.stage_order, STAGE_ORDER), 'AR-8C stage_order must contain the exact lifecycle stages');
   expect(JSON.stringify(lifecycle.stage_order) === JSON.stringify(STAGE_ORDER), 'AR-8C lifecycle stages must preserve issue/import -> validate -> bind -> switch -> verify -> revoke-previous order');
 
@@ -234,6 +251,7 @@ async function selfTest(root, authority) {
     return report(baseline);
   }
   const fixtures = [
+    { name: 'acceptance evidence drift', expected: 'hosted verified main', mutate: (copy) => { copy.ar8c_operational_lifecycle.acceptance.hosted_verified_main = '0'.repeat(40); } },
     { name: 'missing concern', expected: 'concerns must equal', mutate: (copy) => { copy.ar8c_operational_lifecycle.concerns.pop(); } },
     { name: 'duplicate concern', expected: 'ids must be unique', mutate: (copy) => { copy.ar8c_operational_lifecycle.concerns.push(clone(copy.ar8c_operational_lifecycle.concerns[0])); } },
     { name: 'plaintext field', expected: 'forbidden plaintext', mutate: (copy) => { copy.ar8c_operational_lifecycle.concerns[0].value = 'forbidden'; } },

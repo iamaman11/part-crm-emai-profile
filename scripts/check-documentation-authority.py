@@ -19,14 +19,16 @@ TRACKING_ISSUE = 266
 SUBORDINATE_ISSUE = 268
 CURRENT_SLICE = "AR-8"
 NEXT_SLICE = "AR-9"
-STATUS_DATE = "2026-08-16"
+STATUS_DATE = "2026-08-18"
 ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5", "AR-6", "AR-7"]
 AR8_UMBRELLA_ISSUE = 308
 AR8B_IMPLEMENTATION_ISSUE = 309
 AR8C_IMPLEMENTATION_ISSUE = 314
-AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B"]
-AR8_CURRENT_SUBSLICE = "AR-8C"
-AR8_MANDATORY_REMAINING = ["AR-8C", "AR-8D", "AR-8E", "AR-8F"]
+AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B", "AR-8C"]
+AR8_CURRENT_SUBSLICE = "AR-8D"
+AR8D_IMPLEMENTATION_ISSUE = None
+AR8_IMPLEMENTATION_ENTRY_GATE = "POST_AR8C_CLEANUP_DX_ACCEPTANCE_REQUIRED_BEFORE_AR8D_IMPLEMENTATION"
+AR8_MANDATORY_REMAINING = ["AR-8D", "AR-8E", "AR-8F"]
 AR8B_ACCEPTANCE = {
     "issue": 309,
     "implementation_pr": 312,
@@ -34,6 +36,7 @@ AR8B_ACCEPTANCE = {
     "implementation_merge": "4e4d1c25226384858ca8905377ee155bedabc6d4",
     "applicable_permanent_workflows": "14/14",
 }
+AR8C_ACCEPTANCE = {'issue': 314, 'implementation_pr': 315, 'implementation_exact_green_head': '8e2e699156bdbca085b44a73b331cf3922b79c54', 'implementation_merge': '7cdfdfc3982f23635017d9352a8c08a903e00f33', 'applicable_permanent_workflows': '14/14', 'hosted_verified_main': '29519fbf05f8e4c228a0907ee0dafd2c85e3749b', 'provider_bootstrap': {'run_id': 32063820617, 'run_attempt': 1, 'source_sha': '03c8b2280a9ed592569a68a2cf8c8e1f549957a6', 'conclusion': 'success'}, 'promotion': {'run_id': 32068326946, 'run_attempt': 2, 'source_sha': 'a78f29a1bf402c83fab3a813bf89115519d0dd98', 'conclusion': 'success', 'resolver_release': {'run_id': 32067978790, 'artifact_id': 9300729822, 'artifact_digest': 'sha256:a20090bef6ac570d9dc0db07d705ec86aef35f958bbe1d2be0b5b1f4f9d63c5f', 'release_id': 'mailbox-secret-resolver-v1-sha256-c4e94819e2e8abfdec65115809cf536a6e68d86d3029bcc58413dbcf787fb788', 'worker_sha256': '5ce3d4ad47b52c045d4a610d325320e706265e1abb0db64b368cc7962f503f28'}, 'control_plane_release': {'run_id': 32067978783, 'artifact_id': 9300736107, 'artifact_digest': 'sha256:d512fea2ceeb1ce5825e7474438907cdfb70ab0ec8743112306e0d6282abc52b', 'release_id': 'cloudflare-v1-sha256-1f5aec9c82e4e5002bfc2a2e9111fef5b5b3bd94bdd851994197b480baeabb6f'}, 'evidence_artifact': {'artifact_id': 9300866099, 'artifact_digest': 'sha256:62034d3b9b8d7b101a7652c2d86833fb7014029ccbd64cf4af69dab303c35751'}, 'd1_exact_match': True, 'access_health_smoke': 'success'}, 'bootstrap_retirement': {'run_id': 32070555089, 'run_attempt': 1, 'source_sha': 'e083b44eddff852672e62609978fe1dbad99227f', 'conclusion': 'success'}, 'steady_state_governance': {'run_id': 32071104508, 'run_attempt': 1, 'source_sha': '29519fbf05f8e4c228a0907ee0dafd2c85e3749b', 'contract_job': 'success', 'github_hosted_state_job': 'success', 'operational_credential_hosted_state_job': 'success'}, 'metadata_only': True, 'production_mutation': False}
 TOPOLOGY = Path("architecture/runtime-topology-ar2.json")
 AR2_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR2.md")
 AR3_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR3.md")
@@ -115,8 +118,9 @@ def validate_ar8_progress(value: object, label: str, errors: list[str], *, allow
         "umbrella_issue": AR8_UMBRELLA_ISSUE,
         "accepted_subslices": AR8_ACCEPTED_SUBSLICES,
         "current_subslice": AR8_CURRENT_SUBSLICE,
-        "current_implementation_issue": AR8C_IMPLEMENTATION_ISSUE,
+        "current_implementation_issue": AR8D_IMPLEMENTATION_ISSUE,
         "mandatory_remaining": AR8_MANDATORY_REMAINING,
+        "implementation_entry_gate": AR8_IMPLEMENTATION_ENTRY_GATE,
         "full_ar8_accepted": False,
         "ar9_blocked": True,
         "production_mutation": False,
@@ -198,6 +202,7 @@ def expected_ar8c_operational_lifecycle_projection(payload: dict[str, Any]) -> d
         },
         "production_mutation": lifecycle.get("production_mutation") is True,
         "opsctl_mutation": lifecycle.get("opsctl_mutation") is True,
+        "acceptance": lifecycle.get("acceptance"),
     }
 
 
@@ -310,6 +315,8 @@ def validate(root: Path) -> list[str]:
     validate_ar8_progress(program.get("ar8_progress"), "docs/status.json architecture_program.ar8_progress", errors, allow_projection_fields=False)
     if program.get("ar8b_acceptance") != AR8B_ACCEPTANCE:
         errors.append("docs/status.json AR-8B acceptance provenance drifted")
+    if program.get("ar8c_acceptance") != AR8C_ACCEPTANCE:
+        errors.append("docs/status.json AR-8C acceptance provenance drifted")
 
     ar5 = program.get("ar5_acceptance") if isinstance(program.get("ar5_acceptance"), dict) else {}
     if (
@@ -386,13 +393,14 @@ def validate(root: Path) -> list[str]:
         errors.append("AR-8B credential source authority provenance/policy drifted")
     ar8c_lifecycle = credential_authority.get("ar8c_operational_lifecycle") if isinstance(credential_authority.get("ar8c_operational_lifecycle"), dict) else {}
     if (
-        ar8c_lifecycle.get("status") != "CANDIDATE_AR8C_OPERATIONAL_CREDENTIAL_LIFECYCLE"
+        ar8c_lifecycle.get("status") != "ACCEPTED_AR8C_OPERATIONAL_CREDENTIAL_LIFECYCLE"
         or ar8c_lifecycle.get("implementation_issue") != AR8C_IMPLEMENTATION_ISSUE
         or ar8c_lifecycle.get("accepted_base") != "4e4d1c25226384858ca8905377ee155bedabc6d4"
         or ar8c_lifecycle.get("metadata_only") is not True
         or ar8c_lifecycle.get("production_mutation") is not False
         or ar8c_lifecycle.get("opsctl_mutation") is not False
         or ar8c_lifecycle.get("pull_request_privileged_exposure") is not False
+        or ar8c_lifecycle.get("acceptance") != AR8C_ACCEPTANCE
     ):
         errors.append("AR-8C operational credential lifecycle source provenance/policy drifted")
 
@@ -418,8 +426,8 @@ def validate(root: Path) -> list[str]:
     if phase2j.get("status") != "blocked_pending_repository_remediation" or phase2j.get("forward_execution_authority") is not False:
         errors.append("historical Phase 2J state must remain blocked/non-forward")
 
-    if transition.get("schema_version") != 11 or transition.get("status") != "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8B":
-        errors.append("architecture transition must encode active AR-8 after accepted AR-8B")
+    if transition.get("schema_version") != 12 or transition.get("status") != "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8C":
+        errors.append("architecture transition must encode active AR-8 after accepted AR-8C")
     if transition.get("tracking_issue") != TRACKING_ISSUE or transition.get("current_authority") != CURRENT_AUTHORITY:
         errors.append("architecture transition authority drifted")
     if transition.get("accepted_slices") != ACCEPTED_SLICES:
@@ -429,6 +437,8 @@ def validate(root: Path) -> list[str]:
     validate_ar8_progress(transition.get("ar8_progress"), "architecture transition ar8_progress", errors, allow_projection_fields=True)
     if transition.get("ar8b_acceptance") != AR8B_ACCEPTANCE:
         errors.append("architecture transition AR-8B acceptance provenance drifted")
+    if transition.get("ar8c_acceptance") != AR8C_ACCEPTANCE:
+        errors.append("architecture transition AR-8C acceptance provenance drifted")
     transition_state = transition.get("state_model") if isinstance(transition.get("state_model"), dict) else {}
     if transition_state.get("architecture_complete") is not False or transition_state.get("production_core_gate") != "BLOCKED" or transition_state.get("production_ready") is not False:
         errors.append("transition state must remain fail closed through AR-8")
@@ -507,6 +517,8 @@ def validate(root: Path) -> list[str]:
     validate_ar8_progress(program_state.get("ar8_progress"), "architecture inventory program_state.ar8_progress", errors, allow_projection_fields=False)
     if program_state.get("ar8b_acceptance") != AR8B_ACCEPTANCE:
         errors.append("architecture inventory AR-8B acceptance provenance drifted")
+    if program_state.get("ar8c_acceptance") != AR8C_ACCEPTANCE:
+        errors.append("architecture inventory AR-8C acceptance provenance drifted")
     if program_state.get("production_ready") is not False or program_state.get("production_core_gate") != "BLOCKED":
         errors.append("architecture inventory must remain fail closed")
     projected_credential = inventory.get("credential_authority") if isinstance(inventory.get("credential_authority"), dict) else {}
@@ -605,7 +617,7 @@ def self_test(root: Path) -> bool:
     fixtures = [
         ("tracking rollback", Path("docs/status.json"), '"tracking_issue": 266', '"tracking_issue": 203', "tracking_issue"),
         ("active slice rollback", Path("docs/status.json"), '"current_slice": "AR-8"', '"current_slice": "AR-7"', "current_slice"),
-        ("AR-8 subslice skip", Path("docs/status.json"), '"current_subslice": "AR-8C"', '"current_subslice": "AR-8D"', "current_subslice"),
+        ("AR-8 subslice rollback", Path("docs/status.json"), '"current_subslice": "AR-8D"', '"current_subslice": "AR-8C"', "current_subslice"),
         ("premature AR-8 acceptance", Path("docs/status.json"), '"full_ar8_accepted": false', '"full_ar8_accepted": true', "full_ar8_accepted"),
         ("premature AR-9 unblock", Path("docs/status.json"), '"ar9_blocked": true', '"ar9_blocked": false', "ar9_blocked"),
         ("premature architecture closeout", Path("docs/status.json"), '"architecture_complete": false', '"architecture_complete": true', "architecture_complete"),
@@ -627,7 +639,7 @@ def self_test(root: Path) -> bool:
             if not errors or not any(expected.lower() in error.lower() for error in errors):
                 print(f"negative fixture {label} was not rejected by the expected invariant: {errors}")
                 return False
-    print("Architecture Re-baseline v3 active AR-8 / current AR-8C documentation authority negative fixtures passed.")
+    print("Architecture Re-baseline v3 active AR-8 / AR-8C accepted / AR-8D cleanup-gated documentation authority negative fixtures passed.")
     return True
 
 
@@ -644,7 +656,7 @@ def main() -> int:
         for error in errors:
             print(error)
         return 1
-    print("Architecture Re-baseline v3 active AR-8 / current AR-8C documentation/program authority is consistent.")
+    print("Architecture Re-baseline v3 active AR-8 / AR-8C accepted / AR-8D cleanup-gated documentation/program authority is consistent.")
     return 0
 
 

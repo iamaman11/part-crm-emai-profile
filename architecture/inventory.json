@@ -1263,7 +1263,7 @@
     "schema_version": 1,
     "status": "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY",
     "source_authority": "architecture/credential-authority-ar8b.json",
-    "source_git_blob_sha1": "d12e742c2fd5b9067bec7e68fc629f47963cc972",
+    "source_git_blob_sha1": "cfd34cacd41205bc606e05842eacefd134537b74",
     "metadata_only": true,
     "canonical_environments": [
       "rehearsal",
@@ -1351,7 +1351,7 @@
     },
     "operational_lifecycle": {
       "schema_version": 1,
-      "status": "CANDIDATE_AR8C_OPERATIONAL_CREDENTIAL_LIFECYCLE",
+      "status": "ACCEPTED_AR8C_OPERATIONAL_CREDENTIAL_LIFECYCLE",
       "implementation_issue": 314,
       "accepted_base": "4e4d1c25226384858ca8905377ee155bedabc6d4",
       "metadata_only": true,
@@ -1400,7 +1400,62 @@
         }
       },
       "production_mutation": false,
-      "opsctl_mutation": false
+      "opsctl_mutation": false,
+      "acceptance": {
+        "issue": 314,
+        "implementation_pr": 315,
+        "implementation_exact_green_head": "8e2e699156bdbca085b44a73b331cf3922b79c54",
+        "implementation_merge": "7cdfdfc3982f23635017d9352a8c08a903e00f33",
+        "applicable_permanent_workflows": "14/14",
+        "hosted_verified_main": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b",
+        "provider_bootstrap": {
+          "run_id": 32063820617,
+          "run_attempt": 1,
+          "source_sha": "03c8b2280a9ed592569a68a2cf8c8e1f549957a6",
+          "conclusion": "success"
+        },
+        "promotion": {
+          "run_id": 32068326946,
+          "run_attempt": 2,
+          "source_sha": "a78f29a1bf402c83fab3a813bf89115519d0dd98",
+          "conclusion": "success",
+          "resolver_release": {
+            "run_id": 32067978790,
+            "artifact_id": 9300729822,
+            "artifact_digest": "sha256:a20090bef6ac570d9dc0db07d705ec86aef35f958bbe1d2be0b5b1f4f9d63c5f",
+            "release_id": "mailbox-secret-resolver-v1-sha256-c4e94819e2e8abfdec65115809cf536a6e68d86d3029bcc58413dbcf787fb788",
+            "worker_sha256": "5ce3d4ad47b52c045d4a610d325320e706265e1abb0db64b368cc7962f503f28"
+          },
+          "control_plane_release": {
+            "run_id": 32067978783,
+            "artifact_id": 9300736107,
+            "artifact_digest": "sha256:d512fea2ceeb1ce5825e7474438907cdfb70ab0ec8743112306e0d6282abc52b",
+            "release_id": "cloudflare-v1-sha256-1f5aec9c82e4e5002bfc2a2e9111fef5b5b3bd94bdd851994197b480baeabb6f"
+          },
+          "evidence_artifact": {
+            "artifact_id": 9300866099,
+            "artifact_digest": "sha256:62034d3b9b8d7b101a7652c2d86833fb7014029ccbd64cf4af69dab303c35751"
+          },
+          "d1_exact_match": true,
+          "access_health_smoke": "success"
+        },
+        "bootstrap_retirement": {
+          "run_id": 32070555089,
+          "run_attempt": 1,
+          "source_sha": "e083b44eddff852672e62609978fe1dbad99227f",
+          "conclusion": "success"
+        },
+        "steady_state_governance": {
+          "run_id": 32071104508,
+          "run_attempt": 1,
+          "source_sha": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b",
+          "contract_job": "success",
+          "github_hosted_state_job": "success",
+          "operational_credential_hosted_state_job": "success"
+        },
+        "metadata_only": true,
+        "production_mutation": false
+      }
     }
   },
   "documentation_authority": {
@@ -1616,16 +1671,17 @@
       "umbrella_issue": 308,
       "accepted_subslices": [
         "AR-8A",
-        "AR-8B"
+        "AR-8B",
+        "AR-8C"
       ],
-      "current_subslice": "AR-8C",
-      "current_implementation_issue": 314,
+      "current_subslice": "AR-8D",
+      "current_implementation_issue": null,
       "mandatory_remaining": [
-        "AR-8C",
         "AR-8D",
         "AR-8E",
         "AR-8F"
       ],
+      "implementation_entry_gate": "POST_AR8C_CLEANUP_DX_ACCEPTANCE_REQUIRED_BEFORE_AR8D_IMPLEMENTATION",
       "full_ar8_accepted": false,
       "ar9_blocked": true,
       "production_mutation": false
@@ -1636,6 +1692,61 @@
       "exact_green_head": "743276b578bb15042e8a42beff0e14f7698e61b0",
       "implementation_merge": "4e4d1c25226384858ca8905377ee155bedabc6d4",
       "applicable_permanent_workflows": "14/14"
+    },
+    "ar8c_acceptance": {
+      "issue": 314,
+      "implementation_pr": 315,
+      "implementation_exact_green_head": "8e2e699156bdbca085b44a73b331cf3922b79c54",
+      "implementation_merge": "7cdfdfc3982f23635017d9352a8c08a903e00f33",
+      "applicable_permanent_workflows": "14/14",
+      "hosted_verified_main": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b",
+      "provider_bootstrap": {
+        "run_id": 32063820617,
+        "run_attempt": 1,
+        "source_sha": "03c8b2280a9ed592569a68a2cf8c8e1f549957a6",
+        "conclusion": "success"
+      },
+      "promotion": {
+        "run_id": 32068326946,
+        "run_attempt": 2,
+        "source_sha": "a78f29a1bf402c83fab3a813bf89115519d0dd98",
+        "conclusion": "success",
+        "resolver_release": {
+          "run_id": 32067978790,
+          "artifact_id": 9300729822,
+          "artifact_digest": "sha256:a20090bef6ac570d9dc0db07d705ec86aef35f958bbe1d2be0b5b1f4f9d63c5f",
+          "release_id": "mailbox-secret-resolver-v1-sha256-c4e94819e2e8abfdec65115809cf536a6e68d86d3029bcc58413dbcf787fb788",
+          "worker_sha256": "5ce3d4ad47b52c045d4a610d325320e706265e1abb0db64b368cc7962f503f28"
+        },
+        "control_plane_release": {
+          "run_id": 32067978783,
+          "artifact_id": 9300736107,
+          "artifact_digest": "sha256:d512fea2ceeb1ce5825e7474438907cdfb70ab0ec8743112306e0d6282abc52b",
+          "release_id": "cloudflare-v1-sha256-1f5aec9c82e4e5002bfc2a2e9111fef5b5b3bd94bdd851994197b480baeabb6f"
+        },
+        "evidence_artifact": {
+          "artifact_id": 9300866099,
+          "artifact_digest": "sha256:62034d3b9b8d7b101a7652c2d86833fb7014029ccbd64cf4af69dab303c35751"
+        },
+        "d1_exact_match": true,
+        "access_health_smoke": "success"
+      },
+      "bootstrap_retirement": {
+        "run_id": 32070555089,
+        "run_attempt": 1,
+        "source_sha": "e083b44eddff852672e62609978fe1dbad99227f",
+        "conclusion": "success"
+      },
+      "steady_state_governance": {
+        "run_id": 32071104508,
+        "run_attempt": 1,
+        "source_sha": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b",
+        "contract_job": "success",
+        "github_hosted_state_job": "success",
+        "operational_credential_hosted_state_job": "success"
+      },
+      "metadata_only": true,
+      "production_mutation": false
     },
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
