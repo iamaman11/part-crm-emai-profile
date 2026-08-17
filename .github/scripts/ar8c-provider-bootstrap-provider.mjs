@@ -167,10 +167,7 @@ export async function reconcileAccess(bootstrapToken, accountId) {
     body: { name: EXPECTED.accessApp, type: 'self_hosted', domain: EXPECTED.hostname, app_launcher_visible: false, session_duration: '24h', policies: [{ id: policy.id, precedence: 1 }] },
   })).result;
   invariant(app?.id && typeof app?.aud === 'string' && app.aud.length > 0, 'Access app has no id/audience');
-  const org = await cfRequest(bootstrapToken, `/accounts/${accountId}/access/organizations`);
-  const authDomain = safeText(org?.result?.auth_domain);
-  invariant(authDomain && /^[a-z0-9.-]+$/i.test(authDomain), 'Access organization auth_domain is missing or malformed');
-  return { appId: app.id, policyId: policy.id, serviceTokenId: serviceToken.id, clientId: serviceToken.client_id, clientSecret: serviceToken.client_secret, audience: app.aud, issuer: `https://${authDomain}` };
+  return { appId: app.id, policyId: policy.id, serviceTokenId: serviceToken.id, clientId: serviceToken.client_id, clientSecret: serviceToken.client_secret, audience: app.aud };
 }
 
 export async function issueDeployToken({ issuerToken, groups, accountId, zoneId }) {
