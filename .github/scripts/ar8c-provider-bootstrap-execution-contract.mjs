@@ -34,11 +34,15 @@ async function validate() {
     invariant(workflow.includes(`secrets.${binding}`), `protected bootstrap input is missing: ${binding}`);
   }
   invariant(!workflow.includes('secrets.CLOUDFLARE_API_TOKEN'), 'steady-state CLOUDFLARE_API_TOKEN must not authenticate bootstrap execution');
-  invariant(workflow.includes('google_oauth_client_id:') && workflow.includes('microsoft_oauth_client_id:'), 'public OAuth client-id dispatch inputs are missing');
+  for (const input of ['access_issuer:', 'google_oauth_client_id:', 'microsoft_oauth_client_id:']) {
+    invariant(workflow.includes(input), `required public dispatch input is missing: ${input}`);
+  }
+  invariant(workflow.includes('AR8C_ACCESS_ISSUER: ${{ inputs.access_issuer }}'), 'Access issuer must flow only from the explicit public dispatch input');
   invariant(workflow.indexOf('ar8c-staging-bootstrap-preflight.mjs') < workflow.indexOf('ar8c-staging-d1-classification.mjs'), 'read-only preflight must precede D1 classification');
   invariant(workflow.indexOf('ar8c-staging-d1-classification.mjs') < workflow.indexOf('ar8c-provider-bootstrap-execution.mjs execute'), 'all read-only checks must precede provider mutation');
 
   invariant(execution.includes("process.env.GITHUB_REF_NAME === EXPECTED.refName") && execution.includes("process.env.GITHUB_EVENT_NAME === EXPECTED.eventName"), 'runtime accepted-main/workflow_dispatch boundary checks are missing');
+  invariant(execution.includes("publicInput('AR8C_ACCESS_ISSUER')") && execution.includes(".cloudflareaccess.com"), 'Access issuer strict public-input validation is missing');
   invariant(provider.indexOf('classifyBeforeMutation') < provider.indexOf('issueR2Credential'), 'provider module must expose classification before first credential mutation');
   invariant(execution.indexOf('classifyBeforeMutation') < execution.indexOf('issueR2Credential'), 'execution must classify provider state before first mutation');
   invariant(provider.includes("/user/tokens/${existing.id}/value") && provider.includes('/access/service_tokens/${existing.id}/rotate'), 'recovery-safe token rotation surfaces are missing');
@@ -48,6 +52,7 @@ async function validate() {
   invariant(execution.includes('CLOUDFLARE_API_TOKEN') && execution.includes('CLOUDFLARE_DEPLOY_MANIFEST_JSON'), 'steady-state handoff outputs are incomplete');
   invariant(execution.includes('buildManifest') && execution.includes('schema_version: 1'), 'canonical deploy manifest construction is missing');
   invariant(common.includes("hostname: 'staging.alegria.by'") && !JSON.stringify({ common, execution, provider }).toLowerCase().includes('part-crm-catalog-production'), 'production target leaked into provider bootstrap implementation');
+  invariant(!combined.includes('/access/organizations'), 'provider bootstrap must not widen the accepted bootstrap token with Access Organizations read');
 
   for (const forbidden of ['wrangler deploy', 'wrangler secret', 'terraform', 'method: \'DELETE\'', '/workers/scripts/', '/workers/routes']) {
     invariant(!combined.toLowerCase().includes(forbidden.toLowerCase()), `provider bootstrap contains forbidden mutable surface: ${forbidden}`);
