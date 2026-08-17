@@ -262,7 +262,7 @@ export async function validateR2Credential({
 
 export function bindEnvironmentSecret(ghToken, name, value) {
   invariant(typeof value === 'string' && value.length > 0, `${name} has no value to bind`);
-  const result = spawnSync('gh', ['secret', 'set', name, '--env', EXPECTED.environment, '--repo', EXPECTED.repository, '--body', '-'], {
+  const result = spawnSync('gh', ['secret', 'set', name, '--env', EXPECTED.environment, '--repo', EXPECTED.repository], {
     input: value,
     encoding: 'utf8',
     env: { ...process.env, GH_TOKEN: ghToken },
