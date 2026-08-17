@@ -69,6 +69,7 @@ async function validate() {
   invariant(common.includes("createHash('sha256').update(tokenValue") && common.includes('validateR2Credential'), 'R2 derivation/bounded validation contract is missing');
   invariant(provider.indexOf("cfRequest(tokenValue, '/user/tokens/verify')") < provider.indexOf('await validateR2Credential({ accountId, ...result })'), 'R2 API token must verify active before S3 credential validation');
   invariant(common.includes('R2_CREDENTIAL_VALIDATION_POLICY') && common.includes('isRetryableR2ValidationStatus'), 'bounded R2 validation retry policy is missing');
+  invariant(common.includes('SignatureDoesNotMatch') && common.includes('R2_ACTIVATION_PROPAGATION_DELAY_MS'), 'bounded R2 activation propagation handling is missing');
   invariant(common.includes("gh', ['secret', 'set'") && common.includes("'--body', '-'") && common.includes('input: value'), 'GitHub Environment secret binding must remain write-only over stdin');
   invariant(common.includes('githubReadJson') && !common.includes('retryEnvironmentSecret'), 'GitHub retry helper must remain scoped to read requests, not Environment writes');
   invariant(execution.includes('verifyEnvironmentBindings') && execution.includes('FINAL_ENV_BINDINGS'), 'post-bind metadata verification is missing');
@@ -141,6 +142,23 @@ async function validate() {
   });
   invariant(r2RetryCalls === 3, 'R2 transient 401 validation retry loop did not recover deterministically');
   invariant(JSON.stringify(r2RetrySleeps) === JSON.stringify([1_000, 2_000]), 'R2 validation retry backoff sequence drifted');
+
+  let r2PropagationCalls = 0;
+  const r2PropagationSleeps = [];
+  await validateR2Credential({
+    accountId: 'a'.repeat(32),
+    accessKeyId: 'b'.repeat(32),
+    secretAccessKey: 'c'.repeat(64),
+    nowImpl: () => new Date('2026-08-17T16:00:00.000Z'),
+    fetchImpl: async () => {
+      r2PropagationCalls += 1;
+      if (r2PropagationCalls < 3) return new Response('<Error><Code>SignatureDoesNotMatch</Code></Error>', { status: 403 });
+      return new Response('', { status: 200 });
+    },
+    sleepImpl: async (ms) => { r2PropagationSleeps.push(ms); },
+  });
+  invariant(r2PropagationCalls === 3, 'R2 post-rotation SignatureDoesNotMatch window did not recover deterministically');
+  invariant(JSON.stringify(r2PropagationSleeps) === JSON.stringify([15_000, 15_000]), 'R2 activation propagation delay sequence drifted');
 
   let r2FailFastCalls = 0;
   let r2FailFastError = null;
