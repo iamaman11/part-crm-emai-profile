@@ -3,6 +3,10 @@ name: AR-8C Staging Provider Bootstrap Execution
 on:
   workflow_dispatch:
     inputs:
+      access_issuer:
+        description: 'Authoritative staging Cloudflare Access issuer origin (not a secret)'
+        required: true
+        type: string
       google_oauth_client_id:
         description: 'Authoritative staging Google OAuth public client ID (not a secret)'
         required: true
@@ -28,6 +32,7 @@ jobs:
     environment: staging
     env:
       AR8C_TARGET_ENVIRONMENT: staging
+      AR8C_ACCESS_ISSUER: ${{ inputs.access_issuer }}
       AR8C_GOOGLE_OAUTH_CLIENT_ID: ${{ inputs.google_oauth_client_id }}
       AR8C_MICROSOFT_OAUTH_CLIENT_ID: ${{ inputs.microsoft_oauth_client_id }}
       GH_BOOTSTRAP_ADMIN_TOKEN: ${{ secrets.GH_BOOTSTRAP_ADMIN_TOKEN }}
