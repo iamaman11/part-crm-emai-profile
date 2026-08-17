@@ -21,8 +21,8 @@ import {
 
 const ASSESSMENT_SCRIPT = '.github/scripts/ar8c-credential-recovery-assessment.mjs';
 const RECOVERY_INPUT_BINDINGS = Object.freeze([
-  'AR8C_RECOVERY_GOOGLE_OAUTH_CLIENT_SECRET',
-  'AR8C_RECOVERY_MICROSOFT_OAUTH_CLIENT_SECRET',
+  'GOOGLE_OAUTH_CLIENT_SECRET',
+  'MICROSOFT_OAUTH_CLIENT_SECRET',
 ]);
 const FINAL_RECOVERY_BINDINGS = Object.freeze([
   'CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON',
@@ -94,6 +94,7 @@ function generateProjectMaterial(randomBytesImpl = randomBytes) {
 }
 
 function providerOwnedSecret(name) {
+  invariant(RECOVERY_INPUT_BINDINGS.includes(name), `refusing non-canonical OAuth recovery input ${name}`);
   const value = secret(name);
   invariant(!/[\r\n\t]/.test(value), `${name} contains control whitespace`);
   invariant(!/(dummy|example|placeholder|changeme|todo)/i.test(value), `${name} contains a forbidden placeholder`);
@@ -158,7 +159,7 @@ async function writeSummary({ accountId, r2TokenId, evidence }) {
     `- Account ID: \`${accountId}\``,
     `- R2 credential token ID: \`${r2TokenId}\``,
     `- Restored final bindings: \`${FINAL_RECOVERY_BINDINGS.join(', ')}\``,
-    `- Consumed recovery inputs removed: \`${RECOVERY_INPUT_BINDINGS.join(', ')}\``,
+    `- Consumed temporary OAuth bindings removed: \`${RECOVERY_INPUT_BINDINGS.join(', ')}\``,
     '- Access credential mutation: **no**',
     '- Deploy credential mutation: **no**',
     '- Worker deploy/secret mutation: **no**',
@@ -233,14 +234,14 @@ async function execute() {
   for (const name of RECOVERY_INPUT_BINDINGS) deleteRecoveryInputBinding(ghToken, name);
   const afterCleanup = await environmentSecretMetadata(ghToken);
   for (const name of RECOVERY_INPUT_BINDINGS) {
-    invariant(!afterCleanup.has(name), `consumed recovery input binding ${name} still exists after cleanup`);
+    invariant(!afterCleanup.has(name), `consumed temporary OAuth binding ${name} still exists after cleanup`);
   }
   for (const name of FINAL_RECOVERY_BINDINGS) {
     invariant(afterCleanup.has(name), `restored final binding ${name} disappeared during cleanup`);
   }
 
   await writeSummary({ accountId, r2TokenId: r2.tokenId, evidence });
-  console.log('AR-8C staging credential bundle recovery: PASS (two final bundles restored; recovery inputs removed; no deploy, Access, D1 application-data, or production mutation)');
+  console.log('AR-8C staging credential bundle recovery: PASS (two final bundles restored; temporary OAuth bindings removed; no deploy, Access, D1 application-data, or production mutation)');
 }
 
 function selfTest() {
@@ -250,7 +251,10 @@ function selfTest() {
     'CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON',
     'CLOUDFLARE_RESOLVER_SECRETS_JSON',
   ]), 'final recovery binding set drifted');
-  invariant(RECOVERY_INPUT_BINDINGS.length === 2, 'recovery input binding set drifted');
+  invariant(JSON.stringify(RECOVERY_INPUT_BINDINGS) === JSON.stringify([
+    'GOOGLE_OAUTH_CLIENT_SECRET',
+    'MICROSOFT_OAUTH_CLIENT_SECRET',
+  ]), 'canonical OAuth recovery input binding set drifted');
 
   let counter = 0;
   const fixtureRandom = (size) => {
