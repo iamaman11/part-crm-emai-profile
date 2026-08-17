@@ -6,8 +6,13 @@ on:
       - '.github/scripts/ar8-staging-provider-bootstrap.mjs'
       - '.github/scripts/ar8c-resolver-schema-convergence.mjs'
       - '.github/scripts/ar8c-resolver-convergence-execution-contract.mjs'
+      - '.github/scripts/ar8c-provider-bootstrap-common.mjs'
+      - '.github/scripts/ar8c-provider-bootstrap-provider.mjs'
+      - '.github/scripts/ar8c-provider-bootstrap-execution.mjs'
+      - '.github/scripts/ar8c-provider-bootstrap-execution-contract.mjs'
       - '.github/workflows/ar8c-staging-provider-bootstrap.yml'
       - '.github/workflows/ar8c-resolver-schema-convergence.yml'
+      - '.github/workflows/ar8c-provider-bootstrap-execution.yml'
 
 permissions:
   contents: read
@@ -48,3 +53,12 @@ jobs:
 
       - name: Validate privileged resolver convergence execution surface
         run: node .github/scripts/ar8c-resolver-convergence-execution-contract.mjs
+
+      - name: Validate staging provider bootstrap execution surface
+        run: |
+          node --check .github/scripts/ar8c-provider-bootstrap-common.mjs
+          node --check .github/scripts/ar8c-provider-bootstrap-provider.mjs
+          node --check .github/scripts/ar8c-provider-bootstrap-execution.mjs
+          node --check .github/scripts/ar8c-provider-bootstrap-execution-contract.mjs
+          node .github/scripts/ar8c-provider-bootstrap-execution.mjs self-test
+          node .github/scripts/ar8c-provider-bootstrap-execution-contract.mjs
