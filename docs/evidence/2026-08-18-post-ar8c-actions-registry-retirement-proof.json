@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "cleanup_issue": 352,
+  "scope": "post-AR-8C GitHub Actions registry retirement",
+  "baseline_classification": "docs/evidence/2026-08-18-post-ar8c-actions-registry-classification.json",
+  "baseline_registered_workflows": 198,
+  "baseline_keep_active": 16,
+  "baseline_disable_registration": 176,
+  "baseline_retire_file_and_disable": 6,
+  "recovery": {
+    "pull_request": 354,
+    "exact_green_head": "d70a06b2858c7aa5f090b06f892d0640f4629422",
+    "merge": "507fa4183bcf484374ac148a575ea14b72eaa9da",
+    "workflow_run": 32079199119,
+    "job": 95538650189,
+    "conclusion": "success"
+  },
+  "post_recovery_live_proof": {
+    "accepted_main": "507fa4183bcf484374ac148a575ea14b72eaa9da",
+    "captured_at": "2026-08-17T23:09:57.362972Z",
+    "registered_workflow_count": 195,
+    "baseline_obsolete_active": 0,
+    "baseline_obsolete_disabled_manually": 176,
+    "baseline_obsolete_provider_terminal_missing": 6,
+    "baseline_keep_active_not_active": 0,
+    "cleanup_executor_id": 336538931,
+    "cleanup_executor_state": "disabled_manually"
+  },
+  "post_baseline_scratch_retirement": {
+    "captured_at": "2026-08-17T23:15:28Z",
+    "historical_runs_preserved": true,
+    "registrations": [
+      {
+        "id": 336535387,
+        "path": ".github/workflows/_cleanup-retired-bootstrap-bindings-once.yml",
+        "branch": "agent/post-ar8c-cleanup-registry-fix",
+        "classification": "SCRATCH_VERIFIER",
+        "state": "disabled_manually"
+      },
+      {
+        "id": 336540374,
+        "path": ".github/workflows/_cleanup-post-registry-verify-once.yml",
+        "branch": "agent/post-ar8c-registry-postverify",
+        "classification": "SCRATCH_VERIFIER",
+        "state": "disabled_manually"
+      }
+    ]
+  },
+  "branch_protection": {
+    "protected": true,
+    "required_checks_changed": false
+  },
+  "invariants": {
+    "production_mutation": false,
+    "provider_mutation": false,
+    "secret_readback": false,
+    "historical_actions_runs_deleted": false,
+    "terraform_added": false
+  }
+}

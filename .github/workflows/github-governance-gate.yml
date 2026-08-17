@@ -10,6 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -46,6 +47,12 @@ jobs:
 
       - name: Prove AR-7 governance drift fails closed
         run: node .github/scripts/github-governance.mjs self-test
+
+      - name: Validate canonical Actions registry projection
+        run: node .github/scripts/github-actions-registry.mjs contract
+
+      - name: Prove Actions registry drift fails closed
+        run: node .github/scripts/github-actions-registry.mjs self-test
 
       - name: Validate AR-8C operational credential lifecycle
         run: node .github/scripts/credential-lifecycle.mjs contract
@@ -89,6 +96,11 @@ jobs:
 
       - name: Audit live hosted GitHub governance
         run: node .github/scripts/github-governance.mjs live
+
+      - name: Audit live Actions registry against canonical projection
+        env:
+          GITHUB_ACTIONS_READ_AUTH: ${{ github.token }}
+        run: printf '%s' "$GITHUB_ACTIONS_READ_AUTH" | node .github/scripts/github-actions-registry.mjs live
 
       - name: Reconcile GitHub credential binding metadata
         env:
