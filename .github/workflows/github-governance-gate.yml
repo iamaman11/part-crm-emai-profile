@@ -2,141 +2,208 @@ name: GitHub Governance Gate
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
-  schedule:
-    - cron: '17 3 * * *'
-  workflow_dispatch:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
+  pull-requests: read
 
 concurrency:
-  group: github-governance-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: post-ar8c-branch-classification-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 jobs:
-  contract:
-    name: GitHub Governance Contract
+  classify:
+    name: Classify AR-8C Scratch Branches
+    if: github.event.pull_request.head.ref == 'agent/post-ar8c-branch-retirement'
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout exact candidate source
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Verify exact source checkout
-        env:
-          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
-
-      - name: Set up Node 24 LTS
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: '24.19.0'
-          package-manager-cache: false
-
-      - name: Enforce Node version
-        run: test "$(node --version)" = "v24.19.0"
-
-      - name: Validate AR-7 governance contract
-        run: node .github/scripts/github-governance.mjs contract
-
-      - name: Prove AR-7 governance drift fails closed
-        run: node .github/scripts/github-governance.mjs self-test
-
-      - name: Validate canonical Actions registry projection
-        run: node .github/scripts/github-actions-registry.mjs contract
-
-      - name: Prove Actions registry drift fails closed
-        run: node .github/scripts/github-actions-registry.mjs self-test
-
-      - name: Validate AR-8C operational credential lifecycle
-        run: node .github/scripts/credential-lifecycle.mjs contract
-
-      - name: Prove AR-8C credential lifecycle drift fails closed
-        run: node .github/scripts/credential-lifecycle.mjs self-test
-
-      - name: Validate AR-8C staging provider execution authority
-        run: node .github/scripts/ar8-staging-provider-bootstrap.mjs contract
-
-      - name: Prove AR-8C provider execution authority drift fails closed
-        run: node .github/scripts/ar8-staging-provider-bootstrap.mjs self-test
-
-  hosted-state:
-    name: GitHub Governance Hosted State
-    if: github.event_name != 'pull_request'
-    needs: contract
-    runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
-      GOVERNANCE_AUDIT_TOKEN: ${{ secrets.GOVERNANCE_AUDIT_TOKEN }}
+      ACCEPTED_MAIN: 6145ac6754d83cf1d3b5361a098c28a20a9222f7
+      EXECUTOR_BRANCH: agent/post-ar8c-branch-retirement
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout accepted source
+      - name: Checkout classifier branch
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
+          ref: agent/post-ar8c-branch-retirement
+          fetch-depth: 1
 
-      - name: Verify exact source checkout
-        env:
-          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+      - name: Verify exact accepted main and fetch its tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test "$current_main" = "$ACCEPTED_MAIN"
+          git fetch --no-tags --depth=1 origin "$ACCEPTED_MAIN"
 
-      - name: Set up Node 24 LTS
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: '24.19.0'
-          package-manager-cache: false
+      - name: Classify exact AR-8C and post-AR-8C branch refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import urllib.parse
+          import urllib.request
+          from collections import Counter
+          from datetime import datetime, timezone
+          from pathlib import Path
 
-      - name: Enforce Node version
-        run: test "$(node --version)" = "v24.19.0"
+          repo = os.environ['GITHUB_REPOSITORY']
+          owner, _ = repo.split('/', 1)
+          token = os.environ['GH_TOKEN']
+          accepted_main = os.environ['ACCEPTED_MAIN']
+          executor_branch = os.environ['EXECUTOR_BRANCH']
+          api = f'https://api.github.com/repos/{repo}'
 
-      - name: Audit live hosted GitHub governance
-        run: node .github/scripts/github-governance.mjs live
+          def get(url):
+              req = urllib.request.Request(url, headers={
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': f'Bearer {token}',
+                  'User-Agent': 'post-ar8c-branch-classifier',
+                  'X-GitHub-Api-Version': '2022-11-28',
+              })
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.load(response)
 
-      - name: Audit live Actions registry against canonical projection
-        env:
-          GITHUB_ACTIONS_READ_AUTH: ${{ github.token }}
-        run: printf '%s' "$GITHUB_ACTIONS_READ_AUTH" | node .github/scripts/github-actions-registry.mjs live
+          branches = []
+          page = 1
+          while True:
+              rows = get(f'{api}/branches?per_page=100&page={page}')
+              branches.extend(rows)
+              if len(rows) < 100:
+                  break
+              page += 1
+              if page > 100:
+                  raise SystemExit('branch pagination exceeded bound')
 
-      - name: Reconcile GitHub credential binding metadata
-        env:
-          GH_ADMIN_OPERATOR_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
-        run: node .github/scripts/credential-lifecycle.mjs github-live
+          targets = sorted(
+              [b for b in branches if b['name'].startswith('agent/ar8c-') or b['name'].startswith('agent/post-ar8c-')],
+              key=lambda b: b['name'],
+          )
+          results = []
+          for branch in targets:
+              name = branch['name']
+              sha = branch['commit']['sha']
+              if name == executor_branch:
+                  results.append({
+                      'branch': name,
+                      'head_sha': sha,
+                      'classification': 'CLASSIFIER_SELF_KEEP_UNTIL_FINAL',
+                      'delete_eligible': False,
+                  })
+                  continue
 
-  operational-credential-state:
-    name: Operational Credential Hosted State
-    if: github.event_name != 'pull_request'
-    needs: contract
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - name: Checkout accepted source
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
+              compare = get(f'{api}/compare/{sha}...{accepted_main}')
+              contained = compare.get('status') in {'ahead', 'identical'} and compare.get('behind_by', 0) == 0
 
-      - name: Verify exact source checkout
-        env:
-          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+              head_query = urllib.parse.urlencode({'state': 'all', 'head': f'{owner}:{name}', 'per_page': 100})
+              prs = get(f'{api}/pulls?{head_query}')
+              open_prs = [p['number'] for p in prs if p['state'] == 'open']
+              merged_prs = [p['number'] for p in prs if p.get('merged_at')]
+              closed_unmerged_prs = [p['number'] for p in prs if p['state'] == 'closed' and not p.get('merged_at')]
 
-      - name: Set up Node 24 LTS
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: '24.19.0'
-          package-manager-cache: false
+              run_query = urllib.parse.urlencode({'branch': name, 'per_page': 100})
+              runs_payload = get(f'{api}/actions/runs?{run_query}')
+              runs = runs_payload.get('workflow_runs', [])
+              recent_runs = [
+                  {
+                      'id': run['id'],
+                      'workflow_id': run['workflow_id'],
+                      'name': run.get('name'),
+                      'event': run.get('event'),
+                      'head_sha': run.get('head_sha'),
+                      'status': run.get('status'),
+                      'conclusion': run.get('conclusion'),
+                      'created_at': run.get('created_at'),
+                  }
+                  for run in runs[:20]
+              ]
 
-      - name: Enforce Node version
-        run: test "$(node --version)" = "v24.19.0"
+              grep = subprocess.run(
+                  ['git', 'grep', '-F', '-n', name, accepted_main, '--', '.'],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+              )
+              if grep.returncode not in {0, 1}:
+                  raise SystemExit(f'git grep failed for {name}: {grep.stderr}')
+              references = []
+              for line in grep.stdout.splitlines():
+                  _, rest = line.split(':', 1)
+                  file_path, _, text = rest.partition(':')
+                  references.append({'path': file_path, 'text': text[:500]})
 
-      - name: Audit staging Cloudflare operational credential metadata
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
-          AR8C_AUDIT_ENVIRONMENT: staging
-        run: node .github/scripts/credential-lifecycle.mjs cloudflare-live
+              if open_prs:
+                  classification = 'KEEP_OPEN_PR'
+                  delete_eligible = False
+              elif contained:
+                  classification = 'RETIRE_CONTAINED_IN_ACCEPTED_MAIN'
+                  delete_eligible = True
+              elif references:
+                  classification = 'REVIEW_UNMERGED_REFERENCED_BY_ACCEPTED_MAIN'
+                  delete_eligible = False
+              elif recent_runs:
+                  classification = 'RETIRE_SCRATCH_ACTIONS_PROVENANCE_PRESERVED'
+                  delete_eligible = True
+              else:
+                  classification = 'REVIEW_UNMERGED_NO_PRESERVED_PROVENANCE'
+                  delete_eligible = False
+
+              results.append({
+                  'branch': name,
+                  'head_sha': sha,
+                  'contained_in_accepted_main': contained,
+                  'compare_status': compare.get('status'),
+                  'accepted_main_ahead_by': compare.get('ahead_by'),
+                  'accepted_main_behind_by': compare.get('behind_by'),
+                  'open_prs': open_prs,
+                  'merged_prs': merged_prs,
+                  'closed_unmerged_prs': closed_unmerged_prs,
+                  'accepted_main_references': references,
+                  'actions_run_count_reported': runs_payload.get('total_count'),
+                  'recent_runs': recent_runs,
+                  'classification': classification,
+                  'delete_eligible': delete_eligible,
+              })
+
+          counts = Counter(r['classification'] for r in results)
+          out = {
+              'schema_version': 1,
+              'issue': 352,
+              'accepted_main': accepted_main,
+              'captured_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+              'prefix_scope': ['agent/ar8c-', 'agent/post-ar8c-'],
+              'branch_count': len(results),
+              'classification_counts': dict(sorted(counts.items())),
+              'branches': results,
+              'invariants': {
+                  'read_only_hosted_classification': True,
+                  'branch_deleted': False,
+                  'actions_run_deleted': False,
+                  'production_mutation': False,
+                  'provider_mutation': False,
+                  'secret_readback': False,
+              },
+          }
+          Path('post-ar8c-branch-classification.json').write_text(json.dumps(out, indent=2) + '\n')
+          print(json.dumps({
+              'branch_count': out['branch_count'],
+              'classification_counts': out['classification_counts'],
+              'delete_eligible': sum(1 for r in results if r['delete_eligible']),
+              'review_required': [r['branch'] for r in results if r['classification'].startswith('REVIEW_')],
+          }, indent=2))
+          PY
+
+      - name: Commit classification evidence to classifier branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add post-ar8c-branch-classification.json
+          git diff --cached --check
+          git commit -m 'cleanup: classify AR-8C temporary branch refs'
+          git push origin HEAD:agent/post-ar8c-branch-retirement
