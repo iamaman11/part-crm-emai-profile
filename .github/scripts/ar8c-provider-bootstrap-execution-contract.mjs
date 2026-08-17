@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { invariant } from './ar8c-provider-bootstrap-common.mjs';
 import {
   GITHUB_READ_RETRY_POLICY,
+  githubReadJson,
   githubReadRetryDelayMs,
   isRetryableGitHubReadStatus,
   isRetryableGitHubTransportError,
@@ -71,6 +72,36 @@ async function validate() {
   invariant(githubReadRetryDelayMs(null, 1, 0) === 1_000 && githubReadRetryDelayMs(null, 4, 0) === 8_000, 'GitHub read retry exponential backoff drifted');
   const retryAfterHeaders = new Headers({ 'Retry-After': '30' });
   invariant(githubReadRetryDelayMs({ headers: retryAfterHeaders }, 1, 0) === 8_000, 'GitHub Retry-After must remain capped');
+
+  let retryCalls = 0;
+  const retrySleeps = [];
+  const retryResult = await githubReadJson({
+    token: 'fixture-token-not-a-secret', path: '/fixture', apiVersion: '2026-03-10', userAgent: 'ar8c-contract-fixture',
+    fetchImpl: async () => {
+      retryCalls += 1;
+      if (retryCalls < 3) return new Response(JSON.stringify({ message: 'transient' }), { status: 503 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+    sleepImpl: async (ms) => { retrySleeps.push(ms); },
+  });
+  invariant(retryResult?.ok === true && retryCalls === 3, 'GitHub 5xx read retry loop did not recover deterministically');
+  invariant(JSON.stringify(retrySleeps) === JSON.stringify([1_000, 2_000]), 'GitHub 5xx read retry backoff sequence drifted');
+
+  let failFastCalls = 0;
+  let failFastError = null;
+  try {
+    await githubReadJson({
+      token: 'fixture-token-not-a-secret', path: '/fixture', apiVersion: '2026-03-10', userAgent: 'ar8c-contract-fixture',
+      fetchImpl: async () => {
+        failFastCalls += 1;
+        return new Response(JSON.stringify({ message: 'forbidden' }), { status: 403 });
+      },
+      sleepImpl: async () => { throw new Error('non-retryable GitHub 4xx must not sleep'); },
+    });
+  } catch (error) {
+    failFastError = error;
+  }
+  invariant(failFastCalls === 1 && /HTTP 403/.test(failFastError?.message ?? ''), 'GitHub non-retryable 4xx must fail on the first attempt');
 
   for (const forbidden of ['wrangler deploy', 'wrangler secret', 'terraform', 'method: \'DELETE\'', '/workers/scripts/', '/workers/routes']) {
     invariant(!combined.toLowerCase().includes(forbidden.toLowerCase()), `provider bootstrap contains forbidden mutable surface: ${forbidden}`);
