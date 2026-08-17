@@ -5,7 +5,9 @@ on:
     paths:
       - '.github/scripts/ar8-staging-provider-bootstrap.mjs'
       - '.github/scripts/ar8c-resolver-schema-convergence.mjs'
+      - '.github/scripts/ar8c-resolver-convergence-execution-contract.mjs'
       - '.github/workflows/ar8c-staging-provider-bootstrap.yml'
+      - '.github/workflows/ar8c-resolver-schema-convergence.yml'
 
 permissions:
   contents: read
@@ -43,3 +45,6 @@ jobs:
 
       - name: Prove resolver convergence fails closed
         run: node .github/scripts/ar8c-resolver-schema-convergence.mjs self-test
+
+      - name: Validate privileged resolver convergence execution surface
+        run: node .github/scripts/ar8c-resolver-convergence-execution-contract.mjs
