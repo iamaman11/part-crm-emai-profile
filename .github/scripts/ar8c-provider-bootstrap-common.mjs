@@ -1,5 +1,6 @@
 import { createHash, createHmac } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { githubReadJson } from './ar8c-github-read-retry.mjs';
 
 export const EXPECTED = Object.freeze({
   repository: 'iamaman11/part-crm-emai-profile',
@@ -52,7 +53,7 @@ export const FINAL_ENV_BINDINGS = Object.freeze([
 ]);
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
-const GH_API = 'https://api.github.com';
+const GITHUB_API_VERSION = '2026-03-10';
 
 export function invariant(condition, message) {
   if (!condition) throw new Error(message);
@@ -105,22 +106,12 @@ export async function cfRequest(token, path, { method = 'GET', body = undefined 
 }
 
 export async function ghRequest(token, path) {
-  const response = await fetch(`${GH_API}${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2026-03-10',
-      'User-Agent': 'part-crm-ar8c-provider-bootstrap',
-    },
-    signal: AbortSignal.timeout(20_000),
+  return githubReadJson({
+    token,
+    path,
+    apiVersion: GITHUB_API_VERSION,
+    userAgent: 'part-crm-ar8c-provider-bootstrap',
   });
-  const text = await response.text();
-  let payload = null;
-  if (text) {
-    try { payload = JSON.parse(text); } catch { throw new Error(`GitHub ${path} returned non-JSON HTTP ${response.status}`); }
-  }
-  if (!response.ok) throw new Error(`GitHub ${path} failed HTTP ${response.status}: ${safeText(payload?.message) ?? 'unknown error'}`);
-  return payload;
 }
 
 export function parseExactBundle(raw, expectedKeys, label) {

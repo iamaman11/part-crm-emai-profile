@@ -1,4 +1,11 @@
 import { appendFile } from 'node:fs/promises';
+import {
+  GITHUB_READ_RETRY_POLICY,
+  githubReadJson,
+  githubReadRetryDelayMs,
+  isRetryableGitHubReadStatus,
+  isRetryableGitHubTransportError,
+} from './ar8c-github-read-retry.mjs';
 
 const EXPECTED = Object.freeze({
   repository: 'iamaman11/part-crm-emai-profile',
@@ -11,7 +18,6 @@ const EXPECTED = Object.freeze({
 });
 
 const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
-const GITHUB_API = 'https://api.github.com';
 const GITHUB_API_VERSION = '2026-03-10';
 
 function invariant(condition, message) {
@@ -60,31 +66,12 @@ async function cloudflareRequest(token, path) {
 }
 
 async function githubRequest(token, path) {
-  const response = await fetch(`${GITHUB_API}${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': GITHUB_API_VERSION,
-      'User-Agent': 'part-crm-ar8c-bootstrap-preflight',
-    },
-    signal: AbortSignal.timeout(20_000),
+  return githubReadJson({
+    token,
+    path,
+    apiVersion: GITHUB_API_VERSION,
+    userAgent: 'part-crm-ar8c-bootstrap-preflight',
   });
-
-  let payload = null;
-  const text = await response.text();
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      throw new Error(`GitHub ${path} returned non-JSON HTTP ${response.status}`);
-    }
-  }
-
-  if (!response.ok) {
-    const message = typeof payload?.message === 'string' ? payload.message.slice(0, 300) : 'unknown error';
-    throw new Error(`GitHub ${path} failed with HTTP ${response.status}: ${message}`);
-  }
-  return payload;
 }
 
 async function verifyCloudflareToken(token, label) {
@@ -152,14 +139,8 @@ function normalizeProviderInventory({ accountId, zoneId, workers, d1, queues, r2
   const inventory = {
     schema_version: 1,
     environment: EXPECTED.environment,
-    account: {
-      name: EXPECTED.accountName,
-      id: accountId,
-    },
-    zone: {
-      name: EXPECTED.zoneName,
-      id: zoneId,
-    },
+    account: { name: EXPECTED.accountName, id: accountId },
+    zone: { name: EXPECTED.zoneName, id: zoneId },
     staging_hostname_authority: EXPECTED.stagingHostname,
     workers_scripts: sortByStableIdentity(workers.map((item) => ({
       name: safeText(item?.id),
@@ -286,6 +267,14 @@ function selfTest() {
   invariant(EXPECTED.zoneName === 'alegria.by', 'Cloudflare zone authority drifted');
   invariant(EXPECTED.stagingHostname === 'staging.alegria.by', 'staging hostname authority drifted');
   invariant(!JSON.stringify(EXPECTED).includes('production'), 'production authority must not be present in AR-8C staging preflight');
+
+  invariant(GITHUB_READ_RETRY_POLICY.maxAttempts === 5, 'GitHub read retry attempt bound drifted');
+  invariant(GITHUB_READ_RETRY_POLICY.maxDelayMs === 8_000, 'GitHub read retry delay cap drifted');
+  for (const status of [429, 500, 503, 599]) invariant(isRetryableGitHubReadStatus(status), `GitHub HTTP ${status} must remain retryable`);
+  for (const status of [400, 401, 403, 404, 409, 422]) invariant(!isRetryableGitHubReadStatus(status), `GitHub HTTP ${status} must remain fail-fast`);
+  invariant(isRetryableGitHubTransportError(new TypeError('fixture')), 'GitHub transport TypeError must remain retryable');
+  invariant(!isRetryableGitHubTransportError(new Error('fixture')), 'ordinary GitHub errors must remain fail-fast');
+  invariant(githubReadRetryDelayMs(null, 1, 0) === 1_000 && githubReadRetryDelayMs(null, 4, 0) === 8_000, 'GitHub retry backoff drifted');
 
   const fixture = normalizeProviderInventory({
     accountId: '0123456789abcdef0123456789abcdef',
