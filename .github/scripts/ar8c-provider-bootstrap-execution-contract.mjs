@@ -9,6 +9,7 @@ import {
 } from './ar8c-github-read-retry.mjs';
 
 const WORKFLOW_PATH = '.github/workflows/ar8c-provider-bootstrap-execution.yml';
+const PREFLIGHT_PATH = '.github/scripts/ar8c-staging-bootstrap-preflight.mjs';
 const EXECUTION_PATH = '.github/scripts/ar8c-provider-bootstrap-execution.mjs';
 const PROVIDER_PATH = '.github/scripts/ar8c-provider-bootstrap-provider.mjs';
 const COMMON_PATH = '.github/scripts/ar8c-provider-bootstrap-common.mjs';
@@ -19,11 +20,11 @@ const NODE_PIN = 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e';
 function count(source, fragment) { return source.split(fragment).length - 1; }
 
 async function validate() {
-  const [workflow, execution, provider, common, retry] = await Promise.all([
-    readFile(WORKFLOW_PATH, 'utf8'), readFile(EXECUTION_PATH, 'utf8'),
+  const [workflow, preflight, execution, provider, common, retry] = await Promise.all([
+    readFile(WORKFLOW_PATH, 'utf8'), readFile(PREFLIGHT_PATH, 'utf8'), readFile(EXECUTION_PATH, 'utf8'),
     readFile(PROVIDER_PATH, 'utf8'), readFile(COMMON_PATH, 'utf8'), readFile(RETRY_PATH, 'utf8'),
   ]);
-  const combined = `${workflow}\n${execution}\n${provider}\n${common}\n${retry}`;
+  const providerCombined = `${workflow}\n${execution}\n${provider}\n${common}\n${retry}`;
 
   invariant(workflow.startsWith('name: AR-8C Staging Provider Bootstrap Execution\n'), 'provider bootstrap workflow name drifted');
   invariant(count(workflow, 'workflow_dispatch:') === 1, 'provider bootstrap workflow must expose exactly one workflow_dispatch trigger');
@@ -49,6 +50,11 @@ async function validate() {
   invariant(workflow.indexOf('ar8c-staging-bootstrap-preflight.mjs') < workflow.indexOf('ar8c-staging-d1-classification.mjs'), 'read-only preflight must precede D1 classification');
   invariant(workflow.indexOf('ar8c-staging-d1-classification.mjs') < workflow.indexOf('ar8c-provider-bootstrap-execution.mjs execute'), 'all read-only checks must precede provider mutation');
 
+  invariant(!preflight.includes("githubRequest(token, '/user')"), 'GitHub bootstrap preflight must not depend on token-flavor-specific GET /user');
+  invariant(preflight.includes('environments/${EXPECTED.environment}/secrets?per_page=1'), 'GitHub bootstrap preflight must verify staging Environment secret metadata capability');
+  invariant(preflight.includes('environments/${EXPECTED.environment}/secrets/public-key'), 'GitHub bootstrap preflight must verify staging Environment public-key capability');
+  invariant(!preflight.includes('GitHub bootstrap principal:'), 'preflight must not require or emit a user principal identity');
+
   invariant(execution.includes("process.env.GITHUB_REF_NAME === EXPECTED.refName") && execution.includes("process.env.GITHUB_EVENT_NAME === EXPECTED.eventName"), 'runtime accepted-main/workflow_dispatch boundary checks are missing');
   invariant(execution.includes("publicInput('AR8C_ACCESS_ISSUER')") && execution.includes(".cloudflareaccess.com"), 'Access issuer strict public-input validation is missing');
   invariant(provider.indexOf('classifyBeforeMutation') < provider.indexOf('issueR2Credential'), 'provider module must expose classification before first credential mutation');
@@ -61,7 +67,7 @@ async function validate() {
   invariant(execution.includes('CLOUDFLARE_API_TOKEN') && execution.includes('CLOUDFLARE_DEPLOY_MANIFEST_JSON'), 'steady-state handoff outputs are incomplete');
   invariant(execution.includes('buildManifest') && execution.includes('schema_version: 1'), 'canonical deploy manifest construction is missing');
   invariant(common.includes("hostname: 'staging.alegria.by'") && !JSON.stringify({ common, execution, provider }).toLowerCase().includes('part-crm-catalog-production'), 'production target leaked into provider bootstrap implementation');
-  invariant(!combined.includes('/access/organizations'), 'provider bootstrap must not widen the accepted bootstrap token with Access Organizations read');
+  invariant(!providerCombined.includes('/access/organizations'), 'provider bootstrap must not widen the accepted bootstrap token with Access Organizations read');
 
   invariant(GITHUB_READ_RETRY_POLICY.maxAttempts === 5, 'GitHub read retry attempt bound drifted');
   invariant(GITHUB_READ_RETRY_POLICY.baseDelayMs === 1_000 && GITHUB_READ_RETRY_POLICY.maxDelayMs === 8_000, 'GitHub read retry backoff bounds drifted');
@@ -104,7 +110,7 @@ async function validate() {
   invariant(failFastCalls === 1 && /HTTP 403/.test(failFastError?.message ?? ''), 'GitHub non-retryable 4xx must fail on the first attempt');
 
   for (const forbidden of ['wrangler deploy', 'wrangler secret', 'terraform', 'method: \'DELETE\'', '/workers/scripts/', '/workers/routes']) {
-    invariant(!combined.toLowerCase().includes(forbidden.toLowerCase()), `provider bootstrap contains forbidden mutable surface: ${forbidden}`);
+    invariant(!providerCombined.toLowerCase().includes(forbidden.toLowerCase()), `provider bootstrap contains forbidden mutable surface: ${forbidden}`);
   }
   console.log('AR-8C staging provider bootstrap execution contract: PASS');
 }

@@ -219,9 +219,9 @@ async function discoverProviderInventory(token, { accountId, zoneId }) {
   });
 }
 
-async function verifyGitHubBootstrapToken(token) {
-  const user = await githubRequest(token, '/user');
-  invariant(typeof user?.login === 'string' && user.login.length > 0, 'GH_BOOTSTRAP_ADMIN_TOKEN did not resolve an authenticated GitHub user');
+async function verifyGitHubBootstrapAuthority(token) {
+  const environmentSecrets = await githubRequest(token, `/repos/${EXPECTED.repository}/environments/${EXPECTED.environment}/secrets?per_page=1`);
+  invariant(Number.isInteger(environmentSecrets?.total_count) && Array.isArray(environmentSecrets?.secrets), 'GH_BOOTSTRAP_ADMIN_TOKEN cannot read staging Environment secret metadata');
 
   const publicKey = await githubRequest(token, `/repos/${EXPECTED.repository}/environments/${EXPECTED.environment}/secrets/public-key`);
   invariant(typeof publicKey?.key_id === 'string' && publicKey.key_id.length > 0, 'GitHub staging environment public key is unavailable');
@@ -229,10 +229,9 @@ async function verifyGitHubBootstrapToken(token) {
 
   const workflows = await githubRequest(token, `/repos/${EXPECTED.repository}/actions/workflows?per_page=1`);
   invariant(Number.isInteger(workflows?.total_count), 'GH_BOOTSTRAP_ADMIN_TOKEN cannot read Actions workflow metadata');
-  return user.login;
 }
 
-async function writeSummary({ accountId, zoneId, githubLogin, inventory }) {
+async function writeSummary({ accountId, zoneId, inventory }) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (!summaryPath) return;
   const text = [
@@ -246,7 +245,7 @@ async function writeSummary({ accountId, zoneId, githubLogin, inventory }) {
     `- Zone: \`${EXPECTED.zoneName}\``,
     `- Zone ID: \`${zoneId}\``,
     `- Staging hostname authority: \`${EXPECTED.stagingHostname}\``,
-    `- GitHub bootstrap principal: \`${githubLogin}\``,
+    '- GitHub staging Environment secret metadata read: **verified**',
     '- Mutation performed: **none**',
     '- Secret values emitted: **none**',
     '',
@@ -305,10 +304,10 @@ async function preflight() {
 
   await verifyCloudflareToken(cloudflareBootstrapToken, 'CLOUDFLARE_BOOTSTRAP_TOKEN');
   await verifyCloudflareToken(cloudflareIssuerToken, 'CLOUDFLARE_TOKEN_ISSUER_TOKEN');
-  const githubLogin = await verifyGitHubBootstrapToken(githubBootstrapToken);
+  await verifyGitHubBootstrapAuthority(githubBootstrapToken);
   const providerIdentity = await discoverExactZone(cloudflareBootstrapToken);
   const inventory = await discoverProviderInventory(cloudflareBootstrapToken, providerIdentity);
-  await writeSummary({ ...providerIdentity, githubLogin, inventory });
+  await writeSummary({ ...providerIdentity, inventory });
   console.log(`AR8C_PROVIDER_INVENTORY_JSON=${JSON.stringify(inventory)}`);
   console.log('AR-8C staging bootstrap preflight: PASS (read-only; no provider or GitHub mutation performed)');
 }
