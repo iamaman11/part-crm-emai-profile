@@ -1263,7 +1263,7 @@
     "schema_version": 1,
     "status": "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY",
     "source_authority": "architecture/credential-authority-ar8b.json",
-    "source_git_blob_sha1": "8c0747047654e081215c3291229330c2aade4ced",
+    "source_git_blob_sha1": "d12e742c2fd5b9067bec7e68fc629f47963cc972",
     "metadata_only": true,
     "canonical_environments": [
       "rehearsal",
@@ -1278,13 +1278,16 @@
       "ar9_blocked": true
     },
     "authority_counts": {
-      "credentials": 15,
+      "credentials": 18,
       "dynamic_credential_domains": 1,
       "future_trust_domains": 1
     },
     "authority_ids": [
       "github.governance-audit",
       "github.hosted-admin-operator",
+      "github.ar8c-staging-bootstrap-admin",
+      "cloudflare.ar8c-staging-bootstrap",
+      "cloudflare.ar8c-token-issuer-bootstrap",
       "github.actions-runtime-api",
       "cloudflare.platform-api",
       "cloudflare.access-service-auth",
@@ -1306,10 +1309,13 @@
       "CLOUDFLARE_ACCESS_CLIENT_ID",
       "CLOUDFLARE_ACCESS_CLIENT_SECRET",
       "CLOUDFLARE_API_TOKEN",
+      "CLOUDFLARE_BOOTSTRAP_TOKEN",
       "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON",
       "CLOUDFLARE_DEPLOY_MANIFEST_JSON",
       "CLOUDFLARE_RESOLVER_SECRETS_JSON",
+      "CLOUDFLARE_TOKEN_ISSUER_TOKEN",
       "GH_ADMIN_OPERATOR_TOKEN",
+      "GH_BOOTSTRAP_ADMIN_TOKEN",
       "GH_TOKEN",
       "GITHUB_TOKEN",
       "GOOGLE_OAUTH_CLIENT_SECRET",
@@ -1324,6 +1330,9 @@
     "future_cutovers": {
       "github.governance-audit": "AR-8C",
       "github.hosted-admin-operator": "AR-8C",
+      "github.ar8c-staging-bootstrap-admin": "AR-8C",
+      "cloudflare.ar8c-staging-bootstrap": "AR-8C",
+      "cloudflare.ar8c-token-issuer-bootstrap": "AR-8C",
       "github.actions-runtime-api": "EXISTING_GITHUB_ACTIONS_RUNTIME",
       "cloudflare.platform-api": "AR-8C",
       "cloudflare.access-service-auth": "AR-8C",
@@ -1356,10 +1365,13 @@
       ],
       "concern_ids": [
         "cloudflare.access-service-auth",
+        "cloudflare.ar8c-staging-bootstrap",
+        "cloudflare.ar8c-token-issuer-bootstrap",
         "cloudflare.control-plane-secret-bundle-transport",
         "cloudflare.deploy-manifest-protected-input",
         "cloudflare.platform-api",
         "cloudflare.resolver-secret-bundle-transport",
+        "github.ar8c-staging-bootstrap-admin",
         "github.governance-audit",
         "github.hosted-admin-operator",
         "profile-generation.r2-access"
