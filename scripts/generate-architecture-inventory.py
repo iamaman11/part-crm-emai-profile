@@ -44,9 +44,11 @@ AR8C_IMPLEMENTATION_ISSUE = 314
 ACCEPTED_SLICES = ["AR-0", "AR-1", "AR-2", "AR-3", "AR-4A", "AR-4B", "AR-4C", "AR-5", "AR-6", "AR-7"]
 CURRENT_SLICE = "AR-8"
 NEXT_SLICE = "AR-9"
-AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B"]
-AR8_CURRENT_SUBSLICE = "AR-8C"
-AR8_MANDATORY_REMAINING = ["AR-8C", "AR-8D", "AR-8E", "AR-8F"]
+AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B", "AR-8C"]
+AR8_CURRENT_SUBSLICE = "AR-8D"
+AR8D_IMPLEMENTATION_ISSUE = None
+AR8_IMPLEMENTATION_ENTRY_GATE = "POST_AR8C_CLEANUP_DX_ACCEPTANCE_REQUIRED_BEFORE_AR8D_IMPLEMENTATION"
+AR8_MANDATORY_REMAINING = ["AR-8D", "AR-8E", "AR-8F"]
 
 CANONICAL_ENVIRONMENTS = {"rehearsal", "staging", "production"}
 REQUIRED_CREDENTIAL_ENTRY_FIELDS = {
@@ -143,13 +145,21 @@ def ar8b_acceptance() -> dict[str, object]:
     }
 
 
+def ar8c_acceptance() -> dict[str, object]:
+    payload = load_credential_authority().get("ar8c_operational_lifecycle", {}).get("acceptance")
+    if not isinstance(payload, dict):
+        raise SystemExit("accepted AR-8C lifecycle acceptance evidence is missing")
+    return payload
+
+
 def expected_ar8_progress() -> dict[str, object]:
     return {
         "umbrella_issue": AR8_UMBRELLA_ISSUE,
         "accepted_subslices": AR8_ACCEPTED_SUBSLICES,
         "current_subslice": AR8_CURRENT_SUBSLICE,
-        "current_implementation_issue": AR8C_IMPLEMENTATION_ISSUE,
+        "current_implementation_issue": AR8D_IMPLEMENTATION_ISSUE,
         "mandatory_remaining": AR8_MANDATORY_REMAINING,
+        "implementation_entry_gate": AR8_IMPLEMENTATION_ENTRY_GATE,
         "full_ar8_accepted": False,
         "ar9_blocked": True,
         "production_mutation": False,
@@ -571,6 +581,7 @@ def build_ar8c_operational_lifecycle_projection(payload: dict[str, Any]) -> dict
         },
         "production_mutation": lifecycle.get("production_mutation") is True,
         "opsctl_mutation": lifecycle.get("opsctl_mutation") is True,
+        "acceptance": lifecycle.get("acceptance"),
     }
 
 
@@ -774,6 +785,7 @@ def build_inventory() -> dict[str, object]:
             "next_architecture_slice_after_acceptance": NEXT_SLICE,
             "ar8_progress": expected_ar8_progress(),
             "ar8b_acceptance": ar8b_acceptance(),
+            "ar8c_acceptance": ar8c_acceptance(),
             "architecture_complete": False,
             "production_core_gate": "BLOCKED",
             "production_ready": False,
@@ -808,9 +820,9 @@ def self_test(expected: dict[str, object]) -> None:
     if serialized(state) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect active AR-8 rollback")
     ar8_state = copy.deepcopy(expected)
-    ar8_state["program_state"]["ar8_progress"]["current_subslice"] = "AR-8D"
+    ar8_state["program_state"]["ar8_progress"]["current_subslice"] = "AR-8C"
     if serialized(ar8_state) == serialized(expected):
-        raise SystemExit("inventory self-test failed to detect AR-8C sequencing drift")
+        raise SystemExit("inventory self-test failed to detect AR-8D sequencing drift")
     credential = copy.deepcopy(expected)
     credential["credential_authority"]["metadata_only"] = False
     if serialized(credential) == serialized(expected):
@@ -863,7 +875,7 @@ def self_test(expected: dict[str, object]) -> None:
     python_ops["python_operational_authority"]["status"] = "AR6_CANDIDATE"
     if serialized(python_ops) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect AR-6 Python/opsctl acceptance rollback")
-    print("Architecture inventory active AR-8 / AR-8A+B accepted / current AR-8C negative self-test passed.")
+    print("Architecture inventory active AR-8 / AR-8A+B+C accepted / AR-8D gated by cleanup/DX negative self-test passed.")
 
 
 def main() -> int:
@@ -889,7 +901,7 @@ def main() -> int:
     elif args.check:
         check_current(expected)
         validate_full_documentation_authority()
-        print("Architecture inventory projects active AR-8 with AR-8A+B accepted and AR-8C current.")
+        print("Architecture inventory projects active AR-8 with AR-8A+B+C accepted and AR-8D gated by cleanup/DX.")
     else:
         self_test(expected)
     return 0
