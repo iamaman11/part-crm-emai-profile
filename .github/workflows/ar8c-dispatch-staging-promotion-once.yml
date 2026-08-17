@@ -142,7 +142,7 @@ jobs:
           test "$resolver_worker_sha256" != 'null'
           test "${#resolver_worker_sha256}" -eq 64
 
-          test "$(jq -r '.source_commit_sha' "$control_manifest")" = "$source_sha"
+          test "$(jq -r '.source.commit_sha' "$control_manifest")" = "$source_sha"
           test "$(jq -r '.release_id' "$control_manifest")" = "$control_release_id"
 
           payload="$(jq -n \
