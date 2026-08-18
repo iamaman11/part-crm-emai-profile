@@ -1,7 +1,6 @@
 use crate::model::MAX_CLOCK_SKEW_MS;
 use control_plane_contract::resolver_service_auth::{
-    KEYED_SIGNATURE_VERSION, LEGACY_SIGNATURE_VERSION, ServiceAuthCanonicalInput,
-    canonical_signature_input,
+    LEGACY_SIGNATURE_VERSION, ServiceAuthCanonicalInput, canonical_signature_input,
 };
 use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
 use sha2::{Digest, Sha256};
@@ -149,12 +148,33 @@ pub fn hex_encode(bytes: &[u8]) -> String {
     output
 }
 
+pub fn hex_decode(value: &str) -> Option<Vec<u8>> {
+    if !value.len().is_multiple_of(2) {
+        return None;
+    }
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| Some((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?))
+        .collect()
+}
+
+const fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        KEYED_SIGNATURE_VERSION, LEGACY_SIGNATURE_VERSION, SignatureError, SignatureInput,
-        body_digest_hex, sign_hex, sign_hex_versioned, verify, verify_versioned,
+        LEGACY_SIGNATURE_VERSION, SignatureError, SignatureInput, body_digest_hex, sign_hex,
+        sign_hex_versioned, verify, verify_versioned,
     };
+    use control_plane_contract::resolver_service_auth::KEYED_SIGNATURE_VERSION;
 
     fn input<'a>(body: &'a [u8]) -> SignatureInput<'a> {
         SignatureInput {
