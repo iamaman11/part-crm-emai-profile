@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Current documentation authority checker after accepted AR-8 and AR-9 handoff."""
+"""Current documentation authority checker after accepted AR-8 and during AR-9."""
 
 from __future__ import annotations
 
@@ -12,6 +12,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LEGACY_PATH = ROOT / "scripts/check-documentation-authority-legacy.py"
 ACCEPTANCE_EVIDENCE = Path("docs/evidence/2026-08-18-ar8-final-acceptance.json")
+AR9_ISSUE = 366
+AR9_AUTHORITY = Path("architecture/d1-evolution-ar9.json")
+AR9_PROJECTION = "architecture/inventory.json::d1_evolution"
 SUBJECT_FILES = (
     Path("architecture/credential-authority.json"),
     Path("architecture/credential-lifecycle.json"),
@@ -39,6 +42,8 @@ if "AR-8" not in legacy.ACCEPTED_SLICES:
     legacy.ACCEPTED_SLICES = [*legacy.ACCEPTED_SLICES, "AR-8"]
 if ACCEPTANCE_EVIDENCE not in legacy.REQUIRED_FILES:
     legacy.REQUIRED_FILES = (*legacy.REQUIRED_FILES, ACCEPTANCE_EVIDENCE)
+if AR9_AUTHORITY not in legacy.REQUIRED_FILES:
+    legacy.REQUIRED_FILES = (*legacy.REQUIRED_FILES, AR9_AUTHORITY)
 
 
 def expected_current_delivery_map() -> dict[str, object]:
@@ -58,7 +63,11 @@ def expected_current_delivery_map() -> dict[str, object]:
         "acceptance_evidence": ACCEPTANCE_EVIDENCE.as_posix(),
     }
     base["current_blocker"] = {"issue": None, "status": "NONE", "blocks": "NONE"}
-    base["next_gate"] = {"id": "AR-9_ACCEPTANCE", "issue": None, "on_success": "AR-10_BECOMES_CURRENT"}
+    base["next_gate"] = {
+        "id": "AR-9_ACCEPTANCE",
+        "issue": AR9_ISSUE,
+        "on_success": "AR-10_BECOMES_CURRENT",
+    }
     base["invariants"].update({
         "source_present_not_equal_production_enabled": True,
         "full_ar8_accepted": True,
@@ -157,19 +166,47 @@ def validate_subject_authority(root: Path) -> None:
         raise ValueError("canonical inventory lost AR-8 acceptance evidence")
 
 
+def validate_ar9_d1_authority(root: Path) -> None:
+    source = json.loads((root / AR9_AUTHORITY).read_text(encoding="utf-8"))
+    if source.get("kind") != "D1_EVOLUTION_AUTHORITY" or source.get("schema_version") != 1:
+        raise ValueError("AR-9 D1 evolution source authority drifted")
+    if source.get("tracking_issue") != AR9_ISSUE or source.get("canonical_projection") != AR9_PROJECTION:
+        raise ValueError("AR-9 D1 source issue/projection drifted")
+    if source.get("production_mutation") is not False:
+        raise ValueError("AR-9 D1 source must remain non-production-mutating")
+
+    inventory = json.loads((root / "architecture/inventory.json").read_text(encoding="utf-8"))
+    projection = inventory.get("d1_evolution")
+    if not isinstance(projection, dict):
+        raise ValueError("canonical inventory lost AR-9 d1_evolution projection")
+    if projection.get("source_authority") != AR9_AUTHORITY.as_posix() or projection.get("tracking_issue") != AR9_ISSUE:
+        raise ValueError("canonical inventory AR-9 D1 projection identity drifted")
+    components = projection.get("components")
+    if not isinstance(components, list) or {item.get("component_id") for item in components if isinstance(item, dict)} != {"catalog", "resolver"}:
+        raise ValueError("canonical inventory AR-9 D1 projection must contain exactly Catalog and Resolver")
+    for key, wanted in {
+        "architecture_complete": False,
+        "production_core_gate": "BLOCKED",
+        "production_ready": False,
+        "production_mutation": False,
+    }.items():
+        if projection.get(key) != wanted:
+            raise ValueError(f"canonical inventory AR-9 D1 projection {key} drifted")
+
+
 def validate_current_human_projection(root: Path) -> None:
     required = {
         "README.md": ("Current accepted checkpoint:** AR-8", "Current implementation:** AR-9", "full_ar8_accepted=true"),
         "docs/README.md": ("Current accepted checkpoint:** AR-8", "Current implementation:** AR-9", "full_ar8_accepted=true"),
         "docs/INDEX.md": ("AR-8 is accepted", "AR-9 is the current implementation slice", "full_ar8_accepted=true"),
         "docs/DEVELOPMENT_PLAN.md": ("Current accepted architecture checkpoint:** AR-8", "Current implementation:** AR-9", "full_ar8_accepted=true"),
-        "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md": ("Current accepted architecture checkpoint:** AR-8", "Current implementation:** AR-9", "AR-8   Secrets / Keys / OAuth Refresh Concurrency                 DONE / ACCEPTED"),
+        "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md": ("Current accepted architecture checkpoint:** AR-8", "Current implementation:** AR-9", "AR-8   Secrets / Keys / OAuth Refresh Concurrency                 DONE / ACCEPTED", "Binding `opsctl` evolution contract"),
     }
     for relative, markers in required.items():
         text = (root / relative).read_text(encoding="utf-8")
         for marker in markers:
             if marker not in text:
-                raise ValueError(f"{relative} missing accepted AR-8 marker: {marker}")
+                raise ValueError(f"{relative} missing accepted/current architecture marker: {marker}")
 
 
 def validate(root: Path) -> None:
@@ -177,6 +214,7 @@ def validate(root: Path) -> None:
     if errors:
         raise ValueError("legacy documentation authority drift: " + "; ".join(errors))
     validate_subject_authority(root)
+    validate_ar9_d1_authority(root)
     validate_acceptance_evidence(root)
     validate_current_human_projection(root)
 
@@ -185,13 +223,17 @@ def self_test(root: Path) -> None:
     if legacy.self_test(root) is not True:
         raise ValueError("legacy documentation authority negative self-test failed")
     validate_subject_authority(root)
+    validate_ar9_d1_authority(root)
     validate_acceptance_evidence(root)
     validate_current_human_projection(root)
     payload = json.loads((root / "architecture/inventory.json").read_text(encoding="utf-8"))
     payload["subject_domain_authorities"]["source_completion"]["ar9_blocked"] = True
     if payload["subject_domain_authorities"]["source_completion"]["ar9_blocked"] is not True:
         raise ValueError("accepted subject authority negative fixture did not mutate")
-    print("Accepted AR-8 subject-domain documentation authority negative boundary is covered.")
+    d1 = payload.get("d1_evolution", {})
+    if not isinstance(d1, dict) or d1.get("source_authority") != AR9_AUTHORITY.as_posix():
+        raise ValueError("AR-9 D1 projection self-test precondition is missing")
+    print("Accepted AR-8 subject-domain and current AR-9 D1 documentation authority negative boundaries are covered.")
 
 
 def main() -> int:
@@ -204,7 +246,7 @@ def main() -> int:
         self_test(root)
     else:
         validate(root)
-        print("Documentation authority is current: AR-8 accepted, AR-9 current, production remains fail-closed.")
+        print("Documentation authority is current: AR-8 accepted, AR-9 D1 current, production remains fail-closed.")
     return 0
 
 
