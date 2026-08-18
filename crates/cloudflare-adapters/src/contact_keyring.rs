@@ -37,6 +37,7 @@ pub fn contact_key_lifecycle_from_serialized_keyring(
     ))
 }
 
+#[cfg(test)]
 fn parse_contact_protection_keyring(
     serialized: String,
 ) -> Result<ContactProtectionKeyring, ContactKeyringConfigError> {
