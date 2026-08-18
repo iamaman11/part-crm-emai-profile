@@ -1,0 +1,41 @@
+name: AR8 Final Projection Rematerializer Temporary
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize-and-retire:
+    if: github.repository == 'iamaman11/part-crm-emai-profile' && github.event.pull_request.head.ref == 'agent/ar8-completion' && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact completion branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: agent/ar8-completion
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Materialize current generated authorities in dependency order
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          rm .github/workflows/ar8-final-projection-rematerializer.yml
+          python scripts/python-estate-ar6.py --write
+          python scripts/python-estate-ar6.py --check
+          python scripts/generate-ar8-completion-status.py --check
+          python scripts/generate-architecture-inventory.py --write
+          python scripts/generate-architecture-inventory.py --check
+          node .github/scripts/architecture-authority-check.mjs
+          node .github/scripts/profile-security-authority-check.mjs
+          python scripts/check-documentation-authority.py --root .
+      - name: Commit deterministic authorities and retire materializer
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add architecture/inventory.json architecture/python-estate-ar6.json .github/workflows/ar8-final-projection-rematerializer.yml
+          git diff --cached --check
+          git commit -m "Rematerialize final AR-8 generated authorities"
+          git push origin HEAD:agent/ar8-completion
