@@ -357,8 +357,7 @@ fn contract_that_strands_known_good_is_blocked() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn repair_fail_forward_transition_is_explicitly_blocked() -> Result<(), Box<dyn Error>>
-{
+fn repair_fail_forward_transition_is_explicitly_blocked() -> Result<(), Box<dyn Error>> {
     let authority = write_fixture(
         "repair-authority",
         &single_transition_authority(
