@@ -160,11 +160,7 @@ fn status_covers_exact_and_known_prefix() -> Result<(), Box<dyn Error>> {
 #[test]
 fn noncanonical_ledgers_all_require_recovery() -> Result<(), Box<dyn Error>> {
     let fixtures = [
-        (
-            "DIVERGED",
-            ledger(&["0002_expand.sql"]),
-            "matrix-diverged",
-        ),
+        ("DIVERGED", ledger(&["0002_expand.sql"]), "matrix-diverged"),
         (
             "UNKNOWN_MIGRATION",
             ledger(&["0001_base.sql", "9999_unknown.sql"]),
@@ -205,10 +201,7 @@ fn expand_with_complete_rollback_context_is_migration_required() -> Result<(), B
     assert_eq!(value["decision"], "MIGRATION_REQUIRED");
     assert_eq!(value["rollback_context_complete"], true);
     assert_eq!(value["allowed"], true);
-    assert_eq!(
-        value["planned_migrations"],
-        json!(["0002_expand.sql"])
-    );
+    assert_eq!(value["planned_migrations"], json!(["0002_expand.sql"]));
     assert_eq!(
         value["planned_migration_contracts"][0]["migration_class"],
         "EXPAND"
@@ -259,7 +252,10 @@ fn missing_current_runtime_context_blocks_plan() -> Result<(), Box<dyn Error>> {
         None,
     )?;
     assert_eq!(value["decision"], "CODE_ROLLBACK_BLOCKED");
-    assert_eq!(value["reason_codes"], json!(["CURRENT_RUNTIME_CONTEXT_MISSING"]));
+    assert_eq!(
+        value["reason_codes"],
+        json!(["CURRENT_RUNTIME_CONTEXT_MISSING"])
+    );
     assert_eq!(value["allowed"], false);
     Ok(())
 }
@@ -319,7 +315,11 @@ fn contract_without_retirement_evidence_is_blocked() -> Result<(), Box<dyn Error
     assert!(
         value["planned_migration_contracts"]
             .as_array()
-            .is_some_and(|items| items.iter().any(|item| item["migration_class"] == "CONTRACT"))
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item["migration_class"] == "CONTRACT")
+            })
     );
     Ok(())
 }
@@ -456,7 +456,8 @@ fn rollout_order_distinguishes_migrate_first_and_deploy_first() -> Result<(), Bo
 }
 
 #[test]
-fn known_ahead_schema_covers_compatible_incompatible_and_verify_exactness() -> Result<(), Box<dyn Error>> {
+fn known_ahead_schema_covers_compatible_incompatible_and_verify_exactness()
+-> Result<(), Box<dyn Error>> {
     let compatibility = invoke(
         D1Action::Compatibility,
         repo("tests/d1-evolution/synthetic-ledger-through-backfill.json"),
@@ -504,6 +505,9 @@ fn known_ahead_schema_covers_compatible_incompatible_and_verify_exactness() -> R
     )?;
     assert_eq!(verify["decision"], "RECOVERY_REQUIRED");
     assert_eq!(verify["allowed"], false);
-    assert_eq!(verify["reason_codes"], json!(["POST_APPLY_TARGET_MISMATCH"]));
+    assert_eq!(
+        verify["reason_codes"],
+        json!(["POST_APPLY_TARGET_MISMATCH"])
+    );
     Ok(())
 }

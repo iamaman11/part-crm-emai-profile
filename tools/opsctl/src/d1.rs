@@ -257,10 +257,7 @@ pub fn run(request: D1RunRequest<'_>) -> Result<String, D1Error> {
         request.action.name(),
     )?;
     let preconditions = match request.preconditions_json {
-        Some(path) => load_preconditions(
-            &resolve_input(request.root, path),
-            request.component,
-        )?,
+        Some(path) => load_preconditions(&resolve_input(request.root, path), request.component)?,
         None => Preconditions::default(),
     };
 
@@ -348,7 +345,11 @@ fn load_component_authority(
         .ok_or_else(|| D1Error::new("component ordered_history is missing"))?;
     let mut ordered_history = Vec::with_capacity(ordered.len());
     for entry in ordered {
-        ordered_history.push(required_value_string(entry, "name", "historical migration")?);
+        ordered_history.push(required_value_string(
+            entry,
+            "name",
+            "historical migration",
+        )?);
     }
     if ordered_history.is_empty() {
         return Err(D1Error::new("component ordered_history must not be empty"));
@@ -747,7 +748,9 @@ fn evaluate(
     }
 
     let rollback_supported = runtime_supports_index(authority, known_good, target_index)?;
-    let fail_forward = contracts.iter().any(|contract| contract.fail_forward_required);
+    let fail_forward = contracts
+        .iter()
+        .any(|contract| contract.fail_forward_required);
     if !rollback_supported {
         return Ok(Evaluation {
             ledger_state: state,
@@ -1078,10 +1081,7 @@ fn resolve_input(root: &Path, path: &Path) -> PathBuf {
 
 fn read_json(path: &Path, label: &str) -> Result<Value, D1Error> {
     let text = fs::read_to_string(path).map_err(|error| {
-        D1Error::new(format!(
-            "cannot read {label} {}: {error}",
-            path.display()
-        ))
+        D1Error::new(format!("cannot read {label} {}: {error}", path.display()))
     })?;
     serde_json::from_str(&text)
         .map_err(|error| D1Error::new(format!("cannot parse {label} {}: {error}", path.display())))
@@ -1090,8 +1090,8 @@ fn read_json(path: &Path, label: &str) -> Result<Value, D1Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ComponentAuthority, D1Action, D1Error, LedgerState, Preconditions,
-        ReleaseSchemaContract, classify_prefix, evaluate,
+        ComponentAuthority, D1Action, D1Error, LedgerState, Preconditions, ReleaseSchemaContract,
+        classify_prefix, evaluate,
     };
 
     fn authority() -> ComponentAuthority {
@@ -1198,7 +1198,10 @@ mod tests {
         assert_eq!(result.ledger_state, LedgerState::BehindKnownPrefix);
         assert!(!result.allowed);
         assert_eq!(result.planned_migrations, vec!["0002_b.sql"]);
-        assert_eq!(result.reason_codes, vec!["HISTORICAL_COMPATIBILITY_UNKNOWN"]);
+        assert_eq!(
+            result.reason_codes,
+            vec!["HISTORICAL_COMPATIBILITY_UNKNOWN"]
+        );
         Ok(())
     }
 }

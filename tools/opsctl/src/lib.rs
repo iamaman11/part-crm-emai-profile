@@ -189,9 +189,9 @@ where
                 set_once(&mut ledger_json, PathBuf::from(value), "--ledger-json")?;
             }
             "--release-manifest" => {
-                let value = iterator.next().ok_or_else(|| {
-                    OpsctlError::new("d1", "--release-manifest requires a value")
-                })?;
+                let value = iterator
+                    .next()
+                    .ok_or_else(|| OpsctlError::new("d1", "--release-manifest requires a value"))?;
                 set_once(
                     &mut release_manifest,
                     PathBuf::from(value),
@@ -199,9 +199,9 @@ where
                 )?;
             }
             "--current-manifest" => {
-                let value = iterator.next().ok_or_else(|| {
-                    OpsctlError::new("d1", "--current-manifest requires a value")
-                })?;
+                let value = iterator
+                    .next()
+                    .ok_or_else(|| OpsctlError::new("d1", "--current-manifest requires a value"))?;
                 set_once(
                     &mut current_manifest,
                     PathBuf::from(value),
