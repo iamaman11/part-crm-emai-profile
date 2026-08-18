@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import process from 'node:process';
 
 const OVERLAY_PATH = 'architecture/ar8-completion-lifecycle.json';
+const OPERATOR_PATH = 'architecture/ar8-operator-rehearsal.json';
 const CANONICAL_PATH = 'architecture/credential-authority-ar8b.json';
 const ENCRYPTED_GENERATION_PATH = 'crates/encrypted-generation-domain/src/container.rs';
 const DIRTY_GENERATION_PATH = 'apps/profile-bridge/src/dirty_generation.rs';
@@ -24,6 +25,15 @@ const EXPECTED_PROFILE_DOMAINS = new Set([
   'profile-network.proxy-credential',
   'profile-bridge.enrollment-claim',
   'profile-generation.short-lived-object-access',
+]);
+
+const EXPECTED_OPERATOR_GATES = new Map([
+  ['profile-generation.encryption-key-hierarchy', 'AR-10_CONSUMER_INTEGRATION_THEN_AR-13_ROTATION_AND_AR-14_RECOVERY'],
+  ['profile-identity.entropy-root', 'AR-10'],
+  ['profile-bridge.device-private-key', 'AR-10_AND_LATER_PLATFORM_REHEARSAL'],
+  ['profile-network.proxy-credential', 'AR-10'],
+  ['profile-bridge.enrollment-claim', 'AR-10_RUNTIME_INTEGRATION'],
+  ['profile-generation.short-lived-object-access', 'AR-10_RUNTIME_CONTRACT_THEN_STAGING_RECOVERY_REHEARSAL'],
 ]);
 
 const FORBIDDEN_VALUE_KEYS = new Set([
@@ -240,13 +250,7 @@ function validateDomains(overlay, sources, errors) {
         }
         requireMarkers(
           sources.adr1,
-          [
-            '**Статус:** proposed',
-            'profile_entropy_root',
-            'HMAC(profile_entropy_root',
-            '256',
-            'KeyProviderPort',
-          ],
+          ['**Статус:** proposed', 'profile_entropy_root', 'HMAC(profile_entropy_root', '256', 'KeyProviderPort'],
           ADR1_PATH,
           errors,
         );
@@ -255,10 +259,10 @@ function validateDomains(overlay, sources, errors) {
         if (
           domain.class !== 'DEVICE_PRIVATE_KEY' ||
           domain.application_boundary !== 'HANDLE_ONLY' ||
-          domain.private_key_readback !== false ||
+          domain.material_readback !== false ||
           !String(domain.implementation_owner ?? '').includes('AR-10')
         ) {
-          errors.push(`${id}: device private key must stay handle-only with later platform proof`);
+          errors.push(`${id}: device private key must stay handle-only with no material readback and later platform proof`);
         }
         requireMarkers(
           sources.bridgeDomain,
@@ -298,12 +302,7 @@ function validateDomains(overlay, sources, errors) {
         }
         requireMarkers(
           sources.bridgeDomain,
-          [
-            'ClaimCode([REDACTED])',
-            'EnrollmentClaimError::ReplayRejected',
-            'EnrollmentClaimError::DeviceRebindRejected',
-            'if now >= self.expires_at',
-          ],
+          ['ClaimCode([REDACTED])', 'EnrollmentClaimError::ReplayRejected', 'EnrollmentClaimError::DeviceRebindRejected', 'if now >= self.expires_at'],
           BRIDGE_DOMAIN_PATH,
           errors,
         );
@@ -338,6 +337,51 @@ function validateDomains(overlay, sources, errors) {
   }
 }
 
+function validateOperatorPlans(operator, errors) {
+  if (
+    operator.kind !== 'AR8F_OPERATOR_REHEARSAL_AUTHORITY' ||
+    operator.status !== 'candidate' ||
+    operator.tracking_issue !== 361 ||
+    operator.parent_issue !== 308 ||
+    operator.canonical_lifecycle !== OVERLAY_PATH
+  ) {
+    errors.push('AR-8F operator authority provenance drifted for profile security projection');
+  }
+  const plans = operator.profile_security_plans;
+  if (!Array.isArray(plans)) {
+    errors.push('AR-8F profile_security_plans must be an array');
+    return;
+  }
+  const seen = new Set();
+  for (const plan of plans) {
+    const id = plan?.id;
+    if (typeof id !== 'string' || seen.has(id) || !EXPECTED_PROFILE_DOMAINS.has(id)) {
+      errors.push(`invalid/duplicate AR-8F profile security plan: ${String(id)}`);
+      continue;
+    }
+    seen.add(id);
+    if (
+      plan.operator_visibility !== 'METADATA_ONLY' ||
+      plan.mutation_executed !== false ||
+      plan.secret_readback !== false ||
+      plan.next_owning_gate !== EXPECTED_OPERATOR_GATES.get(id)
+    ) {
+      errors.push(`${id}: operator plan must remain metadata-only/non-mutating and point to its exact later owning gate`);
+    }
+    requireString(plan.ar8_status, `${id}.ar8_status`, errors);
+    requireString(plan.operator_rule, `${id}.operator_rule`, errors);
+    requireString(plan.recovery_rule, `${id}.recovery_rule`, errors);
+  }
+  for (const id of EXPECTED_PROFILE_DOMAINS) {
+    if (!seen.has(id)) {
+      errors.push(`missing AR-8F profile security plan: ${id}`);
+    }
+  }
+  if (seen.size !== EXPECTED_PROFILE_DOMAINS.size || plans.length !== EXPECTED_PROFILE_DOMAINS.size) {
+    errors.push('AR-8F profile_security_plans must exactly match the audited profile security domain set');
+  }
+}
+
 function validateNonCredentialState(overlay, bridgeDomain, errors) {
   const entries = overlay.profile_protected_noncredential_state;
   if (!Array.isArray(entries) || entries.length !== 1) {
@@ -356,12 +400,7 @@ function validateNonCredentialState(overlay, bridgeDomain, errors) {
   ) {
     errors.push('workspace lock token must remain explicitly classified as protected non-credential coordination state');
   }
-  requireMarkers(
-    bridgeDomain,
-    ['WorkspaceLockToken([REDACTED])', 'WorkspaceLockError::StaleWriter'],
-    BRIDGE_DOMAIN_PATH,
-    errors,
-  );
+  requireMarkers(bridgeDomain, ['WorkspaceLockToken([REDACTED])', 'WorkspaceLockError::StaleWriter'], BRIDGE_DOMAIN_PATH, errors);
 }
 
 function validateCredentialEquivalentAsset(overlay, dataClassification, errors) {
@@ -387,28 +426,19 @@ function validateCredentialEquivalentAsset(overlay, dataClassification, errors) 
 function validateAr10Boundary(sources, errors) {
   requireMarkers(
     sources.camoufoxPlan,
-    [
-      'AR-10',
-      'real Camouhost',
-      'tools/profile_browser.py',
-      'AR-15',
-      'Camoufox',
-    ],
+    ['AR-10', 'real Camouhost', 'tools/profile_browser.py', 'AR-15', 'Camoufox'],
     CAMOUFOX_PLAN_PATH,
     errors,
   );
   requireMarkers(
     sources.pythonEstate,
-    ['tools/profile_browser.py', '"cutover_slice": "AR-10"', 'runtime/camouhost/main.py'],
+    ['tools/profile_browser.py', '"cutover_slice": "AR-10"', 'runtime/camouhost/main.py', 'legacy_direct_browser_runtime_tool'],
     PYTHON_ESTATE_PATH,
     errors,
   );
-  if (sources.pythonEstate.includes('"path": "tools/profile_browser.py"') && !sources.pythonEstate.includes('legacy_direct_browser_runtime_tool')) {
-    errors.push('tools/profile_browser.py must remain classified as the legacy direct browser runtime tool until AR-10 parity');
-  }
 }
 
-function validate(overlay, canonical, sources) {
+function validate(overlay, operator, canonical, sources) {
   const errors = [];
   if (
     overlay.schema_version !== 1 ||
@@ -424,8 +454,10 @@ function validate(overlay, canonical, sources) {
     errors.push('AR-8 profile security audit must remain non-production and plaintext-free');
   }
   scanForbiddenValueFields(overlay, 'overlay', errors);
+  scanForbiddenValueFields(operator, 'operator', errors);
   validateScope(overlay.camoufox_profile_scope, errors);
   validateDomains(overlay, sources, errors);
+  validateOperatorPlans(operator, errors);
   validateNonCredentialState(overlay, sources.bridgeDomain, errors);
   validateCredentialEquivalentAsset(overlay, sources.dataClassification, errors);
   validateAr10Boundary(sources, errors);
@@ -433,52 +465,61 @@ function validate(overlay, canonical, sources) {
   return errors;
 }
 
-function assertRejected(label, overlay, canonical, sources) {
-  const errors = validate(overlay, canonical, sources);
+function assertRejected(label, overlay, operator, canonical, sources) {
+  const errors = validate(overlay, operator, canonical, sources);
   if (errors.length === 0) {
     throw new Error(`negative fixture unexpectedly passed: ${label}`);
   }
 }
 
-function selfTest(overlay, canonical, sources) {
+function selfTest(overlay, operator, canonical, sources) {
   const realRuntime = clone(overlay);
   realRuntime.camoufox_profile_scope.real_runtime_implemented_in_ar8 = true;
-  assertRejected('real Camoufox runtime claimed in AR-8', realRuntime, canonical, sources);
+  assertRejected('real Camoufox runtime claimed in AR-8', realRuntime, operator, canonical, sources);
 
   const missingDomain = clone(overlay);
   missingDomain.profile_security_domains.pop();
-  assertRejected('missing profile security domain', missingDomain, canonical, sources);
+  assertRejected('missing profile security domain', missingDomain, operator, canonical, sources);
 
   const entropyLeak = clone(overlay);
   entropyLeak.profile_security_domains.find((item) => item.id === 'profile-identity.entropy-root').secret_value = 'forbidden';
-  assertRejected('entropy secret value field', entropyLeak, canonical, sources);
+  assertRejected('entropy secret value field', entropyLeak, operator, canonical, sources);
 
   const deviceReadback = clone(overlay);
-  deviceReadback.profile_security_domains.find((item) => item.id === 'profile-bridge.device-private-key').private_key_readback = true;
-  assertRejected('device private-key readback', deviceReadback, canonical, sources);
+  deviceReadback.profile_security_domains.find((item) => item.id === 'profile-bridge.device-private-key').material_readback = true;
+  assertRejected('device private-key material readback', deviceReadback, operator, canonical, sources);
 
   const staticBridgeR2 = clone(overlay);
   staticBridgeR2.profile_security_domains.find((item) => item.id === 'profile-generation.short-lived-object-access').lifetime_policy = 'STATIC_R2_PAIR_ON_BRIDGE';
-  assertRejected('static Bridge R2 credential', staticBridgeR2, canonical, sources);
+  assertRejected('static Bridge R2 credential', staticBridgeR2, operator, canonical, sources);
 
   const entropyInPlace = clone(overlay);
   entropyInPlace.profile_security_domains.find((item) => item.id === 'profile-identity.entropy-root').rotation_policy = 'IN_PLACE_MUTATION';
-  assertRejected('in-place profile entropy mutation', entropyInPlace, canonical, sources);
+  assertRejected('in-place profile entropy mutation', entropyInPlace, operator, canonical, sources);
 
   const workspaceCredential = clone(overlay);
   workspaceCredential.profile_protected_noncredential_state[0].credential_authority = true;
-  assertRejected('workspace lock promoted to credential authority', workspaceCredential, canonical, sources);
+  assertRejected('workspace lock promoted to credential authority', workspaceCredential, operator, canonical, sources);
 
   const productionProof = clone(overlay);
   productionProof.profile_security_domains[0].production_proof_complete = true;
-  assertRejected('premature profile key production proof', productionProof, canonical, sources);
+  assertRejected('premature profile key production proof', productionProof, operator, canonical, sources);
+
+  const missingOperatorPlan = clone(operator);
+  missingOperatorPlan.profile_security_plans.pop();
+  assertRejected('missing operator profile security plan', overlay, missingOperatorPlan, canonical, sources);
+
+  const operatorReadback = clone(operator);
+  operatorReadback.profile_security_plans[0].secret_readback = true;
+  assertRejected('operator profile secret readback', overlay, operatorReadback, canonical, sources);
 
   const windowsInAr8 = clone(canonical);
   windowsInAr8.future_trust_domains.find((item) => item.id === 'windows.release-signing-trust').future_cutover = 'AR-8';
-  assertRejected('Windows signing ownership pulled into AR-8', overlay, windowsInAr8, sources);
+  assertRejected('Windows signing ownership pulled into AR-8', overlay, operator, windowsInAr8, sources);
 }
 
 const overlay = load(OVERLAY_PATH);
+const operator = load(OPERATOR_PATH);
 const canonical = load(CANONICAL_PATH);
 const sources = {
   encryptedGeneration: text(ENCRYPTED_GENERATION_PATH),
@@ -494,7 +535,7 @@ const sources = {
   adr6: text(ADR6_PATH),
 };
 
-const errors = validate(overlay, canonical, sources);
+const errors = validate(overlay, operator, canonical, sources);
 if (errors.length > 0) {
   for (const error of errors) {
     console.error(`ERROR: ${error}`);
@@ -503,7 +544,7 @@ if (errors.length > 0) {
 }
 
 if (process.argv.includes('--self-test')) {
-  selfTest(overlay, canonical, sources);
+  selfTest(overlay, operator, canonical, sources);
   console.log('AR-8 Camoufox/profile security authority and negative fixtures passed.');
 } else {
   console.log('AR-8 Camoufox/profile security authority passed.');
