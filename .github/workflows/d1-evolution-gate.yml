@@ -29,22 +29,33 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Emit exact generated AR-9 inventory candidate
+      - name: Emit exact generated AR-9 canonical projection candidates
         run: |
           set -euo pipefail
+          cp docs/status.json /tmp/ar9-status-before.json
+          cp architecture/architecture-rebaseline-v3-transition.json /tmp/ar9-transition-before.json
           cp architecture/inventory.json /tmp/ar9-inventory-before.json
+          python scripts/generate-ar8-completion-status.py --write
           python scripts/generate-architecture-inventory.py --write
           python - <<'PY'
           import base64
           from pathlib import Path
-          encoded = base64.b64encode(Path('architecture/inventory.json').read_bytes()).decode('ascii')
+          documents = {
+              'STATUS': Path('docs/status.json'),
+              'TRANSITION': Path('architecture/architecture-rebaseline-v3-transition.json'),
+              'INVENTORY': Path('architecture/inventory.json'),
+          }
           width = 4096
-          chunks = [encoded[index:index + width] for index in range(0, len(encoded), width)]
-          print(f'AR9_INVENTORY_B64_COUNT={len(chunks)}')
-          for index, chunk in enumerate(chunks, start=1):
-              print(f'AR9_INVENTORY_B64_{index:04d}={chunk}')
-          print('AR9_INVENTORY_B64_END=1')
+          for label, file_path in documents.items():
+              encoded = base64.b64encode(file_path.read_bytes()).decode('ascii')
+              chunks = [encoded[index:index + width] for index in range(0, len(encoded), width)]
+              print(f'AR9_{label}_B64_COUNT={len(chunks)}')
+              for index, chunk in enumerate(chunks, start=1):
+                  print(f'AR9_{label}_B64_{index:04d}={chunk}')
+              print(f'AR9_{label}_B64_END=1')
           PY
+          cp /tmp/ar9-status-before.json docs/status.json
+          cp /tmp/ar9-transition-before.json architecture/architecture-rebaseline-v3-transition.json
           cp /tmp/ar9-inventory-before.json architecture/inventory.json
 
       - name: Set up pinned Node and npm
