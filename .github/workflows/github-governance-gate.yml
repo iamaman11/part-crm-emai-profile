@@ -72,6 +72,12 @@ jobs:
       - name: Prove AR-8 completion credential lifecycle drift fails closed
         run: node .github/scripts/ar8-completion-lifecycle.mjs --self-test
 
+      - name: Validate AR-8F operator rehearsal authority
+        run: node .github/scripts/ar8-f-operator-rehearsal.mjs
+
+      - name: Prove AR-8F operator rehearsal drift fails closed
+        run: node .github/scripts/ar8-f-operator-rehearsal.mjs --self-test
+
   hosted-state:
     name: GitHub Governance Hosted State
     if: github.event_name != 'pull_request'
