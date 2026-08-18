@@ -283,7 +283,7 @@
       "evidence": [
         {
           "path": "scripts/check-opsctl-readonly.py",
-          "marker": "mutable command-surface negative fixture unexpectedly passed"
+          "marker": "mutable command-surface"
         }
       ]
     },
