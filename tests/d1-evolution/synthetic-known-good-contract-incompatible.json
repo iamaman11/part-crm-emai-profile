@@ -1,0 +1,10 @@
+{
+  "schema_contract": {
+    "database_component": "resolver",
+    "target_schema_revision": "0002_expand.sql",
+    "supported_schema_min": "0001_base.sql",
+    "supported_schema_max": "0003_backfill.sql",
+    "migration_history_digest": "synthetic-history-v1",
+    "compatibility_policy_digest": "synthetic-policy-known-good-incompatible"
+  }
+}
