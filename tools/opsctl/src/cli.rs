@@ -368,7 +368,14 @@ mod tests {
 
     #[test]
     fn rejects_mutation_commands() {
-        for command in ["deploy", "provision", "promote", "delete", "rotate", "migrate"] {
+        for command in [
+            "deploy",
+            "provision",
+            "promote",
+            "delete",
+            "rotate",
+            "migrate",
+        ] {
             assert!(parse_invocation(args(&["opsctl", command])).is_err());
         }
     }
