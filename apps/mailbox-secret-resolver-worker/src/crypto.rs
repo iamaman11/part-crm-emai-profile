@@ -568,7 +568,8 @@ mod tests {
 
     #[test]
     fn legacy_handle_hmac_secret_maps_to_version_one_only() -> Result<(), CryptoError> {
-        let keyring = HandleHmacKeyring::parse(&"legacy-handle-hmac-key-material-0123456789".repeat(2))?;
+        let keyring =
+            HandleHmacKeyring::parse(&"legacy-handle-hmac-key-material-0123456789".repeat(2))?;
         assert_eq!(keyring.active_version(), 1);
         assert_eq!(keyring.retained_versions(), vec![1]);
         assert!(keyring.legacy_serialization());
@@ -580,11 +581,17 @@ mod tests {
         let crypto = crypto_with_handle_keyring(2)?;
         let candidates = crypto.lookup_candidates("tenant_01", "secret_handle")?;
         assert_eq!(
-            candidates.iter().map(|candidate| candidate.version).collect::<Vec<_>>(),
+            candidates
+                .iter()
+                .map(|candidate| candidate.version)
+                .collect::<Vec<_>>(),
             vec![1, 2]
         );
         assert_eq!(crypto.active_lookup_hmac_version(), 2);
-        assert_eq!(crypto.lookup_digest("tenant_01", "secret_handle")?, candidates[1].digest);
+        assert_eq!(
+            crypto.lookup_digest("tenant_01", "secret_handle")?,
+            candidates[1].digest
+        );
         assert_ne!(candidates[0].digest, candidates[1].digest);
         Ok(())
     }
