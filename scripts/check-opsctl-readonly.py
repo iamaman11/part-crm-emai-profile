@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed if the AR-6 Rust opsctl grows mutable authority."""
+"""Fail closed if the Rust opsctl grows mutable authority."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ LIB = Path("tools/opsctl/src/lib.rs")
 MAIN = Path("tools/opsctl/src/main.rs")
 CARGO = Path("tools/opsctl/Cargo.toml")
 LOCK = Path("tools/opsctl/Cargo.lock")
-EXPECTED_COMMANDS = {"Doctor", "Status", "Inventory"}
-EXPECTED_PARSE_LITERALS = {"doctor", "status", "inventory"}
+EXPECTED_COMMANDS = {"Doctor", "Status", "Inventory", "CredentialLifecycle"}
+EXPECTED_PARSE_LITERALS = {"doctor", "status", "inventory", "credential-lifecycle"}
 FORBIDDEN_RUNTIME_MARKERS = (
     'Command::new("wrangler")',
     'Command::new("git")',
@@ -101,13 +101,15 @@ def validate_source(lib: str, main: str, cargo: str, lock: str) -> None:
         '"scripts/python-estate-ar6.py"',
         'canonical_json_document(&repo_root, "docs/status.json", "status")',
         'canonical_json_document(&repo_root, "architecture/inventory.json", "inventory")',
+        '"architecture/ar8-completion-lifecycle.json"',
+        '"credential-lifecycle"',
         '"mutation_executed\\\":false',
     ):
         if required not in lib:
             fail(f"opsctl lost required read-only marker: {required}")
 
     if "[dependencies]" in cargo or "[dev-dependencies]" in cargo or "[build-dependencies]" in cargo:
-        fail("AR-6 opsctl must remain dependency-free")
+        fail("opsctl must remain dependency-free")
     if '[workspace]' not in cargo or 'name = "opsctl"' not in cargo:
         fail("opsctl must remain a standalone Cargo workspace/package")
     if 'name = "opsctl"' not in lock or "version = 4" not in lock:
@@ -161,7 +163,11 @@ def self_test() -> None:
     else:
         fail("environment mutation capability negative fixture unexpectedly passed")
 
-    expanded = lib.replace("    Inventory,\n}", "    Inventory,\n    Deploy,\n}", 1)
+    expanded = lib.replace(
+        "    CredentialLifecycle,\n}",
+        "    CredentialLifecycle,\n    Deploy,\n}",
+        1,
+    )
     try:
         validate_source(expanded, main, cargo, lock)
     except GateError:
@@ -177,7 +183,7 @@ def self_test() -> None:
     else:
         fail("opsctl dependency negative fixture unexpectedly passed")
 
-    print("AR-6 opsctl capability, mutation and dependency negative fixtures rejected as expected.")
+    print("opsctl capability, mutation and dependency negative fixtures rejected as expected.")
 
 
 def main() -> int:
@@ -188,7 +194,7 @@ def main() -> int:
         self_test()
     else:
         validate()
-        print("AR-6 opsctl is dependency-free, typed and capability-bounded read-only.")
+        print("opsctl is dependency-free, typed and capability-bounded read-only.")
     return 0
 
 
@@ -196,5 +202,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except GateError as error:
-        print(f"AR-6 opsctl gate error: {error}", file=sys.stderr)
+        print(f"opsctl gate error: {error}", file=sys.stderr)
         raise SystemExit(1) from error

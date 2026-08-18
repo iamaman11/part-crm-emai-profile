@@ -8,13 +8,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const HELP: &str = "opsctl — project-specific read-only operations interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n\nCOMMANDS:\n    doctor      Validate canonical repository authorities\n    status      Print canonical docs/status.json\n    inventory   Print canonical architecture/inventory.json\n\nOPTIONS:\n    --root PATH  Explicit repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nAR-6 is intentionally read-only. No provider, database, secret, deployment, or customer-state mutation is exposed.\n";
+pub const HELP: &str = "opsctl — project-specific read-only operations interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n\nCOMMANDS:\n    doctor                Validate canonical repository authorities\n    status                Print canonical docs/status.json\n    inventory             Print canonical architecture/inventory.json\n    credential-lifecycle  Print canonical AR-8 credential lifecycle metadata\n\nOPTIONS:\n    --root PATH  Explicit repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nAR-8F keeps this interface read-only. No provider, database, secret, deployment, or customer-state mutation is exposed.\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadCommand {
     Doctor,
     Status,
     Inventory,
+    CredentialLifecycle,
 }
 
 impl ReadCommand {
@@ -24,6 +25,7 @@ impl ReadCommand {
             Self::Doctor => "doctor",
             Self::Status => "status",
             Self::Inventory => "inventory",
+            Self::CredentialLifecycle => "credential-lifecycle",
         }
     }
 }
@@ -120,9 +122,10 @@ fn parse_command(value: &str) -> Result<ReadCommand, OpsctlError> {
         "doctor" => Ok(ReadCommand::Doctor),
         "status" => Ok(ReadCommand::Status),
         "inventory" => Ok(ReadCommand::Inventory),
+        "credential-lifecycle" => Ok(ReadCommand::CredentialLifecycle),
         other => Err(OpsctlError::new(
             "parse",
-            format!("unsupported command {other:?}; AR-6 exposes doctor/status/inventory only"),
+            format!("unsupported command {other:?}; opsctl exposes read-only metadata commands only"),
         )),
     }
 }
@@ -141,6 +144,11 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                 ReadCommand::Inventory => {
                     canonical_json_document(&repo_root, "architecture/inventory.json", "inventory")
                 }
+                ReadCommand::CredentialLifecycle => canonical_json_document(
+                    &repo_root,
+                    "architecture/ar8-completion-lifecycle.json",
+                    "credential-lifecycle",
+                ),
             }
         }
     }
@@ -186,6 +194,9 @@ fn is_repo_root(path: &Path) -> bool {
         && path.join("architecture/inventory.json").is_file()
         && path.join("architecture/python-estate-ar6.json").is_file()
         && path
+            .join("architecture/ar8-completion-lifecycle.json")
+            .is_file()
+        && path
             .join("scripts/generate-architecture-inventory.py")
             .is_file()
         && path.join("scripts/python-estate-ar6.py").is_file()
@@ -217,6 +228,7 @@ fn doctor(root: &Path) -> Result<String, OpsctlError> {
         "docs/status.json",
         "architecture/inventory.json",
         "architecture/python-estate-ar6.json",
+        "architecture/ar8-completion-lifecycle.json",
         "scripts/generate-architecture-inventory.py",
         "scripts/python-estate-ar6.py",
     ] {
@@ -233,7 +245,7 @@ fn doctor(root: &Path) -> Result<String, OpsctlError> {
         &["--check"],
     )?;
     run_python_check(root, "scripts/python-estate-ar6.py", &["--check"])?;
-    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/python-estate-ar6.json\",\"docs/status.json\"]}\n".to_owned())
+    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/python-estate-ar6.json\",\"architecture/ar8-completion-lifecycle.json\",\"docs/status.json\"]}\n".to_owned())
 }
 
 fn run_python_check(root: &Path, script: &str, arguments: &[&str]) -> Result<(), OpsctlError> {
@@ -292,6 +304,7 @@ mod tests {
             ("doctor", ReadCommand::Doctor),
             ("status", ReadCommand::Status),
             ("inventory", ReadCommand::Inventory),
+            ("credential-lifecycle", ReadCommand::CredentialLifecycle),
         ] {
             assert_eq!(
                 parse_invocation(args(&["opsctl", name])),
