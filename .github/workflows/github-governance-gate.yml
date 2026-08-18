@@ -9,201 +9,327 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: post-ar8c-branch-classification-${{ github.event.pull_request.number }}
+  group: post-ar8c-branch-retirement-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
-  classify:
-    name: Classify AR-8C Scratch Branches
+  retire:
+    name: Retire Classified AR-8C Scratch Branches
     if: github.event.pull_request.head.ref == 'agent/post-ar8c-branch-retirement'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       ACCEPTED_MAIN: 6145ac6754d83cf1d3b5361a098c28a20a9222f7
       EXECUTOR_BRANCH: agent/post-ar8c-branch-retirement
+      SELF_EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout classifier branch
+      - name: Checkout exact executor head
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: agent/post-ar8c-branch-retirement
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
+          persist-credentials: false
 
-      - name: Verify exact accepted main and fetch its tree
+      - name: Verify exact accepted main and executor head
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SELF_EXPECTED_SHA"
           current_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
           test "$current_main" = "$ACCEPTED_MAIN"
           git fetch --no-tags --depth=1 origin "$ACCEPTED_MAIN"
 
-      - name: Classify exact AR-8C and post-AR-8C branch refs
+      - name: Validate classification, exception resolutions and live registry
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import json
           import os
-          import subprocess
           import urllib.parse
           import urllib.request
-          from collections import Counter
-          from datetime import datetime, timezone
           from pathlib import Path
 
           repo = os.environ['GITHUB_REPOSITORY']
-          owner, _ = repo.split('/', 1)
           token = os.environ['GH_TOKEN']
           accepted_main = os.environ['ACCEPTED_MAIN']
           executor_branch = os.environ['EXECUTOR_BRANCH']
+          self_sha = os.environ['SELF_EXPECTED_SHA']
           api = f'https://api.github.com/repos/{repo}'
+
+          classification = json.loads(Path('post-ar8c-branch-classification.json').read_text())
+          resolutions = json.loads(Path('post-ar8c-branch-review-resolutions.json').read_text())
+          if classification.get('schema_version') != 1 or classification.get('issue') != 352:
+              raise SystemExit('branch classification schema/issue drifted')
+          if classification.get('accepted_main') != accepted_main or classification.get('branch_count') != 36:
+              raise SystemExit('branch classification accepted-main/count drifted')
+          if classification.get('classification_counts') != {
+              'CLASSIFIER_SELF_KEEP_UNTIL_FINAL': 1,
+              'RETIRE_CONTAINED_IN_ACCEPTED_MAIN': 29,
+              'REVIEW_UNMERGED_NO_PRESERVED_PROVENANCE': 2,
+              'REVIEW_UNMERGED_REFERENCED_BY_ACCEPTED_MAIN': 4,
+          }:
+              raise SystemExit('branch classification counts drifted')
+          if resolutions.get('schema_version') != 1 or resolutions.get('issue') != 352 or resolutions.get('accepted_main') != accepted_main:
+              raise SystemExit('branch resolution schema/main drifted')
+
+          rows = classification['branches']
+          by_name = {row['branch']: row for row in rows}
+          if len(by_name) != 36:
+              raise SystemExit('branch classification contains duplicate names')
+          self_row = by_name.get(executor_branch)
+          if not self_row or self_row.get('classification') != 'CLASSIFIER_SELF_KEEP_UNTIL_FINAL':
+              raise SystemExit('classifier self row missing')
+
+          review_rows = {
+              row['branch']: row for row in rows
+              if str(row.get('classification', '')).startswith('REVIEW_')
+          }
+          resolution_by_name = {item['branch']: item for item in resolutions['resolutions']}
+          if set(review_rows) != set(resolution_by_name) or len(resolution_by_name) != 6:
+              raise SystemExit('review-resolution set does not exactly cover six reviewed branches')
+          for name, item in resolution_by_name.items():
+              if item.get('expected_head_sha') != review_rows[name].get('head_sha'):
+                  raise SystemExit(f'resolution SHA drifted for {name}')
+              if not str(item.get('decision', '')).startswith('RETIRE_'):
+                  raise SystemExit(f'non-retirement resolution for {name}')
+              if not item.get('basis'):
+                  raise SystemExit(f'missing resolution basis for {name}')
+
+          auto = [row for row in rows if row.get('delete_eligible') is True]
+          if len(auto) != 29 or any(row.get('classification') != 'RETIRE_CONTAINED_IN_ACCEPTED_MAIN' for row in auto):
+              raise SystemExit('automatic delete set must be exactly 29 contained branches')
+          delete_rows = auto + [review_rows[name] for name in sorted(review_rows)]
+          if len(delete_rows) != 35 or len({row['branch'] for row in delete_rows}) != 35:
+              raise SystemExit('delete allowlist must contain exactly 35 non-self branches')
 
           def get(url):
               req = urllib.request.Request(url, headers={
                   'Accept': 'application/vnd.github+json',
                   'Authorization': f'Bearer {token}',
-                  'User-Agent': 'post-ar8c-branch-classifier',
+                  'User-Agent': 'post-ar8c-branch-retirement',
                   'X-GitHub-Api-Version': '2022-11-28',
               })
               with urllib.request.urlopen(req, timeout=30) as response:
                   return json.load(response)
 
-          branches = []
+          # Fail closed if the permanent live Actions registry is not already in its
+          # 16-authority steady state before branch mutation.
+          policy = json.loads(__import__('subprocess').check_output(
+              ['git', 'show', f'{accepted_main}:architecture/github-actions-registry.json'], text=True
+          ))
+          expected_paths = {item['path'] for item in policy['active_registrations']}
+          if len(expected_paths) != 16:
+              raise SystemExit('canonical registry projection must contain 16 active paths')
+          workflows = []
           page = 1
           while True:
-              rows = get(f'{api}/branches?per_page=100&page={page}')
-              branches.extend(rows)
-              if len(rows) < 100:
+              payload = get(f'{api}/actions/workflows?per_page=100&page={page}')
+              batch = payload.get('workflows', [])
+              workflows.extend(batch)
+              if len(batch) < 100:
                   break
               page += 1
               if page > 100:
-                  raise SystemExit('branch pagination exceeded bound')
+                  raise SystemExit('workflow pagination exceeded bound')
+          active = [w for w in workflows if w.get('state') == 'active']
+          active_paths = [w.get('path') for w in active]
+          if len(active) != 16 or set(active_paths) != expected_paths or len(active_paths) != len(set(active_paths)):
+              raise SystemExit(f'live Actions registry not in 16-authority steady state: {active_paths}')
 
-          targets = sorted(
-              [b for b in branches if b['name'].startswith('agent/ar8c-') or b['name'].startswith('agent/post-ar8c-')],
-              key=lambda b: b['name'],
-          )
-          results = []
-          for branch in targets:
-              name = branch['name']
-              sha = branch['commit']['sha']
-              if name == executor_branch:
-                  results.append({
-                      'branch': name,
-                      'head_sha': sha,
-                      'classification': 'CLASSIFIER_SELF_KEEP_UNTIL_FINAL',
-                      'delete_eligible': False,
-                  })
-                  continue
+          # Preflight every exact ref before the first DELETE.
+          owner = repo.split('/', 1)[0]
+          for row in delete_rows:
+              name = row['branch']
+              expected_sha = row['head_sha']
+              ref = get(f'{api}/git/ref/heads/{urllib.parse.quote(name, safe="/")}')
+              observed = ref['object']['sha']
+              if observed != expected_sha:
+                  raise SystemExit(f'branch moved since classification: {name}: {observed} != {expected_sha}')
+              q = urllib.parse.urlencode({'state': 'open', 'head': f'{owner}:{name}', 'per_page': 100})
+              if get(f'{api}/pulls?{q}'):
+                  raise SystemExit(f'open PR appeared for retirement branch: {name}')
+              if row.get('classification') == 'RETIRE_CONTAINED_IN_ACCEPTED_MAIN':
+                  compare = get(f'{api}/compare/{expected_sha}...{accepted_main}')
+                  if compare.get('status') not in {'ahead', 'identical'} or compare.get('behind_by') != 0:
+                      raise SystemExit(f'contained branch no longer contained in accepted main: {name}')
 
-              compare = get(f'{api}/compare/{sha}...{accepted_main}')
-              contained = compare.get('status') in {'ahead', 'identical'} and compare.get('behind_by', 0) == 0
+          self_ref = get(f'{api}/git/ref/heads/{urllib.parse.quote(executor_branch, safe="/")}')
+          if self_ref['object']['sha'] != self_sha:
+              raise SystemExit('executor branch moved during preflight')
 
-              head_query = urllib.parse.urlencode({'state': 'all', 'head': f'{owner}:{name}', 'per_page': 100})
-              prs = get(f'{api}/pulls?{head_query}')
-              open_prs = [p['number'] for p in prs if p['state'] == 'open']
-              merged_prs = [p['number'] for p in prs if p.get('merged_at')]
-              closed_unmerged_prs = [p['number'] for p in prs if p['state'] == 'closed' and not p.get('merged_at')]
-
-              run_query = urllib.parse.urlencode({'branch': name, 'per_page': 100})
-              runs_payload = get(f'{api}/actions/runs?{run_query}')
-              runs = runs_payload.get('workflow_runs', [])
-              recent_runs = [
-                  {
-                      'id': run['id'],
-                      'workflow_id': run['workflow_id'],
-                      'name': run.get('name'),
-                      'event': run.get('event'),
-                      'head_sha': run.get('head_sha'),
-                      'status': run.get('status'),
-                      'conclusion': run.get('conclusion'),
-                      'created_at': run.get('created_at'),
-                  }
-                  for run in runs[:20]
-              ]
-
-              grep = subprocess.run(
-                  ['git', 'grep', '-F', '-n', name, accepted_main, '--', '.'],
-                  text=True,
-                  stdout=subprocess.PIPE,
-                  stderr=subprocess.PIPE,
-              )
-              if grep.returncode not in {0, 1}:
-                  raise SystemExit(f'git grep failed for {name}: {grep.stderr}')
-              references = []
-              for line in grep.stdout.splitlines():
-                  _, rest = line.split(':', 1)
-                  file_path, _, text = rest.partition(':')
-                  references.append({'path': file_path, 'text': text[:500]})
-
-              if open_prs:
-                  classification = 'KEEP_OPEN_PR'
-                  delete_eligible = False
-              elif contained:
-                  classification = 'RETIRE_CONTAINED_IN_ACCEPTED_MAIN'
-                  delete_eligible = True
-              elif references:
-                  classification = 'REVIEW_UNMERGED_REFERENCED_BY_ACCEPTED_MAIN'
-                  delete_eligible = False
-              elif recent_runs:
-                  classification = 'RETIRE_SCRATCH_ACTIONS_PROVENANCE_PRESERVED'
-                  delete_eligible = True
-              else:
-                  classification = 'REVIEW_UNMERGED_NO_PRESERVED_PROVENANCE'
-                  delete_eligible = False
-
-              results.append({
-                  'branch': name,
-                  'head_sha': sha,
-                  'contained_in_accepted_main': contained,
-                  'compare_status': compare.get('status'),
-                  'accepted_main_ahead_by': compare.get('ahead_by'),
-                  'accepted_main_behind_by': compare.get('behind_by'),
-                  'open_prs': open_prs,
-                  'merged_prs': merged_prs,
-                  'closed_unmerged_prs': closed_unmerged_prs,
-                  'accepted_main_references': references,
-                  'actions_run_count_reported': runs_payload.get('total_count'),
-                  'recent_runs': recent_runs,
-                  'classification': classification,
-                  'delete_eligible': delete_eligible,
-              })
-
-          counts = Counter(r['classification'] for r in results)
-          out = {
+          plan = {
               'schema_version': 1,
               'issue': 352,
               'accepted_main': accepted_main,
-              'captured_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
-              'prefix_scope': ['agent/ar8c-', 'agent/post-ar8c-'],
-              'branch_count': len(results),
-              'classification_counts': dict(sorted(counts.items())),
-              'branches': results,
+              'executor_branch': executor_branch,
+              'executor_head': self_sha,
+              'automatic_contained_count': 29,
+              'reviewed_exception_count': 6,
+              'non_self_delete_count': 35,
+              'self_delete_last': True,
+              'live_active_registry_count': 16,
+              'branches': [{'branch': r['branch'], 'expected_head_sha': r['head_sha'], 'basis': r['classification']} for r in sorted(delete_rows, key=lambda x: x['branch'])],
+              'review_resolutions': resolutions['resolutions'],
               'invariants': {
-                  'read_only_hosted_classification': True,
-                  'branch_deleted': False,
-                  'actions_run_deleted': False,
+                  'no_regex_deletion': True,
+                  'exact_sha_preflight': True,
+                  'open_pr_fail_closed': True,
+                  'actions_runs_deleted': False,
                   'production_mutation': False,
                   'provider_mutation': False,
                   'secret_readback': False,
               },
           }
-          Path('post-ar8c-branch-classification.json').write_text(json.dumps(out, indent=2) + '\n')
-          print(json.dumps({
-              'branch_count': out['branch_count'],
-              'classification_counts': out['classification_counts'],
-              'delete_eligible': sum(1 for r in results if r['delete_eligible']),
-              'review_required': [r['branch'] for r in results if r['classification'].startswith('REVIEW_')],
-          }, indent=2))
+          Path('/tmp/post-ar8c-branch-retirement-plan.json').write_text(json.dumps(plan, indent=2) + '\n')
+          print(json.dumps(plan, indent=2))
           PY
 
-      - name: Commit classification evidence to classifier branch only
+      - name: Delete only exact classified non-self refs
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add post-ar8c-branch-classification.json
-          git diff --cached --check
-          git commit -m 'cleanup: classify AR-8C temporary branch refs'
-          git push origin HEAD:agent/post-ar8c-branch-retirement
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          api = f'https://api.github.com/repos/{repo}'
+          plan = json.loads(Path('/tmp/post-ar8c-branch-retirement-plan.json').read_text())
+
+          def request(url, method='GET'):
+              req = urllib.request.Request(url, method=method, headers={
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': f'Bearer {token}',
+                  'User-Agent': 'post-ar8c-branch-retirement',
+                  'X-GitHub-Api-Version': '2022-11-28',
+              })
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      body = response.read()
+                      return response.status, json.loads(body) if body else None
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode(errors='replace')
+                  raise SystemExit(f'{method} {url} failed: HTTP {exc.code}: {body[:1000]}')
+
+          deleted = []
+          for item in plan['branches']:
+              name = item['branch']
+              expected_sha = item['expected_head_sha']
+              encoded = urllib.parse.quote(name, safe='/')
+              status, ref = request(f'{api}/git/ref/heads/{encoded}')
+              if status != 200 or ref['object']['sha'] != expected_sha:
+                  raise SystemExit(f'pre-delete SHA mismatch for {name}')
+              status, _ = request(f'{api}/git/refs/heads/{encoded}', method='DELETE')
+              if status != 204:
+                  raise SystemExit(f'unexpected delete status for {name}: {status}')
+              try:
+                  request(f'{api}/git/ref/heads/{encoded}')
+              except SystemExit as exc:
+                  if 'HTTP 404' not in str(exc):
+                      raise
+              else:
+                  raise SystemExit(f'deleted branch still resolves: {name}')
+              deleted.append({'branch': name, 'head_sha': expected_sha, 'deleted': True})
+              print(json.dumps(deleted[-1]))
+          if len(deleted) != 35:
+              raise SystemExit('expected exactly 35 non-self deletions')
+          Path('/tmp/post-ar8c-branch-retirement-results.json').write_text(json.dumps({'deleted': deleted}, indent=2) + '\n')
+          PY
+
+      - name: Verify steady state and delete executor branch last
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          accepted_main = os.environ['ACCEPTED_MAIN']
+          self_branch = os.environ['EXECUTOR_BRANCH']
+          self_sha = os.environ['SELF_EXPECTED_SHA']
+          api = f'https://api.github.com/repos/{repo}'
+
+          def req(url, method='GET', allow_404=False):
+              request = urllib.request.Request(url, method=method, headers={
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': f'Bearer {token}',
+                  'User-Agent': 'post-ar8c-branch-retirement',
+                  'X-GitHub-Api-Version': '2022-11-28',
+              })
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      body = response.read()
+                      return response.status, json.loads(body) if body else None
+              except urllib.error.HTTPError as exc:
+                  if allow_404 and exc.code == 404:
+                      return 404, None
+                  body = exc.read().decode(errors='replace')
+                  raise SystemExit(f'{method} {url} failed: HTTP {exc.code}: {body[:1000]}')
+
+          # Verify all 35 exact refs are gone.
+          results = json.loads(Path('/tmp/post-ar8c-branch-retirement-results.json').read_text())['deleted']
+          for item in results:
+              encoded = urllib.parse.quote(item['branch'], safe='/')
+              status, _ = req(f'{api}/git/ref/heads/{encoded}', allow_404=True)
+              if status != 404:
+                  raise SystemExit(f'branch unexpectedly remains after delete: {item["branch"]}')
+
+          # Ensure no other AR-8C/post-AR-8C branch appeared while mutating.
+          branches = []
+          page = 1
+          while True:
+              status, rows = req(f'{api}/branches?per_page=100&page={page}')
+              if status != 200:
+                  raise SystemExit('branch listing failed')
+              branches.extend(rows)
+              if len(rows) < 100:
+                  break
+              page += 1
+          scoped = [b['name'] for b in branches if b['name'].startswith('agent/ar8c-') or b['name'].startswith('agent/post-ar8c-')]
+          if scoped != [self_branch]:
+              raise SystemExit(f'unexpected scoped branches remain before self-delete: {scoped}')
+
+          current_main = next((b['commit']['sha'] for b in branches if b['name'] == 'main'), None)
+          if current_main != accepted_main:
+              raise SystemExit(f'main moved during branch retirement: {current_main}')
+
+          encoded_self = urllib.parse.quote(self_branch, safe='/')
+          status, self_ref = req(f'{api}/git/ref/heads/{encoded_self}')
+          if status != 200 or self_ref['object']['sha'] != self_sha:
+              raise SystemExit('executor branch SHA changed before final self-delete')
+
+          summary = {
+              'schema_version': 1,
+              'issue': 352,
+              'accepted_main': accepted_main,
+              'deleted_non_self': 35,
+              'self_branch': self_branch,
+              'self_head_sha': self_sha,
+              'self_delete_next': True,
+              'historical_actions_runs_deleted': False,
+              'production_mutation': False,
+              'provider_mutation': False,
+              'secret_readback': False,
+          }
+          print('FINAL_PRE_SELF_DELETE=' + json.dumps(summary, sort_keys=True))
+          status, _ = req(f'{api}/git/refs/heads/{encoded_self}', method='DELETE')
+          if status != 204:
+              raise SystemExit(f'unexpected self-delete status: {status}')
+          status, _ = req(f'{api}/git/ref/heads/{encoded_self}', allow_404=True)
+          if status != 404:
+              raise SystemExit('executor branch still resolves after self-delete')
+          print('FINAL_BRANCH_RETIREMENT=success; deleted=36; historical_actions_runs_deleted=false; production_mutation=false; provider_mutation=false; secret_readback=false')
+          PY
