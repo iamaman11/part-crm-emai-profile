@@ -156,10 +156,8 @@ mod tests {
             .is_err()
         );
         assert!(
-            parse_contact_protection_keyring(
-                "{\"encryption\":[],\"lookup\":[]}".to_owned()
-            )
-            .is_err()
+            parse_contact_protection_keyring("{\"encryption\":[],\"lookup\":[]}".to_owned())
+                .is_err()
         );
         let missing_active = format!(
             "{{\"activeEncryptionVersion\":3,\"activeLookupVersion\":1,\"encryption\":[{{\"version\":2,\"keyHex\":\"{}\"}}],\"lookup\":[{{\"version\":1,\"keyHex\":\"{}\"}}]}}",
