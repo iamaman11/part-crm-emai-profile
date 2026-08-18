@@ -164,7 +164,7 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: true
 
       - name: Execute staged source and compatibility steps
@@ -224,7 +224,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git checkout origin/main -- .github/workflows/github-governance-gate.yml
+          git fetch --no-tags --depth=1 origin main
+          git checkout FETCH_HEAD -- .github/workflows/github-governance-gate.yml
           rm .github/workflows/ar8-accepted-checkpoint-materializer.yml
           rm .github/workflows/ar8-checkpoint-push-bootstrap.yml
           git config user.name github-actions[bot]
