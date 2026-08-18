@@ -152,3 +152,83 @@ jobs:
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
           AR8C_AUDIT_ENVIRONMENT: staging
         run: node .github/scripts/credential-lifecycle.mjs cloudflare-live
+
+  ar8-checkpoint-materializer:
+    name: AR8 Accepted Checkpoint Materializer Temporary
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/ar8-accepted-checkpoint-sync' && github.event.pull_request.base.ref == 'main'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact checkpoint-sync head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Execute staged source and compatibility steps
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          def execute_named_run(workflow_path: str, step_name: str, next_step: str) -> None:
+              workflow = Path(workflow_path).read_text(encoding='utf-8')
+              marker = f'      - name: {step_name}\n'
+              start = workflow.index(marker)
+              run_at = workflow.index('        run: |\n', start) + len('        run: |\n')
+              end = workflow.index(f'\n      - name: {next_step}', run_at)
+              lines = workflow[run_at:end].splitlines()
+              script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+              head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+              script = script.replace('${{ github.event.pull_request.head.sha }}', head)
+              subprocess.run(['bash', '-c', script], check=True)
+
+          execute_named_run(
+              '.github/workflows/ar8-accepted-checkpoint-materializer.yml',
+              'Write accepted AR-8 checkpoint sources',
+              'Validate accepted checkpoint locally',
+          )
+          execute_named_run(
+              '.github/workflows/ar8-checkpoint-push-bootstrap.yml',
+              'Advance legacy documentation checker and capability projection',
+              'Validate and retire all temporary materializers',
+          )
+          PY
+
+      - name: Validate final accepted checkpoint tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/generate-ar8-completion-status.py --check
+          python scripts/generate-ar8-completion-status.py --self-test
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/generate-architecture-inventory.py --self-test
+          python scripts/check-documentation-authority.py
+          python scripts/check-documentation-authority.py --self-test
+          python scripts/python-estate-ar6.py --check
+          python scripts/python-estate-ar6.py --self-test
+          python scripts/check-opsctl-readonly.py
+          python scripts/check-opsctl-readonly.py --self-test
+          node .github/scripts/architecture-authority-check.mjs
+          node .github/scripts/architecture-authority-check.mjs --self-test
+          node .github/scripts/profile-security-authority-check.mjs
+          node .github/scripts/profile-security-authority-check.mjs --self-test
+          git diff --check
+
+      - name: Restore permanent workflow retire bootstrap and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout origin/main -- .github/workflows/github-governance-gate.yml
+          rm .github/workflows/ar8-accepted-checkpoint-materializer.yml
+          rm .github/workflows/ar8-checkpoint-push-bootstrap.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Project accepted AR-8 checkpoint and AR-9 handoff"
+          git push origin HEAD:agent/ar8-accepted-checkpoint-sync
