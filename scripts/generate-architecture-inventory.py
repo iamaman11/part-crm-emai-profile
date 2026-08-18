@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate canonical inventory with current subject-domain AR-8 completion projection."""
+"""Generate canonical inventory after accepted AR-8 and hand off to AR-9."""
 
 from __future__ import annotations
 
@@ -29,24 +29,40 @@ engine = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(engine)
 legacy_delivery_map = engine.current_delivery_map
 legacy_progress = engine.expected_ar8_progress
+engine.CURRENT_SLICE = "AR-9"
+engine.NEXT_SLICE = "AR-10"
+engine.CURRENT_DELIVERY_CHECKPOINT = "AR-8"
+engine.AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"]
+engine.AR8_CURRENT_SUBSLICE = None
+engine.AR8D_IMPLEMENTATION_ISSUE = None
+engine.AR8_MANDATORY_REMAINING = []
+engine.AR8_IMPLEMENTATION_ENTRY_GATE = "AR8_ACCEPTED_MAIN_AR9_CURRENT"
+if "AR-8" not in engine.ACCEPTED_SLICES:
+    engine.ACCEPTED_SLICES = [*engine.ACCEPTED_SLICES, "AR-8"]
 
 
 def completion_delivery_map() -> dict[str, object]:
     value = legacy_delivery_map()
-    value["current_work"] = "AR-8_COMPLETION_CANDIDATE"
+    value["accepted_checkpoint"] = "AR-8"
+    value["current_work"] = "AR-9"
     value["source_implemented"] = {
-        "status": "COMPLETE_CANDIDATE",
-        "through": "AR-8F",
-        "current_subslice": "AR-8_COMPLETION",
-        "current_subslice_source": "PR_362_NOT_ACCEPTED_MAIN",
+        "status": "ACCEPTED",
+        "through": "AR-8",
+        "current_subslice": "AR-9",
+        "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR8_CLOSEOUT",
     }
-    value["accepted_on_main"] = {"status": "PARTIAL", "through": "AR-8C", "full_ar8_accepted": False}
-    value["current_blocker"] = {"issue": 361, "status": "FINAL_ACCEPTANCE_PENDING", "blocks": "AR-9"}
-    value["next_gate"] = {"id": "AR-8_FINAL_ACCEPTANCE", "issue": 361, "on_success": "ACCEPTED_MAIN_REREAD_THEN_AR9"}
+    value["accepted_on_main"] = {
+        "status": "COMPLETE",
+        "through": "AR-8",
+        "full_ar8_accepted": True,
+        "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
+    }
+    value["current_blocker"] = {"issue": None, "status": "NONE", "blocks": "NONE"}
+    value["next_gate"] = {"id": "AR-9_ACCEPTANCE", "issue": None, "on_success": "AR-10_BECOMES_CURRENT"}
     value["invariants"].update({
         "source_present_not_equal_production_enabled": True,
-        "full_ar8_accepted": False,
-        "ar9_blocked": True,
+        "full_ar8_accepted": True,
+        "ar9_blocked": False,
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
         "production_ready": False,
@@ -58,17 +74,23 @@ def completion_delivery_map() -> dict[str, object]:
 def completion_progress() -> dict[str, object]:
     value = legacy_progress()
     value.update({
-        "accepted_subslices": ["AR-8A", "AR-8B", "AR-8C"],
-        "current_subslice": "AR-8_COMPLETION",
-        "current_implementation_issue": 361,
+        "accepted_subslices": ["AR-8A", "AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"],
+        "current_subslice": None,
+        "current_implementation_issue": None,
         "mandatory_remaining": [],
-        "implementation_entry_gate": "AR8_COMPLETION_PR_362_FINAL_ACCEPTANCE",
-        "full_ar8_accepted": False,
-        "ar9_blocked": True,
+        "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
+        "full_ar8_accepted": True,
+        "ar9_blocked": False,
         "production_mutation": False,
-        "source_complete_candidate": True,
+        "source_complete_candidate": False,
         "completion_pr": 362,
         "implemented_through": "AR-8F",
+        "accepted_top_level_slice": "AR-8",
+        "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+        "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+        "applicable_permanent_workflows": "14/14",
+        "accepted_main_reread": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+        "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
     })
     return value
 
@@ -120,15 +142,19 @@ def subject_projection() -> dict[str, object]:
             "secret_transport_successor_candidate": "docs/evidence/ar8-d-secret-transport-successor-candidate.json",
         },
         "source_completion": {
-            "tracking_issue": 361,
-            "completion_pr": 362,
-            "implemented_through": "AR-8F",
-            "state": "FINAL_ACCEPTANCE_PENDING",
-            "accepted_main_through": "AR-8C",
-            "full_ar8_accepted": False,
-            "ar9_blocked": True,
-            "production_mutation": False,
-        },
+        "tracking_issue": 361,
+        "umbrella_issue": 308,
+        "completion_pr": 362,
+        "implemented_through": "AR-8F",
+        "state": "ACCEPTED_MAIN",
+        "accepted_main_through": "AR-8",
+        "full_ar8_accepted": True,
+        "ar9_blocked": False,
+        "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+        "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+        "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
+        "production_mutation": False,
+    },
     }
 
 
@@ -143,6 +169,7 @@ def build_inventory() -> dict[str, object]:
     documentation["profile_security"] = SUBJECTS["profile_security"]
     documentation["ar8_completion_tracking_issue"] = 361
     documentation["ar8_completion_pr"] = 362
+    documentation["ar8_acceptance_evidence"] = "docs/evidence/2026-08-18-ar8-final-acceptance.json"
     return expected
 
 
@@ -184,12 +211,12 @@ def main() -> int:
     expected = build_inventory()
     if args.write:
         INVENTORY_PATH.write_text(serialized(expected), encoding="utf-8", newline="\n")
-        print("Wrote architecture/inventory.json with current subject-domain AR-8 completion projection.")
+        print("Wrote architecture/inventory.json with accepted AR-8 and AR-9 handoff projection.")
     elif args.check:
         check_current(expected)
         engine.validate_full_documentation_authority()
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--check"])
-        print("Architecture inventory projects current subject-domain authorities while accepted-main/AR-9/production remain blocked.")
+        print("Architecture inventory projects accepted AR-8 subject-domain authorities; AR-9 is current while production remains blocked.")
     else:
         engine.self_test(expected)
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--self-test"])

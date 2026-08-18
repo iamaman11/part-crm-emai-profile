@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "status": "ACCEPTED_AR8",
+  "program": "Architecture Re-baseline v3",
+  "umbrella_issue": 308,
+  "completion_issue": 361,
+  "implementation_pr": 362,
+  "accepted_base": "9635ef21aafa0e2ff04551ef4cecf9497cbc87d5",
+  "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+  "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+  "applicable_permanent_workflows": "14/14",
+  "behind_by": 0,
+  "blocking_reviews": 0,
+  "unresolved_review_threads": 0,
+  "accepted_main_reread": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+  "accepted_subslices": [
+    "AR-8A",
+    "AR-8B",
+    "AR-8C",
+    "AR-8D",
+    "AR-8E",
+    "AR-8F"
+  ],
+  "subject_domain_authorities": [
+    "architecture/credential-authority.json",
+    "architecture/credential-lifecycle.json",
+    "architecture/profile-security.json",
+    "architecture/operator-contract.json"
+  ],
+  "proxy_raw_handle_repository_occurrences_at_final_candidate": 0,
+  "next_slice": "AR-9",
+  "architecture_complete": false,
+  "production_core_gate": "BLOCKED",
+  "production_ready": false,
+  "production_mutation": false,
+  "terraform": false
+}

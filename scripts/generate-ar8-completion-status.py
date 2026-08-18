@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministically project pre-acceptance AR-8 completion into status and transition authorities."""
+"""Deterministically project accepted AR-8 and AR-9 handoff into canonical status authorities."""
 
 from __future__ import annotations
 
@@ -14,22 +14,31 @@ BASE_STATUS = ROOT / "history/status-ar8c-before-ar8-completion.json"
 BASE_TRANSITION = ROOT / "history/architecture-rebaseline-v3-transition-before-ar8-completion.json"
 STATUS = ROOT / "docs/status.json"
 TRANSITION = ROOT / "architecture/architecture-rebaseline-v3-transition.json"
+ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-18-ar8-final-acceptance.json"
+EXACT_GREEN_HEAD = "81d1f0c26ff0bd3a688c2d5dc000b93640479e47"
+IMPLEMENTATION_MERGE = "874666f6ef6eb003425c9677d558378d6dc0daaf"
 
 
 def progress(*, projection_fields: bool) -> dict[str, object]:
     value: dict[str, object] = {
         "umbrella_issue": 308,
-        "accepted_subslices": ["AR-8A", "AR-8B", "AR-8C"],
-        "current_subslice": "AR-8_COMPLETION",
-        "current_implementation_issue": 361,
+        "accepted_subslices": ["AR-8A", "AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"],
+        "current_subslice": None,
+        "current_implementation_issue": None,
         "mandatory_remaining": [],
-        "full_ar8_accepted": False,
-        "ar9_blocked": True,
+        "full_ar8_accepted": True,
+        "ar9_blocked": False,
         "production_mutation": False,
-        "implementation_entry_gate": "AR8_COMPLETION_PR_362_FINAL_ACCEPTANCE",
-        "source_complete_candidate": True,
+        "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
+        "source_complete_candidate": False,
         "completion_pr": 362,
         "implemented_through": "AR-8F",
+        "accepted_top_level_slice": "AR-8",
+        "exact_green_head": EXACT_GREEN_HEAD,
+        "implementation_merge": IMPLEMENTATION_MERGE,
+        "applicable_permanent_workflows": "14/14",
+        "accepted_main_reread": IMPLEMENTATION_MERGE,
+        "acceptance_evidence": ACCEPTANCE_EVIDENCE,
     }
     if projection_fields:
         value.update({
@@ -42,20 +51,30 @@ def progress(*, projection_fields: bool) -> dict[str, object]:
 
 def delivery_map(base: dict[str, object]) -> dict[str, object]:
     value = copy.deepcopy(base)
-    value["current_work"] = "AR-8_COMPLETION_CANDIDATE"
+    value["accepted_checkpoint"] = "AR-8"
+    value["current_work"] = "AR-9"
     value["source_implemented"] = {
-        "status": "COMPLETE_CANDIDATE",
-        "through": "AR-8F",
-        "current_subslice": "AR-8_COMPLETION",
-        "current_subslice_source": "PR_362_NOT_ACCEPTED_MAIN",
+        "status": "ACCEPTED",
+        "through": "AR-8",
+        "current_subslice": "AR-9",
+        "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR8_CLOSEOUT",
     }
-    value["accepted_on_main"] = {"status": "PARTIAL", "through": "AR-8C", "full_ar8_accepted": False}
-    value["current_blocker"] = {"issue": 361, "status": "FINAL_ACCEPTANCE_PENDING", "blocks": "AR-9"}
-    value["next_gate"] = {"id": "AR-8_FINAL_ACCEPTANCE", "issue": 361, "on_success": "ACCEPTED_MAIN_REREAD_THEN_AR9"}
+    value["accepted_on_main"] = {
+        "status": "COMPLETE",
+        "through": "AR-8",
+        "full_ar8_accepted": True,
+        "acceptance_evidence": ACCEPTANCE_EVIDENCE,
+    }
+    value["current_blocker"] = {"issue": None, "status": "NONE", "blocks": "NONE"}
+    value["next_gate"] = {
+        "id": "AR-9_ACCEPTANCE",
+        "issue": None,
+        "on_success": "AR-10_BECOMES_CURRENT",
+    }
     value["invariants"].update({
         "source_present_not_equal_production_enabled": True,
-        "full_ar8_accepted": False,
-        "ar9_blocked": True,
+        "full_ar8_accepted": True,
+        "ar9_blocked": False,
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
         "production_ready": False,
@@ -64,11 +83,37 @@ def delivery_map(base: dict[str, object]) -> dict[str, object]:
     return value
 
 
+def acceptance() -> dict[str, object]:
+    return {
+        "issue": 361,
+        "umbrella_issue": 308,
+        "implementation_pr": 362,
+        "exact_green_head": EXACT_GREEN_HEAD,
+        "implementation_merge": IMPLEMENTATION_MERGE,
+        "applicable_permanent_workflows": "14/14",
+        "behind_by": 0,
+        "blocking_reviews": 0,
+        "unresolved_review_threads": 0,
+        "accepted_main_reread": IMPLEMENTATION_MERGE,
+        "evidence": ACCEPTANCE_EVIDENCE,
+        "metadata_only": True,
+        "production_mutation": False,
+    }
+
+
 def project_status() -> dict[str, object]:
     payload = json.loads(BASE_STATUS.read_text(encoding="utf-8"))
     current = payload["current"]
-    current["architecture_program"]["ar8_progress"] = progress(projection_fields=False)
-    current["architecture_program"]["subject_domain_authorities"] = {
+    program = current["architecture_program"]
+    accepted_slices = list(program.get("accepted_slices", []))
+    if "AR-8" not in accepted_slices:
+        accepted_slices.append("AR-8")
+    program["accepted_slices"] = accepted_slices
+    program["current_slice"] = "AR-9"
+    program["next_slice_after_acceptance"] = "AR-10"
+    program["ar8_progress"] = progress(projection_fields=False)
+    program["ar8_acceptance"] = acceptance()
+    program["subject_domain_authorities"] = {
         "credential_authority": "architecture/credential-authority.json",
         "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
         "credential_lifecycle": "architecture/credential-lifecycle.json",
@@ -79,32 +124,37 @@ def project_status() -> dict[str, object]:
     current["current_delivery_map"] = delivery_map(current["current_delivery_map"])
     current["architecture_complete"] = False
     current["production_core_gate"] = "BLOCKED"
-    step = current.get("next_repository_step", {})
-    step.update({
-        "name": "AR-8 completion closeout",
-        "status": "final_acceptance_pending",
+    current["next_repository_step"] = {
+        "name": "AR-9 — D1 Evolution / Schema Compatibility",
+        "status": "current",
         "tracking_issue": 266,
-        "umbrella_issue": 308,
-        "implementation_issue": 361,
         "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
-    })
-    current["next_repository_step"] = step
+        "previous_acceptance_evidence": ACCEPTANCE_EVIDENCE,
+    }
+    payload["production_ready"] = False
     payload["as_of"] = "2026-08-18"
     return payload
 
 
 def project_transition() -> dict[str, object]:
     payload = json.loads(BASE_TRANSITION.read_text(encoding="utf-8"))
-    payload["status"] = "ACTIVE_DURING_AR8_COMPLETION_CANDIDATE"
+    payload["status"] = "ACTIVE_AFTER_AR8_ACCEPTANCE"
+    payload["current_slice"] = "AR-9"
+    payload["next_slice_after_acceptance"] = "AR-10"
+    accepted_slices = list(payload.get("accepted_slices", []))
+    if "AR-8" not in accepted_slices:
+        accepted_slices.append("AR-8")
+    payload["accepted_slices"] = accepted_slices
     payload["ar8_progress"] = progress(projection_fields=True)
+    payload["ar8_acceptance"] = acceptance()
     payload["current_delivery_map"] = delivery_map(payload["current_delivery_map"])
     policy = payload["architecture_inventory_policy"]
     policy["ar8_current_subject_projection"] = "architecture/inventory.json::subject_domain_authorities"
     policy["ar8_current_composition_root"] = "architecture/credential-authority.json"
     policy["ar8b_registry_role"] = "IMMUTABLE_ACCEPTED_PROVENANCE_DATASET"
     app = payload.get("application_architecture", {})
-    app["program_handoff_status"] = "AR8_COMPLETION_CANDIDATE"
-    app["program_next_required_subslice"] = "AR-8_FINAL_ACCEPTANCE"
+    app["program_handoff_status"] = "AR8_ACCEPTED_AR9_CURRENT"
+    app["program_next_required_subslice"] = "AR-9"
     return payload
 
 
@@ -114,18 +164,20 @@ def serialized(payload: object) -> str:
 
 def validate(status: dict[str, object], transition: dict[str, object]) -> None:
     current = status["current"]
-    candidate = current["architecture_program"]["ar8_progress"]
-    if candidate != progress(projection_fields=False):
-        raise ValueError("docs/status.json AR-8 completion progress drifted")
+    program = current["architecture_program"]
+    if program.get("current_slice") != "AR-9" or "AR-8" not in program.get("accepted_slices", []):
+        raise ValueError("program must advance to AR-9 only after accepted AR-8")
+    if program.get("ar8_progress") != progress(projection_fields=False):
+        raise ValueError("docs/status.json accepted AR-8 progress drifted")
     if transition.get("ar8_progress") != progress(projection_fields=True):
-        raise ValueError("architecture transition AR-8 completion progress drifted")
+        raise ValueError("architecture transition accepted AR-8 progress drifted")
     expected_delivery = current["current_delivery_map"]
     if expected_delivery != transition.get("current_delivery_map"):
         raise ValueError("status and transition CURRENT_DELIVERY_MAP projections must match exactly")
     invariants = expected_delivery.get("invariants", {})
     required = {
-        "full_ar8_accepted": False,
-        "ar9_blocked": True,
+        "full_ar8_accepted": True,
+        "ar9_blocked": False,
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
         "production_ready": False,
@@ -134,8 +186,10 @@ def validate(status: dict[str, object], transition: dict[str, object]) -> None:
     for key, wanted in required.items():
         if invariants.get(key) != wanted:
             raise ValueError(f"CURRENT_DELIVERY_MAP invariant {key} drifted")
-    if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED" or status.get("production_ready") is not False:
-        raise ValueError("accepted-main/production gates must remain fail-closed")
+    if current.get("architecture_complete") is not False:
+        raise ValueError("architecture must remain incomplete after AR-8")
+    if current.get("production_core_gate") != "BLOCKED" or status.get("production_ready") is not False:
+        raise ValueError("production gates must remain fail-closed after AR-8")
 
 
 def main() -> int:
@@ -151,23 +205,23 @@ def main() -> int:
     if args.write:
         STATUS.write_text(serialized(expected_status), encoding="utf-8", newline="\n")
         TRANSITION.write_text(serialized(expected_transition), encoding="utf-8", newline="\n")
-        print("Wrote AR-8 completion candidate status and transition projections.")
+        print("Wrote accepted AR-8 status/transition and AR-9 handoff projections.")
     elif args.check:
         actual_status = json.loads(STATUS.read_text(encoding="utf-8"))
         actual_transition = json.loads(TRANSITION.read_text(encoding="utf-8"))
         validate(actual_status, actual_transition)
         if actual_status != expected_status or actual_transition != expected_transition:
-            raise SystemExit("AR-8 completion status/transition projections are stale; run --write")
-        print("AR-8 source-complete status/transition are current while accepted-main, AR-9 and production remain blocked.")
+            raise SystemExit("accepted AR-8 status/transition projections are stale; run --write")
+        print("AR-8 accepted-main status/transition are current; AR-9 is current while production remains blocked.")
     else:
         negative = copy.deepcopy(expected_status)
-        negative["current"]["current_delivery_map"]["invariants"]["ar9_blocked"] = False
+        negative["current"]["current_delivery_map"]["invariants"]["production_core_gate"] = "AUTHORIZED"
         try:
             validate(negative, expected_transition)
         except ValueError:
-            print("AR-8 completion status/transition negative fixture rejected as expected.")
+            print("Post-AR-8 premature production authorization fixture rejected as expected.")
         else:
-            raise SystemExit("premature AR-9 unblock negative fixture unexpectedly passed")
+            raise SystemExit("premature production authorization negative fixture unexpectedly passed")
     return 0
 
 
@@ -175,5 +229,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-        print(f"AR-8 completion projection failed: {error}", file=sys.stderr)
+        print(f"AR-8 accepted checkpoint projection failed: {error}", file=sys.stderr)
         raise SystemExit(1) from error
