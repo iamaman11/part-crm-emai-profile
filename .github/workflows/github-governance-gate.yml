@@ -86,6 +86,13 @@ jobs:
           legacy_path.write_text(legacy_text, encoding='utf-8', newline='\n')
           PY
 
+      - name: Restore permanent governance before validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main
+          git checkout FETCH_HEAD -- .github/workflows/github-governance-gate.yml
+
       - name: Validate final accepted checkpoint tree
         shell: bash
         run: |
@@ -106,14 +113,12 @@ jobs:
           node .github/scripts/profile-security-authority-check.mjs --self-test
           git diff --check
 
-      - name: Restore permanent governance and commit checkpoint
+      - name: Commit accepted checkpoint and retire temporary materializers
         shell: bash
         env:
           GH_PUSH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin main
-          git checkout FETCH_HEAD -- .github/workflows/github-governance-gate.yml
           rm .github/workflows/ar8-accepted-checkpoint-materializer.yml
           rm .github/workflows/ar8-checkpoint-push-bootstrap.yml
           git config user.name github-actions[bot]
