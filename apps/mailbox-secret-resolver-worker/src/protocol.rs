@@ -1,7 +1,7 @@
 use crate::model::MAX_CLOCK_SKEW_MS;
-use control_plane_contract::resolver_service_auth::canonical_signature_input;
-pub use control_plane_contract::resolver_service_auth::{
-    KEYED_SIGNATURE_VERSION, LEGACY_SIGNATURE_VERSION,
+use control_plane_contract::resolver_service_auth::{
+    KEYED_SIGNATURE_VERSION, LEGACY_SIGNATURE_VERSION, ServiceAuthCanonicalInput,
+    canonical_signature_input,
 };
 use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
 use sha2::{Digest, Sha256};
@@ -43,17 +43,16 @@ pub fn sign_hex_versioned(
 ) -> Result<String, SignatureError> {
     validate_metadata(input)?;
     let digest = body_digest_hex(input.body);
-    let canonical = canonical_signature_input(
-        version,
-        key_id,
-        input.method,
-        input.path,
-        &digest,
-        input.tenant_id,
-        input.timestamp_ms,
-        input.nonce,
-    )
-    .map_err(|_| SignatureError::InvalidMetadata)?;
+    let canonical_input = ServiceAuthCanonicalInput {
+        method: input.method,
+        path: input.path,
+        body_digest: &digest,
+        tenant_id: input.tenant_id,
+        timestamp_ms: input.timestamp_ms,
+        nonce: input.nonce,
+    };
+    let canonical = canonical_signature_input(version, key_id, &canonical_input)
+        .map_err(|_| SignatureError::InvalidMetadata)?;
     let mut mac = <HmacSha256 as HmacKeyInit>::new_from_slice(secret)
         .map_err(|_| SignatureError::InvalidSignature)?;
     mac.update(canonical.as_bytes());

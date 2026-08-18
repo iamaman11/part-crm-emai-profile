@@ -47,6 +47,16 @@ impl ServiceAuthSigningKey<'_> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceAuthCanonicalInput<'a> {
+    pub method: &'a str,
+    pub path: &'a str,
+    pub body_digest: &'a str,
+    pub tenant_id: &'a str,
+    pub timestamp_ms: u64,
+    pub nonce: &'a str,
+}
+
 impl ServiceAuthKeyring {
     pub fn parse(serialized: &str) -> Result<Self, ServiceAuthContractError> {
         if serialized.trim_start().starts_with('{') {
@@ -197,19 +207,26 @@ impl Drop for ServiceAuthKeySecret {
 pub fn canonical_signature_input(
     version: &str,
     key_id: Option<&str>,
-    method: &str,
-    path: &str,
-    body_digest: &str,
-    tenant_id: &str,
-    timestamp_ms: u64,
-    nonce: &str,
+    input: &ServiceAuthCanonicalInput<'_>,
 ) -> Result<String, ServiceAuthContractError> {
     match (version, key_id) {
         (LEGACY_SIGNATURE_VERSION, None) => Ok(format!(
-            "{LEGACY_SIGNATURE_VERSION}\n{method}\n{path}\n{body_digest}\n{tenant_id}\n{timestamp_ms}\n{nonce}"
+            "{LEGACY_SIGNATURE_VERSION}\n{}\n{}\n{}\n{}\n{}\n{}",
+            input.method,
+            input.path,
+            input.body_digest,
+            input.tenant_id,
+            input.timestamp_ms,
+            input.nonce
         )),
         (KEYED_SIGNATURE_VERSION, Some(key_id)) if valid_key_id(key_id) => Ok(format!(
-            "{KEYED_SIGNATURE_VERSION}\n{key_id}\n{method}\n{path}\n{body_digest}\n{tenant_id}\n{timestamp_ms}\n{nonce}"
+            "{KEYED_SIGNATURE_VERSION}\n{key_id}\n{}\n{}\n{}\n{}\n{}\n{}",
+            input.method,
+            input.path,
+            input.body_digest,
+            input.tenant_id,
+            input.timestamp_ms,
+            input.nonce
         )),
         _ => Err(ServiceAuthContractError),
     }
@@ -255,8 +272,9 @@ const fn hex_nibble(value: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        KEYED_SIGNATURE_VERSION, LEGACY_KEY_ID, LEGACY_SIGNATURE_VERSION, ServiceAuthContractError,
-        ServiceAuthKeyring, canonical_signature_input,
+        KEYED_SIGNATURE_VERSION, LEGACY_KEY_ID, LEGACY_SIGNATURE_VERSION,
+        ServiceAuthCanonicalInput, ServiceAuthContractError, ServiceAuthKeyring,
+        canonical_signature_input,
     };
 
     fn migrated_keyring() -> String {
@@ -265,6 +283,17 @@ mod tests {
             "11".repeat(32),
             "22".repeat(32),
         )
+    }
+
+    fn canonical_input<'a>(body_digest: &'a str) -> ServiceAuthCanonicalInput<'a> {
+        ServiceAuthCanonicalInput {
+            method: "POST",
+            path: "/v1/mailbox-credentials/resolve",
+            body_digest,
+            tenant_id: "tenant_01",
+            timestamp_ms: 100,
+            nonce: "00112233445566778899aabbccddeeff",
+        }
     }
 
     #[test]
@@ -324,16 +353,12 @@ mod tests {
         );
         assert!(ServiceAuthKeyring::parse(&duplicate).is_err());
         assert!(ServiceAuthKeyring::parse("{\"activeKeyId\":\"missing\",\"keys\":[]}").is_err());
+        let body_digest = "a".repeat(64);
         assert!(
             canonical_signature_input(
                 KEYED_SIGNATURE_VERSION,
                 Some("bad key id"),
-                "POST",
-                "/v1/mailbox-credentials/resolve",
-                &"a".repeat(64),
-                "tenant_01",
-                100,
-                "00112233445566778899aabbccddeeff",
+                &canonical_input(&body_digest),
             )
             .is_err()
         );
@@ -341,25 +366,13 @@ mod tests {
 
     #[test]
     fn canonical_v1_and_v2_are_version_bound() -> Result<(), ServiceAuthContractError> {
-        let legacy = canonical_signature_input(
-            LEGACY_SIGNATURE_VERSION,
-            None,
-            "POST",
-            "/v1/mailbox-credentials/resolve",
-            &"a".repeat(64),
-            "tenant_01",
-            100,
-            "00112233445566778899aabbccddeeff",
-        )?;
+        let body_digest = "a".repeat(64);
+        let input = canonical_input(&body_digest);
+        let legacy = canonical_signature_input(LEGACY_SIGNATURE_VERSION, None, &input)?;
         let keyed = canonical_signature_input(
             KEYED_SIGNATURE_VERSION,
             Some("key-2026-08"),
-            "POST",
-            "/v1/mailbox-credentials/resolve",
-            &"a".repeat(64),
-            "tenant_01",
-            100,
-            "00112233445566778899aabbccddeeff",
+            &input,
         )?;
         assert_ne!(legacy, keyed);
         assert!(legacy.starts_with("hmac-sha256-v1\nPOST\n"));

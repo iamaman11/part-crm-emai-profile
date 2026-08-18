@@ -1,5 +1,5 @@
 use control_plane_contract::resolver_service_auth::{
-    ServiceAuthKeyring, canonical_signature_input,
+    ServiceAuthCanonicalInput, ServiceAuthKeyring, canonical_signature_input,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use serde_json::{Map, Value};
@@ -88,17 +88,16 @@ pub fn signed_resolver_request(
         .map_err(|_| ResolverRequestError::InvalidSecret)?;
     let signature_version = signing_key.version();
     let key_id = signing_key.key_id();
-    let canonical = canonical_signature_input(
-        signature_version,
-        key_id,
-        "POST",
-        &path,
-        &body_digest,
+    let canonical_input = ServiceAuthCanonicalInput {
+        method: "POST",
+        path,
+        body_digest: &body_digest,
         tenant_id,
         timestamp_ms,
-        &nonce,
-    )
-    .map_err(|_| ResolverRequestError::InvalidSecret)?;
+        nonce: &nonce,
+    };
+    let canonical = canonical_signature_input(signature_version, key_id, &canonical_input)
+        .map_err(|_| ResolverRequestError::InvalidSecret)?;
     let mut mac = <HmacSha256 as KeyInit>::new_from_slice(signing_key.bytes())
         .map_err(|_| ResolverRequestError::InvalidSecret)?;
     mac.update(canonical.as_bytes());
