@@ -150,7 +150,10 @@ def serialized(payload: object) -> str:
 
 
 def check_current(expected: dict[str, object]) -> None:
-    actual = json.loads(INVENTORY_PATH.read_text(encoding="utf-8"))
+    try:
+        actual = json.loads(INVENTORY_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit(f"architecture inventory is missing or malformed: {INVENTORY_PATH}: {error}") from error
     if actual != expected:
         raise SystemExit("architecture/inventory.json is stale; run scripts/generate-architecture-inventory.py --write")
 
