@@ -113,7 +113,6 @@ impl<N> D1ContactKeyLifecycle<N> {
             ORDER BY encryption_key_version
             "#
         )
-        .map_err(|_| ContactKeyLifecycleError::StorageUnavailable)?
         .all()
         .await
         .map_err(|_| ContactKeyLifecycleError::StorageUnavailable)?
@@ -128,7 +127,6 @@ impl<N> D1ContactKeyLifecycle<N> {
             ORDER BY lookup_key_version
             "#
         )
-        .map_err(|_| ContactKeyLifecycleError::StorageUnavailable)?
         .all()
         .await
         .map_err(|_| ContactKeyLifecycleError::StorageUnavailable)?
@@ -184,8 +182,8 @@ impl<N: ContactNonceSource> D1ContactKeyLifecycle<N> {
         .results::<ProtectedContactRow>()
         .map_err(|_| ContactKeyLifecycleError::StorageUnavailable)?;
 
-        let scanned_rows = u32::try_from(rows.len())
-            .map_err(|_| ContactKeyLifecycleError::StorageUnavailable)?;
+        let scanned_rows =
+            u32::try_from(rows.len()).map_err(|_| ContactKeyLifecycleError::StorageUnavailable)?;
         let mut reprotected_rows = 0_u32;
         for row in rows {
             self.reconcile_row(row).await?;
@@ -259,12 +257,8 @@ impl<N: ContactNonceSource> D1ContactKeyLifecycle<N> {
         if normalized.expose() != plaintext.as_str() {
             return Err(ContactKeyLifecycleError::InvalidStoredMetadata);
         }
-        let hmac_input = exact_lookup_hmac_input(
-            &tenant_id,
-            kind,
-            normalization_version,
-            &normalized,
-        );
+        let hmac_input =
+            exact_lookup_hmac_input(&tenant_id, kind, normalization_version, &normalized);
         let old_candidate = self
             .protection
             .derive_lookup_candidates(&tenant_id, &hmac_input)
@@ -296,8 +290,7 @@ impl<N: ContactNonceSource> D1ContactKeyLifecycle<N> {
             ))
             .await
             .map_err(|_| ContactKeyLifecycleError::KeyUnavailable)?;
-        if replacement_encrypted.key_version().value()
-            != self.metadata.active_encryption_version
+        if replacement_encrypted.key_version().value() != self.metadata.active_encryption_version
             || replacement_lookup.key_version().value() != self.metadata.active_lookup_version
         {
             return Err(ContactKeyLifecycleError::InvalidStoredMetadata);
@@ -449,7 +442,8 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, ContactKeyLifecycleError> {
         .as_bytes()
         .chunks_exact(2)
         .map(|pair| {
-            let high = hex_nibble(pair[0]).ok_or(ContactKeyLifecycleError::InvalidStoredMetadata)?;
+            let high =
+                hex_nibble(pair[0]).ok_or(ContactKeyLifecycleError::InvalidStoredMetadata)?;
             let low = hex_nibble(pair[1]).ok_or(ContactKeyLifecycleError::InvalidStoredMetadata)?;
             Ok((high << 4) | low)
         })
@@ -481,7 +475,9 @@ fn count_to_u32(value: i64) -> Result<u32, ContactKeyLifecycleError> {
     u32::try_from(value).map_err(|_| ContactKeyLifecycleError::InvalidStoredMetadata)
 }
 
-const fn map_crypto_error(error: crate::contact_protection::ContactCryptoError) -> ContactKeyLifecycleError {
+const fn map_crypto_error(
+    error: crate::contact_protection::ContactCryptoError,
+) -> ContactKeyLifecycleError {
     match error {
         crate::contact_protection::ContactCryptoError::KeyUnavailable
         | crate::contact_protection::ContactCryptoError::InvalidKeyring => {
@@ -513,8 +509,20 @@ mod tests {
             physical_rows: 0,
         };
         assert!(clear.can_retire());
-        assert!(!ContactKeyDependencyStatus { active: true, ..clear }.can_retire());
-        assert!(!ContactKeyDependencyStatus { retained: false, ..clear }.can_retire());
+        assert!(
+            !ContactKeyDependencyStatus {
+                active: true,
+                ..clear
+            }
+            .can_retire()
+        );
+        assert!(
+            !ContactKeyDependencyStatus {
+                retained: false,
+                ..clear
+            }
+            .can_retire()
+        );
         assert!(
             !ContactKeyDependencyStatus {
                 physical_rows: 1,
