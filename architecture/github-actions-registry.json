@@ -17,6 +17,14 @@
       "category": "PERMANENT_REQUIRED"
     },
     {
+      "path": ".github/workflows/d1-evolution-gate.yml",
+      "category": "PERMANENT_REQUIRED"
+    },
+    {
+      "path": ".github/workflows/d1-migration-executor.yml",
+      "category": "PERMANENT_REQUIRED"
+    },
+    {
       "path": ".github/workflows/encrypted-generation-gate.yml",
       "category": "PERMANENT_REQUIRED"
     },
