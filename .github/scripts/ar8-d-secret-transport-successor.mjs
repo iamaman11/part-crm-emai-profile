@@ -61,7 +61,7 @@ function absolute(relative) {
 }
 
 function read(relative) {
-  return readFileSync(absolute(relative), 'utf8');
+  return readFileSync(absolute(relative), 'utf8').replace(/\r\n?/g, '\n');
 }
 
 function load(relative) {
@@ -145,7 +145,10 @@ function predecessorErrors(authority) {
   }
   for (const relative of [D3_AUTHORITY, D3_MARKER]) {
     const historical = git(['show', `${ref}:${relative}`], { check: false });
-    if (historical.status !== 0 || historical.stdout !== read(relative)) {
+    if (
+      historical.status !== 0 ||
+      historical.stdout.replace(/\r\n?/g, '\n') !== read(relative)
+    ) {
       errors.push(`historical D3 authority changed after the AR-8D transition: ${relative}`);
     }
   }
