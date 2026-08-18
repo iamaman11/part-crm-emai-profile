@@ -1,0 +1,276 @@
+name: D1 Evolution Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d1-evolution-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Native opsctl and pinned Wrangler D1 proof
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up pinned Node and npm
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce pinned Wrangler version
+        run: |
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+          test "$(npx --yes wrangler@4.94.0 --version)" = "4.94.0"
+
+      - name: Verify native opsctl D1 policy boundary
+        run: |
+          python scripts/check-opsctl-readonly.py
+          python scripts/check-opsctl-readonly.py --self-test
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml
+
+      - name: Execute all opsctl D1 commands as real CLI processes
+        run: |
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
+            --component resolver \
+            --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json | python -m json.tool >/dev/null
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan \
+            --component resolver \
+            --ledger-json tests/d1-evolution/synthetic-ledger-base.json \
+            --release-manifest tests/d1-evolution/synthetic-release-expand.json \
+            --current-manifest tests/d1-evolution/synthetic-release-base.json \
+            --known-good-manifest tests/d1-evolution/synthetic-release-base.json \
+            --authority tests/d1-evolution/synthetic-authority.json | python -m json.tool >/dev/null
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
+            --component resolver \
+            --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json \
+            --release-manifest tests/d1-evolution/resolver-release-compatible.json | python -m json.tool >/dev/null
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify \
+            --component resolver \
+            --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json \
+            --release-manifest tests/d1-evolution/resolver-release-compatible.json | python -m json.tool >/dev/null
+
+      - name: Prove Catalog pinned-Wrangler migration and replay no-op
+        run: |
+          npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB \
+            --local \
+            --config deploy/cloudflare/wrangler.d1-test.jsonc \
+            --persist-to .wrangler/ar9-catalog \
+            --experimental-provision=false \
+            --experimental-auto-create=false
+          npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB \
+            --local \
+            --config deploy/cloudflare/wrangler.d1-test.jsonc \
+            --persist-to .wrangler/ar9-catalog \
+            --experimental-provision=false \
+            --experimental-auto-create=false
+          mkdir -p artifacts/d1-evolution
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB \
+            --local \
+            --config deploy/cloudflare/wrangler.d1-test.jsonc \
+            --persist-to .wrangler/ar9-catalog \
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-evolution/catalog-ledger.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
+            --component catalog \
+            --ledger-json artifacts/d1-evolution/catalog-ledger.json > artifacts/d1-evolution/catalog-status.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          status = json.loads(Path('artifacts/d1-evolution/catalog-status.json').read_text())
+          assert status['ledger_state'] == 'EXACT', status
+          assert status['decision'] == 'SAFE', status
+          assert status['mutation_executed'] is False, status
+          PY
+
+      - name: Prove Resolver pinned-Wrangler migration and replay no-op
+        run: |
+          npx --yes wrangler@4.94.0 d1 migrations apply RESOLVER_DB \
+            --local \
+            --config deploy/cloudflare/wrangler.resolver-d1-test.jsonc \
+            --persist-to .wrangler/ar9-resolver \
+            --experimental-provision=false \
+            --experimental-auto-create=false
+          npx --yes wrangler@4.94.0 d1 migrations apply RESOLVER_DB \
+            --local \
+            --config deploy/cloudflare/wrangler.resolver-d1-test.jsonc \
+            --persist-to .wrangler/ar9-resolver \
+            --experimental-provision=false \
+            --experimental-auto-create=false
+          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
+            --local \
+            --config deploy/cloudflare/wrangler.resolver-d1-test.jsonc \
+            --persist-to .wrangler/ar9-resolver \
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-evolution/resolver-ledger.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
+            --component resolver \
+            --ledger-json artifacts/d1-evolution/resolver-ledger.json > artifacts/d1-evolution/resolver-status.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          status = json.loads(Path('artifacts/d1-evolution/resolver-status.json').read_text())
+          assert status['ledger_state'] == 'EXACT', status
+          assert status['decision'] == 'SAFE', status
+          assert status['mutation_executed'] is False, status
+          PY
+
+      - name: Prove Wrangler partial failure leaves a valid canonical prefix
+        run: |
+          mkdir -p .wrangler/ar9-partial/migrations .wrangler/ar9-partial/state
+          cat > .wrangler/ar9-partial/wrangler.jsonc <<'JSON'
+          {
+            "name": "ar9-d1-partial-failure-proof",
+            "main": "../../tests/d1-runtime/worker.mjs",
+            "compatibility_date": "2026-08-05",
+            "d1_databases": [
+              {
+                "binding": "RESOLVER_DB",
+                "database_name": "ar9-partial-failure-proof",
+                "database_id": "00000000-0000-0000-0000-000000000009",
+                "migrations_dir": "migrations"
+              }
+            ]
+          }
+          JSON
+          cat > .wrangler/ar9-partial/migrations/0001_base.sql <<'SQL'
+          CREATE TABLE ar9_base (id INTEGER PRIMARY KEY);
+          SQL
+          cat > .wrangler/ar9-partial/migrations/0002_expand.sql <<'SQL'
+          CREATE TABLE ar9_partial_failure_residue (id INTEGER PRIMARY KEY);
+          INSERT INTO ar9_missing_table (id) VALUES (1);
+          SQL
+          if npx --yes wrangler@4.94.0 d1 migrations apply RESOLVER_DB \
+            --local \
+            --config .wrangler/ar9-partial/wrangler.jsonc \
+            --persist-to .wrangler/ar9-partial/state \
+            --experimental-provision=false \
+            --experimental-auto-create=false; then
+            echo "Intentional failing migration unexpectedly succeeded." >&2
+            exit 1
+          fi
+          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
+            --local \
+            --config .wrangler/ar9-partial/wrangler.jsonc \
+            --persist-to .wrangler/ar9-partial/state \
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-evolution/partial-ledger.json
+          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
+            --local \
+            --config .wrangler/ar9-partial/wrangler.jsonc \
+            --persist-to .wrangler/ar9-partial/state \
+            --command "SELECT COUNT(*) AS residue FROM sqlite_master WHERE name='ar9_partial_failure_residue'" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-evolution/partial-residue.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
+            --component resolver \
+            --ledger-json artifacts/d1-evolution/partial-ledger.json \
+            --authority tests/d1-evolution/synthetic-authority.json > artifacts/d1-evolution/partial-status.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan \
+            --component resolver \
+            --ledger-json artifacts/d1-evolution/partial-ledger.json \
+            --release-manifest tests/d1-evolution/synthetic-release-expand.json \
+            --current-manifest tests/d1-evolution/synthetic-release-base.json \
+            --known-good-manifest tests/d1-evolution/synthetic-release-base.json \
+            --authority tests/d1-evolution/synthetic-authority.json > artifacts/d1-evolution/partial-plan.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          status = json.loads(Path('artifacts/d1-evolution/partial-status.json').read_text())
+          plan = json.loads(Path('artifacts/d1-evolution/partial-plan.json').read_text())
+          residue = json.loads(Path('artifacts/d1-evolution/partial-residue.json').read_text())
+          assert status['ledger_state'] == 'BEHIND_KNOWN_PREFIX', status
+          assert status['planned_migrations'][0] == '0002_expand.sql', status
+          assert plan['ledger_state'] == 'BEHIND_KNOWN_PREFIX', plan
+          assert plan['decision'] == 'MIGRATION_REQUIRED', plan
+          assert plan['allowed'] is True, plan
+          assert residue[0]['results'][0]['residue'] == 0, residue
+          PY
+
+      - name: Prove safe continuation after fixing the failed migration
+        run: |
+          cat > .wrangler/ar9-partial/migrations/0002_expand.sql <<'SQL'
+          CREATE TABLE ar9_expand (id INTEGER PRIMARY KEY);
+          SQL
+          npx --yes wrangler@4.94.0 d1 migrations apply RESOLVER_DB \
+            --local \
+            --config .wrangler/ar9-partial/wrangler.jsonc \
+            --persist-to .wrangler/ar9-partial/state \
+            --experimental-provision=false \
+            --experimental-auto-create=false
+          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
+            --local \
+            --config .wrangler/ar9-partial/wrangler.jsonc \
+            --persist-to .wrangler/ar9-partial/state \
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-evolution/recovered-ledger.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify \
+            --component resolver \
+            --ledger-json artifacts/d1-evolution/recovered-ledger.json \
+            --release-manifest tests/d1-evolution/synthetic-release-expand.json \
+            --authority tests/d1-evolution/synthetic-authority.json > artifacts/d1-evolution/recovered-verify.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          value = json.loads(Path('artifacts/d1-evolution/recovered-verify.json').read_text())
+          assert value['ledger_state'] == 'EXACT', value
+          assert value['decision'] == 'SAFE', value
+          assert value['allowed'] is True, value
+          PY
+
+  windows-cli:
+    name: Native opsctl D1 CLI portability on Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Execute all native opsctl D1 commands on Windows
+        shell: pwsh
+        run: |
+          $status = cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status --component resolver --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json | ConvertFrom-Json
+          if ($status.ledger_state -ne 'EXACT' -or $status.mutation_executed) { throw 'd1 status portability proof failed' }
+          $plan = cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan --component resolver --ledger-json tests/d1-evolution/synthetic-ledger-base.json --release-manifest tests/d1-evolution/synthetic-release-expand.json --current-manifest tests/d1-evolution/synthetic-release-base.json --known-good-manifest tests/d1-evolution/synthetic-release-base.json --authority tests/d1-evolution/synthetic-authority.json | ConvertFrom-Json
+          if ($plan.decision -ne 'MIGRATION_REQUIRED' -or -not $plan.allowed) { throw 'd1 plan portability proof failed' }
+          $compatibility = cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility --component resolver --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json --release-manifest tests/d1-evolution/resolver-release-compatible.json | ConvertFrom-Json
+          if ($compatibility.ledger_state -ne 'EXACT') { throw 'd1 compatibility portability proof failed' }
+          $verify = cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify --component resolver --ledger-json tests/d1-evolution/valid-exact-resolver-ledger.json --release-manifest tests/d1-evolution/resolver-release-compatible.json | ConvertFrom-Json
+          if ($verify.decision -ne 'SAFE' -or -not $verify.allowed) { throw 'd1 verify portability proof failed' }
