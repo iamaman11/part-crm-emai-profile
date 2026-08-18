@@ -476,12 +476,10 @@ fn ledger_names(rows: &[Value]) -> Result<Vec<String>, D1Error> {
             .ok_or_else(|| D1Error::new("D1 ledger row is missing migration name"))?
             .to_owned();
         if let Some(id) = object.get("id").and_then(Value::as_i64) {
-            if let Some(previous) = last_id {
-                if id <= previous {
-                    return Err(D1Error::new(
-                        "D1 ledger ids must be strictly increasing in query order",
-                    ));
-                }
+            if last_id.is_some_and(|previous| id <= previous) {
+                return Err(D1Error::new(
+                    "D1 ledger ids must be strictly increasing in query order",
+                ));
             }
             last_id = Some(id);
         }
