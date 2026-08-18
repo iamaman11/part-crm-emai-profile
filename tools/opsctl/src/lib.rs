@@ -125,7 +125,9 @@ fn parse_command(value: &str) -> Result<ReadCommand, OpsctlError> {
         "credential-lifecycle" => Ok(ReadCommand::CredentialLifecycle),
         other => Err(OpsctlError::new(
             "parse",
-            format!("unsupported command {other:?}; opsctl exposes read-only metadata commands only"),
+            format!(
+                "unsupported command {other:?}; opsctl exposes read-only metadata commands only"
+            ),
         )),
     }
 }
