@@ -46,7 +46,6 @@ client-domain = { path = "crates/client-domain" }
 device-domain = { path = "crates/device-domain" }
 cloudflare-adapters = { path = "crates/cloudflare-adapters" }
 contracts = { path = "crates/contracts" }
-control-plane-contract = { path = "crates/control-plane-contract" }
 encrypted-generation-domain = { path = "crates/encrypted-generation-domain" }
 hmac = { version = "=0.13.0", default-features = false }
 identity-access-domain = { path = "crates/identity-access-domain" }
