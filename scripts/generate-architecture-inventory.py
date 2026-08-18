@@ -85,7 +85,8 @@ def load_json(relative: str) -> dict[str, Any]:
 
 
 def file_sha256(relative: str) -> str:
-    return hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    canonical_text = (ROOT / relative).read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
 
 
 def subject_projection() -> dict[str, object]:
