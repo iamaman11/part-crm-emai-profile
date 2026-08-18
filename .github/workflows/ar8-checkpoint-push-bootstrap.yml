@@ -35,7 +35,8 @@ jobs:
           lines = workflow[run_at:end].splitlines()
           script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
           head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-          script = script.replace('${{ github.event.pull_request.head.sha }}', head)
+          token = '$' + '{{ github.event.pull_request.head.sha }}'
+          script = script.replace(token, head)
           subprocess.run(['bash', '-c', script], check=True)
           PY
 
@@ -89,6 +90,36 @@ jobs:
           data = data.replace(old, new, 1)
           data = data.replace('Repository/source evidence and the AR-8C staging foundation exist independently from production state.', 'Repository/source evidence includes accepted AR-8 plus the bounded AR-8C staging foundation; both remain independent from production state.')
           matrix.write_text(data, encoding='utf-8', newline='\n')
+
+          wrapper = Path('scripts/check-documentation-authority.py')
+          wtext = wrapper.read_text(encoding='utf-8')
+          old_validate = '''def validate(root: Path) -> None:
+              legacy.validate(root)
+              validate_subject_authority(root)
+              validate_acceptance_evidence(root)
+              validate_current_human_projection(root)
+          '''
+          new_validate = '''def validate(root: Path) -> None:
+              errors = legacy.validate(root)
+              if errors:
+                  raise ValueError("legacy documentation authority drift: " + "; ".join(errors))
+              validate_subject_authority(root)
+              validate_acceptance_evidence(root)
+              validate_current_human_projection(root)
+          '''
+          old_self_test = '''def self_test(root: Path) -> None:
+              legacy.self_test(root)
+              validate_subject_authority(root)
+          '''
+          new_self_test = '''def self_test(root: Path) -> None:
+              if legacy.self_test(root) is not True:
+                  raise ValueError("legacy documentation authority negative self-test failed")
+              validate_subject_authority(root)
+          '''
+          if old_validate not in wtext or old_self_test not in wtext:
+              raise SystemExit('current documentation wrapper fail-closed patch anchor missing')
+          wtext = wtext.replace(old_validate, new_validate, 1).replace(old_self_test, new_self_test, 1)
+          wrapper.write_text(wtext, encoding='utf-8', newline='\n')
           PY
 
           python scripts/python-estate-ar6.py --write
