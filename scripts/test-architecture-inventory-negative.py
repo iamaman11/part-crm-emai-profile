@@ -42,6 +42,11 @@ def expect_rejected(module: ModuleType, expected: dict[str, object], tampered: d
 def main() -> int:
     module = load_generator()
     expected = module.build_inventory()
+    d1_evolution = expected.get("d1_evolution")
+    if not isinstance(d1_evolution, dict):
+        raise AssertionError("AR-9 generator lost architecture/inventory.json::d1_evolution")
+    if d1_evolution.get("source_authority") != "architecture/d1-evolution-ar9.json":
+        raise AssertionError("AR-9 D1 projection lost its single source authority")
 
     workspace_drift = copy.deepcopy(expected)
     workspace_drift["workspace_members"] = [
@@ -53,6 +58,14 @@ def main() -> int:
     route_drift = copy.deepcopy(expected)
     route_drift["routing"]["public_routes"][0]["route_class"] = "UnknownApi"
     expect_rejected(module, expected, route_drift)
+
+    missing_d1_projection = copy.deepcopy(expected)
+    del missing_d1_projection["d1_evolution"]
+    expect_rejected(module, expected, missing_d1_projection)
+
+    tampered_d1_projection = copy.deepcopy(expected)
+    tampered_d1_projection["d1_evolution"]["components"][0]["history_digest"] = "0" * 64
+    expect_rejected(module, expected, tampered_d1_projection)
 
     original_path = module.INVENTORY_PATH
     missing_path = ROOT / ".architecture-inventory-negative-missing.json"
@@ -68,7 +81,7 @@ def main() -> int:
     finally:
         module.INVENTORY_PATH = original_path
 
-    print("Architecture inventory checker rejects stale, tampered and missing inventory.")
+    print("Architecture inventory checker rejects stale, tampered, missing and D1-projection drift.")
     return 0
 
 
