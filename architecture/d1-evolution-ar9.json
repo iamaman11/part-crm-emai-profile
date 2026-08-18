@@ -87,11 +87,7 @@
         ],
         "ordered_set_identity_algorithm": "sha256(canonical-json(name+sha256))",
         "ordered_set_identity": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
-        "per_file_sha256_freeze": {
-          "status": "FROZEN",
-          "algorithm": "sha256",
-          "count": 26
-        },
+        "per_file_sha256_freeze": {"status": "FROZEN", "algorithm": "sha256", "count": 26},
         "retroactive_runtime_compatibility_claims": false
       },
       "current_repository_revision": "0026_outbound_mail_intents.sql",
@@ -125,17 +121,14 @@
         "status": "FROZEN_CONSUMED_HISTORY_CANDIDATE",
         "start_base": "10c317d7187e6a86c5e2ed6d1cd92c2e76c0c256",
         "ordered_history": [
-          {"name": "0001_resolver_security_boundary.sql", "git_blob_sha1": "d8770b8711657d51de2304a84ce27939705c4991"},
-          {"name": "0002_oauth_refresh_fencing.sql", "git_blob_sha1": "0b0845d04b1a908f9c5b536ab9d4898a2e4a3e6b"},
-          {"name": "0003_lookup_hmac_versions.sql", "git_blob_sha1": "89900b3b6d9b3a20ff7d962e59f81423c8c4e710"},
-          {"name": "0004_refresh_owner_hmac_version.sql", "git_blob_sha1": "6de4439a6e304e03e2943ea75e0df2c730e79975"}
+          {"name": "0001_resolver_security_boundary.sql", "git_blob_sha1": "d8770b8711657d51de2304a84ce27939705c4991", "sha256": "002267474f75ba430586a5ebe02dc8a624e5d33326c3be7e52123911d1b2c224"},
+          {"name": "0002_oauth_refresh_fencing.sql", "git_blob_sha1": "0b0845d04b1a908f9c5b536ab9d4898a2e4a3e6b", "sha256": "18678d9b73830d4982ebfbed4c3ae7b29ce0b068e0c4593e8a393c8907a74a1d"},
+          {"name": "0003_lookup_hmac_versions.sql", "git_blob_sha1": "89900b3b6d9b3a20ff7d962e59f81423c8c4e710", "sha256": "0d1086845c7082a85cde2208917eef7df22bb0e389b3d350ca608b5f9d972db8"},
+          {"name": "0004_refresh_owner_hmac_version.sql", "git_blob_sha1": "6de4439a6e304e03e2943ea75e0df2c730e79975", "sha256": "0d5796f8749dd8420894e190d6d44c61f2de3fa14e15be9a5a70983fce6450bc"}
         ],
-        "ordered_set_identity_algorithm": "sha256(canonical-json(name+git_blob_sha1))",
-        "ordered_set_identity": "5cd81bbb99b71e63cb7f3efb3271fe76972d9f57ef1a8a8802a95705ea51ea52",
-        "per_file_sha256_freeze": {
-          "required_before_ar9_acceptance": true,
-          "status": "PENDING_AR9_FREEZE_GENERATION"
-        },
+        "ordered_set_identity_algorithm": "sha256(canonical-json(name+sha256))",
+        "ordered_set_identity": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
+        "per_file_sha256_freeze": {"status": "FROZEN", "algorithm": "sha256", "count": 4},
         "retroactive_runtime_compatibility_claims": false
       },
       "current_repository_revision": "0004_refresh_owner_hmac_version.sql",
@@ -162,30 +155,13 @@
   ],
   "new_migration_contract": {
     "required_fields": [
-      "component",
-      "migration_file",
-      "migration_revision",
-      "migration_class",
-      "old_runtime_compatible_after",
-      "new_runtime_compatible_before",
-      "rollout_order",
-      "backfill_required",
-      "backfill_authority",
-      "backfill_completion_predicate",
-      "verification_invariants",
-      "failure_mode",
-      "recovery_mode",
-      "code_rollback_allowed",
-      "fail_forward_required",
-      "contract_preconditions",
-      "destructive"
+      "component", "migration_file", "migration_revision", "migration_class",
+      "old_runtime_compatible_after", "new_runtime_compatible_before", "rollout_order",
+      "backfill_required", "backfill_authority", "backfill_completion_predicate",
+      "verification_invariants", "failure_mode", "recovery_mode", "code_rollback_allowed",
+      "fail_forward_required", "contract_preconditions", "destructive"
     ],
-    "rollout_order_vocabulary": [
-      "MIGRATE_BEFORE_CODE",
-      "CODE_BEFORE_MIGRATE",
-      "EITHER",
-      "SEPARATE_CONTRACT_RELEASE"
-    ],
+    "rollout_order_vocabulary": ["MIGRATE_BEFORE_CODE", "CODE_BEFORE_MIGRATE", "EITHER", "SEPARATE_CONTRACT_RELEASE"],
     "contract_rules": {
       "CONTRACT_requires_prior_EXPAND": true,
       "CONTRACT_requires_backfill_complete_when_required": true,
