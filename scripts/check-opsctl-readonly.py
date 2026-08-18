@@ -248,6 +248,8 @@ def verify_lockfile_reproducible(root: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="opsctl-lock-") as temporary:
         workspace = Path(temporary)
         shutil.copyfile(root / CARGO, workspace / "Cargo.toml")
+        (workspace / "src").mkdir()
+        (workspace / "src" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
         completed = subprocess.run(
             [
                 "cargo",
