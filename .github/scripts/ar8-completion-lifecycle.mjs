@@ -22,6 +22,12 @@ const EXPECTED = new Map([
   ['resolver.google-oauth-application', { slice: 'AR-8E', cutover: 'AR-8E', external: true }],
   ['resolver.microsoft-oauth-application', { slice: 'AR-8E', cutover: 'AR-8E', external: true }],
 ]);
+const R2_RETIREMENT_PRECONDITIONS = [
+  'replacement token is scoped to the intended account and bucket',
+  'replacement Access Key ID and Secret Access Key are bound as one pair',
+  'bounded staging R2 access succeeds with replacement',
+  'Worker binding metadata verifies replacement before old token revocation',
+];
 const FORBIDDEN_VALUE_KEYS = /(?:plaintext_value|secret_value|token_value|credential_value|key_hex|private_key)/i;
 
 function load(path) {
@@ -121,11 +127,13 @@ function validateSpecific(concern, errors) {
     case 'profile-generation.r2-access':
       if (
         concern.credential_pair_atomic !== true ||
+        concern.provider_identity !== 'R2 API token -> Access Key ID + Secret Access Key' ||
         concern.overlap_model !== 'SEPARATE_PROVIDER_TOKENS' ||
         concern.supersedes_lifecycle_projection !==
-          'credential-authority-ar8b.json::ar8c_operational_lifecycle/profile-generation.r2-access'
+          'credential-authority-ar8b.json::ar8c_operational_lifecycle/profile-generation.r2-access' ||
+        !same(concern.retirement_preconditions, R2_RETIREMENT_PRECONDITIONS)
       ) {
-        errors.push(`${concern.id}: R2 replacement must be pair-atomic, separate-token overlap and explicitly supersede the AR-8C routine-promotion lifecycle projection`);
+        errors.push(`${concern.id}: R2 replacement must preserve the exact pair-atomic issue/scope/bind/verify/retire contract and explicitly supersede the AR-8C routine-promotion lifecycle projection`);
       }
       if (!String(concern.allowed_mutator ?? '').includes('explicit-governed-worker-secret-rotation')) {
         errors.push(`${concern.id}: R2 mutation must be an explicit rotation lifecycle, not routine promotion`);
@@ -254,6 +262,18 @@ function selfTest(overlay, canonical) {
   const routineRotation = clone(overlay);
   routineRotation.concerns.find((item) => item.id === 'profile-generation.r2-access').routine_release_rotation = true;
   assertRejected('R2 routine-release rotation', routineRotation, canonical);
+
+  const splitR2Pair = clone(overlay);
+  splitR2Pair.concerns.find((item) => item.id === 'profile-generation.r2-access').credential_pair_atomic = false;
+  assertRejected('R2 split credential pair', splitR2Pair, canonical);
+
+  const r2RevokeBeforeVerify = clone(overlay);
+  r2RevokeBeforeVerify.concerns.find((item) => item.id === 'profile-generation.r2-access').retire_previous_requires_verified_replacement = false;
+  assertRejected('R2 revoke-before-verify', r2RevokeBeforeVerify, canonical);
+
+  const r2MissingScopeProof = clone(overlay);
+  r2MissingScopeProof.concerns.find((item) => item.id === 'profile-generation.r2-access').retirement_preconditions.pop();
+  assertRejected('R2 missing binding metadata verification', r2MissingScopeProof, canonical);
 
   const implicitContact = clone(overlay);
   implicitContact.concerns.find((item) => item.id === 'control-plane.client-contact-protection').active_selection = 'JSON_ARRAY_ORDER';
