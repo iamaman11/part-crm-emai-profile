@@ -83,7 +83,7 @@ impl ServiceAuthKeyring {
                 return Err(ResolverRequestError::InvalidSecret);
             }
             keys.push(ServiceAuthKey {
-                id: entry.id,
+                id: entry.id.clone(),
                 bytes: Zeroizing::new(decoded),
             });
         }
