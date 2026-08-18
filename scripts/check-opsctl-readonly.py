@@ -245,6 +245,23 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
 
 
 def verify_lockfile_reproducible(root: Path) -> None:
+    primed = subprocess.run(
+        [
+            "cargo",
+            "fetch",
+            "--locked",
+            "--manifest-path",
+            str(root / CARGO),
+        ],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if primed.returncode != 0:
+        detail = primed.stderr.strip() or primed.stdout.strip()
+        fail(f"cannot prime exact standalone opsctl dependency cache from Cargo.lock: {detail}")
+
     with tempfile.TemporaryDirectory(prefix="opsctl-lock-") as temporary:
         workspace = Path(temporary)
         shutil.copyfile(root / CARGO, workspace / "Cargo.toml")
