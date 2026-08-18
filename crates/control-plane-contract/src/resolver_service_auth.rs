@@ -103,7 +103,9 @@ impl ServiceAuthKeyring {
         })
     }
 
-    pub fn active_signing_key(&self) -> Result<ServiceAuthSigningKey<'_>, ServiceAuthContractError> {
+    pub fn active_signing_key(
+        &self,
+    ) -> Result<ServiceAuthSigningKey<'_>, ServiceAuthContractError> {
         let active = self
             .keys
             .iter()
@@ -253,8 +255,8 @@ const fn hex_nibble(value: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        KEYED_SIGNATURE_VERSION, LEGACY_KEY_ID, LEGACY_SIGNATURE_VERSION,
-        ServiceAuthContractError, ServiceAuthKeyring, canonical_signature_input,
+        KEYED_SIGNATURE_VERSION, LEGACY_KEY_ID, LEGACY_SIGNATURE_VERSION, ServiceAuthContractError,
+        ServiceAuthKeyring, canonical_signature_input,
     };
 
     fn migrated_keyring() -> String {
