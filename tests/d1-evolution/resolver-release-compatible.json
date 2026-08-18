@@ -1,0 +1,9 @@
+{
+  "schema_contract": {
+    "database_component": "resolver",
+    "target_schema_revision": "0004_refresh_owner_hmac_version.sql",
+    "supported_schema_min": "0001_resolver_security_boundary.sql",
+    "supported_schema_max": "0004_refresh_owner_hmac_version.sql",
+    "compatibility_policy_digest": "fixture-policy-v1"
+  }
+}
