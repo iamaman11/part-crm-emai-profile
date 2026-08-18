@@ -28,4 +28,6 @@ production_core_gate=BLOCKED
 production_ready=false
 ```
 
+The post-acceptance checkpoint projection is metadata-only and cannot authorize, enable, or mutate production capabilities.
+
 The program therefore advances only to **AR-9 — D1 Evolution / Schema Compatibility**. No production mutation occurred in AR-8.
