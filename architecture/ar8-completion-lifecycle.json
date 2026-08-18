@@ -125,18 +125,36 @@
       "canonical_future_cutover": "AR-8E",
       "externally_issued": true,
       "routine_release_rotation": false,
-      "allowed_mutator": "google-oauth-credential-issuance-plus-explicit-governed-resolver-secret-rotation",
+      "allowed_mutator": "google-oauth-client-secret-issuance-plus-explicit-governed-resolver-worker-secret-rotation",
+      "application_profile": "CONFIDENTIAL_WEB_OAUTH_CLIENT",
+      "client_id_authority": "Google Auth Platform OAuth client registration metadata plus the environment-scoped GOOGLE_OAUTH_CLIENT_ID resolver variable.",
+      "client_secret_authority": "Google Auth Platform client-secret issuance with write-only binding to the environment-scoped Cloudflare Worker secret GOOGLE_OAUTH_CLIENT_SECRET.",
+      "provider_application_registration_authority": "Google Auth Platform OAuth client registration owned outside repository state; repository evidence contains metadata only.",
+      "redirect_configuration_authority": "Google Auth Platform authorized redirect-URI metadata matched exactly to the environment-scoped GOOGLE_OAUTH_REDIRECT_URI resolver variable.",
+      "environment_ownership": "EXPLICIT_ENVIRONMENT_SCOPED_REGISTRATION_AND_BINDING",
       "user_token_state_authority": "AR-8A",
-      "provider_overlap_guarantee": "NOT_ASSUMED",
-      "provider_constraint": "Do not assume old and replacement client secrets remain simultaneously valid for the exact Google OAuth registration type. A classic secret reset can invalidate the old secret immediately; exact provider capability must be discovered before mutation.",
+      "application_credential_failure_state": "ConfigurationUnavailable",
+      "user_refresh_rejection_state": "ReauthRequired",
+      "secret_plaintext_evidence": "FORBIDDEN",
+      "provider_overlap_guarantee": "TWO_ENABLED_CLIENT_SECRETS_MAXIMUM",
+      "provider_secret_limit": 2,
+      "previous_secret_disable_reversible_before_delete": true,
+      "previous_secret_delete_reversible": false,
+      "provider_metadata_evidence": [
+        "OAuth client identifier",
+        "authorized redirect URI metadata",
+        "client-secret creation/status metadata without secret value"
+      ],
       "retire_previous_requires_verified_replacement": true,
       "retirement_preconditions": [
-        "replacement credential is issued by the authoritative Google application owner",
-        "resolver binding is prepared before any destructive reset where provider semantics require it",
-        "staging authorization-code/token exchange verifies the replacement without secret readback",
-        "provider rejection maps to safe operator/re-auth state rather than a second OAuth state machine"
+        "target OAuth client id and authorized redirect URI metadata match the intended environment",
+        "replacement client secret is added and enabled while the previous secret remains enabled",
+        "replacement secret is write-only bound to GOOGLE_OAUTH_CLIENT_SECRET for the intended resolver environment",
+        "bounded staging authorization-code and refresh-token exchanges succeed with the replacement",
+        "metadata-only rollout evidence confirms the previous secret is no longer used before disable",
+        "previous secret is disabled only after replacement verification and deleted only after a bounded rollback observation window"
       ],
-      "recovery": "If overlap is unavailable, use a controlled cutover with explicit maintenance/re-auth handling; never revoke/reset first and hope routine deployment repairs the binding."
+      "recovery": "If replacement verification fails before deletion, keep the previous secret enabled or re-enable it after disable, restore the previous Worker binding, and repeat verification. Deletion is final for that secret; user OAuth state remains solely under AR-8A."
     },
     {
       "id": "resolver.microsoft-oauth-application",
@@ -144,18 +162,40 @@
       "canonical_future_cutover": "AR-8E",
       "externally_issued": true,
       "routine_release_rotation": false,
-      "allowed_mutator": "microsoft-entra-application-credential-issuance-plus-explicit-governed-resolver-secret-rotation",
+      "allowed_mutator": "microsoft-entra-application-addpassword-plus-explicit-governed-resolver-worker-secret-rotation",
+      "application_profile": "CONFIDENTIAL_WEB_OAUTH_CLIENT",
+      "client_id_authority": "Microsoft Entra application registration metadata plus the environment-scoped MICROSOFT_OAUTH_CLIENT_ID resolver variable.",
+      "client_secret_authority": "Microsoft Entra application addPassword issuance with write-only binding to the environment-scoped Cloudflare Worker secret MICROSOFT_OAUTH_CLIENT_SECRET.",
+      "provider_application_registration_authority": "Microsoft Entra application object owned outside repository state; repository evidence contains metadata only.",
+      "redirect_configuration_authority": "Microsoft Entra Web redirect-URI registration matched exactly to the environment-scoped MICROSOFT_OAUTH_REDIRECT_URI resolver variable.",
+      "environment_ownership": "EXPLICIT_ENVIRONMENT_SCOPED_REGISTRATION_AND_BINDING",
       "user_token_state_authority": "AR-8A",
+      "application_credential_failure_state": "ConfigurationUnavailable",
+      "user_refresh_rejection_state": "ReauthRequired",
+      "secret_plaintext_evidence": "FORBIDDEN",
       "provider_overlap_guarantee": "MULTIPLE_PASSWORD_CREDENTIALS_SUPPORTED",
-      "provider_constraint": "Microsoft Entra application password credentials support add-before-remove; bind and verify the replacement credential before removing the previous password credential by key id.",
+      "password_credential_collection": "application.passwordCredentials",
+      "replacement_operation": "application:addPassword",
+      "retirement_operation": "application:removePassword(keyId)",
+      "expiry_metadata_authority": "passwordCredential.endDateTime",
+      "provider_metadata_evidence": [
+        "application object id and appId/client id",
+        "Web redirect URI metadata",
+        "passwordCredential.keyId",
+        "passwordCredential.endDateTime",
+        "passwordCredential.displayName"
+      ],
       "retire_previous_requires_verified_replacement": true,
       "retirement_preconditions": [
-        "replacement password credential is added to the intended application registration",
-        "resolver binding is switched to replacement",
-        "staging authorization-code/token exchange verifies replacement without secret readback",
-        "previous password credential is removed only after replacement verification"
+        "target application client id and registered Web redirect URI metadata match the intended environment",
+        "replacement passwordCredential is added before removal of the previous credential",
+        "replacement secretText is captured only at issuance and write-only bound to MICROSOFT_OAUTH_CLIENT_SECRET for the intended resolver environment",
+        "bounded staging authorization-code and refresh-token exchanges succeed with the replacement",
+        "replacement passwordCredential keyId and endDateTime metadata are recorded without secret value readback",
+        "previous passwordCredential is removed by keyId only after replacement verification"
       ],
-      "recovery": "If replacement verification fails, keep the previous password credential valid and restore the prior resolver binding; user refresh-token lifecycle remains AR-8A authority."
+      "recovery": "If replacement verification fails, keep the previous passwordCredential valid and restore the previous Worker binding. If a passwordCredential has already been removed, it is not treated as recoverable secret material; issue a new replacement. User refresh-token lifecycle remains AR-8A authority.",
+      "secret_retrieval_semantics": "ISSUANCE_RESPONSE_ONLY"
     }
   ]
 }
