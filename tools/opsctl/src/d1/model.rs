@@ -221,3 +221,7 @@ pub struct D1RunRequest<'a> {
     pub preconditions_json: Option<&'a Path>,
     pub authority_path: Option<&'a Path>,
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;
