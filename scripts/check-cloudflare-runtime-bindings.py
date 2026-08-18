@@ -30,7 +30,7 @@ PROMOTION_WORKFLOW = ROOT / ".github/workflows/mailbox-secret-resolver-promotion
 PROMOTION_ENTRYPOINT = ROOT / "scripts/mailbox-secret-resolver-promotion.py"
 PROMOTION_CORE = ROOT / "scripts/_mailbox_secret_resolver_promotion_core.py"
 AR8D_SECRET_TRANSPORT_SUCCESSOR = ROOT / "architecture/ar8-d-secret-transport-successor.json"
-AR8D_SECRET_TRANSPORT_CHECKER = ROOT / "scripts/check-ar8-d-secret-transport-successor.py"
+AR8D_SECRET_TRANSPORT_CHECKER = ROOT / ".github/scripts/ar8-d-secret-transport-successor.mjs"
 QUEUE_ENTRYPOINT = ROOT / "apps/control-plane-worker/src/lib.rs"
 QUEUE_ENVELOPE = ROOT / "crates/cloudflare-adapters/src/control_plane_queue.rs"
 CONTROL_PLANE_CONTRACT = ROOT / "crates/control-plane-contract/src/lib.rs"
@@ -366,7 +366,7 @@ def governed_d3_workflow(current_workflow: str) -> str:
         fail("AR-8D secret-transport successor authority exists without its permanent checker")
 
     successor_check = subprocess.run(
-        [sys.executable, str(AR8D_SECRET_TRANSPORT_CHECKER)],
+        ["node", str(AR8D_SECRET_TRANSPORT_CHECKER)],
         cwd=ROOT,
         text=True,
         capture_output=True,
