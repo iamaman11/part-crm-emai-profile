@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Fail closed if Rust opsctl gains provider/mutation authority or unreviewed runtime dependencies."""
+"""Fail closed if Rust opsctl or its AR-9 D1 authority gains unreviewed capability."""
 
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
+import json
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 LIB = Path("tools/opsctl/src/lib.rs")
@@ -14,10 +18,28 @@ D1 = Path("tools/opsctl/src/d1.rs")
 MAIN = Path("tools/opsctl/src/main.rs")
 CARGO = Path("tools/opsctl/Cargo.toml")
 LOCK = Path("tools/opsctl/Cargo.lock")
+D1_AUTHORITY = Path("architecture/d1-evolution-ar9.json")
 EXPECTED_COMMANDS = {"Doctor", "Status", "Inventory", "CredentialLifecycle", "RotationPlan"}
 EXPECTED_PARSE_LITERALS = {"doctor", "status", "inventory", "credential-lifecycle", "rotation-plan"}
 EXPECTED_D1_ACTIONS = {"status", "plan", "compatibility", "verify"}
+EXPECTED_MIGRATION_CLASSES = {"EXPAND", "BACKFILL", "CONTRACT", "REPAIR"}
+EXPECTED_LEDGER_STATES = {
+    "EXACT",
+    "BEHIND_KNOWN_PREFIX",
+    "AHEAD_KNOWN_COMPATIBLE",
+    "AHEAD_KNOWN_INCOMPATIBLE",
+    "DIVERGED",
+    "UNKNOWN_MIGRATION",
+    "CORRUPT_LEDGER",
+}
+COMPONENT_ROOTS = {
+    "catalog": "migrations/d1",
+    "resolver": "migrations/resolver-d1",
+}
 ALLOWED_DEPENDENCIES = {"serde_json": "=1.0.151"}
+MIGRATION_RE = re.compile(r"^(?P<number>[0-9]{4})_[a-z0-9_]+\.sql$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+GIT_BLOB_SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 FORBIDDEN_RUNTIME_MARKERS = (
     'Command::new("wrangler")',
     'Command::new("node")',
@@ -108,7 +130,10 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
         fail("opsctl ReadCommand enum is missing")
     commands = {line.strip().rstrip(",") for line in enum.group("body").splitlines() if line.strip()}
     if commands != EXPECTED_COMMANDS:
-        fail(f"opsctl legacy read command surface must be exactly {sorted(EXPECTED_COMMANDS)}; observed={sorted(commands)}")
+        fail(
+            f"opsctl legacy read command surface must be exactly {sorted(EXPECTED_COMMANDS)}; "
+            f"observed={sorted(commands)}"
+        )
 
     parser = re.search(r"fn parse_command\(.*?\n\}", lib, re.S)
     if parser is None:
@@ -120,9 +145,14 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
     d1_parser = re.search(r"let action = match action_text \{(?P<body>.*?)\n\s*\};", lib, re.S)
     if d1_parser is None:
         fail("opsctl native D1 action parser is missing")
-    d1_actions = set(re.findall(r'^\s*"([a-z][a-z0-9_-]*)"\s*=>', d1_parser.group("body"), re.M))
+    d1_actions = set(
+        re.findall(r'^\s*"([a-z][a-z0-9_-]*)"\s*=>', d1_parser.group("body"), re.M)
+    )
     if d1_actions != EXPECTED_D1_ACTIONS:
-        fail(f"opsctl D1 action surface must be exactly {sorted(EXPECTED_D1_ACTIONS)}; observed={sorted(d1_actions)}")
+        fail(
+            f"opsctl D1 action surface must be exactly {sorted(EXPECTED_D1_ACTIONS)}; "
+            f"observed={sorted(d1_actions)}"
+        )
 
     production_source = production(lib) + "\n" + production(d1) + "\n" + main
     for marker in FORBIDDEN_RUNTIME_MARKERS:
@@ -187,6 +217,151 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
         fail("opsctl lockfile must pin serde_json 1.0.151")
 
 
+def canonical_freeze(root: Path, migration_root: str) -> tuple[list[dict[str, str]], str]:
+    directory = root / migration_root
+    if not directory.is_dir() or directory.is_symlink():
+        fail(f"D1 migration root must be a real directory: {migration_root}")
+    files = sorted(directory.glob("*.sql"), key=lambda item: item.name)
+    if not files:
+        fail(f"D1 migration root is empty: {migration_root}")
+    numbers: list[int] = []
+    entries: list[dict[str, str]] = []
+    for path in files:
+        if not path.is_file() or path.is_symlink():
+            fail(f"D1 migration must be a regular file: {path.relative_to(root)}")
+        match = MIGRATION_RE.fullmatch(path.name)
+        if match is None:
+            fail(f"invalid D1 migration filename: {path.name}")
+        if path.name.endswith("_down.sql"):
+            fail(f"down migration is forbidden as rollback authority: {path.name}")
+        numbers.append(int(match.group("number")))
+        entries.append({"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+    expected_numbers = list(range(1, len(files) + 1))
+    if numbers != expected_numbers:
+        fail(
+            f"D1 migration history must be contiguous from 0001: root={migration_root} "
+            f"observed={numbers}"
+        )
+    canonical = json.dumps(entries, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return entries, digest
+
+
+def load_d1_authority(root: Path) -> dict[str, Any]:
+    path = root / D1_AUTHORITY
+    if not path.is_file() or path.is_symlink():
+        fail(f"D1 evolution authority is missing/not regular: {D1_AUTHORITY}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise GateError(f"D1 evolution authority is malformed: {error}") from error
+    if not isinstance(payload, dict):
+        fail("D1 evolution authority must be one JSON object")
+    return payload
+
+
+def validate_d1_authority_document(root: Path, payload: dict[str, Any]) -> None:
+    if payload.get("kind") != "D1_EVOLUTION_AUTHORITY" or payload.get("schema_version") != 1:
+        fail("D1 evolution authority identity/version is invalid")
+    if payload.get("production_mutation") is not False:
+        fail("AR-9 D1 authority must not claim production mutation")
+
+    global_policy = payload.get("global_policy")
+    if not isinstance(global_policy, dict):
+        fail("D1 global policy is missing")
+    if set(global_policy.get("migration_classes", [])) != EXPECTED_MIGRATION_CLASSES:
+        fail("D1 migration class vocabulary drifted")
+    if set(global_policy.get("ledger_states", [])) != EXPECTED_LEDGER_STATES:
+        fail("D1 ledger-state vocabulary drifted")
+    if global_policy.get("new_opsctl_process_spawn_sites") != 0:
+        fail("D1 authority must require zero new opsctl process-spawn sites")
+    if global_policy.get("opsctl_provider_credentials") is not False:
+        fail("D1 authority must forbid provider credentials in opsctl")
+    if global_policy.get("database_lock_required_by_default") is not False:
+        fail("D1 authority must not invent a default DB lock")
+    if global_policy.get("resource_auto_provisioning_allowed") is not False:
+        fail("D1 authority must forbid automatic resource provisioning")
+
+    components = payload.get("components")
+    if not isinstance(components, list):
+        fail("D1 components must be a list")
+    by_id: dict[str, dict[str, Any]] = {}
+    for component in components:
+        if not isinstance(component, dict) or not isinstance(component.get("component_id"), str):
+            fail("D1 component record is malformed")
+        component_id = component["component_id"]
+        if component_id in by_id:
+            fail(f"duplicate D1 component: {component_id}")
+        by_id[component_id] = component
+    if set(by_id) != set(COMPONENT_ROOTS):
+        fail(f"D1 component set must be exactly {sorted(COMPONENT_ROOTS)}")
+
+    for component_id, migration_root in COMPONENT_ROOTS.items():
+        component = by_id[component_id]
+        if component.get("migration_root") != migration_root:
+            fail(f"{component_id} migration root drifted")
+        historical = component.get("historical_epoch")
+        if not isinstance(historical, dict):
+            fail(f"{component_id} historical epoch is missing")
+        ordered = historical.get("ordered_history")
+        if not isinstance(ordered, list) or not ordered:
+            fail(f"{component_id} ordered history is missing")
+
+        expected_entries, expected_digest = canonical_freeze(root, migration_root)
+        expected_names = [entry["name"] for entry in expected_entries]
+        observed_names: list[str] = []
+        observed_hashes: list[str | None] = []
+        for entry in ordered:
+            if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+                fail(f"{component_id} historical entry is malformed")
+            blob = entry.get("git_blob_sha1")
+            if not isinstance(blob, str) or GIT_BLOB_SHA1_RE.fullmatch(blob) is None:
+                fail(f"{component_id} historical entry has malformed Git blob identity: {entry.get('name')}")
+            sha256 = entry.get("sha256")
+            if sha256 is not None and (not isinstance(sha256, str) or SHA256_RE.fullmatch(sha256) is None):
+                fail(f"{component_id} historical entry has malformed SHA-256: {entry.get('name')}")
+            observed_names.append(entry["name"])
+            observed_hashes.append(sha256 if isinstance(sha256, str) else None)
+
+        if observed_names != expected_names:
+            fail(
+                f"{component_id} historical migration names differ from exact repository order: "
+                f"observed={observed_names} expected={expected_names}"
+            )
+        expected_hashes = [entry["sha256"] for entry in expected_entries]
+        freeze = historical.get("per_file_sha256_freeze")
+        freeze_complete = (
+            observed_hashes == expected_hashes
+            and historical.get("ordered_set_identity_algorithm")
+            == "sha256(canonical-json(name+sha256))"
+            and historical.get("ordered_set_identity") == expected_digest
+            and isinstance(freeze, dict)
+            and freeze.get("status") == "FROZEN"
+            and freeze.get("algorithm") == "sha256"
+            and freeze.get("count") == len(expected_entries)
+        )
+        if not freeze_complete:
+            expected = {
+                "component_id": component_id,
+                "ordered_history": expected_entries,
+                "ordered_set_identity_algorithm": "sha256(canonical-json(name+sha256))",
+                "ordered_set_identity": expected_digest,
+                "per_file_sha256_freeze": {
+                    "status": "FROZEN",
+                    "algorithm": "sha256",
+                    "count": len(expected_entries),
+                },
+            }
+            fail(
+                f"D1 historical freeze incomplete or stale for {component_id}; "
+                f"expected_freeze={json.dumps(expected, sort_keys=True, separators=(',', ':'))}"
+            )
+        if component.get("current_repository_revision") != expected_names[-1]:
+            fail(f"{component_id} current repository revision must equal the final frozen migration")
+        if historical.get("retroactive_runtime_compatibility_claims") is not False:
+            fail(f"{component_id} historical epoch must not invent retroactive compatibility claims")
+
+
 def validate(root: Path = ROOT) -> None:
     validate_source(
         read(root, LIB),
@@ -195,6 +370,7 @@ def validate(root: Path = ROOT) -> None:
         read(root, CARGO),
         read(root, LOCK),
     )
+    validate_d1_authority_document(root, load_d1_authority(root))
 
 
 def expect_rejected(label: str, lib: str, d1: str, main: str, cargo: str, lock: str) -> None:
@@ -205,6 +381,14 @@ def expect_rejected(label: str, lib: str, d1: str, main: str, cargo: str, lock: 
     fail(f"{label} negative fixture unexpectedly passed")
 
 
+def expect_d1_rejected(label: str, payload: dict[str, Any]) -> None:
+    try:
+        validate_d1_authority_document(ROOT, payload)
+    except GateError:
+        return
+    fail(f"{label} D1 authority negative fixture unexpectedly passed")
+
+
 def self_test() -> None:
     lib = read(ROOT, LIB)
     d1 = read(ROOT, D1)
@@ -212,23 +396,60 @@ def self_test() -> None:
     cargo = read(ROOT, CARGO)
     lock = read(ROOT, LOCK)
     validate_source(lib, d1, main, cargo, lock)
+    authority = load_d1_authority(ROOT)
+    validate_d1_authority_document(ROOT, authority)
 
-    process_injected = d1.split("#[cfg(test)]", 1)[0] + '\nfn forbidden() { let _ = Command::new("wrangler").arg("deploy"); }\n#[cfg(test)]' + d1.split("#[cfg(test)]", 1)[1]
+    process_injected = (
+        d1.split("#[cfg(test)]", 1)[0]
+        + '\nfn forbidden() { let _ = Command::new("wrangler").arg("deploy"); }\n#[cfg(test)]'
+        + d1.split("#[cfg(test)]", 1)[1]
+    )
     expect_rejected("mutable D1 process-spawn", lib, process_injected, main, cargo, lock)
 
-    filesystem_injected = d1.split("#[cfg(test)]", 1)[0] + '\nfn forbidden_write() { let _ = fs::write("state.json", b"mutable"); }\n#[cfg(test)]' + d1.split("#[cfg(test)]", 1)[1]
+    filesystem_injected = (
+        d1.split("#[cfg(test)]", 1)[0]
+        + '\nfn forbidden_write() { let _ = fs::write("state.json", b"mutable"); }\n#[cfg(test)]'
+        + d1.split("#[cfg(test)]", 1)[1]
+    )
     expect_rejected("filesystem mutation capability", lib, filesystem_injected, main, cargo, lock)
 
-    expanded = lib.replace('"verify" => d1::D1Action::Verify,', '"verify" => d1::D1Action::Verify,\n        "apply" => d1::D1Action::Verify,', 1)
+    expanded = lib.replace(
+        '"verify" => d1::D1Action::Verify,',
+        '"verify" => d1::D1Action::Verify,\n        "apply" => d1::D1Action::Verify,',
+        1,
+    )
     expect_rejected("mutable D1 command-surface", expanded, d1, main, cargo, lock)
 
-    ar_specific = lib.replace('architecture/credential-lifecycle.json', 'architecture/ar8-completion-lifecycle.json', 1)
+    ar_specific = lib.replace(
+        "architecture/credential-lifecycle.json",
+        "architecture/ar8-completion-lifecycle.json",
+        1,
+    )
     expect_rejected("historical AR-specific canonical coupling", ar_specific, d1, main, cargo, lock)
 
-    dependency = cargo.replace('serde_json = "=1.0.151"', 'serde_json = "=1.0.151"\nreqwest = "=0.13.1"', 1)
+    dependency = cargo.replace(
+        'serde_json = "=1.0.151"',
+        'serde_json = "=1.0.151"\nreqwest = "=0.13.1"',
+        1,
+    )
     expect_rejected("unreviewed dependency", lib, d1, main, dependency, lock)
 
-    print("opsctl legacy bridge, native D1 subprocess/mutation, command-surface and dependency negative fixtures rejected as expected.")
+    hash_mutation = copy.deepcopy(authority)
+    hash_mutation["components"][0]["historical_epoch"]["ordered_history"][0]["sha256"] = "0" * 64
+    expect_d1_rejected("historical SQL hash rewrite", hash_mutation)
+
+    class_mutation = copy.deepcopy(authority)
+    class_mutation["global_policy"]["migration_classes"].append("DOWN")
+    expect_d1_rejected("unknown migration class", class_mutation)
+
+    lock_mutation = copy.deepcopy(authority)
+    lock_mutation["global_policy"]["database_lock_required_by_default"] = True
+    expect_d1_rejected("unproven database lock", lock_mutation)
+
+    print(
+        "opsctl legacy bridge, native D1 subprocess/mutation, historical-freeze, command-surface "
+        "and dependency negative fixtures rejected as expected."
+    )
 
 
 def main() -> int:
@@ -239,7 +460,10 @@ def main() -> int:
         self_test()
     else:
         validate()
-        print("opsctl remains read-only: one accepted AR-6 Python validator bridge, native Rust D1 semantics, exact serde_json dependency, no provider/mutation capability.")
+        print(
+            "opsctl remains read-only: one accepted AR-6 Python validator bridge, native Rust D1 "
+            "semantics, frozen D1 histories, exact serde_json dependency, no provider/mutation capability."
+        )
     return 0
 
 
