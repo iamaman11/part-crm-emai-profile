@@ -32,6 +32,12 @@
       "CONTRACT_BLOCKED",
       "RECOVERY_REQUIRED"
     ],
+    "failure_modes": [
+      "RETRY_SAFE",
+      "PARTIAL_PREFIX_REEVALUATE",
+      "FAIL_FORWARD_ONLY",
+      "MANUAL_RECOVERY_REQUIRED"
+    ],
     "rollback_authority": [
       "CODE_ROLLBACK",
       "FAIL_FORWARD",
@@ -90,6 +96,9 @@
         "per_file_sha256_freeze": {"status": "FROZEN", "algorithm": "sha256", "count": 26},
         "retroactive_runtime_compatibility_claims": false
       },
+      "post_epoch_migrations": [],
+      "history_digest_algorithm": "sha256(canonical-json(name+sha256))",
+      "history_digest": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
       "current_repository_revision": "0026_outbound_mail_intents.sql",
       "fresh_bootstrap_authority": "scripts/cloudflare-d1-bootstrap.py",
       "upgrade_authority": "PINNED_WRANGLER_D1_MIGRATIONS_APPLY",
@@ -131,6 +140,9 @@
         "per_file_sha256_freeze": {"status": "FROZEN", "algorithm": "sha256", "count": 4},
         "retroactive_runtime_compatibility_claims": false
       },
+      "post_epoch_migrations": [],
+      "history_digest_algorithm": "sha256(canonical-json(name+sha256))",
+      "history_digest": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
       "current_repository_revision": "0004_refresh_owner_hmac_version.sql",
       "fresh_bootstrap_authority": "D3_RESOLVER_FIRST_BOOTSTRAP_AUTHORITY",
       "upgrade_authority": "PINNED_WRANGLER_D1_MIGRATIONS_APPLY",
@@ -155,19 +167,28 @@
   ],
   "new_migration_contract": {
     "required_fields": [
-      "component", "migration_file", "migration_revision", "migration_class",
+      "component", "migration_file", "migration_revision", "sha256", "migration_class",
       "old_runtime_compatible_after", "new_runtime_compatible_before", "rollout_order",
       "backfill_required", "backfill_authority", "backfill_completion_predicate",
       "verification_invariants", "failure_mode", "recovery_mode", "code_rollback_allowed",
       "fail_forward_required", "contract_preconditions", "destructive"
     ],
     "rollout_order_vocabulary": ["MIGRATE_BEFORE_CODE", "CODE_BEFORE_MIGRATE", "EITHER", "SEPARATE_CONTRACT_RELEASE"],
+    "contract_precondition_vocabulary": [
+      "replacement_active",
+      "backfill_complete",
+      "old_readers_writers_retired",
+      "known_good_compatible"
+    ],
+    "rollout_order_is_derived": true,
     "contract_rules": {
       "CONTRACT_requires_prior_EXPAND": true,
       "CONTRACT_requires_backfill_complete_when_required": true,
       "CONTRACT_requires_old_readers_writers_retired": true,
+      "CONTRACT_requires_known_good_compatibility": true,
       "CONTRACT_cannot_first_introduce_replacement_representation": true,
-      "destructive_cannot_be_implicitly_rollback_safe": true
+      "destructive_cannot_be_implicitly_rollback_safe": true,
+      "fail_forward_requires_explicit_recovery": true
     }
   }
 }
