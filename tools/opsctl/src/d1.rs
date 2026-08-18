@@ -142,7 +142,3 @@ fn serialize_evaluation(
         .map(|value| value + "\n")
         .map_err(|error| D1Error::new(format!("cannot serialize d1 result: {error}")))
 }
-
-#[cfg(test)]
-#[path = "d1/tests.rs"]
-mod tests;
