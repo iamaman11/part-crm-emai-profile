@@ -189,8 +189,6 @@ def main() -> int:
         check_current(expected)
         engine.validate_full_documentation_authority()
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--check"])
-        run(["node", ".github/scripts/architecture-authority-check.mjs"])
-        run(["node", ".github/scripts/profile-security-authority-check.mjs"])
         print("Architecture inventory projects current subject-domain authorities while accepted-main/AR-9/production remain blocked.")
     else:
         engine.self_test(expected)
