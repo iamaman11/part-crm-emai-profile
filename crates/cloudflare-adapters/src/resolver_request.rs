@@ -75,7 +75,8 @@ impl ServiceAuthKeyring {
                 entry.key_hex.zeroize();
                 return Err(ResolverRequestError::InvalidSecret);
             }
-            let mut decoded = hex_decode(&entry.key_hex).ok_or(ResolverRequestError::InvalidSecret)?;
+            let mut decoded =
+                hex_decode(&entry.key_hex).ok_or(ResolverRequestError::InvalidSecret)?;
             entry.key_hex.zeroize();
             if !(MIN_KEY_BYTES..=MAX_KEY_BYTES).contains(&decoded.len()) {
                 decoded.zeroize();
@@ -369,7 +370,8 @@ mod tests {
 
     #[test]
     fn raw_secret_preserves_v1_signing_mode() -> Result<(), ResolverRequestError> {
-        let keyring = ServiceAuthKeyring::parse(&"legacy-caller-auth-key-material-0123456789".repeat(2))?;
+        let keyring =
+            ServiceAuthKeyring::parse(&"legacy-caller-auth-key-material-0123456789".repeat(2))?;
         assert!(keyring.legacy_serialization);
         assert_eq!(keyring.active()?.id, LEGACY_KEY_ID);
         assert!(
