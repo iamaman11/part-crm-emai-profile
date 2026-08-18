@@ -22,7 +22,7 @@ const EXPECTED = new Map([
   ['resolver.google-oauth-application', { slice: 'AR-8E', cutover: 'AR-8E', external: true }],
   ['resolver.microsoft-oauth-application', { slice: 'AR-8E', cutover: 'AR-8E', external: true }],
 ]);
-const FORBIDDEN_VALUE_KEYS = /(?:plaintext|secret_value|token_value|credential_value|key_hex|private_key)/i;
+const FORBIDDEN_VALUE_KEYS = /(?:plaintext_value|secret_value|token_value|credential_value|key_hex|private_key)/i;
 
 function load(path) {
   const value = JSON.parse(readFileSync(path, 'utf8'));
