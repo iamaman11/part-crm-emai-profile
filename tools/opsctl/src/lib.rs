@@ -292,7 +292,9 @@ fn json_escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Invocation, ReadCommand, json_escape, parse_invocation};
+    use super::{
+        Invocation, OpsctlError, ReadCommand, execute, json_escape, parse_invocation,
+    };
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -327,6 +329,19 @@ mod tests {
                 command: ReadCommand::Status,
             })
         );
+    }
+
+    #[test]
+    fn credential_lifecycle_reads_canonical_metadata() -> Result<(), OpsctlError> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let output = execute(Invocation::Run {
+            root: Some(root),
+            command: ReadCommand::CredentialLifecycle,
+        })?;
+        assert!(output.contains("\"kind\": \"AR8_COMPLETION_LIFECYCLE_OVERLAY\""));
+        assert!(output.contains("\"secret_plaintext_in_git\": false"));
+        assert!(!output.contains("\"secret_value\""));
+        Ok(())
     }
 
     #[test]
