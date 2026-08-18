@@ -9,6 +9,7 @@ const CANONICAL_PATH = 'architecture/credential-authority-ar8b.json';
 const ENCRYPTED_GENERATION_PATH = 'crates/encrypted-generation-domain/src/container.rs';
 const DIRTY_GENERATION_PATH = 'apps/profile-bridge/src/dirty_generation.rs';
 const BRIDGE_DOMAIN_PATH = 'crates/bridge-domain/src/lib.rs';
+const SESSION_DOMAIN_PATH = 'crates/session-domain/src/lib.rs';
 const OPERATOR_FLOW_PATH = 'apps/profile-bridge/src/operator_flow.rs';
 const CAMOUFOX_PLAN_PATH = 'docs/CAMOUFOX_RUNTIME_CUTOVER_PLAN.md';
 const PYTHON_ESTATE_PATH = 'architecture/python-estate-ar6.json';
@@ -16,6 +17,7 @@ const DATA_CLASSIFICATION_PATH = 'docs/DATA_CLASSIFICATION.md';
 const THREAT_MODEL_PATH = 'docs/THREAT_MODEL.md';
 const ADR1_PATH = 'docs/adr/ADR-0001-fingerprint-stability-policy.md';
 const ADR2_PATH = 'docs/adr/ADR-0002-cloud-profile-materialization.md';
+const ADR3_PATH = 'docs/adr/ADR-0003-desktop-runtime-distribution.md';
 const ADR6_PATH = 'docs/adr/ADR-0006-cloud-profile-key-management.md';
 
 const EXPECTED_PROFILE_DOMAINS = new Set([
@@ -25,6 +27,12 @@ const EXPECTED_PROFILE_DOMAINS = new Set([
   'profile-network.proxy-credential',
   'profile-bridge.enrollment-claim',
   'profile-generation.short-lived-object-access',
+]);
+
+const EXPECTED_NONCREDENTIAL_STATES = new Set([
+  'profile-bridge.workspace-lock-token',
+  'profile-session.launch-intent-state',
+  'profile-session.fencing-token',
 ]);
 
 const EXPECTED_OPERATOR_GATES = new Map([
@@ -121,9 +129,10 @@ function canonicalWindowsTrust(canonical, errors) {
   if (
     entry.future_cutover !== 'AR-15B' ||
     entry.externally_issued !== true ||
-    !String(entry.legitimate_mutable_authority ?? '').includes('AR-15B')
+    !String(entry.legitimate_mutable_authority ?? '').includes('AR-15B') ||
+    !String(entry.consumers ?? '').includes('Profile Bridge signed release/update chain')
   ) {
-    errors.push('Windows release-signing trust must remain owned by AR-15B, not AR-8 or AR-10');
+    errors.push('Windows/runtime-bundle signing trust must remain owned by the existing AR-15B future trust domain');
   }
 }
 
@@ -141,6 +150,11 @@ function validateScope(scope, errors) {
     remote_recovery_rehearsal_owner: 'AR-14',
     windows_delivery_owner: 'AR-15',
     windows_signing_trust_owner: 'AR-15B',
+    runtime_bundle_signing_trust_domain: 'windows.release-signing-trust',
+    runtime_bundle_signing_trust_owner: 'AR-15B',
+    launch_intent_secret_mapping: 'profile-bridge.enrollment-claim',
+    current_secret_vault_smoke_status: 'ONE_DEVICE_PROTOTYPE_NOT_PRODUCTION_KEY_AUTHORITY',
+    cloud_profile_object_access_rule: 'NO_STATIC_R2_CREDENTIAL_ON_PROFILE_BRIDGE',
     real_runtime_implemented_in_ar8: false,
     production_runtime_proof_in_ar8: false,
     production_key_recovery_proof_in_ar8: false,
@@ -205,10 +219,11 @@ function validateDomains(overlay, sources, errors) {
           domain.metadata_policy !== 'KEY_IDS_WRAPPED_REFERENCES_ALGORITHM_VERSION_AND_DEPENDENCY_STATUS_ONLY' ||
           domain.generation_dek_policy !== 'ONE_RANDOM_DEK_PER_GENERATION_NO_IN_PLACE_ROTATION' ||
           domain.root_kek_overlap_model !== 'DUAL_READ_SINGLE_WRITE' ||
+          domain.current_smoke_secret_vault_status !== 'ONE_DEVICE_PROTOTYPE_NOT_PRODUCTION_KEY_AUTHORITY' ||
           !String(domain.implementation_owner ?? '').includes('AR-13') ||
           !String(domain.implementation_owner ?? '').includes('AR-14')
         ) {
-          errors.push(`${id}: key hierarchy policy/later rehearsal ownership drifted`);
+          errors.push(`${id}: key hierarchy/prototype/later-rehearsal policy drifted`);
         }
         requireStringList(domain.retirement_preconditions, `${id}.retirement_preconditions`, errors);
         requireMarkers(
@@ -232,6 +247,7 @@ function validateDomains(overlay, sources, errors) {
             'Generation DEK',
             'dual-read/single-write',
             'plaintext key живет в bounded memory',
+            'локальный Secret Vault key',
           ],
           ADR6_PATH,
           errors,
@@ -243,10 +259,11 @@ function validateDomains(overlay, sources, errors) {
           domain.entropy_bits !== 256 ||
           domain.scope !== 'UNIQUE_PER_PROFILE_GENERATION' ||
           domain.plaintext_policy !== 'NO_LOG_AUDIT_SUPPORT_R2_OR_PUBLIC_METADATA' ||
+          domain.raw_handle_visibility !== false ||
           domain.rotation_policy !== 'NEW_PROFILE_GENERATION_ONLY_NO_IN_PLACE_ENTROPY_REWRITE' ||
           domain.implementation_owner !== 'AR-10'
         ) {
-          errors.push(`${id}: fingerprint entropy must remain AR-10-owned, generation-scoped and non-exportable`);
+          errors.push(`${id}: fingerprint entropy must remain AR-10-owned, generation-scoped, non-exportable and raw-handle-hidden`);
         }
         requireMarkers(
           sources.adr1,
@@ -260,9 +277,10 @@ function validateDomains(overlay, sources, errors) {
           domain.class !== 'DEVICE_PRIVATE_KEY' ||
           domain.application_boundary !== 'HANDLE_ONLY' ||
           domain.material_readback !== false ||
+          domain.raw_handle_visibility !== false ||
           !String(domain.implementation_owner ?? '').includes('AR-10')
         ) {
-          errors.push(`${id}: device private key must stay handle-only with no material readback and later platform proof`);
+          errors.push(`${id}: device private key must stay handle-only with no material/handle readback and later platform proof`);
         }
         requireMarkers(
           sources.bridgeDomain,
@@ -284,17 +302,19 @@ function validateDomains(overlay, sources, errors) {
         if (
           domain.class !== 'TENANT_DYNAMIC_PROXY_CREDENTIAL' ||
           domain.runtime_boundary !== 'HANDLE_OR_SCOPED_EPHEMERAL_MATERIAL_ONLY' ||
+          domain.raw_handle_visibility !== false ||
           domain.implementation_owner !== 'AR-10'
         ) {
-          errors.push(`${id}: proxy credential must remain an AR-10 handle/scoped-material domain`);
+          errors.push(`${id}: proxy credential must remain an AR-10 scoped domain with raw handle hidden`);
         }
-        requireMarkers(sources.dataClassification, ['proxy', 'CREDENTIAL_EQUIVALENT'], DATA_CLASSIFICATION_PATH, errors);
-        requireMarkers(sources.threatModel, ['proxy', 'device private'], THREAT_MODEL_PATH, errors);
+        requireMarkers(sources.dataClassification, ['proxy/mailbox secret handles', 'CREDENTIAL_EQUIVALENT'], DATA_CLASSIFICATION_PATH, errors);
+        requireMarkers(sources.threatModel, ['mailbox, proxy and OAuth secret handles', 'profile entropy/fingerprint/network identity'], THREAT_MODEL_PATH, errors);
         break;
       case 'profile-bridge.enrollment-claim':
         if (
           domain.class !== 'EPHEMERAL_DEVICE_ENROLLMENT_SECRET' ||
           domain.debug_policy !== 'REDACTED' ||
+          domain.claim_value_visibility !== 'REDACTED_ONLY' ||
           domain.replay_policy !== 'REJECT_REPLAY_AND_DEVICE_REBIND' ||
           domain.retirement_policy !== 'EXPIRE_OR_SINGLE_SUCCESSFUL_REDEMPTION'
         ) {
@@ -312,9 +332,10 @@ function validateDomains(overlay, sources, errors) {
           domain.class !== 'EPHEMERAL_SCOPED_OBJECT_ACCESS_CREDENTIAL' ||
           domain.scope_policy !== 'TENANT_PROFILE_GENERATION_AND_OPERATION_BOUND' ||
           domain.lifetime_policy !== 'SHORT_LIVED_NO_STATIC_BRIDGE_R2_CREDENTIAL' ||
+          domain.raw_bearer_visibility !== false ||
           !String(domain.implementation_owner ?? '').includes('AR-10')
         ) {
-          errors.push(`${id}: Bridge object access must remain short-lived/scoped and distinct from static control-plane R2 access`);
+          errors.push(`${id}: Bridge object access must remain short-lived/scoped, bearer-hidden and distinct from static control-plane R2 access`);
         }
         requireMarkers(
           sources.adr2,
@@ -371,6 +392,19 @@ function validateOperatorPlans(operator, errors) {
     requireString(plan.ar8_status, `${id}.ar8_status`, errors);
     requireString(plan.operator_rule, `${id}.operator_rule`, errors);
     requireString(plan.recovery_rule, `${id}.recovery_rule`, errors);
+    const rule = String(plan.operator_rule ?? '');
+    if (id === 'profile-identity.entropy-root' && !rule.includes('never entropy bytes or the raw secret-handle value')) {
+      errors.push(`${id}: operator rule must hide entropy and raw secret handle`);
+    }
+    if (id === 'profile-bridge.device-private-key' && !rule.includes('never private-key bytes or the raw device key handle')) {
+      errors.push(`${id}: operator rule must hide private material and raw key handle`);
+    }
+    if (id === 'profile-network.proxy-credential' && !rule.includes('never proxy username/password/token material or the raw secret handle')) {
+      errors.push(`${id}: operator rule must hide proxy credential material and raw handle`);
+    }
+    if (id === 'profile-generation.short-lived-object-access' && !rule.includes('never bearer credential/capability material')) {
+      errors.push(`${id}: operator rule must hide bearer object-access material`);
+    }
   }
   for (const id of EXPECTED_PROFILE_DOMAINS) {
     if (!seen.has(id)) {
@@ -380,27 +414,95 @@ function validateOperatorPlans(operator, errors) {
   if (seen.size !== EXPECTED_PROFILE_DOMAINS.size || plans.length !== EXPECTED_PROFILE_DOMAINS.size) {
     errors.push('AR-8F profile_security_plans must exactly match the audited profile security domain set');
   }
+
+  const noncredential = operator.profile_noncredential_state_policy;
+  if (
+    noncredential?.operator_visibility !== 'METADATA_ONLY' ||
+    noncredential?.raw_token_or_claim_value !== false ||
+    !Array.isArray(noncredential?.ids) ||
+    new Set(noncredential.ids).size !== EXPECTED_NONCREDENTIAL_STATES.size ||
+    noncredential.ids.some((id) => !EXPECTED_NONCREDENTIAL_STATES.has(id))
+  ) {
+    errors.push('AR-8F protected non-credential state policy must be exact, metadata-only and value-free');
+  }
 }
 
-function validateNonCredentialState(overlay, bridgeDomain, errors) {
+function validateNonCredentialState(overlay, sources, errors) {
   const entries = overlay.profile_protected_noncredential_state;
-  if (!Array.isArray(entries) || entries.length !== 1) {
-    errors.push('profile_protected_noncredential_state must contain exactly workspace-lock-token');
+  if (!Array.isArray(entries)) {
+    errors.push('profile_protected_noncredential_state must be an array');
     return;
   }
-  const entry = entries[0];
-  if (
-    entry?.id !== 'profile-bridge.workspace-lock-token' ||
-    entry?.class !== 'PROTECTED_COORDINATION_FENCING_STATE' ||
-    entry?.credential_authority !== false ||
-    entry?.scope !== 'LOCAL_WORKSPACE_SINGLE_WRITER' ||
-    entry?.debug_policy !== 'REDACTED' ||
-    entry?.persistence_policy !== 'LOCAL_COORDINATION_ONLY_NOT_PROVIDER_CREDENTIAL' ||
-    entry?.failure_policy !== 'STALE_OR_MISMATCHED_OWNER_FAILS_CLOSED'
-  ) {
-    errors.push('workspace lock token must remain explicitly classified as protected non-credential coordination state');
+  const seen = new Set();
+  for (const entry of entries) {
+    const id = entry?.id;
+    if (typeof id !== 'string' || seen.has(id) || !EXPECTED_NONCREDENTIAL_STATES.has(id)) {
+      errors.push(`invalid/duplicate protected non-credential profile state: ${String(id)}`);
+      continue;
+    }
+    seen.add(id);
+    if (entry.credential_authority !== false) {
+      errors.push(`${id}: protected coordination/authorization state must not become credential authority`);
+    }
+    switch (id) {
+      case 'profile-bridge.workspace-lock-token':
+        if (
+          entry.class !== 'PROTECTED_COORDINATION_FENCING_STATE' ||
+          entry.scope !== 'LOCAL_WORKSPACE_SINGLE_WRITER' ||
+          entry.debug_policy !== 'REDACTED' ||
+          entry.persistence_policy !== 'LOCAL_COORDINATION_ONLY_NOT_PROVIDER_CREDENTIAL' ||
+          entry.failure_policy !== 'STALE_OR_MISMATCHED_OWNER_FAILS_CLOSED'
+        ) {
+          errors.push(`${id}: local workspace coordination classification drifted`);
+        }
+        requireMarkers(sources.bridgeDomain, ['WorkspaceLockToken([REDACTED])', 'WorkspaceLockError::StaleWriter'], BRIDGE_DOMAIN_PATH, errors);
+        break;
+      case 'profile-session.launch-intent-state':
+        if (
+          entry.class !== 'CONFIDENTIAL_EPHEMERAL_AUTHORIZATION_STATE' ||
+          entry.scope !== 'TENANT_ACTOR_DEVICE_PROFILE_BOUND' ||
+          entry.secret_redemption_mapping !== 'profile-bridge.enrollment-claim' ||
+          entry.persistence_policy !== 'BOUNDED_AUTHORIZATION_METADATA_ONLY_NO_CLAIM_CODE' ||
+          entry.failure_policy !== 'TENANT_ACTOR_DEVICE_MISMATCH_REPLAY_OR_EXPIRY_FAILS_CLOSED'
+        ) {
+          errors.push(`${id}: launch-intent authorization state classification drifted`);
+        }
+        requireMarkers(
+          sources.sessionDomain,
+          ['pub struct LaunchIntent', 'LaunchIntentError::ReplayRejected', 'LaunchIntentError::Expired', 'LaunchIntentError::DeviceMismatch'],
+          SESSION_DOMAIN_PATH,
+          errors,
+        );
+        break;
+      case 'profile-session.fencing-token':
+        if (
+          entry.class !== 'PROTECTED_COORDINATION_FENCING_STATE' ||
+          entry.scope !== 'CLOUD_PROFILE_SINGLE_WRITER_LEASE' ||
+          entry.identifier_policy !== 'OPAQUE_COORDINATION_ID_NOT_BEARER_SECRET' ||
+          entry.persistence_policy !== 'LEASE_COORDINATION_METADATA_NOT_SECRET_STORE_AUTHORITY' ||
+          entry.failure_policy !== 'STALE_EPOCH_OR_TOKEN_FAILS_CLOSED'
+        ) {
+          errors.push(`${id}: cloud lease fencing classification drifted`);
+        }
+        requireMarkers(
+          sources.sessionDomain,
+          ['pub struct ProfileLease', 'fencing_token: FencingToken', 'Self::StaleWriter => "lease command has stale epoch or fencing token"'],
+          SESSION_DOMAIN_PATH,
+          errors,
+        );
+        break;
+      default:
+        break;
+    }
   }
-  requireMarkers(bridgeDomain, ['WorkspaceLockToken([REDACTED])', 'WorkspaceLockError::StaleWriter'], BRIDGE_DOMAIN_PATH, errors);
+  for (const id of EXPECTED_NONCREDENTIAL_STATES) {
+    if (!seen.has(id)) {
+      errors.push(`missing protected non-credential profile state: ${id}`);
+    }
+  }
+  if (seen.size !== EXPECTED_NONCREDENTIAL_STATES.size || entries.length !== EXPECTED_NONCREDENTIAL_STATES.size) {
+    errors.push('profile_protected_noncredential_state must exactly match the audited state set');
+  }
 }
 
 function validateCredentialEquivalentAsset(overlay, dataClassification, errors) {
@@ -423,10 +525,10 @@ function validateCredentialEquivalentAsset(overlay, dataClassification, errors) 
   requireMarkers(dataClassification, ['CREDENTIAL_EQUIVALENT', 'key4.db', 'logins.db', 'DEK', 'KEK'], DATA_CLASSIFICATION_PATH, errors);
 }
 
-function validateAr10Boundary(sources, errors) {
+function validateAr10AndAr15Boundaries(sources, errors) {
   requireMarkers(
     sources.camoufoxPlan,
-    ['AR-10', 'real Camouhost', 'tools/profile_browser.py', 'AR-15', 'Camoufox'],
+    ['AR-10', 'real Camouhost', 'tools/profile_browser.py', 'AR-13', 'AR-14', 'AR-15', 'Camoufox'],
     CAMOUFOX_PLAN_PATH,
     errors,
   );
@@ -434,6 +536,20 @@ function validateAr10Boundary(sources, errors) {
     sources.pythonEstate,
     ['tools/profile_browser.py', '"cutover_slice": "AR-10"', 'runtime/camouhost/main.py', 'legacy_direct_browser_runtime_tool'],
     PYTHON_ESTATE_PATH,
+    errors,
+  );
+  requireMarkers(
+    sources.adr3,
+    [
+      'one-time launch intent',
+      'profilebridge://claim/<opaque-code>',
+      'Profile ID, JWT, email, R2 credentials и keys в URI запрещены',
+      'signed content-addressed artifact',
+      'Production client не получает постоянный R2 bucket token',
+      'short-lived scoped credentials',
+      'Текущий smoke использует локальный Secret Vault key',
+    ],
+    ADR3_PATH,
     errors,
   );
 }
@@ -458,9 +574,9 @@ function validate(overlay, operator, canonical, sources) {
   validateScope(overlay.camoufox_profile_scope, errors);
   validateDomains(overlay, sources, errors);
   validateOperatorPlans(operator, errors);
-  validateNonCredentialState(overlay, sources.bridgeDomain, errors);
+  validateNonCredentialState(overlay, sources, errors);
   validateCredentialEquivalentAsset(overlay, sources.dataClassification, errors);
-  validateAr10Boundary(sources, errors);
+  validateAr10AndAr15Boundaries(sources, errors);
   canonicalWindowsTrust(canonical, errors);
   return errors;
 }
@@ -489,6 +605,10 @@ function selfTest(overlay, operator, canonical, sources) {
   deviceReadback.profile_security_domains.find((item) => item.id === 'profile-bridge.device-private-key').material_readback = true;
   assertRejected('device private-key material readback', deviceReadback, operator, canonical, sources);
 
+  const rawProxyHandle = clone(overlay);
+  rawProxyHandle.profile_security_domains.find((item) => item.id === 'profile-network.proxy-credential').raw_handle_visibility = true;
+  assertRejected('raw proxy secret-handle visibility', rawProxyHandle, operator, canonical, sources);
+
   const staticBridgeR2 = clone(overlay);
   staticBridgeR2.profile_security_domains.find((item) => item.id === 'profile-generation.short-lived-object-access').lifetime_policy = 'STATIC_R2_PAIR_ON_BRIDGE';
   assertRejected('static Bridge R2 credential', staticBridgeR2, operator, canonical, sources);
@@ -500,6 +620,10 @@ function selfTest(overlay, operator, canonical, sources) {
   const workspaceCredential = clone(overlay);
   workspaceCredential.profile_protected_noncredential_state[0].credential_authority = true;
   assertRejected('workspace lock promoted to credential authority', workspaceCredential, operator, canonical, sources);
+
+  const launchCredential = clone(overlay);
+  launchCredential.profile_protected_noncredential_state.find((item) => item.id === 'profile-session.launch-intent-state').credential_authority = true;
+  assertRejected('launch intent promoted to credential authority', launchCredential, operator, canonical, sources);
 
   const productionProof = clone(overlay);
   productionProof.profile_security_domains[0].production_proof_complete = true;
@@ -513,6 +637,10 @@ function selfTest(overlay, operator, canonical, sources) {
   operatorReadback.profile_security_plans[0].secret_readback = true;
   assertRejected('operator profile secret readback', overlay, operatorReadback, canonical, sources);
 
+  const operatorRawState = clone(operator);
+  operatorRawState.profile_noncredential_state_policy.raw_token_or_claim_value = true;
+  assertRejected('operator raw coordination/claim value', overlay, operatorRawState, canonical, sources);
+
   const windowsInAr8 = clone(canonical);
   windowsInAr8.future_trust_domains.find((item) => item.id === 'windows.release-signing-trust').future_cutover = 'AR-8';
   assertRejected('Windows signing ownership pulled into AR-8', overlay, operator, windowsInAr8, sources);
@@ -525,6 +653,7 @@ const sources = {
   encryptedGeneration: text(ENCRYPTED_GENERATION_PATH),
   dirtyGeneration: text(DIRTY_GENERATION_PATH),
   bridgeDomain: text(BRIDGE_DOMAIN_PATH),
+  sessionDomain: text(SESSION_DOMAIN_PATH),
   operatorFlow: text(OPERATOR_FLOW_PATH),
   camoufoxPlan: text(CAMOUFOX_PLAN_PATH),
   pythonEstate: text(PYTHON_ESTATE_PATH),
@@ -532,6 +661,7 @@ const sources = {
   threatModel: text(THREAT_MODEL_PATH),
   adr1: text(ADR1_PATH),
   adr2: text(ADR2_PATH),
+  adr3: text(ADR3_PATH),
   adr6: text(ADR6_PATH),
 };
 
