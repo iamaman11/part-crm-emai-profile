@@ -1458,11 +1458,15 @@ mod tests {
     #[test]
     fn lookup_candidate_slots_are_fixed_bounded_and_unique() {
         let candidates = vec![candidate(1, "a"), candidate(2, "b")];
-        let slots = candidate_digest_slots(&candidates).expect("bounded candidates");
-        assert_eq!(slots[0], candidates[0].digest.as_str());
-        assert_eq!(slots[1], candidates[1].digest.as_str());
-        assert_eq!(slots[2], "");
-        assert_eq!(slots[3], "");
+        assert_eq!(
+            candidate_digest_slots(&candidates),
+            Ok([
+                candidates[0].digest.as_str(),
+                candidates[1].digest.as_str(),
+                "",
+                "",
+            ])
+        );
 
         assert_eq!(candidate_digest_slots(&[]), Err(RecordStoreError::Crypto));
         assert_eq!(
@@ -1488,18 +1492,19 @@ mod tests {
     #[test]
     fn idempotency_lookup_accepts_one_exact_pair_and_rejects_mismatch_or_ambiguity() {
         let candidates = vec![candidate(1, "a"), candidate(2, "b")];
-        let exact = resolve_idempotency_rows(
+        let exact_result = resolve_idempotency_rows(
             &candidates,
             vec![IdempotencyRow {
                 idempotency_digest: candidates[1].digest.clone(),
                 request_sha256: "f".repeat(64),
                 hmac_version: 2,
             }],
-        )
-        .expect("exact pair")
-        .expect("one match");
-        assert_eq!(exact.lookup, candidates[1]);
-        assert_eq!(exact.request_sha256, "f".repeat(64));
+        );
+        assert!(matches!(
+            exact_result.as_ref(),
+            Ok(Some(exact))
+                if exact.lookup == candidates[1] && exact.request_sha256 == "f".repeat(64)
+        ));
 
         assert_eq!(
             resolve_idempotency_rows(
