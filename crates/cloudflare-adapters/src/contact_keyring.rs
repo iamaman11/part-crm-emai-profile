@@ -129,10 +129,11 @@ const fn hex_nibble(value: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_contact_protection_keyring;
+    use super::{ContactKeyringConfigError, parse_contact_protection_keyring};
 
     #[test]
-    fn explicit_active_versions_do_not_depend_on_json_array_order() {
+    fn explicit_active_versions_do_not_depend_on_json_array_order()
+    -> Result<(), ContactKeyringConfigError> {
         let valid = format!(
             "{{\"activeEncryptionVersion\":1,\"activeLookupVersion\":1,\"encryption\":[{{\"version\":2,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}],\"lookup\":[{{\"version\":3,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}]}}",
             "ab".repeat(32),
@@ -140,9 +141,10 @@ mod tests {
             "ef".repeat(32),
             "12".repeat(32),
         );
-        let keyring = parse_contact_protection_keyring(valid).expect("explicit keyring should parse");
+        let keyring = parse_contact_protection_keyring(valid)?;
         assert_eq!(keyring.lookup_versions()[0].value(), 1);
         assert!(format!("{keyring:?}").contains("encryption_versions: [1, 2]"));
+        Ok(())
     }
 
     #[test]
