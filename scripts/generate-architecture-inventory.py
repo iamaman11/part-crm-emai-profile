@@ -35,6 +35,11 @@ AR7_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR7.md"
 GOVERNANCE_CONTRACT = "architecture/github-governance-ar7.json"
 PYTHON_ESTATE = "architecture/python-estate-ar6.json"
 CREDENTIAL_AUTHORITY = "architecture/credential-authority-ar8b.json"
+AR8D_SECRET_TRANSPORT_SUCCESSOR = "architecture/ar8-d-secret-transport-successor.json"
+AR8D_SUPERSEDED_ROUTINE_BINDING_OWNERS = {
+    "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON": "cloudflare.control-plane-secret-bundle-transport",
+    "CLOUDFLARE_RESOLVER_SECRETS_JSON": "cloudflare.resolver-secret-bundle-transport",
+}
 AR8C_PROVIDER_EXECUTION_AUTHORITY = "architecture/ar8-staging-provider-bootstrap-contract.json"
 AR8C_PROVIDER_EXECUTION_EVIDENCE = "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md"
 POST_AR8C_CLEANUP_EVIDENCE = "docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json"
@@ -379,6 +384,40 @@ def credential_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def governed_superseded_credential_bindings(owners: dict[str, str]) -> set[str]:
+    path = ROOT / AR8D_SECRET_TRANSPORT_SUCCESSOR
+    if not path.is_file():
+        return set()
+    transition = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(transition, dict):
+        raise ValueError("AR-8D secret-transport successor must be one JSON object")
+    if (
+        transition.get("kind") != "POLICY_TRANSITION"
+        or transition.get("status") != "candidate"
+        or transition.get("tracking_issue") != 361
+        or transition.get("parent_issue") != AR8_UMBRELLA_ISSUE
+        or transition.get("canonical_inventory") != "architecture/inventory.json"
+    ):
+        raise ValueError("AR-8D secret-transport successor provenance drifted")
+    successor = transition.get("successor")
+    if not isinstance(successor, dict):
+        raise ValueError("AR-8D secret-transport successor metadata is missing")
+    names = successor.get("superseded_routine_deploy_bindings")
+    expected_names = sorted(AR8D_SUPERSEDED_ROUTINE_BINDING_OWNERS)
+    if names != expected_names:
+        raise ValueError("AR-8D successor must govern exactly the two historical D3 bundle bindings")
+    if (
+        successor.get("routine_deploy_secret_value_transport") is not False
+        or successor.get("routine_deploy_secret_mutation") is not False
+        or successor.get("rotation_lifecycle") != "separate_explicit_rotation_authority"
+    ):
+        raise ValueError("AR-8D successor no longer separates routine deployment from secret rotation")
+    for name, expected_owner in AR8D_SUPERSEDED_ROUTINE_BINDING_OWNERS.items():
+        if owners.get(name) != expected_owner:
+            raise ValueError(f"AR-8D superseded binding {name} is not owned by {expected_owner}")
+    return set(expected_names)
+
+
 def validate_credential_authority(payload: dict[str, Any], detected: dict[str, set[str]]) -> None:
     if payload.get("schema_version") != 1:
         raise ValueError("credential authority schema_version must be 1")
@@ -481,7 +520,8 @@ def validate_credential_authority(payload: dict[str, Any], detected: dict[str, s
     if missing:
         details = ", ".join(f"{name} ({sorted(detected[name])})" for name in missing)
         raise ValueError(f"tracked credential bindings missing canonical authority: {details}")
-    stale = sorted(set(owners) - set(detected) - declaration_only)
+    governed_superseded = governed_superseded_credential_bindings(owners)
+    stale = sorted(set(owners) - set(detected) - declaration_only - governed_superseded)
     if stale:
         raise ValueError("authority has non-detected bindings without declaration_only=true: " + ", ".join(stale))
 
@@ -577,6 +617,20 @@ def credential_negative_self_test(payload: dict[str, Any], detected: dict[str, s
     synthetic = copy.deepcopy(detected)
     synthetic["AR8B_UNKNOWN_TRACKED_SECRET"] = {"tests/synthetic-workflow.yml"}
     must_reject("unknown tracked credential binding", payload, synthetic)
+
+    unrelated_live = next(
+        (
+            name
+            for name in sorted(detected)
+            if name not in AR8D_SUPERSEDED_ROUTINE_BINDING_OWNERS
+        ),
+        None,
+    )
+    if unrelated_live is None:
+        raise SystemExit("AR-8B self-test requires one non-AR-8D live binding")
+    unrelated_stale = copy.deepcopy(detected)
+    unrelated_stale.pop(unrelated_live)
+    must_reject("unrelated stale binding is not governed by AR-8D transition", payload, unrelated_stale)
 
 
 def print_credential_check_summary(detected: dict[str, set[str]], *, self_tested: bool) -> None:
