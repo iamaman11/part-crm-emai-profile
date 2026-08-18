@@ -8,6 +8,7 @@ use worker::query;
 use zeroize::Zeroizing;
 
 const REFRESH_LEASE_TTL_MS: u64 = 30_000;
+const MAX_LOOKUP_HMAC_CANDIDATES: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CredentialLifecycleState {
@@ -1093,37 +1094,29 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             .crypto
             .lookup_candidates(tenant_id, idempotency_key)
             .map_err(map_crypto_error)?;
-        let mut resolved = None;
-        for candidate in candidates {
-            let row = query!(
-                &self.database,
-                r#"
-                SELECT request_sha256, hmac_version
-                FROM resolver_idempotency_records
-                WHERE tenant_id = ? AND idempotency_digest = ? AND operation = ?
-                "#,
-                tenant_id,
-                candidate.digest.as_str(),
-                operation
-            )
-            .map_err(|_| RecordStoreError::StorageUnavailable)?
-            .first::<IdempotencyRow>(None)
-            .await
-            .map_err(|_| RecordStoreError::StorageUnavailable)?;
-            let Some(row) = row else {
-                continue;
-            };
-            let stored_version =
-                u32::try_from(row.hmac_version).map_err(|_| RecordStoreError::Crypto)?;
-            if stored_version != candidate.version || resolved.is_some() {
-                return Err(RecordStoreError::Crypto);
-            }
-            resolved = Some(ResolvedIdempotencyClaim {
-                lookup: candidate,
-                request_sha256: row.request_sha256,
-            });
-        }
-        Ok(resolved)
+        let [digest_0, digest_1, digest_2, digest_3] = candidate_digest_slots(&candidates)?;
+        let rows = query!(
+            &self.database,
+            r#"
+            SELECT idempotency_digest, request_sha256, hmac_version
+            FROM resolver_idempotency_records
+            WHERE tenant_id = ? AND operation = ?
+              AND idempotency_digest IN (?, ?, ?, ?)
+            "#,
+            tenant_id,
+            operation,
+            digest_0,
+            digest_1,
+            digest_2,
+            digest_3
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .all()
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .results::<IdempotencyRow>()
+        .map_err(|_| RecordStoreError::StorageUnavailable)?;
+        resolve_idempotency_rows(&candidates, rows)
     }
 
     async fn resolve_record_lookup(
@@ -1142,37 +1135,29 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             .crypto
             .lookup_candidates(tenant_id, raw_handle)
             .map_err(map_crypto_error)?;
-        let mut resolved = None;
-        for candidate in candidates {
-            let row = query!(
-                &self.database,
-                r#"
-                SELECT lookup_hmac_version, logical_id
-                FROM resolver_encrypted_records
-                WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ?
-                "#,
-                tenant_id,
-                candidate.digest.as_str(),
-                record_kind
-            )
-            .map_err(|_| RecordStoreError::StorageUnavailable)?
-            .first::<LookupMetadataRow>(None)
-            .await
-            .map_err(|_| RecordStoreError::StorageUnavailable)?;
-            let Some(row) = row else {
-                continue;
-            };
-            let stored_version =
-                u32::try_from(row.lookup_hmac_version).map_err(|_| RecordStoreError::Crypto)?;
-            if stored_version != candidate.version
-                || row.logical_id != candidate.digest
-                || resolved.is_some()
-            {
-                return Err(RecordStoreError::Crypto);
-            }
-            resolved = Some(candidate);
-        }
-        Ok(resolved)
+        let [digest_0, digest_1, digest_2, digest_3] = candidate_digest_slots(&candidates)?;
+        let rows = query!(
+            &self.database,
+            r#"
+            SELECT lookup_digest, lookup_hmac_version, logical_id
+            FROM resolver_encrypted_records
+            WHERE tenant_id = ? AND record_kind = ?
+              AND lookup_digest IN (?, ?, ?, ?)
+            "#,
+            tenant_id,
+            record_kind,
+            digest_0,
+            digest_1,
+            digest_2,
+            digest_3
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .all()
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .results::<LookupMetadataRow>()
+        .map_err(|_| RecordStoreError::StorageUnavailable)?;
+        resolve_lookup_rows(&candidates, rows)
     }
 
     async fn reencrypt(
@@ -1229,6 +1214,7 @@ struct ResolvedIdempotencyClaim {
 
 #[derive(Deserialize)]
 struct LookupMetadataRow {
+    lookup_digest: String,
     lookup_hmac_version: i64,
     logical_id: String,
 }
@@ -1283,8 +1269,81 @@ struct CountRow {
 
 #[derive(Deserialize)]
 struct IdempotencyRow {
+    idempotency_digest: String,
     request_sha256: String,
     hmac_version: i64,
+}
+
+fn candidate_digest_slots(
+    candidates: &[LookupDigest],
+) -> Result<[&str; MAX_LOOKUP_HMAC_CANDIDATES], RecordStoreError> {
+    if candidates.is_empty() || candidates.len() > MAX_LOOKUP_HMAC_CANDIDATES {
+        return Err(RecordStoreError::Crypto);
+    }
+    let mut slots = [""; MAX_LOOKUP_HMAC_CANDIDATES];
+    for (index, candidate) in candidates.iter().enumerate() {
+        if candidate.version == 0
+            || candidate.digest.len() != 64
+            || !candidate
+                .digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || candidates[..index].iter().any(|existing| {
+                existing.version == candidate.version || existing.digest == candidate.digest
+            })
+        {
+            return Err(RecordStoreError::Crypto);
+        }
+        slots[index] = candidate.digest.as_str();
+    }
+    Ok(slots)
+}
+
+fn resolve_idempotency_rows(
+    candidates: &[LookupDigest],
+    rows: Vec<IdempotencyRow>,
+) -> Result<Option<ResolvedIdempotencyClaim>, RecordStoreError> {
+    let mut resolved = None;
+    for row in rows {
+        let stored_version =
+            u32::try_from(row.hmac_version).map_err(|_| RecordStoreError::Crypto)?;
+        let candidate = candidates
+            .iter()
+            .find(|candidate| {
+                candidate.version == stored_version && candidate.digest == row.idempotency_digest
+            })
+            .ok_or(RecordStoreError::Crypto)?;
+        if resolved.is_some() {
+            return Err(RecordStoreError::Crypto);
+        }
+        resolved = Some(ResolvedIdempotencyClaim {
+            lookup: candidate.clone(),
+            request_sha256: row.request_sha256,
+        });
+    }
+    Ok(resolved)
+}
+
+fn resolve_lookup_rows(
+    candidates: &[LookupDigest],
+    rows: Vec<LookupMetadataRow>,
+) -> Result<Option<LookupDigest>, RecordStoreError> {
+    let mut resolved = None;
+    for row in rows {
+        let stored_version =
+            u32::try_from(row.lookup_hmac_version).map_err(|_| RecordStoreError::Crypto)?;
+        let candidate = candidates
+            .iter()
+            .find(|candidate| {
+                candidate.version == stored_version && candidate.digest == row.lookup_digest
+            })
+            .ok_or(RecordStoreError::Crypto)?;
+        if row.logical_id != candidate.digest || resolved.is_some() {
+            return Err(RecordStoreError::Crypto);
+        }
+        resolved = Some(candidate.clone());
+    }
+    Ok(resolved)
 }
 
 fn require_one_change(meta: Option<D1ResultMeta>) -> Result<(), RecordStoreError> {
@@ -1347,8 +1406,11 @@ const fn map_crypto_error(_error: CryptoError) -> RecordStoreError {
 #[cfg(test)]
 mod tests {
     use super::{
-        HandleHmacDependencyStatus, RecordIdentity, RecordStoreError, validate_record_input,
+        HandleHmacDependencyStatus, IdempotencyRow, LookupMetadataRow, RecordIdentity,
+        RecordStoreError, candidate_digest_slots, resolve_idempotency_rows, resolve_lookup_rows,
+        validate_record_input,
     };
+    use crate::crypto::LookupDigest;
 
     #[test]
     fn record_input_is_bounded_and_expiry_is_forward_only() {
@@ -1391,6 +1453,140 @@ mod tests {
             }
             .can_retire()
         );
+    }
+
+    #[test]
+    fn lookup_candidate_slots_are_fixed_bounded_and_unique() {
+        let candidates = vec![candidate(1, "a"), candidate(2, "b")];
+        let slots = candidate_digest_slots(&candidates).expect("bounded candidates");
+        assert_eq!(slots[0], candidates[0].digest.as_str());
+        assert_eq!(slots[1], candidates[1].digest.as_str());
+        assert_eq!(slots[2], "");
+        assert_eq!(slots[3], "");
+
+        assert_eq!(candidate_digest_slots(&[]), Err(RecordStoreError::Crypto));
+        assert_eq!(
+            candidate_digest_slots(&[
+                candidate(1, "a"),
+                candidate(2, "b"),
+                candidate(3, "c"),
+                candidate(4, "d"),
+                candidate(5, "e"),
+            ]),
+            Err(RecordStoreError::Crypto)
+        );
+        assert_eq!(
+            candidate_digest_slots(&[candidate(1, "a"), candidate(1, "b")]),
+            Err(RecordStoreError::Crypto)
+        );
+        assert_eq!(
+            candidate_digest_slots(&[candidate(1, "a"), candidate(2, "a")]),
+            Err(RecordStoreError::Crypto)
+        );
+    }
+
+    #[test]
+    fn idempotency_lookup_accepts_one_exact_pair_and_rejects_mismatch_or_ambiguity() {
+        let candidates = vec![candidate(1, "a"), candidate(2, "b")];
+        let exact = resolve_idempotency_rows(
+            &candidates,
+            vec![IdempotencyRow {
+                idempotency_digest: candidates[1].digest.clone(),
+                request_sha256: "f".repeat(64),
+                hmac_version: 2,
+            }],
+        )
+        .expect("exact pair")
+        .expect("one match");
+        assert_eq!(exact.lookup, candidates[1]);
+        assert_eq!(exact.request_sha256, "f".repeat(64));
+
+        assert_eq!(
+            resolve_idempotency_rows(
+                &candidates,
+                vec![IdempotencyRow {
+                    idempotency_digest: candidates[1].digest.clone(),
+                    request_sha256: "f".repeat(64),
+                    hmac_version: 1,
+                }],
+            )
+            .err(),
+            Some(RecordStoreError::Crypto)
+        );
+        assert_eq!(
+            resolve_idempotency_rows(
+                &candidates,
+                vec![
+                    IdempotencyRow {
+                        idempotency_digest: candidates[0].digest.clone(),
+                        request_sha256: "e".repeat(64),
+                        hmac_version: 1,
+                    },
+                    IdempotencyRow {
+                        idempotency_digest: candidates[1].digest.clone(),
+                        request_sha256: "f".repeat(64),
+                        hmac_version: 2,
+                    },
+                ],
+            )
+            .err(),
+            Some(RecordStoreError::Crypto)
+        );
+    }
+
+    #[test]
+    fn record_lookup_accepts_one_exact_pair_and_rejects_malformed_metadata_or_ambiguity() {
+        let candidates = vec![candidate(1, "a"), candidate(2, "b")];
+        assert_eq!(
+            resolve_lookup_rows(
+                &candidates,
+                vec![lookup_row(&candidates[0], candidates[0].digest.clone())],
+            ),
+            Ok(Some(candidates[0].clone()))
+        );
+        assert_eq!(
+            resolve_lookup_rows(
+                &candidates,
+                vec![LookupMetadataRow {
+                    lookup_digest: candidates[0].digest.clone(),
+                    lookup_hmac_version: 2,
+                    logical_id: candidates[0].digest.clone(),
+                }],
+            ),
+            Err(RecordStoreError::Crypto)
+        );
+        assert_eq!(
+            resolve_lookup_rows(
+                &candidates,
+                vec![lookup_row(&candidates[0], "c".repeat(64))],
+            ),
+            Err(RecordStoreError::Crypto)
+        );
+        assert_eq!(
+            resolve_lookup_rows(
+                &candidates,
+                vec![
+                    lookup_row(&candidates[0], candidates[0].digest.clone()),
+                    lookup_row(&candidates[1], candidates[1].digest.clone()),
+                ],
+            ),
+            Err(RecordStoreError::Crypto)
+        );
+    }
+
+    fn candidate(version: u32, nibble: &str) -> LookupDigest {
+        LookupDigest {
+            version,
+            digest: nibble.repeat(64),
+        }
+    }
+
+    fn lookup_row(candidate: &LookupDigest, logical_id: String) -> LookupMetadataRow {
+        LookupMetadataRow {
+            lookup_digest: candidate.digest.clone(),
+            lookup_hmac_version: i64::from(candidate.version),
+            logical_id,
+        }
     }
 
     const fn identity() -> RecordIdentity<'static> {
