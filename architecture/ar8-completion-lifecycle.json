@@ -268,7 +268,7 @@
       "legitimate_mutable_authority": "single platform device-key adapter behind DeviceKeyPort",
       "version_state_source": "device identity/key handle and future platform key metadata only",
       "application_boundary": "HANDLE_ONLY",
-      "private_key_readback": false,
+      "material_readback": false,
       "implementation_owner": "AR-10 supported Profile Bridge runtime integration; physical/platform key-protection proof remains a later pre-production requirement",
       "production_proof_complete": false
     },
