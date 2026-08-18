@@ -728,12 +728,14 @@ mod tests {
             )?,
             FixedNonce([0x55; 24]),
         );
-        let old_encrypted = block_on(legacy.encrypt_contact_display(ContactEncryptionRequest::new(
-            &tenant,
-            &contact_id,
-            ContactProtectionVersion::V1,
-            &normalized,
-        )))?;
+        let old_encrypted = block_on(legacy.encrypt_contact_display(
+            ContactEncryptionRequest::new(
+                &tenant,
+                &contact_id,
+                ContactProtectionVersion::V1,
+                &normalized,
+            ),
+        ))?;
         let old_lookup = block_on(legacy.derive_exact_lookup_token(
             ContactExactLookupRequest::new(
                 &tenant,
@@ -773,13 +775,14 @@ mod tests {
             .expect("retained old lookup version must remain readable during reconciliation");
         assert_eq!(retained_old_lookup.bytes(), old_lookup.bytes());
 
-        let replacement_encrypted =
-            block_on(rotated.encrypt_contact_display(ContactEncryptionRequest::new(
+        let replacement_encrypted = block_on(rotated.encrypt_contact_display(
+            ContactEncryptionRequest::new(
                 &tenant,
                 &contact_id,
                 ContactProtectionVersion::V1,
                 &normalized,
-            )))?;
+            ),
+        ))?;
         let replacement_lookup = block_on(rotated.derive_exact_lookup_token(
             ContactExactLookupRequest::new(
                 &tenant,
@@ -837,8 +840,12 @@ mod tests {
             "hex(nonce) = ?",
             "hex(exact_lookup_token) = ?",
         ] {
-            assert!(cas_update.contains(required), "missing CAS predicate: {required}");
+            assert!(
+                cas_update.contains(required),
+                "missing CAS predicate: {required}"
+            );
         }
+        assert!(!cas_update.contains("status ="));
         assert!(source.contains("if changes != 1"));
         assert!(source.contains("ContactKeyLifecycleError::ConcurrentMutation"));
     }
