@@ -18,6 +18,12 @@ function normalizedShell(text) {
   return text.replace(/\\\s*\n\s*/g, ' ');
 }
 
+function replaceFixture(label, text, from, to) {
+  const mutated = text.replace(from, to);
+  if (mutated === text) fail(`negative protected-executor fixture did not mutate source: ${label}`);
+  return mutated;
+}
+
 async function workflowPaths(root) {
   const entries = await readdir(path.join(root, WORKFLOWS), { withFileTypes: true });
   return entries
@@ -73,6 +79,9 @@ async function validateExecutor(text, root = ROOT) {
   if (authorizeBody.includes('environment:')) {
     fail('preflight authorization job must not bind any GitHub Environment');
   }
+  if (authorizeBody.includes('CLOUDFLARE_API_TOKEN')) {
+    fail('preflight authorization job must not receive the provider API token');
+  }
   for (const marker of [
     'test "$TARGET_ENVIRONMENT" = "staging" || test "$TARGET_ENVIRONMENT" = "production"',
     'test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"',
@@ -82,18 +91,20 @@ async function validateExecutor(text, root = ROOT) {
     if (!authorizeBody.includes(marker)) fail(`preflight authorization lost fail-closed marker: ${marker}`);
   }
 
-  const migrateHeader = text.slice(migrateIndex, text.indexOf('\n    steps:', migrateIndex));
+  const migrateStepsIndex = text.indexOf('\n    steps:', migrateIndex);
+  if (migrateStepsIndex < 0) fail('protected mutation job steps are missing');
+  const migrateHeader = text.slice(migrateIndex, migrateStepsIndex);
   if (!migrateHeader.includes('needs: authorize')) {
     fail('protected mutation job must depend on successful preflight authorization');
   }
   if (!migrateHeader.includes('environment: ${{ inputs.environment }}')) {
     fail('protected mutation job lost exact environment binding');
   }
-
-  const jobEnvMatch = text.match(/^    env:\n(?<body>.*?)(?=^    steps:)/ms);
-  if (!jobEnvMatch) fail('protected D1 executor job-level metadata environment is missing');
-  if (jobEnvMatch.groups.body.includes('CLOUDFLARE_API_TOKEN')) {
-    fail('Cloudflare API token must not exist in the job-level environment');
+  if (!migrateHeader.includes('    env:\n')) {
+    fail('protected D1 executor job-level metadata environment is missing');
+  }
+  if (migrateHeader.includes('CLOUDFLARE_API_TOKEN')) {
+    fail('Cloudflare API token must not exist in the protected mutation job-level environment');
   }
 
   const forbiddenMarkers = [
@@ -157,14 +168,43 @@ async function expectRejected(label, text) {
 
 async function selfTest(text) {
   await validateExecutor(text, ROOT);
-  await expectRejected('automatic restore', text.replace('d1 time-travel info', 'd1 time-travel restore'));
-  await expectRejected('concurrency cancellation', text.replace('cancel-in-progress: false', 'cancel-in-progress: true'));
-  await expectRejected('provider auto-create', text.replace('--experimental-auto-create=false', '--experimental-auto-create=true'));
-  await expectRejected('missing preflight dependency', text.replace('    needs: authorize\n', ''));
-  await expectRejected('preflight environment binding', text.replace('  authorize:\n', '  authorize:\n    environment: untrusted-input\n'));
+  await expectRejected(
+    'automatic restore',
+    replaceFixture('automatic restore', text, 'd1 time-travel info', 'd1 time-travel restore'),
+  );
+  await expectRejected(
+    'concurrency cancellation',
+    replaceFixture('concurrency cancellation', text, 'cancel-in-progress: false', 'cancel-in-progress: true'),
+  );
+  await expectRejected(
+    'provider auto-create',
+    replaceFixture('provider auto-create', text, '--experimental-auto-create=false', '--experimental-auto-create=true'),
+  );
+  await expectRejected(
+    'missing preflight dependency',
+    replaceFixture('missing preflight dependency', text, '    needs: authorize\n', ''),
+  );
+  await expectRejected(
+    'preflight environment binding',
+    replaceFixture('preflight environment binding', text, '  authorize:\n', '  authorize:\n    environment: untrusted-input\n'),
+  );
+  await expectRejected(
+    'preflight provider credential',
+    replaceFixture(
+      'preflight provider credential',
+      text,
+      '    env:\n      SOURCE_SHA:',
+      '    env:\n      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n      SOURCE_SHA:',
+    ),
+  );
   await expectRejected(
     'job-level provider credential',
-    text.replace('    env:\n      CLOUDFLARE_ACCOUNT_ID:', '    env:\n      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n      CLOUDFLARE_ACCOUNT_ID:'),
+    replaceFixture(
+      'job-level provider credential',
+      text,
+      '    env:\n      CLOUDFLARE_ACCOUNT_ID:',
+      '    env:\n      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n      CLOUDFLARE_ACCOUNT_ID:',
+    ),
   );
   await expectRejected(
     'second remote apply',
