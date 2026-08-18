@@ -186,6 +186,12 @@ jobs:
               head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
               token = '$' + '{{ github.event.pull_request.head.sha }}'
               script = script.replace(token, head)
+              if workflow_path.endswith('ar8-accepted-checkpoint-materializer.yml'):
+                  fragile = "if old not in text:\n    raise SystemExit('inventory source_completion block missing')\ntext = text.replace(old, new, 1)"
+                  robust = "pattern = re.compile(r'        \\\"source_completion\\\": \\\{\\n(?:            [^\\n]*\\n)+        \\\},')\nif pattern.search(text) is None:\n    raise SystemExit('inventory source_completion block missing')\ntext = pattern.sub(new, text, count=1)"
+                  if fragile not in script:
+                      raise SystemExit('nested inventory source_completion patch anchor missing')
+                  script = script.replace(fragile, robust, 1)
               subprocess.run(['bash', '-c', script], check=True)
 
           execute_named_run(
