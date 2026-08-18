@@ -89,7 +89,7 @@ impl ServiceAuthKeyring {
                 return Err(ServiceAuthContractError);
             }
             keys.push(ServiceAuthKey {
-                id: entry.id,
+                id: entry.id.clone(),
                 bytes: Zeroizing::new(decoded),
             });
         }
