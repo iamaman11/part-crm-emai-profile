@@ -292,9 +292,7 @@ fn json_escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Invocation, OpsctlError, ReadCommand, execute, json_escape, parse_invocation,
-    };
+    use super::{Invocation, OpsctlError, ReadCommand, execute, json_escape, parse_invocation};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
