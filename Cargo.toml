@@ -19,7 +19,6 @@ members = [
     "crates/notification-domain",
     "crates/primitives",
     "crates/profile-domain",
-    "crates/resolver-auth-contract",
     "crates/runtime-bundle-domain",
     "crates/session-domain",
     "crates/use-cases",
@@ -55,7 +54,6 @@ mailbox-domain = { path = "crates/mailbox-domain" }
 notification-domain = { path = "crates/notification-domain" }
 profile-domain = { path = "crates/profile-domain" }
 profile-platform-primitives = { path = "crates/primitives" }
-resolver-auth-contract = { path = "crates/resolver-auth-contract" }
 runtime-bundle-domain = { path = "crates/runtime-bundle-domain" }
 session-domain = { path = "crates/session-domain" }
 sha2 = { version = "=0.11.0", default-features = false }
