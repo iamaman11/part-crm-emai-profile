@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministically project accepted AR-8 and AR-9 handoff into canonical status authorities."""
+"""Deterministically project accepted AR-8 and current AR-9 into canonical status authorities."""
 
 from __future__ import annotations
 
@@ -17,6 +17,9 @@ TRANSITION = ROOT / "architecture/architecture-rebaseline-v3-transition.json"
 ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-18-ar8-final-acceptance.json"
 EXACT_GREEN_HEAD = "81d1f0c26ff0bd3a688c2d5dc000b93640479e47"
 IMPLEMENTATION_MERGE = "874666f6ef6eb003425c9677d558378d6dc0daaf"
+AR9_ISSUE = 366
+AR9_AUTHORITY = "architecture/d1-evolution-ar9.json"
+AR9_PROJECTION = "architecture/inventory.json::d1_evolution"
 
 
 def progress(*, projection_fields: bool) -> dict[str, object]:
@@ -68,7 +71,7 @@ def delivery_map(base: dict[str, object]) -> dict[str, object]:
     value["current_blocker"] = {"issue": None, "status": "NONE", "blocks": "NONE"}
     value["next_gate"] = {
         "id": "AR-9_ACCEPTANCE",
-        "issue": None,
+        "issue": AR9_ISSUE,
         "on_success": "AR-10_BECOMES_CURRENT",
     }
     value["invariants"].update({
@@ -101,6 +104,18 @@ def acceptance() -> dict[str, object]:
     }
 
 
+def ar9_projection() -> dict[str, object]:
+    return {
+        "tracking_issue": AR9_ISSUE,
+        "source_authority": AR9_AUTHORITY,
+        "canonical_projection": AR9_PROJECTION,
+        "production_mutation": False,
+        "architecture_complete": False,
+        "production_core_gate": "BLOCKED",
+        "production_ready": False,
+    }
+
+
 def project_status() -> dict[str, object]:
     payload = json.loads(BASE_STATUS.read_text(encoding="utf-8"))
     current = payload["current"]
@@ -113,6 +128,7 @@ def project_status() -> dict[str, object]:
     program["next_slice_after_acceptance"] = "AR-10"
     program["ar8_progress"] = progress(projection_fields=False)
     program["ar8_acceptance"] = acceptance()
+    program["ar9_current"] = ar9_projection()
     program["subject_domain_authorities"] = {
         "credential_authority": "architecture/credential-authority.json",
         "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
@@ -127,8 +143,11 @@ def project_status() -> dict[str, object]:
     current["next_repository_step"] = {
         "name": "AR-9 — D1 Evolution / Schema Compatibility",
         "status": "current",
-        "tracking_issue": 266,
+        "tracking_issue": AR9_ISSUE,
+        "program_tracking_issue": 266,
         "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+        "slice_authority": AR9_AUTHORITY,
+        "canonical_projection": AR9_PROJECTION,
         "previous_acceptance_evidence": ACCEPTANCE_EVIDENCE,
     }
     payload["production_ready"] = False
@@ -147,11 +166,14 @@ def project_transition() -> dict[str, object]:
     payload["accepted_slices"] = accepted_slices
     payload["ar8_progress"] = progress(projection_fields=True)
     payload["ar8_acceptance"] = acceptance()
+    payload["ar9_current"] = ar9_projection()
     payload["current_delivery_map"] = delivery_map(payload["current_delivery_map"])
     policy = payload["architecture_inventory_policy"]
     policy["ar8_current_subject_projection"] = "architecture/inventory.json::subject_domain_authorities"
     policy["ar8_current_composition_root"] = "architecture/credential-authority.json"
     policy["ar8b_registry_role"] = "IMMUTABLE_ACCEPTED_PROVENANCE_DATASET"
+    policy["ar9_d1_evolution_projection"] = AR9_PROJECTION
+    policy["ar9_d1_evolution_source"] = AR9_AUTHORITY
     app = payload.get("application_architecture", {})
     app["program_handoff_status"] = "AR8_ACCEPTED_AR9_CURRENT"
     app["program_next_required_subslice"] = "AR-9"
@@ -171,9 +193,13 @@ def validate(status: dict[str, object], transition: dict[str, object]) -> None:
         raise ValueError("docs/status.json accepted AR-8 progress drifted")
     if transition.get("ar8_progress") != progress(projection_fields=True):
         raise ValueError("architecture transition accepted AR-8 progress drifted")
+    if program.get("ar9_current") != ar9_projection() or transition.get("ar9_current") != ar9_projection():
+        raise ValueError("status and transition AR-9 authority projection drifted")
     expected_delivery = current["current_delivery_map"]
     if expected_delivery != transition.get("current_delivery_map"):
         raise ValueError("status and transition CURRENT_DELIVERY_MAP projections must match exactly")
+    if expected_delivery.get("next_gate", {}).get("issue") != AR9_ISSUE:
+        raise ValueError("AR-9 acceptance gate must point to implementation issue #366")
     invariants = expected_delivery.get("invariants", {})
     required = {
         "full_ar8_accepted": True,
@@ -205,14 +231,14 @@ def main() -> int:
     if args.write:
         STATUS.write_text(serialized(expected_status), encoding="utf-8", newline="\n")
         TRANSITION.write_text(serialized(expected_transition), encoding="utf-8", newline="\n")
-        print("Wrote accepted AR-8 status/transition and AR-9 handoff projections.")
+        print("Wrote accepted AR-8 status/transition and current AR-9 D1 projections.")
     elif args.check:
         actual_status = json.loads(STATUS.read_text(encoding="utf-8"))
         actual_transition = json.loads(TRANSITION.read_text(encoding="utf-8"))
         validate(actual_status, actual_transition)
         if actual_status != expected_status or actual_transition != expected_transition:
-            raise SystemExit("accepted AR-8 status/transition projections are stale; run --write")
-        print("AR-8 accepted-main status/transition are current; AR-9 is current while production remains blocked.")
+            raise SystemExit("accepted AR-8/current AR-9 status/transition projections are stale; run --write")
+        print("AR-8 accepted-main status/transition and current AR-9 D1 projection are current while production remains blocked.")
     else:
         negative = copy.deepcopy(expected_status)
         negative["current"]["current_delivery_map"]["invariants"]["production_core_gate"] = "AUTHORIZED"
@@ -222,6 +248,14 @@ def main() -> int:
             print("Post-AR-8 premature production authorization fixture rejected as expected.")
         else:
             raise SystemExit("premature production authorization negative fixture unexpectedly passed")
+        stale_issue = copy.deepcopy(expected_status)
+        stale_issue["current"]["current_delivery_map"]["next_gate"]["issue"] = None
+        try:
+            validate(stale_issue, expected_transition)
+        except ValueError:
+            print("Stale AR-9 acceptance issue projection rejected as expected.")
+        else:
+            raise SystemExit("stale AR-9 acceptance issue negative fixture unexpectedly passed")
     return 0
 
 
@@ -229,5 +263,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-        print(f"AR-8 accepted checkpoint projection failed: {error}", file=sys.stderr)
+        print(f"AR-8 accepted/current AR-9 projection failed: {error}", file=sys.stderr)
         raise SystemExit(1) from error
