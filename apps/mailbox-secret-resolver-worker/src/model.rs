@@ -3,7 +3,6 @@ use zeroize::Zeroize;
 
 pub const MAX_REQUEST_BYTES: usize = 32 * 1024;
 pub const MAX_SECRET_DOCUMENT_BYTES: usize = 16 * 1024;
-pub const SIGNATURE_VERSION: &str = "hmac-sha256-v1";
 pub const MAX_CLOCK_SKEW_MS: u64 = 5 * 60 * 1000;
 pub const NONCE_BYTES: usize = 16;
 pub const AES_GCM_NONCE_BYTES: usize = 12;
