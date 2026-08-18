@@ -166,7 +166,9 @@ print(
 PY
 fi
 
+node .github/scripts/ar8-completion-lifecycle.mjs
+node .github/scripts/ar8-completion-lifecycle.mjs --self-test
 python scripts/check-contract-compatibility.py
 python scripts/test-d1-schema.py
 
-echo "Phase 2I public contract freeze, immutable consumed B4/C2/C3 authorities, governed D3-to-AR-8D secret-transport transition, pending C3G governed provider migration authority, and immutable-prefix D1 migration policy are valid."
+echo "Phase 2I public contract freeze, immutable consumed B4/C2/C3 authorities, governed Pre-2J D3-to-AR-8D transition, AR-8D/E completion lifecycle overlay, pending C3G governed provider migration authority, and immutable-prefix D1 migration policy are valid."

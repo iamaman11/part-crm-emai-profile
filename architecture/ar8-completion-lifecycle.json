@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "kind": "AR8_COMPLETION_LIFECYCLE_OVERLAY",
+  "status": "candidate",
+  "tracking_issue": 361,
+  "parent_issue": 308,
+  "canonical_credential_authority": "architecture/credential-authority-ar8b.json",
+  "canonical_inventory": "architecture/inventory.json",
+  "production_mutation": false,
+  "secret_plaintext_in_git": false,
+  "opsctl_mutation": false,
+  "routine_release_rotates_runtime_secrets": false,
+  "stage_order": [
+    "issue_or_import",
+    "validate",
+    "bind_replacement",
+    "switch_active",
+    "verify",
+    "retire_previous"
+  ],
+  "concerns": [
+    {
+      "id": "resolver.encryption-keyring",
+      "logical_slice": "AR-8D.2",
+      "canonical_future_cutover": "AR-8D",
+      "externally_issued": false,
+      "routine_release_rotation": false,
+      "allowed_mutator": "explicit-governed-resolver-worker-secret-rotation",
+      "overlap_model": "ACTIVE_PLUS_RETAINED",
+      "read_old_write_new": true,
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "replacement is bound and active",
+        "old ciphertext reconciliation completed",
+        "old encrypted-record dependency count is zero"
+      ],
+      "recovery": "Interrupted reconciliation keeps the previous key retained; stale-key writes and downgrade remain fail-closed."
+    },
+    {
+      "id": "resolver.handle-hmac",
+      "logical_slice": "AR-8D.3",
+      "canonical_future_cutover": "AR-8D",
+      "externally_issued": false,
+      "routine_release_rotation": false,
+      "allowed_mutator": "explicit-governed-resolver-worker-secret-rotation",
+      "overlap_model": "ACTIVE_PLUS_BOUNDED_RETAINED_VERSIONS",
+      "lookup_resolution": "BOUNDED_RETAINED_VERSION_CANDIDATES",
+      "stored_dependency_metadata": [
+        "lookup_hmac_version",
+        "idempotency hmac_version",
+        "refresh_owner_hmac_version"
+      ],
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "version is not active",
+        "live encrypted-record dependency count is zero",
+        "idempotency dependency count is zero",
+        "live refresh-lease dependency count is zero"
+      ],
+      "recovery": "Unknown, missing or ambiguous version metadata fails closed; raw handles or idempotency keys are never persisted to make rotation easier."
+    },
+    {
+      "id": "mailbox-resolver.caller-auth",
+      "logical_slice": "AR-8D.4",
+      "canonical_future_cutover": "AR-8D",
+      "externally_issued": false,
+      "routine_release_rotation": false,
+      "allowed_mutator": "explicit-governed-dual-worker-service-auth-rotation",
+      "overlap_model": "ACTIVE_PLUS_ACCEPTED_PREVIOUS",
+      "key_selection": "EXPLICIT_AUTHENTICATED_KEY_ID",
+      "single_protocol_policy_required": true,
+      "legacy_v1_compatibility": "TEMPORARY_MIGRATION_ONLY",
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "resolver accepts replacement key id",
+        "control-plane signer emits replacement key id",
+        "staging traffic verifies on replacement",
+        "no accepted caller still requires legacy-v1 or previous key id"
+      ],
+      "recovery": "Keep the previous accepted key during failed cutover; unknown/revoked key ids, replay and stale requests fail closed."
+    },
+    {
+      "id": "control-plane.client-contact-protection",
+      "logical_slice": "AR-8D.5",
+      "canonical_future_cutover": "AR-8D",
+      "externally_issued": false,
+      "routine_release_rotation": false,
+      "allowed_mutator": "explicit-governed-control-plane-worker-secret-rotation",
+      "active_selection": "EXPLICIT_VERSION_FIELDS",
+      "active_encryption_field": "activeEncryptionVersion",
+      "active_lookup_field": "activeLookupVersion",
+      "overlap_model": "ACTIVE_PLUS_RETAINED",
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "replacement is retained before switch",
+        "explicit active version is switched only after keyring validation",
+        "encrypted contact rows no longer depend on the retired encryption version",
+        "lookup rows no longer depend on the retired lookup version"
+      ],
+      "recovery": "A failed switch retains the previous versions; implicit JSON-array ordering is not an accepted active-key authority."
+    },
+    {
+      "id": "profile-generation.r2-access",
+      "logical_slice": "AR-8D.6",
+      "canonical_future_cutover": "AR-8C",
+      "supersedes_lifecycle_projection": "credential-authority-ar8b.json::ar8c_operational_lifecycle/profile-generation.r2-access",
+      "externally_issued": true,
+      "routine_release_rotation": false,
+      "allowed_mutator": "cloudflare-r2-token-issuance-plus-explicit-governed-worker-secret-rotation",
+      "credential_pair_atomic": true,
+      "provider_identity": "R2 API token -> Access Key ID + Secret Access Key",
+      "overlap_model": "SEPARATE_PROVIDER_TOKENS",
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "replacement token is scoped to the intended account and bucket",
+        "replacement Access Key ID and Secret Access Key are bound as one pair",
+        "bounded staging R2 access succeeds with replacement",
+        "Worker binding metadata verifies replacement before old token revocation"
+      ],
+      "recovery": "Keep the previous R2 token valid until replacement verification; routine code promotion never rotates or rebinds this pair."
+    },
+    {
+      "id": "resolver.google-oauth-application",
+      "logical_slice": "AR-8E",
+      "canonical_future_cutover": "AR-8E",
+      "externally_issued": true,
+      "routine_release_rotation": false,
+      "allowed_mutator": "google-oauth-credential-issuance-plus-explicit-governed-resolver-secret-rotation",
+      "user_token_state_authority": "AR-8A",
+      "provider_overlap_guarantee": "NOT_ASSUMED",
+      "provider_constraint": "Do not assume old and replacement client secrets remain simultaneously valid for the exact Google OAuth registration type. A classic secret reset can invalidate the old secret immediately; exact provider capability must be discovered before mutation.",
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "replacement credential is issued by the authoritative Google application owner",
+        "resolver binding is prepared before any destructive reset where provider semantics require it",
+        "staging authorization-code/token exchange verifies the replacement without secret readback",
+        "provider rejection maps to safe operator/re-auth state rather than a second OAuth state machine"
+      ],
+      "recovery": "If overlap is unavailable, use a controlled cutover with explicit maintenance/re-auth handling; never revoke/reset first and hope routine deployment repairs the binding."
+    },
+    {
+      "id": "resolver.microsoft-oauth-application",
+      "logical_slice": "AR-8E",
+      "canonical_future_cutover": "AR-8E",
+      "externally_issued": true,
+      "routine_release_rotation": false,
+      "allowed_mutator": "microsoft-entra-application-credential-issuance-plus-explicit-governed-resolver-secret-rotation",
+      "user_token_state_authority": "AR-8A",
+      "provider_overlap_guarantee": "MULTIPLE_PASSWORD_CREDENTIALS_SUPPORTED",
+      "provider_constraint": "Microsoft Entra application password credentials support add-before-remove; bind and verify the replacement credential before removing the previous password credential by key id.",
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "replacement password credential is added to the intended application registration",
+        "resolver binding is switched to replacement",
+        "staging authorization-code/token exchange verifies replacement without secret readback",
+        "previous password credential is removed only after replacement verification"
+      ],
+      "recovery": "If replacement verification fails, keep the previous password credential valid and restore the prior resolver binding; user refresh-token lifecycle remains AR-8A authority."
+    }
+  ]
+}
