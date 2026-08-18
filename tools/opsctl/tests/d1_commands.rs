@@ -1,17 +1,18 @@
 use opsctl::{Invocation, d1::D1Action, execute};
 use serde_json::Value;
+use std::error::Error;
 use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn parse_output(output: &str) -> Value {
-    serde_json::from_str(output).expect("opsctl D1 output must be valid JSON")
+fn parse_output(output: &str) -> Result<Value, serde_json::Error> {
+    serde_json::from_str(output)
 }
 
 #[test]
-fn resolver_exact_status_is_deterministic_and_read_only() {
+fn resolver_exact_status_is_deterministic_and_read_only() -> Result<(), Box<dyn Error>> {
     let root = repo_root();
     let invocation = Invocation::D1 {
         root: Some(root.clone()),
@@ -21,7 +22,7 @@ fn resolver_exact_status_is_deterministic_and_read_only() {
         release_manifest: None,
         authority: None,
     };
-    let first = execute(invocation).expect("exact resolver status should succeed");
+    let first = execute(invocation)?;
     let second = execute(Invocation::D1 {
         root: Some(root),
         action: D1Action::Status,
@@ -29,18 +30,18 @@ fn resolver_exact_status_is_deterministic_and_read_only() {
         ledger_json: PathBuf::from("tests/d1-evolution/valid-exact-resolver-ledger.json"),
         release_manifest: None,
         authority: None,
-    })
-    .expect("repeated exact resolver status should succeed");
+    })?;
     assert_eq!(first, second);
-    let value = parse_output(&first);
+    let value = parse_output(&first)?;
     assert_eq!(value["ledger_state"], "EXACT");
     assert_eq!(value["decision"], "SAFE");
     assert_eq!(value["mutation_executed"], false);
     assert_eq!(value["component"], "resolver");
+    Ok(())
 }
 
 #[test]
-fn resolver_known_prefix_builds_exact_missing_suffix() {
+fn resolver_known_prefix_builds_exact_missing_suffix() -> Result<(), Box<dyn Error>> {
     let output = execute(Invocation::D1 {
         root: Some(repo_root()),
         action: D1Action::Plan,
@@ -50,9 +51,8 @@ fn resolver_known_prefix_builds_exact_missing_suffix() {
             "tests/d1-evolution/resolver-release-compatible.json",
         )),
         authority: None,
-    })
-    .expect("known resolver prefix should produce a deterministic plan");
-    let value = parse_output(&output);
+    })?;
+    let value = parse_output(&output)?;
     assert_eq!(value["ledger_state"], "BEHIND_KNOWN_PREFIX");
     assert_eq!(value["decision"], "MIGRATION_REQUIRED");
     assert_eq!(
@@ -63,10 +63,11 @@ fn resolver_known_prefix_builds_exact_missing_suffix() {
         ])
     );
     assert_eq!(value["mutation_executed"], false);
+    Ok(())
 }
 
 #[test]
-fn resolver_diverged_ledger_fails_closed_without_mutation() {
+fn resolver_diverged_ledger_fails_closed_without_mutation() -> Result<(), Box<dyn Error>> {
     let output = execute(Invocation::D1 {
         root: Some(repo_root()),
         action: D1Action::Status,
@@ -74,11 +75,11 @@ fn resolver_diverged_ledger_fails_closed_without_mutation() {
         ledger_json: PathBuf::from("tests/d1-evolution/invalid-diverged-resolver-ledger.json"),
         release_manifest: None,
         authority: None,
-    })
-    .expect("diverged ledger must return a typed blocked result");
-    let value = parse_output(&output);
+    })?;
+    let value = parse_output(&output)?;
     assert_eq!(value["ledger_state"], "DIVERGED");
     assert_eq!(value["decision"], "RECOVERY_REQUIRED");
     assert_eq!(value["allowed"], false);
     assert_eq!(value["mutation_executed"], false);
+    Ok(())
 }
