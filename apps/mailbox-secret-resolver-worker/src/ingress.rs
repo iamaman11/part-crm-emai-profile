@@ -100,7 +100,7 @@ impl ServiceAuthKeyring {
                 return Err(IngressError::ConfigurationUnavailable);
             }
             keys.push(ServiceAuthKey {
-                id: entry.id,
+                id: entry.id.clone(),
                 bytes: Zeroizing::new(decoded),
             });
         }
