@@ -8,7 +8,10 @@ import copy
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +34,23 @@ EXPECTED_LEDGER_STATES = {
     "DIVERGED",
     "UNKNOWN_MIGRATION",
     "CORRUPT_LEDGER",
+}
+EXPECTED_DECISIONS = {
+    "SAFE",
+    "MIGRATION_REQUIRED",
+    "DEPLOY_FIRST",
+    "MIGRATE_FIRST",
+    "CODE_ROLLBACK_SAFE",
+    "CODE_ROLLBACK_BLOCKED",
+    "FAIL_FORWARD_REQUIRED",
+    "CONTRACT_BLOCKED",
+    "RECOVERY_REQUIRED",
+}
+EXPECTED_ROLLOUT_ORDERS = {
+    "MIGRATE_BEFORE_CODE",
+    "CODE_BEFORE_MIGRATE",
+    "EITHER",
+    "SEPARATE_CONTRACT_RELEASE",
 }
 COMPONENT_ROOTS = {
     "catalog": "migrations/d1",
@@ -73,14 +93,14 @@ FORBIDDEN_MUTATION_CAPABILITIES = (
     "env::remove_var(",
 )
 FORBIDDEN_AR_CANONICAL_PATHS = (
-    'architecture/ar8-completion-lifecycle.json',
-    'architecture/ar8-operator-rehearsal.json',
+    "architecture/ar8-completion-lifecycle.json",
+    "architecture/ar8-operator-rehearsal.json",
 )
 REQUIRED_SUBJECT_PATHS = (
-    'architecture/credential-authority.json',
-    'architecture/credential-lifecycle.json',
-    'architecture/profile-security.json',
-    'architecture/operator-contract.json',
+    "architecture/credential-authority.json",
+    "architecture/credential-lifecycle.json",
+    "architecture/profile-security.json",
+    "architecture/operator-contract.json",
 )
 
 
@@ -122,7 +142,7 @@ def parse_dependency_table(cargo: str) -> dict[str, str]:
 def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None:
     if "#![forbid(unsafe_code)]" not in lib:
         fail("opsctl must forbid unsafe code")
-    if "mod d1;" not in lib:
+    if "pub mod d1;" not in lib:
         fail("opsctl must retain the AR-9 native D1 policy module")
 
     enum = re.search(r"pub enum ReadCommand\s*\{(?P<body>.*?)\n\}", lib, re.S)
@@ -186,6 +206,9 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
         "d1 plan",
         "d1 compatibility",
         "d1 verify",
+        "--current-manifest",
+        "--known-good-manifest",
+        "--preconditions-json",
     ):
         if required not in lib:
             fail(f"opsctl lost required read-only marker: {required}")
@@ -199,6 +222,10 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
         '"DIVERGED"',
         '"UNKNOWN_MIGRATION"',
         '"CORRUPT_LEDGER"',
+        '"DEPLOY_FIRST"',
+        '"MIGRATE_FIRST"',
+        '"FAIL_FORWARD_REQUIRED"',
+        '"CONTRACT_BLOCKED"',
         '"mutation_executed": false',
     ):
         if required not in d1:
@@ -217,7 +244,33 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
         fail("opsctl lockfile must pin serde_json 1.0.151")
 
 
-def canonical_freeze(root: Path, migration_root: str) -> tuple[list[dict[str, str]], str]:
+def verify_lockfile_reproducible(root: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="opsctl-lock-") as temporary:
+        workspace = Path(temporary)
+        shutil.copyfile(root / CARGO, workspace / "Cargo.toml")
+        completed = subprocess.run(
+            [
+                "cargo",
+                "generate-lockfile",
+                "--offline",
+                "--manifest-path",
+                str(workspace / "Cargo.toml"),
+            ],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or completed.stdout.strip()
+            fail(f"cannot reproduce standalone opsctl Cargo.lock offline: {detail}")
+        expected = (workspace / "Cargo.lock").read_text(encoding="utf-8")
+        observed = read(root, LOCK)
+        if observed != expected:
+            fail(f"standalone opsctl Cargo.lock is not reproducible; expected_lock={expected!r}")
+
+
+def canonical_entries(root: Path, migration_root: str) -> list[dict[str, str]]:
     directory = root / migration_root
     if not directory.is_dir() or directory.is_symlink():
         fail(f"D1 migration root must be a real directory: {migration_root}")
@@ -242,9 +295,12 @@ def canonical_freeze(root: Path, migration_root: str) -> tuple[list[dict[str, st
             f"D1 migration history must be contiguous from 0001: root={migration_root} "
             f"observed={numbers}"
         )
+    return entries
+
+
+def identity_digest(entries: list[dict[str, str]]) -> str:
     canonical = json.dumps(entries, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return entries, digest
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def load_d1_authority(root: Path) -> dict[str, Any]:
@@ -260,6 +316,132 @@ def load_d1_authority(root: Path) -> dict[str, Any]:
     return payload
 
 
+def require_bool(record: dict[str, Any], field: str, label: str) -> bool:
+    value = record.get(field)
+    if not isinstance(value, bool):
+        fail(f"{label}.{field} must be boolean")
+    return value
+
+
+def require_text(record: dict[str, Any], field: str, label: str) -> str:
+    value = record.get(field)
+    if not isinstance(value, str) or not value:
+        fail(f"{label}.{field} must be a non-empty string")
+    return value
+
+
+def require_text_list(record: dict[str, Any], field: str, label: str, *, nonempty: bool = False) -> list[str]:
+    value = record.get(field)
+    if not isinstance(value, list) or (nonempty and not value):
+        fail(f"{label}.{field} must be {'a non-empty' if nonempty else 'an'} array")
+    if any(not isinstance(item, str) or not item for item in value):
+        fail(f"{label}.{field} must contain non-empty strings only")
+    if len(value) != len(set(value)):
+        fail(f"{label}.{field} must not contain duplicates")
+    return list(value)
+
+
+def derived_rollout(record: dict[str, Any]) -> str:
+    migration_class = require_text(record, "migration_class", "migration")
+    old_after = require_bool(record, "old_runtime_compatible_after", "migration")
+    new_before = require_bool(record, "new_runtime_compatible_before", "migration")
+    fail_forward = require_bool(record, "fail_forward_required", "migration")
+    if migration_class == "CONTRACT":
+        return "SEPARATE_CONTRACT_RELEASE"
+    if old_after and new_before:
+        return "EITHER"
+    if old_after and not new_before:
+        return "MIGRATE_BEFORE_CODE"
+    if not old_after and new_before:
+        return "CODE_BEFORE_MIGRATE"
+    if migration_class == "REPAIR" and fail_forward:
+        return "SEPARATE_CONTRACT_RELEASE"
+    fail("migration compatibility flags have no safe derived rollout order")
+    raise AssertionError("unreachable")
+
+
+def validate_post_epoch_records(
+    component_id: str,
+    records: list[Any],
+    actual_tail: list[dict[str, str]],
+    required_fields: set[str],
+    failure_modes: set[str],
+    recovery_modes: set[str],
+    precondition_vocabulary: set[str],
+) -> None:
+    if len(records) != len(actual_tail):
+        fail(
+            f"{component_id} post-epoch contract count differs from appended SQL: "
+            f"contracts={len(records)} files={len(actual_tail)}"
+        )
+    prior_classes: list[str] = []
+    for index, (raw, actual) in enumerate(zip(records, actual_tail, strict=True)):
+        label = f"{component_id}.post_epoch_migrations[{index}]"
+        if not isinstance(raw, dict):
+            fail(f"{label} must be an object")
+        if not required_fields.issubset(raw):
+            fail(f"{label} missing required fields: {sorted(required_fields - set(raw))}")
+        if raw.get("component") != component_id:
+            fail(f"{label}.component mismatch")
+        if raw.get("migration_file") != actual["name"] or raw.get("migration_revision") != actual["name"]:
+            fail(f"{label} migration identity differs from exact append order")
+        if raw.get("sha256") != actual["sha256"]:
+            fail(f"{label}.sha256 differs from exact SQL bytes")
+        migration_class = require_text(raw, "migration_class", label)
+        if migration_class not in EXPECTED_MIGRATION_CLASSES:
+            fail(f"{label} uses unknown migration class: {migration_class}")
+        rollout = require_text(raw, "rollout_order", label)
+        expected_rollout = derived_rollout(raw)
+        if rollout != expected_rollout:
+            fail(f"{label}.rollout_order must be derived as {expected_rollout}, observed={rollout}")
+        if rollout not in EXPECTED_ROLLOUT_ORDERS:
+            fail(f"{label}.rollout_order is unknown")
+        backfill_required = require_bool(raw, "backfill_required", label)
+        backfill_authority = raw.get("backfill_authority")
+        backfill_predicate = raw.get("backfill_completion_predicate")
+        if backfill_required:
+            if not isinstance(backfill_authority, str) or not backfill_authority:
+                fail(f"{label} requires explicit backfill_authority")
+            if not isinstance(backfill_predicate, str) or not backfill_predicate:
+                fail(f"{label} requires explicit backfill_completion_predicate")
+        invariants = require_text_list(raw, "verification_invariants", label, nonempty=True)
+        if not invariants:
+            fail(f"{label} must define verification invariants")
+        failure_mode = require_text(raw, "failure_mode", label)
+        recovery_mode = require_text(raw, "recovery_mode", label)
+        if failure_mode not in failure_modes:
+            fail(f"{label}.failure_mode is unknown: {failure_mode}")
+        if recovery_mode not in recovery_modes:
+            fail(f"{label}.recovery_mode is unknown: {recovery_mode}")
+        code_rollback_allowed = require_bool(raw, "code_rollback_allowed", label)
+        fail_forward_required = require_bool(raw, "fail_forward_required", label)
+        destructive = require_bool(raw, "destructive", label)
+        preconditions = require_text_list(raw, "contract_preconditions", label)
+        if not set(preconditions).issubset(precondition_vocabulary):
+            fail(f"{label} contains unknown contract precondition")
+        if destructive and code_rollback_allowed:
+            fail(f"{label} destructive migration cannot be marked code-rollback-safe")
+        if fail_forward_required and not (
+            failure_mode == "FAIL_FORWARD_ONLY" and recovery_mode == "FAIL_FORWARD"
+        ):
+            fail(f"{label} fail-forward migration requires FAIL_FORWARD_ONLY + FAIL_FORWARD")
+        if migration_class == "CONTRACT":
+            required_contract = {
+                "replacement_active",
+                "backfill_complete",
+                "old_readers_writers_retired",
+                "known_good_compatible",
+            }
+            if not required_contract.issubset(preconditions):
+                fail(f"{label} CONTRACT is missing mechanical preconditions")
+            if "EXPAND" not in prior_classes:
+                fail(f"{label} CONTRACT has no prior post-epoch EXPAND migration")
+        if migration_class == "REPAIR":
+            for field in ("repair_reason", "bad_state_predicate", "target_invariant"):
+                require_text(raw, field, label)
+        prior_classes.append(migration_class)
+
+
 def validate_d1_authority_document(root: Path, payload: dict[str, Any]) -> None:
     if payload.get("kind") != "D1_EVOLUTION_AUTHORITY" or payload.get("schema_version") != 1:
         fail("D1 evolution authority identity/version is invalid")
@@ -273,6 +455,12 @@ def validate_d1_authority_document(root: Path, payload: dict[str, Any]) -> None:
         fail("D1 migration class vocabulary drifted")
     if set(global_policy.get("ledger_states", [])) != EXPECTED_LEDGER_STATES:
         fail("D1 ledger-state vocabulary drifted")
+    if set(global_policy.get("rollout_decisions", [])) != EXPECTED_DECISIONS:
+        fail("D1 rollout-decision vocabulary drifted")
+    failure_modes = set(global_policy.get("failure_modes", []))
+    recovery_modes = set(global_policy.get("rollback_authority", []))
+    if not failure_modes or not recovery_modes:
+        fail("D1 failure/recovery vocabularies must be explicit")
     if global_policy.get("new_opsctl_process_spawn_sites") != 0:
         fail("D1 authority must require zero new opsctl process-spawn sites")
     if global_policy.get("opsctl_provider_credentials") is not False:
@@ -281,6 +469,20 @@ def validate_d1_authority_document(root: Path, payload: dict[str, Any]) -> None:
         fail("D1 authority must not invent a default DB lock")
     if global_policy.get("resource_auto_provisioning_allowed") is not False:
         fail("D1 authority must forbid automatic resource provisioning")
+
+    contract_authority = payload.get("new_migration_contract")
+    if not isinstance(contract_authority, dict):
+        fail("new migration contract authority is missing")
+    required_fields = set(contract_authority.get("required_fields", []))
+    if not required_fields:
+        fail("new migration contract required_fields must be explicit")
+    if set(contract_authority.get("rollout_order_vocabulary", [])) != EXPECTED_ROLLOUT_ORDERS:
+        fail("migration rollout-order vocabulary drifted")
+    if contract_authority.get("rollout_order_is_derived") is not True:
+        fail("migration rollout_order must remain a derived property")
+    precondition_vocabulary = set(contract_authority.get("contract_precondition_vocabulary", []))
+    if not precondition_vocabulary:
+        fail("CONTRACT precondition vocabulary is missing")
 
     components = payload.get("components")
     if not isinstance(components, list):
@@ -307,10 +509,12 @@ def validate_d1_authority_document(root: Path, payload: dict[str, Any]) -> None:
         if not isinstance(ordered, list) or not ordered:
             fail(f"{component_id} ordered history is missing")
 
-        expected_entries, expected_digest = canonical_freeze(root, migration_root)
-        expected_names = [entry["name"] for entry in expected_entries]
-        observed_names: list[str] = []
-        observed_hashes: list[str | None] = []
+        actual = canonical_entries(root, migration_root)
+        historical_count = len(ordered)
+        if historical_count > len(actual):
+            fail(f"{component_id} frozen history exceeds actual migration history")
+        expected_frozen = actual[:historical_count]
+        observed_identity: list[dict[str, str]] = []
         for entry in ordered:
             if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
                 fail(f"{component_id} historical entry is malformed")
@@ -318,48 +522,45 @@ def validate_d1_authority_document(root: Path, payload: dict[str, Any]) -> None:
             if not isinstance(blob, str) or GIT_BLOB_SHA1_RE.fullmatch(blob) is None:
                 fail(f"{component_id} historical entry has malformed Git blob identity: {entry.get('name')}")
             sha256 = entry.get("sha256")
-            if sha256 is not None and (not isinstance(sha256, str) or SHA256_RE.fullmatch(sha256) is None):
+            if not isinstance(sha256, str) or SHA256_RE.fullmatch(sha256) is None:
                 fail(f"{component_id} historical entry has malformed SHA-256: {entry.get('name')}")
-            observed_names.append(entry["name"])
-            observed_hashes.append(sha256 if isinstance(sha256, str) else None)
+            observed_identity.append({"name": entry["name"], "sha256": sha256})
+        if observed_identity != expected_frozen:
+            fail(f"{component_id} frozen epoch differs from exact historical SQL bytes/order")
 
-        if observed_names != expected_names:
-            fail(
-                f"{component_id} historical migration names differ from exact repository order: "
-                f"observed={observed_names} expected={expected_names}"
-            )
-        expected_hashes = [entry["sha256"] for entry in expected_entries]
+        frozen_digest = identity_digest(expected_frozen)
         freeze = historical.get("per_file_sha256_freeze")
-        freeze_complete = (
-            observed_hashes == expected_hashes
-            and historical.get("ordered_set_identity_algorithm")
-            == "sha256(canonical-json(name+sha256))"
-            and historical.get("ordered_set_identity") == expected_digest
+        if not (
+            historical.get("ordered_set_identity_algorithm") == "sha256(canonical-json(name+sha256))"
+            and historical.get("ordered_set_identity") == frozen_digest
             and isinstance(freeze, dict)
             and freeze.get("status") == "FROZEN"
             and freeze.get("algorithm") == "sha256"
-            and freeze.get("count") == len(expected_entries)
-        )
-        if not freeze_complete:
-            expected = {
-                "component_id": component_id,
-                "ordered_history": expected_entries,
-                "ordered_set_identity_algorithm": "sha256(canonical-json(name+sha256))",
-                "ordered_set_identity": expected_digest,
-                "per_file_sha256_freeze": {
-                    "status": "FROZEN",
-                    "algorithm": "sha256",
-                    "count": len(expected_entries),
-                },
-            }
-            fail(
-                f"D1 historical freeze incomplete or stale for {component_id}; "
-                f"expected_freeze={json.dumps(expected, sort_keys=True, separators=(',', ':'))}"
-            )
-        if component.get("current_repository_revision") != expected_names[-1]:
-            fail(f"{component_id} current repository revision must equal the final frozen migration")
+            and freeze.get("count") == historical_count
+        ):
+            fail(f"{component_id} frozen epoch digest/status is incomplete or stale")
         if historical.get("retroactive_runtime_compatibility_claims") is not False:
             fail(f"{component_id} historical epoch must not invent retroactive compatibility claims")
+
+        post_epoch = component.get("post_epoch_migrations")
+        if not isinstance(post_epoch, list):
+            fail(f"{component_id} post_epoch_migrations must be explicit")
+        validate_post_epoch_records(
+            component_id,
+            post_epoch,
+            actual[historical_count:],
+            required_fields,
+            failure_modes,
+            recovery_modes,
+            precondition_vocabulary,
+        )
+        full_digest = identity_digest(actual)
+        if component.get("history_digest_algorithm") != "sha256(canonical-json(name+sha256))":
+            fail(f"{component_id} full history digest algorithm drifted")
+        if component.get("history_digest") != full_digest:
+            fail(f"{component_id} full history digest is stale")
+        if component.get("current_repository_revision") != actual[-1]["name"]:
+            fail(f"{component_id} current repository revision must equal final canonical migration")
 
 
 def validate(root: Path = ROOT) -> None:
@@ -370,6 +571,7 @@ def validate(root: Path = ROOT) -> None:
         read(root, CARGO),
         read(root, LOCK),
     )
+    verify_lockfile_reproducible(root)
     validate_d1_authority_document(root, load_d1_authority(root))
 
 
@@ -420,13 +622,6 @@ def self_test() -> None:
     )
     expect_rejected("mutable D1 command-surface", expanded, d1, main, cargo, lock)
 
-    ar_specific = lib.replace(
-        "architecture/credential-lifecycle.json",
-        "architecture/ar8-completion-lifecycle.json",
-        1,
-    )
-    expect_rejected("historical AR-specific canonical coupling", ar_specific, d1, main, cargo, lock)
-
     dependency = cargo.replace(
         'serde_json = "=1.0.151"',
         'serde_json = "=1.0.151"\nreqwest = "=0.13.1"',
@@ -446,9 +641,57 @@ def self_test() -> None:
     lock_mutation["global_policy"]["database_lock_required_by_default"] = True
     expect_d1_rejected("unproven database lock", lock_mutation)
 
+    synthetic_actual = [{"name": "0005_expand.sql", "sha256": "a" * 64}]
+    valid_expand = {
+        "component": "resolver",
+        "migration_file": "0005_expand.sql",
+        "migration_revision": "0005_expand.sql",
+        "sha256": "a" * 64,
+        "migration_class": "EXPAND",
+        "old_runtime_compatible_after": True,
+        "new_runtime_compatible_before": True,
+        "rollout_order": "EITHER",
+        "backfill_required": False,
+        "backfill_authority": "NONE",
+        "backfill_completion_predicate": "NOT_REQUIRED",
+        "verification_invariants": ["new representation exists"],
+        "failure_mode": "RETRY_SAFE",
+        "recovery_mode": "CODE_ROLLBACK",
+        "code_rollback_allowed": True,
+        "fail_forward_required": False,
+        "contract_preconditions": [],
+        "destructive": False,
+    }
+    required_fields = set(authority["new_migration_contract"]["required_fields"])
+    validate_post_epoch_records(
+        "resolver",
+        [valid_expand],
+        synthetic_actual,
+        required_fields,
+        set(authority["global_policy"]["failure_modes"]),
+        set(authority["global_policy"]["rollback_authority"]),
+        set(authority["new_migration_contract"]["contract_precondition_vocabulary"]),
+    )
+    invalid_rollout = dict(valid_expand)
+    invalid_rollout["rollout_order"] = "CODE_BEFORE_MIGRATE"
+    try:
+        validate_post_epoch_records(
+            "resolver",
+            [invalid_rollout],
+            synthetic_actual,
+            required_fields,
+            set(authority["global_policy"]["failure_modes"]),
+            set(authority["global_policy"]["rollback_authority"]),
+            set(authority["new_migration_contract"]["contract_precondition_vocabulary"]),
+        )
+    except GateError:
+        pass
+    else:
+        fail("contradictory derived rollout negative fixture unexpectedly passed")
+
     print(
-        "opsctl legacy bridge, native D1 subprocess/mutation, historical-freeze, command-surface "
-        "and dependency negative fixtures rejected as expected."
+        "opsctl legacy bridge, native D1 subprocess/mutation, append-only history, derived rollout, "
+        "historical-freeze and dependency negative fixtures rejected as expected."
     )
 
 
@@ -462,7 +705,8 @@ def main() -> int:
         validate()
         print(
             "opsctl remains read-only: one accepted AR-6 Python validator bridge, native Rust D1 "
-            "semantics, frozen D1 histories, exact serde_json dependency, no provider/mutation capability."
+            "semantics, frozen+append-only D1 histories, reproducible exact serde_json dependency, "
+            "no provider/mutation capability."
         )
     return 0
 
