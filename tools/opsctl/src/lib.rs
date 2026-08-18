@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const HELP: &str = "opsctl — project-specific read-only operations interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n    opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [--release-manifest PATH] [--authority PATH]\n\nCOMMANDS:\n    doctor                Validate canonical repository authorities\n    status                Print canonical docs/status.json\n    inventory             Print canonical architecture/inventory.json\n    credential-lifecycle  Print canonical credential lifecycle metadata\n    rotation-plan         Print canonical operator rotation/recovery contract\n    d1 status             Classify a saved D1 migration ledger against canonical history\n    d1 plan               Build a deterministic migration plan for a release schema contract\n    d1 compatibility      Evaluate runtime/schema compatibility and rollback safety\n    d1 verify             Verify a post-apply ledger against a release schema contract\n\nD1 OPTIONS:\n    --component ID          catalog or resolver\n    --ledger-json PATH      Saved machine-readable Wrangler D1 ledger query result\n    --release-manifest PATH Required for plan/compatibility/verify\n    --authority PATH        Optional D1 evolution authority override for fixtures\n\nGLOBAL OPTIONS:\n    --root PATH  Explicit repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nThis interface is permanently read-only and metadata-only. D1 commands parse saved provider output and never execute Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation.\n";
+pub const HELP: &str = "opsctl — project-specific read-only operations interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n    opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [D1 OPTIONS]\n\nCOMMANDS:\n    doctor                Validate canonical repository authorities\n    status                Print canonical docs/status.json\n    inventory             Print canonical architecture/inventory.json\n    credential-lifecycle  Print canonical credential lifecycle metadata\n    rotation-plan         Print canonical operator rotation/recovery contract\n    d1 status             Classify a saved D1 migration ledger against canonical history\n    d1 plan               Build a deterministic migration/rollback plan\n    d1 compatibility      Evaluate runtime/schema compatibility\n    d1 verify             Verify a post-apply ledger against a release schema contract\n\nD1 OPTIONS:\n    --component ID              catalog or resolver\n    --ledger-json PATH          Saved machine-readable Wrangler D1 ledger query result\n    --release-manifest PATH     Target release; required for plan/compatibility/verify\n    --current-manifest PATH     Current runtime schema contract; plan rollback context\n    --known-good-manifest PATH  Known-good rollback release schema contract\n    --preconditions-json PATH   Metadata-only CONTRACT precondition evidence\n    --authority PATH            Optional D1 evolution authority override for fixtures\n\nGLOBAL OPTIONS:\n    --root PATH  Explicit repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nThis interface is permanently read-only and metadata-only. D1 commands parse saved provider output and never execute Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation.\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadCommand {
@@ -48,6 +48,9 @@ pub enum Invocation {
         component: String,
         ledger_json: PathBuf,
         release_manifest: Option<PathBuf>,
+        current_manifest: Option<PathBuf>,
+        known_good_manifest: Option<PathBuf>,
+        preconditions_json: Option<PathBuf>,
         authority: Option<PathBuf>,
     },
 }
@@ -161,6 +164,9 @@ where
     let mut component: Option<String> = None;
     let mut ledger_json: Option<PathBuf> = None;
     let mut release_manifest: Option<PathBuf> = None;
+    let mut current_manifest: Option<PathBuf> = None;
+    let mut known_good_manifest: Option<PathBuf> = None;
+    let mut preconditions_json: Option<PathBuf> = None;
     let mut authority: Option<PathBuf> = None;
 
     while let Some(argument) = iterator.next() {
@@ -190,6 +196,36 @@ where
                     &mut release_manifest,
                     PathBuf::from(value),
                     "--release-manifest",
+                )?;
+            }
+            "--current-manifest" => {
+                let value = iterator.next().ok_or_else(|| {
+                    OpsctlError::new("d1", "--current-manifest requires a value")
+                })?;
+                set_once(
+                    &mut current_manifest,
+                    PathBuf::from(value),
+                    "--current-manifest",
+                )?;
+            }
+            "--known-good-manifest" => {
+                let value = iterator.next().ok_or_else(|| {
+                    OpsctlError::new("d1", "--known-good-manifest requires a value")
+                })?;
+                set_once(
+                    &mut known_good_manifest,
+                    PathBuf::from(value),
+                    "--known-good-manifest",
+                )?;
+            }
+            "--preconditions-json" => {
+                let value = iterator.next().ok_or_else(|| {
+                    OpsctlError::new("d1", "--preconditions-json requires a value")
+                })?;
+                set_once(
+                    &mut preconditions_json,
+                    PathBuf::from(value),
+                    "--preconditions-json",
                 )?;
             }
             "--authority" => {
@@ -222,10 +258,15 @@ where
             format!("d1 {} requires --release-manifest", action.name()),
         ));
     }
-    if action == d1::D1Action::Status && release_manifest.is_some() {
+    if action == d1::D1Action::Status
+        && (release_manifest.is_some()
+            || current_manifest.is_some()
+            || known_good_manifest.is_some()
+            || preconditions_json.is_some())
+    {
         return Err(OpsctlError::new(
             "d1",
-            "d1 status does not accept --release-manifest",
+            "d1 status accepts only component, ledger and authority inputs",
         ));
     }
 
@@ -235,6 +276,9 @@ where
         component,
         ledger_json,
         release_manifest,
+        current_manifest,
+        known_good_manifest,
+        preconditions_json,
         authority,
     })
 }
@@ -298,17 +342,23 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             component,
             ledger_json,
             release_manifest,
+            current_manifest,
+            known_good_manifest,
+            preconditions_json,
             authority,
         } => {
             let repo_root = resolve_repo_root(root.as_deref(), "d1")?;
-            d1::run(
-                &repo_root,
+            d1::run(d1::D1RunRequest {
+                root: &repo_root,
                 action,
-                &component,
-                &ledger_json,
-                release_manifest.as_deref(),
-                authority.as_deref(),
-            )
+                component: &component,
+                ledger_json: &ledger_json,
+                release_manifest: release_manifest.as_deref(),
+                current_manifest: current_manifest.as_deref(),
+                known_good_manifest: known_good_manifest.as_deref(),
+                preconditions_json: preconditions_json.as_deref(),
+                authority_path: authority.as_deref(),
+            })
             .map_err(|error| OpsctlError::new("d1", error.to_string()))
         }
     }
@@ -521,21 +571,30 @@ mod tests {
                 "--ledger-json",
                 "ledger.json",
                 "--release-manifest",
-                "release.json",
+                "target.json",
+                "--current-manifest",
+                "current.json",
+                "--known-good-manifest",
+                "known-good.json",
+                "--preconditions-json",
+                "preconditions.json",
             ])),
             Ok(Invocation::D1 {
                 root: Some(PathBuf::from("/repo")),
                 action: D1Action::Plan,
                 component: "catalog".to_owned(),
                 ledger_json: PathBuf::from("ledger.json"),
-                release_manifest: Some(PathBuf::from("release.json")),
+                release_manifest: Some(PathBuf::from("target.json")),
+                current_manifest: Some(PathBuf::from("current.json")),
+                known_good_manifest: Some(PathBuf::from("known-good.json")),
+                preconditions_json: Some(PathBuf::from("preconditions.json")),
                 authority: None,
             })
         );
     }
 
     #[test]
-    fn d1_status_rejects_release_manifest() {
+    fn d1_status_rejects_release_context() {
         assert!(
             parse_invocation(args(&[
                 "opsctl",
@@ -545,8 +604,8 @@ mod tests {
                 "catalog",
                 "--ledger-json",
                 "ledger.json",
-                "--release-manifest",
-                "release.json",
+                "--known-good-manifest",
+                "known-good.json",
             ]))
             .is_err()
         );
