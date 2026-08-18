@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed if Rust opsctl or its AR-9 D1 authority gains unreviewed capability."""
+"""Fail closed if modular Rust opsctl or its AR-9 D1 authority gains unreviewed capability."""
 
 from __future__ import annotations
 
@@ -16,9 +16,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-LIB = Path("tools/opsctl/src/lib.rs")
-D1 = Path("tools/opsctl/src/d1.rs")
-MAIN = Path("tools/opsctl/src/main.rs")
+SRC = Path("tools/opsctl/src")
+MAIN = SRC / "main.rs"
 CARGO = Path("tools/opsctl/Cargo.toml")
 LOCK = Path("tools/opsctl/Cargo.lock")
 D1_AUTHORITY = Path("architecture/d1-evolution-ar9.json")
@@ -60,6 +59,35 @@ ALLOWED_DEPENDENCIES = {"serde_json": "=1.0.151"}
 MIGRATION_RE = re.compile(r"^(?P<number>[0-9]{4})_[a-z0-9_]+\.sql$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_BLOB_SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
+EXPECTED_SOURCE_FILES = {
+    "cli.rs",
+    "credentials/mod.rs",
+    "d1.rs",
+    "d1/authority.rs",
+    "d1/compatibility.rs",
+    "d1/model.rs",
+    "d1/plan.rs",
+    "d1/status.rs",
+    "d1/tests.rs",
+    "d1/util.rs",
+    "d1/verify.rs",
+    "doctor.rs",
+    "error.rs",
+    "inventory.rs",
+    "lib.rs",
+    "main.rs",
+    "promotion/mod.rs",
+    "readiness.rs",
+    "recovery/mod.rs",
+    "release/mod.rs",
+    "repository.rs",
+    "status.rs",
+}
+RESERVED_FAMILIES = {
+    "release/mod.rs": ("AR-11", {"inspect", "verify", "compatibility"}),
+    "promotion/mod.rs": ("AR-11", {"plan", "preflight", "verify"}),
+    "recovery/mod.rs": ("AR-14", {"inspect", "plan", "verify"}),
+}
 FORBIDDEN_RUNTIME_MARKERS = (
     'Command::new("wrangler")',
     'Command::new("node")',
@@ -123,6 +151,30 @@ def production(text: str) -> str:
     return text.split("#[cfg(test)]", 1)[0]
 
 
+def rust_sources(root: Path) -> dict[str, str]:
+    source_root = root / SRC
+    if not source_root.is_dir() or source_root.is_symlink():
+        fail(f"opsctl Rust source root is missing/not regular: {SRC}")
+    files = sorted(source_root.rglob("*.rs"), key=lambda item: item.as_posix())
+    observed: dict[str, str] = {}
+    for path in files:
+        if not path.is_file() or path.is_symlink():
+            fail(f"opsctl Rust source must be a regular file: {path.relative_to(root)}")
+        relative = path.relative_to(source_root).as_posix()
+        observed[relative] = path.read_text(encoding="utf-8")
+    missing = sorted(EXPECTED_SOURCE_FILES - set(observed))
+    if missing:
+        fail(f"modular opsctl source layout is incomplete: missing={missing}")
+    return observed
+
+
+def production_sources(sources: dict[str, str]) -> dict[str, str]:
+    return {
+        path: "" if path.endswith("tests.rs") else production(text)
+        for path, text in sources.items()
+    }
+
+
 def parse_dependency_table(cargo: str) -> dict[str, str]:
     match = re.search(r"(?ms)^\[dependencies\]\n(?P<body>.*?)(?=^\[|\Z)", cargo)
     if match is None:
@@ -139,15 +191,55 @@ def parse_dependency_table(cargo: str) -> dict[str, str]:
     return result
 
 
-def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None:
+def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
+    lib = sources["lib.rs"]
+    cli = sources["cli.rs"]
+    main = sources["main.rs"]
+    d1_facade = sources["d1.rs"]
+    production_by_path = production_sources(sources)
+    production_source = "\n".join(production_by_path.values())
+    d1_source = "\n".join(
+        text
+        for path, text in production_by_path.items()
+        if path == "d1.rs" or path.startswith("d1/")
+    )
+    future_source = "\n".join(
+        production_by_path[path]
+        for path in [
+            "release/mod.rs",
+            "promotion/mod.rs",
+            "recovery/mod.rs",
+            "readiness.rs",
+        ]
+    )
+
     if "#![forbid(unsafe_code)]" not in lib:
         fail("opsctl must forbid unsafe code")
-    if "pub mod d1;" not in lib:
-        fail("opsctl must retain the AR-9 native D1 policy module")
+    for declaration in (
+        "mod cli;",
+        "pub mod d1;",
+        "mod doctor;",
+        "mod inventory;",
+        "mod repository;",
+        "mod status;",
+        "pub mod credentials;",
+        "pub mod release;",
+        "pub mod promotion;",
+        "pub mod recovery;",
+        "pub mod readiness;",
+    ):
+        if declaration not in lib:
+            fail(f"opsctl modular composition root lost declaration: {declaration}")
 
-    enum = re.search(r"pub enum ReadCommand\s*\{(?P<body>.*?)\n\}", lib, re.S)
+    if len(main.encode("utf-8")) > 1024:
+        fail("opsctl main.rs must remain a thin parse -> execute -> output/exit adapter")
+    for marker in ("opsctl::parse_invocation", "opsctl::execute", "error.json()"):
+        if marker not in main:
+            fail(f"opsctl main.rs lost thin-entrypoint marker: {marker}")
+
+    enum = re.search(r"pub enum ReadCommand\s*\{(?P<body>.*?)\n\}", cli, re.S)
     if enum is None:
-        fail("opsctl ReadCommand enum is missing")
+        fail("opsctl ReadCommand enum is missing from cli.rs")
     commands = {line.strip().rstrip(",") for line in enum.group("body").splitlines() if line.strip()}
     if commands != EXPECTED_COMMANDS:
         fail(
@@ -155,14 +247,14 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
             f"observed={sorted(commands)}"
         )
 
-    parser = re.search(r"fn parse_command\(.*?\n\}", lib, re.S)
+    parser = re.search(r"fn parse_command\(.*?\n\}", cli, re.S)
     if parser is None:
-        fail("opsctl parse_command is missing")
+        fail("opsctl parse_command is missing from cli.rs")
     literals = set(re.findall(r'^\s*"([a-z][a-z0-9_-]*)"\s*=>', parser.group(0), re.M))
     if literals != EXPECTED_PARSE_LITERALS:
         fail(f"opsctl legacy parser surface drifted: {sorted(literals)}")
 
-    d1_parser = re.search(r"let action = match action_text \{(?P<body>.*?)\n\s*\};", lib, re.S)
+    d1_parser = re.search(r"let action = match action_text \{(?P<body>.*?)\n\s*\};", cli, re.S)
     if d1_parser is None:
         fail("opsctl native D1 action parser is missing")
     d1_actions = set(
@@ -174,7 +266,6 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
             f"observed={sorted(d1_actions)}"
         )
 
-    production_source = production(lib) + "\n" + production(d1) + "\n" + main
     for marker in FORBIDDEN_RUNTIME_MARKERS:
         if marker in production_source:
             fail(f"opsctl read-only boundary contains forbidden runtime marker: {marker}")
@@ -183,25 +274,32 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
             fail(f"opsctl read-only boundary contains forbidden mutation capability: {marker}")
     if production_source.count("Command::new(") != 1 or production_source.count("Command::new(&python)") != 1:
         fail("opsctl may spawn exactly one accepted AR-6 canonical Python validator process site")
-    if "Command::new(" in production(d1):
+    if "Command::new(" not in production_by_path["doctor.rs"]:
+        fail("the sole accepted AR-6 process bridge must be isolated in doctor.rs")
+    for path, text in production_by_path.items():
+        if path != "doctor.rs" and "Command::new(" in text:
+            fail(f"opsctl child-process authority escaped doctor.rs: {path}")
+    if "Command::new(" in d1_source:
         fail("native AR-9 opsctl D1 semantics must not spawn child processes")
+    if "Command::new(" in future_source:
+        fail("future opsctl namespaces must not gain process authority before their owning AR")
 
     for path in FORBIDDEN_AR_CANONICAL_PATHS:
-        if path in lib:
+        if path in production_source:
             fail(f"opsctl must not depend on historical AR-specific canonical path: {path}")
-    for path in REQUIRED_SUBJECT_PATHS:
-        if f'"{path}"' not in lib:
-            fail(f"opsctl lost subject-domain authority path: {path}")
+    for subject in REQUIRED_SUBJECT_PATHS:
+        if f'"{subject}"' not in production_source:
+            fail(f"opsctl lost subject-domain authority path: {subject}")
 
     for required in (
         '"scripts/generate-architecture-inventory.py"',
         '"scripts/python-estate-ar6.py"',
-        'canonical_json_document(&repo_root, "docs/status.json", "status")',
-        'canonical_json_document(&repo_root, "architecture/inventory.json", "inventory")',
+        'canonical_json_document(root, "docs/status.json", "status")',
+        'canonical_json_document(root, "architecture/inventory.json", "inventory")',
         '"credential-lifecycle"',
         '"rotation-plan"',
         '"mutation_executed\\\":false',
-        "permanently read-only and metadata-only",
+        "read-only and metadata-only",
         "d1 status",
         "d1 plan",
         "d1 compatibility",
@@ -210,7 +308,7 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
         "--known-good-manifest",
         "--preconditions-json",
     ):
-        if required not in lib:
+        if required not in production_source:
             fail(f"opsctl lost required read-only marker: {required}")
 
     for required in (
@@ -228,8 +326,28 @@ def validate_source(lib: str, d1: str, main: str, cargo: str, lock: str) -> None
         '"CONTRACT_BLOCKED"',
         '"mutation_executed": false',
     ):
-        if required not in d1:
+        if required not in d1_source:
             fail(f"opsctl D1 policy engine lost required marker: {required}")
+
+    for relative, (owner, commands) in RESERVED_FAMILIES.items():
+        text = sources[relative]
+        if f'ACTIVATION_OWNER: &str = "{owner}"' not in text:
+            fail(f"future opsctl namespace {relative} lost owning AR {owner}")
+        observed = set(re.findall(r'"([a-z][a-z0-9-]*)"', text))
+        if not commands.issubset(observed):
+            fail(f"future opsctl namespace {relative} lost target commands {sorted(commands)}")
+        if "PROVIDER_MUTATION_AUTHORITY: bool = false" not in text:
+            fail(f"future opsctl namespace {relative} must remain non-mutating before activation")
+    if 'TARGET_COMMANDS: &[&str] = &["status", "readiness", "rotation-plan"]' not in sources["credentials/mod.rs"]:
+        fail("credentials target namespace drifted")
+    if 'ACTIVATION_OWNER: &str = "AR-10/AR-13"' not in sources["credentials/mod.rs"]:
+        fail("credentials namespace owner drifted")
+    if 'TARGET_COMMAND: &str = "readiness"' not in sources["readiness.rs"]:
+        fail("aggregate readiness target namespace drifted")
+    if 'ACTIVATION_OWNER: &str = "AR-16"' not in sources["readiness.rs"]:
+        fail("aggregate readiness owner drifted")
+    if "PRODUCTION_AUTHORIZATION_AUTHORITY: bool = false" not in sources["readiness.rs"]:
+        fail("opsctl readiness must not become production authorization authority")
 
     dependencies = parse_dependency_table(cargo)
     if dependencies != ALLOWED_DEPENDENCIES:
@@ -349,7 +467,13 @@ def require_text(record: dict[str, Any], field: str, label: str) -> str:
     return value
 
 
-def require_text_list(record: dict[str, Any], field: str, label: str, *, nonempty: bool = False) -> list[str]:
+def require_text_list(
+    record: dict[str, Any],
+    field: str,
+    label: str,
+    *,
+    nonempty: bool = False,
+) -> list[str]:
     value = record.get(field)
     if not isinstance(value, list) or (nonempty and not value):
         fail(f"{label}.{field} must be {'a non-empty' if nonempty else 'an'} array")
@@ -583,20 +707,19 @@ def validate_d1_authority_document(root: Path, payload: dict[str, Any]) -> None:
 
 
 def validate(root: Path = ROOT) -> None:
-    validate_source(
-        read(root, LIB),
-        read(root, D1),
-        read(root, MAIN),
-        read(root, CARGO),
-        read(root, LOCK),
-    )
+    validate_source(rust_sources(root), read(root, CARGO), read(root, LOCK))
     verify_lockfile_reproducible(root)
     validate_d1_authority_document(root, load_d1_authority(root))
 
 
-def expect_rejected(label: str, lib: str, d1: str, main: str, cargo: str, lock: str) -> None:
+def expect_rejected(
+    label: str,
+    sources: dict[str, str],
+    cargo: str,
+    lock: str,
+) -> None:
     try:
-        validate_source(lib, d1, main, cargo, lock)
+        validate_source(sources, cargo, lock)
     except GateError:
         return
     fail(f"{label} negative fixture unexpectedly passed")
@@ -611,42 +734,47 @@ def expect_d1_rejected(label: str, payload: dict[str, Any]) -> None:
 
 
 def self_test() -> None:
-    lib = read(ROOT, LIB)
-    d1 = read(ROOT, D1)
-    main = read(ROOT, MAIN)
+    sources = rust_sources(ROOT)
     cargo = read(ROOT, CARGO)
     lock = read(ROOT, LOCK)
-    validate_source(lib, d1, main, cargo, lock)
+    validate_source(sources, cargo, lock)
     authority = load_d1_authority(ROOT)
     validate_d1_authority_document(ROOT, authority)
 
-    process_injected = (
-        d1.split("#[cfg(test)]", 1)[0]
-        + '\nfn forbidden() { let _ = Command::new("wrangler").arg("deploy"); }\n#[cfg(test)]'
-        + d1.split("#[cfg(test)]", 1)[1]
-    )
-    expect_rejected("mutable D1 process-spawn", lib, process_injected, main, cargo, lock)
+    process_sources = dict(sources)
+    process_sources["d1.rs"] += '\nfn forbidden() { let _ = Command::new("wrangler").arg("deploy"); }\n'
+    expect_rejected("mutable D1 process-spawn", process_sources, cargo, lock)
 
-    filesystem_injected = (
-        d1.split("#[cfg(test)]", 1)[0]
-        + '\nfn forbidden_write() { let _ = fs::write("state.json", b"mutable"); }\n#[cfg(test)]'
-        + d1.split("#[cfg(test)]", 1)[1]
-    )
-    expect_rejected("filesystem mutation capability", lib, filesystem_injected, main, cargo, lock)
+    filesystem_sources = dict(sources)
+    filesystem_sources["d1.rs"] += '\nfn forbidden_write() { let _ = fs::write("state.json", b"mutable"); }\n'
+    expect_rejected("filesystem mutation capability", filesystem_sources, cargo, lock)
 
-    expanded = lib.replace(
+    expanded_sources = dict(sources)
+    expanded_sources["cli.rs"] = expanded_sources["cli.rs"].replace(
         '"verify" => d1::D1Action::Verify,',
         '"verify" => d1::D1Action::Verify,\n        "apply" => d1::D1Action::Verify,',
         1,
     )
-    expect_rejected("mutable D1 command-surface", expanded, d1, main, cargo, lock)
+    expect_rejected("mutable D1 command-surface", expanded_sources, cargo, lock)
+
+    future_activation = dict(sources)
+    future_activation["cli.rs"] = future_activation["cli.rs"].replace(
+        '"rotation-plan" => Ok(ReadCommand::RotationPlan),',
+        '"rotation-plan" => Ok(ReadCommand::RotationPlan),\n        "release" => Ok(ReadCommand::Status),',
+        1,
+    )
+    expect_rejected("premature future namespace activation", future_activation, cargo, lock)
+
+    future_process = dict(sources)
+    future_process["release/mod.rs"] += '\nfn forbidden() { let _ = Command::new("python"); }\n'
+    expect_rejected("future namespace process authority", future_process, cargo, lock)
 
     dependency = cargo.replace(
         'serde_json = "=1.0.151"',
         'serde_json = "=1.0.151"\nreqwest = "=0.13.1"',
         1,
     )
-    expect_rejected("unreviewed dependency", lib, d1, main, dependency, lock)
+    expect_rejected("unreviewed dependency", sources, dependency, lock)
 
     hash_mutation = copy.deepcopy(authority)
     hash_mutation["components"][0]["historical_epoch"]["ordered_history"][0]["sha256"] = "0" * 64
@@ -709,8 +837,8 @@ def self_test() -> None:
         fail("contradictory derived rollout negative fixture unexpectedly passed")
 
     print(
-        "opsctl legacy bridge, native D1 subprocess/mutation, append-only history, derived rollout, "
-        "historical-freeze and dependency negative fixtures rejected as expected."
+        "opsctl modular layout, sole doctor bridge, native D1/future namespace subprocess and mutation, "
+        "append-only history, derived rollout, historical-freeze and dependency negative fixtures rejected."
     )
 
 
@@ -723,9 +851,9 @@ def main() -> int:
     else:
         validate()
         print(
-            "opsctl remains read-only: one accepted AR-6 Python validator bridge, native Rust D1 "
-            "semantics, frozen+append-only D1 histories, reproducible exact serde_json dependency, "
-            "no provider/mutation capability."
+            "opsctl modular tree is fail-closed: thin main, one accepted AR-6 doctor Python bridge, "
+            "native Rust D1 semantics, source-reserved future families without activation/process/provider authority, "
+            "frozen+append-only D1 histories and reproducible exact serde_json dependency."
         )
     return 0
 
