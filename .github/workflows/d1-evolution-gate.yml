@@ -42,10 +42,12 @@ jobs:
           test "$(npm --version)" = "11.17.0"
           test "$(npx --yes wrangler@4.94.0 --version)" = "4.94.0"
 
-      - name: Verify protected executor and bootstrap convergence contracts
+      - name: Verify protected executor, release identity, and bootstrap convergence contracts
         run: |
           python scripts/check-d1-migration-executor.py
           python scripts/check-d1-migration-executor.py --self-test
+          python scripts/check-d1-release-schema-identity.py
+          python scripts/check-d1-release-schema-identity.py --self-test
           python scripts/cloudflare-d1-bootstrap.py check
           python scripts/cloudflare-d1-bootstrap.py self-test
 
