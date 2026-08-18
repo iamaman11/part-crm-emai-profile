@@ -11,11 +11,11 @@ jobs:
     if: github.repository == 'iamaman11/part-crm-emai-profile' && github.event.pull_request.head.ref == 'agent/ar8-completion' && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout exact completion branch
+      - name: Checkout exact completion candidate
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: agent/ar8-completion
-          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
           persist-credentials: true
       - name: Materialize current generated authorities in dependency order
         run: |
