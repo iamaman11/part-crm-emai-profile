@@ -264,7 +264,7 @@ def validate_topology(topology: dict[str, Any]) -> None:
             fail(f"AR-2 policy {key} must remain true")
     if (
         policies.get("production_promotion_authority")
-        != "PC-1_AFTER_AR17_USING_AR11_RELEASE_SET"
+        != "PC-1_AFTER_AR-17_USING_AR-11_RELEASE_SET"
     ):
         fail("production promotion authority drifted")
 
