@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import process from 'node:process';
 
 const FORBIDDEN_VALUE_KEYS = new Set([
@@ -47,11 +47,11 @@ function rejectValueShapedFields(value, path = '$SECRET_LIST') {
 }
 
 function requiredSecretNames(config, environment) {
-  if (!object(config)) fail('rendered Wrangler config must be one JSON object');
+  if (!object(config)) fail('Wrangler config must be one JSON object');
   const selected = config.env?.[environment];
   const required = selected?.secrets?.required;
   if (!Array.isArray(required) || required.length === 0) {
-    fail(`rendered Wrangler env.${environment}.secrets.required must be non-empty`);
+    fail(`Wrangler env.${environment}.secrets.required must be non-empty`);
   }
   if (required.some((name) => !validBindingName(name))) {
     fail('required Worker secret binding names are malformed');
@@ -97,6 +97,28 @@ function validate(config, environment, secretList) {
   }
 }
 
+function normalizeRequiredContract(sourceConfig, renderedConfig, environment) {
+  if (!CANONICAL_ENVIRONMENTS.has(environment)) {
+    fail('secret contract normalization environment is not canonical');
+  }
+  const required = requiredSecretNames(sourceConfig, environment);
+  if (!object(renderedConfig) || !object(renderedConfig.env?.[environment])) {
+    fail(`rendered Wrangler env.${environment} is missing`);
+  }
+  const selected = renderedConfig.env[environment];
+  if (selected.secrets !== undefined) {
+    if (!object(selected.secrets) || Object.keys(selected.secrets).some((key) => key !== 'required')) {
+      fail('rendered Wrangler config contains a non-declarative secrets payload');
+    }
+    const existing = selected.secrets.required;
+    if (existing !== undefined && JSON.stringify([...existing].sort()) !== JSON.stringify(required)) {
+      fail('rendered Wrangler config secret contract differs from immutable release authority');
+    }
+  }
+  selected.secrets = { required };
+  return renderedConfig;
+}
+
 async function readJson(path, label) {
   const bytes = await readFile(path);
   if (bytes.length === 0 || bytes.length > MAX_DOCUMENT_BYTES) {
@@ -109,6 +131,13 @@ async function readJson(path, label) {
   }
 }
 
+async function normalizeFile(sourcePath, renderedPath, environment) {
+  const source = await readJson(sourcePath, 'immutable release Wrangler config');
+  const rendered = await readJson(renderedPath, 'rendered Wrangler config');
+  const normalized = normalizeRequiredContract(source, rendered, environment);
+  await writeFile(renderedPath, `${JSON.stringify(normalized, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
 function expectRejected(label, operation) {
   try {
     operation();
@@ -119,7 +148,7 @@ function expectRejected(label, operation) {
 }
 
 function selfTest() {
-  const config = {
+  const source = {
     env: {
       staging: { secrets: { required: ['CALLER_AUTH_KEY', 'ENCRYPTION_KEYRING'] } },
       production: { secrets: { required: ['CALLER_AUTH_KEY', 'ENCRYPTION_KEYRING'] } },
@@ -129,17 +158,38 @@ function selfTest() {
     { name: 'ENCRYPTION_KEYRING', type: 'secret_text' },
     { name: 'CALLER_AUTH_KEY', type: 'secret_text' },
   ];
-  validate(config, 'staging', valid);
-  expectRejected('missing required secret', () => validate(config, 'staging', valid.slice(0, 1)));
-  expectRejected('unexpected stale secret', () => validate(config, 'staging', [
+  const normalized = normalizeRequiredContract(
+    source,
+    { env: { staging: { name: 'worker-staging' } } },
+    'staging',
+  );
+  validate(normalized, 'staging', valid);
+  expectRejected('missing required secret', () => validate(normalized, 'staging', valid.slice(0, 1)));
+  expectRejected('unexpected stale secret', () => validate(normalized, 'staging', [
     ...valid,
     { name: 'STALE_SECRET', type: 'secret_text' },
   ]));
-  expectRejected('secret value field', () => validate(config, 'staging', [
+  expectRejected('secret value field', () => validate(normalized, 'staging', [
     { name: 'CALLER_AUTH_KEY', type: 'secret_text', value: 'forbidden' },
   ]));
   expectRejected('missing secrets.required', () => validate({ env: { staging: {} } }, 'staging', valid));
-  expectRejected('noncanonical environment', () => validate(config, 'prod', valid));
+  expectRejected('noncanonical environment', () => validate(normalized, 'prod', valid));
+  expectRejected(
+    'rendered secret-value payload',
+    () => normalizeRequiredContract(
+      source,
+      { env: { staging: { secrets: { required: ['CALLER_AUTH_KEY'], value: 'forbidden' } } } },
+      'staging',
+    ),
+  );
+  expectRejected(
+    'rendered contract drift',
+    () => normalizeRequiredContract(
+      source,
+      { env: { staging: { secrets: { required: ['OTHER_SECRET'] } } } },
+      'staging',
+    ),
+  );
   console.log('Worker secret binding metadata validator self-test passed.');
 }
 
@@ -154,13 +204,20 @@ async function main() {
     selfTest();
     return;
   }
-  const configPath = argument('--config');
   const environment = argument('--environment');
-  const secretListPath = argument('--secret-list');
+  if (process.argv.includes('--normalize')) {
+    await normalizeFile(
+      argument('--source-config'),
+      argument('--rendered-config'),
+      environment,
+    );
+    console.log(`Restored declarative secrets.required for ${environment} from immutable release authority.`);
+    return;
+  }
   validate(
-    await readJson(configPath, 'rendered Wrangler config'),
+    await readJson(argument('--config'), 'rendered Wrangler config'),
     environment,
-    await readJson(secretListPath, 'wrangler secret-list metadata'),
+    await readJson(argument('--secret-list'), 'wrangler secret-list metadata'),
   );
   console.log(`Worker secret binding metadata exactly matches secrets.required for ${environment}.`);
 }
