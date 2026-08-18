@@ -68,26 +68,20 @@ jobs:
 
           legacy_path = Path('scripts/check-documentation-authority-legacy.py')
           legacy_text = legacy_path.read_text(encoding='utf-8')
-          historical = '''    expected_python_summary = {
-              "tracked_python_files": 116,
-              "DELETE_AFTER_SEQUENCE": 6,
-              "KEEP_PYTHON": 108,
-              "MIGRATE_TO_RUST": 2,
-              "WRAP_WITH_RUST": 0,
+          start_marker = '    expected_python_summary = {\n'
+          end_marker = '    if (\n        program.get("python_estate")'
+          start = legacy_text.index(start_marker)
+          end = legacy_text.index(end_marker, start)
+          current = '''    python_rows = python_estate.get("files") if isinstance(python_estate.get("files"), list) else []
+          expected_python_summary = {
+              "tracked_python_files": len(python_rows),
+              "DELETE_AFTER_SEQUENCE": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "DELETE_AFTER_SEQUENCE"),
+              "KEEP_PYTHON": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "KEEP_PYTHON"),
+              "MIGRATE_TO_RUST": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "MIGRATE_TO_RUST"),
+              "WRAP_WITH_RUST": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "WRAP_WITH_RUST"),
           }
           '''
-          current = '''    python_rows = python_estate.get("files") if isinstance(python_estate.get("files"), list) else []
-              expected_python_summary = {
-                  "tracked_python_files": len(python_rows),
-                  "DELETE_AFTER_SEQUENCE": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "DELETE_AFTER_SEQUENCE"),
-                  "KEEP_PYTHON": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "KEEP_PYTHON"),
-                  "MIGRATE_TO_RUST": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "MIGRATE_TO_RUST"),
-                  "WRAP_WITH_RUST": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "WRAP_WITH_RUST"),
-              }
-          '''
-          if historical not in legacy_text:
-              raise SystemExit('AR-6 historical/current Python estate summary anchor missing')
-          legacy_text = legacy_text.replace(historical, current, 1)
+          legacy_text = legacy_text[:start] + current + legacy_text[end:]
           legacy_path.write_text(legacy_text, encoding='utf-8', newline='\n')
           PY
 
