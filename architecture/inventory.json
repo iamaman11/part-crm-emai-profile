@@ -1463,12 +1463,12 @@
     "canonical_authority": "architecture/inventory.json::current_delivery_map",
     "program": "Architecture Re-baseline v3",
     "accepted_checkpoint": "AR-8C",
-    "current_work": "AR-8D_IMPLEMENTATION",
+    "current_work": "AR-8_COMPLETION_CANDIDATE",
     "source_implemented": {
-      "status": "PARTIAL",
-      "through": "AR-8C",
-      "current_subslice": "AR-8D",
-      "current_subslice_source": "CURRENT_IMPLEMENTATION_NOT_ACCEPTED"
+      "status": "COMPLETE_CANDIDATE",
+      "through": "AR-8F",
+      "current_subslice": "AR-8_COMPLETION",
+      "current_subslice_source": "PR_362_NOT_ACCEPTED_MAIN"
     },
     "accepted_on_main": {
       "status": "PARTIAL",
@@ -1496,14 +1496,14 @@
       "evidence": "docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json"
     },
     "current_blocker": {
-      "issue": null,
-      "status": "NONE",
-      "blocks": "NONE"
+      "issue": 361,
+      "status": "FINAL_ACCEPTANCE_PENDING",
+      "blocks": "AR-9"
     },
     "next_gate": {
-      "id": "AR-8D_ACCEPTANCE",
-      "issue": null,
-      "on_success": "AR-8E_BECOMES_CURRENT"
+      "id": "AR-8_FINAL_ACCEPTANCE",
+      "issue": 361,
+      "on_success": "ACCEPTED_MAIN_REREAD_THEN_AR9"
     },
     "invariants": {
       "source_present_not_equal_production_enabled": true,
@@ -1545,7 +1545,14 @@
     "security": "docs/THREAT_MODEL.md",
     "accepted_phase_ledger": "architecture/accepted-phases.json",
     "historical_pre2j_product_readiness": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
-    "historical_pre2j_architecture_closeout": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md"
+    "historical_pre2j_architecture_closeout": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+    "current_credential_authority": "architecture/credential-authority.json",
+    "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
+    "credential_lifecycle": "architecture/credential-lifecycle.json",
+    "operator_contract": "architecture/operator-contract.json",
+    "profile_security": "architecture/profile-security.json",
+    "ar8_completion_tracking_issue": 361,
+    "ar8_completion_pr": 362
   },
   "document_status": [
     {
@@ -1737,17 +1744,16 @@
         "AR-8B",
         "AR-8C"
       ],
-      "current_subslice": "AR-8D",
-      "current_implementation_issue": null,
-      "mandatory_remaining": [
-        "AR-8D",
-        "AR-8E",
-        "AR-8F"
-      ],
-      "implementation_entry_gate": "POST_AR8C_CLEANUP_DX_ACCEPTED_AR8D_IMPLEMENTATION_CURRENT",
+      "current_subslice": "AR-8_COMPLETION",
+      "current_implementation_issue": 361,
+      "mandatory_remaining": [],
+      "implementation_entry_gate": "AR8_COMPLETION_PR_362_FINAL_ACCEPTANCE",
       "full_ar8_accepted": false,
       "ar9_blocked": true,
-      "production_mutation": false
+      "production_mutation": false,
+      "source_complete_candidate": true,
+      "completion_pr": 362,
+      "implemented_through": "AR-8F"
     },
     "ar8b_acceptance": {
       "issue": 309,
@@ -1817,5 +1823,62 @@
     "production_ready": false,
     "production_mutation_allowed_during_ar0_ar17": false,
     "production_ready_authority": "PC-1_AFTER_AR-17_AUTHORIZATION"
+  },
+  "subject_domain_authorities": {
+    "schema_version": 1,
+    "role": "CURRENT_SUBJECT_DOMAIN_PROJECTION",
+    "composition_root": "architecture/credential-authority.json",
+    "registry_provenance": "architecture/credential-authority-ar8b.json",
+    "sources": {
+      "credential_authority": {
+        "path": "architecture/credential-authority.json",
+        "sha256": "d7ad45094c867b855749334b2a51d06d8d2496b9ff6e74970c88a524c5f01bfd"
+      },
+      "credential_lifecycle": {
+        "path": "architecture/credential-lifecycle.json",
+        "sha256": "8f4acce098fe2612f63856e7a94531189f9e5877ae5add19d69c666861ebb800"
+      },
+      "operator_contract": {
+        "path": "architecture/operator-contract.json",
+        "sha256": "1d9aa17ff767685222cff8422b7c3a534366618abccecf9836a93321c9c9cd65"
+      },
+      "profile_security": {
+        "path": "architecture/profile-security.json",
+        "sha256": "ee410f7f3047128aa410c3ea8098803d476a7592a09f792e6acff3c672d88811"
+      }
+    },
+    "credential_lifecycle_concern_ids": [
+      "resolver.encryption-keyring",
+      "resolver.handle-hmac",
+      "mailbox-resolver.caller-auth",
+      "control-plane.client-contact-protection",
+      "profile-generation.r2-access",
+      "resolver.google-oauth-application",
+      "resolver.microsoft-oauth-application"
+    ],
+    "profile_security_domain_ids": [
+      "profile-generation.encryption-key-hierarchy",
+      "profile-identity.entropy-root",
+      "profile-bridge.device-private-key",
+      "profile-network.proxy-credential",
+      "profile-bridge.enrollment-claim",
+      "profile-generation.short-lived-object-access"
+    ],
+    "operator_mode": "READ_ONLY_METADATA_ONLY",
+    "completion_provenance": {
+      "lifecycle_candidate": "docs/evidence/ar8-completion-lifecycle-candidate.json",
+      "operator_rehearsal_candidate": "docs/evidence/ar8-operator-rehearsal-candidate.json",
+      "secret_transport_successor_candidate": "docs/evidence/ar8-d-secret-transport-successor-candidate.json"
+    },
+    "source_completion": {
+      "tracking_issue": 361,
+      "completion_pr": 362,
+      "implemented_through": "AR-8F",
+      "state": "FINAL_ACCEPTANCE_PENDING",
+      "accepted_main_through": "AR-8C",
+      "full_ar8_accepted": false,
+      "ar9_blocked": true,
+      "production_mutation": false
+    }
   }
 }
