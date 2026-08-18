@@ -5,6 +5,9 @@ The shared validator in `_cloudflare_runtime_bindings_core.py` proves the curren
 source-to-Wrangler binding inventory. This entrypoint preserves the accepted
 AR-2 topology, resolver-isolation and D3 compatibility invariants and applies
 AR-5's accepted deletion authority for the legacy GENERATION_VERIFICATION Queue.
+When AR-8D introduces the governed secret-transport successor, the accepted D3
+promotion ceremony remains checked against its immutable predecessor workflow
+while the current workflow is checked by the AR-8D successor authority.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,6 +29,8 @@ TOPOLOGY = ROOT / "architecture/runtime-topology-ar2.json"
 PROMOTION_WORKFLOW = ROOT / ".github/workflows/mailbox-secret-resolver-promotion.yml"
 PROMOTION_ENTRYPOINT = ROOT / "scripts/mailbox-secret-resolver-promotion.py"
 PROMOTION_CORE = ROOT / "scripts/_mailbox_secret_resolver_promotion_core.py"
+AR8D_SECRET_TRANSPORT_SUCCESSOR = ROOT / "architecture/ar8-d-secret-transport-successor.json"
+AR8D_SECRET_TRANSPORT_CHECKER = ROOT / ".github/scripts/ar8-d-secret-transport-successor.mjs"
 QUEUE_ENTRYPOINT = ROOT / "apps/control-plane-worker/src/lib.rs"
 QUEUE_ENVELOPE = ROOT / "crates/cloudflare-adapters/src/control_plane_queue.rs"
 CONTROL_PLANE_CONTRACT = ROOT / "crates/control-plane-contract/src/lib.rs"
@@ -353,6 +359,60 @@ def validate_d3_gate(workflow: str) -> None:
         fail("D3 mutation job can bypass the canonical AR-2 preflight")
 
 
+def governed_d3_workflow(current_workflow: str) -> str:
+    if not AR8D_SECRET_TRANSPORT_SUCCESSOR.is_file():
+        return current_workflow
+    if not AR8D_SECRET_TRANSPORT_CHECKER.is_file():
+        fail("AR-8D secret-transport successor authority exists without its permanent checker")
+
+    successor_check = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "--eval",
+            "await import('./.github/scripts/ar8-d-secret-transport-successor.mjs')",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if successor_check.returncode != 0:
+        details = "\n".join(
+            value.strip()
+            for value in (successor_check.stdout, successor_check.stderr)
+            if value.strip()
+        )
+        fail(f"AR-8D secret-transport successor gate failed:\n{details}")
+
+    authority = load(AR8D_SECRET_TRANSPORT_SUCCESSOR, "AR-8D secret-transport successor")
+    predecessor = object_value(authority.get("predecessor"), "AR-8D predecessor")
+    transition_base = predecessor.get("transition_base_main")
+    workflow_path = predecessor.get("promotion_workflow")
+    expected_path = PROMOTION_WORKFLOW.relative_to(ROOT).as_posix()
+    if (
+        not isinstance(transition_base, str)
+        or re.fullmatch(r"[0-9a-f]{40}", transition_base) is None
+        or workflow_path != expected_path
+    ):
+        fail("AR-8D successor does not bind an exact historical D3 promotion workflow")
+
+    historical = subprocess.run(
+        ["git", "show", f"{transition_base}:{workflow_path}"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if historical.returncode != 0 or not historical.stdout:
+        details = historical.stderr.strip()
+        fail(
+            "accepted D3 predecessor workflow is unavailable at the governed AR-8D transition base"
+            + (f": {details}" if details else "")
+        )
+    return historical.stdout
+
+
 def self_test(control: dict[str, Any], topology: dict[str, Any], workflow: str) -> None:
     restored_producer = copy.deepcopy(control)
     production = object_value(
@@ -428,17 +488,18 @@ def main() -> int:
         control = load(CONTROL_CONFIG, "control-plane Wrangler config")
         resolver = load(RESOLVER_CONFIG, "resolver Wrangler config")
         topology = load(TOPOLOGY, "AR-2 runtime topology")
-        workflow = PROMOTION_WORKFLOW.read_text(encoding="utf-8")
+        current_workflow = PROMOTION_WORKFLOW.read_text(encoding="utf-8")
+        d3_workflow = governed_d3_workflow(current_workflow)
         validate_queue_consumers(control)
         validate_queue_producers(control)
         validate_generation_verification_runtime(control)
         validate_resolver_isolation(resolver)
         validate_topology(topology)
-        validate_d3_gate(workflow)
-        self_test(control, topology, workflow)
+        validate_d3_gate(d3_workflow)
+        self_test(control, topology, d3_workflow)
         print(
             "AR-5 runtime authority cleanup, accepted AR-2 topology, resolver isolation, "
-            "and D3 production fail-closed compatibility checks passed."
+            "and governed D3-to-AR-8D production fail-closed compatibility checks passed."
         )
         return 0
     except (OSError, json.JSONDecodeError, Ar2TopologyError, KeyError) as error:

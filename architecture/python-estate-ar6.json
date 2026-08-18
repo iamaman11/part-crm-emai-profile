@@ -24,9 +24,9 @@
     "production_mutation": false
   },
   "summary": {
-    "tracked_python_files": 116,
+    "tracked_python_files": 119,
     "DELETE_AFTER_SEQUENCE": 6,
-    "KEEP_PYTHON": 108,
+    "KEEP_PYTHON": 111,
     "MIGRATE_TO_RUST": 2,
     "WRAP_WITH_RUST": 0
   },
@@ -149,6 +149,14 @@
     },
     {
       "path": "scripts/check-device-generation-commit-boundary.py",
+      "classification": "KEEP_PYTHON",
+      "role": "validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "validators remain legitimate Python"
+    },
+    {
+      "path": "scripts/check-documentation-authority-legacy.py",
       "classification": "KEEP_PYTHON",
       "role": "validator",
       "side_effect_class": "repository_validation_only",
@@ -530,6 +538,22 @@
       "side_effect_class": "artifact_generation_only",
       "authority": "PYTHON_ALLOWED_BY_AR6",
       "rationale": "release artifact/provenance generator remains Python; AR-11 owns later operational release-set semantics"
+    },
+    {
+      "path": "scripts/generate-ar8-completion-status.py",
+      "classification": "KEEP_PYTHON",
+      "role": "generator",
+      "side_effect_class": "artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "deterministic generators remain legitimate Python"
+    },
+    {
+      "path": "scripts/generate-architecture-inventory-engine.py",
+      "classification": "KEEP_PYTHON",
+      "role": "generator",
+      "side_effect_class": "artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR6",
+      "rationale": "deterministic generators remain legitimate Python"
     },
     {
       "path": "scripts/generate-architecture-inventory.py",

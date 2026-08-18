@@ -1,0 +1,405 @@
+{
+  "schema_version": 1,
+  "kind": "AR8F_OPERATOR_REHEARSAL_AUTHORITY",
+  "status": "candidate",
+  "tracking_issue": 361,
+  "parent_issue": 308,
+  "completion_pr": 362,
+  "canonical_lifecycle": "architecture/ar8-completion-lifecycle.json",
+  "accepted_projection_update": "DEFERRED_UNTIL_FINAL_FROZEN_SHA",
+  "environment_policy": {
+    "rehearsal_environment": "staging",
+    "production_mutation": false,
+    "secret_readback": false,
+    "opsctl_mutation": false,
+    "routine_release_secret_transport": false,
+    "provider_mutation_from_opsctl": false
+  },
+  "operator_surfaces": {
+    "status": {
+      "command": "opsctl status",
+      "source": "docs/status.json",
+      "mode": "metadata-only"
+    },
+    "inventory": {
+      "command": "opsctl inventory",
+      "source": "architecture/inventory.json",
+      "mode": "metadata-only"
+    },
+    "doctor": {
+      "command": "opsctl doctor",
+      "source": "canonical validators plus AR-8 candidate authorities",
+      "mode": "read-only-validation"
+    },
+    "credential_lifecycle": {
+      "command": "opsctl credential-lifecycle",
+      "source": "architecture/ar8-completion-lifecycle.json",
+      "mode": "metadata-only"
+    },
+    "rotation_plan": {
+      "command": "opsctl rotation-plan",
+      "source": "architecture/ar8-operator-rehearsal.json",
+      "mode": "metadata-only"
+    }
+  },
+  "audit_lineage": {
+    "mode": "metadata-only",
+    "allowed_fields": [
+      "concern_id",
+      "logical_slice",
+      "environment",
+      "credential_or_key_id",
+      "version",
+      "binding_names",
+      "provider_metadata_ids",
+      "state",
+      "source_sha",
+      "evidence_ref",
+      "observed_at"
+    ],
+    "forbidden_fields": [
+      "value",
+      "secret_value",
+      "plaintext",
+      "plaintext_value",
+      "private_key",
+      "password",
+      "token_value",
+      "credential_value",
+      "key_material",
+      "raw_secret",
+      "raw_token"
+    ]
+  },
+  "ceremony_policy": {
+    "stage_order": [
+      "precheck",
+      "issue_or_import",
+      "bind_replacement",
+      "switch_active",
+      "verify",
+      "retire_previous"
+    ],
+    "retirement_rule": "VERIFY_REPLACEMENT_BEFORE_RETIRE_PREVIOUS",
+    "rollback_rule": "KEEP_PREVIOUS_VALID_OR_RETAINED_UNTIL_REPLACEMENT_IS_VERIFIED",
+    "cross_environment_rule": "TARGET_ENVIRONMENT_IDENTIFIERS_MUST_MATCH_STAGING_BEFORE_ANY_STAGING_CEREMONY",
+    "recovery_required": true
+  },
+  "concern_plans": [
+    {
+      "id": "resolver.encryption-keyring",
+      "logical_slice": "AR-8D.2",
+      "environment": "staging",
+      "rehearsal_mode": "DETERMINISTIC_REPOSITORY_FIXTURE",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "ceremony": [
+        "precheck: inspect active and retained key-version metadata only",
+        "issue_or_import: prepare replacement key material outside evidence",
+        "bind_replacement: bind active plus retained previous in the governed Worker secret authority",
+        "switch_active: make replacement active while reads retain previous",
+        "verify: reconcile old ciphertext and require old encrypted-record dependency count zero",
+        "retire_previous: retire only after replacement verification and zero dependency proof"
+      ],
+      "recovery": "Interrupted reconciliation keeps the previous key retained; retry bounded reconciliation and reject stale-key writes."
+    },
+    {
+      "id": "resolver.handle-hmac",
+      "logical_slice": "AR-8D.3",
+      "environment": "staging",
+      "rehearsal_mode": "DETERMINISTIC_REPOSITORY_FIXTURE",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "ceremony": [
+        "precheck: inspect active and bounded retained lookup-HMAC versions",
+        "issue_or_import: prepare replacement lookup-HMAC version outside evidence",
+        "bind_replacement: bind active plus bounded retained versions",
+        "switch_active: new identities use only the replacement version",
+        "verify: require zero live record, idempotency and refresh-lease dependencies before retirement",
+        "retire_previous: retire only a non-active version with zero dependency counts"
+      ],
+      "recovery": "Ambiguous, missing or stale version metadata fails closed; keep retained versions until dependency counts reach zero."
+    },
+    {
+      "id": "mailbox-resolver.caller-auth",
+      "logical_slice": "AR-8D.4",
+      "environment": "staging",
+      "rehearsal_mode": "DETERMINISTIC_REPOSITORY_FIXTURE",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "ceremony": [
+        "precheck: inspect accepted key ids and temporary legacy-v1 compatibility metadata",
+        "issue_or_import: prepare replacement caller-auth key outside evidence",
+        "bind_replacement: resolver accepts replacement plus previous before signer switch",
+        "switch_active: control-plane signer emits v2 with exactly the replacement key id",
+        "verify: bounded staging traffic verifies the named replacement key id",
+        "retire_previous: retire previous or legacy-v1 only after no accepted caller depends on it"
+      ],
+      "recovery": "Keep the previous accepted key during failed cutover; unknown or revoked key ids, replay and stale requests fail closed."
+    },
+    {
+      "id": "control-plane.client-contact-protection",
+      "logical_slice": "AR-8D.5",
+      "environment": "staging",
+      "rehearsal_mode": "DETERMINISTIC_REPOSITORY_FIXTURE",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "ceremony": [
+        "precheck: inspect explicit active encryption and lookup versions",
+        "issue_or_import: prepare replacement encryption and lookup versions outside evidence",
+        "bind_replacement: retain previous versions before switching explicit active fields",
+        "switch_active: write only replacement versions while old versions remain readable",
+        "verify: reconcile and require zero encrypted-row and lookup-row dependencies on retired versions",
+        "retire_previous: retire only after dependency proof and replacement verification"
+      ],
+      "recovery": "A failed switch retains previous versions; interrupted reconciliation is retryable and CAS concurrency failures remain fail closed."
+    },
+    {
+      "id": "profile-generation.r2-access",
+      "logical_slice": "AR-8D.6",
+      "environment": "staging",
+      "rehearsal_mode": "STAGING_METADATA_AUDIT_PLUS_DETERMINISTIC_SIGNER_FIXTURE",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "ceremony": [
+        "precheck: verify intended Cloudflare account, bucket and Worker binding names metadata-only",
+        "issue_or_import: issue a separate replacement R2 token only in an explicitly governed staging ceremony",
+        "bind_replacement: bind Access Key ID and Secret Access Key atomically outside evidence",
+        "switch_active: replacement pair becomes the intended Worker binding only in that governed ceremony",
+        "verify: bounded staging R2 capability verification and binding metadata check must succeed",
+        "retire_previous: revoke previous provider token only after replacement verification"
+      ],
+      "recovery": "Keep the previous provider token valid until replacement verification; routine application promotion never rotates this pair."
+    },
+    {
+      "id": "resolver.google-oauth-application",
+      "logical_slice": "AR-8E",
+      "environment": "staging",
+      "rehearsal_mode": "PROVIDER_CEREMONY_CONTRACT_WITHOUT_AUTOMATED_PROVIDER_MUTATION",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "ceremony": [
+        "precheck: match staging OAuth client id and authorized redirect URI metadata",
+        "issue_or_import: add replacement client secret while previous remains enabled when an explicitly governed staging provider ceremony is performed",
+        "bind_replacement: write-only bind replacement to staging GOOGLE_OAUTH_CLIENT_SECRET",
+        "switch_active: staging resolver uses replacement binding without changing AR-8A user-token authority",
+        "verify: bounded staging authorization-code and refresh-token exchanges must succeed before disable",
+        "retire_previous: disable previous first and delete only after a bounded rollback observation window"
+      ],
+      "recovery": "Before deletion, keep or re-enable the previous Google secret and restore its Worker binding if verification fails; deletion is final for that secret."
+    },
+    {
+      "id": "resolver.microsoft-oauth-application",
+      "logical_slice": "AR-8E",
+      "environment": "staging",
+      "rehearsal_mode": "PROVIDER_CEREMONY_CONTRACT_WITHOUT_AUTOMATED_PROVIDER_MUTATION",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "ceremony": [
+        "precheck: match staging application client id and registered Web redirect URI metadata",
+        "issue_or_import: add replacement passwordCredential before removing previous when an explicitly governed staging provider ceremony is performed",
+        "bind_replacement: capture secretText only at issuance and write-only bind MICROSOFT_OAUTH_CLIENT_SECRET",
+        "switch_active: staging resolver uses replacement binding without changing AR-8A user-token authority",
+        "verify: bounded staging authorization-code and refresh-token exchanges plus keyId/endDateTime metadata verification must succeed",
+        "retire_previous: remove previous passwordCredential by keyId only after replacement verification"
+      ],
+      "recovery": "Keep the previous passwordCredential valid and restore its Worker binding if verification fails; removed credentials are not treated as recoverable."
+    }
+  ],
+  "profile_security_plans": [
+    {
+      "id": "profile-generation.encryption-key-hierarchy",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "AUTHORITY_AND_LIFECYCLE_CONTRACT_ONLY",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10_CONSUMER_INTEGRATION_THEN_AR-13_ROTATION_AND_AR-14_RECOVERY",
+      "operator_rule": "Never display root/KEK/DEK material; expose only allowed key-version identifiers, wrapped-reference/dependency state and readiness. The one-device Secret Vault smoke is prototype evidence, not production key authority.",
+      "recovery_rule": "Do not retire a root/KEK version until reconciliation and restore evidence required by the later owning gates exists."
+    },
+    {
+      "id": "profile-identity.entropy-root",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "DEFERRED_IMPLEMENTATION_AR10",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10",
+      "operator_rule": "Expose fingerprint policy/generation identity and secret-handle presence/provider status only; never entropy bytes or the raw secret-handle value.",
+      "recovery_rule": "No in-place entropy rewrite; identity change requires a new profile generation and certification."
+    },
+    {
+      "id": "profile-bridge.device-private-key",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "HANDLE_BOUNDARY_PRESENT_PROVIDER_PROOF_DEFERRED",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10_AND_LATER_PLATFORM_REHEARSAL",
+      "operator_rule": "Expose device identity, provider/key-version status and key-presence state only; never private-key bytes or the raw device key handle.",
+      "recovery_rule": "Loss/revocation is handled through the owning device identity/enrollment authority; do not export private key material for recovery."
+    },
+    {
+      "id": "profile-network.proxy-credential",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "DEFERRED_IMPLEMENTATION_AR10",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10",
+      "operator_rule": "Expose provider/route/version/status and non-reversible reference metadata only; never proxy username/password/token material or the raw secret handle.",
+      "recovery_rule": "Real network/proxy cutover must fail closed when the scoped credential authority is missing, rejected or cross-environment."
+    },
+    {
+      "id": "profile-bridge.enrollment-claim",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "CURRENT_FAIL_CLOSED_CONTRACT",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10_RUNTIME_INTEGRATION",
+      "operator_rule": "Expose expiry/redemption/device-binding outcome only; the single-use claim value remains redacted and never appears with profile ID/JWT/R2 credentials/keys in the custom URI.",
+      "recovery_rule": "Expired/replayed/rebound claims are not reused; issue a fresh claim through the owning enrollment authority."
+    },
+    {
+      "id": "profile-generation.short-lived-object-access",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "DEFERRED_IMPLEMENTATION_AR10",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10_RUNTIME_CONTRACT_THEN_STAGING_RECOVERY_REHEARSAL",
+      "operator_rule": "Expose non-secret issuance reference, scope, expiry and generation-binding state only; never bearer credential/capability material and never reuse the static control-plane R2 pair on Profile Bridge.",
+      "recovery_rule": "Expired/revoked scoped access is reissued only after current tenant/profile/generation/device/lease authorization is proven."
+    }
+  ],
+  "profile_noncredential_state_policy": {
+    "operator_visibility": "METADATA_ONLY",
+    "raw_token_or_claim_value": false,
+    "ids": [
+      "profile-bridge.workspace-lock-token",
+      "profile-session.launch-intent-state",
+      "profile-session.fencing-token"
+    ],
+    "rule": "Launch-intent authorization state and fencing/lock coordination remain fail-closed state authorities, not secret/provider credential registries."
+  },
+  "negative_matrix": [
+    {
+      "id": "missing_binding",
+      "expected": "FAIL_CLOSED",
+      "evidence": [
+        {
+          "path": ".github/scripts/worker-secret-bindings.mjs",
+          "marker": "missing"
+        }
+      ]
+    },
+    {
+      "id": "malformed_keyring",
+      "expected": "FAIL_CLOSED",
+      "evidence": [
+        {
+          "path": "crates/cloudflare-adapters/src/contact_keyring.rs",
+          "marker": "keyring_requires_explicit_present_active_versions_and_valid_entries"
+        }
+      ]
+    },
+    {
+      "id": "unknown_or_revoked_version",
+      "expected": "FAIL_CLOSED",
+      "evidence": [
+        {
+          "path": "crates/control-plane-contract/src/resolver_service_auth.rs",
+          "marker": "revoked-key"
+        }
+      ]
+    },
+    {
+      "id": "stale_rotation",
+      "expected": "FAIL_CLOSED",
+      "evidence": [
+        {
+          "path": "apps/mailbox-secret-resolver-worker/src/storage.rs",
+          "marker": "ConcurrentMutation"
+        }
+      ]
+    },
+    {
+      "id": "concurrent_rotation",
+      "expected": "FAIL_CLOSED",
+      "evidence": [
+        {
+          "path": "crates/cloudflare-adapters/src/contact_key_lifecycle.rs",
+          "marker": "ContactKeyLifecycleError::ConcurrentMutation"
+        }
+      ]
+    },
+    {
+      "id": "interrupted_reconciliation",
+      "expected": "FAIL_CLOSED_WITH_PREVIOUS_RETAINED",
+      "evidence": [
+        {
+          "path": "crates/cloudflare-adapters/src/contact_key_lifecycle.rs",
+          "marker": "interrupted_rotation_reads_retained_old_material_and_writes_only_active_versions"
+        }
+      ]
+    },
+    {
+      "id": "secret_value_leakage",
+      "expected": "FAIL_CLOSED",
+      "evidence": [
+        {
+          "path": ".github/scripts/ar8-completion-lifecycle.mjs",
+          "marker": "secret value field"
+        },
+        {
+          "path": ".github/scripts/ar8-profile-security.mjs",
+          "marker": "secret value-bearing field is forbidden"
+        }
+      ]
+    },
+    {
+      "id": "competing_mutator",
+      "expected": "FAIL_CLOSED",
+      "evidence": [
+        {
+          "path": "scripts/check-opsctl-readonly.py",
+          "marker": "mutable command-surface"
+        }
+      ]
+    },
+    {
+      "id": "routine_deploy_secret_transport",
+      "expected": "FAIL_CLOSED",
+      "evidence": [
+        {
+          "path": ".github/scripts/ar8-completion-lifecycle.mjs",
+          "marker": "OAuth application secret transported by routine promotion"
+        }
+      ]
+    },
+    {
+      "id": "cross_environment_mixup",
+      "expected": "FAIL_CLOSED",
+      "evidence": [
+        {
+          "path": ".github/scripts/ar8-completion-lifecycle.mjs",
+          "marker": "cross-environment OAuth application ownership"
+        }
+      ]
+    },
+    {
+      "id": "revoke_before_verify",
+      "expected": "FAIL_CLOSED",
+      "evidence": [
+        {
+          "path": ".github/scripts/ar8-completion-lifecycle.mjs",
+          "marker": "Microsoft revoke-before-verify"
+        }
+      ]
+    }
+  ],
+  "final_projection_gate": {
+    "inventory_status_docs_advance": "ONLY_ON_ONE_EXACT_FINAL_FROZEN_SHA",
+    "full_ar8_accepted": false,
+    "ar9_blocked": true,
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false
+  }
+}

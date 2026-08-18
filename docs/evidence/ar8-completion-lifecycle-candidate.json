@@ -1,0 +1,388 @@
+{
+  "schema_version": 1,
+  "kind": "AR8_COMPLETION_LIFECYCLE_OVERLAY",
+  "status": "candidate",
+  "tracking_issue": 361,
+  "parent_issue": 308,
+  "canonical_credential_authority": "architecture/credential-authority-ar8b.json",
+  "canonical_inventory": "architecture/inventory.json",
+  "production_mutation": false,
+  "secret_plaintext_in_git": false,
+  "opsctl_mutation": false,
+  "routine_release_rotates_runtime_secrets": false,
+  "stage_order": [
+    "issue_or_import",
+    "validate",
+    "bind_replacement",
+    "switch_active",
+    "verify",
+    "retire_previous"
+  ],
+  "concerns": [
+    {
+      "id": "resolver.encryption-keyring",
+      "logical_slice": "AR-8D.2",
+      "canonical_future_cutover": "AR-8D",
+      "externally_issued": false,
+      "routine_release_rotation": false,
+      "allowed_mutator": "explicit-governed-resolver-worker-secret-rotation",
+      "overlap_model": "ACTIVE_PLUS_RETAINED",
+      "read_old_write_new": true,
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "replacement is bound and active",
+        "old ciphertext reconciliation completed",
+        "old encrypted-record dependency count is zero"
+      ],
+      "recovery": "Interrupted reconciliation keeps the previous key retained; stale-key writes and downgrade remain fail-closed."
+    },
+    {
+      "id": "resolver.handle-hmac",
+      "logical_slice": "AR-8D.3",
+      "canonical_future_cutover": "AR-8D",
+      "externally_issued": false,
+      "routine_release_rotation": false,
+      "allowed_mutator": "explicit-governed-resolver-worker-secret-rotation",
+      "overlap_model": "ACTIVE_PLUS_BOUNDED_RETAINED_VERSIONS",
+      "lookup_resolution": "BOUNDED_RETAINED_VERSION_CANDIDATES",
+      "stored_dependency_metadata": [
+        "lookup_hmac_version",
+        "idempotency hmac_version",
+        "refresh_owner_hmac_version"
+      ],
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "version is not active",
+        "live encrypted-record dependency count is zero",
+        "idempotency dependency count is zero",
+        "live refresh-lease dependency count is zero"
+      ],
+      "recovery": "Unknown, missing or ambiguous version metadata fails closed; raw handles or idempotency keys are never persisted to make rotation easier."
+    },
+    {
+      "id": "mailbox-resolver.caller-auth",
+      "logical_slice": "AR-8D.4",
+      "canonical_future_cutover": "AR-8D",
+      "externally_issued": false,
+      "routine_release_rotation": false,
+      "allowed_mutator": "explicit-governed-dual-worker-service-auth-rotation",
+      "overlap_model": "ACTIVE_PLUS_ACCEPTED_PREVIOUS",
+      "key_selection": "EXPLICIT_AUTHENTICATED_KEY_ID",
+      "single_protocol_policy_required": true,
+      "legacy_v1_compatibility": "TEMPORARY_MIGRATION_ONLY",
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "resolver accepts replacement key id",
+        "control-plane signer emits replacement key id",
+        "staging traffic verifies on replacement",
+        "no accepted caller still requires legacy-v1 or previous key id"
+      ],
+      "recovery": "Keep the previous accepted key during failed cutover; unknown/revoked key ids, replay and stale requests fail closed."
+    },
+    {
+      "id": "control-plane.client-contact-protection",
+      "logical_slice": "AR-8D.5",
+      "canonical_future_cutover": "AR-8D",
+      "externally_issued": false,
+      "routine_release_rotation": false,
+      "allowed_mutator": "explicit-governed-control-plane-worker-secret-rotation",
+      "active_selection": "EXPLICIT_VERSION_FIELDS",
+      "active_encryption_field": "activeEncryptionVersion",
+      "active_lookup_field": "activeLookupVersion",
+      "overlap_model": "ACTIVE_PLUS_RETAINED",
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "replacement is retained before switch",
+        "explicit active version is switched only after keyring validation",
+        "encrypted contact rows no longer depend on the retired encryption version",
+        "lookup rows no longer depend on the retired lookup version"
+      ],
+      "recovery": "A failed switch retains the previous versions; implicit JSON-array ordering is not an accepted active-key authority."
+    },
+    {
+      "id": "profile-generation.r2-access",
+      "logical_slice": "AR-8D.6",
+      "canonical_future_cutover": "AR-8C",
+      "supersedes_lifecycle_projection": "credential-authority-ar8b.json::ar8c_operational_lifecycle/profile-generation.r2-access",
+      "externally_issued": true,
+      "routine_release_rotation": false,
+      "allowed_mutator": "cloudflare-r2-token-issuance-plus-explicit-governed-worker-secret-rotation",
+      "credential_pair_atomic": true,
+      "provider_identity": "R2 API token -> Access Key ID + Secret Access Key",
+      "overlap_model": "SEPARATE_PROVIDER_TOKENS",
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "replacement token is scoped to the intended account and bucket",
+        "replacement Access Key ID and Secret Access Key are bound as one pair",
+        "bounded staging R2 access succeeds with replacement",
+        "Worker binding metadata verifies replacement before old token revocation"
+      ],
+      "recovery": "Keep the previous R2 token valid until replacement verification; routine code promotion never rotates or rebinds this pair."
+    },
+    {
+      "id": "resolver.google-oauth-application",
+      "logical_slice": "AR-8E",
+      "canonical_future_cutover": "AR-8E",
+      "externally_issued": true,
+      "routine_release_rotation": false,
+      "allowed_mutator": "google-oauth-client-secret-issuance-plus-explicit-governed-resolver-worker-secret-rotation",
+      "application_profile": "CONFIDENTIAL_WEB_OAUTH_CLIENT",
+      "client_id_authority": "Google Auth Platform OAuth client registration metadata plus the environment-scoped GOOGLE_OAUTH_CLIENT_ID resolver variable.",
+      "client_secret_authority": "Google Auth Platform client-secret issuance with write-only binding to the environment-scoped Cloudflare Worker secret GOOGLE_OAUTH_CLIENT_SECRET.",
+      "provider_application_registration_authority": "Google Auth Platform OAuth client registration owned outside repository state; repository evidence contains metadata only.",
+      "redirect_configuration_authority": "Google Auth Platform authorized redirect-URI metadata matched exactly to the environment-scoped GOOGLE_OAUTH_REDIRECT_URI resolver variable.",
+      "environment_ownership": "EXPLICIT_ENVIRONMENT_SCOPED_REGISTRATION_AND_BINDING",
+      "user_token_state_authority": "AR-8A",
+      "application_credential_failure_state": "ConfigurationUnavailable",
+      "user_refresh_rejection_state": "ReauthRequired",
+      "secret_plaintext_evidence": "FORBIDDEN",
+      "provider_overlap_guarantee": "TWO_ENABLED_CLIENT_SECRETS_MAXIMUM",
+      "provider_secret_limit": 2,
+      "previous_secret_disable_reversible_before_delete": true,
+      "previous_secret_delete_reversible": false,
+      "provider_metadata_evidence": [
+        "OAuth client identifier",
+        "authorized redirect URI metadata",
+        "client-secret creation/status metadata without secret value"
+      ],
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "target OAuth client id and authorized redirect URI metadata match the intended environment",
+        "replacement client secret is added and enabled while the previous secret remains enabled",
+        "replacement secret is write-only bound to GOOGLE_OAUTH_CLIENT_SECRET for the intended resolver environment",
+        "bounded staging authorization-code and refresh-token exchanges succeed with the replacement",
+        "metadata-only rollout evidence confirms the previous secret is no longer used before disable",
+        "previous secret is disabled only after replacement verification and deleted only after a bounded rollback observation window"
+      ],
+      "recovery": "If replacement verification fails before deletion, keep the previous secret enabled or re-enable it after disable, restore the previous Worker binding, and repeat verification. Deletion is final for that secret; user OAuth state remains solely under AR-8A."
+    },
+    {
+      "id": "resolver.microsoft-oauth-application",
+      "logical_slice": "AR-8E",
+      "canonical_future_cutover": "AR-8E",
+      "externally_issued": true,
+      "routine_release_rotation": false,
+      "allowed_mutator": "microsoft-entra-application-addpassword-plus-explicit-governed-resolver-worker-secret-rotation",
+      "application_profile": "CONFIDENTIAL_WEB_OAUTH_CLIENT",
+      "client_id_authority": "Microsoft Entra application registration metadata plus the environment-scoped MICROSOFT_OAUTH_CLIENT_ID resolver variable.",
+      "client_secret_authority": "Microsoft Entra application addPassword issuance with write-only binding to the environment-scoped Cloudflare Worker secret MICROSOFT_OAUTH_CLIENT_SECRET.",
+      "provider_application_registration_authority": "Microsoft Entra application object owned outside repository state; repository evidence contains metadata only.",
+      "redirect_configuration_authority": "Microsoft Entra Web redirect-URI registration matched exactly to the environment-scoped MICROSOFT_OAUTH_REDIRECT_URI resolver variable.",
+      "environment_ownership": "EXPLICIT_ENVIRONMENT_SCOPED_REGISTRATION_AND_BINDING",
+      "user_token_state_authority": "AR-8A",
+      "application_credential_failure_state": "ConfigurationUnavailable",
+      "user_refresh_rejection_state": "ReauthRequired",
+      "secret_plaintext_evidence": "FORBIDDEN",
+      "provider_overlap_guarantee": "MULTIPLE_PASSWORD_CREDENTIALS_SUPPORTED",
+      "password_credential_collection": "application.passwordCredentials",
+      "replacement_operation": "application:addPassword",
+      "retirement_operation": "application:removePassword(keyId)",
+      "expiry_metadata_authority": "passwordCredential.endDateTime",
+      "provider_metadata_evidence": [
+        "application object id and appId/client id",
+        "Web redirect URI metadata",
+        "passwordCredential.keyId",
+        "passwordCredential.endDateTime",
+        "passwordCredential.displayName"
+      ],
+      "retire_previous_requires_verified_replacement": true,
+      "retirement_preconditions": [
+        "target application client id and registered Web redirect URI metadata match the intended environment",
+        "replacement passwordCredential is added before removal of the previous credential",
+        "replacement secretText is captured only at issuance and write-only bound to MICROSOFT_OAUTH_CLIENT_SECRET for the intended resolver environment",
+        "bounded staging authorization-code and refresh-token exchanges succeed with the replacement",
+        "replacement passwordCredential keyId and endDateTime metadata are recorded without secret value readback",
+        "previous passwordCredential is removed by keyId only after replacement verification"
+      ],
+      "recovery": "If replacement verification fails, keep the previous passwordCredential valid and restore the previous Worker binding. If a passwordCredential has already been removed, it is not treated as recoverable secret material; issue a new replacement. User refresh-token lifecycle remains AR-8A authority.",
+      "secret_retrieval_semantics": "ISSUANCE_RESPONSE_ONLY"
+    }
+  ],
+  "camoufox_profile_scope": {
+    "real_runtime_implementation_owner": "AR-10",
+    "runtime_cutover_authority": "docs/CAMOUFOX_RUNTIME_CUTOVER_PLAN.md",
+    "fingerprint_policy_authority": "AR-10_MUST_ACCEPT_OR_REPLACE_ADR-0001",
+    "cloud_profile_key_provider_status": "ADR-0006_PROPOSED_AND_PRODUCTION_BLOCKING",
+    "rotation_rehearsal_owner": "AR-13",
+    "remote_recovery_rehearsal_owner": "AR-14",
+    "windows_delivery_owner": "AR-15",
+    "windows_signing_trust_owner": "AR-15B",
+    "runtime_bundle_signing_trust_domain": "windows.release-signing-trust",
+    "runtime_bundle_signing_trust_owner": "AR-15B",
+    "launch_intent_secret_mapping": "profile-bridge.enrollment-claim",
+    "current_secret_vault_smoke_status": "ONE_DEVICE_PROTOTYPE_NOT_PRODUCTION_KEY_AUTHORITY",
+    "cloud_profile_object_access_rule": "NO_STATIC_R2_CREDENTIAL_ON_PROFILE_BRIDGE",
+    "real_runtime_implemented_in_ar8": false,
+    "production_runtime_proof_in_ar8": false,
+    "production_key_recovery_proof_in_ar8": false,
+    "production_mutation": false
+  },
+  "profile_security_domains": [
+    {
+      "id": "profile-generation.encryption-key-hierarchy",
+      "class": "CREDENTIAL_EQUIVALENT_ENVELOPE_KEY_HIERARCHY",
+      "current_source_contracts": [
+        "crates/encrypted-generation-domain/src/container.rs::GenerationDek",
+        "apps/profile-bridge/src/dirty_generation.rs::GenerationSealingMaterialPort",
+        "docs/adr/ADR-0003-desktop-runtime-distribution.md",
+        "docs/adr/ADR-0006-cloud-profile-key-management.md"
+      ],
+      "owner": "profile-key-provider-authority",
+      "protected_value_authority": "KeyProviderPort-compatible protected provider; exact production provider remains unaccepted while ADR-0006 is proposed",
+      "legitimate_mutable_authority": "one future profile-key-provider authority; no direct domain/runtime key-store mutation",
+      "version_state_source": "root/KEK key ids and per-generation DEK key id/wrapped-key metadata only",
+      "plaintext_policy": "BOUNDED_MEMORY_ONLY_ZEROIZED_WHERE_OWNED",
+      "metadata_policy": "KEY_IDS_WRAPPED_REFERENCES_ALGORITHM_VERSION_AND_DEPENDENCY_STATUS_ONLY",
+      "generation_dek_policy": "ONE_RANDOM_DEK_PER_GENERATION_NO_IN_PLACE_ROTATION",
+      "root_kek_overlap_model": "DUAL_READ_SINGLE_WRITE",
+      "current_smoke_secret_vault_status": "ONE_DEVICE_PROTOTYPE_NOT_PRODUCTION_KEY_AUTHORITY",
+      "retirement_preconditions": [
+        "replacement root/KEK authority is active for new writes",
+        "wrapped-key rewrap/reconciliation is complete for the retiring version",
+        "dependency inventory reports zero required unwraps on the retiring version",
+        "restore verification succeeds before irreversible retirement"
+      ],
+      "implementation_owner": "AR-10 consumes the provider-neutral key boundary; AR-13 proves rotation and AR-14 proves remote recovery",
+      "production_proof_complete": false
+    },
+    {
+      "id": "profile-identity.entropy-root",
+      "class": "PROFILE_FINGERPRINT_SECRET_ROOT",
+      "current_source_contracts": [
+        "docs/adr/ADR-0001-fingerprint-stability-policy.md",
+        "docs/CAMOUFOX_RUNTIME_CUTOVER_PLAN.md"
+      ],
+      "owner": "camoufox-profile-identity-authority",
+      "protected_value_authority": "future KeyProviderPort-backed opaque profile secret handle",
+      "legitimate_mutable_authority": "AR-10 profile identity creation/generation lifecycle only",
+      "version_state_source": "profile generation and fingerprint policy version metadata; never entropy bytes or raw secret handle",
+      "entropy_bits": 256,
+      "scope": "UNIQUE_PER_PROFILE_GENERATION",
+      "plaintext_policy": "NO_LOG_AUDIT_SUPPORT_R2_OR_PUBLIC_METADATA",
+      "raw_handle_visibility": false,
+      "rotation_policy": "NEW_PROFILE_GENERATION_ONLY_NO_IN_PLACE_ENTROPY_REWRITE",
+      "implementation_owner": "AR-10",
+      "production_proof_complete": false
+    },
+    {
+      "id": "profile-bridge.device-private-key",
+      "class": "DEVICE_PRIVATE_KEY",
+      "current_source_contracts": [
+        "crates/bridge-domain/src/lib.rs::DeviceKeyPort",
+        "apps/profile-bridge/src/operator_flow.rs",
+        "docs/adr/ADR-0003-desktop-runtime-distribution.md"
+      ],
+      "owner": "profile-bridge-device-identity-authority",
+      "protected_value_authority": "platform secure device-key store behind opaque key handle; production provider not yet accepted",
+      "legitimate_mutable_authority": "single platform device-key adapter behind DeviceKeyPort",
+      "version_state_source": "device identity/provider/key-version status; never raw key handle or private material",
+      "application_boundary": "HANDLE_ONLY",
+      "material_readback": false,
+      "raw_handle_visibility": false,
+      "implementation_owner": "AR-10 supported Profile Bridge runtime integration; physical/platform key-protection proof remains a later pre-production requirement",
+      "production_proof_complete": false
+    },
+    {
+      "id": "profile-network.proxy-credential",
+      "class": "TENANT_DYNAMIC_PROXY_CREDENTIAL",
+      "current_source_contracts": [
+        "docs/DATA_CLASSIFICATION.md",
+        "docs/THREAT_MODEL.md",
+        "docs/adr/ADR-0003-desktop-runtime-distribution.md",
+        "docs/CAMOUFOX_RUNTIME_CUTOVER_PLAN.md"
+      ],
+      "owner": "camoufox-network-identity-adapter",
+      "protected_value_authority": "future approved secret-handle/provider adapter; no plaintext credential persistence in D1/profile metadata/logs",
+      "legitimate_mutable_authority": "single AR-10 network/proxy credential adapter authority",
+      "version_state_source": "provider/route/version/status plus non-reversible reference metadata; never raw secret handle or credential value",
+      "runtime_boundary": "HANDLE_OR_SCOPED_EPHEMERAL_MATERIAL_ONLY",
+      "raw_handle_visibility": false,
+      "implementation_owner": "AR-10",
+      "production_proof_complete": false
+    },
+    {
+      "id": "profile-bridge.enrollment-claim",
+      "class": "EPHEMERAL_DEVICE_ENROLLMENT_SECRET",
+      "current_source_contracts": [
+        "crates/bridge-domain/src/lib.rs::ClaimCode",
+        "crates/bridge-domain/src/lib.rs::EnrollmentClaim",
+        "docs/adr/ADR-0003-desktop-runtime-distribution.md"
+      ],
+      "owner": "profile-bridge-enrollment-authority",
+      "protected_value_authority": "bounded ephemeral claim value in the issuing/redemption flow only",
+      "legitimate_mutable_authority": "single enrollment claim issue/redeem state machine",
+      "version_state_source": "claim expiry/redemption/device binding metadata without claim value",
+      "debug_policy": "REDACTED",
+      "claim_value_visibility": "REDACTED_ONLY",
+      "replay_policy": "REJECT_REPLAY_AND_DEVICE_REBIND",
+      "retirement_policy": "EXPIRE_OR_SINGLE_SUCCESSFUL_REDEMPTION",
+      "production_proof_complete": false
+    },
+    {
+      "id": "profile-generation.short-lived-object-access",
+      "class": "EPHEMERAL_SCOPED_OBJECT_ACCESS_CREDENTIAL",
+      "current_source_contracts": [
+        "docs/adr/ADR-0002-cloud-profile-materialization.md",
+        "docs/adr/ADR-0003-desktop-runtime-distribution.md",
+        "docs/CAMOUFOX_RUNTIME_CUTOVER_PLAN.md"
+      ],
+      "owner": "profile-generation-object-access-issuance-authority",
+      "protected_value_authority": "future bounded short-lived capability/credential delivery to an authorized Bridge; not the static control-plane R2 pair",
+      "legitimate_mutable_authority": "single scoped object-access issuer consumed by the supported Profile Bridge runtime",
+      "version_state_source": "non-secret issuance reference, scope, expiry and generation binding metadata only; never bearer credential value",
+      "scope_policy": "TENANT_PROFILE_GENERATION_AND_OPERATION_BOUND",
+      "lifetime_policy": "SHORT_LIVED_NO_STATIC_BRIDGE_R2_CREDENTIAL",
+      "raw_bearer_visibility": false,
+      "implementation_owner": "AR-10 runtime contract and later staging/recovery rehearsal",
+      "production_proof_complete": false
+    }
+  ],
+  "profile_protected_noncredential_state": [
+    {
+      "id": "profile-bridge.workspace-lock-token",
+      "class": "PROTECTED_COORDINATION_FENCING_STATE",
+      "source_contract": "crates/bridge-domain/src/lib.rs::WorkspaceLockToken",
+      "credential_authority": false,
+      "scope": "LOCAL_WORKSPACE_SINGLE_WRITER",
+      "debug_policy": "REDACTED",
+      "persistence_policy": "LOCAL_COORDINATION_ONLY_NOT_PROVIDER_CREDENTIAL",
+      "failure_policy": "STALE_OR_MISMATCHED_OWNER_FAILS_CLOSED"
+    },
+    {
+      "id": "profile-session.launch-intent-state",
+      "class": "CONFIDENTIAL_EPHEMERAL_AUTHORIZATION_STATE",
+      "source_contract": "crates/session-domain/src/lib.rs::LaunchIntent",
+      "credential_authority": false,
+      "scope": "TENANT_ACTOR_DEVICE_PROFILE_BOUND",
+      "secret_redemption_mapping": "profile-bridge.enrollment-claim",
+      "persistence_policy": "BOUNDED_AUTHORIZATION_METADATA_ONLY_NO_CLAIM_CODE",
+      "failure_policy": "TENANT_ACTOR_DEVICE_MISMATCH_REPLAY_OR_EXPIRY_FAILS_CLOSED"
+    },
+    {
+      "id": "profile-session.fencing-token",
+      "class": "PROTECTED_COORDINATION_FENCING_STATE",
+      "source_contract": "crates/session-domain/src/lib.rs::ProfileLease",
+      "credential_authority": false,
+      "scope": "CLOUD_PROFILE_SINGLE_WRITER_LEASE",
+      "identifier_policy": "OPAQUE_COORDINATION_ID_NOT_BEARER_SECRET",
+      "persistence_policy": "LEASE_COORDINATION_METADATA_NOT_SECRET_STORE_AUTHORITY",
+      "failure_policy": "STALE_EPOCH_OR_TOKEN_FAILS_CLOSED"
+    }
+  ],
+  "profile_credential_equivalent_assets": [
+    {
+      "id": "browser-profile-generation-payload",
+      "classification": "CREDENTIAL_EQUIVALENT",
+      "authority": "docs/DATA_CLASSIFICATION.md",
+      "includes": [
+        "cookies",
+        "key4.db",
+        "logins.db",
+        "localStorage and site storage",
+        "materialized browser profile state"
+      ],
+      "cloud_storage_policy": "APPLICATION_LAYER_ENCRYPTED_IMMUTABLE_GENERATION_ONLY",
+      "ordinary_log_audit_export": false
+    }
+  ]
+}

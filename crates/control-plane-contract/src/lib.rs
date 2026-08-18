@@ -7,6 +7,7 @@ pub mod mailbox_api;
 pub mod operator_query_api;
 pub mod profile_generation_api;
 pub mod public_api;
+pub mod resolver_service_auth;
 mod routes;
 
 pub const D1_CATALOG_BINDING: &str = "CATALOG_DB";

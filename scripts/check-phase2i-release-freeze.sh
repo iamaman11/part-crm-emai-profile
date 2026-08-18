@@ -40,9 +40,40 @@ else
   python scripts/check-pre2j-d3-resolver-bootstrap-authority.py --base-ref "origin/${base_ref}"
 fi
 if [[ -f architecture/pre2j-d3-resolver-bootstrap-implementation.json ]]; then
-  python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py \
-    --base-ref "origin/${base_ref}"
-  python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
+  if [[ -f architecture/ar8-d-secret-transport-successor.json ]]; then
+    node .github/scripts/ar8-d-secret-transport-successor.mjs \
+      --base-ref "origin/${base_ref}"
+    node .github/scripts/ar8-d-secret-transport-successor.mjs --self-test
+
+    predecessor_ref="$(python - <<'PY'
+import json
+from pathlib import Path
+
+authority = json.loads(
+    Path("architecture/ar8-d-secret-transport-successor.json").read_text(encoding="utf-8")
+)
+print(authority["predecessor"]["transition_base_main"])
+PY
+)"
+    (
+      promotion_workflow=".github/workflows/mailbox-secret-resolver-promotion.yml"
+      current_promotion="$(mktemp)"
+      cp "$promotion_workflow" "$current_promotion"
+      restore_current_promotion() {
+        cp "$current_promotion" "$promotion_workflow"
+        rm -f "$current_promotion"
+      }
+      trap restore_current_promotion EXIT
+      git show "${predecessor_ref}:${promotion_workflow}" > "$promotion_workflow"
+      python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py \
+        --base-ref "origin/${base_ref}"
+      python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
+    )
+  else
+    python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py \
+      --base-ref "origin/${base_ref}"
+    python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
+  fi
 fi
 
 if git diff --quiet "origin/${base_ref}" -- migrations/d1; then
@@ -135,7 +166,9 @@ print(
 PY
 fi
 
+node .github/scripts/ar8-completion-lifecycle.mjs
+node .github/scripts/ar8-completion-lifecycle.mjs --self-test
 python scripts/check-contract-compatibility.py
 python scripts/test-d1-schema.py
 
-echo "Phase 2I public contract freeze, immutable consumed B4/C2/C3 authorities, pending C3G governed provider migration authority, and immutable-prefix D1 migration policy are valid."
+echo "Phase 2I public contract freeze, immutable consumed B4/C2/C3 authorities, governed Pre-2J D3-to-AR-8D transition, AR-8D/E completion lifecycle overlay, pending C3G governed provider migration authority, and immutable-prefix D1 migration policy are valid."

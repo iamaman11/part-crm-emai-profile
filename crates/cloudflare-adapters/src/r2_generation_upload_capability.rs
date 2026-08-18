@@ -2,6 +2,7 @@ use application_ports::generation_objects::GenerationObjectDescriptor;
 use core::fmt;
 use profile_platform_primitives::TenantScope;
 use sha2::{Digest, Sha256};
+use zeroize::Zeroize;
 
 const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 const REGION: &str = "auto";
@@ -10,7 +11,7 @@ const TERMINATOR: &str = "aws4_request";
 const UNSIGNED_PAYLOAD: &str = "UNSIGNED-PAYLOAD";
 const MAX_EXPIRES_SECONDS: u32 = 300;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct R2SigV4Credentials {
     access_key_id: String,
     secret_access_key: String,
@@ -34,6 +35,23 @@ impl R2SigV4Credentials {
             access_key_id,
             secret_access_key,
         })
+    }
+}
+
+impl fmt::Debug for R2SigV4Credentials {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("R2SigV4Credentials")
+            .field("access_key_id", &"[REDACTED]")
+            .field("secret_access_key", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Drop for R2SigV4Credentials {
+    fn drop(&mut self) {
+        self.access_key_id.zeroize();
+        self.secret_access_key.zeroize();
     }
 }
 
@@ -434,6 +452,28 @@ mod tests {
             "profile-generations",
             R2SigV4Credentials::new("ACCESSKEYEXAMPLE", "secret-example-key")?,
         )?)
+    }
+
+    #[test]
+    fn credential_debug_redacts_the_atomic_r2_pair() -> Result<(), Box<dyn std::error::Error>> {
+        let access_id = "AR8D6_ACCESS_ID_SENTINEL";
+        let secret = "AR8D6_SECRET_ACCESS_KEY_SENTINEL";
+        let credentials = R2SigV4Credentials::new(access_id, secret)?;
+        let credential_debug = format!("{credentials:?}");
+        assert!(credential_debug.contains("R2SigV4Credentials"));
+        assert!(credential_debug.matches("[REDACTED]").count() >= 2);
+        assert!(!credential_debug.contains(access_id));
+        assert!(!credential_debug.contains(secret));
+
+        let signer = R2GenerationUploadCapabilitySigner::new(
+            "0123456789abcdef0123456789abcdef",
+            "profile-generations",
+            credentials,
+        )?;
+        let signer_debug = format!("{signer:?}");
+        assert!(!signer_debug.contains(access_id));
+        assert!(!signer_debug.contains(secret));
+        Ok(())
     }
 
     #[test]

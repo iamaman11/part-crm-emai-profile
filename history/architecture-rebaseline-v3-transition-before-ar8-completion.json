@@ -1,6 +1,6 @@
 {
   "schema_version": 13,
-  "status": "ACTIVE_DURING_AR8_COMPLETION_CANDIDATE",
+  "status": "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8C",
   "program": "Architecture Re-baseline v3",
   "tracking_issue": 266,
   "subordinate_preproduction_issue": 268,
@@ -27,19 +27,19 @@
       "AR-8B",
       "AR-8C"
     ],
-    "current_subslice": "AR-8_COMPLETION",
-    "current_implementation_issue": 361,
-    "mandatory_remaining": [],
+    "current_subslice": "AR-8D",
+    "current_implementation_issue": null,
+    "mandatory_remaining": [
+      "AR-8D",
+      "AR-8E",
+      "AR-8F"
+    ],
     "full_ar8_accepted": false,
     "ar9_blocked": true,
     "production_mutation": false,
-    "implementation_entry_gate": "AR8_COMPLETION_PR_362_FINAL_ACCEPTANCE",
-    "source_complete_candidate": true,
-    "completion_pr": 362,
-    "implemented_through": "AR-8F",
-    "credential_authority_source": "architecture/credential-authority.json",
-    "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
-    "canonical_projection": "architecture/inventory.json::subject_domain_authorities"
+    "credential_authority_source": "architecture/credential-authority-ar8b.json",
+    "canonical_projection": "architecture/inventory.json::credential_authority",
+    "implementation_entry_gate": "POST_AR8C_CLEANUP_DX_ACCEPTED_AR8D_IMPLEMENTATION_CURRENT"
   },
   "state_model": {
     "architecture_complete": false,
@@ -181,10 +181,7 @@
     "ar7_remediation": "ACCEPTED_GITHUB_GOVERNANCE_AND_OPERATIONAL_BOUNDARIES_IN_CANONICAL_INVENTORY",
     "ar8b_accepted_projection": "ACCEPTED_METADATA_ONLY_CREDENTIAL_AUTHORITY_IN_CANONICAL_INVENTORY",
     "ar8c_accepted_projection": "ACCEPTED_OPERATIONAL_CREDENTIAL_LIFECYCLE_IN_CANONICAL_INVENTORY",
-    "current_delivery_map_projection": "architecture/inventory.json::current_delivery_map",
-    "ar8_current_subject_projection": "architecture/inventory.json::subject_domain_authorities",
-    "ar8_current_composition_root": "architecture/credential-authority.json",
-    "ar8b_registry_role": "IMMUTABLE_ACCEPTED_PROVENANCE_DATASET"
+    "current_delivery_map_projection": "architecture/inventory.json::current_delivery_map"
   },
   "preserve_accepted_history": [
     "repository_steps_0_10",
@@ -258,8 +255,8 @@
     "implementation_issue": 286,
     "applicable_permanent_workflows": "13/13",
     "next_required_slice": "AR-5",
-    "program_handoff_status": "AR8_COMPLETION_CANDIDATE",
-    "program_next_required_subslice": "AR-8_FINAL_ACCEPTANCE"
+    "program_handoff_status": "AR8_ACTIVE_AFTER_AR8C_ACCEPTED",
+    "program_next_required_subslice": "AR-8D_AFTER_CLEANUP_DX_ACCEPTANCE"
   },
   "runtime_authority_cleanup": {
     "status": "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP",
@@ -443,12 +440,12 @@
     "canonical_authority": "architecture/inventory.json::current_delivery_map",
     "program": "Architecture Re-baseline v3",
     "accepted_checkpoint": "AR-8C",
-    "current_work": "AR-8_COMPLETION_CANDIDATE",
+    "current_work": "AR-8D_IMPLEMENTATION",
     "source_implemented": {
-      "status": "COMPLETE_CANDIDATE",
-      "through": "AR-8F",
-      "current_subslice": "AR-8_COMPLETION",
-      "current_subslice_source": "PR_362_NOT_ACCEPTED_MAIN"
+      "status": "PARTIAL",
+      "through": "AR-8C",
+      "current_subslice": "AR-8D",
+      "current_subslice_source": "CURRENT_IMPLEMENTATION_NOT_ACCEPTED"
     },
     "accepted_on_main": {
       "status": "PARTIAL",
@@ -476,14 +473,14 @@
       "evidence": "docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json"
     },
     "current_blocker": {
-      "issue": 361,
-      "status": "FINAL_ACCEPTANCE_PENDING",
-      "blocks": "AR-9"
+      "issue": null,
+      "status": "NONE",
+      "blocks": "NONE"
     },
     "next_gate": {
-      "id": "AR-8_FINAL_ACCEPTANCE",
-      "issue": 361,
-      "on_success": "ACCEPTED_MAIN_REREAD_THEN_AR9"
+      "id": "AR-8D_ACCEPTANCE",
+      "issue": null,
+      "on_success": "AR-8E_BECOMES_CURRENT"
     },
     "invariants": {
       "source_present_not_equal_production_enabled": true,

@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 aes-gcm.workspace = true
+control-plane-contract = { path = "../../crates/control-plane-contract" }
 hmac.workspace = true
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"

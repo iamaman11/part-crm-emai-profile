@@ -8,13 +8,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const HELP: &str = "opsctl — project-specific read-only operations interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n\nCOMMANDS:\n    doctor      Validate canonical repository authorities\n    status      Print canonical docs/status.json\n    inventory   Print canonical architecture/inventory.json\n\nOPTIONS:\n    --root PATH  Explicit repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nAR-6 is intentionally read-only. No provider, database, secret, deployment, or customer-state mutation is exposed.\n";
+pub const HELP: &str = "opsctl — project-specific read-only operations interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n\nCOMMANDS:\n    doctor                Validate canonical repository authorities\n    status                Print canonical docs/status.json\n    inventory             Print canonical architecture/inventory.json\n    credential-lifecycle  Print canonical credential lifecycle metadata\n    rotation-plan         Print canonical operator rotation/recovery contract\n\nOPTIONS:\n    --root PATH  Explicit repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nThis interface is permanently read-only and metadata-only. No provider, database, secret, deployment, or customer-state mutation is exposed.\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadCommand {
     Doctor,
     Status,
     Inventory,
+    CredentialLifecycle,
+    RotationPlan,
 }
 
 impl ReadCommand {
@@ -24,6 +26,8 @@ impl ReadCommand {
             Self::Doctor => "doctor",
             Self::Status => "status",
             Self::Inventory => "inventory",
+            Self::CredentialLifecycle => "credential-lifecycle",
+            Self::RotationPlan => "rotation-plan",
         }
     }
 }
@@ -120,9 +124,13 @@ fn parse_command(value: &str) -> Result<ReadCommand, OpsctlError> {
         "doctor" => Ok(ReadCommand::Doctor),
         "status" => Ok(ReadCommand::Status),
         "inventory" => Ok(ReadCommand::Inventory),
+        "credential-lifecycle" => Ok(ReadCommand::CredentialLifecycle),
+        "rotation-plan" => Ok(ReadCommand::RotationPlan),
         other => Err(OpsctlError::new(
             "parse",
-            format!("unsupported command {other:?}; AR-6 exposes doctor/status/inventory only"),
+            format!(
+                "unsupported command {other:?}; opsctl exposes read-only metadata commands only"
+            ),
         )),
     }
 }
@@ -141,6 +149,16 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                 ReadCommand::Inventory => {
                     canonical_json_document(&repo_root, "architecture/inventory.json", "inventory")
                 }
+                ReadCommand::CredentialLifecycle => canonical_json_document(
+                    &repo_root,
+                    "architecture/credential-lifecycle.json",
+                    "credential-lifecycle",
+                ),
+                ReadCommand::RotationPlan => canonical_json_document(
+                    &repo_root,
+                    "architecture/operator-contract.json",
+                    "rotation-plan",
+                ),
             }
         }
     }
@@ -186,6 +204,14 @@ fn is_repo_root(path: &Path) -> bool {
         && path.join("architecture/inventory.json").is_file()
         && path.join("architecture/python-estate-ar6.json").is_file()
         && path
+            .join("architecture/credential-authority.json")
+            .is_file()
+        && path
+            .join("architecture/credential-lifecycle.json")
+            .is_file()
+        && path.join("architecture/profile-security.json").is_file()
+        && path.join("architecture/operator-contract.json").is_file()
+        && path
             .join("scripts/generate-architecture-inventory.py")
             .is_file()
         && path.join("scripts/python-estate-ar6.py").is_file()
@@ -217,6 +243,10 @@ fn doctor(root: &Path) -> Result<String, OpsctlError> {
         "docs/status.json",
         "architecture/inventory.json",
         "architecture/python-estate-ar6.json",
+        "architecture/credential-authority.json",
+        "architecture/credential-lifecycle.json",
+        "architecture/profile-security.json",
+        "architecture/operator-contract.json",
         "scripts/generate-architecture-inventory.py",
         "scripts/python-estate-ar6.py",
     ] {
@@ -227,13 +257,23 @@ fn doctor(root: &Path) -> Result<String, OpsctlError> {
             ));
         }
     }
+
+    for relative in [
+        "architecture/credential-authority.json",
+        "architecture/credential-lifecycle.json",
+        "architecture/profile-security.json",
+        "architecture/operator-contract.json",
+    ] {
+        let _ = canonical_json_document(root, relative, "doctor")?;
+    }
+
     run_python_check(
         root,
         "scripts/generate-architecture-inventory.py",
         &["--check"],
     )?;
     run_python_check(root, "scripts/python-estate-ar6.py", &["--check"])?;
-    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/python-estate-ar6.json\",\"docs/status.json\"]}\n".to_owned())
+    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/python-estate-ar6.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"architecture/operator-contract.json\",\"docs/status.json\"]}\n".to_owned())
 }
 
 fn run_python_check(root: &Path, script: &str, arguments: &[&str]) -> Result<(), OpsctlError> {
@@ -278,7 +318,7 @@ fn json_escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Invocation, ReadCommand, json_escape, parse_invocation};
+    use super::{Invocation, OpsctlError, ReadCommand, execute, json_escape, parse_invocation};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -292,6 +332,8 @@ mod tests {
             ("doctor", ReadCommand::Doctor),
             ("status", ReadCommand::Status),
             ("inventory", ReadCommand::Inventory),
+            ("credential-lifecycle", ReadCommand::CredentialLifecycle),
+            ("rotation-plan", ReadCommand::RotationPlan),
         ] {
             assert_eq!(
                 parse_invocation(args(&["opsctl", name])),
@@ -309,9 +351,36 @@ mod tests {
             parse_invocation(args(&["opsctl", "--root", "/repo", "status"])),
             Ok(Invocation::Run {
                 root: Some(PathBuf::from("/repo")),
-                command: ReadCommand::Status,
+                command: ReadCommand::Status
             })
         );
+    }
+
+    #[test]
+    fn credential_lifecycle_reads_subject_authority() -> Result<(), OpsctlError> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let output = execute(Invocation::Run {
+            root: Some(root),
+            command: ReadCommand::CredentialLifecycle,
+        })?;
+        assert!(output.contains("\"kind\": \"CREDENTIAL_LIFECYCLE_AUTHORITY\""));
+        assert!(output.contains("\"routine_release_rotates_runtime_secrets\": false"));
+        assert!(!output.contains("\"secret_value\":"));
+        Ok(())
+    }
+
+    #[test]
+    fn rotation_plan_reads_subject_operator_contract() -> Result<(), OpsctlError> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let output = execute(Invocation::Run {
+            root: Some(root),
+            command: ReadCommand::RotationPlan,
+        })?;
+        assert!(output.contains("\"kind\": \"OPERATOR_CONTRACT_AUTHORITY\""));
+        assert!(output.contains("\"mode\": \"READ_ONLY_METADATA_ONLY\""));
+        assert!(output.contains("\"production_mutation\": false"));
+        assert!(!output.contains("\"secret_value\":"));
+        Ok(())
     }
 
     #[test]

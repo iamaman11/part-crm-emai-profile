@@ -1,3 +1,6 @@
+use control_plane_contract::resolver_service_auth::{
+    ServiceAuthCanonicalInput, ServiceAuthKeyring, canonical_signature_input,
+};
 use hmac::{Hmac, KeyInit, Mac};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -7,7 +10,6 @@ use zeroize::{Zeroize, Zeroizing};
 
 const RESOLVER_ORIGIN: &str = "https://mailbox-secret-resolver.internal";
 const CALLER_AUTH_SECRET: &str = "MAILBOX_RESOLVER_CALLER_AUTH_KEY";
-const SIGNATURE_VERSION: &str = "hmac-sha256-v1";
 const NONCE_BYTES: usize = 16;
 const MAX_REQUEST_BYTES: usize = 32 * 1024;
 
@@ -74,19 +76,29 @@ pub fn signed_resolver_request(
     let timestamp = timestamp_ms.to_string();
     let nonce = random_nonce_hex()?;
     let body_digest = hex_encode(Sha256::digest(body.as_bytes()).as_slice());
-    let canonical = format!(
-        "{SIGNATURE_VERSION}\nPOST\n{path}\n{body_digest}\n{tenant_id}\n{timestamp_ms}\n{nonce}"
-    );
-    let secret = Zeroizing::new(
+    let caller_secret = Zeroizing::new(
         env.secret(CALLER_AUTH_SECRET)
             .map_err(|_| ResolverRequestError::InvalidSecret)?
             .to_string(),
     );
-    if !(32..=128).contains(&secret.len()) {
-        body.zeroize();
-        return Err(ResolverRequestError::InvalidSecret);
-    }
-    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(secret.as_bytes())
+    let keyring = ServiceAuthKeyring::parse(&caller_secret)
+        .map_err(|_| ResolverRequestError::InvalidSecret)?;
+    let signing_key = keyring
+        .active_signing_key()
+        .map_err(|_| ResolverRequestError::InvalidSecret)?;
+    let signature_version = signing_key.version();
+    let key_id = signing_key.key_id();
+    let canonical_input = ServiceAuthCanonicalInput {
+        method: "POST",
+        path,
+        body_digest: &body_digest,
+        tenant_id,
+        timestamp_ms,
+        nonce: &nonce,
+    };
+    let canonical = canonical_signature_input(signature_version, key_id, &canonical_input)
+        .map_err(|_| ResolverRequestError::InvalidSecret)?;
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(signing_key.bytes())
         .map_err(|_| ResolverRequestError::InvalidSecret)?;
     mac.update(canonical.as_bytes());
     let signature = hex_encode(mac.finalize().into_bytes().as_slice());
@@ -96,7 +108,7 @@ pub fn signed_resolver_request(
         ("accept", "application/json"),
         ("content-type", "application/json"),
         ("cache-control", "no-store"),
-        ("x-resolver-signature-version", SIGNATURE_VERSION),
+        ("x-resolver-signature-version", signature_version),
         ("x-resolver-body-sha256", body_digest.as_str()),
         ("x-resolver-timestamp-ms", timestamp.as_str()),
         ("x-resolver-nonce", nonce.as_str()),
@@ -104,6 +116,11 @@ pub fn signed_resolver_request(
     ] {
         headers
             .set(name, value)
+            .map_err(|_| ResolverRequestError::HeaderFailure)?;
+    }
+    if let Some(key_id) = key_id {
+        headers
+            .set("x-resolver-key-id", key_id)
             .map_err(|_| ResolverRequestError::HeaderFailure)?;
     }
     let js_body = JsValue::from_str(&body);
@@ -159,14 +176,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_REQUEST_BYTES, RESOLVER_ORIGIN, SIGNATURE_VERSION, oauth_callback_tenant};
-
-    #[test]
-    fn signed_protocol_constants_match_resolver_ingress() {
-        assert_eq!(SIGNATURE_VERSION, "hmac-sha256-v1");
-        assert_eq!(MAX_REQUEST_BYTES, 32 * 1024);
-        assert_eq!(RESOLVER_ORIGIN, "https://mailbox-secret-resolver.internal");
-    }
+    use super::oauth_callback_tenant;
 
     #[test]
     fn callback_state_carries_a_bounded_tenant_partition() {

@@ -3,6 +3,8 @@ const OPERATIONS: &str = include_str!("operations.rs");
 const LIB: &str = include_str!("lib.rs");
 const MIGRATION: &str =
     include_str!("../../../migrations/resolver-d1/0002_oauth_refresh_fencing.sql");
+const HMAC_VERSION_MIGRATION: &str =
+    include_str!("../../../migrations/resolver-d1/0004_refresh_owner_hmac_version.sql");
 
 fn normalized(source: &str) -> String {
     source.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -29,13 +31,28 @@ fn migration_persists_generation_lifecycle_and_bounded_lease_state() {
     ));
     assert!(migration.contains("ADD COLUMN refresh_started_at_ms INTEGER"));
     assert!(migration.contains("ADD COLUMN refresh_expires_at_ms INTEGER"));
+
+    let hmac_version_migration = normalized(HMAC_VERSION_MIGRATION);
+    assert!(hmac_version_migration.contains(
+        "ADD COLUMN refresh_owner_hmac_version INTEGER CHECK (refresh_owner_hmac_version IS NULL OR refresh_owner_hmac_version > 0)"
+    ));
+    assert!(
+        hmac_version_migration
+            .contains("SET refresh_owner_hmac_version = 1 WHERE refresh_owner_digest IS NOT NULL")
+    );
 }
 
 #[test]
 fn lease_acquire_is_generation_scoped_single_flight_and_crash_recoverable() {
     let storage = normalized(STORAGE);
     assert!(storage.contains(
-        "mutation_generation = ? AND credential_state = 'ACTIVE' AND discarded_at_ms IS NULL AND (refresh_owner_digest IS NULL OR refresh_expires_at_ms <= ?) RETURNING mutation_generation, refresh_owner_digest, refresh_expires_at_ms"
+        "SET refresh_owner_digest = ?, refresh_owner_hmac_version = ?, refresh_started_at_ms = ?, refresh_expires_at_ms = ?, updated_at_ms = ?"
+    ));
+    assert!(storage.contains(
+        "mutation_generation = ? AND credential_state = 'ACTIVE' AND discarded_at_ms IS NULL AND (refresh_owner_digest IS NULL OR refresh_expires_at_ms <= ?) RETURNING mutation_generation, refresh_owner_digest, refresh_owner_hmac_version, refresh_expires_at_ms"
+    ));
+    assert!(storage.contains(
+        "row.refresh_owner_digest != owner_lookup.digest || stored_owner_version != owner_lookup.version"
     ));
     assert!(storage.contains(
         "if row.refresh_owner_digest.is_some() && row.refresh_expires_at_ms.is_some_and(|value| value > now) { return Err(RefreshAcquireError::Busy); }"
@@ -46,21 +63,22 @@ fn lease_acquire_is_generation_scoped_single_flight_and_crash_recoverable() {
 fn refresh_commit_requires_generation_owner_live_lease_and_no_key_downgrade() {
     let storage = normalized(STORAGE);
     assert!(storage.contains(
-        "mutation_generation = ? AND credential_state = 'ACTIVE' AND refresh_owner_digest = ? AND refresh_expires_at_ms > ? AND discarded_at_ms IS NULL AND key_version <= ?"
+        "mutation_generation = ? AND credential_state = 'ACTIVE' AND refresh_owner_digest = ? AND refresh_owner_hmac_version = ? AND refresh_expires_at_ms > ? AND discarded_at_ms IS NULL AND key_version <= ?"
     ));
     assert!(storage.contains(
-        "mutation_generation = ?, refresh_owner_digest = NULL, refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL"
+        "mutation_generation = ?, refresh_owner_digest = NULL, refresh_owner_hmac_version = NULL, refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL"
     ));
+    assert!(storage.contains("i64::from(lease.owner_hmac_version)"));
 }
 
 #[test]
 fn reauth_transition_is_fenced_by_the_same_live_lease() {
     let storage = normalized(STORAGE);
     assert!(storage.contains(
-        "SET credential_state = 'REAUTH_REQUIRED', mutation_generation = ?, refresh_owner_digest = NULL, refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL, updated_at_ms = ?"
+        "SET credential_state = 'REAUTH_REQUIRED', mutation_generation = ?, refresh_owner_digest = NULL, refresh_owner_hmac_version = NULL, refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL, updated_at_ms = ?"
     ));
     assert!(storage.contains(
-        "mutation_generation = ? AND credential_state = 'ACTIVE' AND refresh_owner_digest = ? AND refresh_expires_at_ms > ? AND discarded_at_ms IS NULL"
+        "mutation_generation = ? AND credential_state = 'ACTIVE' AND refresh_owner_digest = ? AND refresh_owner_hmac_version = ? AND refresh_expires_at_ms > ? AND discarded_at_ms IS NULL"
     ));
 }
 

@@ -10,6 +10,7 @@ application-ports.workspace = true
 chacha20poly1305.workspace = true
 client-domain.workspace = true
 contracts.workspace = true
+control-plane-contract = { path = "../control-plane-contract" }
 device-domain.workspace = true
 hmac.workspace = true
 identity-access-domain.workspace = true
@@ -17,7 +18,7 @@ mailbox-domain.workspace = true
 notification-domain.workspace = true
 profile-domain.workspace = true
 profile-platform-primitives.workspace = true
-serde = "=1.0.229"
+serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 session-domain.workspace = true
 sha2.workspace = true

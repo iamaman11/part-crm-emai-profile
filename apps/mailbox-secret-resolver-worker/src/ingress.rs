@@ -1,11 +1,13 @@
 use crate::contract::validate_payload;
-use crate::model::{MAX_REQUEST_BYTES, ResolverEnvelope, ResolverRoute, SIGNATURE_VERSION};
-use crate::protocol::{SignatureError, SignatureInput, verify};
+use crate::model::{MAX_REQUEST_BYTES, ResolverEnvelope, ResolverRoute};
+use crate::protocol::{SignatureError, SignatureInput, verify_versioned};
+use control_plane_contract::resolver_service_auth::ServiceAuthKeyring;
 use worker::{Env, Method, Request};
 use zeroize::Zeroizing;
 
 const CALLER_AUTH_SECRET: &str = "MAILBOX_RESOLVER_CALLER_AUTH_KEY";
 const SIGNATURE_VERSION_HEADER: &str = "x-resolver-signature-version";
+const KEY_ID_HEADER: &str = "x-resolver-key-id";
 const BODY_DIGEST_HEADER: &str = "x-resolver-body-sha256";
 const TIMESTAMP_HEADER: &str = "x-resolver-timestamp-ms";
 const NONCE_HEADER: &str = "x-resolver-nonce";
@@ -76,9 +78,7 @@ pub async fn authenticate_request(
     }
 
     let version = required_header(request, SIGNATURE_VERSION_HEADER)?;
-    if version != SIGNATURE_VERSION {
-        return Err(IngressError::InvalidAuthentication);
-    }
+    let key_id = optional_header(request, KEY_ID_HEADER)?;
     let body_digest = required_header(request, BODY_DIGEST_HEADER)?;
     let timestamp = required_header(request, TIMESTAMP_HEADER)?;
     let timestamp_ms = timestamp
@@ -86,14 +86,16 @@ pub async fn authenticate_request(
         .map_err(|_| IngressError::InvalidAuthentication)?;
     let nonce = required_header(request, NONCE_HEADER)?;
     let signature = required_header(request, SIGNATURE_HEADER)?;
-    let caller_key = Zeroizing::new(
+    let caller_secret = Zeroizing::new(
         env.secret(CALLER_AUTH_SECRET)
             .map_err(|_| IngressError::ConfigurationUnavailable)?
             .to_string(),
     );
-    if !(32..=128).contains(&caller_key.len()) {
-        return Err(IngressError::ConfigurationUnavailable);
-    }
+    let keyring = ServiceAuthKeyring::parse(&caller_secret)
+        .map_err(|_| IngressError::ConfigurationUnavailable)?;
+    let verification_key = keyring
+        .verification_key(&version, key_id.as_deref())
+        .map_err(|_| IngressError::InvalidAuthentication)?;
     let signature_input = SignatureInput {
         method: "POST",
         path: &path,
@@ -102,8 +104,10 @@ pub async fn authenticate_request(
         timestamp_ms,
         nonce: &nonce,
     };
-    verify(
-        caller_key.as_bytes(),
+    verify_versioned(
+        verification_key,
+        &version,
+        key_id.as_deref(),
         &signature_input,
         &body_digest,
         &signature,
@@ -145,6 +149,14 @@ fn required_header(request: &Request, name: &str) -> Result<String, IngressError
         .map_err(|_| IngressError::InvalidAuthentication)?
         .filter(|value| !value.is_empty())
         .ok_or(IngressError::MissingAuthentication)
+}
+
+fn optional_header(request: &Request, name: &str) -> Result<Option<String>, IngressError> {
+    request
+        .headers()
+        .get(name)
+        .map_err(|_| IngressError::InvalidAuthentication)
+        .map(|value| value.filter(|item| !item.is_empty()))
 }
 
 const fn map_signature_error(error: SignatureError) -> IngressError {

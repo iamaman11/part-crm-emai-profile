@@ -1,3 +1,6 @@
+use crate::contact_key_lifecycle::ContactKeyLifecycleMetadata;
+#[cfg(target_arch = "wasm32")]
+use crate::contact_key_lifecycle::D1ContactKeyLifecycle;
 use crate::contact_protection::{
     ContactEncryptionRootKey, ContactLookupRootKey, ContactProtectionKeyring,
 };
@@ -5,6 +8,8 @@ use crate::contact_protection::{
 use crate::contact_protection::{RustCryptoContactProtection, WorkerCryptoNonceSource};
 use client_domain::{EncryptionKeyVersion, LookupKeyVersion};
 use serde::Deserialize;
+#[cfg(target_arch = "wasm32")]
+use worker::d1::D1Database;
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,19 +19,44 @@ pub struct ContactKeyringConfigError;
 pub fn contact_protection_from_serialized_keyring(
     serialized: String,
 ) -> Result<RustCryptoContactProtection<WorkerCryptoNonceSource>, ContactKeyringConfigError> {
+    let (keyring, _) = parse_contact_protection_keyring_with_metadata(serialized)?;
     Ok(RustCryptoContactProtection::new(
-        parse_contact_protection_keyring(serialized)?,
+        keyring,
         WorkerCryptoNonceSource,
     ))
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn contact_key_lifecycle_from_serialized_keyring(
+    serialized: String,
+    database: D1Database,
+) -> Result<D1ContactKeyLifecycle<WorkerCryptoNonceSource>, ContactKeyringConfigError> {
+    let (keyring, metadata) = parse_contact_protection_keyring_with_metadata(serialized)?;
+    Ok(D1ContactKeyLifecycle::new(
+        database,
+        RustCryptoContactProtection::new(keyring, WorkerCryptoNonceSource),
+        metadata,
+    ))
+}
+
+#[cfg(test)]
 fn parse_contact_protection_keyring(
     serialized: String,
 ) -> Result<ContactProtectionKeyring, ContactKeyringConfigError> {
+    parse_contact_protection_keyring_with_metadata(serialized).map(|(keyring, _)| keyring)
+}
+
+fn parse_contact_protection_keyring_with_metadata(
+    serialized: String,
+) -> Result<(ContactProtectionKeyring, ContactKeyLifecycleMetadata), ContactKeyringConfigError> {
     let serialized = Zeroizing::new(serialized);
     let keyring: ContactProtectionKeyringSecret =
         serde_json::from_str(serialized.as_str()).map_err(|_| ContactKeyringConfigError)?;
-    let encryption_keys = keyring
+    let active_encryption_version = EncryptionKeyVersion::new(keyring.active_encryption_version)
+        .map_err(|_| ContactKeyringConfigError)?;
+    let active_lookup_version = LookupKeyVersion::new(keyring.active_lookup_version)
+        .map_err(|_| ContactKeyringConfigError)?;
+    let mut encryption_keys = keyring
         .encryption
         .iter()
         .map(|entry| {
@@ -36,7 +66,7 @@ fn parse_contact_protection_keyring(
             ))
         })
         .collect::<Result<Vec<_>, ContactKeyringConfigError>>()?;
-    let lookup_keys = keyring
+    let mut lookup_keys = keyring
         .lookup
         .iter()
         .map(|entry| {
@@ -46,13 +76,59 @@ fn parse_contact_protection_keyring(
             ))
         })
         .collect::<Result<Vec<_>, ContactKeyringConfigError>>()?;
-    ContactProtectionKeyring::new(encryption_keys, lookup_keys)
-        .map_err(|_| ContactKeyringConfigError)
+    let retained_encryption_versions = encryption_keys
+        .iter()
+        .map(|key| key.version().value())
+        .collect::<Vec<_>>();
+    let retained_lookup_versions = lookup_keys
+        .iter()
+        .map(|key| key.version().value())
+        .collect::<Vec<_>>();
+    let metadata = ContactKeyLifecycleMetadata::new(
+        active_encryption_version.value(),
+        active_lookup_version.value(),
+        retained_encryption_versions,
+        retained_lookup_versions,
+    )
+    .map_err(|_| ContactKeyringConfigError)?;
+
+    move_active_encryption_first(&mut encryption_keys, active_encryption_version)?;
+    move_active_lookup_first(&mut lookup_keys, active_lookup_version)?;
+
+    let protection_keyring = ContactProtectionKeyring::new(encryption_keys, lookup_keys)
+        .map_err(|_| ContactKeyringConfigError)?;
+    Ok((protection_keyring, metadata))
+}
+
+fn move_active_encryption_first(
+    keys: &mut [ContactEncryptionRootKey],
+    active_version: EncryptionKeyVersion,
+) -> Result<(), ContactKeyringConfigError> {
+    let index = keys
+        .iter()
+        .position(|key| key.version() == active_version)
+        .ok_or(ContactKeyringConfigError)?;
+    keys.swap(0, index);
+    Ok(())
+}
+
+fn move_active_lookup_first(
+    keys: &mut [ContactLookupRootKey],
+    active_version: LookupKeyVersion,
+) -> Result<(), ContactKeyringConfigError> {
+    let index = keys
+        .iter()
+        .position(|key| key.version() == active_version)
+        .ok_or(ContactKeyringConfigError)?;
+    keys.swap(0, index);
+    Ok(())
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ContactProtectionKeyringSecret {
+    active_encryption_version: u32,
+    active_lookup_version: u32,
     encryption: Vec<ContactProtectionKeyEntry>,
     lookup: Vec<ContactProtectionKeyEntry>,
 }
@@ -95,27 +171,63 @@ const fn hex_nibble(value: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_contact_protection_keyring;
+    use super::{
+        ContactKeyringConfigError, parse_contact_protection_keyring,
+        parse_contact_protection_keyring_with_metadata,
+    };
 
     #[test]
-    fn versioned_keyring_requires_valid_nonempty_32_byte_entries() {
+    fn explicit_active_versions_do_not_depend_on_json_array_order()
+    -> Result<(), ContactKeyringConfigError> {
         let valid = format!(
-            "{{\"encryption\":[{{\"version\":2,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}],\"lookup\":[{{\"version\":3,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}]}}",
+            "{{\"activeEncryptionVersion\":1,\"activeLookupVersion\":1,\"encryption\":[{{\"version\":2,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}],\"lookup\":[{{\"version\":3,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}]}}",
             "ab".repeat(32),
             "cd".repeat(32),
             "ef".repeat(32),
             "12".repeat(32),
         );
-        assert!(parse_contact_protection_keyring(valid).is_ok());
+        let (keyring, metadata) = parse_contact_protection_keyring_with_metadata(valid)?;
+        assert_eq!(keyring.lookup_versions()[0].value(), 1);
+        assert!(format!("{keyring:?}").contains("encryption_versions: [1, 2]"));
+        assert!(format!("{metadata:?}").contains("active_encryption_version: 1"));
+        assert!(format!("{metadata:?}").contains("active_lookup_version: 1"));
+        Ok(())
+    }
+
+    #[test]
+    fn keyring_requires_explicit_present_active_versions_and_valid_entries() {
+        assert!(
+            parse_contact_protection_keyring(
+                "{\"activeEncryptionVersion\":1,\"activeLookupVersion\":1,\"encryption\":[],\"lookup\":[]}".to_owned()
+            )
+            .is_err()
+        );
         assert!(
             parse_contact_protection_keyring("{\"encryption\":[],\"lookup\":[]}".to_owned())
                 .is_err()
         );
+        let missing_active = format!(
+            "{{\"activeEncryptionVersion\":3,\"activeLookupVersion\":1,\"encryption\":[{{\"version\":2,\"keyHex\":\"{}\"}}],\"lookup\":[{{\"version\":1,\"keyHex\":\"{}\"}}]}}",
+            "ab".repeat(32),
+            "cd".repeat(32),
+        );
+        assert!(parse_contact_protection_keyring(missing_active).is_err());
         assert!(
             parse_contact_protection_keyring(
-                "{\"encryption\":[{\"version\":0,\"keyHex\":\"00\"}],\"lookup\":[]}".to_owned()
+                "{\"activeEncryptionVersion\":1,\"activeLookupVersion\":1,\"encryption\":[{\"version\":0,\"keyHex\":\"00\"}],\"lookup\":[]}".to_owned()
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn duplicate_versions_remain_rejected_after_active_selection() {
+        let duplicate = format!(
+            "{{\"activeEncryptionVersion\":1,\"activeLookupVersion\":1,\"encryption\":[{{\"version\":1,\"keyHex\":\"{}\"}},{{\"version\":1,\"keyHex\":\"{}\"}}],\"lookup\":[{{\"version\":1,\"keyHex\":\"{}\"}}]}}",
+            "ab".repeat(32),
+            "cd".repeat(32),
+            "ef".repeat(32),
+        );
+        assert!(parse_contact_protection_keyring(duplicate).is_err());
     }
 }

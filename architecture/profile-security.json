@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "kind": "PROFILE_SECURITY_AUTHORITY",
+  "status": "current",
+  "credential_authority": "architecture/credential-authority.json",
+  "historical_acceptance_provenance": "architecture/ar8-completion-lifecycle.json",
+  "runtime_scope": {
+    "real_runtime_implementation_owner": "AR-10",
+    "runtime_cutover_authority": "docs/CAMOUFOX_RUNTIME_CUTOVER_PLAN.md",
+    "fingerprint_policy_authority": "AR-10_MUST_ACCEPT_OR_REPLACE_ADR-0001",
+    "cloud_profile_key_provider_status": "ADR-0006_PROPOSED_AND_PRODUCTION_BLOCKING",
+    "rotation_rehearsal_owner": "AR-13",
+    "remote_recovery_rehearsal_owner": "AR-14",
+    "windows_delivery_owner": "AR-15",
+    "windows_signing_trust_owner": "AR-15B",
+    "runtime_bundle_signing_trust_domain": "windows.release-signing-trust",
+    "runtime_bundle_signing_trust_owner": "AR-15B",
+    "current_secret_vault_smoke_status": "ONE_DEVICE_PROTOTYPE_NOT_PRODUCTION_KEY_AUTHORITY",
+    "cloud_profile_object_access_rule": "NO_STATIC_R2_CREDENTIAL_ON_PROFILE_BRIDGE",
+    "real_runtime_implemented_in_ar8": false,
+    "production_runtime_proof_in_ar8": false,
+    "production_key_recovery_proof_in_ar8": false,
+    "production_mutation": false
+  },
+  "security_domains": [
+    {
+      "id": "profile-generation.encryption-key-hierarchy",
+      "class": "CREDENTIAL_EQUIVALENT_ENVELOPE_KEY_HIERARCHY",
+      "owner": "profile-key-provider-authority",
+      "protected_value_authority": "KeyProviderPort-compatible protected provider; exact production provider remains unaccepted while ADR-0006 is proposed",
+      "legitimate_mutable_authority": "one future profile-key-provider authority; no direct domain/runtime key-store mutation",
+      "version_state_source": "root/KEK key ids and per-generation DEK key id/wrapped-key metadata only",
+      "plaintext_policy": "BOUNDED_MEMORY_ONLY_ZEROIZED_WHERE_OWNED",
+      "metadata_policy": "KEY_IDS_WRAPPED_REFERENCES_ALGORITHM_VERSION_AND_DEPENDENCY_STATUS_ONLY",
+      "generation_dek_policy": "ONE_RANDOM_DEK_PER_GENERATION_NO_IN_PLACE_ROTATION",
+      "root_kek_overlap_model": "DUAL_READ_SINGLE_WRITE",
+      "current_smoke_secret_vault_status": "ONE_DEVICE_PROTOTYPE_NOT_PRODUCTION_KEY_AUTHORITY",
+      "implementation_owner": "AR-10 consumes the provider-neutral key boundary; AR-13 proves rotation and AR-14 proves remote recovery",
+      "production_proof_complete": false
+    },
+    {
+      "id": "profile-identity.entropy-root",
+      "class": "PROFILE_FINGERPRINT_SECRET_ROOT",
+      "owner": "camoufox-profile-identity-authority",
+      "protected_value_authority": "future KeyProviderPort-backed opaque profile secret handle",
+      "legitimate_mutable_authority": "AR-10 profile identity creation/generation lifecycle only",
+      "version_state_source": "profile generation and fingerprint policy version metadata; never entropy bytes or raw secret handle",
+      "entropy_bits": 256,
+      "scope": "UNIQUE_PER_PROFILE_GENERATION",
+      "plaintext_policy": "NO_LOG_AUDIT_SUPPORT_R2_OR_PUBLIC_METADATA",
+      "raw_handle_visibility": false,
+      "rotation_policy": "NEW_PROFILE_GENERATION_ONLY_NO_IN_PLACE_ENTROPY_REWRITE",
+      "implementation_owner": "AR-10",
+      "production_proof_complete": false
+    },
+    {
+      "id": "profile-bridge.device-private-key",
+      "class": "DEVICE_PRIVATE_KEY",
+      "owner": "profile-bridge-device-identity-authority",
+      "protected_value_authority": "platform secure device-key store behind opaque key handle; production provider not yet accepted",
+      "legitimate_mutable_authority": "single platform device-key adapter behind DeviceKeyPort",
+      "version_state_source": "device identity/provider/key-version status; never raw key handle or private material",
+      "application_boundary": "HANDLE_ONLY",
+      "material_readback": false,
+      "raw_handle_visibility": false,
+      "implementation_owner": "AR-10 supported Profile Bridge runtime integration; physical/platform key-protection proof remains a later pre-production requirement",
+      "production_proof_complete": false
+    },
+    {
+      "id": "profile-network.proxy-credential",
+      "class": "TENANT_DYNAMIC_PROXY_CREDENTIAL",
+      "owner": "camoufox-network-identity-adapter",
+      "protected_value_authority": "approved secret-handle/provider adapter; no plaintext credential persistence in profile metadata/logs",
+      "legitimate_mutable_authority": "single AR-10 network/proxy credential adapter authority",
+      "version_state_source": "provider/route/version/status plus non-reversible reference metadata; never raw secret handle or credential value",
+      "runtime_boundary": "HANDLE_OR_SCOPED_EPHEMERAL_MATERIAL_ONLY",
+      "raw_handle_visibility": false,
+      "public_model_visibility": false,
+      "api_visibility": false,
+      "operator_visibility": false,
+      "log_audit_debug_visibility": false,
+      "implementation_owner": "AR-10",
+      "production_proof_complete": false
+    },
+    {
+      "id": "profile-bridge.enrollment-claim",
+      "class": "EPHEMERAL_DEVICE_ENROLLMENT_SECRET",
+      "owner": "profile-bridge-enrollment-authority",
+      "protected_value_authority": "bounded ephemeral claim value in the issuing/redemption flow only",
+      "legitimate_mutable_authority": "single enrollment claim issue/redeem state machine",
+      "version_state_source": "claim expiry/redemption/device binding metadata without claim value",
+      "debug_policy": "REDACTED",
+      "claim_value_visibility": "REDACTED_ONLY",
+      "replay_policy": "REJECT_REPLAY_AND_DEVICE_REBIND",
+      "retirement_policy": "EXPIRE_OR_SINGLE_SUCCESSFUL_REDEMPTION",
+      "production_proof_complete": false
+    },
+    {
+      "id": "profile-generation.short-lived-object-access",
+      "class": "EPHEMERAL_SCOPED_OBJECT_ACCESS_CREDENTIAL",
+      "owner": "profile-generation-object-access-issuance-authority",
+      "protected_value_authority": "bounded short-lived capability/credential delivery to an authorized Bridge; never the static control-plane R2 pair",
+      "legitimate_mutable_authority": "single scoped object-access issuer consumed by the supported Profile Bridge runtime",
+      "version_state_source": "non-secret issuance reference, scope, expiry and generation binding metadata only; never bearer credential value",
+      "scope_policy": "TENANT_PROFILE_GENERATION_AND_OPERATION_BOUND",
+      "lifetime_policy": "SHORT_LIVED_NO_STATIC_BRIDGE_R2_CREDENTIAL",
+      "raw_bearer_visibility": false,
+      "implementation_owner": "AR-10 runtime contract and later staging/recovery rehearsal",
+      "production_proof_complete": false
+    }
+  ],
+  "protected_noncredential_state": [
+    {
+      "id": "profile-bridge.workspace-lock-token",
+      "credential_authority": false,
+      "class": "PROTECTED_COORDINATION_FENCING_STATE"
+    },
+    {
+      "id": "profile-session.launch-intent-state",
+      "credential_authority": false,
+      "class": "CONFIDENTIAL_EPHEMERAL_AUTHORIZATION_STATE",
+      "secret_redemption_mapping": "profile-bridge.enrollment-claim"
+    },
+    {
+      "id": "profile-session.fencing-token",
+      "credential_authority": false,
+      "class": "PROTECTED_COORDINATION_FENCING_STATE"
+    }
+  ],
+  "credential_equivalent_assets": [
+    {
+      "id": "browser-profile-generation-payload",
+      "classification": "CREDENTIAL_EQUIVALENT",
+      "authority": "docs/DATA_CLASSIFICATION.md",
+      "includes": [
+        "cookies",
+        "key4.db",
+        "logins.db",
+        "localStorage and site storage",
+        "materialized browser profile state"
+      ],
+      "cloud_storage_policy": "APPLICATION_LAYER_ENCRYPTED_IMMUTABLE_GENERATION_ONLY",
+      "ordinary_log_audit_export": false
+    }
+  ]
+}
