@@ -41,23 +41,33 @@ function requireOrderedMarkers(text, label, markers) {
   }
 }
 
-function conservativeWindow(authority, componentId) {
+function derivedSchemaContract(authority, componentId) {
   const component = authority.components.find((entry) => entry.component_id === componentId);
   if (!component) fail(`${componentId} D1 authority component is missing`);
   const target = component.current_repository_revision;
-  if (!target) fail(`${componentId} current repository revision is missing`);
-  const compatibility = component.component_release_compatibility;
-  if (!compatibility || compatibility.target_schema_revision !== target) {
-    fail(`${componentId} component release compatibility target is stale`);
+  if (typeof target !== 'string' || target.length === 0) {
+    fail(`${componentId} current repository revision is missing`);
   }
-  if (compatibility.supported_schema_min !== target || compatibility.supported_schema_max !== target) {
-    fail(`${componentId} frozen epoch must keep supported_min = target = supported_max`);
+  const historyDigest = component.history_digest;
+  if (typeof historyDigest !== 'string' || historyDigest.length === 0) {
+    fail(`${componentId} history digest is missing`);
   }
-  for (const field of ['migration_history_digest', 'compatibility_policy_digest']) {
-    const value = compatibility[field];
-    if (typeof value !== 'string' || value.length === 0) fail(`${componentId} compatibility lacks ${field}`);
+  const policy = component.compatibility_policy;
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+    fail(`${componentId} compatibility policy is missing`);
   }
-  return compatibility;
+  const historical = component.historical_epoch;
+  if (!historical || typeof historical !== 'object' || historical.per_file_sha256_freeze?.status !== 'FROZEN') {
+    fail(`${componentId} historical epoch is not fully frozen`);
+  }
+  return {
+    database_component: componentId,
+    target_schema_revision: target,
+    supported_schema_min: target,
+    supported_schema_max: target,
+    migration_history_digest: historyDigest,
+    compatibility_policy_digest: sha256(canonical(policy)),
+  };
 }
 
 function proveSyntheticIdentity(component) {
@@ -92,6 +102,9 @@ async function validate() {
     readFile(path.join(ROOT, AUTHORITY), 'utf8'),
   ]);
   const authority = JSON.parse(authorityText);
+  if (!authority || authority.kind !== 'D1_EVOLUTION_AUTHORITY' || !Array.isArray(authority.components)) {
+    fail('D1 evolution authority identity is invalid');
+  }
 
   requireOrderedMarkers(catalog, 'Catalog release', [
     'def build_manifest_payload(',
@@ -109,8 +122,17 @@ async function validate() {
     'release_id = RELEASE_PREFIX + sha256_bytes(canonical(payload))',
   ]);
 
-  conservativeWindow(authority, 'catalog');
-  conservativeWindow(authority, 'resolver');
+  const catalogContract = derivedSchemaContract(authority, 'catalog');
+  const resolverContract = derivedSchemaContract(authority, 'resolver');
+  for (const contract of [catalogContract, resolverContract]) {
+    if (contract.supported_schema_min !== contract.target_schema_revision || contract.supported_schema_max !== contract.target_schema_revision) {
+      fail(`${contract.database_component} frozen epoch schema window is not conservative`);
+    }
+    if (!/^[0-9a-f]{64}$/.test(contract.migration_history_digest) || !/^[0-9a-f]{64}$/.test(contract.compatibility_policy_digest)) {
+      fail(`${contract.database_component} derived schema contract digests are invalid`);
+    }
+  }
+
   proveSyntheticIdentity('catalog');
   proveSyntheticIdentity('resolver');
 }
