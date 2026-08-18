@@ -1,0 +1,52 @@
+name: AR-9 Projection Artifact Temporary
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ar9-projection-artifact-temp-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generate:
+    name: Generate exact canonical projections
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Generate canonical AR-9 projections
+        run: |
+          set -euo pipefail
+          python scripts/generate-ar8-completion-status.py --write
+          python scripts/generate-architecture-inventory.py --write
+          python scripts/generate-ar8-completion-status.py --check
+          python scripts/generate-architecture-inventory.py --check
+
+      - name: Stage generated projection artifact
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/ar9-projections/docs artifacts/ar9-projections/architecture
+          cp docs/status.json artifacts/ar9-projections/docs/status.json
+          cp architecture/architecture-rebaseline-v3-transition.json artifacts/ar9-projections/architecture/architecture-rebaseline-v3-transition.json
+          cp architecture/inventory.json artifacts/ar9-projections/architecture/inventory.json
+
+      - name: Upload exact generated projections
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ar9-generated-projections-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ar9-projections
+          if-no-files-found: error
+          retention-days: 1
