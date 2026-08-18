@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HISTORICAL_CHECKER = Path(
-    "scripts/check-pre2j-d3-resolver-bootstrap-implementation-historical.py"
+    ".github/scripts/history/pre2j-d3-resolver-bootstrap-implementation"
 )
 SUCCESSOR_AUTHORITY = Path("architecture/ar8-d-secret-transport-successor.json")
 SUCCESSOR_CHECKER = Path(".github/scripts/ar8-d-secret-transport-successor.mjs")
