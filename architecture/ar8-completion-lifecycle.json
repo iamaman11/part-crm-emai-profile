@@ -207,6 +207,11 @@
     "remote_recovery_rehearsal_owner": "AR-14",
     "windows_delivery_owner": "AR-15",
     "windows_signing_trust_owner": "AR-15B",
+    "runtime_bundle_signing_trust_domain": "windows.release-signing-trust",
+    "runtime_bundle_signing_trust_owner": "AR-15B",
+    "launch_intent_secret_mapping": "profile-bridge.enrollment-claim",
+    "current_secret_vault_smoke_status": "ONE_DEVICE_PROTOTYPE_NOT_PRODUCTION_KEY_AUTHORITY",
+    "cloud_profile_object_access_rule": "NO_STATIC_R2_CREDENTIAL_ON_PROFILE_BRIDGE",
     "real_runtime_implemented_in_ar8": false,
     "production_runtime_proof_in_ar8": false,
     "production_key_recovery_proof_in_ar8": false,
@@ -219,6 +224,7 @@
       "current_source_contracts": [
         "crates/encrypted-generation-domain/src/container.rs::GenerationDek",
         "apps/profile-bridge/src/dirty_generation.rs::GenerationSealingMaterialPort",
+        "docs/adr/ADR-0003-desktop-runtime-distribution.md",
         "docs/adr/ADR-0006-cloud-profile-key-management.md"
       ],
       "owner": "profile-key-provider-authority",
@@ -229,6 +235,7 @@
       "metadata_policy": "KEY_IDS_WRAPPED_REFERENCES_ALGORITHM_VERSION_AND_DEPENDENCY_STATUS_ONLY",
       "generation_dek_policy": "ONE_RANDOM_DEK_PER_GENERATION_NO_IN_PLACE_ROTATION",
       "root_kek_overlap_model": "DUAL_READ_SINGLE_WRITE",
+      "current_smoke_secret_vault_status": "ONE_DEVICE_PROTOTYPE_NOT_PRODUCTION_KEY_AUTHORITY",
       "retirement_preconditions": [
         "replacement root/KEK authority is active for new writes",
         "wrapped-key rewrap/reconciliation is complete for the retiring version",
@@ -248,10 +255,11 @@
       "owner": "camoufox-profile-identity-authority",
       "protected_value_authority": "future KeyProviderPort-backed opaque profile secret handle",
       "legitimate_mutable_authority": "AR-10 profile identity creation/generation lifecycle only",
-      "version_state_source": "profile generation and fingerprint policy version metadata; never entropy bytes",
+      "version_state_source": "profile generation and fingerprint policy version metadata; never entropy bytes or raw secret handle",
       "entropy_bits": 256,
       "scope": "UNIQUE_PER_PROFILE_GENERATION",
       "plaintext_policy": "NO_LOG_AUDIT_SUPPORT_R2_OR_PUBLIC_METADATA",
+      "raw_handle_visibility": false,
       "rotation_policy": "NEW_PROFILE_GENERATION_ONLY_NO_IN_PLACE_ENTROPY_REWRITE",
       "implementation_owner": "AR-10",
       "production_proof_complete": false
@@ -261,14 +269,16 @@
       "class": "DEVICE_PRIVATE_KEY",
       "current_source_contracts": [
         "crates/bridge-domain/src/lib.rs::DeviceKeyPort",
-        "apps/profile-bridge/src/operator_flow.rs"
+        "apps/profile-bridge/src/operator_flow.rs",
+        "docs/adr/ADR-0003-desktop-runtime-distribution.md"
       ],
       "owner": "profile-bridge-device-identity-authority",
       "protected_value_authority": "platform secure device-key store behind opaque key handle; production provider not yet accepted",
       "legitimate_mutable_authority": "single platform device-key adapter behind DeviceKeyPort",
-      "version_state_source": "device identity/key handle and future platform key metadata only",
+      "version_state_source": "device identity/provider/key-version status; never raw key handle or private material",
       "application_boundary": "HANDLE_ONLY",
       "material_readback": false,
+      "raw_handle_visibility": false,
       "implementation_owner": "AR-10 supported Profile Bridge runtime integration; physical/platform key-protection proof remains a later pre-production requirement",
       "production_proof_complete": false
     },
@@ -278,13 +288,15 @@
       "current_source_contracts": [
         "docs/DATA_CLASSIFICATION.md",
         "docs/THREAT_MODEL.md",
+        "docs/adr/ADR-0003-desktop-runtime-distribution.md",
         "docs/CAMOUFOX_RUNTIME_CUTOVER_PLAN.md"
       ],
       "owner": "camoufox-network-identity-adapter",
       "protected_value_authority": "future approved secret-handle/provider adapter; no plaintext credential persistence in D1/profile metadata/logs",
       "legitimate_mutable_authority": "single AR-10 network/proxy credential adapter authority",
-      "version_state_source": "opaque secret handle/provider credential identity and status only",
+      "version_state_source": "provider/route/version/status plus non-reversible reference metadata; never raw secret handle or credential value",
       "runtime_boundary": "HANDLE_OR_SCOPED_EPHEMERAL_MATERIAL_ONLY",
+      "raw_handle_visibility": false,
       "implementation_owner": "AR-10",
       "production_proof_complete": false
     },
@@ -293,13 +305,15 @@
       "class": "EPHEMERAL_DEVICE_ENROLLMENT_SECRET",
       "current_source_contracts": [
         "crates/bridge-domain/src/lib.rs::ClaimCode",
-        "crates/bridge-domain/src/lib.rs::EnrollmentClaim"
+        "crates/bridge-domain/src/lib.rs::EnrollmentClaim",
+        "docs/adr/ADR-0003-desktop-runtime-distribution.md"
       ],
       "owner": "profile-bridge-enrollment-authority",
       "protected_value_authority": "bounded ephemeral claim value in the issuing/redemption flow only",
       "legitimate_mutable_authority": "single enrollment claim issue/redeem state machine",
-      "version_state_source": "claim expiry/redemption/device binding metadata",
+      "version_state_source": "claim expiry/redemption/device binding metadata without claim value",
       "debug_policy": "REDACTED",
+      "claim_value_visibility": "REDACTED_ONLY",
       "replay_policy": "REJECT_REPLAY_AND_DEVICE_REBIND",
       "retirement_policy": "EXPIRE_OR_SINGLE_SUCCESSFUL_REDEMPTION",
       "production_proof_complete": false
@@ -309,14 +323,16 @@
       "class": "EPHEMERAL_SCOPED_OBJECT_ACCESS_CREDENTIAL",
       "current_source_contracts": [
         "docs/adr/ADR-0002-cloud-profile-materialization.md",
+        "docs/adr/ADR-0003-desktop-runtime-distribution.md",
         "docs/CAMOUFOX_RUNTIME_CUTOVER_PLAN.md"
       ],
       "owner": "profile-generation-object-access-issuance-authority",
       "protected_value_authority": "future bounded short-lived capability/credential delivery to an authorized Bridge; not the static control-plane R2 pair",
       "legitimate_mutable_authority": "single scoped object-access issuer consumed by the supported Profile Bridge runtime",
-      "version_state_source": "credential/capability id, scope, expiry and generation binding metadata only",
+      "version_state_source": "non-secret issuance reference, scope, expiry and generation binding metadata only; never bearer credential value",
       "scope_policy": "TENANT_PROFILE_GENERATION_AND_OPERATION_BOUND",
       "lifetime_policy": "SHORT_LIVED_NO_STATIC_BRIDGE_R2_CREDENTIAL",
+      "raw_bearer_visibility": false,
       "implementation_owner": "AR-10 runtime contract and later staging/recovery rehearsal",
       "production_proof_complete": false
     }
@@ -331,6 +347,26 @@
       "debug_policy": "REDACTED",
       "persistence_policy": "LOCAL_COORDINATION_ONLY_NOT_PROVIDER_CREDENTIAL",
       "failure_policy": "STALE_OR_MISMATCHED_OWNER_FAILS_CLOSED"
+    },
+    {
+      "id": "profile-session.launch-intent-state",
+      "class": "CONFIDENTIAL_EPHEMERAL_AUTHORIZATION_STATE",
+      "source_contract": "crates/session-domain/src/lib.rs::LaunchIntent",
+      "credential_authority": false,
+      "scope": "TENANT_ACTOR_DEVICE_PROFILE_BOUND",
+      "secret_redemption_mapping": "profile-bridge.enrollment-claim",
+      "persistence_policy": "BOUNDED_AUTHORIZATION_METADATA_ONLY_NO_CLAIM_CODE",
+      "failure_policy": "TENANT_ACTOR_DEVICE_MISMATCH_REPLAY_OR_EXPIRY_FAILS_CLOSED"
+    },
+    {
+      "id": "profile-session.fencing-token",
+      "class": "PROTECTED_COORDINATION_FENCING_STATE",
+      "source_contract": "crates/session-domain/src/lib.rs::ProfileLease",
+      "credential_authority": false,
+      "scope": "CLOUD_PROFILE_SINGLE_WRITER_LEASE",
+      "identifier_policy": "OPAQUE_COORDINATION_ID_NOT_BEARER_SECRET",
+      "persistence_policy": "LEASE_COORDINATION_METADATA_NOT_SECRET_STORE_AUTHORITY",
+      "failure_policy": "STALE_EPOCH_OR_TOKEN_FAILS_CLOSED"
     }
   ],
   "profile_credential_equivalent_assets": [
