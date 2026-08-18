@@ -72,15 +72,16 @@ jobs:
           end_marker = '    if (\n        program.get("python_estate")'
           start = legacy_text.index(start_marker)
           end = legacy_text.index(end_marker, start)
-          current = '''    python_rows = python_estate.get("files") if isinstance(python_estate.get("files"), list) else []
-          expected_python_summary = {
-              "tracked_python_files": len(python_rows),
-              "DELETE_AFTER_SEQUENCE": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "DELETE_AFTER_SEQUENCE"),
-              "KEEP_PYTHON": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "KEEP_PYTHON"),
-              "MIGRATE_TO_RUST": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "MIGRATE_TO_RUST"),
-              "WRAP_WITH_RUST": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "WRAP_WITH_RUST"),
-          }
-          '''
+          current = (
+              '    python_rows = python_estate.get("files") if isinstance(python_estate.get("files"), list) else []\n'
+              '    expected_python_summary = {\n'
+              '        "tracked_python_files": len(python_rows),\n'
+              '        "DELETE_AFTER_SEQUENCE": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "DELETE_AFTER_SEQUENCE"),\n'
+              '        "KEEP_PYTHON": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "KEEP_PYTHON"),\n'
+              '        "MIGRATE_TO_RUST": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "MIGRATE_TO_RUST"),\n'
+              '        "WRAP_WITH_RUST": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "WRAP_WITH_RUST"),\n'
+              '    }\n'
+          )
           legacy_text = legacy_text[:start] + current + legacy_text[end:]
           legacy_path.write_text(legacy_text, encoding='utf-8', newline='\n')
           PY
