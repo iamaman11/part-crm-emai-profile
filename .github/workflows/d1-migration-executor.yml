@@ -122,7 +122,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorize:
+    name: Validate D1 mutation inputs before protected Environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      TARGET_ENVIRONMENT: ${{ inputs.environment }}
+      COMPONENT: ${{ inputs.component }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id }}
+      DATABASE_NAME: ${{ inputs.database_name }}
+      DATABASE_ID: ${{ inputs.database_id }}
+      MUTATION_AUTHORIZED: ${{ inputs.mutation_authorized }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+    steps:
+      - name: Fail closed before any Environment binding
+        run: |
+          set -euo pipefail
+          test "$TARGET_ENVIRONMENT" = "staging" || test "$TARGET_ENVIRONMENT" = "production"
+          test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
+          test "$MUTATION_AUTHORIZED" = "true"
+          test -n "$SOURCE_SHA"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$DATABASE_NAME"
+          test -n "$DATABASE_ID"
+          test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
+
   migrate:
+    needs: authorize
     name: ${{ inputs.environment }} / ${{ inputs.component }} / exact D1 migration
     runs-on: ubuntu-latest
     timeout-minutes: 20
