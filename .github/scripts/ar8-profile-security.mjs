@@ -543,7 +543,8 @@ function validateAr10AndAr15Boundaries(sources, errors) {
     [
       'one-time launch intent',
       'profilebridge://claim/<opaque-code>',
-      'Profile ID, JWT, email, R2 credentials и keys в URI запрещены',
+      'Profile ID, JWT,',
+      'email, R2 credentials и keys в URI запрещены',
       'signed content-addressed artifact',
       'Production client не получает постоянный R2 bucket token',
       'short-lived scoped credentials',
