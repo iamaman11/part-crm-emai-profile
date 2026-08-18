@@ -597,7 +597,8 @@ mod tests {
     }
 
     #[test]
-    fn handle_hmac_unknown_duplicate_and_missing_active_versions_fail_closed() -> Result<(), CryptoError> {
+    fn handle_hmac_unknown_duplicate_and_missing_active_versions_fail_closed()
+    -> Result<(), CryptoError> {
         let duplicate = format!(
             r#"{{"activeVersion":1,"keys":[{{"version":1,"keyHex":"{}"}},{{"version":1,"keyHex":"{}"}}]}}"#,
             "44".repeat(32),
