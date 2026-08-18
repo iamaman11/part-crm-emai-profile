@@ -92,7 +92,10 @@ where
             "-V" | "--version" => return Ok(Invocation::Version),
             "--root" => {
                 if root.is_some() {
-                    return Err(OpsctlError::new("parse", "--root may be supplied only once"));
+                    return Err(OpsctlError::new(
+                        "parse",
+                        "--root may be supplied only once",
+                    ));
                 }
                 let value = iterator
                     .next()
@@ -111,7 +114,8 @@ where
         }
     }
 
-    let command = command.ok_or_else(|| OpsctlError::new("parse", "missing command; use --help"))?;
+    let command =
+        command.ok_or_else(|| OpsctlError::new("parse", "missing command; use --help"))?;
     Ok(Invocation::Run { root, command })
 }
 
@@ -124,7 +128,9 @@ fn parse_command(value: &str) -> Result<ReadCommand, OpsctlError> {
         "rotation-plan" => Ok(ReadCommand::RotationPlan),
         other => Err(OpsctlError::new(
             "parse",
-            format!("unsupported command {other:?}; opsctl exposes read-only metadata commands only"),
+            format!(
+                "unsupported command {other:?}; opsctl exposes read-only metadata commands only"
+            ),
         )),
     }
 }
@@ -137,8 +143,12 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             let repo_root = resolve_repo_root(root.as_deref(), command.name())?;
             match command {
                 ReadCommand::Doctor => doctor(&repo_root),
-                ReadCommand::Status => canonical_json_document(&repo_root, "docs/status.json", "status"),
-                ReadCommand::Inventory => canonical_json_document(&repo_root, "architecture/inventory.json", "inventory"),
+                ReadCommand::Status => {
+                    canonical_json_document(&repo_root, "docs/status.json", "status")
+                }
+                ReadCommand::Inventory => {
+                    canonical_json_document(&repo_root, "architecture/inventory.json", "inventory")
+                }
                 ReadCommand::CredentialLifecycle => canonical_json_document(
                     &repo_root,
                     "architecture/credential-lifecycle.json",
@@ -154,15 +164,24 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
     }
 }
 
-fn resolve_repo_root(explicit: Option<&Path>, command: &'static str) -> Result<PathBuf, OpsctlError> {
+fn resolve_repo_root(
+    explicit: Option<&Path>,
+    command: &'static str,
+) -> Result<PathBuf, OpsctlError> {
     if let Some(root) = explicit {
         let canonical = fs::canonicalize(root).map_err(|error| {
-            OpsctlError::new(command, format!("cannot resolve repository root {}: {error}", root.display()))
+            OpsctlError::new(
+                command,
+                format!("cannot resolve repository root {}: {error}", root.display()),
+            )
         })?;
         if is_repo_root(&canonical) {
             return Ok(canonical);
         }
-        return Err(OpsctlError::new(command, "explicit path is not the canonical repository root"));
+        return Err(OpsctlError::new(
+            command,
+            "explicit path is not the canonical repository root",
+        ));
     }
 
     let current = fs::canonicalize(
@@ -174,18 +193,27 @@ fn resolve_repo_root(explicit: Option<&Path>, command: &'static str) -> Result<P
             return Ok(candidate.to_path_buf());
         }
     }
-    Err(OpsctlError::new(command, "repository root not found; provide --root PATH"))
+    Err(OpsctlError::new(
+        command,
+        "repository root not found; provide --root PATH",
+    ))
 }
 
 fn is_repo_root(path: &Path) -> bool {
     path.join("Cargo.toml").is_file()
         && path.join("architecture/inventory.json").is_file()
         && path.join("architecture/python-estate-ar6.json").is_file()
-        && path.join("architecture/credential-authority.json").is_file()
-        && path.join("architecture/credential-lifecycle.json").is_file()
+        && path
+            .join("architecture/credential-authority.json")
+            .is_file()
+        && path
+            .join("architecture/credential-lifecycle.json")
+            .is_file()
         && path.join("architecture/profile-security.json").is_file()
         && path.join("architecture/operator-contract.json").is_file()
-        && path.join("scripts/generate-architecture-inventory.py").is_file()
+        && path
+            .join("scripts/generate-architecture-inventory.py")
+            .is_file()
         && path.join("scripts/python-estate-ar6.py").is_file()
 }
 
@@ -199,7 +227,10 @@ fn canonical_json_document(
         .map_err(|error| OpsctlError::new(command, format!("cannot read {relative}: {error}")))?;
     let trimmed = contents.trim_start();
     if !trimmed.starts_with('{') || !contents.trim_end().ends_with('}') {
-        return Err(OpsctlError::new(command, format!("canonical JSON authority is malformed: {relative}")));
+        return Err(OpsctlError::new(
+            command,
+            format!("canonical JSON authority is malformed: {relative}"),
+        ));
     }
     if !contents.ends_with('\n') {
         contents.push('\n');
@@ -220,7 +251,10 @@ fn doctor(root: &Path) -> Result<String, OpsctlError> {
         "scripts/python-estate-ar6.py",
     ] {
         if !root.join(relative).is_file() {
-            return Err(OpsctlError::new("doctor", format!("required canonical authority is missing: {relative}")));
+            return Err(OpsctlError::new(
+                "doctor",
+                format!("required canonical authority is missing: {relative}"),
+            ));
         }
     }
 
@@ -233,7 +267,11 @@ fn doctor(root: &Path) -> Result<String, OpsctlError> {
         let _ = canonical_json_document(root, relative, "doctor")?;
     }
 
-    run_python_check(root, "scripts/generate-architecture-inventory.py", &["--check"])?;
+    run_python_check(
+        root,
+        "scripts/generate-architecture-inventory.py",
+        &["--check"],
+    )?;
     run_python_check(root, "scripts/python-estate-ar6.py", &["--check"])?;
     Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/python-estate-ar6.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"architecture/operator-contract.json\",\"docs/status.json\"]}\n".to_owned())
 }
@@ -251,8 +289,15 @@ fn run_python_check(root: &Path, script: &str, arguments: &[&str]) -> Result<(),
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let detail = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
-    Err(OpsctlError::new("doctor", format!("canonical validator failed: {script}: {detail}")))
+    let detail = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    Err(OpsctlError::new(
+        "doctor",
+        format!("canonical validator failed: {script}: {detail}"),
+    ))
 }
 
 fn json_escape(value: &str) -> String {
@@ -273,7 +318,7 @@ fn json_escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{execute, json_escape, parse_invocation, Invocation, OpsctlError, ReadCommand};
+    use super::{Invocation, OpsctlError, ReadCommand, execute, json_escape, parse_invocation};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -290,7 +335,13 @@ mod tests {
             ("credential-lifecycle", ReadCommand::CredentialLifecycle),
             ("rotation-plan", ReadCommand::RotationPlan),
         ] {
-            assert_eq!(parse_invocation(args(&["opsctl", name])), Ok(Invocation::Run { root: None, command: expected }));
+            assert_eq!(
+                parse_invocation(args(&["opsctl", name])),
+                Ok(Invocation::Run {
+                    root: None,
+                    command: expected
+                })
+            );
         }
     }
 
@@ -298,14 +349,20 @@ mod tests {
     fn parses_explicit_root() {
         assert_eq!(
             parse_invocation(args(&["opsctl", "--root", "/repo", "status"])),
-            Ok(Invocation::Run { root: Some(PathBuf::from("/repo")), command: ReadCommand::Status })
+            Ok(Invocation::Run {
+                root: Some(PathBuf::from("/repo")),
+                command: ReadCommand::Status
+            })
         );
     }
 
     #[test]
     fn credential_lifecycle_reads_subject_authority() -> Result<(), OpsctlError> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let output = execute(Invocation::Run { root: Some(root), command: ReadCommand::CredentialLifecycle })?;
+        let output = execute(Invocation::Run {
+            root: Some(root),
+            command: ReadCommand::CredentialLifecycle,
+        })?;
         assert!(output.contains("\"kind\": \"CREDENTIAL_LIFECYCLE_AUTHORITY\""));
         assert!(output.contains("\"routine_release_rotates_runtime_secrets\": false"));
         assert!(!output.contains("\"secret_value\":"));
@@ -315,7 +372,10 @@ mod tests {
     #[test]
     fn rotation_plan_reads_subject_operator_contract() -> Result<(), OpsctlError> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let output = execute(Invocation::Run { root: Some(root), command: ReadCommand::RotationPlan })?;
+        let output = execute(Invocation::Run {
+            root: Some(root),
+            command: ReadCommand::RotationPlan,
+        })?;
         assert!(output.contains("\"kind\": \"OPERATOR_CONTRACT_AUTHORITY\""));
         assert!(output.contains("\"mode\": \"READ_ONLY_METADATA_ONLY\""));
         assert!(output.contains("\"production_mutation\": false"));
@@ -325,7 +385,14 @@ mod tests {
 
     #[test]
     fn rejects_mutation_commands() {
-        for command in ["deploy", "provision", "promote", "delete", "rotate", "migrate"] {
+        for command in [
+            "deploy",
+            "provision",
+            "promote",
+            "delete",
+            "rotate",
+            "migrate",
+        ] {
             assert!(parse_invocation(args(&["opsctl", command])).is_err());
         }
     }
