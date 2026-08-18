@@ -1,7 +1,11 @@
-use crate::model::{MAX_CLOCK_SKEW_MS, SIGNATURE_VERSION};
+use crate::model::MAX_CLOCK_SKEW_MS;
 use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
 use sha2::{Digest, Sha256};
 
+pub const LEGACY_SIGNATURE_VERSION: &str = "hmac-sha256-v1";
+pub const KEYED_SIGNATURE_VERSION: &str = "hmac-sha256-v2";
+
+const MAX_KEY_ID_BYTES: usize = 64;
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28,9 +32,18 @@ pub fn body_digest_hex(body: &[u8]) -> String {
 }
 
 pub fn sign_hex(secret: &[u8], input: &SignatureInput<'_>) -> Result<String, SignatureError> {
+    sign_hex_versioned(secret, LEGACY_SIGNATURE_VERSION, None, input)
+}
+
+pub fn sign_hex_versioned(
+    secret: &[u8],
+    version: &str,
+    key_id: Option<&str>,
+    input: &SignatureInput<'_>,
+) -> Result<String, SignatureError> {
     validate_metadata(input)?;
     let digest = body_digest_hex(input.body);
-    let canonical = canonical(input, &digest);
+    let canonical = canonical(version, key_id, input, &digest)?;
     let mut mac = <HmacSha256 as HmacKeyInit>::new_from_slice(secret)
         .map_err(|_| SignatureError::InvalidSignature)?;
     mac.update(canonical.as_bytes());
@@ -44,6 +57,27 @@ pub fn verify(
     supplied_signature: &str,
     now_ms: u64,
 ) -> Result<(), SignatureError> {
+    verify_versioned(
+        secret,
+        LEGACY_SIGNATURE_VERSION,
+        None,
+        input,
+        supplied_body_digest,
+        supplied_signature,
+        now_ms,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn verify_versioned(
+    secret: &[u8],
+    version: &str,
+    key_id: Option<&str>,
+    input: &SignatureInput<'_>,
+    supplied_body_digest: &str,
+    supplied_signature: &str,
+    now_ms: u64,
+) -> Result<(), SignatureError> {
     validate_metadata(input)?;
     if input.timestamp_ms.abs_diff(now_ms) > MAX_CLOCK_SKEW_MS {
         return Err(SignatureError::Stale);
@@ -52,7 +86,7 @@ pub fn verify(
     if !constant_time_hex_eq(&digest, supplied_body_digest) {
         return Err(SignatureError::InvalidDigest);
     }
-    let expected = sign_hex(secret, input)?;
+    let expected = sign_hex_versioned(secret, version, key_id, input)?;
     if !constant_time_hex_eq(&expected, supplied_signature) {
         return Err(SignatureError::InvalidSignature);
     }
@@ -82,11 +116,31 @@ fn valid_identifier(value: &str, maximum: usize) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
 }
 
-fn canonical(input: &SignatureInput<'_>, body_digest: &str) -> String {
-    format!(
-        "{SIGNATURE_VERSION}\n{}\n{}\n{body_digest}\n{}\n{}\n{}",
-        input.method, input.path, input.tenant_id, input.timestamp_ms, input.nonce
-    )
+fn valid_key_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_KEY_ID_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
+fn canonical(
+    version: &str,
+    key_id: Option<&str>,
+    input: &SignatureInput<'_>,
+    body_digest: &str,
+) -> Result<String, SignatureError> {
+    match (version, key_id) {
+        (LEGACY_SIGNATURE_VERSION, None) => Ok(format!(
+            "{LEGACY_SIGNATURE_VERSION}\n{}\n{}\n{body_digest}\n{}\n{}\n{}",
+            input.method, input.path, input.tenant_id, input.timestamp_ms, input.nonce
+        )),
+        (KEYED_SIGNATURE_VERSION, Some(key_id)) if valid_key_id(key_id) => Ok(format!(
+            "{KEYED_SIGNATURE_VERSION}\n{key_id}\n{}\n{}\n{body_digest}\n{}\n{}\n{}",
+            input.method, input.path, input.tenant_id, input.timestamp_ms, input.nonce
+        )),
+        _ => Err(SignatureError::InvalidMetadata),
+    }
 }
 
 fn constant_time_hex_eq(expected: &str, supplied: &str) -> bool {
@@ -135,7 +189,10 @@ const fn hex_nibble(value: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SignatureError, SignatureInput, body_digest_hex, sign_hex, verify};
+    use super::{
+        KEYED_SIGNATURE_VERSION, LEGACY_SIGNATURE_VERSION, SignatureError, SignatureInput,
+        body_digest_hex, sign_hex, sign_hex_versioned, verify, verify_versioned,
+    };
 
     fn input<'a>(body: &'a [u8]) -> SignatureInput<'a> {
         SignatureInput {
@@ -149,12 +206,74 @@ mod tests {
     }
 
     #[test]
-    fn method_path_body_tenant_time_and_nonce_are_authenticated() -> Result<(), SignatureError> {
+    fn legacy_v1_wire_contract_is_preserved() -> Result<(), SignatureError> {
         let request = input(br#"{"tenantId":"tenant_01"}"#);
         let digest = body_digest_hex(request.body);
         let signature = sign_hex(b"caller-auth-key", &request)?;
         assert!(verify(b"caller-auth-key", &request, &digest, &signature, 1_000_001).is_ok());
+        assert_eq!(
+            sign_hex_versioned(b"caller-auth-key", LEGACY_SIGNATURE_VERSION, None, &request)?,
+            signature
+        );
+        Ok(())
+    }
 
+    #[test]
+    fn keyed_v2_authenticates_exact_key_id() -> Result<(), SignatureError> {
+        let request = input(br#"{"tenantId":"tenant_01"}"#);
+        let digest = body_digest_hex(request.body);
+        let signature = sign_hex_versioned(
+            b"new-caller-auth-key",
+            KEYED_SIGNATURE_VERSION,
+            Some("key-2026-08"),
+            &request,
+        )?;
+        verify_versioned(
+            b"new-caller-auth-key",
+            KEYED_SIGNATURE_VERSION,
+            Some("key-2026-08"),
+            &request,
+            &digest,
+            &signature,
+            1_000_001,
+        )?;
+        assert_eq!(
+            verify_versioned(
+                b"new-caller-auth-key",
+                KEYED_SIGNATURE_VERSION,
+                Some("other-key"),
+                &request,
+                &digest,
+                &signature,
+                1_000_001,
+            ),
+            Err(SignatureError::InvalidSignature)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn version_and_key_id_shapes_are_fail_closed() {
+        let request = input(b"{}");
+        assert_eq!(
+            sign_hex_versioned(b"key", KEYED_SIGNATURE_VERSION, None, &request),
+            Err(SignatureError::InvalidMetadata)
+        );
+        assert_eq!(
+            sign_hex_versioned(b"key", LEGACY_SIGNATURE_VERSION, Some("legacy-v1"), &request),
+            Err(SignatureError::InvalidMetadata)
+        );
+        assert_eq!(
+            sign_hex_versioned(b"key", "hmac-sha256-v99", None, &request),
+            Err(SignatureError::InvalidMetadata)
+        );
+    }
+
+    #[test]
+    fn method_path_body_tenant_time_and_nonce_are_authenticated() -> Result<(), SignatureError> {
+        let request = input(br#"{"tenantId":"tenant_01"}"#);
+        let digest = body_digest_hex(request.body);
+        let signature = sign_hex(b"caller-auth-key", &request)?;
         let mut cross_tenant = input(request.body);
         cross_tenant.tenant_id = "tenant_02";
         assert_eq!(
