@@ -64,7 +64,7 @@ Only successful PC-1 may set `production_ready=true`, and only for the accepted 
 
 ```text
 AR-0   Delta Architecture Inventory                              DONE
-AR-1   Architecture Authority Re-baseline                        DONE
+AR-1   Architecture Authority Re-baseline                        DONE / ACCEPTED
 AR-2   Runtime Topology + D3 Compatibility                       DONE / ACCEPTED
 AR-3   Application Architecture Contract                         DONE / ACCEPTED
 AR-4A  Composition-root consolidation                            DONE / ACCEPTED
@@ -157,6 +157,76 @@ one concern -> one legitimate mutable authority
 A legacy Python mutator and an `opsctl` mutator must never remain simultaneously legitimate for the same lifecycle. No global Python→Rust rewrite is authorized.
 
 Terraform and hidden generic-IaC state are forbidden for this program. The intended stack is GitHub Actions / Environments + Rust `opsctl` + Wrangler / Cloudflare APIs.
+
+### 5A. Binding `opsctl` evolution contract
+
+`opsctl` is a standalone project-specific Rust operator CLI and library boundary. It must remain outside runtime application dependencies: no Worker, Profile Bridge, domain crate or product request path may invoke it. Its target shape is:
+
+```text
+opsctl
+├── doctor
+├── status
+├── inventory
+├── d1
+│   ├── status
+│   ├── plan
+│   ├── compatibility
+│   └── verify
+├── release
+│   ├── inspect
+│   ├── verify
+│   └── compatibility
+├── promotion
+│   ├── plan
+│   ├── preflight
+│   └── verify
+├── credentials
+│   ├── status
+│   ├── readiness
+│   └── rotation-plan
+├── recovery
+│   ├── inspect
+│   ├── plan
+│   └── verify
+└── readiness
+```
+
+This tree does not change the binding AR sequence and does not prematurely activate future command families. `source_present != executable_authorized` applies to operator tooling exactly as `source_present != production_enabled` applies to product capability: a reserved Rust namespace may be present before its parser/operational authority is enabled, but unknown or unowned commands must fail closed.
+
+Ownership is fixed as follows unless a later accepted authority transaction explicitly changes it:
+
+- **AR-9:** native `d1 status/plan/compatibility/verify`, modular Rust D1 policy layer, and source-reserved future family namespaces only;
+- **AR-10:** native tooling/executable simplification, including removal of the remaining `opsctl doctor -> Python validators` child-process compatibility bridge from the operator binary and normalization of the current flat credential metadata spellings into the accepted modular CLI shape where safe. AR-10 does not require deleting Python validators from the repository;
+- **AR-11:** `release inspect/verify/compatibility` and `promotion plan/preflight/verify`, integrated with immutable release-set authority. GitHub Environments remain approval/orchestration authority and provider executors remain the actual mutation boundary;
+- **AR-13:** rehearsal-backed `credentials status/readiness/rotation-plan` semantics and evidence, consuming accepted AR-8 credential authority rather than creating a second credential state machine;
+- **AR-14:** `recovery inspect/plan/verify`, consuming accepted D1/release authority. Automatic destructive restore remains forbidden unless explicitly authorized by that recovery slice;
+- **AR-16:** aggregate `readiness` proof over accepted component/release/recovery evidence. `opsctl readiness` is not production authorization; AR-17 alone owns the Production Core authorization transition.
+
+Permanent `opsctl` invariants are:
+
+```text
+opsctl_is_project_specific = true
+opsctl_is_runtime_dependency = false
+git_is_release_source_of_truth = true
+provider_state_is_runtime_truth = true
+hidden_opsctl_state_backend = false
+opsctl_business_domain_authority = false
+opsctl_operational_policy_authority = true
+duplicate_mutation_authorities = 0
+new_opsctl_python_spawn = 0
+new_opsctl_node_spawn = 0
+typed_machine_output = true
+fail_closed_unknown_state = true
+linux_supported = true
+windows_supported = true
+schema_compatibility_machine_enforced = true
+release_compatibility_machine_enforced = true
+recovery_preconditions_machine_enforced = true
+```
+
+During AR-9, `new_opsctl_python_spawn=0` means no new Python spawn sites beyond the single accepted AR-6 `doctor` compatibility bridge. AR-10 owns eliminating that remaining bridge from the final standalone operator binary. Python remains permitted for separately classified validators, generators, tests/fixtures and evidence helpers; there is no global Python→Rust rewrite.
+
+`opsctl` must never acquire its own persistent state backend, generic IaC resource graph, plugin scheduler, deployment scheduler or hidden `state.json`. Git answers what source/release was intended; provider state answers what is deployed; `opsctl` evaluates compatibility and permitted transitions between accepted authorities and observed state.
 
 ## 6. Preserved architecture decisions
 
