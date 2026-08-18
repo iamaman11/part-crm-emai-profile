@@ -455,8 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_debug_redacts_the_atomic_r2_pair()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn credential_debug_redacts_the_atomic_r2_pair() -> Result<(), Box<dyn std::error::Error>> {
         let access_id = "AR8D6_ACCESS_ID_SENTINEL";
         let secret = "AR8D6_SECRET_ACCESS_KEY_SENTINEL";
         let credentials = R2SigV4Credentials::new(access_id, secret)?;
