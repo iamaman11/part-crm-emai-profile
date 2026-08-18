@@ -369,11 +369,8 @@ mod tests {
         let body_digest = "a".repeat(64);
         let input = canonical_input(&body_digest);
         let legacy = canonical_signature_input(LEGACY_SIGNATURE_VERSION, None, &input)?;
-        let keyed = canonical_signature_input(
-            KEYED_SIGNATURE_VERSION,
-            Some("key-2026-08"),
-            &input,
-        )?;
+        let keyed =
+            canonical_signature_input(KEYED_SIGNATURE_VERSION, Some("key-2026-08"), &input)?;
         assert_ne!(legacy, keyed);
         assert!(legacy.starts_with("hmac-sha256-v1\nPOST\n"));
         assert!(keyed.starts_with("hmac-sha256-v2\nkey-2026-08\nPOST\n"));
