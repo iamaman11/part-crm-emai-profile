@@ -66,6 +66,12 @@ jobs:
       - name: Prove AR-8C provider execution authority drift fails closed
         run: node .github/scripts/ar8-staging-provider-bootstrap.mjs self-test
 
+      - name: Validate AR-8 completion credential lifecycle
+        run: node .github/scripts/ar8-completion-lifecycle.mjs
+
+      - name: Prove AR-8 completion credential lifecycle drift fails closed
+        run: node .github/scripts/ar8-completion-lifecycle.mjs --self-test
+
   hosted-state:
     name: GitHub Governance Hosted State
     if: github.event_name != 'pull_request'
