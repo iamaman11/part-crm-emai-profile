@@ -1,6 +1,4 @@
-use crate::crypto::{
-    EncryptionKeyring, HandleHmacKeyring, ResolverCrypto, WorkerNonceSource,
-};
+use crate::crypto::{EncryptionKeyring, HandleHmacKeyring, ResolverCrypto, WorkerNonceSource};
 use crate::ingress::AuthenticatedResolverRequest;
 use crate::model::ResolverRoute;
 use crate::provider::{
@@ -118,8 +116,9 @@ fn encrypted_store(env: &Env) -> Result<EncryptedRecordStore<WorkerNonceSource>,
     );
     let handle_keyring = HandleHmacKeyring::parse(&handle_keyring_secret)
         .map_err(|_| OperationError::ConfigurationUnavailable)?;
-    let crypto = ResolverCrypto::new_with_handle_keyring(keyring, handle_keyring, WorkerNonceSource)
-        .map_err(|_| OperationError::ConfigurationUnavailable)?;
+    let crypto =
+        ResolverCrypto::new_with_handle_keyring(keyring, handle_keyring, WorkerNonceSource)
+            .map_err(|_| OperationError::ConfigurationUnavailable)?;
     Ok(EncryptedRecordStore::new(database, crypto))
 }
 
@@ -208,14 +207,10 @@ async fn provision_password(
     now_ms: u64,
 ) -> Result<Response, OperationError> {
     let idempotency_key = string(payload, "idempotencyKey")?;
-    let claim = claim_idempotency(store, tenant_id, idempotency_key, request_digest, now_ms).await?;
+    let claim =
+        claim_idempotency(store, tenant_id, idempotency_key, request_digest, now_ms).await?;
     let handle = store
-        .deterministic_handle_for_version(
-            tenant_id,
-            "secret_",
-            idempotency_key,
-            claim.hmac_version,
-        )
+        .deterministic_handle_for_version(tenant_id, "secret_", idempotency_key, claim.hmac_version)
         .map_err(map_store_error)?;
     let credential = StoredCredential {
         provider: "IMAP".to_owned(),
