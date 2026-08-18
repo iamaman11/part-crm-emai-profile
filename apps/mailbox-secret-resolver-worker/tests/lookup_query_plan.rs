@@ -56,17 +56,27 @@ finally:
 #[test]
 fn retained_lookup_queries_are_indexed_bounded_searches() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .expect("resolver crate must remain under apps/<crate>");
+    let repo_root = manifest_dir.parent().and_then(Path::parent);
+    assert!(
+        repo_root.is_some(),
+        "resolver crate must remain under apps/<crate>"
+    );
+    let Some(repo_root) = repo_root else {
+        return;
+    };
 
     let output = Command::new("python")
         .arg("-c")
         .arg(QUERY_PLAN_PROBE)
         .arg(repo_root)
-        .output()
-        .expect("python is required by the repository acceptance toolchain");
+        .output();
+    assert!(
+        output.is_ok(),
+        "python is required by the repository acceptance toolchain"
+    );
+    let Ok(output) = output else {
+        return;
+    };
 
     assert!(
         output.status.success(),
