@@ -1,5 +1,7 @@
+use control_plane_contract::resolver_service_auth::{
+    ServiceAuthKeyring, canonical_signature_input,
+};
 use hmac::{Hmac, KeyInit, Mac};
-use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use worker::wasm_bindgen::{JsCast, JsValue};
@@ -8,15 +10,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 const RESOLVER_ORIGIN: &str = "https://mailbox-secret-resolver.internal";
 const CALLER_AUTH_SECRET: &str = "MAILBOX_RESOLVER_CALLER_AUTH_KEY";
-const LEGACY_SIGNATURE_VERSION: &str = "hmac-sha256-v1";
-const KEYED_SIGNATURE_VERSION: &str = "hmac-sha256-v2";
-const LEGACY_KEY_ID: &str = "legacy-v1";
 const NONCE_BYTES: usize = 16;
 const MAX_REQUEST_BYTES: usize = 32 * 1024;
-const MIN_KEY_BYTES: usize = 32;
-const MAX_KEY_BYTES: usize = 128;
-const MAX_RETAINED_KEYS: usize = 4;
-const MAX_KEY_ID_BYTES: usize = 64;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -27,118 +22,6 @@ pub enum ResolverRequestError {
     InvalidSecret,
     RandomnessUnavailable,
     HeaderFailure,
-}
-
-struct ServiceAuthKeyring {
-    active_key_id: String,
-    keys: Vec<ServiceAuthKey>,
-    legacy_serialization: bool,
-}
-
-struct ServiceAuthKey {
-    id: String,
-    bytes: Zeroizing<Vec<u8>>,
-}
-
-impl ServiceAuthKeyring {
-    fn parse(serialized: &str) -> Result<Self, ResolverRequestError> {
-        if serialized.trim_start().starts_with('{') {
-            return Self::parse_json(serialized);
-        }
-        if !valid_legacy_key(serialized.as_bytes()) {
-            return Err(ResolverRequestError::InvalidSecret);
-        }
-        Ok(Self {
-            active_key_id: LEGACY_KEY_ID.to_owned(),
-            keys: vec![ServiceAuthKey {
-                id: LEGACY_KEY_ID.to_owned(),
-                bytes: Zeroizing::new(serialized.as_bytes().to_vec()),
-            }],
-            legacy_serialization: true,
-        })
-    }
-
-    fn parse_json(serialized: &str) -> Result<Self, ResolverRequestError> {
-        let document: ServiceAuthKeyringSecret =
-            serde_json::from_str(serialized).map_err(|_| ResolverRequestError::InvalidSecret)?;
-        if !valid_key_id(&document.active_key_id)
-            || document.keys.is_empty()
-            || document.keys.len() > MAX_RETAINED_KEYS
-        {
-            return Err(ResolverRequestError::InvalidSecret);
-        }
-        let mut keys = Vec::with_capacity(document.keys.len());
-        for mut entry in document.keys {
-            if !valid_key_id(&entry.id)
-                || keys.iter().any(|key: &ServiceAuthKey| key.id == entry.id)
-            {
-                entry.key_hex.zeroize();
-                return Err(ResolverRequestError::InvalidSecret);
-            }
-            let mut decoded =
-                hex_decode(&entry.key_hex).ok_or(ResolverRequestError::InvalidSecret)?;
-            entry.key_hex.zeroize();
-            if !(MIN_KEY_BYTES..=MAX_KEY_BYTES).contains(&decoded.len()) {
-                decoded.zeroize();
-                return Err(ResolverRequestError::InvalidSecret);
-            }
-            keys.push(ServiceAuthKey {
-                id: entry.id.clone(),
-                bytes: Zeroizing::new(decoded),
-            });
-        }
-        if !keys.iter().any(|key| key.id == document.active_key_id) {
-            return Err(ResolverRequestError::InvalidSecret);
-        }
-        Ok(Self {
-            active_key_id: document.active_key_id,
-            keys,
-            legacy_serialization: false,
-        })
-    }
-
-    fn active(&self) -> Result<&ServiceAuthKey, ResolverRequestError> {
-        self.keys
-            .iter()
-            .find(|key| key.id == self.active_key_id)
-            .ok_or(ResolverRequestError::InvalidSecret)
-    }
-}
-
-impl core::fmt::Debug for ServiceAuthKeyring {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let retained_ids = self
-            .keys
-            .iter()
-            .map(|key| key.id.as_str())
-            .collect::<Vec<_>>();
-        formatter
-            .debug_struct("ServiceAuthKeyring")
-            .field("active_key_id", &self.active_key_id)
-            .field("retained_ids", &retained_ids)
-            .field("legacy_serialization", &self.legacy_serialization)
-            .finish()
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ServiceAuthKeyringSecret {
-    active_key_id: String,
-    keys: Vec<ServiceAuthKeySecret>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ServiceAuthKeySecret {
-    id: String,
-    key_hex: String,
-}
-
-impl Drop for ServiceAuthKeySecret {
-    fn drop(&mut self) {
-        self.key_hex.zeroize();
-    }
 }
 
 pub fn oauth_callback_tenant(state: &str) -> Result<&str, ResolverRequestError> {
@@ -198,23 +81,25 @@ pub fn signed_resolver_request(
             .map_err(|_| ResolverRequestError::InvalidSecret)?
             .to_string(),
     );
-    let keyring = ServiceAuthKeyring::parse(&caller_secret)?;
-    let key = keyring.active()?;
-    let (signature_version, key_id) = if keyring.legacy_serialization {
-        (LEGACY_SIGNATURE_VERSION, None)
-    } else {
-        (KEYED_SIGNATURE_VERSION, Some(key.id.as_str()))
-    };
+    let keyring = ServiceAuthKeyring::parse(&caller_secret)
+        .map_err(|_| ResolverRequestError::InvalidSecret)?;
+    let signing_key = keyring
+        .active_signing_key()
+        .map_err(|_| ResolverRequestError::InvalidSecret)?;
+    let signature_version = signing_key.version();
+    let key_id = signing_key.key_id();
     let canonical = canonical_signature_input(
         signature_version,
         key_id,
+        "POST",
         &path,
         &body_digest,
         tenant_id,
         timestamp_ms,
         &nonce,
-    )?;
-    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(key.bytes.as_slice())
+    )
+    .map_err(|_| ResolverRequestError::InvalidSecret)?;
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(signing_key.bytes())
         .map_err(|_| ResolverRequestError::InvalidSecret)?;
     mac.update(canonical.as_bytes());
     let signature = hex_encode(mac.finalize().into_bytes().as_slice());
@@ -246,59 +131,6 @@ pub fn signed_resolver_request(
         .with_headers(headers)
         .with_body(Some(js_body));
     Ok(init)
-}
-
-fn canonical_signature_input(
-    version: &str,
-    key_id: Option<&str>,
-    path: &str,
-    body_digest: &str,
-    tenant_id: &str,
-    timestamp_ms: u64,
-    nonce: &str,
-) -> Result<String, ResolverRequestError> {
-    match (version, key_id) {
-        (LEGACY_SIGNATURE_VERSION, None) => Ok(format!(
-            "{LEGACY_SIGNATURE_VERSION}\nPOST\n{path}\n{body_digest}\n{tenant_id}\n{timestamp_ms}\n{nonce}"
-        )),
-        (KEYED_SIGNATURE_VERSION, Some(key_id)) if valid_key_id(key_id) => Ok(format!(
-            "{KEYED_SIGNATURE_VERSION}\n{key_id}\nPOST\n{path}\n{body_digest}\n{tenant_id}\n{timestamp_ms}\n{nonce}"
-        )),
-        _ => Err(ResolverRequestError::InvalidSecret),
-    }
-}
-
-fn valid_key_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_KEY_ID_BYTES
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
-}
-
-fn valid_legacy_key(value: &[u8]) -> bool {
-    (MIN_KEY_BYTES..=MAX_KEY_BYTES).contains(&value.len())
-        && !value.iter().any(|byte| matches!(byte, b'\r' | b'\n' | 0))
-}
-
-fn hex_decode(value: &str) -> Option<Vec<u8>> {
-    if !value.len().is_multiple_of(2) {
-        return None;
-    }
-    value
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| Some((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?))
-        .collect()
-}
-
-const fn hex_nibble(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        b'A'..=b'F' => Some(value - b'A' + 10),
-        _ => None,
-    }
 }
 
 fn zeroize_map(map: &mut Map<String, Value>) {
@@ -345,18 +177,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        KEYED_SIGNATURE_VERSION, LEGACY_KEY_ID, LEGACY_SIGNATURE_VERSION, ResolverRequestError,
-        ServiceAuthKeyring, canonical_signature_input, oauth_callback_tenant,
-    };
-
-    fn migrated_keyring() -> String {
-        format!(
-            "{{\"activeKeyId\":\"key-2026-08\",\"keys\":[{{\"id\":\"key-2026-08\",\"keyHex\":\"{}\"}},{{\"id\":\"{LEGACY_KEY_ID}\",\"keyHex\":\"{}\"}}]}}",
-            "11".repeat(32),
-            "22".repeat(32),
-        )
-    }
+    use super::oauth_callback_tenant;
 
     #[test]
     fn callback_state_carries_a_bounded_tenant_partition() {
@@ -366,69 +187,5 @@ mod tests {
         );
         assert!(oauth_callback_tenant("state_0123456789abcdef").is_err());
         assert!(oauth_callback_tenant("tenant_01.state_bad space").is_err());
-    }
-
-    #[test]
-    fn raw_secret_preserves_v1_signing_mode() -> Result<(), ResolverRequestError> {
-        let keyring =
-            ServiceAuthKeyring::parse(&"legacy-caller-auth-key-material-0123456789".repeat(2))?;
-        assert!(keyring.legacy_serialization);
-        assert_eq!(keyring.active()?.id, LEGACY_KEY_ID);
-        assert!(
-            canonical_signature_input(
-                LEGACY_SIGNATURE_VERSION,
-                None,
-                "/v1/mailbox-credentials/resolve",
-                &"a".repeat(64),
-                "tenant_01",
-                100,
-                "00112233445566778899aabbccddeeff",
-            )
-            .is_ok()
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn keyed_secret_uses_exact_active_id() -> Result<(), ResolverRequestError> {
-        let keyring = ServiceAuthKeyring::parse(&migrated_keyring())?;
-        assert!(!keyring.legacy_serialization);
-        assert_eq!(keyring.active()?.id, "key-2026-08");
-        assert!(
-            canonical_signature_input(
-                KEYED_SIGNATURE_VERSION,
-                Some("key-2026-08"),
-                "/v1/mailbox-credentials/resolve",
-                &"a".repeat(64),
-                "tenant_01",
-                100,
-                "00112233445566778899aabbccddeeff",
-            )
-            .is_ok()
-        );
-        assert!(
-            canonical_signature_input(
-                KEYED_SIGNATURE_VERSION,
-                None,
-                "/v1/mailbox-credentials/resolve",
-                &"a".repeat(64),
-                "tenant_01",
-                100,
-                "00112233445566778899aabbccddeeff",
-            )
-            .is_err()
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn duplicate_or_missing_active_keys_fail_closed() {
-        let duplicate = format!(
-            "{{\"activeKeyId\":\"same\",\"keys\":[{{\"id\":\"same\",\"keyHex\":\"{}\"}},{{\"id\":\"same\",\"keyHex\":\"{}\"}}]}}",
-            "11".repeat(32),
-            "22".repeat(32),
-        );
-        assert!(ServiceAuthKeyring::parse(&duplicate).is_err());
-        assert!(ServiceAuthKeyring::parse("{\"activeKeyId\":\"missing\",\"keys\":[]}").is_err());
     }
 }

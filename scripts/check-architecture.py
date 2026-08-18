@@ -14,7 +14,7 @@ from accepted_phase_provenance import load_ledger, provenance_self_test, validat
 PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
     "profile-platform-primitives": set(),
     "contracts": {"profile-platform-primitives"},
-    "control-plane-contract": {"serde", "serde_json"},
+    "control-plane-contract": {"serde", "serde_json", "zeroize"},
     "identity-access-domain": {"profile-platform-primitives", "contracts"},
     "client-domain": {"profile-platform-primitives", "contracts", "zeroize"},
     "device-domain": {"profile-platform-primitives"},

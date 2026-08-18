@@ -1,11 +1,11 @@
 use crate::model::MAX_CLOCK_SKEW_MS;
+use control_plane_contract::resolver_service_auth::canonical_signature_input;
+pub use control_plane_contract::resolver_service_auth::{
+    KEYED_SIGNATURE_VERSION, LEGACY_SIGNATURE_VERSION,
+};
 use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
 use sha2::{Digest, Sha256};
 
-pub const LEGACY_SIGNATURE_VERSION: &str = "hmac-sha256-v1";
-pub const KEYED_SIGNATURE_VERSION: &str = "hmac-sha256-v2";
-
-const MAX_KEY_ID_BYTES: usize = 64;
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,7 +43,17 @@ pub fn sign_hex_versioned(
 ) -> Result<String, SignatureError> {
     validate_metadata(input)?;
     let digest = body_digest_hex(input.body);
-    let canonical = canonical(version, key_id, input, &digest)?;
+    let canonical = canonical_signature_input(
+        version,
+        key_id,
+        input.method,
+        input.path,
+        &digest,
+        input.tenant_id,
+        input.timestamp_ms,
+        input.nonce,
+    )
+    .map_err(|_| SignatureError::InvalidMetadata)?;
     let mut mac = <HmacSha256 as HmacKeyInit>::new_from_slice(secret)
         .map_err(|_| SignatureError::InvalidSignature)?;
     mac.update(canonical.as_bytes());
@@ -116,33 +126,6 @@ fn valid_identifier(value: &str, maximum: usize) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
 }
 
-fn valid_key_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_KEY_ID_BYTES
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
-}
-
-fn canonical(
-    version: &str,
-    key_id: Option<&str>,
-    input: &SignatureInput<'_>,
-    body_digest: &str,
-) -> Result<String, SignatureError> {
-    match (version, key_id) {
-        (LEGACY_SIGNATURE_VERSION, None) => Ok(format!(
-            "{LEGACY_SIGNATURE_VERSION}\n{}\n{}\n{body_digest}\n{}\n{}\n{}",
-            input.method, input.path, input.tenant_id, input.timestamp_ms, input.nonce
-        )),
-        (KEYED_SIGNATURE_VERSION, Some(key_id)) if valid_key_id(key_id) => Ok(format!(
-            "{KEYED_SIGNATURE_VERSION}\n{key_id}\n{}\n{}\n{body_digest}\n{}\n{}\n{}",
-            input.method, input.path, input.tenant_id, input.timestamp_ms, input.nonce
-        )),
-        _ => Err(SignatureError::InvalidMetadata),
-    }
-}
-
 fn constant_time_hex_eq(expected: &str, supplied: &str) -> bool {
     if expected.len() != supplied.len() {
         return false;
@@ -165,26 +148,6 @@ pub fn hex_encode(bytes: &[u8]) -> String {
         output.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     output
-}
-
-pub fn hex_decode(value: &str) -> Option<Vec<u8>> {
-    if !value.len().is_multiple_of(2) {
-        return None;
-    }
-    value
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| Some((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?))
-        .collect()
-}
-
-const fn hex_nibble(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        b'A'..=b'F' => Some(value - b'A' + 10),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
