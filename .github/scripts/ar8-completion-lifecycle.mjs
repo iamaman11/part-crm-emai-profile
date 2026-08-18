@@ -5,6 +5,7 @@ import process from 'node:process';
 
 const OVERLAY_PATH = 'architecture/ar8-completion-lifecycle.json';
 const CANONICAL_PATH = 'architecture/credential-authority-ar8b.json';
+const ROUTINE_PROMOTION_PATH = '.github/workflows/mailbox-secret-resolver-promotion.yml';
 const EXPECTED_STAGE_ORDER = [
   'issue_or_import',
   'validate',
@@ -22,6 +23,10 @@ const EXPECTED = new Map([
   ['resolver.google-oauth-application', { slice: 'AR-8E', cutover: 'AR-8E', external: true }],
   ['resolver.microsoft-oauth-application', { slice: 'AR-8E', cutover: 'AR-8E', external: true }],
 ]);
+const R2_PAIR_BINDINGS = [
+  'R2_GENERATION_ACCESS_KEY_ID',
+  'R2_GENERATION_SECRET_ACCESS_KEY',
+];
 const R2_RETIREMENT_PRECONDITIONS = [
   'replacement token is scoped to the intended account and bucket',
   'replacement Access Key ID and Secret Access Key are bound as one pair',
@@ -160,7 +165,7 @@ function validateSpecific(concern, errors) {
   }
 }
 
-function validate(overlay, canonical) {
+function validate(overlay, canonical, routinePromotion) {
   const errors = [];
   if (
     overlay.schema_version !== 1 ||
@@ -185,6 +190,11 @@ function validate(overlay, canonical) {
     errors.push('AR-8 completion lifecycle stage order drifted');
   }
   scanForbiddenValueFields(overlay, 'overlay', errors);
+  for (const binding of R2_PAIR_BINDINGS) {
+    if (routinePromotion.includes(binding)) {
+      errors.push(`${ROUTINE_PROMOTION_PATH}: routine promotion must not transport or rebind ${binding}`);
+    }
+  }
 
   const canonicalById = concernIndex(canonical, errors);
   const concerns = overlay.concerns;
@@ -247,58 +257,66 @@ function validate(overlay, canonical) {
   return errors;
 }
 
-function assertRejected(label, overlay, canonical) {
-  const errors = validate(overlay, canonical);
+function assertRejected(label, overlay, canonical, routinePromotion) {
+  const errors = validate(overlay, canonical, routinePromotion);
   if (errors.length === 0) {
     throw new Error(`negative fixture unexpectedly passed: ${label}`);
   }
 }
 
-function selfTest(overlay, canonical) {
+function selfTest(overlay, canonical, routinePromotion) {
   const production = clone(overlay);
   production.production_mutation = true;
-  assertRejected('production mutation', production, canonical);
+  assertRejected('production mutation', production, canonical, routinePromotion);
 
   const routineRotation = clone(overlay);
   routineRotation.concerns.find((item) => item.id === 'profile-generation.r2-access').routine_release_rotation = true;
-  assertRejected('R2 routine-release rotation', routineRotation, canonical);
+  assertRejected('R2 routine-release rotation', routineRotation, canonical, routinePromotion);
 
   const splitR2Pair = clone(overlay);
   splitR2Pair.concerns.find((item) => item.id === 'profile-generation.r2-access').credential_pair_atomic = false;
-  assertRejected('R2 split credential pair', splitR2Pair, canonical);
+  assertRejected('R2 split credential pair', splitR2Pair, canonical, routinePromotion);
 
   const r2RevokeBeforeVerify = clone(overlay);
   r2RevokeBeforeVerify.concerns.find((item) => item.id === 'profile-generation.r2-access').retire_previous_requires_verified_replacement = false;
-  assertRejected('R2 revoke-before-verify', r2RevokeBeforeVerify, canonical);
+  assertRejected('R2 revoke-before-verify', r2RevokeBeforeVerify, canonical, routinePromotion);
 
   const r2MissingScopeProof = clone(overlay);
   r2MissingScopeProof.concerns.find((item) => item.id === 'profile-generation.r2-access').retirement_preconditions.pop();
-  assertRejected('R2 missing binding metadata verification', r2MissingScopeProof, canonical);
+  assertRejected('R2 missing binding metadata verification', r2MissingScopeProof, canonical, routinePromotion);
+
+  assertRejected(
+    'R2 pair transported by routine promotion',
+    overlay,
+    canonical,
+    `${routinePromotion}\n${R2_PAIR_BINDINGS.join('\n')}`,
+  );
 
   const implicitContact = clone(overlay);
   implicitContact.concerns.find((item) => item.id === 'control-plane.client-contact-protection').active_selection = 'JSON_ARRAY_ORDER';
-  assertRejected('implicit contact active key', implicitContact, canonical);
+  assertRejected('implicit contact active key', implicitContact, canonical, routinePromotion);
 
   const googleOverlap = clone(overlay);
   googleOverlap.concerns.find((item) => item.id === 'resolver.google-oauth-application').provider_overlap_guarantee = 'ALWAYS_DUAL_VALID';
-  assertRejected('invented Google dual-valid overlap', googleOverlap, canonical);
+  assertRejected('invented Google dual-valid overlap', googleOverlap, canonical, routinePromotion);
 
   const revokeBeforeVerify = clone(overlay);
   revokeBeforeVerify.concerns.find((item) => item.id === 'resolver.microsoft-oauth-application').retire_previous_requires_verified_replacement = false;
-  assertRejected('Microsoft revoke-before-verify', revokeBeforeVerify, canonical);
+  assertRejected('Microsoft revoke-before-verify', revokeBeforeVerify, canonical, routinePromotion);
 
   const duplicate = clone(overlay);
   duplicate.concerns.push(clone(duplicate.concerns[0]));
-  assertRejected('duplicate concern authority', duplicate, canonical);
+  assertRejected('duplicate concern authority', duplicate, canonical, routinePromotion);
 
   const plaintext = clone(overlay);
   plaintext.concerns[0].secret_value = 'forbidden-fixture';
-  assertRejected('secret value field', plaintext, canonical);
+  assertRejected('secret value field', plaintext, canonical, routinePromotion);
 }
 
 const overlay = load(OVERLAY_PATH);
 const canonical = load(CANONICAL_PATH);
-const errors = validate(overlay, canonical);
+const routinePromotion = readFileSync(ROUTINE_PROMOTION_PATH, 'utf8');
+const errors = validate(overlay, canonical, routinePromotion);
 if (errors.length > 0) {
   for (const error of errors) {
     console.error(`ERROR: ${error}`);
@@ -306,7 +324,7 @@ if (errors.length > 0) {
   process.exit(1);
 }
 if (process.argv.includes('--self-test')) {
-  selfTest(overlay, canonical);
+  selfTest(overlay, canonical, routinePromotion);
   console.log('AR-8 completion lifecycle authority and negative fixtures passed.');
 } else {
   console.log('AR-8 completion lifecycle authority passed.');
