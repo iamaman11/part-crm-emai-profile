@@ -128,7 +128,6 @@ jobs:
     timeout-minutes: 20
     environment: ${{ inputs.environment }}
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id }}
       SOURCE_SHA: ${{ inputs.source_sha }}
       TARGET_ENVIRONMENT: ${{ inputs.environment }}
@@ -151,7 +150,6 @@ jobs:
           test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
           test "$MUTATION_AUTHORIZED" = "true"
           test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
-          test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
           test "$CLOUDFLARE_ACCOUNT_ID" = "${{ inputs.account_id }}"
 
@@ -189,8 +187,8 @@ jobs:
           npm install --global npm@11.17.0
           test "$(npm --version)" = "11.17.0"
           test "$(npx --yes wrangler@4.94.0 --version)" = "4.94.0"
-          python scripts/check-opsctl-readonly.py
-          cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID python scripts/check-opsctl-readonly.py
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml
 
       - name: Materialize exact metadata inputs and provider config
         run: |
@@ -250,8 +248,11 @@ jobs:
           PY
 
       - name: Verify exact remote database identity before any mutation
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
           npx --yes wrangler@4.94.0 d1 info "$DATABASE_NAME" \
             --config artifacts/d1-migration/wrangler.json \
             --json \
@@ -275,9 +276,12 @@ jobs:
           assert paired(document), 'provider identity does not contain the exact database name and UUID in one object'
           PY
 
-      - name: Read and normalize remote migration ledger
+      - name: Read remote migration ledger through pinned Wrangler
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
           npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
             --remote \
             --config artifacts/d1-migration/wrangler.json \
@@ -285,22 +289,26 @@ jobs:
             --json \
             --experimental-provision=false \
             --experimental-auto-create=false > artifacts/d1-migration/ledger-before.json
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
+
+      - name: Normalize and classify remote ledger with credential-free opsctl
+        run: |
+          set -euo pipefail
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
             --component "$COMPONENT" \
             --ledger-json artifacts/d1-migration/ledger-before.json > artifacts/d1-migration/status-before.json
 
-      - name: Run native plan, compatibility, and rollback-blocker gates
+      - name: Run credential-free native plan, compatibility, and rollback-blocker gates
         id: policy
         run: |
           set -euo pipefail
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan \
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan \
             --component "$COMPONENT" \
             --ledger-json artifacts/d1-migration/ledger-before.json \
             --release-manifest artifacts/d1-migration/target-release.json \
             --current-manifest artifacts/d1-migration/current-release.json \
             --known-good-manifest artifacts/d1-migration/known-good-release.json \
             --preconditions-json artifacts/d1-migration/preconditions.json > artifacts/d1-migration/plan.json
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
             --component "$COMPONENT" \
             --ledger-json artifacts/d1-migration/ledger-before.json \
             --release-manifest artifacts/d1-migration/target-release.json > artifacts/d1-migration/compatibility.json
@@ -321,8 +329,11 @@ jobs:
 
       - name: Capture metadata-only pre-migration Time Travel bookmark
         if: steps.policy.outputs.apply_required == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
           npx --yes wrangler@4.94.0 d1 time-travel info "$DATABASE_NAME" \
             --config artifacts/d1-migration/wrangler.json \
             --json \
@@ -331,17 +342,23 @@ jobs:
 
       - name: Apply planned migrations with pinned Wrangler only
         if: steps.policy.outputs.apply_required == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
           npx --yes wrangler@4.94.0 d1 migrations apply "$DATABASE_NAME" \
             --remote \
             --config artifacts/d1-migration/wrangler.json \
             --experimental-provision=false \
             --experimental-auto-create=false
 
-      - name: Reread remote ledger and require exact target
+      - name: Reread remote ledger through pinned Wrangler
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
           npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
             --remote \
             --config artifacts/d1-migration/wrangler.json \
@@ -349,7 +366,11 @@ jobs:
             --json \
             --experimental-provision=false \
             --experimental-auto-create=false > artifacts/d1-migration/ledger-after.json
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify \
+
+      - name: Require exact target through credential-free opsctl verify
+        run: |
+          set -euo pipefail
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify \
             --component "$COMPONENT" \
             --ledger-json artifacts/d1-migration/ledger-after.json \
             --release-manifest artifacts/d1-migration/target-release.json > artifacts/d1-migration/verify.json
@@ -364,8 +385,11 @@ jobs:
           PY
 
       - name: Verify post-apply database invariants
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
           npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
             --remote \
             --config artifacts/d1-migration/wrangler.json \
