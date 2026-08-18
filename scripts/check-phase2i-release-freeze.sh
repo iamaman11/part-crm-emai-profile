@@ -41,9 +41,9 @@ else
 fi
 if [[ -f architecture/pre2j-d3-resolver-bootstrap-implementation.json ]]; then
   if [[ -f architecture/ar8-d-secret-transport-successor.json ]]; then
-    python scripts/check-ar8-d-secret-transport-successor.py \
+    node .github/scripts/ar8-d-secret-transport-successor.mjs \
       --base-ref "origin/${base_ref}"
-    python scripts/check-ar8-d-secret-transport-successor.py --self-test
+    node .github/scripts/ar8-d-secret-transport-successor.mjs --self-test
 
     predecessor_ref="$(python - <<'PY'
 import json
