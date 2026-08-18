@@ -184,7 +184,8 @@ jobs:
               lines = workflow[run_at:end].splitlines()
               script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
               head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-              script = script.replace('${{ github.event.pull_request.head.sha }}', head)
+              token = '$' + '{{ github.event.pull_request.head.sha }}'
+              script = script.replace(token, head)
               subprocess.run(['bash', '-c', script], check=True)
 
           execute_named_run(
