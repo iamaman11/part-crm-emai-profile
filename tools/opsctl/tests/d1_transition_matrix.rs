@@ -325,7 +325,8 @@ fn contract_without_retirement_evidence_is_blocked() -> Result<(), Box<dyn Error
 }
 
 #[test]
-fn contract_with_complete_evidence_and_compatible_known_good_is_safe() -> Result<(), Box<dyn Error>> {
+fn contract_with_complete_evidence_and_compatible_known_good_is_safe() -> Result<(), Box<dyn Error>>
+{
     let value = plan(
         "tests/d1-evolution/synthetic-release-contract.json",
         Some("tests/d1-evolution/synthetic-release-base.json"),
@@ -356,7 +357,8 @@ fn contract_that_strands_known_good_is_blocked() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn repair_fail_forward_transition_is_explicitly_blocked() -> Result<(), Box<dyn Error>> {
+fn repair_fail_forward_transition_is_explicitly_blocked() -> Result<(), Box<dyn Error>>
+{
     let authority = write_fixture(
         "repair-authority",
         &single_transition_authority(
