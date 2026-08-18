@@ -54,35 +54,29 @@ jobs:
       - name: Prove Actions registry drift fails closed
         run: node .github/scripts/github-actions-registry.mjs self-test
 
-      - name: Validate AR-8C operational credential lifecycle
+      - name: Validate accepted AR-8C operational credential lifecycle provenance
         run: node .github/scripts/credential-lifecycle.mjs contract
 
-      - name: Prove AR-8C credential lifecycle drift fails closed
+      - name: Prove accepted AR-8C credential lifecycle provenance drift fails closed
         run: node .github/scripts/credential-lifecycle.mjs self-test
 
-      - name: Validate AR-8C staging provider execution authority
+      - name: Validate accepted AR-8C staging provider execution provenance
         run: node .github/scripts/ar8-staging-provider-bootstrap.mjs contract
 
-      - name: Prove AR-8C provider execution authority drift fails closed
+      - name: Prove accepted AR-8C provider execution provenance drift fails closed
         run: node .github/scripts/ar8-staging-provider-bootstrap.mjs self-test
 
-      - name: Validate AR-8 completion credential lifecycle
-        run: node .github/scripts/ar8-completion-lifecycle.mjs
+      - name: Validate current subject-domain architecture authorities
+        run: node .github/scripts/architecture-authority-check.mjs
 
-      - name: Prove AR-8 completion credential lifecycle drift fails closed
-        run: node .github/scripts/ar8-completion-lifecycle.mjs --self-test
+      - name: Prove current architecture authority drift fails closed
+        run: node .github/scripts/architecture-authority-check.mjs --self-test
 
-      - name: Validate AR-8 Camoufox profile security authority
-        run: node .github/scripts/ar8-profile-security.mjs
+      - name: Validate current Profile/Camoufox security authority
+        run: node .github/scripts/profile-security-authority-check.mjs
 
-      - name: Prove AR-8 Camoufox profile security drift fails closed
-        run: node .github/scripts/ar8-profile-security.mjs --self-test
-
-      - name: Validate AR-8F operator rehearsal authority
-        run: node .github/scripts/ar8-f-operator-rehearsal.mjs
-
-      - name: Prove AR-8F operator rehearsal drift fails closed
-        run: node .github/scripts/ar8-f-operator-rehearsal.mjs --self-test
+      - name: Prove Profile/Camoufox security and proxy-handle leakage fail closed
+        run: node .github/scripts/profile-security-authority-check.mjs --self-test
 
   hosted-state:
     name: GitHub Governance Hosted State
