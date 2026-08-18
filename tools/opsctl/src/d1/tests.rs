@@ -1,8 +1,8 @@
-use super::model::{
+use super::{
     ComponentAuthority, D1Action, D1Error, LedgerState, Preconditions, ReleaseSchemaContract,
 };
-use super::plan::evaluate;
-use super::status::classify_prefix;
+use crate::d1::plan::evaluate;
+use crate::d1::status::classify_prefix;
 
 fn authority() -> ComponentAuthority {
     ComponentAuthority {
