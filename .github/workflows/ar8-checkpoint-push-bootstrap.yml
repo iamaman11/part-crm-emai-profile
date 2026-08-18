@@ -1,0 +1,124 @@
+name: AR8 Checkpoint Push Bootstrap Temporary
+
+on:
+  push:
+    branches:
+      - agent/ar8-accepted-checkpoint-sync
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Execute staged materializer source step
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          workflow = Path('.github/workflows/ar8-accepted-checkpoint-materializer.yml').read_text(encoding='utf-8')
+          marker = '      - name: Write accepted AR-8 checkpoint sources\n'
+          start = workflow.index(marker)
+          run_at = workflow.index('        run: |\n', start) + len('        run: |\n')
+          end = workflow.index('\n      - name: Validate accepted checkpoint locally', run_at)
+          lines = workflow[run_at:end].splitlines()
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          script = script.replace('${{ github.event.pull_request.head.sha }}', head)
+          subprocess.run(['bash', '-c', script], check=True)
+          PY
+
+      - name: Advance legacy documentation checker and capability projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/check-documentation-authority-legacy.py')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+              ('if transition.get("schema_version") != 13 or transition.get("status") != "ACTIVE_DURING_AR8_AFTER_ACCEPTED_AR8C":\n        errors.append("architecture transition must encode active AR-8 after accepted AR-8C")', 'if transition.get("schema_version") != 13 or transition.get("status") != "ACTIVE_AFTER_AR8_ACCEPTANCE":\n        errors.append("architecture transition must encode accepted AR-8 and current AR-9")'),
+              ('errors.append("architecture transition must encode active AR-8 with AR-9 only after full acceptance")', 'errors.append("architecture transition must encode current AR-9 after accepted AR-8")'),
+              ('errors.append("architecture inventory active AR-8 program state is stale")', 'errors.append("architecture inventory accepted AR-8 / current AR-9 program state is stale")'),
+              ('common = ("Architecture Re-baseline v3", "issue #266", "AR-8C", "AR-8D", "#352", "CURRENT_DELIVERY_MAP", "production_ready=false")', 'common = ("Architecture Re-baseline v3", "issue #266", "AR-8", "AR-9", "CURRENT_DELIVERY_MAP", "production_ready=false")'),
+              ('require(index, ("CURRENT_AUTHORITY", "ARCHITECTURE_REBASELINE_V3_PLAN.md", "issue #266", "AR-8C", "AR-8D", "#352", "CURRENT_DELIVERY_MAP"), "docs/INDEX.md", errors)', 'require(index, ("CURRENT_AUTHORITY", "ARCHITECTURE_REBASELINE_V3_PLAN.md", "issue #266", "AR-8", "AR-9", "CURRENT_DELIVERY_MAP"), "docs/INDEX.md", errors)'),
+              ('require(development, ("Document status:** GENERATED_PROJECTION", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-7   Environments + GitHub Governance + Operational Boundaries", "AR-8C", "AR-8D", "#352", "CURRENT_DELIVERY_MAP", "production_ready=false", "Immutable Accepted Phase Provenance"), "docs/DEVELOPMENT_PLAN.md", errors)', 'require(development, ("Document status:** GENERATED_PROJECTION", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-7   Environments + GitHub Governance + Operational Boundaries", "AR-8", "AR-9", "CURRENT_DELIVERY_MAP", "production_ready=false", "Immutable Accepted Phase Provenance"), "docs/DEVELOPMENT_PLAN.md", errors)'),
+              ('require(plan, ("Document status:** CURRENT_AUTHORITY", "Tracking issue:** #266", "Current accepted architecture checkpoint:** AR-8C", "Current implementation:** AR-8D", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-8D", "CURRENT_DELIVERY_MAP", "source_present != production_enabled", "No production provisioning, promotion or other real production mutation is an AR-0…AR-17 activity"), "current v3 plan", errors)', 'require(plan, ("Document status:** CURRENT_AUTHORITY", "Tracking issue:** #266", "Current accepted architecture checkpoint:** AR-8", "Current implementation:** AR-9", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-8   Secrets / Keys / OAuth Refresh Concurrency                 DONE / ACCEPTED", "AR-9", "CURRENT_DELIVERY_MAP", "source_present != production_enabled", "No production provisioning, promotion or other real production mutation is an AR-0…AR-17 activity"), "current v3 plan", errors)'),
+              ('require(capability_matrix, ("CURRENT_DELIVERY_MAP", "Source implemented", "Accepted on main", "Staging live", "Production authorized", "Production enabled", "#352", "AR-8D", "production_ready=false"), "docs/DEVELOPER_CAPABILITY_MATRIX.md", errors)', 'require(capability_matrix, ("CURRENT_DELIVERY_MAP", "Source implemented", "Accepted on main", "Staging live", "Production authorized", "Production enabled", "AR-8", "AR-9", "full_ar8_accepted=true", "production_ready=false"), "docs/DEVELOPER_CAPABILITY_MATRIX.md", errors)'),
+              ('("active slice rollback", Path("docs/status.json"), \'"current_slice": "AR-8"\', \'"current_slice": "AR-7"\', "current_slice"),', '("active slice rollback", Path("docs/status.json"), \'"current_slice": "AR-9"\', \'"current_slice": "AR-8"\', "current_slice"),'),
+              ('("AR-8 subslice rollback", Path("docs/status.json"), \'"current_subslice": "AR-8D"\', \'"current_subslice": "AR-8C"\', "current_subslice"),', '("AR-8 acceptance rollback", Path("docs/status.json"), \'"full_ar8_accepted": true\', \'"full_ar8_accepted": false\', "full_ar8_accepted"),'),
+              ('("premature AR-8 acceptance", Path("docs/status.json"), \'"full_ar8_accepted": false\', \'"full_ar8_accepted": true\', "full_ar8_accepted"),', '("AR-8 accepted-slice removal", Path("docs/status.json"), \'"accepted_top_level_slice": "AR-8"\', \'"accepted_top_level_slice": "AR-7"\', "accepted_top_level_slice"),'),
+              ('("premature AR-9 unblock", Path("docs/status.json"), \'"ar9_blocked": true\', \'"ar9_blocked": false\', "ar9_blocked"),', '("AR-9 reblock", Path("docs/status.json"), \'"ar9_blocked": false\', \'"ar9_blocked": true\', "ar9_blocked"),'),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'legacy checker expected marker missing: {old[:120]!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8', newline='\n')
+
+          matrix = Path('docs/DEVELOPER_CAPABILITY_MATRIX.md')
+          data = matrix.read_text(encoding='utf-8')
+          old = '''| Source implemented | **PARTIAL** | Accepted source exists through AR-8C; AR-8D is the current implementation subslice and is not yet accepted. |
+          | Accepted on main | **PARTIAL** | AR-8A/AR-8B/AR-8C are accepted; `full_ar8_accepted=false`. |
+          | Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; this is not a full-product or production claim. |
+          | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
+          | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
+          | Current blocker | **NONE** | #352 cleanup / DX gate is accepted; no cleanup blocker remains before AR-8D implementation. |
+          | Next gate | **AR-8D acceptance** | AR-8D must pass its own bounded acceptance before AR-8E becomes current. |'''
+          new = '''| Source implemented | **ACCEPTED** | AR-8 source is accepted on `main`; AR-9 is the current architecture slice. |
+          | Accepted on main | **COMPLETE THROUGH AR-8** | AR-8A…AR-8F and final closeout are accepted; `full_ar8_accepted=true`. |
+          | Staging live | **PARTIAL** | AR-8C staging provider/credential foundation remains the bounded live staging evidence; later AR-8 acceptance does not imply broader staging or production deployment. |
+          | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
+          | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
+          | Current blocker | **NONE** | AR-8 is accepted; no AR-8 blocker remains. |
+          | Next gate | **AR-9 acceptance** | AR-9 — D1 Evolution / Schema Compatibility is the current slice. |'''
+          if old not in data:
+              raise SystemExit('developer capability CURRENT_DELIVERY_MAP marker missing')
+          data = data.replace(old, new, 1)
+          data = data.replace('Repository/source evidence and the AR-8C staging foundation exist independently from production state.', 'Repository/source evidence includes accepted AR-8 plus the bounded AR-8C staging foundation; both remain independent from production state.')
+          matrix.write_text(data, encoding='utf-8', newline='\n')
+          PY
+
+          python scripts/python-estate-ar6.py --write
+          python scripts/generate-ar8-completion-status.py --write
+          python scripts/generate-architecture-inventory.py --write
+
+      - name: Validate and retire all temporary materializers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/generate-ar8-completion-status.py --check
+          python scripts/generate-ar8-completion-status.py --self-test
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/generate-architecture-inventory.py --self-test
+          python scripts/check-documentation-authority.py
+          python scripts/check-documentation-authority.py --self-test
+          python scripts/python-estate-ar6.py --check
+          python scripts/python-estate-ar6.py --self-test
+          python scripts/check-opsctl-readonly.py
+          python scripts/check-opsctl-readonly.py --self-test
+          node .github/scripts/architecture-authority-check.mjs
+          node .github/scripts/architecture-authority-check.mjs --self-test
+          node .github/scripts/profile-security-authority-check.mjs
+          node .github/scripts/profile-security-authority-check.mjs --self-test
+          git diff --check
+          rm .github/workflows/ar8-accepted-checkpoint-materializer.yml
+          rm .github/workflows/ar8-checkpoint-push-bootstrap.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Project accepted AR-8 checkpoint and AR-9 handoff"
+          git push origin HEAD:agent/ar8-accepted-checkpoint-sync
