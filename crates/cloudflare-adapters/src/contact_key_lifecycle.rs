@@ -187,7 +187,9 @@ impl<N: ContactNonceSource> D1ContactKeyLifecycle<N> {
         let mut reprotected_rows = 0_u32;
         for row in rows {
             self.reconcile_row(row).await?;
-            reprotected_rows = reprotected_rows.saturating_add(1);
+            reprotected_rows = reprotected_rows
+                .checked_add(1)
+                .ok_or(ContactKeyLifecycleError::InvalidStoredMetadata)?;
         }
 
         let remaining = query!(
