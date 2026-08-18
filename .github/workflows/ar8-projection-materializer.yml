@@ -1,0 +1,31 @@
+name: AR8 Projection Materializer Temporary
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Materialize candidate projections in isolated checkout
+        run: |
+          python scripts/generate-architecture-inventory.py --write
+          python scripts/project-ar8-completion-status.py --write
+          python scripts/project-ar8-completion-status.py --check
+      - name: Upload generated candidate projections
+        uses: actions/upload-artifact@v4
+        with:
+          name: ar8-candidate-projections
+          path: |
+            architecture/inventory.json
+            docs/status.json
+          if-no-files-found: error
+          retention-days: 1
