@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-mod d1;
+pub mod d1;
 
 use std::env;
 use std::error::Error;
@@ -135,10 +135,7 @@ where
     })
 }
 
-fn parse_d1_invocation<I>(
-    root: Option<PathBuf>,
-    mut iterator: I,
-) -> Result<Invocation, OpsctlError>
+fn parse_d1_invocation<I>(root: Option<PathBuf>, mut iterator: I) -> Result<Invocation, OpsctlError>
 where
     I: Iterator<Item = OsString>,
 {
@@ -170,35 +167,43 @@ where
         let flag = argument
             .to_str()
             .ok_or_else(|| OpsctlError::new("d1", "D1 flags must be valid UTF-8"))?;
-        let value = match flag {
-            "--component" | "--ledger-json" | "--release-manifest" | "--authority" => iterator
-                .next()
-                .ok_or_else(|| OpsctlError::new("d1", format!("{flag} requires a value")))?,
+        match flag {
+            "--component" => {
+                let value = iterator
+                    .next()
+                    .ok_or_else(|| OpsctlError::new("d1", "--component requires a value"))?
+                    .into_string()
+                    .map_err(|_| OpsctlError::new("d1", "component must be valid UTF-8"))?;
+                set_once(&mut component, value, "--component")?;
+            }
+            "--ledger-json" => {
+                let value = iterator
+                    .next()
+                    .ok_or_else(|| OpsctlError::new("d1", "--ledger-json requires a value"))?;
+                set_once(&mut ledger_json, PathBuf::from(value), "--ledger-json")?;
+            }
+            "--release-manifest" => {
+                let value = iterator.next().ok_or_else(|| {
+                    OpsctlError::new("d1", "--release-manifest requires a value")
+                })?;
+                set_once(
+                    &mut release_manifest,
+                    PathBuf::from(value),
+                    "--release-manifest",
+                )?;
+            }
+            "--authority" => {
+                let value = iterator
+                    .next()
+                    .ok_or_else(|| OpsctlError::new("d1", "--authority requires a value"))?;
+                set_once(&mut authority, PathBuf::from(value), "--authority")?;
+            }
             other => {
                 return Err(OpsctlError::new(
                     "d1",
                     format!("unsupported D1 argument: {other}"),
                 ));
             }
-        };
-        match flag {
-            "--component" => {
-                set_once(
-                    &mut component,
-                    value
-                        .into_string()
-                        .map_err(|_| OpsctlError::new("d1", "component must be valid UTF-8"))?,
-                    "--component",
-                )?;
-            }
-            "--ledger-json" => set_once(&mut ledger_json, PathBuf::from(value), "--ledger-json")?,
-            "--release-manifest" => set_once(
-                &mut release_manifest,
-                PathBuf::from(value),
-                "--release-manifest",
-            )?,
-            "--authority" => set_once(&mut authority, PathBuf::from(value), "--authority")?,
-            _ => unreachable!("D1 flag was matched above"),
         }
     }
 
@@ -209,7 +214,8 @@ where
             "--component must be catalog or resolver",
         ));
     }
-    let ledger_json = ledger_json.ok_or_else(|| OpsctlError::new("d1", "--ledger-json is required"))?;
+    let ledger_json =
+        ledger_json.ok_or_else(|| OpsctlError::new("d1", "--ledger-json is required"))?;
     if action.requires_release_manifest() && release_manifest.is_none() {
         return Err(OpsctlError::new(
             "d1",
