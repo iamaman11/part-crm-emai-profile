@@ -260,7 +260,12 @@ mod tests {
             Err(SignatureError::InvalidMetadata)
         );
         assert_eq!(
-            sign_hex_versioned(b"key", LEGACY_SIGNATURE_VERSION, Some("legacy-v1"), &request),
+            sign_hex_versioned(
+                b"key",
+                LEGACY_SIGNATURE_VERSION,
+                Some("legacy-v1"),
+                &request
+            ),
             Err(SignatureError::InvalidMetadata)
         );
         assert_eq!(
