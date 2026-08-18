@@ -5,6 +5,7 @@ pub mod access_webcrypto;
 pub mod cloud_mail_query;
 pub mod cloud_mailbox_provider;
 mod cloud_mailbox_secrets;
+pub mod contact_key_lifecycle;
 pub mod contact_keyring;
 pub mod contact_lookup;
 pub mod contact_protection;
