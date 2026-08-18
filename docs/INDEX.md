@@ -12,9 +12,9 @@ file cannot silently become a second current roadmap.
 - Accepted repository-local product phase: **Phase 2I**, proven by
   [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json).
 - Architecture Re-baseline v3 is the active forward program.
-- AR-0 through AR-7 are accepted top-level checkpoints; AR-8A/AR-8B/AR-8C are accepted subslices inside active AR-8.
-- AR-8C — operational credential lifecycle and staging provider foundation is the current accepted checkpoint.
-- Post-AR-8C cleanup / DX issue #352 is accepted; AR-8D is the current implementation subslice and is not yet accepted; AR-4D remains NOT_REQUIRED unless later accepted evidence reopens it.
+- AR-0 through AR-8 are accepted top-level checkpoints; AR-8A…AR-8F are accepted subslices.
+- AR-8 is accepted; AR-9 is the current implementation slice.
+- Post-AR-8C cleanup / DX issue #352 remains accepted history; AR-4D remains NOT_REQUIRED unless later accepted evidence reopens it.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
@@ -27,13 +27,13 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
-| Source implemented | **PARTIAL** | Accepted source exists through AR-8C; AR-8D is the current implementation subslice and is not yet accepted. |
-| Accepted on main | **PARTIAL** | AR-8A/AR-8B/AR-8C are accepted; `full_ar8_accepted=false`. |
-| Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; this is not a full-product or production claim. |
+| Source implemented | **ACCEPTED** | AR-8 source is accepted on `main`; AR-9 is the current architecture slice. |
+| Accepted on main | **COMPLETE THROUGH AR-8** | AR-8A…AR-8F and final closeout are accepted; `full_ar8_accepted=true`. |
+| Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; later AR-8 acceptance does not imply a broader staging or production deployment. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
-| Current blocker | **NONE** | #352 cleanup / DX gate is accepted; no cleanup blocker remains before AR-8D implementation. |
-| Next gate | **AR-8D acceptance** | AR-8D must pass its own bounded acceptance before AR-8E becomes current. |
+| Current blocker | **NONE** | AR-8 is accepted; no AR-8 blocker remains. |
+| Next gate | **AR-9 acceptance** | AR-9 — D1 Evolution / Schema Compatibility is the current slice. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
@@ -44,7 +44,7 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 2. [`../architecture/architecture-rebaseline-v3-transition.json`](../architecture/architecture-rebaseline-v3-transition.json)
    is the machine transition projection of that authority.
 3. [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json) is the
-   accepted AR-2 topology/D3 decision input; AR-8A/AR-8B/AR-8C are accepted inside active AR-8 and #352 accepted; AR-8D current; AR-7 accepts the GitHub governance/Environment boundary, AR-6 accepted the Python/opsctl operational-tooling dimension, AR-5 accepted generation-verification runtime/deployment cleanup, and the application/runtime ownership projection remains accepted through AR-4C.
+   accepted AR-2 topology/D3 decision input; AR-8 is accepted and AR-9 is current; #352 remains accepted history; AR-7 accepts the GitHub governance/Environment boundary, AR-6 accepted the Python/opsctl operational-tooling dimension, AR-5 accepted generation-verification runtime/deployment cleanup, and the application/runtime ownership projection remains accepted through AR-4C.
 4. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) and [`status.json`](status.json) are current projections;
    they do not define a competing execution sequence.
 5. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md),
@@ -76,6 +76,7 @@ The machine inventory uses these roles:
 ## Current program references
 
 - [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md)
+- [`ARCHITECTURE_REBASELINE_V3_AR8.md`](ARCHITECTURE_REBASELINE_V3_AR8.md)
 - [`ARCHITECTURE_REBASELINE_V3_AR7.md`](ARCHITECTURE_REBASELINE_V3_AR7.md)
 - [`../architecture/github-governance-ar7.json`](../architecture/github-governance-ar7.json)
 - [`ARCHITECTURE_REBASELINE_V3_AR6.md`](ARCHITECTURE_REBASELINE_V3_AR6.md)

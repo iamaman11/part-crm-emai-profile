@@ -2,25 +2,30 @@ name: GitHub Governance Gate
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  actions: read
+  contents: read
 
 concurrency:
   group: github-governance-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  ar8-checkpoint-materializer:
-    name: AR8 Accepted Checkpoint Materializer Temporary
-    if: github.event.pull_request.head.ref == 'agent/ar8-accepted-checkpoint-sync' && github.event.pull_request.base.ref == 'main'
+  contract:
+    name: GitHub Governance Contract
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact candidate source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 1
           persist-credentials: false
 
       - name: Verify exact source checkout
@@ -28,109 +33,122 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Execute accepted checkpoint transformations
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import subprocess
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
 
-          def execute_named_run(workflow_path: str, step_name: str, next_step: str) -> None:
-              workflow = Path(workflow_path).read_text(encoding='utf-8')
-              marker = f'      - name: {step_name}\n'
-              start = workflow.index(marker)
-              run_at = workflow.index('        run: |\n', start) + len('        run: |\n')
-              end = workflow.index(f'\n      - name: {next_step}', run_at)
-              lines = workflow[run_at:end].splitlines()
-              script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
-              head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-              token = '$' + '{{ github.event.pull_request.head.sha }}'
-              script = script.replace(token, head)
-              if workflow_path.endswith('ar8-accepted-checkpoint-materializer.yml'):
-                  fragile = "if old not in text:\n    raise SystemExit('inventory source_completion block missing')\ntext = text.replace(old, new, 1)"
-                  robust = "start = text.index('        \\\"source_completion\\\": {')\nend = text.index('        },\\n    }', start) + len('        },')\ntext = text[:start] + new + text[end:]"
-                  if fragile not in script:
-                      raise SystemExit('nested inventory source_completion patch anchor missing')
-                  script = script.replace(fragile, robust, 1)
-              subprocess.run(['bash', '-c', script], check=True)
+      - name: Enforce Node version
+        run: test "$(node --version)" = "v24.19.0"
 
-          execute_named_run(
-              '.github/workflows/ar8-accepted-checkpoint-materializer.yml',
-              'Write accepted AR-8 checkpoint sources',
-              'Validate accepted checkpoint locally',
-          )
-          execute_named_run(
-              '.github/workflows/ar8-checkpoint-push-bootstrap.yml',
-              'Advance legacy documentation checker and capability projection',
-              'Validate and retire all temporary materializers',
-          )
+      - name: Validate AR-7 governance contract
+        run: node .github/scripts/github-governance.mjs contract
 
-          legacy_path = Path('scripts/check-documentation-authority-legacy.py')
-          legacy_text = legacy_path.read_text(encoding='utf-8')
-          start_marker = '    expected_python_summary = {\n'
-          end_marker = '    if (\n        program.get("python_estate")'
-          start = legacy_text.index(start_marker)
-          end = legacy_text.index(end_marker, start)
-          current = (
-              '    python_rows = python_estate.get("files") if isinstance(python_estate.get("files"), list) else []\n'
-              '    expected_python_summary = {\n'
-              '        "tracked_python_files": len(python_rows),\n'
-              '        "DELETE_AFTER_SEQUENCE": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "DELETE_AFTER_SEQUENCE"),\n'
-              '        "KEEP_PYTHON": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "KEEP_PYTHON"),\n'
-              '        "MIGRATE_TO_RUST": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "MIGRATE_TO_RUST"),\n'
-              '        "WRAP_WITH_RUST": sum(1 for row in python_rows if isinstance(row, dict) and row.get("classification") == "WRAP_WITH_RUST"),\n'
-              '    }\n'
-          )
-          legacy_text = legacy_text[:start] + current + legacy_text[end:]
-          legacy_path.write_text(legacy_text, encoding='utf-8', newline='\n')
+      - name: Prove AR-7 governance drift fails closed
+        run: node .github/scripts/github-governance.mjs self-test
 
-          ar8_doc = Path('docs/ARCHITECTURE_REBASELINE_V3_AR8.md')
-          ar8_doc.write_text(
-              '\n'.join(line.rstrip() for line in ar8_doc.read_text(encoding='utf-8').splitlines()) + '\n',
-              encoding='utf-8',
-              newline='\n',
-          )
-          PY
+      - name: Validate canonical Actions registry projection
+        run: node .github/scripts/github-actions-registry.mjs contract
 
-      - name: Restore permanent governance before validation
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=1 origin main
-          git checkout FETCH_HEAD -- .github/workflows/github-governance-gate.yml
+      - name: Prove Actions registry drift fails closed
+        run: node .github/scripts/github-actions-registry.mjs self-test
 
-      - name: Validate final accepted checkpoint tree
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/generate-ar8-completion-status.py --check
-          python scripts/generate-ar8-completion-status.py --self-test
-          python scripts/generate-architecture-inventory.py --check
-          python scripts/generate-architecture-inventory.py --self-test
-          python scripts/check-documentation-authority.py
-          python scripts/check-documentation-authority.py --self-test
-          python scripts/python-estate-ar6.py --check
-          python scripts/python-estate-ar6.py --self-test
-          python scripts/check-opsctl-readonly.py
-          python scripts/check-opsctl-readonly.py --self-test
-          node .github/scripts/architecture-authority-check.mjs
-          node .github/scripts/architecture-authority-check.mjs --self-test
-          node .github/scripts/profile-security-authority-check.mjs
-          node .github/scripts/profile-security-authority-check.mjs --self-test
-          git diff --check
+      - name: Validate accepted AR-8C operational credential lifecycle provenance
+        run: node .github/scripts/credential-lifecycle.mjs contract
 
-      - name: Commit accepted checkpoint and retire temporary materializers
-        shell: bash
+      - name: Prove accepted AR-8C credential lifecycle provenance drift fails closed
+        run: node .github/scripts/credential-lifecycle.mjs self-test
+
+      - name: Validate accepted AR-8C staging provider execution provenance
+        run: node .github/scripts/ar8-staging-provider-bootstrap.mjs contract
+
+      - name: Prove accepted AR-8C provider execution provenance drift fails closed
+        run: node .github/scripts/ar8-staging-provider-bootstrap.mjs self-test
+
+      - name: Validate current subject-domain architecture authorities
+        run: node .github/scripts/architecture-authority-check.mjs
+
+      - name: Prove current architecture authority drift fails closed
+        run: node .github/scripts/architecture-authority-check.mjs --self-test
+
+      - name: Validate current Profile/Camoufox security authority
+        run: node .github/scripts/profile-security-authority-check.mjs
+
+      - name: Prove Profile/Camoufox security and proxy-handle leakage fail closed
+        run: node .github/scripts/profile-security-authority-check.mjs --self-test
+
+  hosted-state:
+    name: GitHub Governance Hosted State
+    if: github.event_name != 'pull_request'
+    needs: contract
+    runs-on: ubuntu-latest
+    env:
+      GOVERNANCE_AUDIT_TOKEN: ${{ secrets.GOVERNANCE_AUDIT_TOKEN }}
+    steps:
+      - name: Checkout accepted source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
         env:
-          GH_PUSH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          rm .github/workflows/ar8-accepted-checkpoint-materializer.yml
-          rm .github/workflows/ar8-checkpoint-push-bootstrap.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git diff --cached --check
-          git commit -m "Project accepted AR-8 checkpoint and AR-9 handoff"
-          git push "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:agent/ar8-accepted-checkpoint-sync
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node version
+        run: test "$(node --version)" = "v24.19.0"
+
+      - name: Audit live hosted GitHub governance
+        run: node .github/scripts/github-governance.mjs live
+
+      - name: Audit live Actions registry against canonical projection
+        env:
+          GITHUB_ACTIONS_READ_AUTH: ${{ github.token }}
+        run: printf '%s' "$GITHUB_ACTIONS_READ_AUTH" | node .github/scripts/github-actions-registry.mjs live
+
+      - name: Reconcile GitHub credential binding metadata
+        env:
+          GH_ADMIN_OPERATOR_TOKEN: ${{ secrets.GH_ADMIN_OPERATOR_TOKEN }}
+        run: node .github/scripts/credential-lifecycle.mjs github-live
+
+  operational-credential-state:
+    name: Operational Credential Hosted State
+    if: github.event_name != 'pull_request'
+    needs: contract
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout accepted source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node version
+        run: test "$(node --version)" = "v24.19.0"
+
+      - name: Audit staging Cloudflare operational credential metadata
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+          AR8C_AUDIT_ENVIRONMENT: staging
+        run: node .github/scripts/credential-lifecycle.mjs cloudflare-live

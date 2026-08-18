@@ -7,9 +7,9 @@ current-authority hierarchy live in [`INDEX.md`](INDEX.md).
 
 - **Accepted repository-local product phase:** Phase 2I.
 - **Architecture Re-baseline v3:** active, tracked by issue #266.
-- **Accepted top-level architecture slices:** AR-0 through AR-7; AR-8A/AR-8B/AR-8C are accepted subslices inside active AR-8.
-- **Current accepted checkpoint:** AR-8C — operational credential lifecycle and staging provider foundation.
-- **Current implementation:** AR-8D — post-AR-8C cleanup / DX issue #352 is accepted; AR-8D is current but not yet accepted.
+- **Accepted top-level architecture slices:** AR-0 through AR-8; AR-8A…AR-8F are accepted and AR-9 is current.
+- **Current accepted checkpoint:** AR-8 — complete secrets / keys / credentials hardening.
+- **Current implementation:** AR-9 — D1 Evolution / Schema Compatibility.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
@@ -20,13 +20,13 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
-| Source implemented | **PARTIAL** | Accepted source exists through AR-8C; AR-8D is the current implementation subslice and is not yet accepted. |
-| Accepted on main | **PARTIAL** | AR-8A/AR-8B/AR-8C are accepted; `full_ar8_accepted=false`. |
-| Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; this is not a full-product or production claim. |
+| Source implemented | **ACCEPTED** | AR-8 source is accepted on `main`; AR-9 is the current architecture slice. |
+| Accepted on main | **COMPLETE THROUGH AR-8** | AR-8A…AR-8F and final closeout are accepted; `full_ar8_accepted=true`. |
+| Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; later AR-8 acceptance does not imply a broader staging or production deployment. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
-| Current blocker | **NONE** | #352 cleanup / DX gate is accepted; no cleanup blocker remains before AR-8D implementation. |
-| Next gate | **AR-8D acceptance** | AR-8D must pass its own bounded acceptance before AR-8E becomes current. |
+| Current blocker | **NONE** | AR-8 is accepted; no AR-8 blocker remains. |
+| Next gate | **AR-9 acceptance** | AR-9 — D1 Evolution / Schema Compatibility is the current slice. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
@@ -42,6 +42,7 @@ first program step that may perform real Production Core mutation.
 ## Current sources
 
 - [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — CURRENT_AUTHORITY, issue #266;
+- [`ARCHITECTURE_REBASELINE_V3_AR8.md`](ARCHITECTURE_REBASELINE_V3_AR8.md) — accepted AR-8 secrets/keys/credentials hardening evidence;
 - [`ARCHITECTURE_REBASELINE_V3_AR7.md`](ARCHITECTURE_REBASELINE_V3_AR7.md) — accepted AR-7 GitHub governance/Environment evidence;
 - [`../architecture/github-governance-ar7.json`](../architecture/github-governance-ar7.json) — accepted machine-readable GitHub governance contract;
 - [`ARCHITECTURE_REBASELINE_V3_AR6.md`](ARCHITECTURE_REBASELINE_V3_AR6.md) — accepted AR-6 Python-estate/read-only-opsctl evidence;
@@ -76,6 +77,6 @@ first program step that may perform real Production Core mutation.
 
 Issue #203 remains a predecessor blocker lifecycle rather than the forward program tracker after AR-1.
 AR-2 classified issue #251's old production-promotion sequence as superseded forward execution while
-preserving its repository-side D3 foundation; AR-8A/AR-8B/AR-8C are accepted inside active AR-8, #352 accepted; AR-8D current, AR-7 remains accepted governance, AR-6 remains the Python/opsctl authority, AR-5 remains the runtime-authority cleanup, AR-4C remains the latest application-architecture remediation, AR-4D remains NOT_REQUIRED, and AR-8D is the next implementation subslice only after #352 acceptance.
+preserving its repository-side D3 foundation; AR-8 is accepted, AR-9 is current, AR-7 remains accepted governance, AR-6 remains the Python/opsctl authority, AR-5 remains the runtime-authority cleanup, AR-4C remains the latest application-architecture remediation, and AR-4D remains NOT_REQUIRED.
 
 For contributor commands and exact-head acceptance discipline see [`../CONTRIBUTING.md`](../CONTRIBUTING.md).

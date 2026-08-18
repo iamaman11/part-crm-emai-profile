@@ -1462,18 +1462,19 @@
     "schema_version": 1,
     "canonical_authority": "architecture/inventory.json::current_delivery_map",
     "program": "Architecture Re-baseline v3",
-    "accepted_checkpoint": "AR-8C",
-    "current_work": "AR-8_COMPLETION_CANDIDATE",
+    "accepted_checkpoint": "AR-8",
+    "current_work": "AR-9",
     "source_implemented": {
-      "status": "COMPLETE_CANDIDATE",
-      "through": "AR-8F",
-      "current_subslice": "AR-8_COMPLETION",
-      "current_subslice_source": "PR_362_NOT_ACCEPTED_MAIN"
+      "status": "ACCEPTED",
+      "through": "AR-8",
+      "current_subslice": "AR-9",
+      "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR8_CLOSEOUT"
     },
     "accepted_on_main": {
-      "status": "PARTIAL",
-      "through": "AR-8C",
-      "full_ar8_accepted": false
+      "status": "COMPLETE",
+      "through": "AR-8",
+      "full_ar8_accepted": true,
+      "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json"
     },
     "staging_live": {
       "status": "PARTIAL",
@@ -1496,19 +1497,19 @@
       "evidence": "docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json"
     },
     "current_blocker": {
-      "issue": 361,
-      "status": "FINAL_ACCEPTANCE_PENDING",
-      "blocks": "AR-9"
+      "issue": null,
+      "status": "NONE",
+      "blocks": "NONE"
     },
     "next_gate": {
-      "id": "AR-8_FINAL_ACCEPTANCE",
-      "issue": 361,
-      "on_success": "ACCEPTED_MAIN_REREAD_THEN_AR9"
+      "id": "AR-9_ACCEPTANCE",
+      "issue": null,
+      "on_success": "AR-10_BECOMES_CURRENT"
     },
     "invariants": {
       "source_present_not_equal_production_enabled": true,
-      "full_ar8_accepted": false,
-      "ar9_blocked": true,
+      "full_ar8_accepted": true,
+      "ar9_blocked": false,
       "architecture_complete": false,
       "production_core_gate": "BLOCKED",
       "production_ready": false,
@@ -1518,7 +1519,7 @@
   "documentation_authority": {
     "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
     "tracking_issue": 266,
-    "current_slice": "AR-8",
+    "current_slice": "AR-9",
     "transition": "architecture/architecture-rebaseline-v3-transition.json",
     "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
@@ -1552,7 +1553,8 @@
     "operator_contract": "architecture/operator-contract.json",
     "profile_security": "architecture/profile-security.json",
     "ar8_completion_tracking_issue": 361,
-    "ar8_completion_pr": 362
+    "ar8_completion_pr": 362,
+    "ar8_acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json"
   },
   "document_status": [
     {
@@ -1733,27 +1735,37 @@
       "AR-4C",
       "AR-5",
       "AR-6",
-      "AR-7"
+      "AR-7",
+      "AR-8"
     ],
-    "current_architecture_slice": "AR-8",
-    "next_architecture_slice_after_acceptance": "AR-9",
+    "current_architecture_slice": "AR-9",
+    "next_architecture_slice_after_acceptance": "AR-10",
     "ar8_progress": {
       "umbrella_issue": 308,
       "accepted_subslices": [
         "AR-8A",
         "AR-8B",
-        "AR-8C"
+        "AR-8C",
+        "AR-8D",
+        "AR-8E",
+        "AR-8F"
       ],
-      "current_subslice": "AR-8_COMPLETION",
-      "current_implementation_issue": 361,
+      "current_subslice": null,
+      "current_implementation_issue": null,
       "mandatory_remaining": [],
-      "implementation_entry_gate": "AR8_COMPLETION_PR_362_FINAL_ACCEPTANCE",
-      "full_ar8_accepted": false,
-      "ar9_blocked": true,
+      "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
+      "full_ar8_accepted": true,
+      "ar9_blocked": false,
       "production_mutation": false,
-      "source_complete_candidate": true,
+      "source_complete_candidate": false,
       "completion_pr": 362,
-      "implemented_through": "AR-8F"
+      "implemented_through": "AR-8F",
+      "accepted_top_level_slice": "AR-8",
+      "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+      "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+      "applicable_permanent_workflows": "14/14",
+      "accepted_main_reread": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+      "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json"
     },
     "ar8b_acceptance": {
       "issue": 309,
@@ -1872,12 +1884,16 @@
     },
     "source_completion": {
       "tracking_issue": 361,
+      "umbrella_issue": 308,
       "completion_pr": 362,
       "implemented_through": "AR-8F",
-      "state": "FINAL_ACCEPTANCE_PENDING",
-      "accepted_main_through": "AR-8C",
-      "full_ar8_accepted": false,
-      "ar9_blocked": true,
+      "state": "ACCEPTED_MAIN",
+      "accepted_main_through": "AR-8",
+      "full_ar8_accepted": true,
+      "ar9_blocked": false,
+      "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+      "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+      "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
       "production_mutation": false
     }
   }
