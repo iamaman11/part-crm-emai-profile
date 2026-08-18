@@ -139,9 +139,13 @@ pub fn run(
         authority_path.unwrap_or_else(|| Path::new(DEFAULT_AUTHORITY)),
         component,
     )?;
-    let remote_names = load_wrangler_ledger(ledger_json)?;
+    let ledger_path = resolve_input(root, ledger_json);
+    let remote_names = load_wrangler_ledger(&ledger_path)?;
     let contract = match release_manifest {
-        Some(path) => Some(load_release_contract(path, component)?),
+        Some(path) => {
+            let release_path = resolve_input(root, path);
+            Some(load_release_contract(&release_path, component)?)
+        }
         None if action.requires_release_manifest() => {
             return Err(D1Error::new(format!(
                 "d1 {} requires --release-manifest",
@@ -418,9 +422,7 @@ fn evaluate(
         (D1Action::Compatibility, LedgerState::BehindKnownPrefix) => {
             (Decision::MigrationRequired, true)
         }
-        (D1Action::Verify, LedgerState::BehindKnownPrefix) => {
-            (Decision::MigrationRequired, false)
-        }
+        (D1Action::Verify, LedgerState::BehindKnownPrefix) => (Decision::MigrationRequired, false),
         (D1Action::Compatibility, LedgerState::AheadKnownCompatible) => {
             (Decision::CodeRollbackSafe, true)
         }
@@ -477,23 +479,26 @@ fn revision_index(history: &[String], revision: &str) -> Result<usize, D1Error> 
     history
         .iter()
         .position(|candidate| candidate == revision)
-        .ok_or_else(|| D1Error::new(format!("unknown schema revision in release contract: {revision}")))
+        .ok_or_else(|| {
+            D1Error::new(format!(
+                "unknown schema revision in release contract: {revision}"
+            ))
+        })
 }
 
 fn ensure_unique(values: &[String], label: &str) -> Result<(), D1Error> {
     let mut observed = HashSet::with_capacity(values.len());
     for value in values {
         if !observed.insert(value.as_str()) {
-            return Err(D1Error::new(format!("{label} contains duplicate entry: {value}")));
+            return Err(D1Error::new(format!(
+                "{label} contains duplicate entry: {value}"
+            )));
         }
     }
     Ok(())
 }
 
-fn required_string(
-    object: &serde_json::Map<String, Value>,
-    key: &str,
-) -> Result<String, D1Error> {
+fn required_string(object: &serde_json::Map<String, Value>, key: &str) -> Result<String, D1Error> {
     object
         .get(key)
         .and_then(Value::as_str)
@@ -524,15 +529,22 @@ fn resolve_input(root: &Path, path: &Path) -> PathBuf {
 }
 
 fn read_json(path: &Path, label: &str) -> Result<Value, D1Error> {
-    let text = fs::read_to_string(path)
-        .map_err(|error| D1Error::new(format!("cannot read {label} {}: {error}", path.display())))?;
+    let text = fs::read_to_string(path).map_err(|error| {
+        D1Error::new(format!(
+            "cannot read {label} {}: {error}",
+            path.display()
+        ))
+    })?;
     serde_json::from_str(&text)
         .map_err(|error| D1Error::new(format!("cannot parse {label} {}: {error}", path.display())))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ComponentAuthority, D1Action, D1Error, LedgerState, ReleaseSchemaContract, classify_prefix, evaluate};
+    use super::{
+        ComponentAuthority, D1Action, D1Error, LedgerState, ReleaseSchemaContract, classify_prefix,
+        evaluate,
+    };
 
     fn authority() -> ComponentAuthority {
         ComponentAuthority {
@@ -607,7 +619,10 @@ mod tests {
             &remote,
             Some(&contract("0002_b.sql")),
         )?;
-        assert_eq!(incompatible.ledger_state, LedgerState::AheadKnownIncompatible);
+        assert_eq!(
+            incompatible.ledger_state,
+            LedgerState::AheadKnownIncompatible
+        );
         assert!(!incompatible.allowed);
         Ok(())
     }
@@ -623,7 +638,10 @@ mod tests {
         )?;
         assert_eq!(result.ledger_state, LedgerState::BehindKnownPrefix);
         assert!(!result.allowed);
-        assert_eq!(result.planned_migrations, vec!["0002_b.sql", "0003_c.sql"]);
+        assert_eq!(
+            result.planned_migrations,
+            vec!["0002_b.sql", "0003_c.sql"]
+        );
         Ok(())
     }
 }
