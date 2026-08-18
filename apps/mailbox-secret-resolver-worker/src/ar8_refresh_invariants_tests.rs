@@ -36,9 +36,10 @@ fn migration_persists_generation_lifecycle_and_bounded_lease_state() {
     assert!(hmac_version_migration.contains(
         "ADD COLUMN refresh_owner_hmac_version INTEGER CHECK (refresh_owner_hmac_version IS NULL OR refresh_owner_hmac_version > 0)"
     ));
-    assert!(hmac_version_migration.contains(
-        "SET refresh_owner_hmac_version = 1 WHERE refresh_owner_digest IS NOT NULL"
-    ));
+    assert!(
+        hmac_version_migration
+            .contains("SET refresh_owner_hmac_version = 1 WHERE refresh_owner_digest IS NOT NULL")
+    );
 }
 
 #[test]
