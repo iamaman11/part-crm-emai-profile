@@ -8,7 +8,6 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 LEGACY_PATH = ROOT / "scripts/check-documentation-authority-legacy.py"
@@ -26,6 +25,7 @@ if spec is None or spec.loader is None:
 legacy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(legacy)
 
+legacy_expected_current_delivery_map = legacy.expected_current_delivery_map
 legacy.AR8_CURRENT_SUBSLICE = "AR-8_COMPLETION"
 legacy.AR8D_IMPLEMENTATION_ISSUE = 361
 legacy.AR8_IMPLEMENTATION_ENTRY_GATE = "AR8_COMPLETION_PR_362_FINAL_ACCEPTANCE"
@@ -33,7 +33,7 @@ legacy.AR8_MANDATORY_REMAINING = []
 
 
 def expected_current_delivery_map() -> dict[str, object]:
-    base = legacy.expected_current_delivery_map()
+    base = legacy_expected_current_delivery_map()
     base["current_work"] = "AR-8_COMPLETION_CANDIDATE"
     base["source_implemented"] = {
         "status": "COMPLETE_CANDIDATE",
