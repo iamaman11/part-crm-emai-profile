@@ -1,3 +1,4 @@
+use crate::contact_key_lifecycle::{ContactKeyLifecycleMetadata, D1ContactKeyLifecycle};
 use crate::contact_protection::{
     ContactEncryptionRootKey, ContactLookupRootKey, ContactProtectionKeyring,
 };
@@ -5,6 +6,8 @@ use crate::contact_protection::{
 use crate::contact_protection::{RustCryptoContactProtection, WorkerCryptoNonceSource};
 use client_domain::{EncryptionKeyVersion, LookupKeyVersion};
 use serde::Deserialize;
+#[cfg(target_arch = "wasm32")]
+use worker::d1::D1Database;
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,15 +17,35 @@ pub struct ContactKeyringConfigError;
 pub fn contact_protection_from_serialized_keyring(
     serialized: String,
 ) -> Result<RustCryptoContactProtection<WorkerCryptoNonceSource>, ContactKeyringConfigError> {
+    let (keyring, _) = parse_contact_protection_keyring_with_metadata(serialized)?;
     Ok(RustCryptoContactProtection::new(
-        parse_contact_protection_keyring(serialized)?,
+        keyring,
         WorkerCryptoNonceSource,
+    ))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn contact_key_lifecycle_from_serialized_keyring(
+    serialized: String,
+    database: D1Database,
+) -> Result<D1ContactKeyLifecycle<WorkerCryptoNonceSource>, ContactKeyringConfigError> {
+    let (keyring, metadata) = parse_contact_protection_keyring_with_metadata(serialized)?;
+    Ok(D1ContactKeyLifecycle::new(
+        database,
+        RustCryptoContactProtection::new(keyring, WorkerCryptoNonceSource),
+        metadata,
     ))
 }
 
 fn parse_contact_protection_keyring(
     serialized: String,
 ) -> Result<ContactProtectionKeyring, ContactKeyringConfigError> {
+    parse_contact_protection_keyring_with_metadata(serialized).map(|(keyring, _)| keyring)
+}
+
+fn parse_contact_protection_keyring_with_metadata(
+    serialized: String,
+) -> Result<(ContactProtectionKeyring, ContactKeyLifecycleMetadata), ContactKeyringConfigError> {
     let serialized = Zeroizing::new(serialized);
     let keyring: ContactProtectionKeyringSecret =
         serde_json::from_str(serialized.as_str()).map_err(|_| ContactKeyringConfigError)?;
@@ -50,12 +73,28 @@ fn parse_contact_protection_keyring(
             ))
         })
         .collect::<Result<Vec<_>, ContactKeyringConfigError>>()?;
+    let retained_encryption_versions = encryption_keys
+        .iter()
+        .map(|key| key.version().value())
+        .collect::<Vec<_>>();
+    let retained_lookup_versions = lookup_keys
+        .iter()
+        .map(|key| key.version().value())
+        .collect::<Vec<_>>();
+    let metadata = ContactKeyLifecycleMetadata::new(
+        active_encryption_version.value(),
+        active_lookup_version.value(),
+        retained_encryption_versions,
+        retained_lookup_versions,
+    )
+    .map_err(|_| ContactKeyringConfigError)?;
 
     move_active_encryption_first(&mut encryption_keys, active_encryption_version)?;
     move_active_lookup_first(&mut lookup_keys, active_lookup_version)?;
 
-    ContactProtectionKeyring::new(encryption_keys, lookup_keys)
-        .map_err(|_| ContactKeyringConfigError)
+    let protection_keyring = ContactProtectionKeyring::new(encryption_keys, lookup_keys)
+        .map_err(|_| ContactKeyringConfigError)?;
+    Ok((protection_keyring, metadata))
 }
 
 fn move_active_encryption_first(
@@ -129,7 +168,10 @@ const fn hex_nibble(value: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContactKeyringConfigError, parse_contact_protection_keyring};
+    use super::{
+        ContactKeyringConfigError, parse_contact_protection_keyring,
+        parse_contact_protection_keyring_with_metadata,
+    };
 
     #[test]
     fn explicit_active_versions_do_not_depend_on_json_array_order()
@@ -141,9 +183,11 @@ mod tests {
             "ef".repeat(32),
             "12".repeat(32),
         );
-        let keyring = parse_contact_protection_keyring(valid)?;
+        let (keyring, metadata) = parse_contact_protection_keyring_with_metadata(valid)?;
         assert_eq!(keyring.lookup_versions()[0].value(), 1);
         assert!(format!("{keyring:?}").contains("encryption_versions: [1, 2]"));
+        assert!(format!("{metadata:?}").contains("active_encryption_version: 1"));
+        assert!(format!("{metadata:?}").contains("active_lookup_version: 1"));
         Ok(())
     }
 
