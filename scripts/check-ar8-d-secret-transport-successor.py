@@ -15,6 +15,10 @@ PROMOTION = Path(".github/workflows/mailbox-secret-resolver-promotion.yml")
 BINDING_HELPER = Path(".github/scripts/worker-secret-bindings.mjs")
 D3_AUTHORITY = Path("architecture/pre2j-d3-resolver-bootstrap-authority.json")
 D3_MARKER = Path("architecture/pre2j-d3-resolver-bootstrap-implementation.json")
+SUPERSEDED_ROUTINE_BINDINGS = [
+    "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON",
+    "CLOUDFLARE_RESOLVER_SECRETS_JSON",
+]
 
 EXPECTED_AUTHORITY: dict[str, Any] = {
     "schema_version": 1,
@@ -40,6 +44,7 @@ EXPECTED_AUTHORITY: dict[str, Any] = {
         "worker_secret_value_authority": "Cloudflare Worker secret store",
         "required_binding_contract": "env.<environment>.secrets.required",
         "verification_command": "wrangler secret list --format json",
+        "superseded_routine_deploy_bindings": SUPERSEDED_ROUTINE_BINDINGS,
         "routine_deploy_secret_value_transport": False,
         "routine_deploy_secret_mutation": False,
         "rotation_lifecycle": "separate_explicit_rotation_authority",
@@ -49,6 +54,7 @@ EXPECTED_AUTHORITY: dict[str, Any] = {
         "routine promotion verifies exact Worker secret binding names using metadata only",
         "routine promotion never receives Worker runtime secret bundles",
         "routine promotion never mutates Worker secret values",
+        "superseded D3 bundle bindings remain historical metadata only and are not routine deployment inputs",
         "secret rotation remains a separate governed lifecycle",
         "AR-8 performs no production credential mutation",
     ],
@@ -132,8 +138,7 @@ def promotion_errors(promotion: str) -> list[str]:
             errors.append(f"AR-8D routine promotion is missing {marker!r}")
 
     forbidden = (
-        "CLOUDFLARE_RESOLVER_SECRETS_JSON",
-        "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON",
+        *SUPERSEDED_ROUTINE_BINDINGS,
         "--secrets-file",
         "validate-secrets",
         " secret put ",
@@ -206,6 +211,20 @@ def helper_errors(helper: str) -> list[str]:
     return errors
 
 
+def successor_binding_errors(authority: dict[str, Any], promotion: str) -> list[str]:
+    successor = authority.get("successor")
+    if not isinstance(successor, dict):
+        return ["AR-8D transition successor metadata is missing"]
+    names = successor.get("superseded_routine_deploy_bindings")
+    if names != SUPERSEDED_ROUTINE_BINDINGS:
+        return ["AR-8D successor must govern exactly the two historical D3 bundle bindings"]
+    errors: list[str] = []
+    for name in SUPERSEDED_ROUTINE_BINDINGS:
+        if name in promotion:
+            errors.append(f"superseded D3 bundle binding leaked back into routine promotion: {name}")
+    return errors
+
+
 def diff_errors(base_ref: str) -> list[str]:
     errors: list[str] = []
     if git("cat-file", "-e", f"{base_ref}^{{commit}}", check=False).returncode != 0:
@@ -224,8 +243,10 @@ def current_errors() -> list[str]:
         return [f"AR-8D transition authority is unreadable: {exc}"]
     if authority != EXPECTED_AUTHORITY:
         errors.append("AR-8D secret-transport successor authority drifted from its exact governed contract")
+    promotion = read(PROMOTION)
     errors.extend(predecessor_errors(authority))
-    errors.extend(promotion_errors(read(PROMOTION)))
+    errors.extend(successor_binding_errors(authority, promotion))
+    errors.extend(promotion_errors(promotion))
     errors.extend(helper_errors(read(BINDING_HELPER)))
     return errors
 
@@ -241,6 +262,11 @@ def self_test() -> None:
     assert promotion_errors(promotion + "\nnpx wrangler secret put NAME")
     assert promotion_errors(promotion.replace("wrangler@4.94.0 secret list", "wrangler@4.94.0 secret get", 1))
     assert helper_errors(helper.replace("rejectValueShapedFields(secretList);", "", 1))
+    malformed_authority = json.loads(json.dumps(EXPECTED_AUTHORITY))
+    malformed_authority["successor"]["superseded_routine_deploy_bindings"].append(
+        "AR8D_UNRELATED_STALE_BINDING"
+    )
+    assert successor_binding_errors(malformed_authority, promotion)
     node = subprocess.run(
         ["node", str(BINDING_HELPER), "--self-test"],
         cwd=ROOT,
