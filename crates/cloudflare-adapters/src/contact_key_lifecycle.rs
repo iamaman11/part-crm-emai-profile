@@ -154,7 +154,7 @@ impl<N: ContactNonceSource> D1ContactKeyLifecycle<N> {
         &self,
         limit: u32,
     ) -> Result<ContactKeyReconciliationResult, ContactKeyLifecycleError> {
-        if !(1..=MAX_RECONCILIATION_BATCH).contains(&limit) {
+        if !reconciliation_limit_is_valid(limit) {
             return Err(ContactKeyLifecycleError::InvalidInput);
         }
         let active_encryption = i64::from(self.metadata.active_encryption_version);
@@ -269,9 +269,7 @@ impl<N: ContactNonceSource> D1ContactKeyLifecycle<N> {
             .into_iter()
             .find(|candidate| candidate.key_version() == old_lookup_version)
             .ok_or(ContactKeyLifecycleError::KeyUnavailable)?;
-        if !constant_time_eq(old_candidate.bytes(), &old_lookup_bytes) {
-            return Err(ContactKeyLifecycleError::InvalidStoredMetadata);
-        }
+        verify_stored_lookup_token(old_candidate.bytes(), &old_lookup_bytes)?;
 
         let replacement_encrypted = self
             .protection
@@ -293,11 +291,11 @@ impl<N: ContactNonceSource> D1ContactKeyLifecycle<N> {
             ))
             .await
             .map_err(|_| ContactKeyLifecycleError::KeyUnavailable)?;
-        if replacement_encrypted.key_version().value() != self.metadata.active_encryption_version
-            || replacement_lookup.key_version().value() != self.metadata.active_lookup_version
-        {
-            return Err(ContactKeyLifecycleError::InvalidStoredMetadata);
-        }
+        verify_active_replacement_versions(
+            &self.metadata,
+            replacement_encrypted.key_version(),
+            replacement_lookup.key_version(),
+        )?;
 
         let result = query!(
             &self.database,
@@ -400,6 +398,35 @@ fn merge_dependency_counts(
     Ok(statuses)
 }
 
+fn reconciliation_limit_is_valid(limit: u32) -> bool {
+    (1..=MAX_RECONCILIATION_BATCH).contains(&limit)
+}
+
+fn verify_stored_lookup_token(
+    expected: &[u8],
+    stored: &[u8],
+) -> Result<(), ContactKeyLifecycleError> {
+    if constant_time_eq(expected, stored) {
+        Ok(())
+    } else {
+        Err(ContactKeyLifecycleError::InvalidStoredMetadata)
+    }
+}
+
+fn verify_active_replacement_versions(
+    metadata: &ContactKeyLifecycleMetadata,
+    encryption_version: EncryptionKeyVersion,
+    lookup_version: LookupKeyVersion,
+) -> Result<(), ContactKeyLifecycleError> {
+    if encryption_version.value() == metadata.active_encryption_version
+        && lookup_version.value() == metadata.active_lookup_version
+    {
+        Ok(())
+    } else {
+        Err(ContactKeyLifecycleError::InvalidStoredMetadata)
+    }
+}
+
 fn valid_retained_versions(versions: &[u32], active_version: u32) -> bool {
     !versions.is_empty()
         && versions.contains(&active_version)
@@ -500,8 +527,44 @@ const fn map_crypto_error(
 mod tests {
     use super::{
         ContactKeyDependencyStatus, ContactKeyLifecycleError, ContactKeyLifecycleMetadata,
-        DependencyCountRow, merge_dependency_counts,
+        DependencyCountRow, merge_dependency_counts, reconciliation_limit_is_valid,
+        verify_active_replacement_versions, verify_stored_lookup_token,
     };
+    use crate::contact_protection::{
+        ContactCryptoError, ContactEncryptionRootKey, ContactLookupRootKey, ContactNonceSource,
+        ContactProtectionKeyring, RustCryptoContactProtection,
+    };
+    use application_ports::clients::{
+        ContactEncryptionRequest, ContactExactLookupRequest, ContactProtectionPort,
+    };
+    use client_domain::{
+        ContactKind, ContactNormalizationVersion, ContactProtectionVersion, EncryptionKeyVersion,
+        LookupKeyVersion, exact_lookup_hmac_input, normalize_contact_value,
+    };
+    use profile_platform_primitives::{ContactPointId, TenantId};
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    struct FixedNonce([u8; 24]);
+
+    impl ContactNonceSource for FixedNonce {
+        fn fill_nonce(&self, nonce: &mut [u8; 24]) -> Result<(), ContactCryptoError> {
+            nonce.copy_from_slice(&self.0);
+            Ok(())
+        }
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        let mut future = Box::pin(future);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(value) => return value,
+                Poll::Pending => std::hint::spin_loop(),
+            }
+        }
+    }
 
     #[test]
     fn retirement_requires_retained_non_active_zero_physical_dependencies() {
@@ -550,14 +613,15 @@ mod tests {
                     physical_rows: 2,
                 },
             ],
-        );
-        assert!(matches!(
-            statuses.as_ref(),
-            Ok(values)
-                if values.iter().any(|status| status.version == 3
-                    && !status.retained
-                    && status.physical_rows == 2)
-        ));
+        )
+        .expect("synthetic dependency rows should be valid");
+        let unknown = statuses
+            .iter()
+            .find(|status| status.version == 3)
+            .expect("unknown stored version must be surfaced");
+        assert!(!unknown.retained);
+        assert_eq!(unknown.physical_rows, 2);
+        assert!(!unknown.can_retire());
     }
 
     #[test]
@@ -568,8 +632,214 @@ mod tests {
             Err(ContactKeyLifecycleError::InvalidInput)
         );
         assert_eq!(
+            ContactKeyLifecycleMetadata::new(2, 4, vec![1, 2], vec![1, 3]),
+            Err(ContactKeyLifecycleError::InvalidInput)
+        );
+        assert_eq!(
             ContactKeyLifecycleMetadata::new(2, 3, vec![1, 2, 2], vec![1, 3]),
             Err(ContactKeyLifecycleError::InvalidInput)
         );
+        assert_eq!(
+            ContactKeyLifecycleMetadata::new(2, 3, vec![1, 2], vec![1, 3, 3]),
+            Err(ContactKeyLifecycleError::InvalidInput)
+        );
+        assert_eq!(
+            ContactKeyLifecycleMetadata::new(0, 3, vec![1, 2], vec![1, 3]),
+            Err(ContactKeyLifecycleError::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn reconciliation_is_bounded_to_one_through_one_hundred_rows() {
+        assert!(!reconciliation_limit_is_valid(0));
+        assert!(reconciliation_limit_is_valid(1));
+        assert!(reconciliation_limit_is_valid(100));
+        assert!(!reconciliation_limit_is_valid(101));
+        assert!(!reconciliation_limit_is_valid(u32::MAX));
+    }
+
+    #[test]
+    fn stored_lookup_token_mismatch_fails_closed() {
+        let expected = [0x11_u8; 32];
+        let mut stale = expected;
+        stale[7] ^= 0x01;
+        assert_eq!(verify_stored_lookup_token(&expected, &expected), Ok(()));
+        assert_eq!(
+            verify_stored_lookup_token(&expected, &stale),
+            Err(ContactKeyLifecycleError::InvalidStoredMetadata)
+        );
+        assert_eq!(
+            verify_stored_lookup_token(&expected, &expected[..31]),
+            Err(ContactKeyLifecycleError::InvalidStoredMetadata)
+        );
+    }
+
+    #[test]
+    fn replacement_versions_must_match_explicit_active_pair()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let metadata = ContactKeyLifecycleMetadata::new(2, 3, vec![1, 2], vec![2, 3])
+            .expect("metadata fixture should be valid");
+        let active_encryption = EncryptionKeyVersion::new(2)?;
+        let old_encryption = EncryptionKeyVersion::new(1)?;
+        let active_lookup = LookupKeyVersion::new(3)?;
+        let old_lookup = LookupKeyVersion::new(2)?;
+        assert_eq!(
+            verify_active_replacement_versions(&metadata, active_encryption, active_lookup),
+            Ok(())
+        );
+        assert_eq!(
+            verify_active_replacement_versions(&metadata, old_encryption, active_lookup),
+            Err(ContactKeyLifecycleError::InvalidStoredMetadata)
+        );
+        assert_eq!(
+            verify_active_replacement_versions(&metadata, active_encryption, old_lookup),
+            Err(ContactKeyLifecycleError::InvalidStoredMetadata)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_rotation_reads_retained_old_material_and_writes_only_active_versions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tenant = TenantId::parse("tenant_01JAR8D5ROTATE")?;
+        let contact_id = ContactPointId::parse("contact_01JAR8D5ROTATE")?;
+        let normalized = normalize_contact_value(
+            ContactKind::Email,
+            ContactNormalizationVersion::V1,
+            "Person@Example.COM",
+        )?;
+        let hmac_input = exact_lookup_hmac_input(
+            &tenant,
+            ContactKind::Email,
+            ContactNormalizationVersion::V1,
+            &normalized,
+        );
+
+        let legacy = RustCryptoContactProtection::new(
+            ContactProtectionKeyring::new(
+                vec![ContactEncryptionRootKey::new(
+                    EncryptionKeyVersion::new(1)?,
+                    [0x11; 32],
+                )],
+                vec![ContactLookupRootKey::new(
+                    LookupKeyVersion::new(1)?,
+                    [0x33; 32],
+                )],
+            )?,
+            FixedNonce([0x55; 24]),
+        );
+        let old_encrypted = block_on(legacy.encrypt_contact_display(ContactEncryptionRequest::new(
+            &tenant,
+            &contact_id,
+            ContactProtectionVersion::V1,
+            &normalized,
+        )))?;
+        let old_lookup = block_on(legacy.derive_exact_lookup_token(
+            ContactExactLookupRequest::new(
+                &tenant,
+                ContactKind::Email,
+                ContactNormalizationVersion::V1,
+                &hmac_input,
+            ),
+        ))?;
+        assert_eq!(old_encrypted.key_version().value(), 1);
+        assert_eq!(old_lookup.key_version().value(), 1);
+
+        let rotated = RustCryptoContactProtection::new(
+            ContactProtectionKeyring::new(
+                vec![
+                    ContactEncryptionRootKey::new(EncryptionKeyVersion::new(2)?, [0x22; 32]),
+                    ContactEncryptionRootKey::new(EncryptionKeyVersion::new(1)?, [0x11; 32]),
+                ],
+                vec![
+                    ContactLookupRootKey::new(LookupKeyVersion::new(2)?, [0x44; 32]),
+                    ContactLookupRootKey::new(LookupKeyVersion::new(1)?, [0x33; 32]),
+                ],
+            )?,
+            FixedNonce([0x66; 24]),
+        );
+
+        let opened = rotated.decrypt_contact_display(
+            &tenant,
+            &contact_id,
+            ContactProtectionVersion::V1,
+            &old_encrypted,
+        )?;
+        assert_eq!(opened.as_str(), normalized.expose());
+        let retained_old_lookup = rotated
+            .derive_lookup_candidates(&tenant, &hmac_input)?
+            .into_iter()
+            .find(|candidate| candidate.key_version().value() == 1)
+            .expect("retained old lookup version must remain readable during reconciliation");
+        assert_eq!(retained_old_lookup.bytes(), old_lookup.bytes());
+
+        let replacement_encrypted =
+            block_on(rotated.encrypt_contact_display(ContactEncryptionRequest::new(
+                &tenant,
+                &contact_id,
+                ContactProtectionVersion::V1,
+                &normalized,
+            )))?;
+        let replacement_lookup = block_on(rotated.derive_exact_lookup_token(
+            ContactExactLookupRequest::new(
+                &tenant,
+                ContactKind::Email,
+                ContactNormalizationVersion::V1,
+                &hmac_input,
+            ),
+        ))?;
+        assert_eq!(replacement_encrypted.key_version().value(), 2);
+        assert_eq!(replacement_lookup.key_version().value(), 2);
+        assert!(!format!("{:?}", rotated.keyring()).contains("1111111111111111"));
+        assert!(!format!("{:?}", rotated.keyring()).contains("3333333333333333"));
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_sql_contract_counts_archived_rows_and_cas_fails_closed() {
+        let source = include_str!("contact_key_lifecycle.rs");
+        let (_, after_encryption) = source
+            .split_once("let encryption_rows = query!(")
+            .expect("encryption status query must exist");
+        let (encryption_query, after_encryption) = after_encryption
+            .split_once("let lookup_rows = query!(")
+            .expect("lookup status query must follow encryption status query");
+        let (lookup_query, _) = after_encryption
+            .split_once("Ok(ContactKeyLifecycleSnapshot")
+            .expect("status snapshot construction must follow lookup status query");
+        assert!(encryption_query.contains("FROM client_contact_points"));
+        assert!(lookup_query.contains("FROM client_contact_points"));
+        assert!(!encryption_query.contains("WHERE"));
+        assert!(!lookup_query.contains("WHERE"));
+        assert!(!encryption_query.contains("status"));
+        assert!(!lookup_query.contains("status"));
+
+        let (_, reconciliation_select) = source
+            .split_once("let rows = query!(")
+            .expect("bounded reconciliation query must exist");
+        let (reconciliation_select, _) = reconciliation_select
+            .split_once(".map_err(|_| ContactKeyLifecycleError::StorageUnavailable)?")
+            .expect("reconciliation query error mapping must exist");
+        assert!(reconciliation_select.contains("LIMIT ?"));
+        assert!(reconciliation_select.contains("encryption_key_version <> ?"));
+        assert!(reconciliation_select.contains("lookup_key_version <> ?"));
+
+        let (_, cas_update) = source
+            .split_once("UPDATE client_contact_points")
+            .expect("CAS reconciliation update must exist");
+        let (cas_update, _) = cas_update
+            .split_once(".map_err(|_| ContactKeyLifecycleError::StorageUnavailable)?")
+            .expect("CAS update error mapping must exist");
+        for required in [
+            "encryption_key_version = ?",
+            "lookup_key_version = ?",
+            "hex(ciphertext) = ?",
+            "hex(nonce) = ?",
+            "hex(exact_lookup_token) = ?",
+        ] {
+            assert!(cas_update.contains(required), "missing CAS predicate: {required}");
+        }
+        assert!(source.contains("if changes != 1"));
+        assert!(source.contains("ContactKeyLifecycleError::ConcurrentMutation"));
     }
 }
