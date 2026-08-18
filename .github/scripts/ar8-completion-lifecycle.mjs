@@ -27,11 +27,31 @@ const R2_PAIR_BINDINGS = [
   'R2_GENERATION_ACCESS_KEY_ID',
   'R2_GENERATION_SECRET_ACCESS_KEY',
 ];
+const OAUTH_APP_SECRET_BINDINGS = [
+  'GOOGLE_OAUTH_CLIENT_SECRET',
+  'MICROSOFT_OAUTH_CLIENT_SECRET',
+];
 const R2_RETIREMENT_PRECONDITIONS = [
   'replacement token is scoped to the intended account and bucket',
   'replacement Access Key ID and Secret Access Key are bound as one pair',
   'bounded staging R2 access succeeds with replacement',
   'Worker binding metadata verifies replacement before old token revocation',
+];
+const GOOGLE_RETIREMENT_PRECONDITIONS = [
+  'target OAuth client id and authorized redirect URI metadata match the intended environment',
+  'replacement client secret is added and enabled while the previous secret remains enabled',
+  'replacement secret is write-only bound to GOOGLE_OAUTH_CLIENT_SECRET for the intended resolver environment',
+  'bounded staging authorization-code and refresh-token exchanges succeed with the replacement',
+  'metadata-only rollout evidence confirms the previous secret is no longer used before disable',
+  'previous secret is disabled only after replacement verification and deleted only after a bounded rollback observation window',
+];
+const MICROSOFT_RETIREMENT_PRECONDITIONS = [
+  'target application client id and registered Web redirect URI metadata match the intended environment',
+  'replacement passwordCredential is added before removal of the previous credential',
+  'replacement secretText is captured only at issuance and write-only bound to MICROSOFT_OAUTH_CLIENT_SECRET for the intended resolver environment',
+  'bounded staging authorization-code and refresh-token exchanges succeed with the replacement',
+  'replacement passwordCredential keyId and endDateTime metadata are recorded without secret value readback',
+  'previous passwordCredential is removed by keyId only after replacement verification',
 ];
 const FORBIDDEN_VALUE_KEYS = /(?:plaintext_value|secret_value|token_value|credential_value|key_hex|private_key)/i;
 
@@ -90,9 +110,43 @@ function concernIndex(canonical, errors) {
 }
 
 function requireStringList(value, label, errors) {
-  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== 'string' || item.length === 0)) {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((item) => typeof item !== 'string' || item.length === 0)
+  ) {
     errors.push(`${label}: expected a non-empty string array`);
   }
+}
+
+function requireString(value, label, errors) {
+  if (typeof value !== 'string' || value.length === 0) {
+    errors.push(`${label}: expected a non-empty string`);
+  }
+}
+
+function validateOAuthApplicationCommon(concern, errors) {
+  if (
+    concern.application_profile !== 'CONFIDENTIAL_WEB_OAUTH_CLIENT' ||
+    concern.environment_ownership !== 'EXPLICIT_ENVIRONMENT_SCOPED_REGISTRATION_AND_BINDING' ||
+    concern.user_token_state_authority !== 'AR-8A' ||
+    concern.application_credential_failure_state !== 'ConfigurationUnavailable' ||
+    concern.user_refresh_rejection_state !== 'ReauthRequired' ||
+    concern.secret_plaintext_evidence !== 'FORBIDDEN'
+  ) {
+    errors.push(
+      `${concern.id}: OAuth application credential lifecycle must remain environment-scoped, metadata-only and subordinate to the AR-8A user-token state authority`,
+    );
+  }
+  for (const field of [
+    'client_id_authority',
+    'client_secret_authority',
+    'provider_application_registration_authority',
+    'redirect_configuration_authority',
+  ]) {
+    requireString(concern[field], `${concern.id}.${field}`, errors);
+  }
+  requireStringList(concern.provider_metadata_evidence, `${concern.id}.provider_metadata_evidence`, errors);
 }
 
 function validateSpecific(concern, errors) {
@@ -145,19 +199,31 @@ function validateSpecific(concern, errors) {
       }
       break;
     case 'resolver.google-oauth-application':
+      validateOAuthApplicationCommon(concern, errors);
       if (
-        concern.provider_overlap_guarantee !== 'NOT_ASSUMED' ||
-        concern.user_token_state_authority !== 'AR-8A'
+        concern.provider_overlap_guarantee !== 'TWO_ENABLED_CLIENT_SECRETS_MAXIMUM' ||
+        concern.provider_secret_limit !== 2 ||
+        concern.previous_secret_disable_reversible_before_delete !== true ||
+        concern.previous_secret_delete_reversible !== false ||
+        !same(concern.retirement_preconditions, GOOGLE_RETIREMENT_PRECONDITIONS) ||
+        !String(concern.allowed_mutator ?? '').includes('google-oauth-client-secret-issuance')
       ) {
-        errors.push(`${concern.id}: Google overlap must not be assumed and AR-8A must remain user-token authority`);
+        errors.push(`${concern.id}: Google confidential-web client rotation must use the bounded two-secret add/bind/verify/disable/observe/delete lifecycle`);
       }
       break;
     case 'resolver.microsoft-oauth-application':
+      validateOAuthApplicationCommon(concern, errors);
       if (
         concern.provider_overlap_guarantee !== 'MULTIPLE_PASSWORD_CREDENTIALS_SUPPORTED' ||
-        concern.user_token_state_authority !== 'AR-8A'
+        concern.password_credential_collection !== 'application.passwordCredentials' ||
+        concern.replacement_operation !== 'application:addPassword' ||
+        concern.retirement_operation !== 'application:removePassword(keyId)' ||
+        concern.expiry_metadata_authority !== 'passwordCredential.endDateTime' ||
+        concern.secret_retrieval_semantics !== 'ISSUANCE_RESPONSE_ONLY' ||
+        !same(concern.retirement_preconditions, MICROSOFT_RETIREMENT_PRECONDITIONS) ||
+        !String(concern.allowed_mutator ?? '').includes('microsoft-entra-application-addpassword')
       ) {
-        errors.push(`${concern.id}: Microsoft replacement must preserve provider password-credential overlap and AR-8A user-token authority`);
+        errors.push(`${concern.id}: Microsoft application-secret rotation must use passwordCredentials addPassword/bind/verify/removePassword(keyId) semantics`);
       }
       break;
     default:
@@ -190,7 +256,7 @@ function validate(overlay, canonical, routinePromotion) {
     errors.push('AR-8 completion lifecycle stage order drifted');
   }
   scanForbiddenValueFields(overlay, 'overlay', errors);
-  for (const binding of R2_PAIR_BINDINGS) {
+  for (const binding of [...R2_PAIR_BINDINGS, ...OAUTH_APP_SECRET_BINDINGS]) {
     if (routinePromotion.includes(binding)) {
       errors.push(`${ROUTINE_PROMOTION_PATH}: routine promotion must not transport or rebind ${binding}`);
     }
@@ -296,13 +362,44 @@ function selfTest(overlay, canonical, routinePromotion) {
   implicitContact.concerns.find((item) => item.id === 'control-plane.client-contact-protection').active_selection = 'JSON_ARRAY_ORDER';
   assertRejected('implicit contact active key', implicitContact, canonical, routinePromotion);
 
-  const googleOverlap = clone(overlay);
-  googleOverlap.concerns.find((item) => item.id === 'resolver.google-oauth-application').provider_overlap_guarantee = 'ALWAYS_DUAL_VALID';
-  assertRejected('invented Google dual-valid overlap', googleOverlap, canonical, routinePromotion);
+  const googleUnlimited = clone(overlay);
+  googleUnlimited.concerns.find((item) => item.id === 'resolver.google-oauth-application').provider_secret_limit = 3;
+  assertRejected('Google secret limit drift', googleUnlimited, canonical, routinePromotion);
 
-  const revokeBeforeVerify = clone(overlay);
-  revokeBeforeVerify.concerns.find((item) => item.id === 'resolver.microsoft-oauth-application').retire_previous_requires_verified_replacement = false;
-  assertRejected('Microsoft revoke-before-verify', revokeBeforeVerify, canonical, routinePromotion);
+  const googleNoRollback = clone(overlay);
+  googleNoRollback.concerns.find((item) => item.id === 'resolver.google-oauth-application').previous_secret_disable_reversible_before_delete = false;
+  assertRejected('Google disable rollback removed', googleNoRollback, canonical, routinePromotion);
+
+  const googleDeleteRollback = clone(overlay);
+  googleDeleteRollback.concerns.find((item) => item.id === 'resolver.google-oauth-application').previous_secret_delete_reversible = true;
+  assertRejected('Google delete treated as reversible', googleDeleteRollback, canonical, routinePromotion);
+
+  const secondOAuthStateAuthority = clone(overlay);
+  secondOAuthStateAuthority.concerns.find((item) => item.id === 'resolver.google-oauth-application').user_token_state_authority = 'AR-8E';
+  assertRejected('second OAuth user-token state authority', secondOAuthStateAuthority, canonical, routinePromotion);
+
+  const crossEnvironmentOAuth = clone(overlay);
+  crossEnvironmentOAuth.concerns.find((item) => item.id === 'resolver.microsoft-oauth-application').environment_ownership = 'SHARED_ACROSS_ENVIRONMENTS';
+  assertRejected('cross-environment OAuth application ownership', crossEnvironmentOAuth, canonical, routinePromotion);
+
+  const microsoftWrongIssueOperation = clone(overlay);
+  microsoftWrongIssueOperation.concerns.find((item) => item.id === 'resolver.microsoft-oauth-application').replacement_operation = 'application:updatePassword';
+  assertRejected('Microsoft replacement operation drift', microsoftWrongIssueOperation, canonical, routinePromotion);
+
+  const microsoftSecretReadback = clone(overlay);
+  microsoftSecretReadback.concerns.find((item) => item.id === 'resolver.microsoft-oauth-application').secret_retrieval_semantics = 'PERSISTENT_READBACK';
+  assertRejected('Microsoft secret readback authority', microsoftSecretReadback, canonical, routinePromotion);
+
+  const microsoftRevokeBeforeVerify = clone(overlay);
+  microsoftRevokeBeforeVerify.concerns.find((item) => item.id === 'resolver.microsoft-oauth-application').retire_previous_requires_verified_replacement = false;
+  assertRejected('Microsoft revoke-before-verify', microsoftRevokeBeforeVerify, canonical, routinePromotion);
+
+  assertRejected(
+    'OAuth application secret transported by routine promotion',
+    overlay,
+    canonical,
+    `${routinePromotion}\n${OAUTH_APP_SECRET_BINDINGS.join('\n')}`,
+  );
 
   const duplicate = clone(overlay);
   duplicate.concerns.push(clone(duplicate.concerns[0]));
