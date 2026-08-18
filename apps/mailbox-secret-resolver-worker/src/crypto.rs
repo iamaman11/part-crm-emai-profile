@@ -597,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_hmac_unknown_duplicate_and_missing_active_versions_fail_closed() {
+    fn handle_hmac_unknown_duplicate_and_missing_active_versions_fail_closed() -> Result<(), CryptoError> {
         let duplicate = format!(
             r#"{{"activeVersion":1,"keys":[{{"version":1,"keyHex":"{}"}},{{"version":1,"keyHex":"{}"}}]}}"#,
             "44".repeat(32),
@@ -610,11 +610,12 @@ mod tests {
             "55".repeat(32),
         );
         assert!(HandleHmacKeyring::parse(&missing_active).is_err());
-        let crypto = crypto_with_handle_keyring(2).expect("versioned handle keyring");
+        let crypto = crypto_with_handle_keyring(2)?;
         assert_eq!(
             crypto.lookup_digest_for_version(3, "tenant_01", "secret_handle"),
             Err(CryptoError::KeyUnavailable)
         );
+        Ok(())
     }
 
     #[test]
