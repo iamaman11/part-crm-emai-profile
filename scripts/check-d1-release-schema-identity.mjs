@@ -41,6 +41,34 @@ function requireOrderedMarkers(text, label, markers) {
   }
 }
 
+function validateReleaseSources(catalog, resolver) {
+  requireOrderedMarkers(catalog, 'Catalog release', [
+    'def build_manifest_payload(',
+    '"schema_contract": load_schema_contract(root)',
+    'def finalized_manifest(',
+    'manifest["release_id"] = release_id_for(payload)',
+  ]);
+  if (!catalog.includes('def release_id_for(payload: dict[str, Any]) -> str:')) {
+    fail('Catalog release_id_for function is missing');
+  }
+  if (!catalog.includes('return RELEASE_PREFIX + sha256_bytes(canonical_compact(payload))')) {
+    fail('Catalog release_id_for must hash the complete canonical compact payload');
+  }
+  if (!catalog.includes('del payload["release_id"]') || !catalog.includes('if release_id_for(payload) != release_id:')) {
+    fail('Catalog release verifier must recompute immutable identity from the complete payload');
+  }
+
+  requireOrderedMarkers(resolver, 'Resolver release', [
+    'def manifest_for(',
+    '"schema_contract": load_schema_contract(root)',
+    'release_id = RELEASE_PREFIX + sha256_bytes(canonical(payload))',
+    'return {"release_id": release_id, **payload}',
+  ]);
+  if (!resolver.includes('del payload["release_id"]') || !resolver.includes('if release_id != RELEASE_PREFIX + sha256_bytes(canonical(payload)):')) {
+    fail('Resolver release verifier must recompute immutable identity from the complete payload');
+  }
+}
+
 function derivedSchemaContract(authority, componentId) {
   const component = authority.components.find((entry) => entry.component_id === componentId);
   if (!component) fail(`${componentId} D1 authority component is missing`);
@@ -95,33 +123,28 @@ function proveSyntheticIdentity(component) {
   }
 }
 
-async function validate() {
+function expectSourceRejected(label, catalog, resolver) {
+  try {
+    validateReleaseSources(catalog, resolver);
+  } catch {
+    return;
+  }
+  fail(`negative release source fixture unexpectedly passed: ${label}`);
+}
+
+async function loadInputs() {
   const [catalog, resolver, authorityText] = await Promise.all([
     readFile(path.join(ROOT, CATALOG_RELEASE), 'utf8'),
     readFile(path.join(ROOT, RESOLVER_RELEASE), 'utf8'),
     readFile(path.join(ROOT, AUTHORITY), 'utf8'),
   ]);
-  const authority = JSON.parse(authorityText);
+  return { catalog, resolver, authority: JSON.parse(authorityText) };
+}
+
+function validateAuthority(authority) {
   if (!authority || authority.kind !== 'D1_EVOLUTION_AUTHORITY' || !Array.isArray(authority.components)) {
     fail('D1 evolution authority identity is invalid');
   }
-
-  requireOrderedMarkers(catalog, 'Catalog release', [
-    'def build_manifest_payload(',
-    '"schema_contract": load_schema_contract(root)',
-    'def finalized_manifest(',
-    'release_id = release_id_for(payload)',
-  ]);
-  if (!catalog.includes('return RELEASE_PREFIX + sha256_bytes(canonical(payload))')) {
-    fail('Catalog release_id_for must hash the complete canonical payload');
-  }
-
-  requireOrderedMarkers(resolver, 'Resolver release', [
-    'def manifest_for(',
-    '"schema_contract": load_schema_contract(root)',
-    'release_id = RELEASE_PREFIX + sha256_bytes(canonical(payload))',
-  ]);
-
   const catalogContract = derivedSchemaContract(authority, 'catalog');
   const resolverContract = derivedSchemaContract(authority, 'resolver');
   for (const contract of [catalogContract, resolverContract]) {
@@ -132,18 +155,53 @@ async function validate() {
       fail(`${contract.database_component} derived schema contract digests are invalid`);
     }
   }
-
   proveSyntheticIdentity('catalog');
   proveSyntheticIdentity('resolver');
 }
 
+async function validate() {
+  const { catalog, resolver, authority } = await loadInputs();
+  validateReleaseSources(catalog, resolver);
+  validateAuthority(authority);
+}
+
 async function selfTest() {
-  await validate();
+  const { catalog, resolver, authority } = await loadInputs();
+  validateReleaseSources(catalog, resolver);
+  validateAuthority(authority);
+
+  expectSourceRejected(
+    'Catalog schema contract removed from identity payload',
+    catalog.replace('        "schema_contract": load_schema_contract(root),\n', ''),
+    resolver,
+  );
+  expectSourceRejected(
+    'Catalog release ID detached from full payload',
+    catalog.replace(
+      'manifest["release_id"] = release_id_for(payload)',
+      'manifest["release_id"] = RELEASE_PREFIX + "0" * 64',
+    ),
+    resolver,
+  );
+  expectSourceRejected(
+    'Resolver schema contract removed from identity payload',
+    catalog,
+    resolver.replace('        "schema_contract": load_schema_contract(root),\n', ''),
+  );
+  expectSourceRejected(
+    'Resolver release ID detached from full payload',
+    catalog,
+    resolver.replace(
+      'release_id = RELEASE_PREFIX + sha256_bytes(canonical(payload))',
+      'release_id = RELEASE_PREFIX + "0" * 64',
+    ),
+  );
+
   const payload = { schema_contract: { compatibility_policy_digest: 'a'.repeat(64) } };
   const mutated = structuredClone(payload);
   mutated.schema_contract.compatibility_policy_digest = 'b'.repeat(64);
   if (releaseId(payload) === releaseId(mutated)) fail('schema policy negative fixture retained release identity');
-  console.log('D1 release schema-identity negative fixture passed.');
+  console.log('D1 release schema-identity static and policy negative fixtures passed.');
 }
 
 async function main() {
