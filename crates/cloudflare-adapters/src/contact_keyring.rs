@@ -1,4 +1,6 @@
-use crate::contact_key_lifecycle::{ContactKeyLifecycleMetadata, D1ContactKeyLifecycle};
+use crate::contact_key_lifecycle::ContactKeyLifecycleMetadata;
+#[cfg(target_arch = "wasm32")]
+use crate::contact_key_lifecycle::D1ContactKeyLifecycle;
 use crate::contact_protection::{
     ContactEncryptionRootKey, ContactLookupRootKey, ContactProtectionKeyring,
 };
