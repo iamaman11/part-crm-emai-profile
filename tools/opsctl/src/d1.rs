@@ -13,10 +13,6 @@ mod util;
 #[path = "d1/verify.rs"]
 mod verify;
 
-#[cfg(test)]
-#[path = "d1/tests.rs"]
-mod tests;
-
 use authority::{
     load_component_authority, load_preconditions, load_release_contract, load_wrangler_ledger,
 };
@@ -146,3 +142,7 @@ fn serialize_evaluation(
         .map(|value| value + "\n")
         .map_err(|error| D1Error::new(format!("cannot serialize d1 result: {error}")))
 }
+
+#[cfg(test)]
+#[path = "d1/tests.rs"]
+mod tests;
