@@ -76,8 +76,8 @@ impl ServiceAuthKeyring {
     }
 
     fn parse_json(serialized: &str) -> Result<Self, IngressError> {
-        let document: ServiceAuthKeyringSecret = serde_json::from_str(serialized)
-            .map_err(|_| IngressError::ConfigurationUnavailable)?;
+        let document: ServiceAuthKeyringSecret =
+            serde_json::from_str(serialized).map_err(|_| IngressError::ConfigurationUnavailable)?;
         if !valid_key_id(&document.active_key_id)
             || document.keys.is_empty()
             || document.keys.len() > MAX_RETAINED_KEYS
@@ -92,8 +92,8 @@ impl ServiceAuthKeyring {
                 entry.key_hex.zeroize();
                 return Err(IngressError::ConfigurationUnavailable);
             }
-            let mut decoded = hex_decode(&entry.key_hex)
-                .ok_or(IngressError::ConfigurationUnavailable)?;
+            let mut decoded =
+                hex_decode(&entry.key_hex).ok_or(IngressError::ConfigurationUnavailable)?;
             entry.key_hex.zeroize();
             if !(MIN_KEY_BYTES..=MAX_KEY_BYTES).contains(&decoded.len()) {
                 decoded.zeroize();
@@ -114,11 +114,7 @@ impl ServiceAuthKeyring {
         })
     }
 
-    fn verification_key(
-        &self,
-        version: &str,
-        key_id: Option<&str>,
-    ) -> Result<&[u8], IngressError> {
+    fn verification_key(&self, version: &str, key_id: Option<&str>) -> Result<&[u8], IngressError> {
         let selected_id = match (version, key_id) {
             (LEGACY_SIGNATURE_VERSION, None) => LEGACY_KEY_ID,
             (KEYED_SIGNATURE_VERSION, Some(key_id))
@@ -330,7 +326,8 @@ mod tests {
 
     #[test]
     fn raw_secret_remains_legacy_v1_only() -> Result<(), IngressError> {
-        let keyring = ServiceAuthKeyring::parse(&"legacy-caller-auth-key-material-0123456789".repeat(2))?;
+        let keyring =
+            ServiceAuthKeyring::parse(&"legacy-caller-auth-key-material-0123456789".repeat(2))?;
         assert!(
             keyring
                 .verification_key(LEGACY_SIGNATURE_VERSION, None)
@@ -344,8 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn migrated_keyring_accepts_named_v2_and_explicit_legacy_overlap()
-    -> Result<(), IngressError> {
+    fn migrated_keyring_accepts_named_v2_and_explicit_legacy_overlap() -> Result<(), IngressError> {
         let keyring = ServiceAuthKeyring::parse(&migrated_keyring())?;
         assert_eq!(keyring.active_key_id, "key-2026-08");
         assert!(
