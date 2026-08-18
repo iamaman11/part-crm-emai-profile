@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "issue": 352,
+  "accepted_main": "6145ac6754d83cf1d3b5361a098c28a20a9222f7",
+  "policy": "exact-name-and-SHA retirement only; no regex mutation; preserve Actions run history",
+  "resolutions": [
+    {
+      "branch": "agent/ar8c-acceptance-closeout",
+      "expected_head_sha": "7d8794d16da16d62b68b92f23118842868c5c884",
+      "decision": "RETIRE_SUPERSEDED_CLOSEOUT_SCRATCH",
+      "basis": "No open or merged PR uses this branch. It hosted the temporary AR-8C closeout one-shot; its historical Actions runs are already preserved in accepted registry-classification evidence. Formal AR-8C closeout was accepted through PR #351 from agent/ar8c-acceptance-closeout-final and merged as 85c6d42d877108274bfac3b30042164dca0bec41."
+    },
+    {
+      "branch": "agent/ar8c-acceptance-closeout-final-clean",
+      "expected_head_sha": "c74d7a142fb622219cf0e85c1e8eb70dc0397064",
+      "decision": "RETIRE_SUPERSEDED_CLOSEOUT_SCRATCH",
+      "basis": "No PR uses this branch. It is an intermediate closeout candidate that still carries temporary _ar8c-acceptance-closeout-once helper/workflow surfaces. Formal accepted closeout is PR #351 from agent/ar8c-acceptance-closeout-final; current main contains the accepted result without those temporary surfaces."
+    },
+    {
+      "branch": "agent/post-ar8c-cleanup-dx",
+      "expected_head_sha": "09ddc929b5d238b984fb87691716bbfbeebacbd7",
+      "decision": "RETIRE_DISCOVERY_SCRATCH",
+      "basis": "No PR uses this branch. Its unique tree is temporary Phase-A registry discovery/classification machinery and tmp snapshots; canonical classification evidence was subsequently accepted through PR #353."
+    },
+    {
+      "branch": "agent/post-ar8c-cleanup-registry-fix",
+      "expected_head_sha": "4132fc1a9af40d9dfe7687f0ec63ea7e97c48f62",
+      "decision": "RETIRE_READ_ONLY_VERIFIER_SCRATCH",
+      "basis": "No open PR uses this branch. Its unique workflow is a read-only Actions-registry verifier using actions:read; registration 336535387 was explicitly classified scratch and disabled_manually. Historical runs are preserved."
+    },
+    {
+      "branch": "agent/post-ar8c-cleanup-registry-retirement",
+      "expected_head_sha": "71053986d4ed3fd0c7eb467244c592a0a9f6fb3d",
+      "decision": "RETIRE_SUPERSEDED_REGISTRY_CANDIDATE",
+      "basis": "Intermediate registry-retirement branch. Final accepted Phase-A candidate was PR #353 from agent/post-ar8c-cleanup-registry-retirement-final, exact-green head 8084d27fcc67a7cdbbe4b9d4fe3ba152bc8ae0f1, merged as 923672fd9f5fbdfacd8685143151e5ed322cb3cf."
+    },
+    {
+      "branch": "agent/post-ar8c-registry-postverify",
+      "expected_head_sha": "b128c69c67fafd0b55f0653a526525522efad6fb",
+      "decision": "RETIRE_READ_ONLY_VERIFIER_SCRATCH",
+      "basis": "No open PR uses this branch. It records metadata-only post-retirement verification and exact retirement of scratch registrations 336535387 and 336540374; historical runs are preserved and registration 336540374 is disabled_manually."
+    }
+  ],
+  "invariants": {
+    "all_resolutions_are_temporary_or_superseded": true,
+    "accepted_authority_preserved_on_main": true,
+    "actions_run_history_must_not_be_deleted": true,
+    "production_mutation": false,
+    "provider_mutation": false,
+    "secret_readback": false
+  }
+}
