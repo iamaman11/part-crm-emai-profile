@@ -1,0 +1,9 @@
+{
+  "component": "resolver",
+  "completed": [
+    "replacement_active",
+    "backfill_complete",
+    "old_readers_writers_retired",
+    "known_good_compatible"
+  ]
+}
