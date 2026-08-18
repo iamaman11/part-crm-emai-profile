@@ -225,7 +225,11 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
     ) -> Result<(), RecordStoreError> {
         validate_record_input(identity, document, now_ms, expires_at_ms)?;
         let lookup = match self
-            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .resolve_record_lookup(
+                identity.tenant_id,
+                identity.raw_handle,
+                identity.record_kind,
+            )
             .await?
         {
             Some(existing) => existing,
@@ -299,7 +303,11 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
     ) -> Result<StoredSecret, RecordStoreError> {
         validate_identity(identity)?;
         let lookup = self
-            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .resolve_record_lookup(
+                identity.tenant_id,
+                identity.raw_handle,
+                identity.record_kind,
+            )
             .await?
             .ok_or(RecordStoreError::NotFound)?;
         let row = query!(
@@ -391,7 +399,11 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             return Err(RefreshAcquireError::Store(RecordStoreError::InvalidInput));
         }
         let lookup = self
-            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .resolve_record_lookup(
+                identity.tenant_id,
+                identity.raw_handle,
+                identity.record_kind,
+            )
             .await
             .map_err(RefreshAcquireError::Store)?
             .ok_or(RefreshAcquireError::Store(RecordStoreError::NotFound))?;
@@ -520,7 +532,11 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
     ) -> Result<u64, RecordStoreError> {
         validate_record_input(identity, document, now_ms, None)?;
         let lookup = self
-            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .resolve_record_lookup(
+                identity.tenant_id,
+                identity.raw_handle,
+                identity.record_kind,
+            )
             .await?
             .ok_or(RecordStoreError::NotFound)?;
         let context = AuthenticatedContext {
@@ -591,7 +607,11 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
     ) -> Result<(), RecordStoreError> {
         validate_identity(identity)?;
         let lookup = self
-            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .resolve_record_lookup(
+                identity.tenant_id,
+                identity.raw_handle,
+                identity.record_kind,
+            )
             .await?
             .ok_or(RecordStoreError::NotFound)?;
         let now = sqlite_millis(now_ms)?;
@@ -635,7 +655,11 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
     ) -> Result<u64, RecordStoreError> {
         validate_identity(identity)?;
         let lookup = self
-            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .resolve_record_lookup(
+                identity.tenant_id,
+                identity.raw_handle,
+                identity.record_kind,
+            )
             .await?
             .ok_or(RecordStoreError::NotFound)?;
         let now = sqlite_millis(now_ms)?;
@@ -725,7 +749,11 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
     ) -> Result<StoredSecret, RecordStoreError> {
         validate_identity(identity)?;
         let lookup = self
-            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .resolve_record_lookup(
+                identity.tenant_id,
+                identity.raw_handle,
+                identity.record_kind,
+            )
             .await?
             .ok_or(RecordStoreError::ReplayRejected)?;
         let now = sqlite_millis(now_ms)?;
@@ -1342,21 +1370,27 @@ mod tests {
             live_refresh_leases: 0,
         };
         assert!(clear.can_retire());
-        assert!(!HandleHmacDependencyStatus {
-            active: true,
-            ..clear
-        }
-        .can_retire());
-        assert!(!HandleHmacDependencyStatus {
-            idempotency_records: 1,
-            ..clear
-        }
-        .can_retire());
-        assert!(!HandleHmacDependencyStatus {
-            retained: false,
-            ..clear
-        }
-        .can_retire());
+        assert!(
+            !HandleHmacDependencyStatus {
+                active: true,
+                ..clear
+            }
+            .can_retire()
+        );
+        assert!(
+            !HandleHmacDependencyStatus {
+                idempotency_records: 1,
+                ..clear
+            }
+            .can_retire()
+        );
+        assert!(
+            !HandleHmacDependencyStatus {
+                retained: false,
+                ..clear
+            }
+            .can_retire()
+        );
     }
 
     const fn identity() -> RecordIdentity<'static> {
