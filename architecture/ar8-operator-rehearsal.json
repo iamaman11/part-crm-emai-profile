@@ -206,6 +206,68 @@
       "recovery": "Keep the previous passwordCredential valid and restore its Worker binding if verification fails; removed credentials are not treated as recoverable."
     }
   ],
+  "profile_security_plans": [
+    {
+      "id": "profile-generation.encryption-key-hierarchy",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "AUTHORITY_AND_LIFECYCLE_CONTRACT_ONLY",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10_CONSUMER_INTEGRATION_THEN_AR-13_ROTATION_AND_AR-14_RECOVERY",
+      "operator_rule": "Never display root/KEK/DEK material; expose key ids, wrapped-reference/version/dependency state and readiness only.",
+      "recovery_rule": "Do not retire a root/KEK version until reconciliation and restore evidence required by the later owning gates exists."
+    },
+    {
+      "id": "profile-identity.entropy-root",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "DEFERRED_IMPLEMENTATION_AR10",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10",
+      "operator_rule": "Expose fingerprint policy/generation identity and opaque secret-handle state only; never entropy bytes.",
+      "recovery_rule": "No in-place entropy rewrite; identity change requires a new profile generation and certification."
+    },
+    {
+      "id": "profile-bridge.device-private-key",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "HANDLE_BOUNDARY_PRESENT_PROVIDER_PROOF_DEFERRED",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10_AND_LATER_PLATFORM_REHEARSAL",
+      "operator_rule": "Expose device id/key handle/provider status only; private key bytes are never an application/operator surface.",
+      "recovery_rule": "Loss/revocation is handled through the owning device identity/enrollment authority; do not export private key material for recovery."
+    },
+    {
+      "id": "profile-network.proxy-credential",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "DEFERRED_IMPLEMENTATION_AR10",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10",
+      "operator_rule": "Expose provider/route/handle/status metadata only; never proxy username/password/token material.",
+      "recovery_rule": "Real network/proxy cutover must fail closed when the scoped handle/provider credential is missing, rejected or cross-environment."
+    },
+    {
+      "id": "profile-bridge.enrollment-claim",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "CURRENT_FAIL_CLOSED_CONTRACT",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10_RUNTIME_INTEGRATION",
+      "operator_rule": "Expose expiry/redemption/device-binding outcome only; claim value remains redacted.",
+      "recovery_rule": "Expired/replayed/rebound claims are not reused; issue a fresh claim through the owning enrollment authority."
+    },
+    {
+      "id": "profile-generation.short-lived-object-access",
+      "operator_visibility": "METADATA_ONLY",
+      "ar8_status": "DEFERRED_IMPLEMENTATION_AR10",
+      "mutation_executed": false,
+      "secret_readback": false,
+      "next_owning_gate": "AR-10_RUNTIME_CONTRACT_THEN_STAGING_RECOVERY_REHEARSAL",
+      "operator_rule": "Expose capability id/scope/expiry/generation binding only; never reuse the static control-plane R2 pair on Profile Bridge.",
+      "recovery_rule": "Expired/revoked scoped access is reissued only after current tenant/profile/generation/device/lease authorization is proven."
+    }
+  ],
   "negative_matrix": [
     {
       "id": "missing_binding",
@@ -274,6 +336,10 @@
         {
           "path": ".github/scripts/ar8-completion-lifecycle.mjs",
           "marker": "secret value field"
+        },
+        {
+          "path": ".github/scripts/ar8-profile-security.mjs",
+          "marker": "secret value-bearing field is forbidden"
         }
       ]
     },
