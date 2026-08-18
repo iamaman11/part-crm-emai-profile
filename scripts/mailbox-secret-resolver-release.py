@@ -607,11 +607,12 @@ def self_test() -> None:
         manifest["unexpected"] = "field"
         expect_rejected("identity field drift", lambda: verify_manifest(manifest))
         authority_path = root / D1_EVOLUTION
-        authority = json.loads(authority_path.read_text(encoding="utf-8"))
+        original_authority = authority_path.read_bytes()
+        authority = json.loads(original_authority)
         authority["components"][0]["historical_epoch"]["ordered_history"][0]["sha256"] = "0" * 64
         authority_path.write_text(json.dumps(authority) + "\n", encoding="utf-8")
         expect_rejected("schema history substitution", lambda: load_schema_contract(root))
-        fixture_root(root)
+        authority_path.write_bytes(original_authority)
         malicious = root / "malicious.tar"
         with tarfile.open(malicious, "w") as archive:
             info = tarfile.TarInfo("../escape")
