@@ -90,6 +90,7 @@ pub struct D1ContactKeyLifecycle<N> {
 }
 
 impl<N> D1ContactKeyLifecycle<N> {
+    #[cfg(target_arch = "wasm32")]
     #[must_use]
     pub(crate) const fn new(
         database: D1Database,
