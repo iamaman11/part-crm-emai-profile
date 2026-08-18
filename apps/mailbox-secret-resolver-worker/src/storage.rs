@@ -1,5 +1,5 @@
 use crate::crypto::{
-    AuthenticatedContext, CryptoError, EncryptedValue, NonceSource, ResolverCrypto,
+    AuthenticatedContext, CryptoError, EncryptedValue, LookupDigest, NonceSource, ResolverCrypto,
 };
 use crate::model::MAX_SECRET_DOCUMENT_BYTES;
 use serde::Deserialize;
@@ -44,10 +44,37 @@ pub struct StoredSecret {
     pub(crate) lifecycle: CredentialLifecycleState,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IdempotencyClaim {
+    pub hmac_version: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HandleHmacDependencyStatus {
+    pub version: u32,
+    pub active: bool,
+    pub retained: bool,
+    pub live_records: u32,
+    pub idempotency_records: u32,
+    pub live_refresh_leases: u32,
+}
+
+impl HandleHmacDependencyStatus {
+    #[must_use]
+    pub const fn can_retire(self) -> bool {
+        self.retained
+            && !self.active
+            && self.live_records == 0
+            && self.idempotency_records == 0
+            && self.live_refresh_leases == 0
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RefreshLease {
     mutation_generation: u64,
     owner_digest: String,
+    owner_hmac_version: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,14 +124,29 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
     ) -> Result<String, RecordStoreError> {
         let digest = self
             .crypto
-            .lookup_digest(tenant_id, idempotency_key)
+            .active_lookup_digest(tenant_id, idempotency_key)
             .map_err(map_crypto_error)?;
-        Ok(format!("{prefix}{digest}"))
+        Ok(format!("{prefix}{}", digest.digest))
+    }
+
+    pub fn deterministic_handle_for_version(
+        &self,
+        tenant_id: &str,
+        prefix: &str,
+        idempotency_key: &str,
+        hmac_version: u32,
+    ) -> Result<String, RecordStoreError> {
+        let digest = self
+            .crypto
+            .lookup_digest_for_version(hmac_version, tenant_id, idempotency_key)
+            .map_err(map_crypto_error)?;
+        Ok(format!("{prefix}{}", digest.digest))
     }
 
     pub fn lookup_digest(&self, tenant_id: &str, value: &str) -> Result<String, RecordStoreError> {
         self.crypto
-            .lookup_digest(tenant_id, value)
+            .active_lookup_digest(tenant_id, value)
+            .map(|candidate| candidate.digest)
             .map_err(map_crypto_error)
     }
 
@@ -115,7 +157,7 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         operation: &str,
         request_digest: &str,
         now_ms: u64,
-    ) -> Result<(), RecordStoreError> {
+    ) -> Result<IdempotencyClaim, RecordStoreError> {
         if !bounded_identifier(tenant_id, 128)
             || !bounded_identifier(idempotency_key, 192)
             || !bounded_identifier(operation, 64)
@@ -124,46 +166,54 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         {
             return Err(RecordStoreError::InvalidInput);
         }
-        let key_digest = self.lookup_digest(tenant_id, idempotency_key)?;
+        if let Some(existing) = self
+            .find_idempotency_claim(tenant_id, idempotency_key, operation)
+            .await?
+        {
+            if existing.request_sha256 != request_digest {
+                return Err(RecordStoreError::ReplayRejected);
+            }
+            return Ok(IdempotencyClaim {
+                hmac_version: existing.lookup.version,
+            });
+        }
+
+        let active = self
+            .crypto
+            .active_lookup_digest(tenant_id, idempotency_key)
+            .map_err(map_crypto_error)?;
         let created_at = sqlite_millis(now_ms)?;
         query!(
             &self.database,
             r#"
             INSERT INTO resolver_idempotency_records (
-                tenant_id, idempotency_digest, operation, request_sha256, created_at_ms
-            ) VALUES (?, ?, ?, ?, ?)
+                tenant_id, idempotency_digest, operation, request_sha256, created_at_ms,
+                hmac_version
+            ) VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT (tenant_id, idempotency_digest, operation) DO NOTHING
             "#,
             tenant_id,
-            key_digest.as_str(),
+            active.digest.as_str(),
             operation,
             request_digest,
-            created_at
+            created_at,
+            i64::from(active.version)
         )
         .map_err(|_| RecordStoreError::StorageUnavailable)?
         .run()
         .await
         .map_err(|_| RecordStoreError::StorageUnavailable)?;
-        let row = query!(
-            &self.database,
-            r#"
-            SELECT request_sha256
-            FROM resolver_idempotency_records
-            WHERE tenant_id = ? AND idempotency_digest = ? AND operation = ?
-            "#,
-            tenant_id,
-            key_digest,
-            operation
-        )
-        .map_err(|_| RecordStoreError::StorageUnavailable)?
-        .first::<IdempotencyRow>(None)
-        .await
-        .map_err(|_| RecordStoreError::StorageUnavailable)?
-        .ok_or(RecordStoreError::StorageUnavailable)?;
-        if row.request_sha256 != request_digest {
+
+        let claimed = self
+            .find_idempotency_claim(tenant_id, idempotency_key, operation)
+            .await?
+            .ok_or(RecordStoreError::StorageUnavailable)?;
+        if claimed.request_sha256 != request_digest {
             return Err(RecordStoreError::ReplayRejected);
         }
-        Ok(())
+        Ok(IdempotencyClaim {
+            hmac_version: claimed.lookup.version,
+        })
     }
 
     pub async fn store(
@@ -174,15 +224,21 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         expires_at_ms: Option<u64>,
     ) -> Result<(), RecordStoreError> {
         validate_record_input(identity, document, now_ms, expires_at_ms)?;
-        let lookup_digest = self
-            .crypto
-            .lookup_digest(identity.tenant_id, identity.raw_handle)
-            .map_err(map_crypto_error)?;
+        let lookup = match self
+            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .await?
+        {
+            Some(existing) => existing,
+            None => self
+                .crypto
+                .active_lookup_digest(identity.tenant_id, identity.raw_handle)
+                .map_err(map_crypto_error)?,
+        };
         let context = AuthenticatedContext {
             tenant_id: identity.tenant_id,
             provider: identity.provider,
             record_kind: identity.record_kind,
-            logical_id: &lookup_digest,
+            logical_id: &lookup.digest,
         };
         let encrypted = self
             .crypto
@@ -195,12 +251,13 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             r#"
             INSERT INTO resolver_encrypted_records (
                 tenant_id, lookup_digest, provider, record_kind, logical_id,
-                key_version, nonce_hex, ciphertext_hex, created_at_ms,
+                lookup_hmac_version, key_version, nonce_hex, ciphertext_hex, created_at_ms,
                 updated_at_ms, expires_at_ms, consumed_at_ms, discarded_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
             ON CONFLICT (tenant_id, lookup_digest, record_kind) DO UPDATE SET
                 provider = excluded.provider,
                 logical_id = excluded.logical_id,
+                lookup_hmac_version = excluded.lookup_hmac_version,
                 key_version = excluded.key_version,
                 nonce_hex = excluded.nonce_hex,
                 ciphertext_hex = excluded.ciphertext_hex,
@@ -211,14 +268,16 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
                 mutation_generation = resolver_encrypted_records.mutation_generation + 1,
                 credential_state = 'ACTIVE',
                 refresh_owner_digest = NULL,
+                refresh_owner_hmac_version = NULL,
                 refresh_started_at_ms = NULL,
                 refresh_expires_at_ms = NULL
             "#,
             identity.tenant_id,
-            lookup_digest.as_str(),
+            lookup.digest.as_str(),
             identity.provider,
             identity.record_kind,
-            lookup_digest.as_str(),
+            lookup.digest.as_str(),
+            i64::from(lookup.version),
             i64::from(encrypted.key_version),
             encrypted.nonce_hex.as_str(),
             encrypted.ciphertext_hex.as_str(),
@@ -239,20 +298,21 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         now_ms: u64,
     ) -> Result<StoredSecret, RecordStoreError> {
         validate_identity(identity)?;
-        let lookup_digest = self
-            .crypto
-            .lookup_digest(identity.tenant_id, identity.raw_handle)
-            .map_err(map_crypto_error)?;
+        let lookup = self
+            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .await?
+            .ok_or(RecordStoreError::NotFound)?;
         let row = query!(
             &self.database,
             r#"
-            SELECT provider, logical_id, key_version, nonce_hex, ciphertext_hex,
-                   expires_at_ms, discarded_at_ms, mutation_generation, credential_state
+            SELECT provider, logical_id, lookup_hmac_version, key_version, nonce_hex,
+                   ciphertext_hex, expires_at_ms, discarded_at_ms, mutation_generation,
+                   credential_state
             FROM resolver_encrypted_records
             WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ?
             "#,
             identity.tenant_id,
-            lookup_digest.as_str(),
+            lookup.digest.as_str(),
             identity.record_kind
         )
         .map_err(|_| RecordStoreError::StorageUnavailable)?
@@ -260,7 +320,12 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         .await
         .map_err(|_| RecordStoreError::StorageUnavailable)?
         .ok_or(RecordStoreError::NotFound)?;
-        if row.provider != identity.provider || row.logical_id != lookup_digest {
+        let lookup_hmac_version =
+            u32::try_from(row.lookup_hmac_version).map_err(|_| RecordStoreError::Crypto)?;
+        if row.provider != identity.provider
+            || row.logical_id != lookup.digest
+            || lookup_hmac_version != lookup.version
+        {
             return Err(RecordStoreError::NotFound);
         }
         if row.discarded_at_ms.is_some() {
@@ -289,7 +354,7 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             tenant_id: identity.tenant_id,
             provider: identity.provider,
             record_kind: identity.record_kind,
-            logical_id: &lookup_digest,
+            logical_id: &row.logical_id,
         };
         let document = self
             .crypto
@@ -299,7 +364,7 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         if reencrypted {
             self.reencrypt(
                 identity,
-                &lookup_digest,
+                &lookup.digest,
                 &context,
                 key_version,
                 &document,
@@ -325,20 +390,20 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         if expected_generation == 0 || now_ms == 0 {
             return Err(RefreshAcquireError::Store(RecordStoreError::InvalidInput));
         }
-        let lookup_digest = self
-            .crypto
-            .lookup_digest(identity.tenant_id, identity.raw_handle)
-            .map_err(map_crypto_error)
-            .map_err(RefreshAcquireError::Store)?;
+        let lookup = self
+            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .await
+            .map_err(RefreshAcquireError::Store)?
+            .ok_or(RefreshAcquireError::Store(RecordStoreError::NotFound))?;
         let owner = Zeroizing::new(
             self.crypto
                 .random_handle("refresh_", 24)
                 .map_err(map_crypto_error)
                 .map_err(RefreshAcquireError::Store)?,
         );
-        let owner_digest = self
+        let owner_lookup = self
             .crypto
-            .lookup_digest(identity.tenant_id, owner.as_str())
+            .active_lookup_digest(identity.tenant_id, owner.as_str())
             .map_err(map_crypto_error)
             .map_err(RefreshAcquireError::Store)?;
         let now = sqlite_millis(now_ms).map_err(RefreshAcquireError::Store)?;
@@ -350,20 +415,22 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             &self.database,
             r#"
             UPDATE resolver_encrypted_records
-            SET refresh_owner_digest = ?, refresh_started_at_ms = ?, refresh_expires_at_ms = ?,
-                updated_at_ms = ?
+            SET refresh_owner_digest = ?, refresh_owner_hmac_version = ?,
+                refresh_started_at_ms = ?, refresh_expires_at_ms = ?, updated_at_ms = ?
             WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ? AND provider = ?
               AND mutation_generation = ? AND credential_state = 'ACTIVE'
               AND discarded_at_ms IS NULL
               AND (refresh_owner_digest IS NULL OR refresh_expires_at_ms <= ?)
-            RETURNING mutation_generation, refresh_owner_digest, refresh_expires_at_ms
+            RETURNING mutation_generation, refresh_owner_digest, refresh_owner_hmac_version,
+                      refresh_expires_at_ms
             "#,
-            owner_digest.as_str(),
+            owner_lookup.digest.as_str(),
+            i64::from(owner_lookup.version),
             now,
             expires,
             now,
             identity.tenant_id,
-            lookup_digest.as_str(),
+            lookup.digest.as_str(),
             identity.record_kind,
             identity.provider,
             generation,
@@ -378,28 +445,33 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
                 .map_err(|_| RefreshAcquireError::Store(RecordStoreError::Crypto))?;
             let stored_expiry = u64::try_from(row.refresh_expires_at_ms)
                 .map_err(|_| RefreshAcquireError::Store(RecordStoreError::Crypto))?;
+            let stored_owner_version = u32::try_from(row.refresh_owner_hmac_version)
+                .map_err(|_| RefreshAcquireError::Store(RecordStoreError::Crypto))?;
             if stored_generation != expected_generation
-                || row.refresh_owner_digest != owner_digest
+                || row.refresh_owner_digest != owner_lookup.digest
+                || stored_owner_version != owner_lookup.version
                 || stored_expiry != expires_at_ms
             {
                 return Err(RefreshAcquireError::Store(RecordStoreError::Crypto));
             }
             return Ok(RefreshLease {
                 mutation_generation: expected_generation,
-                owner_digest,
+                owner_digest: owner_lookup.digest,
+                owner_hmac_version: owner_lookup.version,
             });
         }
 
         let row = query!(
             &self.database,
             r#"
-            SELECT mutation_generation, credential_state, refresh_owner_digest, refresh_expires_at_ms
+            SELECT mutation_generation, credential_state, refresh_owner_digest,
+                   refresh_owner_hmac_version, refresh_expires_at_ms
             FROM resolver_encrypted_records
             WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ? AND provider = ?
               AND discarded_at_ms IS NULL
             "#,
             identity.tenant_id,
-            lookup_digest,
+            lookup.digest,
             identity.record_kind,
             identity.provider
         )
@@ -421,6 +493,14 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
                 RecordStoreError::ConcurrentMutation,
             ));
         }
+        match (
+            row.refresh_owner_digest.as_ref(),
+            row.refresh_owner_hmac_version,
+        ) {
+            (None, None) => {}
+            (Some(_), Some(version)) if version > 0 => {}
+            _ => return Err(RefreshAcquireError::Store(RecordStoreError::Crypto)),
+        }
         if row.refresh_owner_digest.is_some()
             && row.refresh_expires_at_ms.is_some_and(|value| value > now)
         {
@@ -439,15 +519,15 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         now_ms: u64,
     ) -> Result<u64, RecordStoreError> {
         validate_record_input(identity, document, now_ms, None)?;
-        let lookup_digest = self
-            .crypto
-            .lookup_digest(identity.tenant_id, identity.raw_handle)
-            .map_err(map_crypto_error)?;
+        let lookup = self
+            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .await?
+            .ok_or(RecordStoreError::NotFound)?;
         let context = AuthenticatedContext {
             tenant_id: identity.tenant_id,
             provider: identity.provider,
             record_kind: identity.record_kind,
-            logical_id: &lookup_digest,
+            logical_id: &lookup.digest,
         };
         let encrypted = self
             .crypto
@@ -468,11 +548,13 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             UPDATE resolver_encrypted_records
             SET key_version = ?, nonce_hex = ?, ciphertext_hex = ?, updated_at_ms = ?,
                 mutation_generation = ?, refresh_owner_digest = NULL,
-                refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL
+                refresh_owner_hmac_version = NULL, refresh_started_at_ms = NULL,
+                refresh_expires_at_ms = NULL
             WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ? AND provider = ?
               AND mutation_generation = ? AND credential_state = 'ACTIVE'
-              AND refresh_owner_digest = ? AND refresh_expires_at_ms > ?
-              AND discarded_at_ms IS NULL AND key_version <= ?
+              AND refresh_owner_digest = ? AND refresh_owner_hmac_version = ?
+              AND refresh_expires_at_ms > ? AND discarded_at_ms IS NULL
+              AND key_version <= ?
             "#,
             i64::from(encrypted.key_version),
             encrypted.nonce_hex.as_str(),
@@ -480,11 +562,12 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             now,
             next_generation_sql,
             identity.tenant_id,
-            lookup_digest.as_str(),
+            lookup.digest.as_str(),
             identity.record_kind,
             identity.provider,
             generation,
             lease.owner_digest.as_str(),
+            i64::from(lease.owner_hmac_version),
             now,
             i64::from(encrypted.key_version)
         )
@@ -507,7 +590,10 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         now_ms: u64,
     ) -> Result<(), RecordStoreError> {
         validate_identity(identity)?;
-        let lookup_digest = self.lookup_digest(identity.tenant_id, identity.raw_handle)?;
+        let lookup = self
+            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .await?
+            .ok_or(RecordStoreError::NotFound)?;
         let now = sqlite_millis(now_ms)?;
         let generation =
             i64::try_from(lease.mutation_generation).map_err(|_| RecordStoreError::InvalidInput)?;
@@ -515,18 +601,20 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             &self.database,
             r#"
             UPDATE resolver_encrypted_records
-            SET refresh_owner_digest = NULL, refresh_started_at_ms = NULL,
-                refresh_expires_at_ms = NULL, updated_at_ms = ?
+            SET refresh_owner_digest = NULL, refresh_owner_hmac_version = NULL,
+                refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL, updated_at_ms = ?
             WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ? AND provider = ?
               AND mutation_generation = ? AND refresh_owner_digest = ?
+              AND refresh_owner_hmac_version = ?
             "#,
             now,
             identity.tenant_id,
-            lookup_digest,
+            lookup.digest,
             identity.record_kind,
             identity.provider,
             generation,
-            lease.owner_digest.as_str()
+            lease.owner_digest.as_str(),
+            i64::from(lease.owner_hmac_version)
         )
         .map_err(|_| RecordStoreError::StorageUnavailable)?
         .run()
@@ -546,7 +634,10 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         now_ms: u64,
     ) -> Result<u64, RecordStoreError> {
         validate_identity(identity)?;
-        let lookup_digest = self.lookup_digest(identity.tenant_id, identity.raw_handle)?;
+        let lookup = self
+            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .await?
+            .ok_or(RecordStoreError::NotFound)?;
         let now = sqlite_millis(now_ms)?;
         let generation =
             i64::try_from(lease.mutation_generation).map_err(|_| RecordStoreError::InvalidInput)?;
@@ -561,21 +652,22 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             r#"
             UPDATE resolver_encrypted_records
             SET credential_state = 'REAUTH_REQUIRED', mutation_generation = ?,
-                refresh_owner_digest = NULL, refresh_started_at_ms = NULL,
-                refresh_expires_at_ms = NULL, updated_at_ms = ?
+                refresh_owner_digest = NULL, refresh_owner_hmac_version = NULL,
+                refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL, updated_at_ms = ?
             WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ? AND provider = ?
               AND mutation_generation = ? AND credential_state = 'ACTIVE'
-              AND refresh_owner_digest = ? AND refresh_expires_at_ms > ?
-              AND discarded_at_ms IS NULL
+              AND refresh_owner_digest = ? AND refresh_owner_hmac_version = ?
+              AND refresh_expires_at_ms > ? AND discarded_at_ms IS NULL
             "#,
             next_generation_sql,
             now,
             identity.tenant_id,
-            lookup_digest,
+            lookup.digest,
             identity.record_kind,
             identity.provider,
             generation,
             lease.owner_digest.as_str(),
+            i64::from(lease.owner_hmac_version),
             now
         )
         .map_err(|_| RecordStoreError::StorageUnavailable)?
@@ -597,24 +689,26 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         record_kind: &str,
         now_ms: u64,
     ) -> Result<(), RecordStoreError> {
-        let lookup_digest = self
-            .crypto
-            .lookup_digest(tenant_id, raw_handle)
-            .map_err(map_crypto_error)?;
+        let Some(lookup) = self
+            .resolve_record_lookup(tenant_id, raw_handle, record_kind)
+            .await?
+        else {
+            return Ok(());
+        };
         let now = sqlite_millis(now_ms)?;
         query!(
             &self.database,
             r#"
             UPDATE resolver_encrypted_records
             SET discarded_at_ms = COALESCE(discarded_at_ms, ?), updated_at_ms = ?,
-                refresh_owner_digest = NULL, refresh_started_at_ms = NULL,
-                refresh_expires_at_ms = NULL
+                refresh_owner_digest = NULL, refresh_owner_hmac_version = NULL,
+                refresh_started_at_ms = NULL, refresh_expires_at_ms = NULL
             WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ?
             "#,
             now,
             now,
             tenant_id,
-            lookup_digest,
+            lookup.digest,
             record_kind
         )
         .map_err(|_| RecordStoreError::StorageUnavailable)?
@@ -630,10 +724,10 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         now_ms: u64,
     ) -> Result<StoredSecret, RecordStoreError> {
         validate_identity(identity)?;
-        let lookup_digest = self
-            .crypto
-            .lookup_digest(identity.tenant_id, identity.raw_handle)
-            .map_err(map_crypto_error)?;
+        let lookup = self
+            .resolve_record_lookup(identity.tenant_id, identity.raw_handle, identity.record_kind)
+            .await?
+            .ok_or(RecordStoreError::ReplayRejected)?;
         let now = sqlite_millis(now_ms)?;
         let row = query!(
             &self.database,
@@ -643,13 +737,14 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ?
               AND provider = ? AND consumed_at_ms IS NULL AND discarded_at_ms IS NULL
               AND (expires_at_ms IS NULL OR expires_at_ms > ?)
-            RETURNING provider, logical_id, key_version, nonce_hex, ciphertext_hex,
-                      expires_at_ms, discarded_at_ms, mutation_generation, credential_state
+            RETURNING provider, logical_id, lookup_hmac_version, key_version, nonce_hex,
+                      ciphertext_hex, expires_at_ms, discarded_at_ms, mutation_generation,
+                      credential_state
             "#,
             now,
             now,
             identity.tenant_id,
-            lookup_digest.as_str(),
+            lookup.digest.as_str(),
             identity.record_kind,
             identity.provider,
             now
@@ -659,7 +754,12 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         .await
         .map_err(|_| RecordStoreError::StorageUnavailable)?
         .ok_or(RecordStoreError::ReplayRejected)?;
-        if row.provider != identity.provider || row.logical_id != lookup_digest {
+        let lookup_hmac_version =
+            u32::try_from(row.lookup_hmac_version).map_err(|_| RecordStoreError::Crypto)?;
+        if row.provider != identity.provider
+            || row.logical_id != lookup.digest
+            || lookup_hmac_version != lookup.version
+        {
             return Err(RecordStoreError::NotFound);
         }
         let key_version = u32::try_from(row.key_version).map_err(|_| RecordStoreError::Crypto)?;
@@ -674,7 +774,7 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             tenant_id: identity.tenant_id,
             provider: identity.provider,
             record_kind: identity.record_kind,
-            logical_id: &lookup_digest,
+            logical_id: &row.logical_id,
         };
         let document = self
             .crypto
@@ -692,6 +792,77 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
             reencrypted: false,
             mutation_generation,
             lifecycle,
+        })
+    }
+
+    pub async fn lookup_hmac_dependency_status(
+        &self,
+        version: u32,
+        now_ms: u64,
+    ) -> Result<HandleHmacDependencyStatus, RecordStoreError> {
+        if version == 0 || now_ms == 0 {
+            return Err(RecordStoreError::InvalidInput);
+        }
+        let version_sql = i64::from(version);
+        let now = sqlite_millis(now_ms)?;
+        let live_records = query!(
+            &self.database,
+            r#"
+            SELECT COUNT(*) AS count
+            FROM resolver_encrypted_records
+            WHERE lookup_hmac_version = ?
+              AND discarded_at_ms IS NULL
+              AND consumed_at_ms IS NULL
+              AND (expires_at_ms IS NULL OR expires_at_ms > ?)
+            "#,
+            version_sql,
+            now
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .first::<CountRow>(None)
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .ok_or(RecordStoreError::StorageUnavailable)?;
+        let idempotency_records = query!(
+            &self.database,
+            r#"
+            SELECT COUNT(*) AS count
+            FROM resolver_idempotency_records
+            WHERE hmac_version = ?
+            "#,
+            version_sql
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .first::<CountRow>(None)
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .ok_or(RecordStoreError::StorageUnavailable)?;
+        let live_refresh_leases = query!(
+            &self.database,
+            r#"
+            SELECT COUNT(*) AS count
+            FROM resolver_encrypted_records
+            WHERE refresh_owner_hmac_version = ?
+              AND refresh_owner_digest IS NOT NULL
+              AND refresh_expires_at_ms > ?
+              AND discarded_at_ms IS NULL
+            "#,
+            version_sql,
+            now
+        )
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .first::<CountRow>(None)
+        .await
+        .map_err(|_| RecordStoreError::StorageUnavailable)?
+        .ok_or(RecordStoreError::StorageUnavailable)?;
+        let retained_versions = self.crypto.retained_lookup_hmac_versions();
+        Ok(HandleHmacDependencyStatus {
+            version,
+            active: self.crypto.active_lookup_hmac_version() == version,
+            retained: retained_versions.contains(&version),
+            live_records: count_to_u32(live_records.count)?,
+            idempotency_records: count_to_u32(idempotency_records.count)?,
+            live_refresh_leases: count_to_u32(live_refresh_leases.count)?,
         })
     }
 
@@ -811,8 +982,7 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         .await
         .map_err(|_| RecordStoreError::StorageUnavailable)?
         .ok_or(RecordStoreError::StorageUnavailable)?;
-        let remaining_records =
-            u32::try_from(remaining.count).map_err(|_| RecordStoreError::StorageUnavailable)?;
+        let remaining_records = count_to_u32(remaining.count)?;
 
         for (from_version, scanned, reencrypted) in observed_versions {
             let rotation_id = format!("from-v{from_version}-to-v{active_key_version}");
@@ -885,6 +1055,98 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
         })
     }
 
+    async fn find_idempotency_claim(
+        &self,
+        tenant_id: &str,
+        idempotency_key: &str,
+        operation: &str,
+    ) -> Result<Option<ResolvedIdempotencyClaim>, RecordStoreError> {
+        let candidates = self
+            .crypto
+            .lookup_candidates(tenant_id, idempotency_key)
+            .map_err(map_crypto_error)?;
+        let mut resolved = None;
+        for candidate in candidates {
+            let row = query!(
+                &self.database,
+                r#"
+                SELECT request_sha256, hmac_version
+                FROM resolver_idempotency_records
+                WHERE tenant_id = ? AND idempotency_digest = ? AND operation = ?
+                "#,
+                tenant_id,
+                candidate.digest.as_str(),
+                operation
+            )
+            .map_err(|_| RecordStoreError::StorageUnavailable)?
+            .first::<IdempotencyRow>(None)
+            .await
+            .map_err(|_| RecordStoreError::StorageUnavailable)?;
+            let Some(row) = row else {
+                continue;
+            };
+            let stored_version =
+                u32::try_from(row.hmac_version).map_err(|_| RecordStoreError::Crypto)?;
+            if stored_version != candidate.version || resolved.is_some() {
+                return Err(RecordStoreError::Crypto);
+            }
+            resolved = Some(ResolvedIdempotencyClaim {
+                lookup: candidate,
+                request_sha256: row.request_sha256,
+            });
+        }
+        Ok(resolved)
+    }
+
+    async fn resolve_record_lookup(
+        &self,
+        tenant_id: &str,
+        raw_handle: &str,
+        record_kind: &str,
+    ) -> Result<Option<LookupDigest>, RecordStoreError> {
+        if !bounded_identifier(tenant_id, 128)
+            || !bounded_identifier(raw_handle, 192)
+            || !bounded_identifier(record_kind, 64)
+        {
+            return Err(RecordStoreError::InvalidInput);
+        }
+        let candidates = self
+            .crypto
+            .lookup_candidates(tenant_id, raw_handle)
+            .map_err(map_crypto_error)?;
+        let mut resolved = None;
+        for candidate in candidates {
+            let row = query!(
+                &self.database,
+                r#"
+                SELECT lookup_hmac_version, logical_id
+                FROM resolver_encrypted_records
+                WHERE tenant_id = ? AND lookup_digest = ? AND record_kind = ?
+                "#,
+                tenant_id,
+                candidate.digest.as_str(),
+                record_kind
+            )
+            .map_err(|_| RecordStoreError::StorageUnavailable)?
+            .first::<LookupMetadataRow>(None)
+            .await
+            .map_err(|_| RecordStoreError::StorageUnavailable)?;
+            let Some(row) = row else {
+                continue;
+            };
+            let stored_version =
+                u32::try_from(row.lookup_hmac_version).map_err(|_| RecordStoreError::Crypto)?;
+            if stored_version != candidate.version
+                || row.logical_id != candidate.digest
+                || resolved.is_some()
+            {
+                return Err(RecordStoreError::Crypto);
+            }
+            resolved = Some(candidate);
+        }
+        Ok(resolved)
+    }
+
     async fn reencrypt(
         &self,
         identity: &RecordIdentity<'_>,
@@ -932,10 +1194,22 @@ impl<N: NonceSource> EncryptedRecordStore<N> {
     }
 }
 
+struct ResolvedIdempotencyClaim {
+    lookup: LookupDigest,
+    request_sha256: String,
+}
+
+#[derive(Deserialize)]
+struct LookupMetadataRow {
+    lookup_hmac_version: i64,
+    logical_id: String,
+}
+
 #[derive(Deserialize)]
 struct EncryptedRecordRow {
     provider: String,
     logical_id: String,
+    lookup_hmac_version: i64,
     key_version: i64,
     nonce_hex: String,
     ciphertext_hex: String,
@@ -949,6 +1223,7 @@ struct EncryptedRecordRow {
 struct RefreshLeaseRow {
     mutation_generation: i64,
     refresh_owner_digest: String,
+    refresh_owner_hmac_version: i64,
     refresh_expires_at_ms: i64,
 }
 
@@ -957,6 +1232,7 @@ struct RefreshStateRow {
     mutation_generation: i64,
     credential_state: String,
     refresh_owner_digest: Option<String>,
+    refresh_owner_hmac_version: Option<i64>,
     refresh_expires_at_ms: Option<i64>,
 }
 
@@ -980,6 +1256,7 @@ struct CountRow {
 #[derive(Deserialize)]
 struct IdempotencyRow {
     request_sha256: String,
+    hmac_version: i64,
 }
 
 fn require_one_change(meta: Option<D1ResultMeta>) -> Result<(), RecordStoreError> {
@@ -1031,13 +1308,19 @@ fn sqlite_millis(value: u64) -> Result<i64, RecordStoreError> {
     i64::try_from(value).map_err(|_| RecordStoreError::InvalidInput)
 }
 
+fn count_to_u32(value: i64) -> Result<u32, RecordStoreError> {
+    u32::try_from(value).map_err(|_| RecordStoreError::StorageUnavailable)
+}
+
 const fn map_crypto_error(_error: CryptoError) -> RecordStoreError {
     RecordStoreError::Crypto
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RecordIdentity, RecordStoreError, validate_record_input};
+    use super::{
+        HandleHmacDependencyStatus, RecordIdentity, RecordStoreError, validate_record_input,
+    };
 
     #[test]
     fn record_input_is_bounded_and_expiry_is_forward_only() {
@@ -1046,6 +1329,34 @@ mod tests {
             validate_record_input(&identity(), b"{}", 100, Some(100)),
             Err(RecordStoreError::InvalidInput)
         );
+    }
+
+    #[test]
+    fn handle_hmac_retirement_requires_zero_live_dependencies_and_non_active_version() {
+        let clear = HandleHmacDependencyStatus {
+            version: 1,
+            active: false,
+            retained: true,
+            live_records: 0,
+            idempotency_records: 0,
+            live_refresh_leases: 0,
+        };
+        assert!(clear.can_retire());
+        assert!(!HandleHmacDependencyStatus {
+            active: true,
+            ..clear
+        }
+        .can_retire());
+        assert!(!HandleHmacDependencyStatus {
+            idempotency_records: 1,
+            ..clear
+        }
+        .can_retire());
+        assert!(!HandleHmacDependencyStatus {
+            retained: false,
+            ..clear
+        }
+        .can_retire());
     }
 
     const fn identity() -> RecordIdentity<'static> {
