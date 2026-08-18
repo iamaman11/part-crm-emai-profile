@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod d1;
+
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
@@ -8,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const HELP: &str = "opsctl — project-specific read-only operations interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n\nCOMMANDS:\n    doctor                Validate canonical repository authorities\n    status                Print canonical docs/status.json\n    inventory             Print canonical architecture/inventory.json\n    credential-lifecycle  Print canonical credential lifecycle metadata\n    rotation-plan         Print canonical operator rotation/recovery contract\n\nOPTIONS:\n    --root PATH  Explicit repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nThis interface is permanently read-only and metadata-only. No provider, database, secret, deployment, or customer-state mutation is exposed.\n";
+pub const HELP: &str = "opsctl — project-specific read-only operations interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n    opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [--release-manifest PATH] [--authority PATH]\n\nCOMMANDS:\n    doctor                Validate canonical repository authorities\n    status                Print canonical docs/status.json\n    inventory             Print canonical architecture/inventory.json\n    credential-lifecycle  Print canonical credential lifecycle metadata\n    rotation-plan         Print canonical operator rotation/recovery contract\n    d1 status             Classify a saved D1 migration ledger against canonical history\n    d1 plan               Build a deterministic migration plan for a release schema contract\n    d1 compatibility      Evaluate runtime/schema compatibility and rollback safety\n    d1 verify             Verify a post-apply ledger against a release schema contract\n\nD1 OPTIONS:\n    --component ID          catalog or resolver\n    --ledger-json PATH      Saved machine-readable Wrangler D1 ledger query result\n    --release-manifest PATH Required for plan/compatibility/verify\n    --authority PATH        Optional D1 evolution authority override for fixtures\n\nGLOBAL OPTIONS:\n    --root PATH  Explicit repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nThis interface is permanently read-only and metadata-only. D1 commands parse saved provider output and never execute Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation.\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadCommand {
@@ -39,6 +41,14 @@ pub enum Invocation {
     Run {
         root: Option<PathBuf>,
         command: ReadCommand,
+    },
+    D1 {
+        root: Option<PathBuf>,
+        action: d1::D1Action,
+        component: String,
+        ledger_json: PathBuf,
+        release_manifest: Option<PathBuf>,
+        authority: Option<PathBuf>,
     },
 }
 
@@ -81,9 +91,11 @@ where
     let mut iterator = args.into_iter();
     let _program = iterator.next();
     let mut root: Option<PathBuf> = None;
-    let mut command: Option<ReadCommand> = None;
 
-    while let Some(argument) = iterator.next() {
+    let command = loop {
+        let argument = iterator
+            .next()
+            .ok_or_else(|| OpsctlError::new("parse", "missing command; use --help"))?;
         let text = argument.to_str().ok_or_else(|| {
             OpsctlError::new("parse", "flags and command names must be valid UTF-8")
         })?;
@@ -102,21 +114,134 @@ where
                     .ok_or_else(|| OpsctlError::new("parse", "--root requires a path"))?;
                 root = Some(PathBuf::from(value));
             }
-            value => {
-                if command.is_some() {
-                    return Err(OpsctlError::new(
-                        "parse",
-                        format!("unexpected extra argument: {value}"),
-                    ));
-                }
-                command = Some(parse_command(value)?);
+            value => break value.to_owned(),
+        }
+    };
+
+    if command == "d1" {
+        return parse_d1_invocation(root, iterator);
+    }
+
+    let read_command = parse_command(&command)?;
+    if let Some(extra) = iterator.next() {
+        return Err(OpsctlError::new(
+            "parse",
+            format!("unexpected extra argument: {}", extra.to_string_lossy()),
+        ));
+    }
+    Ok(Invocation::Run {
+        root,
+        command: read_command,
+    })
+}
+
+fn parse_d1_invocation<I>(
+    root: Option<PathBuf>,
+    mut iterator: I,
+) -> Result<Invocation, OpsctlError>
+where
+    I: Iterator<Item = OsString>,
+{
+    let action_value = iterator
+        .next()
+        .ok_or_else(|| OpsctlError::new("d1", "missing D1 action"))?;
+    let action_text = action_value
+        .to_str()
+        .ok_or_else(|| OpsctlError::new("d1", "D1 action must be valid UTF-8"))?;
+    let action = match action_text {
+        "status" => d1::D1Action::Status,
+        "plan" => d1::D1Action::Plan,
+        "compatibility" => d1::D1Action::Compatibility,
+        "verify" => d1::D1Action::Verify,
+        other => {
+            return Err(OpsctlError::new(
+                "d1",
+                format!("unsupported D1 action: {other}"),
+            ));
+        }
+    };
+
+    let mut component: Option<String> = None;
+    let mut ledger_json: Option<PathBuf> = None;
+    let mut release_manifest: Option<PathBuf> = None;
+    let mut authority: Option<PathBuf> = None;
+
+    while let Some(argument) = iterator.next() {
+        let flag = argument
+            .to_str()
+            .ok_or_else(|| OpsctlError::new("d1", "D1 flags must be valid UTF-8"))?;
+        let value = match flag {
+            "--component" | "--ledger-json" | "--release-manifest" | "--authority" => iterator
+                .next()
+                .ok_or_else(|| OpsctlError::new("d1", format!("{flag} requires a value")))?,
+            other => {
+                return Err(OpsctlError::new(
+                    "d1",
+                    format!("unsupported D1 argument: {other}"),
+                ));
             }
+        };
+        match flag {
+            "--component" => {
+                set_once(
+                    &mut component,
+                    value
+                        .into_string()
+                        .map_err(|_| OpsctlError::new("d1", "component must be valid UTF-8"))?,
+                    "--component",
+                )?;
+            }
+            "--ledger-json" => set_once(&mut ledger_json, PathBuf::from(value), "--ledger-json")?,
+            "--release-manifest" => set_once(
+                &mut release_manifest,
+                PathBuf::from(value),
+                "--release-manifest",
+            )?,
+            "--authority" => set_once(&mut authority, PathBuf::from(value), "--authority")?,
+            _ => unreachable!("D1 flag was matched above"),
         }
     }
 
-    let command =
-        command.ok_or_else(|| OpsctlError::new("parse", "missing command; use --help"))?;
-    Ok(Invocation::Run { root, command })
+    let component = component.ok_or_else(|| OpsctlError::new("d1", "--component is required"))?;
+    if component != "catalog" && component != "resolver" {
+        return Err(OpsctlError::new(
+            "d1",
+            "--component must be catalog or resolver",
+        ));
+    }
+    let ledger_json = ledger_json.ok_or_else(|| OpsctlError::new("d1", "--ledger-json is required"))?;
+    if action.requires_release_manifest() && release_manifest.is_none() {
+        return Err(OpsctlError::new(
+            "d1",
+            format!("d1 {} requires --release-manifest", action.name()),
+        ));
+    }
+    if action == d1::D1Action::Status && release_manifest.is_some() {
+        return Err(OpsctlError::new(
+            "d1",
+            "d1 status does not accept --release-manifest",
+        ));
+    }
+
+    Ok(Invocation::D1 {
+        root,
+        action,
+        component,
+        ledger_json,
+        release_manifest,
+        authority,
+    })
+}
+
+fn set_once<T>(slot: &mut Option<T>, value: T, flag: &str) -> Result<(), OpsctlError> {
+    if slot.is_some() {
+        return Err(OpsctlError::new(
+            "d1",
+            format!("{flag} may be supplied only once"),
+        ));
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 fn parse_command(value: &str) -> Result<ReadCommand, OpsctlError> {
@@ -160,6 +285,25 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                     "rotation-plan",
                 ),
             }
+        }
+        Invocation::D1 {
+            root,
+            action,
+            component,
+            ledger_json,
+            release_manifest,
+            authority,
+        } => {
+            let repo_root = resolve_repo_root(root.as_deref(), "d1")?;
+            d1::run(
+                &repo_root,
+                action,
+                &component,
+                &ledger_json,
+                release_manifest.as_deref(),
+                authority.as_deref(),
+            )
+            .map_err(|error| OpsctlError::new("d1", error.to_string()))
         }
     }
 }
@@ -319,6 +463,7 @@ fn json_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{Invocation, OpsctlError, ReadCommand, execute, json_escape, parse_invocation};
+    use crate::d1::D1Action;
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -327,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_exact_read_only_surface() {
+    fn parses_existing_read_only_surface() {
         for (name, expected) in [
             ("doctor", ReadCommand::Doctor),
             ("status", ReadCommand::Status),
@@ -353,6 +498,51 @@ mod tests {
                 root: Some(PathBuf::from("/repo")),
                 command: ReadCommand::Status
             })
+        );
+    }
+
+    #[test]
+    fn parses_native_d1_surface() {
+        assert_eq!(
+            parse_invocation(args(&[
+                "opsctl",
+                "--root",
+                "/repo",
+                "d1",
+                "plan",
+                "--component",
+                "catalog",
+                "--ledger-json",
+                "ledger.json",
+                "--release-manifest",
+                "release.json",
+            ])),
+            Ok(Invocation::D1 {
+                root: Some(PathBuf::from("/repo")),
+                action: D1Action::Plan,
+                component: "catalog".to_owned(),
+                ledger_json: PathBuf::from("ledger.json"),
+                release_manifest: Some(PathBuf::from("release.json")),
+                authority: None,
+            })
+        );
+    }
+
+    #[test]
+    fn d1_status_rejects_release_manifest() {
+        assert!(
+            parse_invocation(args(&[
+                "opsctl",
+                "d1",
+                "status",
+                "--component",
+                "catalog",
+                "--ledger-json",
+                "ledger.json",
+                "--release-manifest",
+                "release.json",
+            ]))
+            .is_err()
         );
     }
 
