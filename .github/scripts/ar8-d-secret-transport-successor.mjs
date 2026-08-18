@@ -350,7 +350,7 @@ function selfTest() {
   malformedAuthority.successor.superseded_routine_deploy_bindings.push('AR8D_UNRELATED_STALE_BINDING');
   mustReject('unrelated stale binding', successorBindingErrors(malformedAuthority, promotion));
 
-  const helperSelfTest = run(process.execPath, [absolute(BINDING_HELPER), '--self-test'], { check: false });
+  const helperSelfTest = run(process.execPath, [BINDING_HELPER, '--self-test'], { check: false });
   if (helperSelfTest.status !== 0) {
     throw new Error((helperSelfTest.stderr || helperSelfTest.stdout).trim());
   }
