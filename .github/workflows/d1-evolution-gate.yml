@@ -44,10 +44,10 @@ jobs:
 
       - name: Verify protected executor, release identity, and bootstrap convergence contracts
         run: |
-          python scripts/check-d1-migration-executor.py
-          python scripts/check-d1-migration-executor.py --self-test
-          python scripts/check-d1-release-schema-identity.py
-          python scripts/check-d1-release-schema-identity.py --self-test
+          node scripts/check-d1-migration-executor.mjs
+          node scripts/check-d1-migration-executor.mjs --self-test
+          node scripts/check-d1-release-schema-identity.mjs
+          node scripts/check-d1-release-schema-identity.mjs --self-test
           python scripts/cloudflare-d1-bootstrap.py check
           python scripts/cloudflare-d1-bootstrap.py self-test
 
