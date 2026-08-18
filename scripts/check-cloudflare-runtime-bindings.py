@@ -366,7 +366,12 @@ def governed_d3_workflow(current_workflow: str) -> str:
         fail("AR-8D secret-transport successor authority exists without its permanent checker")
 
     successor_check = subprocess.run(
-        ["node", AR8D_SECRET_TRANSPORT_CHECKER.relative_to(ROOT).as_posix()],
+        [
+            "node",
+            "--input-type=module",
+            "--eval",
+            "await import('./.github/scripts/ar8-d-secret-transport-successor.mjs')",
+        ],
         cwd=ROOT,
         text=True,
         capture_output=True,
