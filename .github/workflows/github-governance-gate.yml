@@ -78,10 +78,76 @@ jobs:
       - name: Prove Profile/Camoufox security and proxy-handle leakage fail closed
         run: node .github/scripts/profile-security-authority-check.mjs --self-test
 
+  ar8-hosted-registry-cleanup:
+    name: AR-8 Hosted Actions Registry Cleanup
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      contains(github.event.head_commit.message, 'AR-8: retire hosted workflow registrations')
+    needs: contract
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Disable only accepted AR-8 temporary registrations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          auth=(
+            --header "Authorization: Bearer $GH_TOKEN"
+            --header 'Accept: application/vnd.github+json'
+            --header 'X-GitHub-Api-Version: 2022-11-28'
+          )
+
+          ids=(337251240 337253540 337227979 337236357 337220167)
+          paths=(
+            '.github/workflows/ar8-accepted-checkpoint-materializer.yml'
+            '.github/workflows/ar8-checkpoint-push-bootstrap.yml'
+            '.github/workflows/ar8-final-projection-rematerializer.yml'
+            '.github/workflows/ar8-opsctl-rustfmt-remediator.yml'
+            '.github/workflows/ar8-projection-materializer.yml'
+          )
+
+          for index in "${!ids[@]}"; do
+            id="${ids[$index]}"
+            expected_path="${paths[$index]}"
+            before="$RUNNER_TEMP/ar8-workflow-$id-before.json"
+            curl --silent --show-error --fail-with-body "${auth[@]}" "$api/actions/workflows/$id" > "$before"
+            test "$(jq -r '.id' "$before")" = "$id"
+            test "$(jq -r '.path' "$before")" = "$expected_path"
+            state="$(jq -r '.state' "$before")"
+            if [ "$state" = 'active' ]; then
+              code="$(curl --silent --show-error --request PUT "${auth[@]}" --output "$RUNNER_TEMP/ar8-disable-$id.txt" --write-out '%{http_code}' "$api/actions/workflows/$id/disable")"
+              test "$code" = '204'
+            elif [ "$state" = 'disabled_manually' ]; then
+              :
+            else
+              echo "Unexpected state for $id ($expected_path): $state" >&2
+              exit 1
+            fi
+
+            after="$RUNNER_TEMP/ar8-workflow-$id-after.json"
+            curl --silent --show-error --fail-with-body "${auth[@]}" "$api/actions/workflows/$id" > "$after"
+            test "$(jq -r '.path' "$after")" = "$expected_path"
+            test "$(jq -r '.state' "$after")" = 'disabled_manually'
+          done
+
+          echo 'AR-8 temporary hosted workflow registrations are disabled; historical run provenance is preserved.' >> "$GITHUB_STEP_SUMMARY"
+
   hosted-state:
     name: GitHub Governance Hosted State
-    if: github.event_name != 'pull_request'
-    needs: contract
+    if: >-
+      github.event_name != 'pull_request' &&
+      always() &&
+      needs.contract.result == 'success' &&
+      (needs.ar8-hosted-registry-cleanup.result == 'success' || needs.ar8-hosted-registry-cleanup.result == 'skipped')
+    needs:
+      - contract
+      - ar8-hosted-registry-cleanup
     runs-on: ubuntu-latest
     env:
       GOVERNANCE_AUDIT_TOKEN: ${{ secrets.GOVERNANCE_AUDIT_TOKEN }}
