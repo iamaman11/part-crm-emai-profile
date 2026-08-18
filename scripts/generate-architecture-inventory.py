@@ -37,6 +37,7 @@ PYTHON_ESTATE = "architecture/python-estate-ar6.json"
 CREDENTIAL_AUTHORITY = "architecture/credential-authority-ar8b.json"
 AR8C_PROVIDER_EXECUTION_AUTHORITY = "architecture/ar8-staging-provider-bootstrap-contract.json"
 AR8C_PROVIDER_EXECUTION_EVIDENCE = "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md"
+POST_AR8C_CLEANUP_EVIDENCE = "docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json"
 TRACKING_ISSUE = 266
 AR8_UMBRELLA_ISSUE = 308
 AR8B_IMPLEMENTATION_ISSUE = 309
@@ -47,7 +48,7 @@ NEXT_SLICE = "AR-9"
 AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B", "AR-8C"]
 AR8_CURRENT_SUBSLICE = "AR-8D"
 AR8D_IMPLEMENTATION_ISSUE = None
-AR8_IMPLEMENTATION_ENTRY_GATE = "POST_AR8C_CLEANUP_DX_ACCEPTANCE_REQUIRED_BEFORE_AR8D_IMPLEMENTATION"
+AR8_IMPLEMENTATION_ENTRY_GATE = "POST_AR8C_CLEANUP_DX_ACCEPTED_AR8D_IMPLEMENTATION_CURRENT"
 AR8_MANDATORY_REMAINING = ["AR-8D", "AR-8E", "AR-8F"]
 POST_AR8C_CLEANUP_ISSUE = 352
 CURRENT_DELIVERY_CHECKPOINT = "AR-8C"
@@ -131,6 +132,7 @@ DOCUMENT_STATUS = [
     {"path": GOVERNANCE_CONTRACT, "status": "STABLE_AUTHORITY", "scope": "accepted_ar7_github_governance_contract"},
     {"path": AR8C_PROVIDER_EXECUTION_EVIDENCE, "status": "EVIDENCE", "scope": "ar8c_protected_staging_provider_execution_authority"},
     {"path": AR8C_PROVIDER_EXECUTION_AUTHORITY, "status": "STABLE_AUTHORITY", "scope": "ar8c_staging_provider_execution_contract"},
+    {"path": POST_AR8C_CLEANUP_EVIDENCE, "status": "EVIDENCE", "scope": "post_ar8c_cleanup_dx_acceptance"},
     {"path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "superseded_predecessor_forward_execution"},
     {"path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md", "status": "ACCEPTED_HISTORICAL", "scope": "accepted_r1_r9_closeout"},
     {"path": "IMPLEMENTATION_PLAN.md", "status": "SUPERSEDED", "scope": "compatibility_entrypoint_to_preserved_history"},
@@ -175,12 +177,12 @@ def current_delivery_map() -> dict[str, object]:
         "canonical_authority": "architecture/inventory.json::current_delivery_map",
         "program": "Architecture Re-baseline v3",
         "accepted_checkpoint": CURRENT_DELIVERY_CHECKPOINT,
-        "current_work": "POST_AR8C_CLEANUP_DX",
+        "current_work": "AR-8D_IMPLEMENTATION",
         "source_implemented": {
             "status": "PARTIAL",
             "through": CURRENT_DELIVERY_CHECKPOINT,
             "current_subslice": AR8_CURRENT_SUBSLICE,
-            "current_subslice_source": "NOT_STARTED_BY_GATE",
+            "current_subslice_source": "CURRENT_IMPLEMENTATION_NOT_ACCEPTED",
         },
         "accepted_on_main": {
             "status": "PARTIAL",
@@ -202,15 +204,20 @@ def current_delivery_map() -> dict[str, object]:
             "gate": "PC-1_AFTER_AR-17_AUTHORIZATION",
             "scope": "NONE",
         },
-        "current_blocker": {
+        "post_ar8c_cleanup": {
             "issue": POST_AR8C_CLEANUP_ISSUE,
-            "status": "OPEN_ACCEPTANCE_REQUIRED",
-            "blocks": "AR-8D_IMPLEMENTATION",
+            "status": "ACCEPTED",
+            "evidence": "docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json",
+        },
+        "current_blocker": {
+            "issue": None,
+            "status": "NONE",
+            "blocks": "NONE",
         },
         "next_gate": {
-            "id": "POST_AR8C_CLEANUP_DX_ACCEPTANCE",
-            "issue": POST_AR8C_CLEANUP_ISSUE,
-            "on_success": "AR-8D_IMPLEMENTATION_MAY_BEGIN",
+            "id": "AR-8D_ACCEPTANCE",
+            "issue": None,
+            "on_success": "AR-8E_BECOMES_CURRENT",
         },
         "invariants": {
             "source_present_not_equal_production_enabled": True,

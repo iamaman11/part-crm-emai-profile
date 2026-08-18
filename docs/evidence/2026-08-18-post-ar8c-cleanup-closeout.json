@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "issue": 352,
+  "status": "accepted",
+  "pre_closeout_main": "6145ac6754d83cf1d3b5361a098c28a20a9222f7",
+  "registry_cleanup": {
+    "phase_a_pr": 353,
+    "recovery_pr": 354,
+    "permanent_guard_pr": 355,
+    "permanent_guard_merge": "6ef0ee6e9cdbf7742cbeda632f3aaec67b95bad2",
+    "baseline_obsolete_active": 0,
+    "baseline_obsolete_disabled_manually": 176,
+    "baseline_retired_missing": 6,
+    "keep_active_inactive": 0,
+    "live_active_authorities": 16
+  },
+  "delivery_map_cleanup": {
+    "pr": 356,
+    "exact_green_head": "4a7b6afa06eea3aa690ae7583249d61418cee36e",
+    "merge": "6145ac6754d83cf1d3b5361a098c28a20a9222f7",
+    "applicable_permanent_workflows": "14/14"
+  },
+  "branch_cleanup": {
+    "classifier_pr": 357,
+    "classifier_pr_state": "closed_unmerged",
+    "classification_run": 32082829776,
+    "classification_job": 95548988309,
+    "classified_branch_refs": 36,
+    "contained_auto_retire": 29,
+    "explicit_reviewed_retire": 6,
+    "executor_self": 1,
+    "retirement_run": 32083259823,
+    "retirement_job": 95550288045,
+    "deleted_branch_refs": 36,
+    "remaining_ar8c_prefix_refs": 0,
+    "remaining_post_ar8c_prefix_refs": 0,
+    "historical_actions_runs_deleted": false
+  },
+  "acceptance_effect": {
+    "accepted_checkpoint_remains": "AR-8C",
+    "cleanup_gate_352": "ACCEPTED",
+    "current_subslice": "AR-8D",
+    "ar8d_source_acceptance": "NOT_YET_ACCEPTED",
+    "full_ar8_accepted": false,
+    "ar9_blocked": true,
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false
+  },
+  "invariants": {
+    "branch_protection_changed": false,
+    "production_mutation": false,
+    "provider_mutation": false,
+    "credential_mutation": false,
+    "secret_readback": false,
+    "terraform_added": false
+  }
+}

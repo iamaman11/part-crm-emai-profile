@@ -12,7 +12,7 @@ privacy boundaries.
 - **Architecture Re-baseline v3:** active program, tracked by issue #266.
 - **Accepted top-level architecture slices:** AR-0 through AR-7; **AR-8A/AR-8B/AR-8C are accepted subslices** inside active AR-8.
 - **Current accepted checkpoint:** AR-8C — operational credential lifecycle and staging provider foundation.
-- **Current gate:** post-AR-8C cleanup / DX issue #352; AR-8D implementation is blocked until #352 acceptance.
+- **Current implementation:** AR-8D — post-AR-8C cleanup / DX issue #352 is accepted; AR-8D is current but not yet accepted.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
@@ -25,19 +25,19 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
-| Source implemented | **PARTIAL** | Accepted source exists through AR-8C; AR-8D source is `NOT_STARTED_BY_GATE`. |
+| Source implemented | **PARTIAL** | Accepted source exists through AR-8C; AR-8D is the current implementation subslice and is not yet accepted. |
 | Accepted on main | **PARTIAL** | AR-8A/AR-8B/AR-8C are accepted; `full_ar8_accepted=false`. |
 | Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; this is not a full-product or production claim. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
-| Current blocker | **#352 OPEN** | Post-AR-8C cleanup / DX acceptance blocks AR-8D implementation. |
-| Next gate | **#352 acceptance** | Only after #352 acceptance may AR-8D implementation begin. |
+| Current blocker | **NONE** | #352 cleanup / DX gate is accepted; no cleanup blocker remains before AR-8D implementation. |
+| Next gate | **AR-8D acceptance** | AR-8D must pass its own bounded acceptance before AR-8E becomes current. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
 The single current architecture/program execution authority is
 [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md), tracked by issue
-#266. AR-8A/AR-8B/AR-8C are accepted inside active AR-8; #352 is the current entry gate before AR-8D. AR-7 remains the accepted GitHub governance/Environment operational boundary while AR-6 remains the accepted full Python estate and read-only Rust `opsctl` foundation and AR-5 remains the accepted runtime-authority cleanup and the AR-4C-remediated application/runtime ownership contract remains in
+#266. AR-8A/AR-8B/AR-8C are accepted inside active AR-8; #352 is accepted; AR-8D is the current implementation subslice. AR-7 remains the accepted GitHub governance/Environment operational boundary while AR-6 remains the accepted full Python estate and read-only Rust `opsctl` foundation and AR-5 remains the accepted runtime-authority cleanup and the AR-4C-remediated application/runtime ownership contract remains in
 [`architecture/inventory.json`](architecture/inventory.json), with AR-4C acceptance evidence in
 [`docs/ARCHITECTURE_REBASELINE_V3_AR4C.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4C.md), AR-4B evidence preserved in
 [`docs/ARCHITECTURE_REBASELINE_V3_AR4B.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4B.md), AR-4A evidence preserved in

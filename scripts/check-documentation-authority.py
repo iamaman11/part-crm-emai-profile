@@ -27,7 +27,7 @@ AR8C_IMPLEMENTATION_ISSUE = 314
 AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B", "AR-8C"]
 AR8_CURRENT_SUBSLICE = "AR-8D"
 AR8D_IMPLEMENTATION_ISSUE = None
-AR8_IMPLEMENTATION_ENTRY_GATE = "POST_AR8C_CLEANUP_DX_ACCEPTANCE_REQUIRED_BEFORE_AR8D_IMPLEMENTATION"
+AR8_IMPLEMENTATION_ENTRY_GATE = "POST_AR8C_CLEANUP_DX_ACCEPTED_AR8D_IMPLEMENTATION_CURRENT"
 AR8_MANDATORY_REMAINING = ["AR-8D", "AR-8E", "AR-8F"]
 POST_AR8C_CLEANUP_ISSUE = 352
 CURRENT_DELIVERY_CHECKPOINT = "AR-8C"
@@ -67,6 +67,7 @@ REQUIRED_FILES = (
     Path("docs/status.json"),
     Path("docs/DEVELOPMENT_PLAN.md"),
     Path("docs/DEVELOPER_CAPABILITY_MATRIX.md"),
+    Path("docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json"),
     Path("docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"),
     Path("docs/ARCHITECTURE_REBASELINE_V3_AR0.md"),
     Path("docs/ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md"),
@@ -145,12 +146,12 @@ def expected_current_delivery_map() -> dict[str, object]:
         "canonical_authority": "architecture/inventory.json::current_delivery_map",
         "program": CURRENT_PROGRAM,
         "accepted_checkpoint": CURRENT_DELIVERY_CHECKPOINT,
-        "current_work": "POST_AR8C_CLEANUP_DX",
+        "current_work": "AR-8D_IMPLEMENTATION",
         "source_implemented": {
             "status": "PARTIAL",
             "through": CURRENT_DELIVERY_CHECKPOINT,
             "current_subslice": AR8_CURRENT_SUBSLICE,
-            "current_subslice_source": "NOT_STARTED_BY_GATE",
+            "current_subslice_source": "CURRENT_IMPLEMENTATION_NOT_ACCEPTED",
         },
         "accepted_on_main": {
             "status": "PARTIAL",
@@ -172,15 +173,20 @@ def expected_current_delivery_map() -> dict[str, object]:
             "gate": "PC-1_AFTER_AR-17_AUTHORIZATION",
             "scope": "NONE",
         },
-        "current_blocker": {
+        "post_ar8c_cleanup": {
             "issue": POST_AR8C_CLEANUP_ISSUE,
-            "status": "OPEN_ACCEPTANCE_REQUIRED",
-            "blocks": "AR-8D_IMPLEMENTATION",
+            "status": "ACCEPTED",
+            "evidence": "docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json",
+        },
+        "current_blocker": {
+            "issue": None,
+            "status": "NONE",
+            "blocks": "NONE",
         },
         "next_gate": {
-            "id": "POST_AR8C_CLEANUP_DX_ACCEPTANCE",
-            "issue": POST_AR8C_CLEANUP_ISSUE,
-            "on_success": "AR-8D_IMPLEMENTATION_MAY_BEGIN",
+            "id": "AR-8D_ACCEPTANCE",
+            "issue": None,
+            "on_success": "AR-8E_BECOMES_CURRENT",
         },
         "invariants": {
             "source_present_not_equal_production_enabled": True,
@@ -645,8 +651,10 @@ def validate(root: Path) -> list[str]:
     require(docs_readme, common, "docs/README.md", errors)
     require(index, ("CURRENT_AUTHORITY", "ARCHITECTURE_REBASELINE_V3_PLAN.md", "issue #266", "AR-8C", "AR-8D", "#352", "CURRENT_DELIVERY_MAP"), "docs/INDEX.md", errors)
     require(development, ("Document status:** GENERATED_PROJECTION", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-7   Environments + GitHub Governance + Operational Boundaries", "AR-8C", "AR-8D", "#352", "CURRENT_DELIVERY_MAP", "production_ready=false", "Immutable Accepted Phase Provenance"), "docs/DEVELOPMENT_PLAN.md", errors)
-    require(plan, ("Document status:** CURRENT_AUTHORITY", "Tracking issue:** #266", "Current accepted architecture checkpoint:** AR-8C", "Current gate:** Post-AR-8C cleanup / DX — issue #352", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-8D", "CURRENT_DELIVERY_MAP", "source_present != production_enabled", "No production provisioning, promotion or other real production mutation is an AR-0…AR-17 activity"), "current v3 plan", errors)
+    require(plan, ("Document status:** CURRENT_AUTHORITY", "Tracking issue:** #266", "Current accepted architecture checkpoint:** AR-8C", "Current implementation:** AR-8D", "AR-4C  Outbound Mail composition extraction", "AR-5   Wrangler / Runtime Authority Cleanup", "AR-6   Full Python Estate + read-only Rust opsctl", "AR-8D", "CURRENT_DELIVERY_MAP", "source_present != production_enabled", "No production provisioning, promotion or other real production mutation is an AR-0…AR-17 activity"), "current v3 plan", errors)
     require(capability_matrix, ("CURRENT_DELIVERY_MAP", "Source implemented", "Accepted on main", "Staging live", "Production authorized", "Production enabled", "#352", "AR-8D", "production_ready=false"), "docs/DEVELOPER_CAPABILITY_MATRIX.md", errors)
+    cleanup_evidence = read(root, Path("docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json"))
+    require(cleanup_evidence, ("\"issue\": 352", "\"status\": \"accepted\"", "32082829776", "32083259823", "deleted_branch_refs", "historical_actions_runs_deleted"), "post-AR-8C cleanup evidence", errors)
     require(ar2_evidence, ("AR-2 Runtime Topology + D3 Compatibility", "GENERATION_VERIFICATION = DELETE", "legacy D3 production lane", "AR-5", "AR-11", "PC-1"), "AR-2 evidence", errors)
     require(ar3_evidence, ("AR-3 Application Architecture Contract", "EVIDENCE / AR-3 accepted", "AR-4A", "AR-4B", "AR-4C", "NOT_REQUIRED", "architecture/inventory.json"), "AR-3 evidence", errors)
     require(ar4a_evidence, ("AR-4A Composition-root consolidation", "EVIDENCE / AR-4A accepted", "f257a30a1df437812edb5c9e4b33c3de7e0740bc", "74672285ef0146c2dc6da298024b378438e5a75d", "AR-4B", "AR-4C", "Production Core remains `BLOCKED`"), "AR-4A evidence", errors)
@@ -710,7 +718,7 @@ def self_test(root: Path) -> bool:
             if not errors or not any(expected.lower() in error.lower() for error in errors):
                 print(f"negative fixture {label} was not rejected by the expected invariant: {errors}")
                 return False
-    print("Architecture Re-baseline v3 CURRENT_DELIVERY_MAP / AR-8C accepted / #352-gated AR-8D documentation authority negative fixtures passed.")
+    print("Architecture Re-baseline v3 CURRENT_DELIVERY_MAP / AR-8C accepted / AR-8D current after accepted #352 gate documentation authority negative fixtures passed.")
     return True
 
 
