@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_REPOSITORY = "iamaman11/part-crm-emai-profile"
 CONFIG = Path("deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc")
 MIGRATIONS = Path("migrations/resolver-d1")
+D1_EVOLUTION = Path("architecture/d1-evolution-ar9.json")
 WORKER_BUILD = Path("apps/mailbox-secret-resolver-worker/build")
 RELEASE_ROOT = Path("artifacts/mailbox-secret-resolver-release")
 MANIFEST_NAME = "release-manifest.json"
@@ -33,6 +34,7 @@ IDENTITY_FIELDS = (
     "resolver_worker_sha256",
     "resolver_migration_manifest_sha256",
     "resolver_config_sha256",
+    "schema_contract",
     "build_toolchain",
 )
 WORKER_BUILD_VERSION = "0.8.5"
@@ -103,14 +105,81 @@ def migration_paths(root: Path) -> list[Path]:
     if not paths or any(MIGRATION_RE.fullmatch(path.name) is None for path in paths):
         fail("resolver migrations must be a non-empty canonical append-only sequence")
     numbers = [int(path.name[:4]) for path in paths]
-    if len(numbers) != len(set(numbers)) or numbers != sorted(numbers):
-        fail("resolver migration numbers must be unique and ordered")
+    if len(numbers) != len(set(numbers)) or numbers != list(range(1, len(numbers) + 1)):
+        fail("resolver migration numbers must be unique and contiguous from 0001")
     return paths
 
 
 def migration_digest(root: Path) -> str:
     paths = migration_paths(root)
     return inventory_digest(file_inventory(root / MIGRATIONS, [path.name for path in paths]))
+
+
+def evolution_history_identity(root: Path) -> tuple[list[dict[str, str]], str]:
+    entries = [
+        {"name": path.name, "sha256": sha256_file(path)}
+        for path in migration_paths(root)
+    ]
+    return entries, sha256_bytes(canonical(entries))
+
+
+def load_schema_contract(root: Path) -> dict[str, str]:
+    path = root / D1_EVOLUTION
+    try:
+        authority = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ReleaseError(f"cannot read D1 evolution authority: {error}") from error
+    if not isinstance(authority, dict) or authority.get("kind") != "D1_EVOLUTION_AUTHORITY":
+        fail("D1 evolution authority identity is invalid")
+    components = authority.get("components")
+    if not isinstance(components, list):
+        fail("D1 evolution authority component inventory is missing")
+    matches = [
+        value
+        for value in components
+        if isinstance(value, dict) and value.get("component_id") == "resolver"
+    ]
+    if len(matches) != 1:
+        fail("D1 evolution authority must contain exactly one resolver component")
+    component = matches[0]
+    if component.get("migration_root") != MIGRATIONS.as_posix():
+        fail("resolver D1 evolution migration root drifted")
+    historical = component.get("historical_epoch")
+    policy = component.get("compatibility_policy")
+    if not isinstance(historical, dict) or not isinstance(policy, dict):
+        fail("resolver D1 historical/compatibility policy is missing")
+    entries, history_digest = evolution_history_identity(root)
+    observed = historical.get("ordered_history")
+    if not isinstance(observed, list):
+        fail("resolver D1 frozen history is missing")
+    observed_identity = [
+        {"name": value.get("name"), "sha256": value.get("sha256")}
+        for value in observed
+        if isinstance(value, dict)
+    ]
+    if observed_identity != entries:
+        fail("resolver D1 frozen migration identities differ from exact source bytes")
+    freeze = historical.get("per_file_sha256_freeze")
+    if (
+        historical.get("ordered_set_identity_algorithm") != "sha256(canonical-json(name+sha256))"
+        or historical.get("ordered_set_identity") != history_digest
+        or not isinstance(freeze, dict)
+        or freeze.get("status") != "FROZEN"
+        or freeze.get("algorithm") != "sha256"
+        or freeze.get("count") != len(entries)
+    ):
+        fail("resolver D1 historical epoch is not fully frozen")
+    target = component.get("current_repository_revision")
+    if not isinstance(target, str) or target != entries[-1]["name"]:
+        fail("resolver current repository revision differs from frozen history")
+    return {
+        "database_component": "resolver",
+        "target_schema_revision": target,
+        "supported_schema_min": target,
+        "supported_schema_max": target,
+        "migration_history_digest": history_digest,
+        "compatibility_policy_digest": sha256_bytes(canonical(policy)),
+    }
 
 
 def worker_digest(directory: Path) -> str:
@@ -215,6 +284,7 @@ def manifest_for(root: Path, source_sha: str, worker_directory: Path) -> dict[st
         "resolver_worker_sha256": worker_digest(worker_directory),
         "resolver_migration_manifest_sha256": migration_digest(root),
         "resolver_config_sha256": sha256_file(root / CONFIG),
+        "schema_contract": load_schema_contract(root),
         "build_toolchain": toolchain(root),
     }
     release_id = RELEASE_PREFIX + sha256_bytes(canonical(payload))
@@ -233,6 +303,9 @@ def verify_manifest(manifest: Any) -> dict[str, Any]:
         fail("resolver release ID does not authenticate its identity fields")
     if COMMIT_RE.fullmatch(str(manifest.get("source_commit_sha"))) is None:
         fail("resolver release source SHA is invalid")
+    contract = manifest.get("schema_contract")
+    if not isinstance(contract, dict) or contract.get("database_component") != "resolver":
+        fail("resolver release schema contract is invalid")
     return manifest
 
 
@@ -259,6 +332,8 @@ def verify_directory(root: Path, release_directory: Path, expected_source_sha: s
         fail("resolver config differs from the immutable release identity")
     if manifest["resolver_config_sha256"] != sha256_file(root / CONFIG):
         fail("resolver config differs from the exact source authority")
+    if manifest["schema_contract"] != load_schema_contract(root):
+        fail("resolver schema contract differs from the exact D1 evolution authority")
     if manifest["build_toolchain"] != toolchain(root):
         fail("resolver build toolchain differs from the exact source authority")
     if release_directory.name != manifest["release_id"]:
@@ -378,6 +453,7 @@ def build_release(
 def check_repository(root: Path) -> None:
     load_config(root)
     migration_digest(root)
+    load_schema_contract(root)
     toolchain(root)
     print("Mailbox resolver immutable release policy is valid.")
 
@@ -390,7 +466,8 @@ def fixture_root(root: Path) -> None:
     (worker / "worker" / "shim.mjs").write_text("export * from '../index.js';\n", encoding="utf-8")
     (worker / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
     (root / MIGRATIONS).mkdir(parents=True)
-    (root / MIGRATIONS / "0001_fixture.sql").write_text("SELECT 1;\n", encoding="utf-8")
+    migration = root / MIGRATIONS / "0001_fixture.sql"
+    migration.write_text("SELECT 1;\n", encoding="utf-8")
     (root / CONFIG).parent.mkdir(parents=True)
     (root / CONFIG).write_text(
         json.dumps(
@@ -423,6 +500,43 @@ def fixture_root(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+    entries, history_digest = evolution_history_identity(root)
+    d1_path = root / D1_EVOLUTION
+    d1_path.parent.mkdir(parents=True, exist_ok=True)
+    d1_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "D1_EVOLUTION_AUTHORITY",
+                "components": [
+                    {
+                        "component_id": "resolver",
+                        "migration_root": MIGRATIONS.as_posix(),
+                        "current_repository_revision": entries[-1]["name"],
+                        "historical_epoch": {
+                            "ordered_history": [
+                                {**entry, "git_blob_sha1": "0" * 40} for entry in entries
+                            ],
+                            "ordered_set_identity_algorithm": "sha256(canonical-json(name+sha256))",
+                            "ordered_set_identity": history_digest,
+                            "per_file_sha256_freeze": {
+                                "status": "FROZEN",
+                                "algorithm": "sha256",
+                                "count": len(entries),
+                            },
+                        },
+                        "compatibility_policy": {
+                            "historical_epoch_runtime_compatibility": "UNKNOWN_FAIL_CLOSED",
+                            "new_migrations_require_full_contract": True,
+                        },
+                    }
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (root / "Cargo.lock").write_text("# fixture\n", encoding="utf-8")
     (root / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.97.1"\n', encoding="utf-8")
 
@@ -449,6 +563,14 @@ def self_test() -> None:
         )
         if first != second or first_archive.read_bytes() != second_archive.read_bytes():
             fail("identical resolver inputs produced different immutable releases")
+        contract = first.get("schema_contract")
+        if not isinstance(contract, dict) or not (
+            contract.get("database_component") == "resolver"
+            and contract.get("target_schema_revision") == "0001_fixture.sql"
+            and contract.get("supported_schema_min") == "0001_fixture.sql"
+            and contract.get("supported_schema_max") == "0001_fixture.sql"
+        ):
+            fail("resolver fixture release did not bind the exact conservative schema contract")
         unexpected_worker_file = root / WORKER_BUILD / "unexpected.js"
         unexpected_worker_file.write_text("export {};\n", encoding="utf-8")
         expect_rejected(
@@ -484,6 +606,12 @@ def self_test() -> None:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["unexpected"] = "field"
         expect_rejected("identity field drift", lambda: verify_manifest(manifest))
+        authority_path = root / D1_EVOLUTION
+        authority = json.loads(authority_path.read_text(encoding="utf-8"))
+        authority["components"][0]["historical_epoch"]["ordered_history"][0]["sha256"] = "0" * 64
+        authority_path.write_text(json.dumps(authority) + "\n", encoding="utf-8")
+        expect_rejected("schema history substitution", lambda: load_schema_contract(root))
+        fixture_root(root)
         malicious = root / "malicious.tar"
         with tarfile.open(malicious, "w") as archive:
             info = tarfile.TarInfo("../escape")
