@@ -254,16 +254,8 @@ fn doctor(root: &Path) -> Result<String, OpsctlError> {
         }
     }
 
-    let _ = canonical_json_document(
-        root,
-        "architecture/ar8-completion-lifecycle.json",
-        "doctor",
-    )?;
-    let _ = canonical_json_document(
-        root,
-        "architecture/ar8-operator-rehearsal.json",
-        "doctor",
-    )?;
+    let _ = canonical_json_document(root, "architecture/ar8-completion-lifecycle.json", "doctor")?;
+    let _ = canonical_json_document(root, "architecture/ar8-operator-rehearsal.json", "doctor")?;
 
     run_python_check(
         root,
@@ -375,7 +367,9 @@ mod tests {
             command: ReadCommand::RotationPlan,
         })?;
         assert!(output.contains("\"kind\": \"AR8F_OPERATOR_REHEARSAL_AUTHORITY\""));
-        assert!(output.contains("\"accepted_projection_update\": \"DEFERRED_UNTIL_FINAL_FROZEN_SHA\""));
+        assert!(
+            output.contains("\"accepted_projection_update\": \"DEFERRED_UNTIL_FINAL_FROZEN_SHA\"")
+        );
         assert!(output.contains("\"production_mutation\": false"));
         assert!(!output.contains("\"secret_value\":"));
         Ok(())
