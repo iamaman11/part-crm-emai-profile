@@ -1,7 +1,7 @@
 {
   "schema": "profile-platform-camoufox-runtime-v1",
   "candidate": true,
-  "launch_eligible": false,
+  "launch_eligible": true,
   "runtime_policy": "camoufox-runtime-v1",
   "ipc_version": "1",
   "fingerprint_policy_version": 1,
@@ -25,10 +25,12 @@
     "repository": "daijro/camoufox",
     "channel": "official/stable",
     "version": "152.0.4-beta.28",
-    "artifact_sha256": null
+    "artifact_sha256": "386fc2f41139685f9a1a9cef0d024bc041d899c315ea538d561171b5b282e57d"
   },
   "certification": {
-    "state": "candidate-unverified-artifact",
-    "reason": "Windows x86_64 browser artifact SHA-256 must be captured from the pinned upstream asset and committed before launch is eligible."
+    "state": "candidate-windows-smoke-green",
+    "browser_artifact_sha256_verified": true,
+    "persistent_context_relaunch_verified": true,
+    "project_accepted": false
   }
 }
