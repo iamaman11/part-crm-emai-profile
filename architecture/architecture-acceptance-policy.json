@@ -31,6 +31,20 @@
     "candidate_tree_equals_merge_tree_required": true,
     "merge_first_parent_equals_premerge_base_required": true
   },
+  "required_status_contexts": {
+    "sources": [
+      {
+        "path": "architecture/github-governance-ar7.json",
+        "json_pointer": "/main_governance/required_checks"
+      },
+      {
+        "path": "architecture/runtime-cutover-ar10.json",
+        "json_pointer": "/github_governance_extension/required_job_contexts"
+      }
+    ],
+    "duplicate_contexts_forbidden": true,
+    "all_must_succeed_on_exact_candidate": true
+  },
   "acceptance_metadata": {
     "storage": "annotated_git_tag",
     "namespace": "architecture/accepted/",
@@ -115,11 +129,19 @@
     "force_moved_acceptance_tag": true,
     "manual_duplicate_current_slice_authority": true
   },
-  "production_invariants": {
-    "architecture_complete": false,
-    "production_core_gate": "BLOCKED",
-    "production_ready": false,
-    "production_mutation": false,
-    "until_slice": "AR-17"
+  "acceptance_state": {
+    "before_ar17": {
+      "architecture_complete": false,
+      "production_core_gate": "BLOCKED",
+      "production_ready": false,
+      "production_mutation": false
+    },
+    "ar17": {
+      "architecture_complete": true,
+      "production_core_gate": "AUTHORIZED",
+      "production_ready": false,
+      "production_mutation": false
+    },
+    "first_production_enablement_stage": "PC-1"
   }
 }
