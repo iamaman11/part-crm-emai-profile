@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -302,11 +303,17 @@ DELETION_MARKERS = (
     "DeleteFile",
     ".unlink(",
 )
-
 BROWSER_LOCK_MARKERS = (
     "parent.lock",
     ".parentlock",
     "SingletonLock",
+)
+BROWSER_LOCK_NAME_HINTS = (
+    "browser_lock",
+    "firefox_lock",
+    "parent_lock",
+    "parentlock",
+    "singleton_lock",
 )
 
 FORBIDDEN_PHASE2F_PATHS = (
@@ -357,6 +364,74 @@ def struct_body(source: str, struct_name: str) -> str:
         return ""
     end = source.find("\n}", start + len(marker))
     return source[start : end + 2 if end >= 0 else len(source)]
+
+
+def browser_lock_tainted_identifiers(source: str) -> set[str]:
+    """Find identifiers whose assignment/declaration directly names a Firefox lock path."""
+    tainted: set[str] = set()
+    for line in source.splitlines():
+        if not any(marker in line for marker in BROWSER_LOCK_MARKERS):
+            continue
+        rust_match = re.search(r"\blet\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+        python_match = re.search(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+        constant_match = re.search(r"\b(?:const|static)\s+([A-Za-z_][A-Za-z0-9_]*)\b", line)
+        for match in (rust_match, python_match, constant_match):
+            if match is not None:
+                tainted.add(match.group(1))
+    return tainted
+
+
+def browser_lock_deletion_detected(source: str) -> bool:
+    """Reject deletion operations that target Firefox lock artifacts, not mere co-location.
+
+    The old policy rejected any file containing both a deletion API and a browser-lock
+    string. That falsely rejected legitimate deletion of the Bridge-owned
+    `.profile-platform.lock` from files that also *observe* Firefox locks. Here the
+    deletion statement (including a bounded multiline call window) must itself name a
+    browser lock, a browser-lock-shaped identifier, or an identifier directly tainted
+    by a browser-lock literal.
+    """
+    lines = source.splitlines()
+    tainted = browser_lock_tainted_identifiers(source)
+    for index, line in enumerate(lines):
+        if not any(marker in line for marker in DELETION_MARKERS):
+            continue
+        start = max(0, index - 1)
+        end = min(len(lines), index + 4)
+        statement = "\n".join(lines[start:end])
+        if any(marker in statement for marker in BROWSER_LOCK_MARKERS):
+            return True
+        lowered = statement.lower()
+        if any(hint in lowered for hint in BROWSER_LOCK_NAME_HINTS):
+            return True
+        if any(re.search(rf"\b{re.escape(identifier)}\b", statement) for identifier in tainted):
+            return True
+    return False
+
+
+def browser_lock_deletion_self_test(errors: list[str]) -> None:
+    safe = '''
+const FIREFOX_LOCK: &str = "parent.lock";
+let bridge_lock = root.join(".profile-platform.lock");
+std::fs::remove_file(&bridge_lock)?;
+'''
+    if browser_lock_deletion_detected(safe):
+        errors.append("browser-lock policy self-test rejected Bridge-owned lock deletion")
+
+    direct_forbidden = '''
+let path = root.join(".parentlock");
+std::fs::remove_file(path)?;
+'''
+    if not browser_lock_deletion_detected(direct_forbidden):
+        errors.append("browser-lock policy direct-deletion negative fixture unexpectedly passed")
+
+    tainted_forbidden = '''
+let firefox_lock = root.join("parent.lock");
+observe(&firefox_lock)?;
+std::fs::remove_file(&firefox_lock)?;
+'''
+    if not browser_lock_deletion_detected(tainted_forbidden):
+        errors.append("browser-lock policy tainted-variable negative fixture unexpectedly passed")
 
 
 def require_order(
@@ -648,14 +723,13 @@ def main() -> int:
             if marker in pure:
                 errors.append(f"provider/runtime API escaped into Bridge domain: {marker}")
 
+    browser_lock_deletion_self_test(errors)
     for path in source_files(root, repository_root):
         rel = relative(root, path)
         if rel == POLICY_PATH or (repository_root and rel.startswith(FIXTURE_PREFIX)):
             continue
         text = path.read_text(encoding="utf-8")
-        if any(marker in text for marker in DELETION_MARKERS) and any(
-            marker in text for marker in BROWSER_LOCK_MARKERS
-        ):
+        if browser_lock_deletion_detected(text):
             errors.append(f"automatic browser runtime lock deletion is forbidden: {rel}")
 
     if repository_root:
