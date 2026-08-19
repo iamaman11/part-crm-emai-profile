@@ -1,7 +1,7 @@
 use crate::promotion::authority::load_closure;
 use crate::promotion::snapshot::DeploymentSnapshot;
-use crate::release::compatibility::{CompatibilityDecision, CompatibilityEvidence};
-use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
+use crate::release::compatibility::CompatibilityEvidence;
+use crate::release::model::{CompatibilityDecision, ReleaseModelError, ReleaseSetManifest};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
