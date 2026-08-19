@@ -138,7 +138,8 @@ fn preflight_from_plan(
 
     if request.environment == "production" {
         blockers.push("PRODUCTION_EXECUTION_BLOCKED_DURING_AR11".to_owned());
-        required_steps.push("AR-17 authorization and PC-1 workflow authority are required".to_owned());
+        required_steps
+            .push("AR-17 authorization and PC-1 workflow authority are required".to_owned());
     }
     if plan.decision == "NO_CHANGE" {
         warnings.push("target already converged; provider mutation is unnecessary".to_owned());

@@ -2058,7 +2058,7 @@
     "schema_version": 1,
     "role": "CURRENT_AR11_RELEASE_ARCHITECTURE_PROJECTION",
     "source_authority": "architecture/release-architecture-ar11.json",
-    "source_sha256": "dd888f630f5000efdd2b37a2a83d17994f65dd44b4a43f51d6b9d1fce59198ca",
+    "source_sha256": "330bff704d719fdbc885c01fecfc48d608805a1fa31c31d828b844ebcdc4cbb7",
     "source_status": "current_candidate",
     "tracking_issue": 372,
     "principles": {
@@ -2655,6 +2655,49 @@
       }
     ],
     "deployment_closures": [
+      {
+        "closure_id": "rehearsal-core-v1",
+        "profile_id": "rehearsal-core-v1",
+        "required_components": [
+          "control_plane",
+          "frontend",
+          "runtime_bundle",
+          "profile_bridge"
+        ],
+        "required_resources": [
+          "control_plane_worker",
+          "catalog_d1",
+          "profile_objects",
+          "profile_coordinator",
+          "notification_hub",
+          "integration_events",
+          "control_plane_schedule"
+        ],
+        "required_bindings": [
+          "ASSETS",
+          "CATALOG_DB",
+          "PROFILE_OBJECTS",
+          "PROFILE_COORDINATOR",
+          "NOTIFICATION_HUB",
+          "INTEGRATION_EVENTS"
+        ],
+        "required_credentials": [
+          "CLIENT_CONTACT_PROTECTION_KEYRING",
+          "R2_GENERATION_ACCESS_KEY_ID",
+          "R2_GENERATION_SECRET_ACCESS_KEY",
+          "ACCESS_ISSUER",
+          "ACCESS_AUDIENCE"
+        ],
+        "optional_or_disabled_resources": [
+          "mailbox_jobs",
+          "mailbox_jobs_dlq",
+          "mailbox_secret_resolver_worker",
+          "resolver_d1",
+          "resolver_reconciliation_schedule",
+          "mailbox_secret_resolver_service"
+        ],
+        "binding_probe_scope": "REQUIRED_CLOSURE_ONLY"
+      },
       {
         "closure_id": "production-core-v1",
         "profile_id": "production-core-v1",

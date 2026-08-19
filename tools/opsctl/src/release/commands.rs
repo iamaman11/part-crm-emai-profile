@@ -1,7 +1,7 @@
+use crate::release::ReleaseAction;
 use crate::release::artifact::verify_artifacts;
 use crate::release::compatibility::{CompatibilityEvidence, evaluate};
 use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
-use crate::release::ReleaseAction;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -22,9 +22,9 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
     let value = match request.action {
         ReleaseAction::Inspect => inspect(&manifest),
         ReleaseAction::Verify => {
-            let artifact_root = request.artifact_root.ok_or_else(|| {
-                ReleaseModelError::new("release verify requires --artifact-root")
-            })?;
+            let artifact_root = request
+                .artifact_root
+                .ok_or_else(|| ReleaseModelError::new("release verify requires --artifact-root"))?;
             verify(&manifest, artifact_root)?
         }
         ReleaseAction::Compatibility => {
@@ -34,10 +34,7 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
                 ReleaseModelError::new("release compatibility requires --evidence-json")
             })?;
             let evidence = CompatibilityEvidence::load(evidence_path)?;
-            let current = request
-                .current_release_set
-                .map(load_manifest)
-                .transpose()?;
+            let current = request.current_release_set.map(load_manifest).transpose()?;
             evaluate(
                 request.root,
                 &manifest,
@@ -51,7 +48,9 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
     };
     serde_json::to_string_pretty(&value)
         .map(|output| format!("{output}\n"))
-        .map_err(|error| ReleaseModelError::new(format!("cannot serialize release output: {error}")))
+        .map_err(|error| {
+            ReleaseModelError::new(format!("cannot serialize release output: {error}"))
+        })
 }
 
 fn load_manifest(path: &Path) -> Result<ReleaseSetManifest, ReleaseModelError> {

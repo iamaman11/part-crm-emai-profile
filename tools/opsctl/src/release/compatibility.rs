@@ -58,7 +58,10 @@ impl CompatibilityEvidence {
             ReleaseModelError::new(format!("invalid compatibility evidence JSON: {error}"))
         })?;
         let root = object(&value, "compatibility evidence root")?;
-        reject_unknown_fields(root, &["schema_version", "kind", "release_set_id", "dimensions"])?;
+        reject_unknown_fields(
+            root,
+            &["schema_version", "kind", "release_set_id", "dimensions"],
+        )?;
         if required_u64(root, "schema_version")? != SCHEMA_VERSION
             || required_string(root, "kind")? != "RELEASE_COMPATIBILITY_EVIDENCE"
         {
@@ -68,7 +71,10 @@ impl CompatibilityEvidence {
         }
         let release_set_id = required_string(root, "release_set_id")?;
         let dimensions_value = object(required(root, "dimensions")?, "dimensions")?;
-        let observed = dimensions_value.keys().map(String::as_str).collect::<BTreeSet<_>>();
+        let observed = dimensions_value
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
         let expected = REQUIRED_DIMENSIONS.into_iter().collect::<BTreeSet<_>>();
         if observed != expected {
             return Err(ReleaseModelError::new(format!(
@@ -81,7 +87,10 @@ impl CompatibilityEvidence {
             reject_unknown_fields(item, &["decision", "evidence_sha256", "policy_source"])?;
             let decision = CompatibilityDecision::parse(&required_string(item, "decision")?)?;
             let evidence_sha256 = required_string(item, "evidence_sha256")?;
-            validate_sha256(&evidence_sha256, &format!("dimensions.{name}.evidence_sha256"))?;
+            validate_sha256(
+                &evidence_sha256,
+                &format!("dimensions.{name}.evidence_sha256"),
+            )?;
             let policy_source = required_string(item, "policy_source")?;
             if policy_source.trim().is_empty() {
                 return Err(ReleaseModelError::new(format!(
@@ -154,30 +163,31 @@ pub fn evaluate(
     }
 
     let mailbox_admin = effective.is_enabled("mailbox_admin");
-    let windows_required = authority
+    let windows_delivery_present = authority
         .activation_units
         .values()
         .any(|unit| unit.requires_windows_profile_bridge && effective.is_enabled(&unit.id));
+    let windows_required = environment == "production" && windows_delivery_present;
     let required_dimensions = required_dimensions(mailbox_admin, windows_required);
-    for name in required_dimensions {
-        let dimension = evidence.dimensions.get(name).ok_or_else(|| {
-            ReleaseModelError::new(format!("missing compatibility dimension after parse: {name}"))
+    for name in &required_dimensions {
+        let dimension = evidence.dimensions.get(*name).ok_or_else(|| {
+            ReleaseModelError::new(format!(
+                "missing compatibility dimension after parse: {name}"
+            ))
         })?;
         match dimension.decision {
             CompatibilityDecision::Compatible => {}
             CompatibilityDecision::Incompatible => {
-                blockers.push(format!("{}", blocker_code(name, false)));
+                blockers.push(blocker_code(name, false).to_owned());
             }
             CompatibilityDecision::Unknown => {
-                blockers.push(format!("{}", blocker_code(name, true)));
+                blockers.push(blocker_code(name, true).to_owned());
             }
         }
     }
 
     for (name, dimension) in &evidence.dimensions {
-        if !required_dimensions.contains(&name.as_str())
-            && !dimension.decision.is_compatible()
-        {
+        if !required_dimensions.contains(&name.as_str()) && !dimension.decision.is_compatible() {
             warnings.push(format!(
                 "{name} is {} but is outside the selected deployment closure",
                 if dimension.decision == CompatibilityDecision::Unknown {
@@ -196,7 +206,8 @@ pub fn evaluate(
     }
     .to_owned();
     if rollback_compatibility == "UNKNOWN" {
-        warnings.push("rollback compatibility is unknown without current release context".to_owned());
+        warnings
+            .push("rollback compatibility is unknown without current release context".to_owned());
     }
 
     blockers.sort();
@@ -270,9 +281,11 @@ fn required_dimensions(mailbox_admin: bool, windows_required: bool) -> BTreeSet<
 fn blocker_code(name: &str, unknown: bool) -> &'static str {
     match (name, unknown) {
         ("catalog_d1" | "resolver_d1", _) => "SCHEMA_INCOMPATIBLE",
-        ("public_api" | "frontend_api" | "resolver_protocol" | "bridge_protocol" | "camouhost_ipc", _) => {
-            "PROTOCOL_INCOMPATIBLE"
-        }
+        (
+            "public_api" | "frontend_api" | "resolver_protocol" | "bridge_protocol"
+            | "camouhost_ipc",
+            _,
+        ) => "PROTOCOL_INCOMPATIBLE",
         ("runtime_bundle" | "profile_format" | "browser_identity_policy", _) => {
             "RUNTIME_INCOMPATIBLE"
         }
@@ -321,7 +334,10 @@ fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, ReleaseMo
         .ok_or_else(|| ReleaseModelError::new(format!("field {key} must be an unsigned integer")))
 }
 
-fn object<'a>(value: &'a Value, context: &str) -> Result<&'a Map<String, Value>, ReleaseModelError> {
+fn object<'a>(
+    value: &'a Value,
+    context: &str,
+) -> Result<&'a Map<String, Value>, ReleaseModelError> {
     value
         .as_object()
         .ok_or_else(|| ReleaseModelError::new(format!("{context} must be an object")))

@@ -80,11 +80,7 @@ pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelErro
         request.current_release,
     )?;
 
-    let current_id = request
-        .snapshot
-        .release_set_id
-        .as_deref()
-        .unwrap_or("NONE");
+    let current_id = request.snapshot.release_set_id.as_deref().unwrap_or("NONE");
     let promotion_id = sha256_hex(
         format!(
             "environment={}\ncurrent_release_set={}\ntarget_release_set={}\ntarget_profile={}",
@@ -136,8 +132,8 @@ pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelErro
     let release_changed = request.snapshot.release_set_id.as_deref()
         != Some(request.target.release_set_id.as_str())
         || target_components != observed_components;
-    let profile_changed = request.snapshot.capability_profile_id.as_deref()
-        != Some(request.target_profile_id);
+    let profile_changed =
+        request.snapshot.capability_profile_id.as_deref() != Some(request.target_profile_id);
 
     let mut actions = Vec::new();
     if !compatibility.required_steps.is_empty() {

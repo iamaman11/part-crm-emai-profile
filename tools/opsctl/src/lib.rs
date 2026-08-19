@@ -89,6 +89,34 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             })
             .map_err(|error| OpsctlError::new("release", error.to_string()))
         }
+
+        Invocation::Promotion {
+            root,
+            action,
+            release_set,
+            profile_id,
+            environment,
+            snapshot,
+            evidence_json,
+            current_release_set,
+            known_good_release_set,
+            expected_current_release_set_id,
+        } => {
+            let repo_root = resolve_repo_root(root.as_deref(), "promotion")?;
+            promotion::commands::run(promotion::commands::PromotionRunRequest {
+                root: &repo_root,
+                action,
+                release_set: &release_set,
+                profile_id: &profile_id,
+                environment: &environment,
+                snapshot: &snapshot,
+                evidence_json: &evidence_json,
+                current_release_set: current_release_set.as_deref(),
+                known_good_release_set: known_good_release_set.as_deref(),
+                expected_current_release_set_id: expected_current_release_set_id.as_deref(),
+            })
+            .map_err(|error| OpsctlError::new("promotion", error.to_string()))
+        }
     }
 }
 

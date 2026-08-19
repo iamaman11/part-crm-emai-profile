@@ -42,6 +42,7 @@ fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
         },
         "components": {
             "control_plane": component("control-plane-v1", "components/control-plane.tar", SHA_A, 10),
+            "frontend": component("frontend-v1", "components/frontend.tar", SHA_A, 14),
             "secret_resolver": component("resolver-v1", "components/resolver.tar", SHA_B, 11),
             "runtime_bundle": component("runtime-v1", "components/runtime.tar", SHA_C, 12),
             "profile_bridge": component("bridge-v1", "components/profile-bridge.zip", SHA_D, 13)
@@ -54,6 +55,7 @@ fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
         "build_provenance": {"toolchain":"rust-1.97.1","lockfile_sha256":SHA_A},
         "artifact_inventory": [
             {"path":"components/control-plane.tar","sha256":SHA_A,"size_bytes":10,"kind":"component"},
+            {"path":"components/frontend.tar","sha256":SHA_A,"size_bytes":14,"kind":"component"},
             {"path":"components/resolver.tar","sha256":SHA_B,"size_bytes":11,"kind":"component"},
             {"path":"components/runtime.tar","sha256":SHA_C,"size_bytes":12,"kind":"component"},
             {"path":"components/profile-bridge.zip","sha256":SHA_D,"size_bytes":13,"kind":"component"}
@@ -66,10 +68,15 @@ fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
         .remove("release_set_id");
     let digest = sha256_hex(canonical_json(&identity)?.as_bytes());
     value["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{digest}"));
-    Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?)
+    Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(
+        &value,
+    )?)?)
 }
 
-fn evidence(release_set_id: &str, windows: &str) -> Result<CompatibilityEvidence, Box<dyn std::error::Error>> {
+fn evidence(
+    release_set_id: &str,
+    windows: &str,
+) -> Result<CompatibilityEvidence, Box<dyn std::error::Error>> {
     let mut dimensions = serde_json::Map::new();
     for name in [
         "catalog_d1",
@@ -109,7 +116,9 @@ fn evidence(release_set_id: &str, windows: &str) -> Result<CompatibilityEvidence
         "release_set_id": release_set_id,
         "dimensions": dimensions
     });
-    Ok(CompatibilityEvidence::parse_json(&serde_json::to_string(&value)?)?)
+    Ok(CompatibilityEvidence::parse_json(&serde_json::to_string(
+        &value,
+    )?)?)
 }
 
 fn converged_snapshot(
@@ -193,14 +202,16 @@ fn production_remains_blocked_even_with_compatible_saved_evidence()
         expected_current_release_set_id: Some(&target.release_set_id),
     })?;
     assert_eq!(plan.decision, "BLOCKED");
-    assert!(plan
-        .blockers
-        .iter()
-        .any(|value| value == "PRODUCTION_EXECUTION_BLOCKED_DURING_AR11"));
-    assert!(plan
-        .blockers
-        .iter()
-        .any(|value| value == "PROFILE_NOT_AUTHORIZED"));
+    assert!(
+        plan.blockers
+            .iter()
+            .any(|value| value == "PRODUCTION_EXECUTION_BLOCKED_DURING_AR11")
+    );
+    assert!(
+        plan.blockers
+            .iter()
+            .any(|value| value == "PROFILE_NOT_AUTHORIZED")
+    );
     Ok(())
 }
 

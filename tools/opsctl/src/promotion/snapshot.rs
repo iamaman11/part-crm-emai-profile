@@ -180,8 +180,14 @@ fn reject_secret_material(value: &Value, path: &str) -> Result<(), ReleaseModelE
                 let normalized = key.to_ascii_lowercase();
                 if matches!(
                     normalized.as_str(),
-                    "secret" | "secret_value" | "token" | "access_token" | "refresh_token"
-                        | "password" | "private_key" | "credential_value"
+                    "secret"
+                        | "secret_value"
+                        | "token"
+                        | "access_token"
+                        | "refresh_token"
+                        | "password"
+                        | "private_key"
+                        | "credential_value"
                 ) {
                     return Err(ReleaseModelError::new(format!(
                         "secret material is forbidden in DeploymentSnapshot: {path}.{key}"
@@ -202,9 +208,9 @@ fn string_map(
     let value = object(required(root, field)?, field)?;
     let mut result = Vec::with_capacity(value.len());
     for (key, value) in value {
-        let release_id = value.as_str().ok_or_else(|| {
-            ReleaseModelError::new(format!("{field}.{key} must be a string"))
-        })?;
+        let release_id = value
+            .as_str()
+            .ok_or_else(|| ReleaseModelError::new(format!("{field}.{key} must be a string")))?;
         if key.trim().is_empty() || release_id.trim().is_empty() {
             return Err(ReleaseModelError::new(format!(
                 "{field} keys/values must not be empty"
@@ -257,14 +263,16 @@ fn optional_string(
         Some(value) => value
             .as_str()
             .map(|text| Some(text.to_owned()))
-            .ok_or_else(|| ReleaseModelError::new(format!("snapshot field {key} must be string/null"))),
+            .ok_or_else(|| {
+                ReleaseModelError::new(format!("snapshot field {key} must be string/null"))
+            }),
     }
 }
 
 fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, ReleaseModelError> {
-    required(object, key)?
-        .as_u64()
-        .ok_or_else(|| ReleaseModelError::new(format!("snapshot field {key} must be unsigned integer")))
+    required(object, key)?.as_u64().ok_or_else(|| {
+        ReleaseModelError::new(format!("snapshot field {key} must be unsigned integer"))
+    })
 }
 
 fn object<'a>(value: &'a Value, label: &str) -> Result<&'a Map<String, Value>, ReleaseModelError> {

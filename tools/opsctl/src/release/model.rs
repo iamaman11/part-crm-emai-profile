@@ -7,8 +7,9 @@ pub const RELEASE_SET_SCHEMA_VERSION: u64 = 1;
 pub const RELEASE_SET_ID_PREFIX: &str = "release-set-v1-sha256-";
 pub const EXPECTED_REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
 const REQUIRED_COMPONENTS: [&str; 3] = ["control_plane", "secret_resolver", "runtime_bundle"];
-const ALLOWED_COMPONENTS: [&str; 4] = [
+const ALLOWED_COMPONENTS: [&str; 5] = [
     "control_plane",
+    "frontend",
     "secret_resolver",
     "runtime_bundle",
     "profile_bridge",
@@ -164,7 +165,10 @@ impl ReleaseSetManifest {
 
     pub fn verify_content_address(&self) -> Result<(), ReleaseModelError> {
         let canonical = canonical_json(&self.identity_payload).map_err(ReleaseModelError::new)?;
-        let expected = format!("{RELEASE_SET_ID_PREFIX}{}", sha256_hex(canonical.as_bytes()));
+        let expected = format!(
+            "{RELEASE_SET_ID_PREFIX}{}",
+            sha256_hex(canonical.as_bytes())
+        );
         if self.release_set_id != expected {
             return Err(ReleaseModelError::new(format!(
                 "RELEASE_IDENTITY_MISMATCH: expected {expected}, observed {}",
@@ -307,7 +311,9 @@ fn parse_components(
 fn parse_artifact_inventory(value: &Value) -> Result<Vec<ArtifactIdentity>, ReleaseModelError> {
     let values = array(value, "artifact_inventory")?;
     if values.is_empty() {
-        return Err(ReleaseModelError::new("artifact_inventory must not be empty"));
+        return Err(ReleaseModelError::new(
+            "artifact_inventory must not be empty",
+        ));
     }
     let mut paths = BTreeSet::new();
     let mut result = Vec::with_capacity(values.len());
@@ -362,12 +368,14 @@ fn validate_component_artifacts(
         .map(|artifact| (artifact.path.as_str(), artifact))
         .collect::<BTreeMap<_, _>>();
     for component in components.values() {
-        let artifact = by_path.get(component.artifact_path.as_str()).ok_or_else(|| {
-            ReleaseModelError::new(format!(
-                "component {} artifact is absent from artifact_inventory",
-                component.component_id
-            ))
-        })?;
+        let artifact = by_path
+            .get(component.artifact_path.as_str())
+            .ok_or_else(|| {
+                ReleaseModelError::new(format!(
+                    "component {} artifact is absent from artifact_inventory",
+                    component.component_id
+                ))
+            })?;
         if artifact.kind != "component"
             || artifact.sha256 != component.artifact_sha256
             || artifact.size_bytes != component.artifact_size_bytes
@@ -387,7 +395,9 @@ pub fn validate_artifact_path(path: &str) -> Result<(), ReleaseModelError> {
         || path.starts_with('\\')
         || path.contains('\\')
         || path.contains('\0')
-        || path.split('/').any(|segment| segment.is_empty() || segment == "." || segment == "..")
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
         || path.contains(':')
     {
         return Err(ReleaseModelError::new(format!(
@@ -464,7 +474,9 @@ fn required_object_value(
 ) -> Result<Value, ReleaseModelError> {
     let value = required(object, key)?;
     if !value.is_object() {
-        return Err(ReleaseModelError::new(format!("field {key} must be an object")));
+        return Err(ReleaseModelError::new(format!(
+            "field {key} must be an object"
+        )));
     }
     Ok(value.clone())
 }
@@ -619,7 +631,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_and_verifies_content_addressed_release_set() -> Result<(), Box<dyn std::error::Error>> {
+    fn parses_and_verifies_content_addressed_release_set() -> Result<(), Box<dyn std::error::Error>>
+    {
         let parsed = ReleaseSetManifest::parse_json(&signed_fixture()?)?;
         assert_eq!(parsed.schema_version, 1);
         assert_eq!(parsed.source.commit_sha, GIT_SHA);
@@ -632,7 +645,8 @@ mod tests {
 
     #[test]
     fn rejects_component_from_different_source_sha() -> Result<(), String> {
-        let mut value: Value = serde_json::from_str(&signed_fixture()?).map_err(|error| error.to_string())?;
+        let mut value: Value =
+            serde_json::from_str(&signed_fixture()?).map_err(|error| error.to_string())?;
         value["components"]["control_plane"]["source_commit_sha"] =
             Value::String("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned());
         let text = serde_json::to_string(&value).map_err(|error| error.to_string())?;
@@ -642,7 +656,8 @@ mod tests {
 
     #[test]
     fn rejects_wrong_release_set_digest() -> Result<(), String> {
-        let mut value: Value = serde_json::from_str(&signed_fixture()?).map_err(|error| error.to_string())?;
+        let mut value: Value =
+            serde_json::from_str(&signed_fixture()?).map_err(|error| error.to_string())?;
         value["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{SHA_A}"));
         let text = serde_json::to_string(&value).map_err(|error| error.to_string())?;
         assert!(ReleaseSetManifest::parse_json(&text).is_err());
@@ -651,7 +666,8 @@ mod tests {
 
     #[test]
     fn rejects_unknown_top_level_field() -> Result<(), String> {
-        let mut value: Value = serde_json::from_str(&signed_fixture()?).map_err(|error| error.to_string())?;
+        let mut value: Value =
+            serde_json::from_str(&signed_fixture()?).map_err(|error| error.to_string())?;
         value["unexpected"] = Value::Bool(true);
         let text = serde_json::to_string(&value).map_err(|error| error.to_string())?;
         assert!(ReleaseSetManifest::parse_json(&text).is_err());
@@ -660,7 +676,8 @@ mod tests {
 
     #[test]
     fn rejects_unsafe_artifact_path() -> Result<(), String> {
-        let mut value: Value = serde_json::from_str(&signed_fixture()?).map_err(|error| error.to_string())?;
+        let mut value: Value =
+            serde_json::from_str(&signed_fixture()?).map_err(|error| error.to_string())?;
         value["artifact_inventory"][0]["path"] = Value::String("../secret".to_owned());
         let text = serde_json::to_string(&value).map_err(|error| error.to_string())?;
         assert!(ReleaseSetManifest::parse_json(&text).is_err());

@@ -252,7 +252,7 @@ def build(
             },
             "components": component_rows,
             "contracts": source_file_set_identity(
-                [Path("openapi/v1/control-plane.yaml"), Path("contracts/generated/control-plane-v1.json")]
+                [Path("openapi/v1/control-plane.yaml"), Path("contracts/generated/control-plane.openapi.json")]
             ),
             "protocols": {
                 "control_plane_contract_sha256": sha256_file(ROOT / "crates/control-plane-contract/src/lib.rs"),

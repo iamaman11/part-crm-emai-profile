@@ -51,7 +51,9 @@ pub fn verify_artifacts(
     let mut verified_bytes = 0_u64;
     for (relative, path) in observed {
         let artifact = expected.get(relative.as_str()).ok_or_else(|| {
-            ReleaseModelError::new(format!("unexpected artifact after inventory comparison: {relative}"))
+            ReleaseModelError::new(format!(
+                "unexpected artifact after inventory comparison: {relative}"
+            ))
         })?;
         verify_one(path.as_path(), artifact)?;
         verified_bytes = verified_bytes
@@ -67,10 +69,7 @@ pub fn verify_artifacts(
 
 fn verify_one(path: &Path, artifact: &ArtifactIdentity) -> Result<(), ReleaseModelError> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
-        ReleaseModelError::new(format!(
-            "ARTIFACT_MISSING: {}: {error}",
-            artifact.path
-        ))
+        ReleaseModelError::new(format!("ARTIFACT_MISSING: {}: {error}", artifact.path))
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(ReleaseModelError::new(format!(
@@ -120,13 +119,18 @@ fn visit_directory(
             ))
         })?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| ReleaseModelError::new(format!("ARTIFACT_DIRECTORY_READ_FAILED: {error}")))?;
+        .map_err(|error| {
+            ReleaseModelError::new(format!("ARTIFACT_DIRECTORY_READ_FAILED: {error}"))
+        })?;
     entries.sort_by_key(std::fs::DirEntry::file_name);
 
     for entry in entries {
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path).map_err(|error| {
-            ReleaseModelError::new(format!("ARTIFACT_METADATA_FAILED: {}: {error}", path.display()))
+            ReleaseModelError::new(format!(
+                "ARTIFACT_METADATA_FAILED: {}: {error}",
+                path.display()
+            ))
         })?;
         if metadata.file_type().is_symlink() {
             return Err(ReleaseModelError::new(format!(
@@ -149,9 +153,10 @@ fn visit_directory(
         })?;
         let mut components = Vec::new();
         for component in relative.components() {
-            let text = component.as_os_str().to_str().ok_or_else(|| {
-                ReleaseModelError::new("artifact path must be valid UTF-8")
-            })?;
+            let text = component
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| ReleaseModelError::new("artifact path must be valid UTF-8"))?;
             components.push(text);
         }
         let canonical = components.join("/");
@@ -171,7 +176,7 @@ mod tests {
     use crate::release::model::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
     use serde_json::{Value, json};
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn temp_dir(label: &str) -> std::io::Result<PathBuf> {
         let path = std::env::temp_dir().join(format!(
@@ -186,7 +191,7 @@ mod tests {
         Ok(path)
     }
 
-    fn manifest(root: &PathBuf) -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
+    fn manifest(root: &Path) -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
         let files = [
             ("control-plane.tar", b"control".as_slice()),
             ("resolver.tar", b"resolver".as_slice()),
@@ -224,10 +229,15 @@ mod tests {
           ]
         });
         let mut identity = value.clone();
-        identity.as_object_mut().ok_or("identity must be object")?.remove("release_set_id");
+        identity
+            .as_object_mut()
+            .ok_or("identity must be object")?
+            .remove("release_set_id");
         let digest = sha256_hex(canonical_json(&identity)?.as_bytes());
         value["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{digest}"));
-        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?)
+        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(
+            &value,
+        )?)?)
     }
 
     #[test]

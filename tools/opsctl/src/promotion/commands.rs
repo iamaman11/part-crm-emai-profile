@@ -1,8 +1,8 @@
+use crate::promotion::PromotionAction;
 use crate::promotion::plan::{PlanRequest, build};
 use crate::promotion::preflight::{PreflightRequest, evaluate as preflight};
 use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::promotion::verify::{VerifyRequest, verify};
-use crate::promotion::PromotionAction;
 use crate::release::compatibility::CompatibilityEvidence;
 use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
 use std::fs;
@@ -25,10 +25,7 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
     let target = load_manifest(request.release_set)?;
     let snapshot = DeploymentSnapshot::load(request.snapshot)?;
     let evidence = CompatibilityEvidence::load(request.evidence_json)?;
-    let current = request
-        .current_release_set
-        .map(load_manifest)
-        .transpose()?;
+    let current = request.current_release_set.map(load_manifest).transpose()?;
     let known_good = request
         .known_good_release_set
         .map(load_manifest)
@@ -84,7 +81,9 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
 
     serde_json::to_string_pretty(&value)
         .map(|output| format!("{output}\n"))
-        .map_err(|error| ReleaseModelError::new(format!("cannot serialize promotion output: {error}")))
+        .map_err(|error| {
+            ReleaseModelError::new(format!("cannot serialize promotion output: {error}"))
+        })
 }
 
 fn load_manifest(path: &Path) -> Result<ReleaseSetManifest, ReleaseModelError> {

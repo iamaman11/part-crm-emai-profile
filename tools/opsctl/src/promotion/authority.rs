@@ -58,7 +58,10 @@ pub fn load_closure(root: &Path, profile_id: &str) -> Result<DeploymentClosure, 
         ));
     }
 
-    let closures = array(required(root_object, "deployment_closures")?, "deployment_closures")?;
+    let closures = array(
+        required(root_object, "deployment_closures")?,
+        "deployment_closures",
+    )?;
     let mut by_id = BTreeMap::new();
     for value in closures {
         let item = object(value, "deployment closure")?;
@@ -142,10 +145,18 @@ fn resolve_closure(
     visiting.remove(closure_id);
 
     result.closure_id = raw.closure_id.clone();
-    result.required_components.extend(raw.required_components.iter().cloned());
-    result.required_bindings.extend(raw.required_bindings.iter().cloned());
-    result.required_resources.extend(raw.required_resources.iter().cloned());
-    result.required_credentials.extend(raw.required_credentials.iter().cloned());
+    result
+        .required_components
+        .extend(raw.required_components.iter().cloned());
+    result
+        .required_bindings
+        .extend(raw.required_bindings.iter().cloned());
+    result
+        .required_resources
+        .extend(raw.required_resources.iter().cloned());
+    result
+        .required_credentials
+        .extend(raw.required_credentials.iter().cloned());
     result
         .optional_or_disabled_resources
         .extend(raw.optional_or_disabled_resources.iter().cloned());
@@ -165,9 +176,9 @@ fn optional_string_set(
     let values = array(value, field)?;
     let mut result = BTreeSet::new();
     for value in values {
-        let text = value.as_str().ok_or_else(|| {
-            ReleaseModelError::new(format!("{field} must contain strings"))
-        })?;
+        let text = value
+            .as_str()
+            .ok_or_else(|| ReleaseModelError::new(format!("{field} must contain strings")))?;
         if text.trim().is_empty() || !result.insert(text.to_owned()) {
             return Err(ReleaseModelError::new(format!(
                 "{field} contains an empty or duplicate value"
@@ -252,13 +263,21 @@ mod tests {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let closure = load_closure(&root, "production-core-v1")?;
         assert!(!closure.required_bindings.contains("MAILBOX_JOBS"));
-        assert!(!closure.required_bindings.contains("MAILBOX_SECRET_RESOLVER"));
-        assert!(!closure
-            .required_credentials
-            .contains("MAILBOX_RESOLVER_CALLER_AUTH_KEY"));
-        assert!(closure
-            .optional_or_disabled_resources
-            .contains("mailbox_jobs"));
+        assert!(
+            !closure
+                .required_bindings
+                .contains("MAILBOX_SECRET_RESOLVER")
+        );
+        assert!(
+            !closure
+                .required_credentials
+                .contains("MAILBOX_RESOLVER_CALLER_AUTH_KEY")
+        );
+        assert!(
+            closure
+                .optional_or_disabled_resources
+                .contains("mailbox_jobs")
+        );
         Ok(())
     }
 
@@ -268,12 +287,18 @@ mod tests {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let closure = load_closure(&root, "production-mailbox-jobs-v1")?;
         assert!(closure.required_bindings.contains("CATALOG_DB"));
-        assert!(closure.required_bindings.contains("MAILBOX_SECRET_RESOLVER"));
+        assert!(
+            closure
+                .required_bindings
+                .contains("MAILBOX_SECRET_RESOLVER")
+        );
         assert!(closure.required_bindings.contains("MAILBOX_JOBS"));
         assert!(closure.required_resources.contains("mailbox_jobs"));
-        assert!(!closure
-            .optional_or_disabled_resources
-            .contains("mailbox_jobs"));
+        assert!(
+            !closure
+                .optional_or_disabled_resources
+                .contains("mailbox_jobs")
+        );
         Ok(())
     }
 }

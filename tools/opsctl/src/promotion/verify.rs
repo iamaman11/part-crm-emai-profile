@@ -143,7 +143,7 @@ pub fn verify(request: VerifyRequest<'_>) -> Result<VerifyResult, ReleaseModelEr
     }
 
     for (name, dimension) in &request.compatibility_evidence.dimensions {
-        let required = dimension_required(name, &closure);
+        let required = dimension_required(name, &closure, request.environment);
         if !required {
             continue;
         }
@@ -172,11 +172,20 @@ pub fn verify(request: VerifyRequest<'_>) -> Result<VerifyResult, ReleaseModelEr
     Ok(result(decision, blockers))
 }
 
-fn dimension_required(name: &str, closure: &crate::promotion::authority::DeploymentClosure) -> bool {
+fn dimension_required(
+    name: &str,
+    closure: &crate::promotion::authority::DeploymentClosure,
+    environment: &str,
+) -> bool {
     match name {
         "resolver_d1" | "resolver_protocol" => closure.required_resources.contains("resolver_d1"),
-        "windows_profile_bridge" => closure.required_components.contains("profile_bridge")
-            || closure.required_resources.contains("windows_profile_bridge"),
+        "windows_profile_bridge" => {
+            environment == "production"
+                && (closure.required_components.contains("profile_bridge")
+                    || closure
+                        .required_resources
+                        .contains("windows_profile_bridge"))
+        }
         _ => true,
     }
 }
