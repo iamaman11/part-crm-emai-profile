@@ -89,10 +89,8 @@ mod tests {
 
     fn root() -> Result<PathBuf, Box<dyn std::error::Error>> {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "opsctl-ar10-doctor-{}-{nonce}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("opsctl-ar10-doctor-{}-{nonce}", std::process::id()));
         for directory in ["architecture", "docs", "scripts"] {
             fs::create_dir_all(root.join(directory))?;
         }
@@ -107,7 +105,10 @@ mod tests {
         ] {
             fs::write(root.join(relative), b"{\"schema_version\":1}\n")?;
         }
-        fs::write(root.join("scripts/generate-architecture-inventory.py"), b"# retained\n")?;
+        fs::write(
+            root.join("scripts/generate-architecture-inventory.py"),
+            b"# retained\n",
+        )?;
         fs::write(root.join("scripts/python-estate-ar6.py"), b"# retained\n")?;
         Ok(root)
     }
