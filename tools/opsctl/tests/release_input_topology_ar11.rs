@@ -50,23 +50,27 @@ fn missing_release_identity_source_fails_closed() -> Result<(), Box<dyn std::err
     let root = temp_root("missing")?;
     let topology =
         ReleaseInputTopology::parse_json(&authority(&[canonical_input("missing", "missing.txt")]))?;
-    let error = topology
-        .resolve(&root)
-        .expect_err("missing release identity source must fail closed");
+    let error = match topology.resolve(&root) {
+        Err(error) => error,
+        Ok(_) => return Err("missing release identity source unexpectedly resolved".into()),
+    };
     assert!(error.to_string().contains("RELEASE_INPUT_MISSING"));
     fs::remove_dir_all(root)?;
     Ok(())
 }
 
 #[test]
-fn duplicate_release_input_id_fails_closed() {
+fn duplicate_release_input_id_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
     let source = authority(&[
         canonical_input("duplicate", "first.txt"),
         canonical_input("duplicate", "second.txt"),
     ]);
-    let error =
-        ReleaseInputTopology::parse_json(&source).expect_err("duplicate input_id must fail closed");
+    let error = match ReleaseInputTopology::parse_json(&source) {
+        Err(error) => error,
+        Ok(_) => return Err("duplicate input_id unexpectedly parsed".into()),
+    };
     assert!(error.to_string().contains("duplicate release input id"));
+    Ok(())
 }
 
 #[test]
@@ -95,9 +99,10 @@ fn symlink_release_identity_source_fails_closed() -> Result<(), Box<dyn std::err
     symlink("target.txt", root.join("input.txt"))?;
     let topology =
         ReleaseInputTopology::parse_json(&authority(&[canonical_input("symlink", "input.txt")]))?;
-    let error = topology
-        .resolve(&root)
-        .expect_err("symlink release identity source must fail closed");
+    let error = match topology.resolve(&root) {
+        Err(error) => error,
+        Ok(_) => return Err("symlink release identity source unexpectedly resolved".into()),
+    };
     assert!(
         error
             .to_string()
