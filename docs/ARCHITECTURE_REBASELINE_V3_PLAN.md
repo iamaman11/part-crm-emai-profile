@@ -74,7 +74,7 @@ AR-4D  Profile extraction — NOT REQUIRED by AR-3; reopen only by later accepte
 AR-5   Wrangler / Runtime Authority Cleanup                      DONE / ACCEPTED
 AR-6   Full Python Estate + read-only Rust opsctl                DONE / ACCEPTED
 AR-7   Environments + GitHub Governance + Operational Boundaries DONE / ACCEPTED
-AR-8   Secrets / Keys / OAuth Refresh Concurrency                DONE / ACCEPTED
+AR-8   Secrets / Keys / OAuth Refresh Concurrency                 DONE / ACCEPTED
 AR-9   D1 Evolution / Schema Compatibility                       DONE / ACCEPTED
 AR-10  Runtime and Historical Executable Simplification          DONE / ACCEPTED
 AR-11  Release-set / Promotion Architecture                      CURRENT
