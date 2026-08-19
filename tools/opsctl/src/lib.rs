@@ -66,6 +66,29 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             })
             .map_err(|error| OpsctlError::new("d1", error.to_string()))
         }
+        Invocation::Release {
+            root,
+            action,
+            release_set,
+            artifact_root,
+            profile_id,
+            environment,
+            evidence_json,
+            current_release_set,
+        } => {
+            let repo_root = resolve_repo_root(root.as_deref(), "release")?;
+            release::commands::run(release::commands::ReleaseRunRequest {
+                root: &repo_root,
+                action,
+                release_set: &release_set,
+                artifact_root: artifact_root.as_deref(),
+                profile_id: profile_id.as_deref(),
+                environment: environment.as_deref(),
+                evidence_json: evidence_json.as_deref(),
+                current_release_set: current_release_set.as_deref(),
+            })
+            .map_err(|error| OpsctlError::new("release", error.to_string()))
+        }
     }
 }
 
