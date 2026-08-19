@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Validate current documentation/program boundaries without replaying legacy lifecycle state.
+"""Validate current documentation/program projection boundaries.
 
-Architecture acceptance/current-slice state is owned by the generic Git acceptance protocol and is
-resolved at read time. Tracked status/inventory/README material is projection-only and must never
-become a second lifecycle authority. Historical AR-specific security/governance invariants are
-validated by their owning permanent gates rather than duplicated here.
+Architecture acceptance/current-slice state is owned exclusively by the generic Git acceptance
+protocol. This checker intentionally does not re-derive Git history: it validates static program
+policy, projection-only semantics, fail-closed compatibility projections and the identities of
+current specialized AR-9/10/11 authorities. Historical lifecycle engines are not imported.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -68,32 +67,53 @@ def load_json(root: Path, relative: Path) -> dict[str, Any]:
     return value
 
 
-def run_acceptance(root: Path, command: str) -> dict[str, Any] | None:
-    completed = subprocess.run(
-        ["node", ".github/scripts/architecture-acceptance.mjs", command],
-        cwd=root,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip()
-        fail(f"architecture acceptance {command} failed: {detail}")
-    if command != "derive":
-        return None
-    try:
-        value = json.loads(completed.stdout)
-    except json.JSONDecodeError as error:
-        fail(f"architecture acceptance derive emitted invalid JSON: {error}")
-    if not isinstance(value, dict):
-        fail("architecture acceptance derive must emit one JSON object")
-    return value
-
-
 def require_markers(text: str, markers: tuple[str, ...], label: str) -> None:
     missing = [marker for marker in markers if marker not in text]
     if missing:
         fail(f"{label} is missing required markers: {missing}")
+
+
+def validate_acceptance_policy(policy: dict[str, Any], sequence: dict[str, Any]) -> None:
+    if (
+        policy.get("schema_version") != 1
+        or policy.get("kind") != "ARCHITECTURE_ACCEPTANCE_POLICY"
+        or policy.get("status") != "current"
+        or policy.get("program_sequence") != PROGRAM_SEQUENCE.as_posix()
+        or policy.get("source_branch") != "main"
+        or policy.get("source_history_count") != 1
+    ):
+        fail("architecture acceptance policy identity/single-history boundary drifted")
+    if (
+        sequence.get("schema_version") != 1
+        or sequence.get("kind") != "ARCHITECTURE_PROGRAM_SEQUENCE"
+        or sequence.get("state_model") != "STATIC_ORDER_ONLY"
+        or sequence.get("mutable_lifecycle_state_forbidden") is not True
+    ):
+        fail("static architecture program sequence identity/state drifted")
+    slices = sequence.get("slices")
+    if not isinstance(slices, list) or not slices:
+        fail("static architecture program sequence is empty")
+    for item in slices:
+        if not isinstance(item, dict):
+            fail("architecture program sequence contains a non-object slice")
+        for forbidden in ("accepted", "current", "accepted_checkpoint", "current_slice"):
+            if forbidden in item:
+                fail(f"static architecture sequence stores mutable lifecycle field {forbidden}")
+    bootstrap = policy.get("state_derivation", {}).get("migration_bootstrap_acceptance")
+    if not isinstance(bootstrap, dict):
+        fail("architecture acceptance policy lost AR-11 migration bootstrap")
+    if (
+        bootstrap.get("slice") != "AR-11"
+        or bootstrap.get("pr") != 374
+        or bootstrap.get("candidate_tree") != bootstrap.get("merge_tree")
+        or bootstrap.get("required_status_contexts_total") != bootstrap.get("required_status_contexts_success")
+        or bootstrap.get("applicable_permanent_workflows_total") != bootstrap.get("applicable_permanent_workflows_success")
+        or bootstrap.get("behind_by") != 0
+        or bootstrap.get("blocking_reviews") != 0
+        or bootstrap.get("unresolved_review_threads") != 0
+        or bootstrap.get("production_mutation") is not False
+    ):
+        fail("AR-11 migration bootstrap acceptance summary drifted")
 
 
 def validate_projection_policy(policy: dict[str, Any]) -> None:
@@ -111,51 +131,25 @@ def validate_projection_policy(policy: dict[str, Any]) -> None:
         fail("architecture acceptance projection path set drifted")
 
 
-def validate_derived_state(state: dict[str, Any]) -> None:
-    accepted = state.get("accepted_checkpoint")
-    current = state.get("current_slice")
-    if not isinstance(accepted, str) or not accepted.startswith("AR-"):
-        fail("derived accepted checkpoint is malformed")
-    if current is not None and (not isinstance(current, str) or not current.startswith("AR-")):
-        fail("derived current slice is malformed")
-    if accepted == "AR-17":
-        expected = {
-            "architecture_complete": True,
-            "production_core_gate": "AUTHORIZED",
-            "production_ready": False,
-            "production_mutation": False,
-        }
-    else:
-        expected = {
-            "architecture_complete": False,
-            "production_core_gate": "BLOCKED",
-            "production_ready": False,
-            "production_mutation": False,
-        }
-    for key, wanted in expected.items():
-        if state.get(key) != wanted:
-            fail(f"derived lifecycle state {key} drifted: expected {wanted!r}, observed {state.get(key)!r}")
-
-
 def validate_projection_fail_closed(status: dict[str, Any], transition: dict[str, Any], inventory: dict[str, Any]) -> None:
     if status.get("production_ready") is not False:
-        fail("docs/status.json may not project production_ready=true before PC-1")
+        fail("docs/status.json compatibility projection may not enable production")
     current = status.get("current")
     if not isinstance(current, dict):
-        fail("docs/status.json current projection is missing")
+        fail("docs/status.json current compatibility projection is missing")
     if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
-        fail("docs/status.json must remain fail-closed while post-AR-11 cleanup is active")
+        fail("docs/status.json compatibility projection must remain fail-closed")
 
     state_model = transition.get("state_model")
     if not isinstance(state_model, dict):
-        fail("architecture transition projection lost state_model")
+        fail("architecture transition compatibility projection lost state_model")
     for key, wanted in {
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
         "production_ready": False,
     }.items():
         if state_model.get(key) != wanted:
-            fail(f"architecture transition projection must remain fail-closed: {key}")
+            fail(f"architecture transition compatibility projection must remain fail-closed: {key}")
 
     delivery = inventory.get("current_delivery_map")
     invariants = delivery.get("invariants") if isinstance(delivery, dict) else None
@@ -173,11 +167,7 @@ def validate_projection_fail_closed(status: dict[str, Any], transition: dict[str
 
 def validate_owned_authorities(root: Path) -> None:
     ar9 = load_json(root, AR9_AUTHORITY)
-    if (
-        ar9.get("kind") != "D1_EVOLUTION_AUTHORITY"
-        or ar9.get("status") != "accepted"
-        or ar9.get("production_mutation") is not False
-    ):
+    if ar9.get("kind") != "D1_EVOLUTION_AUTHORITY" or ar9.get("status") != "accepted" or ar9.get("production_mutation") is not False:
         fail("accepted AR-9 D1 authority identity/state drifted")
 
     ar10 = load_json(root, AR10_AUTHORITY)
@@ -244,32 +234,19 @@ def validate_human_authority(root: Path) -> None:
     )
 
 
-def validate(root: Path) -> dict[str, Any]:
-    run_acceptance(root, "contract")
-    state = run_acceptance(root, "derive")
-    assert state is not None
-    validate_derived_state(state)
-
+def validate(root: Path) -> None:
     policy = load_json(root, ACCEPTANCE_POLICY)
     sequence = load_json(root, PROGRAM_SEQUENCE)
-    if policy.get("kind") != "ARCHITECTURE_ACCEPTANCE_POLICY" or policy.get("status") != "current":
-        fail("architecture acceptance policy identity/state drifted")
-    if sequence.get("kind") != "ARCHITECTURE_PROGRAM_SEQUENCE" or sequence.get("state_model") != "STATIC_ORDER_ONLY":
-        fail("static architecture program sequence identity/state drifted")
+    validate_acceptance_policy(policy, sequence)
     validate_projection_policy(policy)
-
-    status = load_json(root, STATUS)
-    transition = load_json(root, TRANSITION)
-    inventory = load_json(root, INVENTORY)
-    validate_projection_fail_closed(status, transition, inventory)
+    validate_projection_fail_closed(load_json(root, STATUS), load_json(root, TRANSITION), load_json(root, INVENTORY))
     validate_owned_authorities(root)
     validate_compatibility_entrypoints(root)
     validate_human_authority(root)
-    return state
 
 
 def self_test(root: Path) -> None:
-    state = validate(root)
+    validate(root)
     policy = load_json(root, ACCEPTANCE_POLICY)
     negative = copy.deepcopy(policy)
     negative["projection_policy"]["authoritative"] = True
@@ -301,11 +278,7 @@ def self_test(root: Path) -> None:
     else:
         fail("premature production authorization projection negative fixture unexpectedly passed")
 
-    run_acceptance(root, "self-test")
-    print(
-        "Documentation authority negative matrix passed: tracked lifecycle projections are non-authoritative, "
-        f"derived acceptance checkpoint={state['accepted_checkpoint']} current={state['current_slice']}."
-    )
+    print("Documentation authority negative matrix passed: lifecycle projections cannot become acceptance authority or enable production.")
 
 
 def main() -> int:
@@ -313,16 +286,12 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
-    root = args.root.resolve()
     try:
         if args.self_test:
-            self_test(root)
+            self_test(args.root.resolve())
         else:
-            state = validate(root)
-            print(
-                "Documentation/program authority is consistent: lifecycle state is Git-derived, tracked projections are non-authoritative, "
-                f"accepted={state['accepted_checkpoint']} current={state['current_slice']}."
-            )
+            validate(args.root.resolve())
+            print("Documentation/program projection boundaries are current; Git lifecycle acceptance remains exclusively owned by architecture-acceptance.")
         return 0
     except (DocumentationAuthorityError, OSError, UnicodeError, json.JSONDecodeError) as error:
         print(f"documentation authority check failed: {error}", file=sys.stderr)
