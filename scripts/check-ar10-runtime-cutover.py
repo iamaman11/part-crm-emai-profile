@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
+import importlib.util
 import json
 import re
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +22,9 @@ OPSCTL_SOURCE = Path("tools/opsctl/src")
 ADR = Path("docs/adr/ADR-0001-fingerprint-stability-policy.md")
 AR10_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR10.md")
 AR10_AUTHORITY = Path("architecture/runtime-cutover-ar10.json")
+PYTHON_ESTATE_BASELINE = Path("architecture/python-estate-ar6.json")
+PYTHON_ESTATE_OVERLAY = Path("architecture/python-estate-ar10.json")
+PYTHON_ESTATE_GENERATOR = Path("scripts/python-estate-ar6.py")
 LEGACY_EXECUTABLES = {
     "check_mail.py",
     "profile_manager.py",
@@ -66,6 +72,13 @@ def read_regular(root: Path, relative: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def read_regular_bytes(root: Path, relative: Path) -> bytes:
+    path = root / relative
+    if path.is_symlink() or not path.is_file():
+        fail(f"required AR-10 file is missing/not regular: {relative.as_posix()}")
+    return path.read_bytes()
+
+
 def canonical_json_bytes(value: object) -> bytes:
     return (
         json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"
@@ -93,7 +106,7 @@ def called_names(node: ast.AST) -> set[str]:
 
 
 def validate_runtime_lock(root: Path) -> None:
-    raw = (root / RUNTIME_LOCK).read_bytes()
+    raw = read_regular_bytes(root, RUNTIME_LOCK)
     try:
         parsed = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -193,6 +206,116 @@ def validate_opsctl(root: Path) -> None:
             fail(f"opsctl acquired forbidden provider/network execution authority: {marker}")
 
 
+def git_blob_sha1(raw: bytes) -> str:
+    header = f"blob {len(raw)}\0".encode("ascii")
+    return hashlib.sha1(header + raw, usedforsecurity=False).hexdigest()
+
+
+def load_python_estate_generator(root: Path) -> ModuleType:
+    path = root / PYTHON_ESTATE_GENERATOR
+    spec = importlib.util.spec_from_file_location("python_estate_ar6", path)
+    if spec is None or spec.loader is None:
+        fail("cannot load frozen AR-6 Python-estate classifier")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def validate_python_estate_overlay(root: Path) -> None:
+    baseline_raw = read_regular_bytes(root, PYTHON_ESTATE_BASELINE)
+    baseline = json.loads(baseline_raw.decode("utf-8"))
+    overlay = json.loads(read_regular(root, PYTHON_ESTATE_OVERLAY))
+    if baseline.get("status") != "AR6_ACCEPTED_PYTHON_ESTATE" or baseline.get(
+        "accepted_program_checkpoint"
+    ) != "AR-6":
+        fail("AR-6 Python-estate baseline identity drifted")
+    if overlay.get("schema_version") != 1 or overlay.get("status") != "AR10_CURRENT_PYTHON_ESTATE_OVERLAY":
+        fail("AR-10 Python-estate overlay identity drifted")
+    baseline_contract = overlay.get("baseline")
+    if not isinstance(baseline_contract, dict):
+        fail("AR-10 Python-estate overlay lacks frozen baseline contract")
+    if baseline_contract.get("path") != PYTHON_ESTATE_BASELINE.as_posix() or baseline_contract.get(
+        "immutable"
+    ) is not True:
+        fail("AR-10 Python-estate baseline must remain immutable")
+    expected_blob = baseline_contract.get("git_blob_sha1")
+    if not isinstance(expected_blob, str) or git_blob_sha1(baseline_raw) != expected_blob:
+        fail("accepted AR-6 Python-estate baseline bytes changed")
+
+    baseline_rows = baseline.get("files")
+    additions = overlay.get("additions")
+    retirements = overlay.get("retirements")
+    if not isinstance(baseline_rows, list) or not isinstance(additions, list) or not isinstance(
+        retirements, list
+    ):
+        fail("AR-10 Python-estate overlay collections are malformed")
+    if any(not isinstance(path, str) or not path for path in retirements):
+        fail("AR-10 Python-estate retirements must be non-empty path strings")
+    if len(retirements) != len(set(retirements)):
+        fail("AR-10 Python-estate retirements contain duplicates")
+
+    baseline_by_path = {
+        row["path"]: row
+        for row in baseline_rows
+        if isinstance(row, dict) and isinstance(row.get("path"), str)
+    }
+    if len(baseline_by_path) != len(baseline_rows):
+        fail("accepted AR-6 Python-estate baseline contains malformed/duplicate rows")
+    addition_by_path: dict[str, dict[str, Any]] = {}
+    for row in additions:
+        if not isinstance(row, dict) or not isinstance(row.get("path"), str):
+            fail("AR-10 Python-estate addition row is malformed")
+        path = row["path"]
+        if path in addition_by_path or path in baseline_by_path:
+            fail(f"AR-10 Python-estate addition is duplicate/already in baseline: {path}")
+        if row.get("classification") != "KEEP_PYTHON" or not isinstance(row.get("reason"), str):
+            fail(f"AR-10 Python-estate addition must be reviewed KEEP_PYTHON: {path}")
+        addition_by_path[path] = row
+
+    for path in retirements:
+        baseline_row = baseline_by_path.get(path)
+        if baseline_row is None:
+            fail(f"AR-10 Python-estate retirement is not in frozen AR-6 baseline: {path}")
+        if baseline_row.get("classification") != "DELETE_AFTER_SEQUENCE" or baseline_row.get(
+            "cutover_slice"
+        ) != "AR-10":
+            fail(f"AR-10 may retire only its accepted DELETE_AFTER_SEQUENCE cohort: {path}")
+
+    generator = load_python_estate_generator(root)
+    current = generator.build_inventory(root)
+    current_rows = current.get("files")
+    if not isinstance(current_rows, list):
+        fail("current Python-estate classifier returned malformed rows")
+    current_by_path = {
+        row["path"]: row
+        for row in current_rows
+        if isinstance(row, dict) and isinstance(row.get("path"), str)
+    }
+    if len(current_by_path) != len(current_rows):
+        fail("current Python-estate classifier returned malformed/duplicate paths")
+
+    expected_paths = (set(baseline_by_path) - set(retirements)) | set(addition_by_path)
+    if set(current_by_path) != expected_paths:
+        missing = sorted(expected_paths - set(current_by_path))
+        unexpected = sorted(set(current_by_path) - expected_paths)
+        fail(f"AR-10 Python-estate delta drifted: missing={missing}, unexpected={unexpected}")
+
+    for path, baseline_row in baseline_by_path.items():
+        if path in retirements:
+            if path in current_by_path:
+                fail(f"retired AR-10 Python executable is still tracked: {path}")
+            continue
+        if current_by_path.get(path) != baseline_row:
+            fail(f"retained AR-6 Python classification changed during AR-10: {path}")
+    for path, overlay_row in addition_by_path.items():
+        current_row = current_by_path.get(path)
+        if current_row is None or current_row.get("classification") != overlay_row["classification"]:
+            fail(f"AR-10 Python addition classification drifted: {path}")
+
+    if current.get("summary") != overlay.get("current_summary"):
+        fail("AR-10 Python-estate current summary drifted")
+
+
 def validate_legacy_retirement(root: Path) -> None:
     present = sorted(relative for relative in LEGACY_EXECUTABLES if (root / relative).exists())
     if present:
@@ -210,7 +333,10 @@ def validate_legacy_retirement(root: Path) -> None:
             text = path.read_text(encoding="utf-8", errors="strict")
             for legacy in LEGACY_EXECUTABLES:
                 if legacy in text:
-                    fail(f"active runtime/workflow still references retired executable {legacy}: {path.relative_to(root)}")
+                    fail(
+                        f"active runtime/workflow still references retired executable {legacy}: "
+                        f"{path.relative_to(root)}"
+                    )
 
 
 def validate_acceptance_projection(root: Path) -> None:
@@ -245,6 +371,7 @@ def validate_preflight(root: Path) -> None:
     validate_real_runtime(root)
     validate_synthetic_runtime(root)
     validate_opsctl(root)
+    validate_python_estate_overlay(root)
 
 
 def validate_closeout(root: Path) -> None:
@@ -292,11 +419,11 @@ def main() -> int:
             print("AR-10 runtime cutover policy negative self-test passed.")
         elif arguments.closeout:
             validate_closeout(arguments.root.resolve())
-            print("AR-10 real runtime, identity, opsctl and executable-retirement closeout policy passed.")
+            print("AR-10 real runtime, identity, opsctl, Python estate and executable-retirement closeout policy passed.")
         else:
             validate_preflight(arguments.root.resolve())
-            print("AR-10 successor runtime preflight policy passed; parity may run before retirement.")
-    except (GateError, OSError, UnicodeError, json.JSONDecodeError) as error:
+            print("AR-10 successor runtime and Python-estate preflight policy passed; parity may run before retirement.")
+    except (GateError, OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         print(f"AR-10 runtime cutover policy failed: {error}", file=sys.stderr)
         return 1
     return 0
