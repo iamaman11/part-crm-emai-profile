@@ -57,13 +57,14 @@ for required in (
     if required not in legacy.REQUIRED_FILES:
         legacy.REQUIRED_FILES = (*legacy.REQUIRED_FILES, required)
 
-# The legacy engine deliberately preserves deep historical invariants. These three
-# messages are its only hard-coded pre-AR-10 projection assertions; the current
-# wrapper replaces them with exact AR-9 accepted / AR-10 current checks below.
+# The legacy engine deliberately preserves deep historical invariants. These are
+# hard-coded pre-AR-10 projection assertions only; the current wrapper replaces
+# them with exact AR-9 accepted / AR-10 current checks below.
 SUPERSEDED_LEGACY_PROJECTION_ERRORS = {
     "architecture transition must encode accepted AR-8 and current AR-9",
     "current v3 plan missing authority marker: Current accepted architecture checkpoint:** AR-8",
     "current v3 plan missing authority marker: Current implementation:** AR-9",
+    "docs/DEVELOPER_CAPABILITY_MATRIX.md missing authority marker: full_ar8_accepted=true",
 }
 
 
@@ -384,7 +385,9 @@ def validate_current_human_projection(root: Path) -> None:
             "Binding `opsctl` evolution contract",
         ),
         "docs/DEVELOPER_CAPABILITY_MATRIX.md": (
-            "CURRENT_DELIVERY_MAP",
+            "AR-9 source is accepted on `main`; AR-10 is the current architecture slice.",
+            "COMPLETE THROUGH AR-9",
+            "AR-10 acceptance",
             "production_ready=false",
         ),
     }
