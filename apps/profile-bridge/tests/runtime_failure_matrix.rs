@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
 use bridge_domain::{BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort};
+use profile_bridge::runtime_bundle::{
+    ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator,
+};
 use profile_bridge::{ProcessAction, ProcessControlPort};
-use profile_bridge::runtime_bundle::{ApprovedRuntimeBundle, RuntimeLaunchError, RuntimeSessionOrchestrator};
 use profile_platform_primitives::SessionId;
 use runtime_bundle_domain::{
     BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
@@ -25,7 +27,11 @@ fn approved_bundle() -> Result<ApprovedRuntimeBundle, Box<dyn std::error::Error>
         calculated.clone(),
     )?;
     let inventory = RuntimeInventory::new([InventoryEntry::new(entrypoint, 10, digest('b')?)])?;
-    Ok(ApprovedRuntimeBundle::validate(manifest, inventory, &calculated)?)
+    Ok(ApprovedRuntimeBundle::validate(
+        manifest,
+        inventory,
+        &calculated,
+    )?)
 }
 
 #[derive(Default)]
@@ -67,9 +73,7 @@ struct ScriptedCamouhost {
 }
 
 impl ScriptedCamouhost {
-    fn new(
-        responses: impl IntoIterator<Item = Result<CamouhostMessage, BridgePortError>>,
-    ) -> Self {
+    fn new(responses: impl IntoIterator<Item = Result<CamouhostMessage, BridgePortError>>) -> Self {
         Self {
             responses: responses.into_iter().collect(),
         }
@@ -133,14 +137,14 @@ fn transport_loss_between_hello_and_ready_forces_process_rollback()
     let bundle = approved_bundle()?;
     let session = SessionId::parse("session_01JAR10READYLOSS")?;
     let mut process = TrackingProcess::default();
-    let mut camouhost = ScriptedCamouhost::new([
-        Ok(hello_ack()),
-        Err(BridgePortError::InvalidResponse),
-    ]);
+    let mut camouhost =
+        ScriptedCamouhost::new([Ok(hello_ack()), Err(BridgePortError::InvalidResponse)]);
 
     assert_eq!(
         RuntimeSessionOrchestrator::launch(&bundle, &session, &mut process, &mut camouhost),
-        Err(RuntimeLaunchError::Camouhost(BridgePortError::InvalidResponse))
+        Err(RuntimeLaunchError::Camouhost(
+            BridgePortError::InvalidResponse
+        ))
     );
     assert_eq!(
         process.actions,
@@ -162,7 +166,9 @@ fn wrong_session_ready_is_rejected_and_terminated() -> Result<(), Box<dyn std::e
 
     assert_eq!(
         RuntimeSessionOrchestrator::launch(&bundle, &session, &mut process, &mut camouhost),
-        Err(RuntimeLaunchError::Camouhost(BridgePortError::InvalidResponse))
+        Err(RuntimeLaunchError::Camouhost(
+            BridgePortError::InvalidResponse
+        ))
     );
     assert_eq!(
         process.actions,
@@ -192,7 +198,9 @@ fn wrong_or_unclean_closed_response_never_confirms_clean_stop()
         RuntimeSessionOrchestrator::launch(&bundle, &session, &mut process, &mut camouhost)?;
         assert_eq!(
             RuntimeSessionOrchestrator::close(&bundle, &session, &mut process, &mut camouhost),
-            Err(RuntimeLaunchError::Camouhost(BridgePortError::InvalidResponse))
+            Err(RuntimeLaunchError::Camouhost(
+                BridgePortError::InvalidResponse
+            ))
         );
         assert_eq!(
             process.actions,
