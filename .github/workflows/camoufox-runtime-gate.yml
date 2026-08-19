@@ -16,7 +16,7 @@ concurrency:
 jobs:
   real-runtime-linux:
     name: Real Camoufox cold-launch proof
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout exact source
@@ -55,12 +55,15 @@ jobs:
           python3.12 -m camoufox active | grep -F '152.0.4-beta.28'
 
       - name: Compile AR-10 runtime sources
-        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/test-ar10-real-camoufox.py scripts/check-ar10-runtime-cutover.py scripts/python-estate-ar6.py
+        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/test-ar10-real-camoufox.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/python-estate-ar6.py
 
       - name: Enforce AR-10 successor-runtime policy
         run: |
           python3.12 scripts/python-estate-ar6.py --check
           python3.12 scripts/check-ar10-runtime-cutover.py
+
+      - name: Prove Firefox writer-lock failure semantics
+        run: python3.12 scripts/test-ar10-firefox-writer-locks.py
 
       - name: Prove real Camoufox identity and persistent profile behavior
         run: python3.12 scripts/test-ar10-real-camoufox.py
@@ -77,7 +80,7 @@ jobs:
 
   bridge-regression-windows:
     name: Profile Bridge Windows regression
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - name: Checkout exact source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -91,7 +94,10 @@ jobs:
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
       - name: Compile real Camouhost source without installing browser runtime
-        run: python -m py_compile runtime/camouhost/real.py scripts/check-ar10-runtime-cutover.py scripts/python-estate-ar6.py
+        run: python -m py_compile runtime/camouhost/real.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/python-estate-ar6.py
+
+      - name: Prove Firefox writer-lock failure semantics
+        run: python scripts/test-ar10-firefox-writer-locks.py
 
       - name: Test and build Profile Bridge
         run: |
