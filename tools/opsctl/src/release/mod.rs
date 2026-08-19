@@ -3,6 +3,7 @@
 //! AR-11 owns semantic activation. The module remains a local policy engine:
 //! no provider credentials, network clients, deployment execution or mutation authority.
 
+pub mod authority;
 pub mod model;
 
 pub const TARGET_COMMANDS: &[&str] = &["inspect", "verify", "compatibility"];
