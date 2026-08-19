@@ -24,6 +24,10 @@ AR10_ACCEPTANCE_EVIDENCE = Path("docs/evidence/2026-08-19-ar10-final-acceptance.
 AR10_AUTHORITY = Path("architecture/runtime-cutover-ar10.json")
 PYTHON_ESTATE_BASELINE = Path("architecture/python-estate-ar6.json")
 PYTHON_ESTATE_GENERATOR = Path("scripts/python-estate-ar6.py")
+PYTHON_ESTATE_SUCCESSORS = {
+    "CURRENT_PYTHON_ESTATE_VIA_AR6_BASELINE_PLUS_AR10_OVERLAY": "AR-10",
+    "CURRENT_PYTHON_ESTATE_VIA_AR6_BASELINE_PLUS_AR10_AR11_OVERLAYS": "AR-11",
+}
 LEGACY_EXECUTABLES = {
     "check_mail.py",
     "profile_manager.py",
@@ -208,7 +212,7 @@ def load_python_estate_generator(root: Path) -> ModuleType:
 
 
 def validate_python_estate(root: Path) -> None:
-    """Validate frozen accepted AR-6 provenance and its bounded current AR-10 composition."""
+    """Validate frozen AR-6 provenance plus the exact accepted/current bounded successor chain."""
     try:
         baseline = json.loads(read_regular(root, PYTHON_ESTATE_BASELINE))
     except json.JSONDecodeError as error:
@@ -223,8 +227,13 @@ def validate_python_estate(root: Path) -> None:
         current = generator.build_inventory(root)
     except ValueError as error:
         fail(f"current Python estate composition failed: {error}")
-    if current.get("status") != "CURRENT_PYTHON_ESTATE_VIA_AR6_BASELINE_PLUS_AR10_OVERLAY":
-        fail("current Python estate composition status drifted")
+    status = current.get("status")
+    expected_owner = PYTHON_ESTATE_SUCCESSORS.get(status)
+    if expected_owner is None or current.get("current_owning_slice") != expected_owner:
+        fail(
+            "current Python estate successor identity drifted: "
+            f"status={status!r} owner={current.get('current_owning_slice')!r}"
+        )
     summary = current.get("summary")
     if not isinstance(summary, dict):
         fail("current Python estate summary is missing")
@@ -319,6 +328,11 @@ def self_test() -> None:
         fail("normal-launch regeneration negative self-test failed")
     if re.fullmatch(r"[0-9a-f]{64}", "0" * 64) is None:
         fail("digest self-test failed")
+    if PYTHON_ESTATE_SUCCESSORS != {
+        "CURRENT_PYTHON_ESTATE_VIA_AR6_BASELINE_PLUS_AR10_OVERLAY": "AR-10",
+        "CURRENT_PYTHON_ESTATE_VIA_AR6_BASELINE_PLUS_AR10_AR11_OVERLAYS": "AR-11",
+    }:
+        fail("Python estate successor allowlist self-test drifted")
     if LEGACY_EXECUTABLES != {
         "check_mail.py",
         "profile_manager.py",
