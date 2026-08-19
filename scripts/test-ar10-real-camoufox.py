@@ -109,15 +109,18 @@ def assert_clean_launch_lock_state(root: Path) -> None:
     bridge_lock = root / ".profile-platform.lock"
     if bridge_lock.read_text(encoding="utf-8") != BRIDGE_LOCK_CONTENT:
         raise AssertionError("candidate materialization changed Bridge writer ownership evidence")
-    for lock_path in (
-        root / ".parentlock",
-        root / "lock",
-        root / "user_data" / ".parentlock",
-        root / "user_data" / "lock",
-    ):
+
+    user_data = root / "user_data"
+    if user_data.is_symlink() or (user_data.exists() and not user_data.is_dir()):
+        raise AssertionError("generation-owned user_data must remain a real directory")
+
+    # Firefox may retain its own user_data/.parentlock or user_data/lock marker after a
+    # clean exit. Marker presence alone is not active-writer evidence. Root-level browser
+    # lock artifacts are still forbidden because Profile Bridge owns that namespace.
+    for lock_path in (root / ".parentlock", root / "lock"):
         if lock_path.exists() or lock_path.is_symlink():
             raise AssertionError(
-                f"clean candidate materialization retained Firefox lock: {lock_path.relative_to(root)}"
+                f"unexpected root-level Firefox lock artifact: {lock_path.relative_to(root)}"
             )
 
 
@@ -300,7 +303,7 @@ def main() -> int:
             expect_prelaunch_identity_rejection(first_root, first, url)
             expect_probe_drift_rejection(first_root, first, url)
 
-        print("AR-10 real Camoufox cold-launch, identity, lock-cleanliness and persistence evidence passed.")
+        print("AR-10 real Camoufox cold-launch, identity, Bridge ownership and persistence evidence passed.")
         return 0
     finally:
         server.shutdown()
