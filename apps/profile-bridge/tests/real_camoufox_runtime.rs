@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use bridge_domain::{ClaimUri, CamouhostPort};
 use browser_execution_domain::{
     BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
     NetworkIdentityPolicy,
@@ -108,7 +107,7 @@ fn approved_runtime(
     let lock_path = runtime_root.join("camouhost/runtime-lock.json");
     let (real_length, real_sha256) = digest_file(&real_path)?;
     let (lock_length, lock_sha256) = digest_file(&lock_path)?;
-    let entries = vec![
+    let entries = [
         (
             "camouhost/real.py".to_owned(),
             real_length,
@@ -254,7 +253,5 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
 
     lock.release()?;
     fs::remove_dir_all(&root_path)?;
-    let _claim_parser_linkage = ClaimUri::parse("profilebridge://claim/claim_01JAR10REAL")?;
-    let _typed_ipc_linkage: &dyn CamouhostPort = &camouhost;
     Ok(())
 }
