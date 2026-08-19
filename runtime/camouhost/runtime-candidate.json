@@ -1,0 +1,34 @@
+{
+  "schema": "profile-platform-camoufox-runtime-v1",
+  "candidate": true,
+  "launch_eligible": false,
+  "runtime_policy": "camoufox-runtime-v1",
+  "ipc_version": "1",
+  "fingerprint_policy_version": 1,
+  "platform": "windows-x86_64",
+  "python": {
+    "version": "3.12.10"
+  },
+  "packages": {
+    "camoufox": {
+      "version": "0.5.4",
+      "wheel_sha256": "c3f5fc4de0416d0f3363c029267c61718a3fda9e2668f526aff982ae36c30703"
+    },
+    "browserforge": {
+      "version": "1.2.4"
+    },
+    "playwright": {
+      "version": "1.55.0"
+    }
+  },
+  "browser": {
+    "repository": "daijro/camoufox",
+    "channel": "official/stable",
+    "version": "152.0.4-beta.28",
+    "artifact_sha256": null
+  },
+  "certification": {
+    "state": "candidate-unverified-artifact",
+    "reason": "Windows x86_64 browser artifact SHA-256 must be captured from the pinned upstream asset and committed before launch is eligible."
+  }
+}
