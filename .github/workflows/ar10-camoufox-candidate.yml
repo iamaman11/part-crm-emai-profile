@@ -29,14 +29,9 @@ jobs:
           persist-credentials: false
 
       - name: Verify exact source checkout
-        shell: pwsh
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          $actual = (git rev-parse HEAD).Trim()
-          if ($actual -ne $env:EXPECTED_SOURCE_SHA) {
-            throw "expected $env:EXPECTED_SOURCE_SHA, got $actual"
-          }
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
       - name: Set up exact Python 3.12.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
