@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Build and validate the canonical AR-11 immutable Release Set manifest.
 
-This is a deterministic generator only. It has no provider credentials, network
-access, deployment authority, mutable release registry, or production mutation.
-The resulting directory is verified by native `opsctl release verify` before any
-publication or promotion workflow may consume it.
+This is a deterministic packaging generator only. It has no provider credentials,
+network access, deployment authority, mutable release registry, production mutation,
+or independent knowledge of release-critical repository paths. Those paths are owned
+by the canonical AR-11 release input topology and verified by native `opsctl`.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import shutil
 import tarfile
 import tempfile
@@ -24,11 +23,7 @@ REPOSITORY = "iamaman11/part-crm-emai-profile"
 SCHEMA_VERSION = 1
 PREFIX = "release-set-v1-sha256-"
 COMPONENT_DIR = "components"
-RUNTIME_FILES = (
-    Path("runtime/camouhost/main.py"),
-    Path("runtime/camouhost/real.py"),
-    Path("runtime/camouhost/runtime-lock.json"),
-)
+AUTHORITY_PATH = Path("architecture/release-architecture-ar11.json")
 
 
 class ReleaseSetError(ValueError):
@@ -62,6 +57,93 @@ def document(value: Any) -> bytes:
 def regular(path: Path, label: str) -> None:
     if path.is_symlink() or not path.is_file():
         fail(f"{label} must be a regular file: {path}")
+
+
+def safe_repo_relative(value: str, label: str) -> Path:
+    pure = PurePosixPath(value)
+    if not value or pure.is_absolute() or any(part in ("", ".", "..") for part in pure.parts):
+        fail(f"{label} must be a safe repository-relative path: {value!r}")
+    relative = Path(*pure.parts)
+    path = ROOT / relative
+    regular(path, label)
+    try:
+        path.resolve(strict=True).relative_to(ROOT.resolve(strict=True))
+    except ValueError as error:
+        raise ReleaseSetError(f"{label} escapes repository root: {value}") from error
+    return relative
+
+
+def load_release_authority() -> dict[str, Any]:
+    path = ROOT / AUTHORITY_PATH
+    regular(path, "release architecture authority")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        fail("release architecture authority must be an object")
+    if value.get("schema_version") != 1 or value.get("kind") != "AR11_RELEASE_ARCHITECTURE_SOURCE":
+        fail("release architecture authority identity/schema mismatch")
+    rows = value.get("release_inputs")
+    if not isinstance(rows, list) or not rows:
+        fail("canonical release_inputs topology is missing")
+    return value
+
+
+def release_input_map(authority: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    identity_paths: set[str] = set()
+    rows = authority.get("release_inputs")
+    if not isinstance(rows, list):
+        fail("release_inputs must be an array")
+    for row in rows:
+        if not isinstance(row, dict):
+            fail("release_inputs entries must be objects")
+        input_id = row.get("input_id")
+        identity = row.get("release_identity_source")
+        canonical_source = row.get("canonical_source")
+        generated_projection = row.get("generated_projection")
+        if not isinstance(input_id, str) or not input_id:
+            fail("release input has invalid input_id")
+        if input_id in result:
+            fail(f"duplicate release input id: {input_id}")
+        if not isinstance(identity, str) or not identity:
+            fail(f"release input {input_id} has invalid release_identity_source")
+        sources = [value for value in (canonical_source, generated_projection) if value is not None]
+        if len(sources) != 1 or sources[0] != identity:
+            fail(
+                f"release input {input_id} must bind exactly one canonical/generated source "
+                "to release_identity_source"
+            )
+        safe_repo_relative(identity, f"release input {input_id}")
+        if identity in identity_paths:
+            fail(f"duplicate release identity path: {identity}")
+        identity_paths.add(identity)
+        result[input_id] = row
+    return result
+
+
+def release_input_path(inputs: dict[str, dict[str, Any]], input_id: str) -> Path:
+    row = inputs.get(input_id)
+    if row is None:
+        fail(f"canonical release input is missing: {input_id}")
+    identity = row.get("release_identity_source")
+    if not isinstance(identity, str):
+        fail(f"release input {input_id} has invalid release_identity_source")
+    return safe_repo_relative(identity, f"release input {input_id}")
+
+
+def release_input_paths_for_consumer(
+    inputs: dict[str, dict[str, Any]], consumer: str
+) -> list[Path]:
+    paths: list[Path] = []
+    for input_id, row in inputs.items():
+        consumers = row.get("consumers")
+        if not isinstance(consumers, list) or not all(isinstance(value, str) for value in consumers):
+            fail(f"release input {input_id} has invalid consumers")
+        if consumer in consumers:
+            paths.append(release_input_path(inputs, input_id))
+    paths.sort(key=lambda value: value.as_posix())
+    if not paths:
+        fail(f"canonical release input topology has no inputs for consumer {consumer}")
+    return paths
 
 
 def git_sha(value: str) -> str:
@@ -102,20 +184,22 @@ def source_file_set_identity(paths: list[Path]) -> dict[str, Any]:
     return {"files": entries, "sha256": sha256_bytes(canonical(entries))}
 
 
-def deterministic_runtime_archive(source_sha: str, destination: Path) -> tuple[str, str]:
+def deterministic_runtime_archive(
+    source_sha: str, destination: Path, runtime_files: list[Path]
+) -> tuple[str, str]:
     if destination.exists():
         fail(f"runtime component destination already exists: {destination}")
     manifest = {
         "schema_version": 1,
         "kind": "CAMOUFOX_RUNTIME_COMPONENT",
         "source_commit_sha": source_sha,
-        "files": source_file_set_identity(list(RUNTIME_FILES)),
+        "files": source_file_set_identity(runtime_files),
     }
     manifest["release_id"] = "runtime-bundle-v1-sha256-" + sha256_bytes(canonical(manifest))
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(destination, "w", format=tarfile.PAX_FORMAT) as archive:
         members: list[tuple[str, bytes]] = [("runtime-manifest.json", document(manifest))]
-        members.extend((relative.as_posix(), (ROOT / relative).read_bytes()) for relative in RUNTIME_FILES)
+        members.extend((relative.as_posix(), (ROOT / relative).read_bytes()) for relative in runtime_files)
         for name, data in sorted(members):
             pure = PurePosixPath(name)
             if pure.is_absolute() or ".." in pure.parts:
@@ -167,6 +251,30 @@ def build(
     ):
         regular(path, label)
 
+    authority = load_release_authority()
+    inputs = release_input_map(authority)
+    contract_paths = release_input_paths_for_consumer(inputs, "release_set.contracts")
+    runtime_files = release_input_paths_for_consumer(inputs, "runtime_bundle.files")
+    runtime_lock_relative = release_input_path(inputs, "camouhost_runtime_lock")
+    d1_authority_relative = release_input_path(inputs, "d1_evolution_authority")
+    cargo_lock_relative = release_input_path(inputs, "cargo_lock")
+    rust_toolchain_relative = release_input_path(inputs, "rust_toolchain")
+    frontend_lock_relative = release_input_path(inputs, "frontend_lock")
+    release_architecture_relative = release_input_path(inputs, "release_architecture_authority")
+
+    contracts_identity = source_file_set_identity(contract_paths)
+    runtime_lock = json.loads((ROOT / runtime_lock_relative).read_text(encoding="utf-8"))
+    if not isinstance(runtime_lock, dict):
+        fail("runtime lock must be an object")
+
+    profiles = sorted(
+        item["profile_id"]
+        for item in authority.get("release_profiles", [])
+        if isinstance(item, dict) and isinstance(item.get("profile_id"), str)
+    )
+    if not profiles:
+        fail("release architecture has no capability profiles")
+
     control_release_id, control_manifest_sha = load_component_manifest(
         control_manifest, source_sha=source_sha
     )
@@ -191,7 +299,7 @@ def build(
         shutil.copyfile(resolver_archive, destinations["resolver"], follow_symlinks=False)
         shutil.copyfile(profile_bridge_archive, destinations["bridge"], follow_symlinks=False)
         runtime_release_id, runtime_manifest_sha = deterministic_runtime_archive(
-            source_sha, destinations["runtime"]
+            source_sha, destinations["runtime"], runtime_files
         )
 
         identities = {name: file_identity(path) for name, path in destinations.items()}
@@ -232,15 +340,6 @@ def build(
                 bridge_manifest_sha,
             ),
         }
-        runtime_lock = json.loads((ROOT / "runtime/camouhost/runtime-lock.json").read_text(encoding="utf-8"))
-        authority = json.loads((ROOT / "architecture/release-architecture-ar11.json").read_text(encoding="utf-8"))
-        profiles = sorted(
-            item["profile_id"]
-            for item in authority.get("release_profiles", [])
-            if isinstance(item, dict) and isinstance(item.get("profile_id"), str)
-        )
-        if not profiles:
-            fail("release architecture has no capability profiles")
 
         manifest: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
@@ -251,29 +350,27 @@ def build(
                 "accepted_main_evidence_sha256": accepted_main_evidence(source_sha),
             },
             "components": component_rows,
-            "contracts": source_file_set_identity(
-                [Path("openapi/v1/control-plane.yaml"), Path("contracts/generated/control-plane.openapi.json")]
-            ),
+            "contracts": contracts_identity,
             "protocols": {
-                "control_plane_contract_sha256": sha256_file(ROOT / "crates/control-plane-contract/src/lib.rs"),
+                "public_api_contract_sha256": contracts_identity["sha256"],
                 "camouhost_ipc_version": runtime_lock["camouhost_ipc_version"],
                 "resolver_protocol": "mailbox-secret-resolver-v1",
             },
             "schemas": {
-                "d1_evolution_authority_sha256": sha256_file(ROOT / "architecture/d1-evolution-ar9.json"),
+                "d1_evolution_authority_sha256": sha256_file(ROOT / d1_authority_relative),
             },
             "runtime_compatibility": {
-                "runtime_lock_sha256": sha256_file(ROOT / "runtime/camouhost/runtime-lock.json"),
+                "runtime_lock_sha256": sha256_file(ROOT / runtime_lock_relative),
                 "runtime_role": runtime_lock["runtime_role"],
                 "profile_format": runtime_lock["fingerprint_config_schema"],
                 "browser_identity_policy": runtime_lock["fingerprint_policy_version"],
             },
             "capability_profile_compatibility": profiles,
             "build_provenance": {
-                "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
-                "rust_toolchain_sha256": sha256_file(ROOT / "rust-toolchain.toml"),
-                "frontend_lock_sha256": sha256_file(ROOT / "frontend/package-lock.json"),
-                "release_architecture_sha256": sha256_file(ROOT / "architecture/release-architecture-ar11.json"),
+                "cargo_lock_sha256": sha256_file(ROOT / cargo_lock_relative),
+                "rust_toolchain_sha256": sha256_file(ROOT / rust_toolchain_relative),
+                "frontend_lock_sha256": sha256_file(ROOT / frontend_lock_relative),
+                "release_architecture_sha256": sha256_file(ROOT / release_architecture_relative),
             },
             "artifact_inventory": [
                 inventory("components/control-plane.tar", identities["control"]),
@@ -348,6 +445,18 @@ def self_test() -> None:
         fail("accepted-main evidence identity is not deterministic")
     if accepted_main_evidence("b" * 40) == first:
         fail("accepted-main evidence does not bind source SHA")
+
+    authority = load_release_authority()
+    inputs = release_input_map(authority)
+    contracts = release_input_paths_for_consumer(inputs, "release_set.contracts")
+    if Path("openapi/v1/openapi.json") not in contracts:
+        fail("canonical public API root is absent from release_set.contracts")
+    if any(path.as_posix().endswith("control-plane.yaml") for path in contracts):
+        fail("retired/nonexistent control-plane.yaml leaked into release identity")
+    if release_input_path(inputs, "camouhost_runtime_lock") not in release_input_paths_for_consumer(
+        inputs, "runtime_bundle.files"
+    ):
+        fail("runtime lock is not part of runtime bundle identity")
     print("AR-11 Release Set generator self-test passed.")
 
 
