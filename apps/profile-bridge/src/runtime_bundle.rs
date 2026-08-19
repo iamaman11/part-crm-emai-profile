@@ -79,13 +79,13 @@ impl RuntimeSessionOrchestrator {
             .exchange(&CamouhostMessage::Hello {
                 version: CAMOUHOST_IPC_VERSION,
             })
-            .map_err(|error| rollback_process(process, session_id, error))?;
+            .map_err(|error| rollback_camouhost(process, session_id, error))?;
         if hello
             != (CamouhostMessage::HelloAck {
                 version: CAMOUHOST_IPC_VERSION,
             })
         {
-            return Err(rollback_process(
+            return Err(rollback_camouhost(
                 process,
                 session_id,
                 BridgePortError::InvalidResponse,
@@ -96,13 +96,13 @@ impl RuntimeSessionOrchestrator {
             .exchange(&CamouhostMessage::Launch {
                 session_id: session_id.clone(),
             })
-            .map_err(|error| rollback_process(process, session_id, error))?;
+            .map_err(|error| rollback_camouhost(process, session_id, error))?;
         if ready
             != (CamouhostMessage::Ready {
                 session_id: session_id.clone(),
             })
         {
-            return Err(rollback_process(
+            return Err(rollback_camouhost(
                 process,
                 session_id,
                 BridgePortError::InvalidResponse,
@@ -128,31 +128,44 @@ impl RuntimeSessionOrchestrator {
             .exchange(&CamouhostMessage::Close {
                 session_id: session_id.clone(),
             })
-            .map_err(RuntimeLaunchError::Camouhost)?;
+            .map_err(|error| rollback_camouhost(process, session_id, error))?;
         if closed
             != (CamouhostMessage::Closed {
                 session_id: session_id.clone(),
                 clean: true,
             })
         {
-            return Err(RuntimeLaunchError::Camouhost(
+            return Err(rollback_camouhost(
+                process,
+                session_id,
                 BridgePortError::InvalidResponse,
             ));
         }
         process
             .confirm_stopped(session_id)
-            .map_err(RuntimeLaunchError::Process)?;
+            .map_err(|error| rollback_process_failure(process, session_id, error))?;
         Ok(())
     }
 }
 
-fn rollback_process<P: ProcessControlPort>(
+fn rollback_camouhost<P: ProcessControlPort>(
     process: &mut P,
     session_id: &SessionId,
     source: BridgePortError,
 ) -> RuntimeLaunchError {
     match process.force_terminate(session_id) {
         Ok(()) => RuntimeLaunchError::Camouhost(source),
+        Err(rollback) => RuntimeLaunchError::Rollback { source, rollback },
+    }
+}
+
+fn rollback_process_failure<P: ProcessControlPort>(
+    process: &mut P,
+    session_id: &SessionId,
+    source: BridgePortError,
+) -> RuntimeLaunchError {
+    match process.force_terminate(session_id) {
+        Ok(()) => RuntimeLaunchError::Process(source),
         Err(rollback) => RuntimeLaunchError::Rollback { source, rollback },
     }
 }
@@ -174,7 +187,7 @@ impl fmt::Display for RuntimeLaunchError {
             Self::Camouhost(error) => write!(formatter, "Camouhost protocol error: {error}"),
             Self::Rollback { source, rollback } => write!(
                 formatter,
-                "Camouhost protocol error: {source}; process rollback failed: {rollback}"
+                "runtime session error: {source}; process rollback failed: {rollback}"
             ),
         }
     }
@@ -184,13 +197,41 @@ impl std::error::Error for RuntimeLaunchError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{ApprovedRuntimeBundle, RuntimeBundleApprovalError, RuntimeSessionOrchestrator};
+    use super::{
+        ApprovedRuntimeBundle, RuntimeBundleApprovalError, RuntimeLaunchError,
+        RuntimeSessionOrchestrator,
+    };
     use crate::{FakeCamouhost, FakeProcessControl, ProcessAction};
+    use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
     use profile_platform_primitives::SessionId;
     use runtime_bundle_domain::{
         BundleRelativePath, InventoryEntry, InventoryError, RuntimeInventory, RuntimeManifest,
         RuntimeManifestError, RuntimePlatform, Sha256Digest,
     };
+
+    struct CloseFailCamouhost {
+        inner: FakeCamouhost,
+    }
+
+    impl Default for CloseFailCamouhost {
+        fn default() -> Self {
+            Self {
+                inner: FakeCamouhost::default(),
+            }
+        }
+    }
+
+    impl CamouhostPort for CloseFailCamouhost {
+        fn exchange(
+            &mut self,
+            message: &CamouhostMessage,
+        ) -> Result<CamouhostMessage, BridgePortError> {
+            if matches!(message, CamouhostMessage::Close { .. }) {
+                return Err(BridgePortError::Unavailable);
+            }
+            self.inner.exchange(message)
+        }
+    }
 
     fn digest(character: char) -> Result<Sha256Digest, Box<dyn std::error::Error>> {
         Ok(Sha256Digest::parse(character.to_string().repeat(64))?)
@@ -278,6 +319,28 @@ mod tests {
                 ProcessAction::Spawn(session_id.clone()),
                 ProcessAction::GracefulClose(session_id.clone()),
                 ProcessAction::ConfirmStopped(session_id),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ambiguous_close_forces_process_termination() -> Result<(), Box<dyn std::error::Error>> {
+        let bundle = approved_bundle()?;
+        let session_id = SessionId::parse("session_01JSTEP7CLOSEFAIL")?;
+        let mut process = FakeProcessControl::default();
+        let mut camouhost = CloseFailCamouhost::default();
+        RuntimeSessionOrchestrator::launch(&bundle, &session_id, &mut process, &mut camouhost)?;
+        assert_eq!(
+            RuntimeSessionOrchestrator::close(&bundle, &session_id, &mut process, &mut camouhost),
+            Err(RuntimeLaunchError::Camouhost(BridgePortError::Unavailable))
+        );
+        assert_eq!(
+            process.actions(),
+            [
+                ProcessAction::Spawn(session_id.clone()),
+                ProcessAction::GracefulClose(session_id.clone()),
+                ProcessAction::ForceTerminate(session_id),
             ]
         );
         Ok(())
