@@ -9,6 +9,9 @@ const ROOT_MARKER_CONTENT: &str = "profile-platform-local-root-v1\n";
 const GENERATION_MARKER: &str = ".profile-generation";
 const GENERATION_MARKER_CONTENT: &str = "profile-platform-generation-v1\n";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
+const BROWSER_STATE_DIRECTORY: &str = "user_data";
+const FIREFOX_PARENT_LOCK_PATH: &str = "user_data/.parentlock";
+const FIREFOX_LOCK_PATH: &str = "user_data/lock";
 const MAX_INVENTORY_FILES: usize = 100_000;
 const MAX_RELATIVE_PATH_BYTES: usize = 512;
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -124,6 +127,16 @@ impl GenerationWorkspace {
 
     pub fn inventory(&self) -> Result<GenerationInventory, LocalProfileError> {
         build_inventory(&self.canonical_path)
+    }
+
+    /// Digest only immutable generation materialization inputs.
+    ///
+    /// `user_data/**` is mutable browser state (cookies, localStorage, caches and Firefox
+    /// runtime lock artifacts) and must not invalidate a generation's fingerprint/runtime
+    /// identity after a clean browser session. The state directory itself must still be a
+    /// real directory rather than a symlink.
+    pub fn materialization_inventory_digest(&self) -> Result<u64, LocalProfileError> {
+        build_materialization_inventory_digest(&self.canonical_path)
     }
 }
 
@@ -349,9 +362,7 @@ fn build_inventory(root: &Path) -> Result<GenerationInventory, LocalProfileError
         total_bytes = total_bytes
             .checked_add(entry.bytes)
             .ok_or(LocalProfileError::InventorySizeOverflow)?;
-        digest = fnv_update(digest, entry.relative_path.as_bytes());
-        digest = fnv_update(digest, &entry.bytes.to_le_bytes());
-        digest = fnv_update(digest, &entry.content_digest.to_le_bytes());
+        digest = inventory_entry_digest(digest, entry);
     }
     Ok(GenerationInventory {
         entries,
@@ -360,7 +371,66 @@ fn build_inventory(root: &Path) -> Result<GenerationInventory, LocalProfileError
     })
 }
 
+fn build_materialization_inventory_digest(root: &Path) -> Result<u64, LocalProfileError> {
+    let mut entries = Vec::new();
+    collect_materialization_inventory(root, root, &mut entries)?;
+    entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    if entries.len() > MAX_INVENTORY_FILES {
+        return Err(LocalProfileError::InventoryLimitExceeded);
+    }
+    Ok(entries
+        .iter()
+        .fold(FNV_OFFSET_BASIS, inventory_entry_digest))
+}
+
+fn inventory_entry_digest(digest: u64, entry: &InventoryEntry) -> u64 {
+    let digest = fnv_update(digest, entry.relative_path.as_bytes());
+    let digest = fnv_update(digest, &entry.bytes.to_le_bytes());
+    fnv_update(digest, &entry.content_digest.to_le_bytes())
+}
+
 fn collect_inventory(
+    root: &Path,
+    current: &Path,
+    entries: &mut Vec<InventoryEntry>,
+) -> Result<(), LocalProfileError> {
+    let mut children = fs::read_dir(current)?.collect::<Result<Vec<_>, _>>()?;
+    children.sort_by_key(std::fs::DirEntry::file_name);
+    for child in children {
+        let path = child.path();
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| LocalProfileError::UnsafeRelativePath)?;
+        let relative_path = normalized_relative_path(relative)?;
+        let metadata = fs::symlink_metadata(&path)?;
+        let file_type = metadata.file_type();
+        if is_ephemeral_browser_lock(&relative_path) {
+            if file_type.is_symlink() || file_type.is_file() {
+                continue;
+            }
+            return Err(LocalProfileError::SpecialFileRejected);
+        }
+        if file_type.is_symlink() {
+            return Err(LocalProfileError::SymbolicLinkRejected);
+        }
+        if is_bridge_control_file(&relative_path) {
+            if !file_type.is_file() {
+                return Err(LocalProfileError::SpecialFileRejected);
+            }
+            continue;
+        }
+        if file_type.is_dir() {
+            collect_inventory(root, &path, entries)?;
+        } else if file_type.is_file() {
+            push_inventory_entry(entries, relative_path, &path, metadata.len())?;
+        } else {
+            return Err(LocalProfileError::SpecialFileRejected);
+        }
+    }
+    Ok(())
+}
+
+fn collect_materialization_inventory(
     root: &Path,
     current: &Path,
     entries: &mut Vec<InventoryEntry>,
@@ -384,21 +454,37 @@ fn collect_inventory(
             }
             continue;
         }
-        if file_type.is_dir() {
-            collect_inventory(root, &path, entries)?;
-        } else if file_type.is_file() {
-            if entries.len() >= MAX_INVENTORY_FILES {
-                return Err(LocalProfileError::InventoryLimitExceeded);
+        if relative_path == BROWSER_STATE_DIRECTORY {
+            if !file_type.is_dir() {
+                return Err(LocalProfileError::SpecialFileRejected);
             }
-            entries.push(InventoryEntry {
-                relative_path,
-                bytes: metadata.len(),
-                content_digest: hash_file(&path)?,
-            });
+            continue;
+        }
+        if file_type.is_dir() {
+            collect_materialization_inventory(root, &path, entries)?;
+        } else if file_type.is_file() {
+            push_inventory_entry(entries, relative_path, &path, metadata.len())?;
         } else {
             return Err(LocalProfileError::SpecialFileRejected);
         }
     }
+    Ok(())
+}
+
+fn push_inventory_entry(
+    entries: &mut Vec<InventoryEntry>,
+    relative_path: String,
+    path: &Path,
+    bytes: u64,
+) -> Result<(), LocalProfileError> {
+    if entries.len() >= MAX_INVENTORY_FILES {
+        return Err(LocalProfileError::InventoryLimitExceeded);
+    }
+    entries.push(InventoryEntry {
+        relative_path,
+        bytes,
+        content_digest: hash_file(path)?,
+    });
     Ok(())
 }
 
@@ -425,6 +511,13 @@ fn normalized_relative_path(relative: &Path) -> Result<String, LocalProfileError
 
 fn is_bridge_control_file(relative_path: &str) -> bool {
     matches!(relative_path, GENERATION_MARKER | BRIDGE_LOCK_FILE)
+}
+
+fn is_ephemeral_browser_lock(relative_path: &str) -> bool {
+    matches!(
+        relative_path,
+        FIREFOX_PARENT_LOCK_PATH | FIREFOX_LOCK_PATH
+    )
 }
 
 fn hash_file(path: &Path) -> Result<u64, LocalProfileError> {
