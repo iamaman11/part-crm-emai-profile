@@ -219,31 +219,64 @@ def validate(root: Path) -> None:
     validate_current_human_projection(root)
 
 
+def mutate_json_path(path: Path, keys: tuple[str, ...], old: object, new: object) -> bool:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    cursor: object = payload
+    for key in keys[:-1]:
+        if not isinstance(cursor, dict) or key not in cursor:
+            return False
+        cursor = cursor[key]
+    if not isinstance(cursor, dict):
+        return False
+    leaf = keys[-1]
+    if cursor.get(leaf) != old:
+        return False
+    cursor[leaf] = new
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
+def require_negative_rejection(label: str, errors: list[str], expected: str, *, canonical_map: bool = False) -> None:
+    specific = any(expected.lower() in error.lower() for error in errors)
+    delivery_map = canonical_map and any("current_delivery_map" in error.lower() for error in errors)
+    if not errors or not (specific or delivery_map):
+        raise ValueError(
+            f"legacy negative fixture {label} was not rejected by its specific or canonical-map invariant: {errors}"
+        )
+
+
 def legacy_negative_self_test(root: Path) -> None:
     baseline = legacy.validate(root)
     if baseline:
         raise ValueError("legacy documentation negative self-test requires a valid baseline: " + "; ".join(baseline))
-    fixtures = [
-        ("tracking rollback", Path("docs/status.json"), '"tracking_issue": 266', '"tracking_issue": 203', "tracking_issue"),
-        ("active slice rollback", Path("docs/status.json"), '"current_slice": "AR-9"', '"current_slice": "AR-8"', "current_slice"),
-        ("AR-8 acceptance rollback", Path("docs/status.json"), '"full_ar8_accepted": true', '"full_ar8_accepted": false', "full_ar8_accepted"),
-        ("AR-8 accepted-slice removal", Path("docs/status.json"), '"accepted_top_level_slice": "AR-8"', '"accepted_top_level_slice": "AR-7"', "accepted_top_level_slice"),
-        ("AR-9 reblock", Path("docs/status.json"), '"ar9_blocked": false', '"ar9_blocked": true', "ar9_blocked"),
-        ("premature architecture closeout", Path("docs/status.json"), '"architecture_complete": false', '"architecture_complete": true', "architecture_complete"),
-        ("premature gate authorization", Path("docs/status.json"), '"production_core_gate": "BLOCKED"', '"production_core_gate": "AUTHORIZED"', "Production"),
-        ("premature production readiness", Path("docs/status.json"), '"production_ready": false', '"production_ready": true', "CURRENT_DELIVERY_MAP"),
-        ("premature delivery-map production enablement", Path("docs/status.json"), '"gate": "PC-1_AFTER_AR-17_AUTHORIZATION"', '"status": true, "gate": "PC-1_AFTER_AR-17_AUTHORIZATION"', "CURRENT_DELIVERY_MAP"),
+
+    status_fixtures = [
+        ("tracking rollback", ("current", "architecture_program", "tracking_issue"), 266, 203, "tracking_issue", False),
+        ("active slice rollback", ("current", "architecture_program", "current_slice"), "AR-9", "AR-8", "current_slice", False),
+        ("AR-8 acceptance rollback", ("current", "architecture_program", "ar8_progress", "full_ar8_accepted"), True, False, "full_ar8_accepted", False),
+        ("AR-8 accepted-slice removal", ("current", "architecture_program", "ar8_progress", "accepted_top_level_slice"), "AR-8", "AR-7", "accepted_top_level_slice", False),
+        ("AR-9 reblock", ("current", "architecture_program", "ar8_progress", "ar9_blocked"), False, True, "ar9_blocked", False),
+        ("premature architecture closeout", ("current", "architecture_complete"), False, True, "architecture_complete", False),
+        ("premature gate authorization", ("current", "production_core_gate"), "BLOCKED", "AUTHORIZED", "Production", False),
+        ("premature production readiness", ("production_ready",), False, True, "production_ready", False),
+        ("premature delivery-map production enablement", ("current", "current_delivery_map", "production_enabled", "status"), False, True, "CURRENT_DELIVERY_MAP", True),
+        ("historical #203 resurrected", ("current", "pre2j_product_readiness_remediation", "forward_execution_authority"), False, True, "#203", False),
+    ]
+    for label, keys, old, new, expected, canonical_map in status_fixtures:
+        with legacy.tempfile.TemporaryDirectory(prefix="ar9-document-authority-") as directory:
+            fixture = Path(directory)
+            legacy.copy_fixture(root, fixture)
+            path = fixture / "docs/status.json"
+            if not mutate_json_path(path, keys, old, new):
+                raise ValueError(f"legacy negative fixture authoritative JSON path missing for {label}: {keys}")
+            errors = legacy.validate(fixture)
+            require_negative_rejection(label, errors, expected, canonical_map=canonical_map)
+
+    text_fixtures = [
         ("generation queue resurrection", legacy.TOPOLOGY, '"decision": "DELETE"', '"decision": "KEEP"', "GENERATION_VERIFICATION"),
         ("legacy D3 production resurrection", legacy.TOPOLOGY, '"legacy_d3_production_lane": "DISABLE_FORWARD_EXECUTION"', '"legacy_d3_production_lane": "KEEP"', "D3"),
-        ("historical #203 resurrected", Path("docs/status.json"), '"forward_execution_authority": false', '"forward_execution_authority": true', "#203"),
     ]
-    canonical_map_labels = {
-        "premature architecture closeout",
-        "premature gate authorization",
-        "premature production readiness",
-        "premature delivery-map production enablement",
-    }
-    for label, relative, old, new, expected in fixtures:
+    for label, relative, old, new, expected in text_fixtures:
         with legacy.tempfile.TemporaryDirectory(prefix="ar9-document-authority-") as directory:
             fixture = Path(directory)
             legacy.copy_fixture(root, fixture)
@@ -251,15 +284,9 @@ def legacy_negative_self_test(root: Path) -> None:
             if not legacy.mutate(path, old, new):
                 raise ValueError(f"legacy negative fixture source marker missing for {label}: {old}")
             errors = legacy.validate(fixture)
-            specific = any(expected.lower() in error.lower() for error in errors)
-            canonical_map = label in canonical_map_labels and any(
-                "current_delivery_map" in error.lower() for error in errors
-            )
-            if not errors or not (specific or canonical_map):
-                raise ValueError(
-                    f"legacy negative fixture {label} was not rejected by its specific or canonical-map invariant: {errors}"
-                )
-    print("Legacy documentation authority negative fixtures remain covered through the AR-9 canonical delivery-map wrapper.")
+            require_negative_rejection(label, errors, expected)
+
+    print("Legacy documentation authority negative fixtures remain covered through exact authoritative AR-9 JSON paths.")
 
 
 def self_test(root: Path) -> None:
