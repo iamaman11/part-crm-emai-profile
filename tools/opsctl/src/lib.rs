@@ -20,8 +20,9 @@ use repository::resolve_repo_root;
 
 /// Execute one already-parsed project-specific operational policy command.
 ///
-/// This function is the library composition root. It does not own provider
-/// credentials, hidden state, deployment scheduling, or runtime application logic.
+/// This function is the library composition root. Its operational policy authority
+/// remains read-only and metadata-only: it does not own provider credentials,
+/// hidden state, deployment scheduling, or runtime application logic.
 pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
     match invocation {
         Invocation::Help => Ok(HELP.to_owned()),
