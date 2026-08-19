@@ -6,6 +6,13 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::Path;
 
+const DEPLOY_OWNED_RESOURCES: [&str; 4] = [
+    "control_plane_worker",
+    "profile_coordinator",
+    "notification_hub",
+    "control_plane_schedule",
+];
+
 pub struct PreflightRequest<'a> {
     pub root: &'a Path,
     pub target: &'a ReleaseSetManifest,
@@ -80,6 +87,16 @@ fn preflight_from_plan(
         &plan.closure.required_resources,
         &request.snapshot.logical_resources,
     );
+    let missing_external_resources = missing_resources
+        .iter()
+        .filter(|resource| !DEPLOY_OWNED_RESOURCES.contains(&resource.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let missing_deploy_owned = missing_resources
+        .iter()
+        .filter(|resource| DEPLOY_OWNED_RESOURCES.contains(&resource.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
     let missing_bindings = difference(
         &plan.closure.required_bindings,
         &request.snapshot.logical_bindings,
@@ -88,11 +105,17 @@ fn preflight_from_plan(
         &plan.closure.required_credentials,
         &request.snapshot.logical_credentials,
     );
-    if !missing_resources.is_empty() {
+    if !missing_external_resources.is_empty() {
         blockers.push("REQUIRED_RESOURCES_NOT_READY".to_owned());
         required_steps.push(format!(
-            "provision/identify required resources: {}",
-            missing_resources.join(",")
+            "provision/identify required external resources: {}",
+            missing_external_resources.join(",")
+        ));
+    }
+    if !missing_deploy_owned.is_empty() {
+        warnings.push(format!(
+            "exact deployment will create/update deploy-owned resources: {}",
+            missing_deploy_owned.join(",")
         ));
     }
     if !missing_bindings.is_empty() {
