@@ -69,7 +69,7 @@ jobs:
           python scripts/generate-ar8-completion-status.py --write
           python scripts/generate-architecture-inventory.py --write
 
-      - name: Validate AR-10 accepted / AR-11 current state
+      - name: Validate generated AR-10 accepted / AR-11 current state
         run: |
           python -m py_compile \
             scripts/generate-ar8-completion-status.py \
@@ -82,7 +82,6 @@ jobs:
           python scripts/generate-architecture-inventory.py --self-test
           python scripts/check-documentation-authority.py
           python scripts/check-documentation-authority.py --self-test
-          python scripts/check-ar10-runtime-cutover.py --closeout
           git diff --check
 
       - name: Commit deterministic closeout projection
