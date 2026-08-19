@@ -110,19 +110,29 @@ fn preflight_from_plan(
         ));
     }
 
-    match request.known_good_release {
-        Some(known_good) => {
-            if !known_good
-                .capability_profile_compatibility
-                .iter()
-                .any(|profile| profile == request.target_profile_id)
-            {
-                blockers.push("ROLLBACK_INCOMPATIBLE".to_owned());
+    // A rollback artifact is mandatory when replacing an existing deployment. A fresh
+    // rehearsal environment has no previous application bits to restore, so requiring a
+    // fictitious known-good Release Set would make first deployment impossible.
+    if request.snapshot.release_set_id.is_some() {
+        match request.known_good_release {
+            Some(known_good) => {
+                if !known_good
+                    .capability_profile_compatibility
+                    .iter()
+                    .any(|profile| profile == request.target_profile_id)
+                {
+                    blockers.push("ROLLBACK_INCOMPATIBLE".to_owned());
+                }
+            }
+            None => {
+                blockers.push("ROLLBACK_CANDIDATE_UNAVAILABLE".to_owned());
             }
         }
-        None => {
-            blockers.push("ROLLBACK_CANDIDATE_UNAVAILABLE".to_owned());
-        }
+    } else {
+        warnings.push(
+            "fresh environment has no previous Release Set; rollback artifact is not applicable"
+                .to_owned(),
+        );
     }
 
     if request.snapshot.catalog_ledger_sha256.is_none() {
