@@ -203,7 +203,7 @@ mod tests {
         let sha_a = sha256_hex(b"control");
         let sha_b = sha256_hex(b"resolver");
         let sha_c = sha256_hex(b"runtime");
-        let evidence = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let evidence = "7cb074c3b292300031c603af77c7d92af9603d3144eacdb8034065bbe4fbfcb4";
         let component_manifest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let mut value = json!({
           "schema_version": 1,
