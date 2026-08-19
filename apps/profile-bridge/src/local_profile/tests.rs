@@ -120,7 +120,11 @@ fn recovery_preserves_browser_state_but_not_ephemeral_firefox_locks()
             .iter()
             .any(|entry| entry.relative_path() == "user_data/cookies.sqlite")
     );
-    for ephemeral in ["user_data/lock", "user_data/.parentlock", "user_data/parent.lock"] {
+    for ephemeral in [
+        "user_data/lock",
+        "user_data/.parentlock",
+        "user_data/parent.lock",
+    ] {
         assert!(
             source_inventory
                 .entries()
@@ -135,7 +139,14 @@ fn recovery_preserves_browser_state_but_not_ephemeral_firefox_locks()
         b"persistent-browser-state"
     );
     for ephemeral in ["lock", ".parentlock", "parent.lock"] {
-        assert!(!recovery.workspace().path().join("user_data").join(ephemeral).exists());
+        assert!(
+            !recovery
+                .workspace()
+                .path()
+                .join("user_data")
+                .join(ephemeral)
+                .exists()
+        );
     }
     assert_eq!(
         recovery.workspace().materialization_inventory_digest()?,
