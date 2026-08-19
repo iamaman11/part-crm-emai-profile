@@ -1,0 +1,35 @@
+name: AR-10 Rustfmt Once
+
+on:
+  push:
+    branches:
+      - agent/ar10-runtime-cutover
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: agent/ar10-runtime-cutover
+          fetch-depth: 0
+      - name: Format Rust workspace
+        run: cargo fmt --all
+      - name: Require formatting scope to remain AR-10 failure matrix only
+        run: |
+          git diff --exit-code -- . ':(exclude)apps/profile-bridge/tests/runtime_failure_matrix.rs'
+          git diff --check
+      - name: Commit formatting
+        run: |
+          if git diff --quiet -- apps/profile-bridge/tests/runtime_failure_matrix.rs; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/profile-bridge/tests/runtime_failure_matrix.rs
+          git commit -m 'Format managed runtime failure matrix'
+          git push origin HEAD:agent/ar10-runtime-cutover
