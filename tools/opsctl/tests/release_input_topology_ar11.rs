@@ -81,7 +81,7 @@ fn content_drift_changes_resolved_release_identity() -> Result<(), Box<dyn std::
     let topology =
         ReleaseInputTopology::parse_json(&authority(&[canonical_input("digest", "input.txt")]))?;
     let first = topology.resolve(&root)?;
-    fs::write(&path, b"second")?;
+    fs::write(&path, b"other")?;
     let second = topology.resolve(&root)?;
     assert_ne!(first[0].sha256, second[0].sha256);
     assert_eq!(first[0].size_bytes, second[0].size_bytes);
