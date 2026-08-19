@@ -28,7 +28,7 @@ pub(crate) fn run(root: &Path) -> Result<String, OpsctlError> {
         validate_json_authority(root, relative)?;
     }
 
-    Ok("{\"schema_version\":2,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"native-read-only\",\"mutation_executed\":false,\"child_processes\":0,\"validators_execution\":\"independent-ci\",\"authorities\":[\"architecture/inventory.json\",\"architecture/python-estate-ar6.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"architecture/operator-contract.json\",\"docs/status.json\"]}\n".to_owned())
+    Ok("{\"schema_version\":2,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"implementation\":\"native\",\"mutation_executed\":false,\"child_processes\":0,\"validators_execution\":\"independent-ci\",\"authorities\":[\"architecture/inventory.json\",\"architecture/python-estate-ar6.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"architecture/operator-contract.json\",\"docs/status.json\"]}\n".to_owned())
 }
 
 fn require_regular_file(root: &Path, relative: &str) -> Result<(), OpsctlError> {
@@ -118,6 +118,8 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let root = root()?;
         let output = run(&root)?;
+        assert!(output.contains("\"mode\":\"read-only\""));
+        assert!(output.contains("\"implementation\":\"native\""));
         assert!(output.contains("\"child_processes\":0"));
         assert!(output.contains("\"validators_execution\":\"independent-ci\""));
         fs::remove_dir_all(root)?;
