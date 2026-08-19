@@ -54,6 +54,7 @@ notification-domain = { path = "crates/notification-domain" }
 profile-domain = { path = "crates/profile-domain" }
 profile-platform-primitives = { path = "crates/primitives" }
 runtime-bundle-domain = { path = "crates/runtime-bundle-domain" }
+serde_json = "=1.0.151"
 session-domain = { path = "crates/session-domain" }
 sha2 = { version = "=0.11.0", default-features = false }
 tokio = { version = "=1.53.1", default-features = false, features = ["io-util"] }
