@@ -20,14 +20,17 @@ vi.mock('./api', () => ({
 const mockedListMailboxes = vi.mocked(listMailboxes);
 const mockedAssociation = vi.mocked(getMailboxClientAssociation);
 
-function renderPanel() {
+function renderPanel(outboundMailEnabled = true) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
       <TenantProvider>
-        <ClientMailPanel clientId="client_current" />
+        <ClientMailPanel
+          clientId="client_current"
+          outboundMailEnabled={outboundMailEnabled}
+        />
       </TenantProvider>
     </QueryClientProvider>,
   );
@@ -98,5 +101,14 @@ describe('ClientMailPanel mailbox scoping', () => {
     const fromOptions = within(from).getAllByRole('option').map((option) => option.textContent);
     expect(fromOptions).toEqual(['Select eligible mailbox', 'binding_current · GMAIL_API']);
     expect(mockedListMailboxes).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps read/search UI available while outbound mail is disabled', async () => {
+    renderPanel(false);
+
+    expect(await screen.findByLabelText('Current-client mailbox')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Search mailbox' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Compose' })).toBeNull();
+    expect(screen.getByText(/Outbound mail is disabled by the active release profile/u)).toBeTruthy();
   });
 });
