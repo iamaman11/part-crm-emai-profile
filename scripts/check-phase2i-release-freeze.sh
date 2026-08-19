@@ -44,36 +44,15 @@ if [[ -f architecture/pre2j-d3-resolver-bootstrap-implementation.json ]]; then
     node .github/scripts/ar8-d-secret-transport-successor.mjs \
       --base-ref "origin/${base_ref}"
     node .github/scripts/ar8-d-secret-transport-successor.mjs --self-test
-
-    predecessor_ref="$(python - <<'PY'
-import json
-from pathlib import Path
-
-authority = json.loads(
-    Path("architecture/ar8-d-secret-transport-successor.json").read_text(encoding="utf-8")
-)
-print(authority["predecessor"]["transition_base_main"])
-PY
-)"
-    (
-      promotion_workflow=".github/workflows/mailbox-secret-resolver-promotion.yml"
-      current_promotion="$(mktemp)"
-      cp "$promotion_workflow" "$current_promotion"
-      restore_current_promotion() {
-        cp "$current_promotion" "$promotion_workflow"
-        rm -f "$current_promotion"
-      }
-      trap restore_current_promotion EXIT
-      git show "${predecessor_ref}:${promotion_workflow}" > "$promotion_workflow"
-      python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py \
-        --base-ref "origin/${base_ref}"
-      python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
-    )
-  else
-    python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py \
-      --base-ref "origin/${base_ref}"
-    python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
   fi
+
+  # The governed D3 dispatcher owns historical materialization. In AR-11 the
+  # legacy promotion workflow may be intentionally absent from the current tree;
+  # replay must come from the predecessor Git object instead of restoring a
+  # retired executable authority into current source.
+  python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py \
+    --base-ref "origin/${base_ref}"
+  python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
 fi
 
 if git diff --quiet "origin/${base_ref}" -- migrations/d1; then
