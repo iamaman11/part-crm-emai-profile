@@ -91,6 +91,13 @@ AR10_ADDITION_DECISIONS: dict[str, dict[str, str]] = {
         "authority": "PYTHON_ALLOWED_BY_AR10",
         "rationale": "repository-local real Camoufox integration evidence fixture",
     },
+    "scripts/test-ar10-firefox-writer-locks.py": {
+        "classification": "KEEP_PYTHON",
+        "role": "test",
+        "side_effect_class": "test_only",
+        "authority": "PYTHON_ALLOWED_BY_AR10",
+        "rationale": "OS-level Firefox writer-lock ownership and fail-closed regression matrix",
+    },
 }
 
 

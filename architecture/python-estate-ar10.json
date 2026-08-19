@@ -29,6 +29,11 @@
       "path": "scripts/test-ar10-real-camoufox.py",
       "classification": "KEEP_PYTHON",
       "reason": "repository-local real Camoufox integration evidence fixture"
+    },
+    {
+      "path": "scripts/test-ar10-firefox-writer-locks.py",
+      "classification": "KEEP_PYTHON",
+      "reason": "OS-level Firefox writer-lock ownership and fail-closed regression matrix"
     }
   ],
   "retirements": [
@@ -40,16 +45,16 @@
     "tools/profile_browser.py"
   ],
   "current_summary": {
-    "tracked_python_files": 116,
+    "tracked_python_files": 117,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 114,
+    "KEEP_PYTHON": 115,
     "MIGRATE_TO_RUST": 2,
     "WRAP_WITH_RUST": 0
   },
   "final_ar10_target": {
-    "tracked_python_files": 116,
+    "tracked_python_files": 117,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 114,
+    "KEEP_PYTHON": 115,
     "MIGRATE_TO_RUST": 2,
     "WRAP_WITH_RUST": 0,
     "retire_exactly": [
