@@ -584,6 +584,8 @@ mod tests {
     use serde_json::{Value, json};
 
     const GIT_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const ACCEPTED_MAIN_EVIDENCE: &str =
+        "7cb074c3b292300031c603af77c7d92af9603d3144eacdb8034065bbe4fbfcb4";
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const SHA_C: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
@@ -597,7 +599,7 @@ mod tests {
             "repository": "iamaman11/part-crm-emai-profile",
             "commit_sha": GIT_SHA,
             "accepted_main": true,
-            "accepted_main_evidence_sha256": SHA_A
+            "accepted_main_evidence_sha256": ACCEPTED_MAIN_EVIDENCE
           },
           "components": {
             "control_plane": component("control-plane-v1", "components/control-plane.tar", SHA_A, 10),
