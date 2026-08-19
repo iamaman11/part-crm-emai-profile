@@ -225,6 +225,12 @@ def resolve_proxy() -> dict[str, str] | None:
     return proxy
 
 
+def require_bridge_writer_lock(root: Path) -> None:
+    bridge_lock = root / BRIDGE_LOCK_NAME
+    if bridge_lock.is_symlink() or not bridge_lock.is_file():
+        raise RuntimeContractError("Bridge writer ownership evidence is missing")
+
+
 def resolve_profile_root(require_bridge_lock: bool) -> Path:
     raw = os.environ.get(PROFILE_ROOT_ENV)
     if raw is None:
@@ -234,9 +240,7 @@ def resolve_profile_root(require_bridge_lock: bool) -> Path:
         raise RuntimeContractError("profile root is invalid")
     root = candidate.resolve(strict=True)
     if require_bridge_lock:
-        bridge_lock = root / BRIDGE_LOCK_NAME
-        if bridge_lock.is_symlink() or not bridge_lock.is_file():
-            raise RuntimeContractError("Bridge writer ownership evidence is missing")
+        require_bridge_writer_lock(root)
     return root
 
 
@@ -337,7 +341,7 @@ def close_context(manager: Any, _context: Any) -> None:
 
 
 def materialize_candidate_identity(root: Path) -> dict[str, str]:
-    """Create exact generation identity once for an explicitly prepared candidate root."""
+    """Create exact generation identity once under an already acquired Bridge writer lock."""
     from camoufox.sync_api import Camoufox
     from camoufox.utils import launch_options
 
@@ -346,6 +350,7 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
     if root.is_symlink() or not root.is_dir():
         raise RuntimeContractError("candidate generation root is invalid")
     root = root.resolve(strict=True)
+    require_bridge_writer_lock(root)
     config_path = root / CONFIG_NAME
     user_data_dir = root / USER_DATA_NAME
     if config_path.exists() or config_path.is_symlink() or user_data_dir.is_symlink():
