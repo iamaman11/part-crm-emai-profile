@@ -94,7 +94,7 @@ jobs:
           test "$(jq -r '.release_set_id' "$release_root/release-set.json")" = "$RELEASE_SET_ID"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release verify --release-set "$release_root/release-set.json" --artifact-root "$release_root" \
-            | tee "$RUNNER_TEMP/release-verify.json" | jq -e '.verified == true and .mutation_executed == false' >/dev/null
+            | tee "$RUNNER_TEMP/release-verify.json" | jq -e '.decision == "VALID" and .mutation_executed == false' >/dev/null
           echo "TARGET_RELEASE_ROOT=$release_root" >> "$GITHUB_ENV"
 
       - name: Extract only immutable control-plane component and render no-rebuild Core overlay
