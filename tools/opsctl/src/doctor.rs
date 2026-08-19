@@ -18,12 +18,15 @@ const RETAINED_VALIDATORS: [&str; 2] = [
     "scripts/generate-architecture-inventory.py",
     "scripts/python-estate-ar6.py",
 ];
-const INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT: &str = "{\"mode\":\"native-read-only\"}";
+const INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT: &str =
+    "{\"mode\":\"native-read-only\",\"child_processes\":0}";
 
 pub(crate) fn run(root: &Path) -> Result<String, OpsctlError> {
     let native_contract: Value = serde_json::from_str(INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT)
         .map_err(|error| OpsctlError::new("doctor", format!("native doctor contract invalid: {error}")))?;
-    if native_contract.get("mode").and_then(Value::as_str) != Some("native-read-only") {
+    if native_contract.get("mode").and_then(Value::as_str) != Some("native-read-only")
+        || native_contract.get("child_processes").and_then(Value::as_u64) != Some(0)
+    {
         return Err(OpsctlError::new(
             "doctor",
             "native doctor implementation contract is invalid",
