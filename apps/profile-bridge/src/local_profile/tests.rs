@@ -98,7 +98,10 @@ fn recovery_preserves_browser_state_but_not_ephemeral_firefox_lock()
     let source = root.create_generation(&tenant_id, &profile_id, &source_id)?;
     let user_data = source.path().join("user_data");
     fs::create_dir(&user_data)?;
-    fs::write(user_data.join("cookies.sqlite"), b"persistent-browser-state")?;
+    fs::write(
+        user_data.join("cookies.sqlite"),
+        b"persistent-browser-state",
+    )?;
     fs::write(user_data.join("lock"), b"ephemeral-firefox-writer-lock")?;
 
     let materialization_before = source.materialization_inventory_digest()?;
