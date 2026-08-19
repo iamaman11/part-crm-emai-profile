@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
+import { CapabilityProvider } from './app/CapabilityContext';
 import { TenantProvider } from './app/TenantContext';
 import { router } from './app/router';
 import './app/styles.css';
@@ -21,8 +22,10 @@ ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <TenantProvider>
-        <NotificationRealtimeBridge />
-        <RouterProvider router={router} />
+        <CapabilityProvider>
+          <NotificationRealtimeBridge />
+          <RouterProvider router={router} />
+        </CapabilityProvider>
       </TenantProvider>
     </QueryClientProvider>
   </React.StrictMode>,
