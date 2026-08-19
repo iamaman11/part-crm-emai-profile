@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "kind": "ARCHITECTURE_ACCEPTANCE_POLICY",
+  "status": "current",
+  "tracking_issue": 375,
+  "program_issue": 266,
+  "program_authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+  "program_sequence": "architecture/architecture-program-sequence.json",
+  "source_branch": "main",
+  "source_history_count": 1,
+  "merge_method": "squash",
+  "architecture_pr_identification": {
+    "title_prefix_required": true,
+    "head_branch_prefix_required": true,
+    "title_and_branch_slice_must_match": true,
+    "title_shape": "AR-N: ...",
+    "head_branch_shape": "agent/arN-*"
+  },
+  "premerge": {
+    "exact_head_required": true,
+    "behind_by_required": 0,
+    "blocking_reviews_required": 0,
+    "unresolved_review_threads_required": 0,
+    "all_applicable_permanent_workflows_success": true,
+    "base_ref_required": "main",
+    "derived_current_slice_match_required": true
+  },
+  "merge": {
+    "expected_head_sha_binding_required": true,
+    "accepted_main_reread_required": true,
+    "candidate_tree_equals_merge_tree_required": true,
+    "merge_first_parent_equals_premerge_base_required": true
+  },
+  "required_status_contexts": {
+    "sources": [
+      {
+        "path": "architecture/github-governance-ar7.json",
+        "json_pointer": "/main_governance/required_checks"
+      },
+      {
+        "path": "architecture/runtime-cutover-ar10.json",
+        "json_pointer": "/github_governance_extension/required_job_contexts"
+      }
+    ],
+    "duplicate_contexts_forbidden": true,
+    "all_must_succeed_on_exact_candidate": true
+  },
+  "applicable_permanent_workflows": {
+    "registry": "architecture/github-actions-registry.json",
+    "category": "PERMANENT_REQUIRED",
+    "applicability_rule": "canonical workflow declares pull_request trigger",
+    "every_applicable_workflow_must_have_exact_candidate_run": true,
+    "all_must_succeed_on_exact_candidate": true,
+    "missing_run_fails_closed": true
+  },
+  "acceptance_metadata": {
+    "storage": "annotated_git_tag",
+    "namespace": "architecture/accepted/",
+    "tag_target": "accepted_main_merge_commit",
+    "append_only": true,
+    "force_move_allowed": false,
+    "delete_allowed": false,
+    "source_commit_required": false,
+    "source_commit_forbidden_for_acceptance_only": true,
+    "tag_required_from": "AR-12",
+    "record_schema_version": 1,
+    "required_fields": [
+      "slice",
+      "pr",
+      "base_sha",
+      "candidate_sha",
+      "candidate_tree",
+      "merge_sha",
+      "merge_tree",
+      "required_status_contexts_total",
+      "required_status_contexts_success",
+      "applicable_permanent_workflows_total",
+      "applicable_permanent_workflows_success",
+      "behind_by",
+      "blocking_reviews",
+      "unresolved_review_threads",
+      "accepted_main_reread",
+      "architecture_complete",
+      "production_core_gate",
+      "production_ready",
+      "production_mutation"
+    ]
+  },
+  "state_derivation": {
+    "frozen_legacy_accepted_through": "AR-10",
+    "migration_bootstrap_acceptance": {
+      "slice": "AR-11",
+      "issue": 372,
+      "pr": 374,
+      "base_sha": "1730a5655b07cda21ea9eb3c2cd7a754c7143ca3",
+      "candidate_sha": "3ce30a55eb6b6390a5175572aeb66c29134bfc81",
+      "candidate_tree": "94850c7669ec189d5cbaa880a260d2324fa9c9a6",
+      "merge_sha": "0166a49ba3fefb1d4abf8b48d4983c3e3c145de3",
+      "merge_tree": "94850c7669ec189d5cbaa880a260d2324fa9c9a6",
+      "required_status_contexts_total": 23,
+      "required_status_contexts_success": 23,
+      "applicable_permanent_workflows_total": 17,
+      "applicable_permanent_workflows_success": 17,
+      "behind_by": 0,
+      "blocking_reviews": 0,
+      "unresolved_review_threads": 0,
+      "accepted_main_reread": "0166a49ba3fefb1d4abf8b48d4983c3e3c145de3",
+      "architecture_complete": false,
+      "production_core_gate": "BLOCKED",
+      "production_ready": false,
+      "production_mutation": false
+    },
+    "accepted_checkpoint_rule": "highest contiguous accepted slice from frozen legacy baseline plus bootstrap acceptance plus immutable acceptance tags",
+    "current_slice_rule": "successor of accepted checkpoint",
+    "missing_or_ambiguous_acceptance": "FAIL_CLOSED"
+  },
+  "projection_policy": {
+    "authoritative": false,
+    "generated_or_human_projection_only": true,
+    "paths": [
+      "docs/status.json",
+      "architecture/inventory.json",
+      "architecture/architecture-rebaseline-v3-transition.json",
+      "README.md",
+      "docs/README.md",
+      "docs/INDEX.md",
+      "docs/DEVELOPMENT_PLAN.md",
+      "docs/DEVELOPER_CAPABILITY_MATRIX.md"
+    ],
+    "stale_projection_must_not_create_acceptance_authority": true
+  },
+  "forbidden_forward_patterns": {
+    "per_slice_closeout_transformer": true,
+    "temporary_self_writing_closeout_workflow": true,
+    "second_source_pr_only_to_record_acceptance": true,
+    "acceptance_workflow_branch_push": true,
+    "force_moved_acceptance_tag": true,
+    "manual_duplicate_current_slice_authority": true
+  },
+  "acceptance_state": {
+    "before_ar17": {
+      "architecture_complete": false,
+      "production_core_gate": "BLOCKED",
+      "production_ready": false,
+      "production_mutation": false
+    },
+    "ar17": {
+      "architecture_complete": true,
+      "production_core_gate": "AUTHORIZED",
+      "production_ready": false,
+      "production_mutation": false
+    },
+    "first_production_enablement_stage": "PC-1"
+  }
+}

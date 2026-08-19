@@ -9,7 +9,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(SCRIPT_DIR, '..', '..');
 const POLICY_RELATIVE = 'architecture/github-actions-registry.json';
 const WORKFLOWS_RELATIVE = '.github/workflows';
-const ALLOWED_CATEGORIES = new Set(['PERMANENT_REQUIRED', 'CURRENT_MANUAL_OPERATION']);
+const ALLOWED_CATEGORIES = new Set(['PERMANENT_REQUIRED', 'CURRENT_MANUAL_OPERATION', 'POST_MERGE_METADATA']);
 
 function sameStringSet(actual, expected) {
   if (!Array.isArray(actual) || !Array.isArray(expected)) return false;
@@ -29,10 +29,7 @@ async function loadPolicy(root) {
 
 async function trackedWorkflowPaths(root) {
   const entries = await readdir(path.join(root, WORKFLOWS_RELATIVE), { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name))
-    .map((entry) => `${WORKFLOWS_RELATIVE}/${entry.name}`)
-    .sort();
+  return entries.filter((entry) => entry.isFile() && /\.ya?ml$/i.test(entry.name)).map((entry) => `${WORKFLOWS_RELATIVE}/${entry.name}`).sort();
 }
 
 function validatePolicy(policy, trackedPaths) {
@@ -48,13 +45,15 @@ function validatePolicy(policy, trackedPaths) {
   expect(policy?.duplicate_registration_paths_forbidden === true, 'duplicate registration paths must remain forbidden');
 
   const registrations = Array.isArray(policy?.active_registrations) ? policy.active_registrations : [];
-  expect(registrations.length === 21, 'registry policy must classify exactly 21 current active registrations');
+  expect(registrations.length === 22, 'registry policy must classify exactly 22 current active registrations');
   const paths = registrations.map((entry) => entry?.path);
   expect(paths.every((value) => typeof value === 'string' && value.startsWith(`${WORKFLOWS_RELATIVE}/`) && /\.ya?ml$/i.test(value)), 'every active registration path must be a workflow YAML path');
   expect(new Set(paths).size === paths.length, 'registry policy active paths must be unique');
   expect(registrations.every((entry) => ALLOWED_CATEGORIES.has(entry?.category)), 'registry policy contains an unsupported active category');
   expect(registrations.filter((entry) => entry.category === 'PERMANENT_REQUIRED').length === 20, 'registry policy must classify exactly 20 permanent workflows');
   expect(registrations.filter((entry) => entry.category === 'CURRENT_MANUAL_OPERATION').length === 1, 'registry policy must classify exactly one current manual operation');
+  expect(registrations.filter((entry) => entry.category === 'POST_MERGE_METADATA').length === 1, 'registry policy must classify exactly one post-merge metadata workflow');
+  expect(registrations.some((entry) => entry.path === '.github/workflows/architecture-acceptance-recorder.yml' && entry.category === 'POST_MERGE_METADATA'), 'Architecture Acceptance Recorder must be the single post-merge metadata workflow');
   expect(registrations.some((entry) => entry.path === '.github/workflows/camoufox-runtime-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Camoufox Runtime Gate must be a permanent AR-10 gate');
   expect(registrations.some((entry) => entry.path === '.github/workflows/github-governance-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'GitHub Governance Gate must remain permanent');
   expect(registrations.some((entry) => entry.path === '.github/workflows/quality-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Quality Gate must remain permanent');
@@ -86,9 +85,7 @@ function validateLiveRegistry(policy, workflows) {
     list.push(workflow);
     byPath.set(workflow.path, list);
   }
-  for (const [workflowPath, registrations] of byPath) {
-    if (registrations.length > 1) errors.push(`duplicate registration path: ${workflowPath}`);
-  }
+  for (const [workflowPath, registrations] of byPath) if (registrations.length > 1) errors.push(`duplicate registration path: ${workflowPath}`);
   for (const expectedPath of expected) {
     const registrations = byPath.get(expectedPath) ?? [];
     const active = registrations.filter((entry) => entry.state === 'active');
@@ -103,12 +100,7 @@ function validateLiveRegistry(policy, workflows) {
 
 async function githubJson(apiPath, token) {
   const response = await fetch(`https://api.github.com${apiPath}`, {
-    headers: {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${token}`,
-      'User-Agent': 'part-crm-actions-registry-audit',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
+    headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'User-Agent': 'part-crm-actions-registry-audit', 'X-GitHub-Api-Version': '2022-11-28' },
   });
   if (!response.ok) {
     const body = (await response.text()).slice(0, 1000);
@@ -142,14 +134,8 @@ async function readEphemeralGitHubTokenFromStdin() {
   return token;
 }
 
-function report(errors) {
-  for (const error of errors) console.error(error);
-  return errors.length === 0;
-}
-
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
-}
+function report(errors) { for (const error of errors) console.error(error); return errors.length === 0; }
+function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
 function selfTest(policy) {
   const paths = policy.active_registrations.map((entry) => entry.path);
@@ -159,26 +145,10 @@ function selfTest(policy) {
     return false;
   }
   const fixtures = [
-    {
-      name: 'unexpected active workflow',
-      expected: 'unexpected active workflow registration',
-      mutate: (rows) => rows.push({ id: 99991, path: '.github/workflows/unclassified.yml', state: 'active' }),
-    },
-    {
-      name: 'required workflow disabled',
-      expected: 'exactly one active registration',
-      mutate: (rows) => { rows[0].state = 'disabled_manually'; },
-    },
-    {
-      name: 'duplicate registration path',
-      expected: 'duplicate registration path',
-      mutate: (rows) => rows.push({ id: 99992, path: rows[0].path, state: 'disabled_manually' }),
-    },
-    {
-      name: 'duplicate registration id',
-      expected: 'duplicate workflow registration id',
-      mutate: (rows) => rows.push({ id: rows[0].id, path: '.github/workflows/other.yml', state: 'disabled_manually' }),
-    },
+    { name: 'unexpected active workflow', expected: 'unexpected active workflow registration', mutate: (rows) => rows.push({ id: 99991, path: '.github/workflows/unclassified.yml', state: 'active' }) },
+    { name: 'required workflow disabled', expected: 'exactly one active registration', mutate: (rows) => { rows[0].state = 'disabled_manually'; } },
+    { name: 'duplicate registration path', expected: 'duplicate registration path', mutate: (rows) => rows.push({ id: 99992, path: rows[0].path, state: 'disabled_manually' }) },
+    { name: 'duplicate registration id', expected: 'duplicate workflow registration id', mutate: (rows) => rows.push({ id: rows[0].id, path: '.github/workflows/other.yml', state: 'disabled_manually' }) },
   ];
   for (const fixture of fixtures) {
     const rows = clone(baseline);
@@ -188,6 +158,12 @@ function selfTest(policy) {
       console.error(`negative fixture ${fixture.name} was not rejected as expected: ${JSON.stringify(errors)}`);
       return false;
     }
+  }
+  const categoryFixture = clone(policy);
+  categoryFixture.active_registrations.find((entry) => entry.category === 'POST_MERGE_METADATA').category = 'CURRENT_MANUAL_OPERATION';
+  if (!validatePolicy(categoryFixture, paths).some((error) => error.includes('post-merge metadata'))) {
+    console.error('post-merge metadata category negative fixture was not rejected');
+    return false;
   }
   console.log('GitHub Actions registry negative fixtures passed.');
   return true;
@@ -214,18 +190,12 @@ async function main() {
   const trackedPaths = await trackedWorkflowPaths(root);
   const contractErrors = validatePolicy(policy, trackedPaths);
   if (!report(contractErrors)) return 1;
-  if (command === 'contract') {
-    console.log('GitHub Actions registry policy matches the tracked workflow surface.');
-    return 0;
-  }
+  if (command === 'contract') { console.log('GitHub Actions registry policy matches the tracked workflow surface.'); return 0; }
   if (command === 'self-test') return selfTest(policy) ? 0 : 1;
   if (command === 'live') {
     const token = await readEphemeralGitHubTokenFromStdin();
     const repository = process.env.GITHUB_REPOSITORY || policy.repository;
-    if (repository !== policy.repository) {
-      console.error(`GITHUB_REPOSITORY must be ${policy.repository}; observed ${repository}`);
-      return 1;
-    }
+    if (repository !== policy.repository) { console.error(`GITHUB_REPOSITORY must be ${policy.repository}; observed ${repository}`); return 1; }
     const workflows = await listLiveWorkflows(repository, token);
     const errors = validateLiveRegistry(policy, workflows);
     if (!report(errors)) return 1;
@@ -236,9 +206,4 @@ async function main() {
   return 2;
 }
 
-main()
-  .then((code) => { process.exitCode = code; })
-  .catch((error) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
+main().then((code) => { process.exitCode = code; }).catch((error) => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });

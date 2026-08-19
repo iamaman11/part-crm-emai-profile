@@ -1,0 +1,288 @@
+name: Architecture Acceptance Recorder
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: architecture-acceptance-recorder
+  cancel-in-progress: false
+
+jobs:
+  record:
+    name: Record Architecture Acceptance
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.title, 'AR-')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact accepted merge
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact accepted merge checkout
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: test "$(git rev-parse HEAD)" = "$MERGE_SHA"
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Resolve architecture slice and existing tag
+        id: identity
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          python - <<'PY'
+          import os, re
+          title = os.environ['PR_TITLE']
+          head = os.environ['PR_HEAD_REF']
+          title_match = re.match(r'^(AR-\d+[A-Za-z]?):', title, re.I)
+          branch_match = re.match(r'^agent/ar(\d+[A-Za-z]?)(?:-|$)', head, re.I)
+          if not title_match or not branch_match:
+              raise SystemExit('architecture acceptance requires matching AR-N: title and agent/arN-* branch')
+          title_slice = title_match.group(1).upper()
+          branch_slice = f"AR-{branch_match.group(1).upper()}"
+          if title_slice != branch_slice:
+              raise SystemExit(f'architecture slice signals disagree: {title_slice} != {branch_slice}')
+          tag = f"architecture/accepted/{title_slice.lower()}"
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
+              out.write(f"slice={title_slice}\n")
+              out.write(f"tag={tag}\n")
+          PY
+          TAG="architecture/accepted/$(printf '%s' "${PR_TITLE%%:*}" | tr '[:upper:]' '[:lower:]')"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "existing=true" >> "$GITHUB_OUTPUT"
+            git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+          else
+            echo "existing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify idempotent existing acceptance tag
+        if: steps.identity.outputs.existing == 'true'
+        env:
+          TAG: ${{ steps.identity.outputs.tag }}
+          SLICE: ${{ steps.identity.outputs.slice }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          git for-each-ref "refs/tags/$TAG" --format='%(contents)' > acceptance-record.json
+          node .github/scripts/architecture-acceptance.mjs contract
+          python - <<'PY'
+          import json, os, subprocess
+          record = json.load(open('acceptance-record.json', encoding='utf-8'))
+          expected = {
+              'slice': os.environ['SLICE'],
+              'pr': int(os.environ['PR_NUMBER']),
+              'candidate_sha': os.environ['PR_HEAD_SHA'],
+              'merge_sha': os.environ['MERGE_SHA'],
+          }
+          for key, value in expected.items():
+              if record.get(key) != value:
+                  raise SystemExit(f'existing acceptance tag conflicts on {key}: {record.get(key)!r} != {value!r}')
+          target = subprocess.check_output(['git', 'rev-list', '-n', '1', os.environ['TAG']], text=True).strip()
+          if target != os.environ['MERGE_SHA']:
+              raise SystemExit('existing acceptance tag targets a different merge')
+          PY
+
+      - name: Fetch exact candidate and current main
+        if: steps.identity.outputs.existing != 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin "refs/pull/$PR_NUMBER/head"
+          test "$(git rev-parse FETCH_HEAD)" = "$PR_HEAD_SHA"
+          git fetch --no-tags origin main
+
+      - name: Re-prove premerge and merge identity
+        if: steps.identity.outputs.existing != 'true'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          node .github/scripts/architecture-acceptance.mjs contract
+          node .github/scripts/architecture-acceptance.mjs premerge \
+            --title "$PR_TITLE" \
+            --head-ref "$PR_HEAD_REF" \
+            --base-ref "$PR_BASE_REF" \
+            --base "$PR_BASE_SHA" \
+            --head "$PR_HEAD_SHA" \
+            | python -m json.tool
+          test "$(git rev-parse "$PR_HEAD_SHA^{tree}")" = "$(git rev-parse "$MERGE_SHA^{tree}")"
+          test "$(git rev-parse "$MERGE_SHA^1")" = "$PR_BASE_SHA"
+          git merge-base --is-ancestor "$MERGE_SHA" origin/main
+
+      - name: Collect exact-head hosted evidence
+        if: steps.identity.outputs.existing != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api --method GET "repos/$GITHUB_REPOSITORY/commits/$PR_HEAD_SHA/check-runs" -f per_page=100 > check-runs.json
+          gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs" -f head_sha="$PR_HEAD_SHA" -f event=pull_request -f per_page=100 > workflow-runs.json
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          NAME="${GITHUB_REPOSITORY#*/}"
+          gh api graphql \
+            -f owner="$OWNER" \
+            -f name="$NAME" \
+            -F number="$PR_NUMBER" \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewDecision reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}' \
+            > review-state.json
+
+      - name: Build and validate immutable acceptance record
+        if: steps.identity.outputs.existing != 'true'
+        env:
+          SLICE: ${{ steps.identity.outputs.slice }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          python - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+
+          def pointer(document, value):
+              cursor = document
+              for token in value.strip('/').split('/'):
+                  cursor = cursor[token.replace('~1', '/').replace('~0', '~')]
+              return cursor
+
+          policy = json.loads(Path('architecture/architecture-acceptance-policy.json').read_text(encoding='utf-8'))
+          required = []
+          for source in policy['required_status_contexts']['sources']:
+              document = json.loads(Path(source['path']).read_text(encoding='utf-8'))
+              values = pointer(document, source['json_pointer'])
+              if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+                  raise SystemExit(f"required status source is not a string list: {source}")
+              required.extend(values)
+          if len(required) != len(set(required)):
+              raise SystemExit('required status context sources contain duplicates')
+
+          checks = json.loads(Path('check-runs.json').read_text(encoding='utf-8'))
+          if checks.get('total_count', 0) > 100:
+              raise SystemExit('exact-head check-run count exceeds bounded recorder page')
+          latest_checks = {}
+          for check in checks.get('check_runs', []):
+              name = check.get('name')
+              if isinstance(name, str) and (name not in latest_checks or int(check.get('id', 0)) > int(latest_checks[name].get('id', 0))):
+                  latest_checks[name] = check
+          missing = [name for name in required if name not in latest_checks]
+          failed = [name for name in required if name in latest_checks and (latest_checks[name].get('status') != 'completed' or latest_checks[name].get('conclusion') != 'success')]
+          if missing or failed:
+              raise SystemExit(f'required exact-head contexts incomplete: missing={missing}, failed={failed}')
+
+          registry = json.loads(Path('architecture/github-actions-registry.json').read_text(encoding='utf-8'))
+          permanent = {row['path'] for row in registry.get('active_registrations', []) if row.get('category') == 'PERMANENT_REQUIRED'}
+          applicable_expected = set()
+          trigger_pattern = re.compile(r'^  pull_request:\s*(?:#.*)?$', re.MULTILINE)
+          for workflow_path in permanent:
+              body = Path(workflow_path).read_text(encoding='utf-8')
+              if trigger_pattern.search(body):
+                  applicable_expected.add(workflow_path)
+          if not applicable_expected:
+              raise SystemExit('canonical registry yields no pull-request-applicable permanent workflows')
+
+          runs = json.loads(Path('workflow-runs.json').read_text(encoding='utf-8'))
+          if runs.get('total_count', 0) > 100:
+              raise SystemExit('exact-head workflow-run count exceeds bounded recorder page')
+          applicable_observed = {}
+          for run in runs.get('workflow_runs', []):
+              workflow_path = run.get('path')
+              if workflow_path in applicable_expected and run.get('head_sha') == os.environ['PR_HEAD_SHA'] and run.get('event') == 'pull_request':
+                  if workflow_path not in applicable_observed or int(run.get('id', 0)) > int(applicable_observed[workflow_path].get('id', 0)):
+                      applicable_observed[workflow_path] = run
+          missing_runs = sorted(applicable_expected - set(applicable_observed))
+          not_green = sorted(workflow_path for workflow_path, run in applicable_observed.items() if run.get('status') != 'completed' or run.get('conclusion') != 'success')
+          if missing_runs or not_green:
+              raise SystemExit(f'applicable permanent workflows incomplete: missing={missing_runs}, not_green={not_green}')
+
+          review = json.loads(Path('review-state.json').read_text(encoding='utf-8'))['data']['repository']['pullRequest']
+          threads = review['reviewThreads']
+          if threads['pageInfo']['hasNextPage']:
+              raise SystemExit('review-thread count exceeds bounded recorder page')
+          unresolved = sum(1 for row in threads['nodes'] if not row['isResolved'])
+          blocking = 1 if review.get('reviewDecision') in {'CHANGES_REQUESTED', 'REVIEW_REQUIRED'} else 0
+          if blocking or unresolved:
+              raise SystemExit(f'PR review state is not clean: blocking_reviews={blocking}, unresolved_threads={unresolved}')
+
+          candidate_tree = subprocess.check_output(['git', 'rev-parse', f"{os.environ['PR_HEAD_SHA']}^{{tree}}"], text=True).strip()
+          merge_tree = subprocess.check_output(['git', 'rev-parse', f"{os.environ['MERGE_SHA']}^{{tree}}"], text=True).strip()
+          if candidate_tree != merge_tree:
+              raise SystemExit('candidate tree differs from accepted merge tree')
+
+          state = policy['acceptance_state']['ar17' if os.environ['SLICE'] == 'AR-17' else 'before_ar17']
+          record = {
+              'schema_version': policy['acceptance_metadata']['record_schema_version'],
+              'slice': os.environ['SLICE'],
+              'pr': int(os.environ['PR_NUMBER']),
+              'base_sha': os.environ['PR_BASE_SHA'],
+              'candidate_sha': os.environ['PR_HEAD_SHA'],
+              'candidate_tree': candidate_tree,
+              'merge_sha': os.environ['MERGE_SHA'],
+              'merge_tree': merge_tree,
+              'required_status_contexts_total': len(required),
+              'required_status_contexts_success': len(required),
+              'applicable_permanent_workflows_total': len(applicable_expected),
+              'applicable_permanent_workflows_success': len(applicable_expected),
+              'behind_by': 0,
+              'blocking_reviews': 0,
+              'unresolved_review_threads': 0,
+              'accepted_main_reread': os.environ['MERGE_SHA'],
+              'architecture_complete': state['architecture_complete'],
+              'production_core_gate': state['production_core_gate'],
+              'production_ready': state['production_ready'],
+              'production_mutation': state['production_mutation'],
+          }
+          Path('acceptance-record.json').write_text(json.dumps(record, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8')
+          PY
+          node .github/scripts/architecture-acceptance.mjs record --file acceptance-record.json > validated-record.json
+          python -m json.tool validated-record.json >/dev/null
+
+      - name: Create append-only annotated acceptance tag
+        if: steps.identity.outputs.existing != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.identity.outputs.tag }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('tag-object.json').write_text(json.dumps({
+              'tag': os.environ['TAG'],
+              'message': Path('acceptance-record.json').read_text(encoding='utf-8').strip(),
+              'object': os.environ['MERGE_SHA'],
+              'type': 'commit',
+          }), encoding='utf-8')
+          PY
+          export TAG_OBJECT_SHA="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" --input tag-object.json --jq .sha)"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('tag-ref.json').write_text(json.dumps({
+              'ref': f"refs/tags/{os.environ['TAG']}",
+              'sha': os.environ['TAG_OBJECT_SHA'],
+          }), encoding='utf-8')
+          PY
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" --input tag-ref.json >/dev/null
+          git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(git rev-list -n 1 "$TAG")" = "$MERGE_SHA"
+          node .github/scripts/architecture-acceptance.mjs contract

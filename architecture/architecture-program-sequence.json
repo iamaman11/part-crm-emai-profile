@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "kind": "ARCHITECTURE_PROGRAM_SEQUENCE",
+  "program": "Architecture Re-baseline v3",
+  "program_issue": 266,
+  "state_model": "STATIC_ORDER_ONLY",
+  "mutable_lifecycle_state_forbidden": true,
+  "slices": [
+    {"id":"AR-0","name":"Delta Architecture Inventory","predecessor":null,"successor":"AR-1"},
+    {"id":"AR-1","name":"Architecture Authority Re-baseline","predecessor":"AR-0","successor":"AR-2"},
+    {"id":"AR-2","name":"Runtime Topology + D3 Compatibility","predecessor":"AR-1","successor":"AR-3"},
+    {"id":"AR-3","name":"Application Architecture Contract","predecessor":"AR-2","successor":"AR-4A"},
+    {"id":"AR-4A","name":"Composition-root consolidation","predecessor":"AR-3","successor":"AR-4B"},
+    {"id":"AR-4B","name":"Client Mail route ownership","predecessor":"AR-4A","successor":"AR-4C"},
+    {"id":"AR-4C","name":"Outbound Mail composition extraction","predecessor":"AR-4B","successor":"AR-5"},
+    {"id":"AR-5","name":"Wrangler / Runtime Authority Cleanup","predecessor":"AR-4C","successor":"AR-6"},
+    {"id":"AR-6","name":"Full Python Estate + read-only Rust opsctl","predecessor":"AR-5","successor":"AR-7"},
+    {"id":"AR-7","name":"Environments + GitHub Governance + Operational Boundaries","predecessor":"AR-6","successor":"AR-8"},
+    {"id":"AR-8","name":"Secrets / Keys / OAuth Refresh Concurrency","predecessor":"AR-7","successor":"AR-9"},
+    {"id":"AR-9","name":"D1 Evolution / Schema Compatibility","predecessor":"AR-8","successor":"AR-10"},
+    {"id":"AR-10","name":"Runtime and Historical Executable Simplification","predecessor":"AR-9","successor":"AR-11"},
+    {"id":"AR-11","name":"Release-set / Promotion Architecture","predecessor":"AR-10","successor":"AR-12"},
+    {"id":"AR-12","name":"Fresh Rehearsal Environment","predecessor":"AR-11","successor":"AR-13"},
+    {"id":"AR-13","name":"Rotation Rehearsal","predecessor":"AR-12","successor":"AR-14"},
+    {"id":"AR-14","name":"Remote Recovery Rehearsal","predecessor":"AR-13","successor":"AR-15"},
+    {"id":"AR-15","name":"Windows Delivery Program — inherited Batch E","predecessor":"AR-14","successor":"AR-16"},
+    {"id":"AR-16","name":"Final Whole-project 10/10 Audit","predecessor":"AR-15","successor":"AR-17"},
+    {"id":"AR-17","name":"Architecture Closeout + Production Core Gate","predecessor":"AR-16","successor":null}
+  ],
+  "non_linear_preserved_decisions": [
+    {"id":"AR-4D","name":"Profile extraction","state":"NOT_REQUIRED","reopen_only_by_later_accepted_evidence":true,"not_in_linear_acceptance_chain":true}
+  ]
+}
