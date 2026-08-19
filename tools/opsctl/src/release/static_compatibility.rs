@@ -36,8 +36,8 @@ pub fn evaluate(
 }
 
 fn contracts_match(root: &Path, value: &Value) -> Result<bool, ReleaseModelError> {
-    let object = object(value, "contracts")?;
-    let files = array(required(object, "files")?, "contracts.files")?;
+    let contracts = object(value, "contracts")?;
+    let files = array(required(contracts, "files")?, "contracts.files")?;
     let observed_paths = files
         .iter()
         .map(|value| {
