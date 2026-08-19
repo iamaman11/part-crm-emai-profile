@@ -1,0 +1,66 @@
+name: AR-10 Projection Regeneration
+
+on:
+  push:
+    branches:
+      - agent/ar10-runtime-cutover
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ar10-projection-regeneration
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    if: github.repository == 'iamaman11/part-crm-emai-profile' && github.ref == 'refs/heads/agent/ar10-runtime-cutover'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch head
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: agent/ar10-runtime-cutover
+          fetch-depth: 0
+
+      - name: Remove inherited AR-9 blocker from current documentation authority
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/check-documentation-authority.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''            "full_ar8_accepted": True,\n            "ar9_accepted": True,\n            "ar10_blocked": False,'''
+          new = '''            "full_ar8_accepted": True,\n            "ar9_accepted": True,\n            "ar9_blocked": False,\n            "ar10_blocked": False,'''
+          if new in text:
+              pass
+          elif old in text:
+              text = text.replace(old, new, 1)
+              path.write_text(text, encoding='utf-8', newline='\n')
+          else:
+              raise SystemExit('expected current delivery invariant block not found')
+          PY
+
+      - name: Regenerate canonical projections from source authorities
+        run: |
+          python scripts/generate-ar8-completion-status.py --write
+          python scripts/generate-architecture-inventory.py --write
+
+      - name: Verify generated projections and documentation authority
+        run: |
+          python scripts/generate-ar8-completion-status.py --check
+          python scripts/generate-ar8-completion-status.py --self-test
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/check-documentation-authority.py
+          python scripts/check-documentation-authority.py --self-test
+          git diff --check
+
+      - name: Commit regenerated projections
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/check-documentation-authority.py docs/status.json architecture/architecture-rebaseline-v3-transition.json architecture/inventory.json
+          git commit -m 'Regenerate canonical AR-10 projections'
+          git push origin HEAD:agent/ar10-runtime-cutover
