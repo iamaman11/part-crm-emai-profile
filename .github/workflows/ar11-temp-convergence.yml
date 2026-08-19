@@ -34,12 +34,19 @@ jobs:
           fi
           python - <<'PY'
           from pathlib import Path
-          path = Path('tools/opsctl/src/release/compatibility.rs')
-          text = path.read_text()
+
+          compatibility = Path('tools/opsctl/src/release/compatibility.rs')
+          text = compatibility.read_text()
           old = '''    for name in required_dimensions {\n        let dimension = evidence.dimensions.get(name).ok_or_else(|| {\n            ReleaseModelError::new(format!("missing compatibility dimension after parse: {name}"))\n        })?;\n        match dimension.decision {\n            CompatibilityDecision::Compatible => {}\n            CompatibilityDecision::Incompatible => {\n                blockers.push(format!("{}", blocker_code(name, false)));\n            }\n            CompatibilityDecision::Unknown => {\n                blockers.push(format!("{}", blocker_code(name, true)));\n            }\n        }\n    }\n'''
           new = '''    for name in &required_dimensions {\n        let dimension = evidence.dimensions.get(*name).ok_or_else(|| {\n            ReleaseModelError::new(format!("missing compatibility dimension after parse: {name}"))\n        })?;\n        match dimension.decision {\n            CompatibilityDecision::Compatible => {}\n            CompatibilityDecision::Incompatible => {\n                blockers.push(blocker_code(name, false).to_owned());\n            }\n            CompatibilityDecision::Unknown => {\n                blockers.push(blocker_code(name, true).to_owned());\n            }\n        }\n    }\n'''
           if old in text:
-              path.write_text(text.replace(old, new, 1))
+              compatibility.write_text(text.replace(old, new, 1))
+
+          artifact = Path('tools/opsctl/src/release/artifact.rs')
+          text = artifact.read_text()
+          text = text.replace('use std::path::PathBuf;', 'use std::path::{Path, PathBuf};', 1)
+          text = text.replace('fn manifest(root: &PathBuf)', 'fn manifest(root: &Path)', 1)
+          artifact.write_text(text)
           PY
           cargo fmt --manifest-path tools/opsctl/Cargo.toml
           cargo clippy --fix --locked --manifest-path tools/opsctl/Cargo.toml --all-targets --allow-dirty --allow-staged -- -D warnings
