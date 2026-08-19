@@ -16,6 +16,17 @@ pub struct DeploymentClosure {
     pub optional_or_disabled_resources: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone)]
+struct RawClosure {
+    closure_id: String,
+    extends: Option<String>,
+    required_components: BTreeSet<String>,
+    required_bindings: BTreeSet<String>,
+    required_resources: BTreeSet<String>,
+    required_credentials: BTreeSet<String>,
+    optional_or_disabled_resources: BTreeSet<String>,
+}
+
 pub fn load_closure(root: &Path, profile_id: &str) -> Result<DeploymentClosure, ReleaseModelError> {
     let path = root.join(AUTHORITY_PATH);
     let input = fs::read_to_string(&path).map_err(|error| {
@@ -51,39 +62,107 @@ pub fn load_closure(root: &Path, profile_id: &str) -> Result<DeploymentClosure, 
     let mut by_id = BTreeMap::new();
     for value in closures {
         let item = object(value, "deployment closure")?;
+        reject_unknown_fields(
+            item,
+            &[
+                "closure_id",
+                "profile_id",
+                "extends",
+                "required_components",
+                "required_bindings",
+                "required_resources",
+                "required_credentials",
+                "optional_or_disabled_resources",
+                "binding_probe_scope",
+            ],
+        )?;
         let closure_id = required_string(item, "closure_id")?;
-        if closure_id.trim().is_empty() || by_id.contains_key(&closure_id) {
+        let bound_profile = required_string(item, "profile_id")?;
+        if closure_id.trim().is_empty()
+            || bound_profile != closure_id
+            || by_id.contains_key(&closure_id)
+        {
             return Err(ReleaseModelError::new(
-                "deployment closure IDs must be unique and non-empty",
+                "deployment closure/profile IDs must be unique, equal and non-empty",
+            ));
+        }
+        if required_string(item, "binding_probe_scope")? != "REQUIRED_CLOSURE_ONLY" {
+            return Err(ReleaseModelError::new(
+                "deployment closure binding probe scope must remain REQUIRED_CLOSURE_ONLY",
             ));
         }
         by_id.insert(
             closure_id.clone(),
-            DeploymentClosure {
+            RawClosure {
                 closure_id,
-                required_components: string_set(item, "required_components")?,
-                required_bindings: string_set(item, "required_bindings")?,
-                required_resources: string_set(item, "required_resources")?,
-                required_credentials: string_set(item, "required_credentials")?,
-                optional_or_disabled_resources: string_set(
+                extends: optional_string(item, "extends")?,
+                required_components: optional_string_set(item, "required_components")?,
+                required_bindings: optional_string_set(item, "required_bindings")?,
+                required_resources: optional_string_set(item, "required_resources")?,
+                required_credentials: optional_string_set(item, "required_credentials")?,
+                optional_or_disabled_resources: optional_string_set(
                     item,
                     "optional_or_disabled_resources",
                 )?,
             },
         );
     }
-    by_id.remove(profile_id).ok_or_else(|| {
-        ReleaseModelError::new(format!(
-            "PROFILE_NOT_AUTHORIZED: no deployment closure for {profile_id}"
-        ))
-    })
+
+    let mut visiting = BTreeSet::new();
+    resolve_closure(profile_id, &by_id, &mut visiting)
 }
 
-fn string_set(
+fn resolve_closure(
+    closure_id: &str,
+    by_id: &BTreeMap<String, RawClosure>,
+    visiting: &mut BTreeSet<String>,
+) -> Result<DeploymentClosure, ReleaseModelError> {
+    let raw = by_id.get(closure_id).ok_or_else(|| {
+        ReleaseModelError::new(format!(
+            "PROFILE_NOT_AUTHORIZED: no deployment closure for {closure_id}"
+        ))
+    })?;
+    if !visiting.insert(closure_id.to_owned()) {
+        return Err(ReleaseModelError::new(format!(
+            "deployment closure inheritance cycle at {closure_id}"
+        )));
+    }
+
+    let mut result = match raw.extends.as_deref() {
+        Some(parent) => resolve_closure(parent, by_id, visiting)?,
+        None => DeploymentClosure {
+            closure_id: raw.closure_id.clone(),
+            required_components: BTreeSet::new(),
+            required_bindings: BTreeSet::new(),
+            required_resources: BTreeSet::new(),
+            required_credentials: BTreeSet::new(),
+            optional_or_disabled_resources: BTreeSet::new(),
+        },
+    };
+    visiting.remove(closure_id);
+
+    result.closure_id = raw.closure_id.clone();
+    result.required_components.extend(raw.required_components.iter().cloned());
+    result.required_bindings.extend(raw.required_bindings.iter().cloned());
+    result.required_resources.extend(raw.required_resources.iter().cloned());
+    result.required_credentials.extend(raw.required_credentials.iter().cloned());
+    result
+        .optional_or_disabled_resources
+        .extend(raw.optional_or_disabled_resources.iter().cloned());
+    for resource in &result.required_resources {
+        result.optional_or_disabled_resources.remove(resource);
+    }
+    Ok(result)
+}
+
+fn optional_string_set(
     object: &Map<String, Value>,
     field: &str,
 ) -> Result<BTreeSet<String>, ReleaseModelError> {
-    let values = array(required(object, field)?, field)?;
+    let Some(value) = object.get(field) else {
+        return Ok(BTreeSet::new());
+    };
+    let values = array(value, field)?;
     let mut result = BTreeSet::new();
     for value in values {
         let text = value.as_str().ok_or_else(|| {
@@ -111,6 +190,19 @@ fn required_string(object: &Map<String, Value>, key: &str) -> Result<String, Rel
         .ok_or_else(|| ReleaseModelError::new(format!("field {key} must be a string")))
 }
 
+fn optional_string(
+    object: &Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, ReleaseModelError> {
+    match object.get(key) {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|text| Some(text.to_owned()))
+            .ok_or_else(|| ReleaseModelError::new(format!("field {key} must be a string"))),
+    }
+}
+
 fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, ReleaseModelError> {
     required(object, key)?
         .as_u64()
@@ -135,6 +227,20 @@ fn array<'a>(value: &'a Value, label: &str) -> Result<&'a Vec<Value>, ReleaseMod
         .ok_or_else(|| ReleaseModelError::new(format!("{label} must be an array")))
 }
 
+fn reject_unknown_fields(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+) -> Result<(), ReleaseModelError> {
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(ReleaseModelError::new(format!(
+                "unknown deployment closure field: {key}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::load_closure;
@@ -151,6 +257,21 @@ mod tests {
             .required_credentials
             .contains("MAILBOX_RESOLVER_CALLER_AUTH_KEY"));
         assert!(closure
+            .optional_or_disabled_resources
+            .contains("mailbox_jobs"));
+        Ok(())
+    }
+
+    #[test]
+    fn mailbox_jobs_closure_inherits_core_and_mail_dependencies()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let closure = load_closure(&root, "production-mailbox-jobs-v1")?;
+        assert!(closure.required_bindings.contains("CATALOG_DB"));
+        assert!(closure.required_bindings.contains("MAILBOX_SECRET_RESOLVER"));
+        assert!(closure.required_bindings.contains("MAILBOX_JOBS"));
+        assert!(closure.required_resources.contains("mailbox_jobs"));
+        assert!(!closure
             .optional_or_disabled_resources
             .contains("mailbox_jobs"));
         Ok(())
