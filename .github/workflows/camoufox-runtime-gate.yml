@@ -55,13 +55,22 @@ jobs:
           python3.12 -m camoufox active | grep -F '152.0.4-beta.28'
 
       - name: Compile AR-10 runtime sources
-        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/test-ar10-real-camoufox.py scripts/check-ar10-runtime-cutover.py
+        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/test-ar10-real-camoufox.py scripts/check-ar10-runtime-cutover.py scripts/python-estate-ar6.py
 
-      - name: Enforce AR-10 runtime cutover policy
-        run: python3.12 scripts/check-ar10-runtime-cutover.py
+      - name: Enforce AR-10 successor-runtime policy
+        run: |
+          python3.12 scripts/python-estate-ar6.py --check
+          python3.12 scripts/check-ar10-runtime-cutover.py
 
       - name: Prove real Camoufox identity and persistent profile behavior
         run: python3.12 scripts/test-ar10-real-camoufox.py
+
+      - name: Prove Profile Bridge -> managed IPC -> real Camoufox chain
+        env:
+          AR10_REAL_CAMOUFOX: "1"
+          AR10_PYTHON: /usr/bin/python3.12
+          AR10_RUNTIME_ROOT: ${{ github.workspace }}/runtime
+        run: cargo test --locked -p profile-bridge --test real_camoufox_runtime -- --nocapture
 
   bridge-regression-windows:
     name: Profile Bridge Windows regression
@@ -79,7 +88,7 @@ jobs:
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
       - name: Compile real Camouhost source without installing browser runtime
-        run: python -m py_compile runtime/camouhost/real.py scripts/check-ar10-runtime-cutover.py
+        run: python -m py_compile runtime/camouhost/real.py scripts/check-ar10-runtime-cutover.py scripts/python-estate-ar6.py
 
       - name: Test and build Profile Bridge
         run: |
