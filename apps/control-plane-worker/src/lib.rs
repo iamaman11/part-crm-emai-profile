@@ -50,8 +50,8 @@ use control_plane_contract::{
 use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 use session_domain::coordinator::coordinator_object_name;
 use worker::{
-    Context, Env, MessageBatch, Method, Request, Response, Result, ScheduleContext, ScheduledEvent,
-    event,
+    Context, Env, MessageBatch, MessageExt, Method, Request, Response, Result, ScheduleContext,
+    ScheduledEvent, event,
 };
 
 #[event(fetch, respond_with_errors)]
