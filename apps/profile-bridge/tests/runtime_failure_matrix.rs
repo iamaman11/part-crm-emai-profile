@@ -246,8 +246,8 @@ fn rollback_failure_is_preserved_as_distinct_error() -> Result<(), Box<dyn std::
         force_error: Some(BridgePortError::Unavailable),
         ..TrackingProcess::default()
     };
-    let mut camouhost = ScriptedCamouhost::new([Ok(CamouhostMessage::Error {
-        code: "protocol".to_owned(),
+    let mut camouhost = ScriptedCamouhost::new([Ok(CamouhostMessage::Hello {
+        version: CAMOUHOST_IPC_VERSION,
     })]);
 
     assert_eq!(
