@@ -181,8 +181,16 @@ def validate_opsctl(root: Path) -> None:
     )
     if "Command::new(" in production or "std::process::Command" in production:
         fail("AR-10 requires zero opsctl child-process spawn authority")
-    if "wrangler" in production.lower() or "npx" in production.lower():
-        fail("opsctl may not acquire provider-executor process authority in AR-10")
+    for marker in (
+        "reqwest::",
+        "ureq::",
+        "std::net::",
+        "TcpStream",
+        "worker::",
+        "cloudflare::",
+    ):
+        if marker in production:
+            fail(f"opsctl acquired forbidden provider/network execution authority: {marker}")
 
 
 def validate_legacy_retirement(root: Path) -> None:
