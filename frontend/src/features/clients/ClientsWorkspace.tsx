@@ -138,7 +138,12 @@ export function ClientsWorkspace({
             client={selectedClient}
             onMutated={refreshSelected}
           />
-          {enabled('mailbox_read') ? <ClientMailPanel clientId={selectedClient.clientId} /> : null}
+          {enabled('mailbox_read') ? (
+            <ClientMailPanel
+              clientId={selectedClient.clientId}
+              outboundMailEnabled={enabled('outbound_mail')}
+            />
+          ) : null}
         </>
       )}
 
