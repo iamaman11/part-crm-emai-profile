@@ -31,7 +31,6 @@ CONFIG_NAME = "camoufox-config.json"
 USER_DATA_NAME = "user_data"
 BRIDGE_LOCK_NAME = ".profile-platform.lock"
 RUNTIME_LOCK_NAME = "runtime-lock.json"
-FIREFOX_LOCK_NAMES = (".parentlock", "lock")
 
 PROFILE_ROOT_ENV = "CAMOUHOST_PROFILE_ROOT"
 RUNTIME_LOCK_ENV = "CAMOUHOST_RUNTIME_LOCK"
@@ -103,7 +102,9 @@ def read_regular_file(path: Path, maximum_bytes: int | None = None) -> bytes:
     return path.read_bytes()
 
 
-def load_canonical_json(path: Path, maximum_bytes: int | None = None) -> tuple[dict[str, Any], bytes]:
+def load_canonical_json(
+    path: Path, maximum_bytes: int | None = None
+) -> tuple[dict[str, Any], bytes]:
     raw = read_regular_file(path, maximum_bytes)
     try:
         value = json.loads(raw.decode("utf-8"))
@@ -320,6 +321,8 @@ def launch_verified_context(
 
     if not valid_sha256(expected_probe_sha256):
         raise RuntimeContractError("profile-stable probe digest is invalid")
+    if firefox_writer_active(root):
+        raise RuntimeContractError("Firefox writer is already active")
     manager = Camoufox(**camoufox_kwargs(lock, root, config))
     try:
         with contextlib.redirect_stdout(sys.stderr):
@@ -341,9 +344,21 @@ def launch_verified_context(
         raise
 
 
-def firefox_writer_locks(root: Path) -> tuple[Path, ...]:
+def firefox_writer_locks(root: Path) -> tuple[Path, Path | None]:
+    """Return the platform's primary Firefox lock and optional legacy marker.
+
+    Firefox uses `parent.lock` on Windows, `.parentlock` plus historical `lock`
+    symlink semantics on Linux/other Unix, and `.parentlock` plus historical
+    `parent.lock` on macOS.  These are markers plus OS-lock carriers; existence
+    alone is never writer liveness.
+    """
     user_data_dir = root / USER_DATA_NAME
-    return tuple(user_data_dir / name for name in FIREFOX_LOCK_NAMES)
+    if os.name == "nt":
+        return user_data_dir / "parent.lock", None
+    if os.name == "posix":
+        legacy = user_data_dir / ("parent.lock" if sys.platform == "darwin" else "lock")
+        return user_data_dir / ".parentlock", legacy
+    raise RuntimeContractError("unsupported Firefox lock-probe platform")
 
 
 def unix_parent_lock_is_active(path: Path) -> bool:
@@ -351,7 +366,7 @@ def unix_parent_lock_is_active(path: Path) -> bool:
     import fcntl
 
     if path.is_symlink():
-        return True
+        raise RuntimeContractError("Firefox primary lock has unsupported symlink shape")
     try:
         descriptor = os.open(path, os.O_RDWR)
     except FileNotFoundError:
@@ -376,7 +391,7 @@ def windows_parent_lock_is_active(path: Path) -> bool:
     from ctypes import wintypes
 
     if path.is_symlink():
-        return True
+        raise RuntimeContractError("Firefox primary lock has unsupported symlink shape")
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     create_file = kernel32.CreateFileW
     create_file.argtypes = [
@@ -422,28 +437,33 @@ def modern_unix_legacy_lock_is_stale(path: Path) -> bool:
 
 
 def firefox_writer_active(root: Path) -> bool:
-    parent_lock, legacy_lock = firefox_writer_locks(root)
-    parent_present = os.path.lexists(parent_lock)
-    legacy_present = os.path.lexists(legacy_lock)
+    """Probe real OS ownership; stale marker files are not writer liveness.
 
-    if parent_present:
+    Ambiguous/unsupported states raise RuntimeContractError and therefore fail closed.
+    No lock artifact is ever removed by Camouhost.
+    """
+    primary_lock, legacy_lock = firefox_writer_locks(root)
+    primary_present = os.path.lexists(primary_lock)
+    legacy_present = legacy_lock is not None and os.path.lexists(legacy_lock)
+
+    if primary_present:
         if os.name == "nt":
-            if windows_parent_lock_is_active(parent_lock):
+            if windows_parent_lock_is_active(primary_lock):
                 return True
         elif os.name == "posix":
-            if unix_parent_lock_is_active(parent_lock):
+            if unix_parent_lock_is_active(primary_lock):
                 return True
         else:
             raise RuntimeContractError("unsupported Firefox lock-probe platform")
     elif legacy_present:
-        # Without the primary lock artifact we cannot prove that a legacy marker is stale.
+        # Without the modern primary lock we cannot prove that an old marker is stale.
         return True
 
-    if not legacy_present:
+    if not legacy_present or legacy_lock is None:
         return False
     if os.name == "posix" and modern_unix_legacy_lock_is_stale(legacy_lock):
-        # Firefox itself treats +PID as obsolete once the primary fcntl lock was obtained.
-        # Do not unlink it here; the next Firefox owner remains responsible for cleanup.
+        # Firefox treats +PID as obsolete after the primary fcntl lock is proven free.
+        # Never unlink it here; Firefox remains responsible for its own lock artifacts.
         return False
     return True
 
@@ -479,6 +499,8 @@ def materialize_candidate_identity(root: Path) -> dict[str, str]:
     if config_path.exists() or config_path.is_symlink() or user_data_dir.is_symlink():
         raise RuntimeContractError("candidate identity already exists or path is unsafe")
     user_data_dir.mkdir(exist_ok=True)
+    if firefox_writer_active(root):
+        raise RuntimeContractError("candidate generation has an active/ambiguous Firefox writer")
 
     browser = lock.get("browser")
     if not isinstance(browser, dict) or not isinstance(browser.get("version"), str):
@@ -527,6 +549,10 @@ def run_ipc() -> int:
         lock, _ = load_runtime_lock()
         verify_python_components(lock)
         root = resolve_profile_root(require_bridge_lock=True)
+        # The child is already Bridge-owned, but browser launch is still forbidden until
+        # the real Firefox OS-lock probe proves the generation quiescent.
+        if firefox_writer_active(root):
+            raise RuntimeContractError("Firefox writer is already active")
         config, _ = load_generation_config(root)
         expected_probe = os.environ.get(EXPECTED_PROBE_SHA256_ENV)
         if not valid_sha256(expected_probe):
