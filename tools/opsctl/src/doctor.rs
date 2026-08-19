@@ -18,8 +18,18 @@ const RETAINED_VALIDATORS: [&str; 2] = [
     "scripts/generate-architecture-inventory.py",
     "scripts/python-estate-ar6.py",
 ];
+const INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT: &str = "{\"mode\":\"native-read-only\"}";
 
 pub(crate) fn run(root: &Path) -> Result<String, OpsctlError> {
+    let native_contract: Value = serde_json::from_str(INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT)
+        .map_err(|error| OpsctlError::new("doctor", format!("native doctor contract invalid: {error}")))?;
+    if native_contract.get("mode").and_then(Value::as_str) != Some("native-read-only") {
+        return Err(OpsctlError::new(
+            "doctor",
+            "native doctor implementation contract is invalid",
+        ));
+    }
+
     for relative in AUTHORITIES.into_iter().chain(RETAINED_VALIDATORS) {
         require_regular_file(root, relative)?;
     }
