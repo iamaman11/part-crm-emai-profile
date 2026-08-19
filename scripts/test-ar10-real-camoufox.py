@@ -16,7 +16,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -28,9 +27,11 @@ SESSION = "session_01JAR10REALCAMOUFOX"
 PAGE = b"""<!doctype html><meta charset='utf-8'><script>
 const hadStorage = localStorage.getItem('ar10-marker') === 'persisted';
 const hadCookie = document.cookie.includes('ar10-marker=persisted');
-fetch('/observed?storage=' + String(hadStorage) + '&cookie=' + String(hadCookie));
 localStorage.setItem('ar10-marker', 'persisted');
 document.cookie = 'ar10-marker=persisted; Path=/; SameSite=Lax';
+const observed = new XMLHttpRequest();
+observed.open('GET', '/observed?storage=' + String(hadStorage) + '&cookie=' + String(hadCookie), false);
+observed.send();
 </script><title>AR-10 local persistence proof</title>"""
 
 
