@@ -4,6 +4,9 @@ use worker::{Env, Error, Result};
 pub const CANONICAL_ENVIRONMENT_VAR: &str = "CANONICAL_ENVIRONMENT";
 pub const CAPABILITY_PROFILE_ID_VAR: &str = "CAPABILITY_PROFILE_ID";
 pub const CAPABILITY_PROFILE_DIGEST_VAR: &str = "CAPABILITY_PROFILE_DIGEST";
+pub const RELEASE_PROFILE_HEADER: &str = "X-Release-Profile";
+pub const RELEASE_PROFILE_DIGEST_HEADER: &str = "X-Release-Profile-Digest";
+pub const EFFECTIVE_CAPABILITIES_HEADER: &str = "X-Effective-Capabilities";
 
 pub const PRODUCTION_CORE_V1_DIGEST: &str =
     "92ccb88e7b74c89e4f39a5349eb5bf0da6a2d6f9ccc4a89d72ab462cb08e0868";
@@ -54,11 +57,26 @@ impl ActivationUnit {
     }
 }
 
+const ALL_ACTIVATION_UNITS: [ActivationUnit; 13] = [
+    ActivationUnit::Foundation,
+    ActivationUnit::Identity,
+    ActivationUnit::Clients,
+    ActivationUnit::BrowserProfiles,
+    ActivationUnit::ProfileRuntime,
+    ActivationUnit::Camoufox,
+    ActivationUnit::Notifications,
+    ActivationUnit::MailboxAdmin,
+    ActivationUnit::MailboxClientBinding,
+    ActivationUnit::MailboxBrowserBinding,
+    ActivationUnit::MailboxRead,
+    ActivationUnit::MailboxJobs,
+    ActivationUnit::OutboundMail,
+];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProfileAuthorization {
     NonProductionCandidate,
     ProductionBlocked,
-    ProductionAuthorized,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,6 +123,17 @@ impl EffectiveCapabilities {
             ActivationUnit::OutboundMail => Self::OUTBOUND_MAIL,
         };
         self.0 & bit != 0
+    }
+
+    #[must_use]
+    pub fn enabled_ids(self) -> String {
+        ALL_ACTIVATION_UNITS
+            .iter()
+            .copied()
+            .filter(|unit| self.enabled(*unit))
+            .map(ActivationUnit::id)
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
 
@@ -224,8 +253,7 @@ pub fn select_profile(
         return Err(ProfileSelectionError::EnvironmentNotAllowed);
     }
 
-    if environment == "production"
-        && profile.authorization != ProfileAuthorization::ProductionAuthorized
+    if environment == "production" && profile.authorization == ProfileAuthorization::ProductionBlocked
     {
         return Err(ProfileSelectionError::ProductionNotAuthorized);
     }
@@ -310,14 +338,16 @@ mod tests {
     }
 
     #[test]
-    fn staging_core_excludes_mail() {
-        let profile = select_profile("staging", "rehearsal-core-v1", REHEARSAL_CORE_V1_DIGEST)
-            .expect("staging core profile must be valid");
+    fn staging_core_excludes_mail() -> Result<(), ProfileSelectionError> {
+        let profile = select_profile("staging", "rehearsal-core-v1", REHEARSAL_CORE_V1_DIGEST)?;
         assert!(profile.capabilities.enabled(ActivationUnit::Clients));
         assert!(profile.capabilities.enabled(ActivationUnit::ProfileRuntime));
+        assert!(profile.capabilities.enabled(ActivationUnit::Camoufox));
         assert!(!profile.capabilities.enabled(ActivationUnit::MailboxAdmin));
         assert!(!profile.capabilities.enabled(ActivationUnit::MailboxJobs));
         assert!(!profile.capabilities.enabled(ActivationUnit::OutboundMail));
+        assert!(profile.capabilities.enabled_ids().contains("browser_profiles"));
+        Ok(())
     }
 
     #[test]
