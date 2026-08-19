@@ -1566,7 +1566,9 @@
     "d1_evolution": "architecture/inventory.json::d1_evolution",
     "d1_evolution_source": "architecture/d1-evolution-ar9.json",
     "runtime_cutover": "architecture/inventory.json::runtime_cutover",
-    "runtime_cutover_source": "architecture/runtime-cutover-ar10.json"
+    "runtime_cutover_source": "architecture/runtime-cutover-ar10.json",
+    "release_architecture": "architecture/inventory.json::release_architecture",
+    "release_architecture_source": "architecture/release-architecture-ar11.json"
   },
   "document_status": [
     {
@@ -2047,6 +2049,788 @@
       "provider_mutation_authority": false
     },
     "legacy_executables_remaining": 0,
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false,
+    "production_mutation": false
+  },
+  "release_architecture": {
+    "schema_version": 1,
+    "role": "CURRENT_AR11_RELEASE_ARCHITECTURE_PROJECTION",
+    "source_authority": "architecture/release-architecture-ar11.json",
+    "source_sha256": "dd888f630f5000efdd2b37a2a83d17994f65dd44b4a43f51d6b9d1fce59198ca",
+    "source_status": "current_candidate",
+    "tracking_issue": 372,
+    "principles": {
+      "release_set_distinct_from_capability_profile": true,
+      "application_owner_distinct_from_activation_unit": true,
+      "source_present_not_equal_production_enabled": true,
+      "backend_security_boundary": true,
+      "frontend_projection_only": true,
+      "build_once_promote_same_bits": true,
+      "opsctl_provider_client": false,
+      "opsctl_provider_mutation": false,
+      "unknown_state_fails_closed": true
+    },
+    "activation_units": [
+      {
+        "activation_unit": "foundation",
+        "architecture_owner": "foundation",
+        "application_owner": "control-plane composition / identity session foundations",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [],
+        "incompatible_with": [],
+        "activation_gate": "FOUNDATION",
+        "requires_windows_profile_bridge": false
+      },
+      {
+        "activation_unit": "identity",
+        "architecture_owner": "identity",
+        "application_owner": "crates/use-cases-identity",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "foundation"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-1",
+        "requires_windows_profile_bridge": false
+      },
+      {
+        "activation_unit": "clients",
+        "architecture_owner": "clients",
+        "application_owner": "crates/use-cases-clients",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "foundation",
+          "identity"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-1",
+        "requires_windows_profile_bridge": false
+      },
+      {
+        "activation_unit": "browser_profiles",
+        "architecture_owner": "profiles",
+        "application_owner": "crates/use-cases::profiles + crates/use-cases::generations",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "foundation",
+          "identity",
+          "clients"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-1",
+        "requires_windows_profile_bridge": false
+      },
+      {
+        "activation_unit": "profile_runtime",
+        "architecture_owner": "devices",
+        "application_owner": "crates/use-cases-devices + apps/profile-bridge",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "foundation",
+          "identity",
+          "browser_profiles"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-1",
+        "requires_windows_profile_bridge": true,
+        "windows_compatibility": {
+          "delivery_gate": "AR-15",
+          "status": "UNSATISFIED",
+          "required_evidence": [
+            "signed_windows_artifact",
+            "updater_protocol",
+            "runtime_bundle",
+            "profile_format",
+            "production_equivalent_rehearsal"
+          ]
+        }
+      },
+      {
+        "activation_unit": "camoufox",
+        "architecture_owner": "profile_runtime",
+        "application_owner": "native Profile Bridge -> Camouhost -> pinned Camoufox runtime",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "profile_runtime"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-1",
+        "requires_windows_profile_bridge": true,
+        "windows_compatibility": {
+          "delivery_gate": "AR-15",
+          "status": "UNSATISFIED"
+        }
+      },
+      {
+        "activation_unit": "notifications",
+        "architecture_owner": "notifications",
+        "application_owner": "crates/use-cases-notifications",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "foundation",
+          "identity"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-1_FOUNDATION",
+        "requires_windows_profile_bridge": false
+      },
+      {
+        "activation_unit": "mailbox_admin",
+        "architecture_owner": "mailboxes",
+        "application_owner": "crates/use-cases-mailboxes",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "foundation",
+          "identity"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-2",
+        "requires_windows_profile_bridge": false
+      },
+      {
+        "activation_unit": "mailbox_client_binding",
+        "architecture_owner": "mailboxes",
+        "application_owner": "crates/use-cases-mailboxes",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "mailbox_admin",
+          "clients"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-2",
+        "requires_windows_profile_bridge": false
+      },
+      {
+        "activation_unit": "mailbox_browser_binding",
+        "architecture_owner": "mailboxes",
+        "application_owner": "crates/use-cases-mailboxes + crates/use-cases-devices",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "mailbox_admin",
+          "browser_profiles",
+          "profile_runtime"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-2",
+        "requires_windows_profile_bridge": true
+      },
+      {
+        "activation_unit": "mailbox_read",
+        "architecture_owner": "client_mail",
+        "application_owner": "crates/use-cases-query",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "mailbox_admin",
+          "clients"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-2",
+        "requires_windows_profile_bridge": false
+      },
+      {
+        "activation_unit": "mailbox_jobs",
+        "architecture_owner": "mailboxes",
+        "application_owner": "crates/use-cases-mailboxes::mailbox_jobs + scheduled",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "mailbox_admin"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-3",
+        "requires_windows_profile_bridge": false
+      },
+      {
+        "activation_unit": "outbound_mail",
+        "architecture_owner": "client_mail",
+        "application_owner": "crates/use-cases-mailboxes::outbound_mail",
+        "source_present": true,
+        "accepted": true,
+        "dependencies": [
+          "mailbox_admin",
+          "mailbox_client_binding",
+          "clients"
+        ],
+        "incompatible_with": [],
+        "activation_gate": "PC-4",
+        "requires_windows_profile_bridge": false
+      }
+    ],
+    "release_profiles": [
+      {
+        "profile_id": "production-core-v1",
+        "profile_version": 1,
+        "allowed_environments": [
+          "production"
+        ],
+        "enabled_activation_units": [
+          "foundation",
+          "identity",
+          "clients",
+          "browser_profiles",
+          "profile_runtime",
+          "camoufox",
+          "notifications"
+        ],
+        "disabled_activation_units": [
+          "mailbox_admin",
+          "mailbox_client_binding",
+          "mailbox_browser_binding",
+          "mailbox_read",
+          "mailbox_jobs",
+          "outbound_mail"
+        ],
+        "activation_gate": "PC-1_AFTER_AR17",
+        "current_authorization": "BLOCKED",
+        "blockers": [
+          "AR-11_CURRENT",
+          "AR-15_UNSATISFIED",
+          "AR-17_NOT_ACCEPTED"
+        ]
+      },
+      {
+        "profile_id": "rehearsal-core-v1",
+        "profile_version": 1,
+        "allowed_environments": [
+          "rehearsal",
+          "staging"
+        ],
+        "enabled_activation_units": [
+          "foundation",
+          "identity",
+          "clients",
+          "browser_profiles",
+          "profile_runtime",
+          "camoufox",
+          "notifications"
+        ],
+        "disabled_activation_units": [
+          "mailbox_admin",
+          "mailbox_client_binding",
+          "mailbox_browser_binding",
+          "mailbox_read",
+          "mailbox_jobs",
+          "outbound_mail"
+        ],
+        "activation_gate": "AR-12_OR_LATER_REHEARSAL",
+        "current_authorization": "SOURCE_DEFINED_NOT_ACTIVATED",
+        "blockers": [
+          "AR-11_NOT_ACCEPTED"
+        ]
+      },
+      {
+        "profile_id": "production-mailbox-admin-v1",
+        "profile_version": 1,
+        "allowed_environments": [
+          "production"
+        ],
+        "extends": "production-core-v1",
+        "enabled_activation_units": [
+          "mailbox_admin",
+          "mailbox_client_binding",
+          "mailbox_browser_binding",
+          "mailbox_read"
+        ],
+        "disabled_activation_units": [
+          "mailbox_jobs",
+          "outbound_mail"
+        ],
+        "activation_gate": "PC-2",
+        "current_authorization": "BLOCKED"
+      },
+      {
+        "profile_id": "production-mailbox-jobs-v1",
+        "profile_version": 1,
+        "allowed_environments": [
+          "production"
+        ],
+        "extends": "production-mailbox-admin-v1",
+        "enabled_activation_units": [
+          "mailbox_jobs"
+        ],
+        "disabled_activation_units": [
+          "outbound_mail"
+        ],
+        "activation_gate": "PC-3",
+        "current_authorization": "BLOCKED"
+      },
+      {
+        "profile_id": "production-outbound-mail-v1",
+        "profile_version": 1,
+        "allowed_environments": [
+          "production"
+        ],
+        "extends": "production-mailbox-jobs-v1",
+        "enabled_activation_units": [
+          "outbound_mail"
+        ],
+        "disabled_activation_units": [],
+        "activation_gate": "PC-4",
+        "current_authorization": "BLOCKED"
+      }
+    ],
+    "execution_surfaces": [
+      {
+        "surface_id": "http.health",
+        "kind": "HTTP",
+        "selector": [
+          "HealthApi"
+        ],
+        "activation_unit": "foundation",
+        "enforcement_point": "control_plane.fetch.pre_dispatch",
+        "disabled_behavior": "UNAVAILABLE"
+      },
+      {
+        "surface_id": "http.bindings",
+        "kind": "HTTP",
+        "selector": [
+          "BindingProbeApi"
+        ],
+        "activation_unit": "foundation",
+        "enforcement_point": "control_plane.binding_probe.profile_aware",
+        "disabled_behavior": "FAIL_READINESS"
+      },
+      {
+        "surface_id": "http.session",
+        "kind": "HTTP",
+        "selector": [
+          "AuthenticatedSessionApi"
+        ],
+        "activation_unit": "foundation",
+        "enforcement_point": "control_plane.fetch.pre_dispatch",
+        "disabled_behavior": "REJECT"
+      },
+      {
+        "surface_id": "http.identity",
+        "kind": "HTTP",
+        "selector": [
+          "OwnerBootstrapApi",
+          "OwnerTransferApi",
+          "InvitationCollectionApi",
+          "InvitationAcceptApi",
+          "MembershipCollectionApi",
+          "MembershipStatusApi"
+        ],
+        "activation_unit": "identity",
+        "enforcement_point": "control_plane.fetch.pre_dispatch",
+        "disabled_behavior": "REJECT_BEFORE_SIDE_EFFECT"
+      },
+      {
+        "surface_id": "http.clients",
+        "kind": "HTTP",
+        "selector": [
+          "ClientCollectionApi",
+          "ClientResourceApi",
+          "ClientArchiveApi",
+          "ClientContactApi",
+          "ClientMergeApi",
+          "ClientHistoryApi",
+          "ClientGrantApi"
+        ],
+        "activation_unit": "clients",
+        "enforcement_point": "control_plane.fetch.pre_dispatch",
+        "disabled_behavior": "REJECT_BEFORE_SIDE_EFFECT"
+      },
+      {
+        "surface_id": "http.client_mail_read",
+        "kind": "HTTP",
+        "selector": [
+          "ClientMailSearchApi",
+          "ClientMailMessageApi"
+        ],
+        "activation_unit": "mailbox_read",
+        "enforcement_point": "control_plane.fetch.pre_dispatch",
+        "disabled_behavior": "REJECT_BEFORE_PROVIDER_ACCESS"
+      },
+      {
+        "surface_id": "http.outbound_mail",
+        "kind": "HTTP",
+        "selector": [
+          "ClientMailSendApi"
+        ],
+        "activation_unit": "outbound_mail",
+        "enforcement_point": "control_plane.fetch.pre_dispatch",
+        "disabled_behavior": "REJECT_BEFORE_INTENT_OR_PROVIDER_SIDE_EFFECT"
+      },
+      {
+        "surface_id": "http.browser_profiles",
+        "kind": "HTTP",
+        "selector": [
+          "ProfileCollectionApi",
+          "ProfileResourceApi",
+          "ProfileAssignmentApi",
+          "ProfileGrantApi",
+          "ProfileCoordinatorApi",
+          "ProfileGenerationCollectionApi",
+          "ProfileGenerationResourceApi",
+          "ProfileGenerationVerifyApi",
+          "ProfileGenerationActivateApi",
+          "ProfileGenerationDeactivateApi",
+          "ProfileGenerationQuarantineApi"
+        ],
+        "activation_unit": "browser_profiles",
+        "enforcement_point": "control_plane.fetch.pre_dispatch",
+        "disabled_behavior": "REJECT_BEFORE_SIDE_EFFECT"
+      },
+      {
+        "surface_id": "http.mailbox_admin",
+        "kind": "HTTP",
+        "selector": [
+          "MailboxBindingCollectionApi",
+          "MailboxBindingResourceApi:default",
+          "MailboxBindingResourceApi:standards_onboarding",
+          "MailboxBindingResourceApi:gmail_oauth",
+          "MailboxBindingResourceApi:microsoft_graph_oauth",
+          "MailboxBindingRevokeApi"
+        ],
+        "activation_unit": "mailbox_admin",
+        "enforcement_point": "control_plane.fetch.path_sensitive_pre_dispatch",
+        "disabled_behavior": "REJECT_BEFORE_SIDE_EFFECT"
+      },
+      {
+        "surface_id": "http.mailbox_client_binding",
+        "kind": "HTTP",
+        "selector": [
+          "MailboxBindingResourceApi:client_association"
+        ],
+        "activation_unit": "mailbox_client_binding",
+        "enforcement_point": "control_plane.fetch.path_sensitive_pre_dispatch",
+        "disabled_behavior": "REJECT_BEFORE_SIDE_EFFECT"
+      },
+      {
+        "surface_id": "http.mailbox_browser_binding",
+        "kind": "HTTP",
+        "selector": [
+          "MailboxBrowserExecutionBindApi"
+        ],
+        "activation_unit": "mailbox_browser_binding",
+        "enforcement_point": "control_plane.fetch.pre_dispatch",
+        "disabled_behavior": "REJECT_BEFORE_SIDE_EFFECT"
+      },
+      {
+        "surface_id": "http.mailbox_jobs",
+        "kind": "HTTP",
+        "selector": [
+          "MailboxJobCollectionApi",
+          "MailboxJobResourceApi",
+          "MailboxJobRunApi"
+        ],
+        "activation_unit": "mailbox_jobs",
+        "enforcement_point": "control_plane.fetch.pre_dispatch",
+        "disabled_behavior": "REJECT_BEFORE_ENQUEUE_OR_MUTATION"
+      },
+      {
+        "surface_id": "http.profile_runtime_device_jobs",
+        "kind": "HTTP",
+        "selector": [
+          "DeviceJobClaimableApi",
+          "DeviceJobClaimApi",
+          "DeviceJobHeartbeatApi",
+          "DeviceGenerationUploadCapabilityApi",
+          "DeviceGenerationCommitApi",
+          "DeviceJobOutcomeApi"
+        ],
+        "activation_unit": "profile_runtime",
+        "enforcement_point": "control_plane.fetch.pre_dispatch",
+        "disabled_behavior": "REJECT_BEFORE_DEVICE_JOB_TRANSITION"
+      },
+      {
+        "surface_id": "http.notifications",
+        "kind": "HTTP",
+        "selector": [
+          "NotificationEventCollectionApi",
+          "NotificationEventAckApi",
+          "NotificationReplayCollectionApi",
+          "NotificationOperationsApi"
+        ],
+        "activation_unit": "notifications",
+        "enforcement_point": "control_plane.fetch.pre_dispatch",
+        "disabled_behavior": "REJECT_BEFORE_SIDE_EFFECT"
+      },
+      {
+        "surface_id": "queue.integration_events.consumer",
+        "kind": "QUEUE_CONSUMER",
+        "selector": [
+          "ControlPlaneQueueMessage::IntegrationEvent"
+        ],
+        "activation_unit": "notifications",
+        "enforcement_point": "control_plane_queue.before_consume",
+        "disabled_behavior": "NO_SIDE_EFFECT_AND_RETRY_OR_ACK_POLICY"
+      },
+      {
+        "surface_id": "queue.mailbox_jobs.consumer",
+        "kind": "QUEUE_CONSUMER",
+        "selector": [
+          "ControlPlaneQueueMessage::MailboxJob"
+        ],
+        "activation_unit": "mailbox_jobs",
+        "enforcement_point": "control_plane_queue.before_consume",
+        "disabled_behavior": "NO_PROVIDER_SIDE_EFFECT"
+      },
+      {
+        "surface_id": "schedule.integration_events.dispatcher",
+        "kind": "SCHEDULED",
+        "selector": [
+          "integration_events::dispatch_pending"
+        ],
+        "activation_unit": "notifications",
+        "enforcement_point": "control_plane_schedule.before_dispatch",
+        "disabled_behavior": "NO_OP"
+      },
+      {
+        "surface_id": "schedule.mailbox_jobs.dispatcher",
+        "kind": "SCHEDULED",
+        "selector": [
+          "mailbox_scheduling::dispatch_pending"
+        ],
+        "activation_unit": "mailbox_jobs",
+        "enforcement_point": "control_plane_schedule.before_dispatch",
+        "disabled_behavior": "NO_OP"
+      },
+      {
+        "surface_id": "service.mailbox_secret_resolver.ingress",
+        "kind": "SERVICE_BINDING_INGRESS",
+        "selector": [
+          "mailbox-secret-resolver fetch"
+        ],
+        "activation_unit": "mailbox_admin",
+        "enforcement_point": "resolver.fetch.capability_context",
+        "disabled_behavior": "REJECT_BEFORE_SECRET_OR_PROVIDER_SIDE_EFFECT"
+      },
+      {
+        "surface_id": "schedule.mailbox_secret_resolver.reconciliation",
+        "kind": "SCHEDULED",
+        "selector": [
+          "reconcile_encryption_keys"
+        ],
+        "activation_unit": "mailbox_admin",
+        "enforcement_point": "resolver.schedule.capability_context",
+        "disabled_behavior": "NO_OP"
+      },
+      {
+        "surface_id": "bridge.profile_runtime.commands",
+        "kind": "DEVICE_BRIDGE_COMMAND",
+        "selector": [
+          "profile runtime/device command family"
+        ],
+        "activation_unit": "profile_runtime",
+        "enforcement_point": "bridge command admission",
+        "disabled_behavior": "REJECT_BEFORE_RUNTIME_LAUNCH"
+      },
+      {
+        "surface_id": "bridge.camoufox.launch",
+        "kind": "DEVICE_RUNTIME",
+        "selector": [
+          "native Profile Bridge -> Camouhost -> Camoufox"
+        ],
+        "activation_unit": "camoufox",
+        "enforcement_point": "bridge runtime preflight",
+        "disabled_behavior": "REJECT_BEFORE_CAMOUFOX_LAUNCH"
+      },
+      {
+        "surface_id": "frontend.navigation_actions",
+        "kind": "FRONTEND",
+        "selector": [
+          "router",
+          "navigation",
+          "actions",
+          "deep-links"
+        ],
+        "activation_unit": "PROFILE_PROJECTED",
+        "enforcement_point": "frontend effective capability projection",
+        "disabled_behavior": "HIDDEN_OR_UNAVAILABLE"
+      }
+    ],
+    "deployment_closures": [
+      {
+        "closure_id": "production-core-v1",
+        "profile_id": "production-core-v1",
+        "required_components": [
+          "control_plane",
+          "frontend",
+          "runtime_bundle",
+          "profile_bridge"
+        ],
+        "required_resources": [
+          "control_plane_worker",
+          "catalog_d1",
+          "profile_objects",
+          "profile_coordinator",
+          "notification_hub",
+          "integration_events",
+          "control_plane_schedule"
+        ],
+        "required_bindings": [
+          "ASSETS",
+          "CATALOG_DB",
+          "PROFILE_OBJECTS",
+          "PROFILE_COORDINATOR",
+          "NOTIFICATION_HUB",
+          "INTEGRATION_EVENTS"
+        ],
+        "required_credentials": [
+          "CLIENT_CONTACT_PROTECTION_KEYRING",
+          "R2_GENERATION_ACCESS_KEY_ID",
+          "R2_GENERATION_SECRET_ACCESS_KEY",
+          "ACCESS_ISSUER",
+          "ACCESS_AUDIENCE"
+        ],
+        "optional_or_disabled_resources": [
+          "mailbox_jobs",
+          "mailbox_jobs_dlq",
+          "mailbox_secret_resolver_worker",
+          "resolver_d1",
+          "resolver_reconciliation_schedule",
+          "mailbox_secret_resolver_service"
+        ],
+        "binding_probe_scope": "REQUIRED_CLOSURE_ONLY"
+      },
+      {
+        "closure_id": "production-mailbox-admin-v1",
+        "profile_id": "production-mailbox-admin-v1",
+        "extends": "production-core-v1",
+        "required_components": [
+          "secret_resolver"
+        ],
+        "required_resources": [
+          "mailbox_secret_resolver_worker",
+          "resolver_d1",
+          "resolver_reconciliation_schedule",
+          "mailbox_secret_resolver_service"
+        ],
+        "required_bindings": [
+          "MAILBOX_SECRET_RESOLVER"
+        ],
+        "required_credentials": [
+          "MAILBOX_RESOLVER_CALLER_AUTH_KEY"
+        ],
+        "binding_probe_scope": "REQUIRED_CLOSURE_ONLY"
+      },
+      {
+        "closure_id": "production-mailbox-jobs-v1",
+        "profile_id": "production-mailbox-jobs-v1",
+        "extends": "production-mailbox-admin-v1",
+        "required_resources": [
+          "mailbox_jobs",
+          "mailbox_jobs_dlq"
+        ],
+        "required_bindings": [
+          "MAILBOX_JOBS"
+        ],
+        "required_credentials": [],
+        "binding_probe_scope": "REQUIRED_CLOSURE_ONLY"
+      }
+    ],
+    "component_release_owners": [
+      {
+        "component_id": "control_plane",
+        "owner": "apps/control-plane-worker + frontend",
+        "existing_release_builder": "control-plane release builder",
+        "build_once": true
+      },
+      {
+        "component_id": "secret_resolver",
+        "owner": "apps/mailbox-secret-resolver-worker",
+        "existing_release_builder": "resolver release builder",
+        "build_once": true
+      },
+      {
+        "component_id": "runtime_bundle",
+        "owner": "runtime bundle authority",
+        "build_once": true
+      },
+      {
+        "component_id": "profile_bridge",
+        "owner": "apps/profile-bridge",
+        "delivery_gate": "AR-15",
+        "build_once": true
+      }
+    ],
+    "promotion_policy": {
+      "build_once": true,
+      "promotion_rebuild": false,
+      "environment_overlay_may_change_application_bits": false,
+      "opsctl_network": false,
+      "opsctl_credentials": false,
+      "opsctl_provider_mutation": false,
+      "production_execution_before_ar17": false,
+      "production_first_rollout_owner": "PC-1",
+      "unknown_compatibility": "BLOCK",
+      "same_environment_concurrency": "SERIALIZED",
+      "stale_plan_protection": "EXPECTED_CURRENT_FENCE"
+    },
+    "compatibility_dimensions": [
+      "public_api_contract_digest",
+      "frontend_api_contract_digest",
+      "catalog_d1_min_max_target",
+      "resolver_d1_min_max_target",
+      "bridge_protocol_version",
+      "camouhost_ipc_version",
+      "runtime_bundle_version",
+      "profile_generation_format",
+      "browser_identity_policy",
+      "resolver_service_protocol",
+      "windows_profile_bridge_delivery"
+    ],
+    "artifact_authority": {
+      "canonical_durable_publication": "GITHUB_RELEASE_ASSETS",
+      "actions_artifacts_role": "CI_TRANSPORT_AND_EVIDENCE",
+      "content_addressed_release_set_id": true,
+      "overwrite_existing_release_id": false,
+      "same_id_republish_policy": "VERIFY_BYTE_EQUALITY_OR_FATAL"
+    },
+    "effective_state_model": {
+      "production_enabled_is_derived": true,
+      "inputs": [
+        "environment",
+        "selected_profile_id",
+        "selected_profile_digest",
+        "accepted_activation_gates",
+        "release_set_compatibility",
+        "observed_resource_closure"
+      ],
+      "forbidden_second_authority": [
+        "per-capability mutable environment feature flags",
+        "frontend-only feature flags",
+        "independent dashboard toggles"
+      ]
+    },
+    "release_set": {
+      "schema_version": 1,
+      "id_scheme": "release-set-v1-sha256-SHA256(canonical_identity_payload)",
+      "source_must_be_accepted_main": true,
+      "required_identity_sections": [
+        "source",
+        "components",
+        "contracts",
+        "protocols",
+        "schemas",
+        "runtime_compatibility",
+        "capability_profile_compatibility",
+        "build_provenance",
+        "artifact_inventory"
+      ],
+      "dependency_graph": "ACYCLIC_REQUIRED",
+      "compatibility_result_domain": [
+        "COMPATIBLE",
+        "INCOMPATIBLE",
+        "UNKNOWN"
+      ],
+      "unknown_result": "FAIL_CLOSED"
+    },
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
     "production_ready": false,

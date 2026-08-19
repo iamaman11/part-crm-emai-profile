@@ -188,13 +188,13 @@ impl ReleaseArchitecture {
 
     fn validate_profiles(&self) -> Result<(), ReleaseAuthorityError> {
         for profile in self.profiles.values() {
-            if let Some(parent) = profile.extends.as_deref() {
-                if parent == profile.id || !self.profiles.contains_key(parent) {
-                    return Err(ReleaseAuthorityError::new(format!(
-                        "invalid profile inheritance for {}",
-                        profile.id
-                    )));
-                }
+            if let Some(parent) = profile.extends.as_deref()
+                && (parent == profile.id || !self.profiles.contains_key(parent))
+            {
+                return Err(ReleaseAuthorityError::new(format!(
+                    "invalid profile inheritance for {}",
+                    profile.id
+                )));
             }
             for unit in profile
                 .enabled_activation_units
