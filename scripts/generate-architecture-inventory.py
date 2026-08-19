@@ -68,6 +68,7 @@ def completion_delivery_map() -> dict[str, object]:
         "source_present_not_equal_production_enabled": True,
         "full_ar8_accepted": True,
         "ar9_accepted": True,
+        "ar9_blocked": False,
         "ar10_blocked": False,
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
