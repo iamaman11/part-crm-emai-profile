@@ -4,11 +4,12 @@ use opsctl::promotion::preflight::{PreflightRequest, evaluate as preflight};
 use opsctl::promotion::snapshot::DeploymentSnapshot;
 use opsctl::release::compatibility::CompatibilityEvidence;
 use opsctl::release::digest::{canonical_json, sha256_hex};
+use opsctl::release::input_topology::ReleaseInputTopology;
 use opsctl::release::model::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
 const GIT_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -30,21 +31,22 @@ fn accepted_main_evidence() -> Result<String, String> {
     Ok(sha256_hex(canonical_json(&identity)?.as_bytes()))
 }
 
-fn source_file_identity(root: &Path, relative: &str) -> Result<Value, Box<dyn std::error::Error>> {
-    let bytes = fs::read(root.join(relative))?;
-    Ok(json!({
-        "path": relative,
-        "sha256": sha256_hex(&bytes),
-        "size_bytes": bytes.len() as u64,
-    }))
-}
-
 fn static_compatibility_fields() -> Result<(Value, Value, Value), Box<dyn std::error::Error>> {
     let root = repo_root();
-    let mut contract_files = vec![
-        source_file_identity(&root, "openapi/v1/control-plane.yaml")?,
-        source_file_identity(&root, "contracts/generated/control-plane.openapi.json")?,
-    ];
+    let topology = ReleaseInputTopology::load(&root)?;
+    let resolved = topology.resolve(&root)?;
+
+    let mut contract_files = resolved
+        .iter()
+        .filter(|input| input.input.consumed_by("release_set.contracts"))
+        .map(|input| {
+            json!({
+                "path": input.input.release_identity_source,
+                "sha256": input.sha256,
+                "size_bytes": input.size_bytes,
+            })
+        })
+        .collect::<Vec<_>>();
     contract_files.sort_by(|left, right| {
         left["path"]
             .as_str()
@@ -52,21 +54,25 @@ fn static_compatibility_fields() -> Result<(Value, Value, Value), Box<dyn std::e
             .cmp(right["path"].as_str().unwrap_or_default())
     });
     let contract_identity = Value::Array(contract_files.clone());
+    let contract_sha = sha256_hex(canonical_json(&contract_identity)?.as_bytes());
     let contracts = json!({
         "files": contract_files,
-        "sha256": sha256_hex(canonical_json(&contract_identity)?.as_bytes()),
+        "sha256": contract_sha,
     });
 
-    let control_contract = fs::read(root.join("crates/control-plane-contract/src/lib.rs"))?;
-    let runtime_lock_bytes = fs::read(root.join("runtime/camouhost/runtime-lock.json"))?;
+    let runtime_input = resolved
+        .iter()
+        .find(|input| input.input.input_id == "camouhost_runtime_lock")
+        .ok_or("canonical runtime lock input is missing")?;
+    let runtime_lock_bytes = fs::read(&runtime_input.absolute_path)?;
     let runtime_lock: Value = serde_json::from_slice(&runtime_lock_bytes)?;
     let protocols = json!({
-        "control_plane_contract_sha256": sha256_hex(&control_contract),
+        "public_api_contract_sha256": contract_sha,
         "camouhost_ipc_version": runtime_lock["camouhost_ipc_version"],
         "resolver_protocol": "mailbox-secret-resolver-v1",
     });
     let runtime_compatibility = json!({
-        "runtime_lock_sha256": sha256_hex(&runtime_lock_bytes),
+        "runtime_lock_sha256": runtime_input.sha256,
         "runtime_role": runtime_lock["runtime_role"],
         "profile_format": runtime_lock["fingerprint_config_schema"],
         "browser_identity_policy": runtime_lock["fingerprint_policy_version"],
