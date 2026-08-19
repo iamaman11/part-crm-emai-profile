@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "kind": "AR10_FINAL_ACCEPTANCE",
+  "accepted_program_checkpoint": "AR-10",
+  "tracking_issue": 368,
+  "implementation_pr": 371,
+  "implementation_exact_green_head": "c7f8ac9704433d3e52d3b79f985c9ac60aa068db",
+  "implementation_merge": "7ab5edf583f541d08ff732624af25881d430d427",
+  "implementation_main_reread": "7ab5edf583f541d08ff732624af25881d430d427",
+  "applicable_permanent_workflows": "16/16",
+  "failed_workflows": 0,
+  "pending_workflows": 0,
+  "workflow_runs": {
+    "github_governance_gate": 32268407848,
+    "external_evidence_gate": 32268407912,
+    "resolver_d1_first_bootstrap": 32268407872,
+    "external_readiness_gate": 32268407864,
+    "external_review_attestation_gate": 32268407753,
+    "camoufox_runtime_gate": 32268407924,
+    "certification_gate": 32268407966,
+    "runtime_bundle_gate": 32268407846,
+    "encrypted_generation_gate": 32268407775,
+    "frontend_gate": 32268407909,
+    "d1_evolution_gate": 32268408048,
+    "local_profile_gate": 32268407878,
+    "profile_generation_gate": 32268407918,
+    "cross_component_acceptance_gate": 32268407911,
+    "repository_quality_audit_gate": 32268407745,
+    "quality_gate": 32268407917
+  },
+  "camoufox_runtime_jobs": {
+    "real_camoufox_cold_launch_proof": "success",
+    "profile_bridge_windows_regression": "success"
+  },
+  "hosted_main_protection": {
+    "required_status_contexts": 23,
+    "accepted_ar7_required_contexts_preserved": true,
+    "ar10_required_contexts": [
+      "Real Camoufox cold-launch proof",
+      "Profile Bridge Windows regression"
+    ]
+  },
+  "behind_by": 0,
+  "blocking_reviews": 0,
+  "unresolved_review_threads": 0,
+  "guarded_merge": {
+    "method": "squash",
+    "expected_head_sha": "c7f8ac9704433d3e52d3b79f985c9ac60aa068db",
+    "result": "success"
+  },
+  "real_runtime_acceptance": {
+    "real_camoufox_cold_launch": true,
+    "persistent_cookie_and_localstorage": true,
+    "cross_generation_storage_isolation": true,
+    "generation_stable_fingerprint_identity": true,
+    "runtime_and_identity_mismatch_fail_closed": true,
+    "profile_bridge_managed_ipc_to_real_camoufox": true,
+    "firefox_writer_lock_failure_matrix": true,
+    "managed_process_failure_matrix": true,
+    "malformed_oversized_replayed_ipc_fail_closed": true,
+    "legacy_direct_executables_remaining": 0,
+    "opsctl_production_child_process_spawn_sites": 0
+  },
+  "architecture_complete": false,
+  "production_core_gate": "BLOCKED",
+  "production_ready": false,
+  "production_authorized": false,
+  "production_enabled": false,
+  "production_mutation": false,
+  "next_slice": "AR-11",
+  "next_slice_issue": 372,
+  "next_slice_after_ar11_acceptance": "AR-12"
+}
