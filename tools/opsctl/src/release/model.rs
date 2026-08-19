@@ -583,23 +583,31 @@ mod tests {
     use crate::release::digest::{canonical_json, sha256_hex};
     use serde_json::{Value, json};
 
+    const REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
     const GIT_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const ACCEPTED_MAIN_EVIDENCE: &str =
-        "7cb074c3b292300031c603af77c7d92af9603d3144eacdb8034065bbe4fbfcb4";
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const SHA_C: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
-    fn fixture() -> Value {
-        json!({
+    fn accepted_main_evidence() -> Result<String, String> {
+        let identity = json!({
+            "authority": "accepted-main",
+            "commit_sha": GIT_SHA,
+            "repository": REPOSITORY,
+        });
+        Ok(sha256_hex(canonical_json(&identity)?.as_bytes()))
+    }
+
+    fn fixture() -> Result<Value, String> {
+        Ok(json!({
           "schema_version": 1,
           "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{SHA_A}"),
           "display_version": "test",
           "source": {
-            "repository": "iamaman11/part-crm-emai-profile",
+            "repository": REPOSITORY,
             "commit_sha": GIT_SHA,
             "accepted_main": true,
-            "accepted_main_evidence_sha256": ACCEPTED_MAIN_EVIDENCE
+            "accepted_main_evidence_sha256": accepted_main_evidence()?
           },
           "components": {
             "control_plane": component("control-plane-v1", "components/control-plane.tar", SHA_A, 10),
@@ -617,7 +625,7 @@ mod tests {
             {"path": "components/resolver.tar", "sha256": SHA_B, "size_bytes": 11, "kind": "component"},
             {"path": "components/runtime.tar", "sha256": SHA_C, "size_bytes": 12, "kind": "component"}
           ]
-        })
+        }))
     }
 
     fn component(release_id: &str, path: &str, digest: &str, size: u64) -> Value {
@@ -632,14 +640,14 @@ mod tests {
     }
 
     fn signed_fixture() -> Result<String, String> {
-        let mut value = fixture();
+        let mut value = fixture()?;
         let object = value
             .as_object_mut()
             .ok_or_else(|| "fixture root must be object".to_owned())?;
         object.remove("release_set_id");
         object.remove("display_version");
         let digest = sha256_hex(canonical_json(&value)?.as_bytes());
-        let mut complete = fixture();
+        let mut complete = fixture()?;
         complete["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{digest}"));
         serde_json::to_string(&complete).map_err(|error| error.to_string())
     }
