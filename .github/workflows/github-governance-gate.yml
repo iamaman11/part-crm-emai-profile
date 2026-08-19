@@ -48,6 +48,22 @@ jobs:
           node .github/scripts/architecture-acceptance.mjs contract
           node .github/scripts/architecture-acceptance.mjs derive | python -m json.tool
 
+      - name: Validate architecture-slice premerge identity
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          node .github/scripts/architecture-acceptance.mjs premerge
+          --title "$PR_TITLE"
+          --head-ref "$PR_HEAD_REF"
+          --base-ref "$PR_BASE_REF"
+          --base "$PR_BASE_SHA"
+          --head "$PR_HEAD_SHA"
+
       - name: Prove architecture acceptance drift fails closed
         run: node .github/scripts/architecture-acceptance.mjs self-test
 
