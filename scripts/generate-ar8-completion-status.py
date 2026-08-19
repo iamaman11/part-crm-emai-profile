@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Deterministically project accepted AR-10 and current AR-11 into canonical status authorities."""
+"""Validate tracked lifecycle compatibility projections without owning live AR state.
+
+This path is intentionally retained because permanent checks and developer tooling already call it.
+It is no longer a source-writing architecture lifecycle generator.
+
+Live accepted/current architecture state is owned exclusively by the generic Git acceptance
+machinery (`.github/scripts/architecture-acceptance.mjs`) plus the static program sequence and
+acceptance policy. The tracked status/transition files are compatibility projections: this checker
+validates their immutable historical provenance and fail-closed production boundaries, but it MUST
+NOT compare their snapshot `accepted_slices`/`current_slice` fields with live Git-derived state.
+That rule is what allows a future accepted AR tag to advance lifecycle state without a second source
+commit.
+"""
 
 from __future__ import annotations
 
@@ -8,346 +20,249 @@ import copy
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE_STATUS = ROOT / "history/status-ar8c-before-ar8-completion.json"
-BASE_TRANSITION = ROOT / "history/architecture-rebaseline-v3-transition-before-ar8-completion.json"
+POLICY = ROOT / "architecture/architecture-acceptance-policy.json"
+SEQUENCE = ROOT / "architecture/architecture-program-sequence.json"
 STATUS = ROOT / "docs/status.json"
 TRANSITION = ROOT / "architecture/architecture-rebaseline-v3-transition.json"
-AR8_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-18-ar8-final-acceptance.json"
-AR8_EXACT_GREEN_HEAD = "81d1f0c26ff0bd3a688c2d5dc000b93640479e47"
-AR8_IMPLEMENTATION_MERGE = "874666f6ef6eb003425c9677d558378d6dc0daaf"
-AR9_ISSUE = 366
-AR9_PR = 367
-AR9_EXACT_GREEN_HEAD = "6110a32ade85d08c6ad93d9064190fff768e7cc2"
-AR9_IMPLEMENTATION_MERGE = "5933a5e30a534209138485556b4a895706af765a"
-AR9_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-19-ar9-final-acceptance.json"
-AR9_AUTHORITY = "architecture/d1-evolution-ar9.json"
-AR9_PROJECTION = "architecture/inventory.json::d1_evolution"
-AR10_ISSUE = 368
-AR10_PR = 371
-AR10_EXACT_GREEN_HEAD = "c7f8ac9704433d3e52d3b79f985c9ac60aa068db"
-AR10_IMPLEMENTATION_MERGE = "7ab5edf583f541d08ff732624af25881d430d427"
-AR10_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-19-ar10-final-acceptance.json"
-AR10_AUTHORITY = "architecture/runtime-cutover-ar10.json"
-AR10_PROJECTION = "architecture/inventory.json::runtime_cutover"
-AR10_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR10.md"
-AR11_ISSUE = 372
-AR_IMPLEMENTATION_STATUS = "active_issue_266_ar10_accepted_ar11_current"
 
+PROJECTION_PATHS = {
+    "docs/status.json",
+    "architecture/inventory.json",
+    "architecture/architecture-rebaseline-v3-transition.json",
+    "README.md",
+    "docs/README.md",
+    "docs/INDEX.md",
+    "docs/DEVELOPMENT_PLAN.md",
+    "docs/DEVELOPER_CAPABILITY_MATRIX.md",
+}
 
-def ar8_progress(*, projection_fields: bool) -> dict[str, object]:
-    value: dict[str, object] = {
-        "umbrella_issue": 308,
-        "accepted_subslices": ["AR-8A", "AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"],
-        "current_subslice": None,
-        "current_implementation_issue": None,
-        "mandatory_remaining": [],
-        "full_ar8_accepted": True,
-        "ar9_blocked": False,
-        "production_mutation": False,
-        "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
-        "source_complete_candidate": False,
-        "completion_pr": 362,
-        "implemented_through": "AR-8F",
-        "accepted_top_level_slice": "AR-8",
-        "exact_green_head": AR8_EXACT_GREEN_HEAD,
-        "implementation_merge": AR8_IMPLEMENTATION_MERGE,
-        "applicable_permanent_workflows": "14/14",
-        "accepted_main_reread": AR8_IMPLEMENTATION_MERGE,
-        "acceptance_evidence": AR8_ACCEPTANCE_EVIDENCE,
-    }
-    if projection_fields:
-        value.update({
-            "credential_authority_source": "architecture/credential-authority.json",
-            "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
-            "canonical_projection": "architecture/inventory.json::subject_domain_authorities",
-        })
-    return value
-
-
-def delivery_map(base: dict[str, object]) -> dict[str, object]:
-    value = copy.deepcopy(base)
-    value["accepted_checkpoint"] = "AR-10"
-    value["current_work"] = "AR-11"
-    value["source_implemented"] = {
-        "status": "ACCEPTED",
-        "through": "AR-10",
-        "current_subslice": "AR-11",
-        "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR10_CLOSEOUT",
-    }
-    value["accepted_on_main"] = {
-        "status": "COMPLETE",
-        "through": "AR-10",
-        "full_ar8_accepted": True,
-        "ar9_accepted": True,
-        "ar10_accepted": True,
-        "acceptance_evidence": AR10_ACCEPTANCE_EVIDENCE,
-    }
-    value["current_blocker"] = {"issue": None, "status": "NONE", "blocks": "NONE"}
-    value["next_gate"] = {
-        "id": "AR-11_ACCEPTANCE",
-        "issue": AR11_ISSUE,
-        "on_success": "AR-12_BECOMES_CURRENT",
-    }
-    value["invariants"].update({
-        "source_present_not_equal_production_enabled": True,
-        "full_ar8_accepted": True,
-        "ar9_accepted": True,
-        "ar9_blocked": False,
-        "ar10_accepted": True,
-        "ar10_blocked": False,
-        "ar11_blocked": False,
-        "architecture_complete": False,
-        "production_core_gate": "BLOCKED",
-        "production_ready": False,
-        "production_mutation": False,
-    })
-    return value
-
-
-def ar8_acceptance() -> dict[str, object]:
-    return {
+HISTORICAL_ACCEPTANCE = {
+    "ar8_acceptance": {
         "issue": 361,
-        "umbrella_issue": 308,
         "implementation_pr": 362,
-        "exact_green_head": AR8_EXACT_GREEN_HEAD,
-        "implementation_merge": AR8_IMPLEMENTATION_MERGE,
-        "applicable_permanent_workflows": "14/14",
-        "behind_by": 0,
-        "blocking_reviews": 0,
-        "unresolved_review_threads": 0,
-        "accepted_main_reread": AR8_IMPLEMENTATION_MERGE,
-        "evidence": AR8_ACCEPTANCE_EVIDENCE,
-        "metadata_only": True,
-        "production_mutation": False,
-    }
+        "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+        "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+        "evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
+    },
+    "ar9_acceptance": {
+        "issue": 366,
+        "implementation_pr": 367,
+        "exact_green_head": "6110a32ade85d08c6ad93d9064190fff768e7cc2",
+        "implementation_merge": "5933a5e30a534209138485556b4a895706af765a",
+        "evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
+    },
+    "ar10_acceptance": {
+        "issue": 368,
+        "implementation_pr": 371,
+        "exact_green_head": "c7f8ac9704433d3e52d3b79f985c9ac60aa068db",
+        "implementation_merge": "7ab5edf583f541d08ff732624af25881d430d427",
+        "evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json",
+    },
+}
 
 
-def ar9_acceptance() -> dict[str, object]:
-    return {
-        "issue": AR9_ISSUE,
-        "implementation_pr": AR9_PR,
-        "exact_green_head": AR9_EXACT_GREEN_HEAD,
-        "implementation_merge": AR9_IMPLEMENTATION_MERGE,
-        "applicable_permanent_workflows": "15/15",
-        "behind_by": 0,
-        "blocking_reviews": 0,
-        "unresolved_review_threads": 0,
-        "accepted_main_reread": AR9_IMPLEMENTATION_MERGE,
-        "evidence": AR9_ACCEPTANCE_EVIDENCE,
-        "metadata_only": True,
-        "production_mutation": False,
-    }
+class ProjectionError(ValueError):
+    pass
 
 
-def ar10_acceptance() -> dict[str, object]:
-    return {
-        "issue": AR10_ISSUE,
-        "implementation_pr": AR10_PR,
-        "exact_green_head": AR10_EXACT_GREEN_HEAD,
-        "implementation_merge": AR10_IMPLEMENTATION_MERGE,
-        "applicable_permanent_workflows": "16/16",
-        "behind_by": 0,
-        "blocking_reviews": 0,
-        "unresolved_review_threads": 0,
-        "accepted_main_reread": AR10_IMPLEMENTATION_MERGE,
-        "evidence": AR10_ACCEPTANCE_EVIDENCE,
-        "metadata_only": True,
-        "production_mutation": False,
-    }
+def fail(message: str) -> None:
+    raise ProjectionError(message)
 
 
-def ar11_projection() -> dict[str, object]:
-    return {
-        "tracking_issue": AR11_ISSUE,
-        "name": "AR-11 — Release-set / Promotion Architecture",
-        "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
-        "status": "current",
-        "production_mutation": False,
+def load_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        fail(f"cannot read {path.relative_to(ROOT)}: {error}")
+    if not isinstance(value, dict):
+        fail(f"{path.relative_to(ROOT)} must contain one JSON object")
+    return value
+
+
+def validate_static_authority(policy: dict[str, Any], sequence: dict[str, Any]) -> None:
+    if (
+        policy.get("schema_version") != 1
+        or policy.get("kind") != "ARCHITECTURE_ACCEPTANCE_POLICY"
+        or policy.get("status") != "current"
+        or policy.get("program_sequence") != "architecture/architecture-program-sequence.json"
+        or policy.get("source_branch") != "main"
+        or policy.get("source_history_count") != 1
+    ):
+        fail("generic architecture acceptance policy identity/single-history boundary drifted")
+
+    projection = policy.get("projection_policy")
+    if not isinstance(projection, dict):
+        fail("architecture acceptance policy lost projection_policy")
+    if (
+        projection.get("authoritative") is not False
+        or projection.get("generated_or_human_projection_only") is not True
+        or projection.get("stale_projection_must_not_create_acceptance_authority") is not True
+        or set(projection.get("paths", [])) != PROJECTION_PATHS
+    ):
+        fail("tracked lifecycle projection policy drifted from non-authoritative compatibility role")
+
+    if (
+        sequence.get("schema_version") != 1
+        or sequence.get("kind") != "ARCHITECTURE_PROGRAM_SEQUENCE"
+        or sequence.get("state_model") != "STATIC_ORDER_ONLY"
+        or sequence.get("mutable_lifecycle_state_forbidden") is not True
+    ):
+        fail("architecture program sequence is no longer static-order-only")
+    slices = sequence.get("slices")
+    if not isinstance(slices, list) or not slices:
+        fail("architecture program sequence is empty")
+    for item in slices:
+        if not isinstance(item, dict):
+            fail("architecture program sequence contains a non-object slice")
+        for forbidden in ("accepted", "current", "accepted_checkpoint", "current_slice"):
+            if forbidden in item:
+                fail(f"static architecture program sequence stores mutable lifecycle field {forbidden}")
+
+
+def validate_historical_acceptance(status: dict[str, Any], transition: dict[str, Any]) -> None:
+    current = status.get("current")
+    program = current.get("architecture_program") if isinstance(current, dict) else None
+    if not isinstance(program, dict):
+        fail("docs/status.json architecture_program compatibility projection is missing")
+
+    for key, expected in HISTORICAL_ACCEPTANCE.items():
+        left = program.get(key)
+        right = transition.get(key)
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            fail(f"immutable historical provenance {key} is missing")
+        if left != right:
+            fail(f"status/transition historical provenance {key} diverged")
+        for field, wanted in expected.items():
+            if left.get(field) != wanted:
+                fail(f"immutable historical provenance {key}.{field} drifted")
+        if left.get("metadata_only") is not True or left.get("production_mutation") is not False:
+            fail(f"historical acceptance {key} lost metadata-only/non-production boundary")
+
+
+def validate_fail_closed(status: dict[str, Any], transition: dict[str, Any]) -> None:
+    if status.get("production_ready") is not False:
+        fail("docs/status.json compatibility projection may not enable production")
+    current = status.get("current")
+    if not isinstance(current, dict):
+        fail("docs/status.json current compatibility projection is missing")
+    if current.get("architecture_complete") is not False or current.get("production_core_gate") != "BLOCKED":
+        fail("docs/status.json compatibility projection must remain fail-closed")
+
+    state_model = transition.get("state_model")
+    if not isinstance(state_model, dict):
+        fail("architecture transition compatibility projection lost state_model")
+    for key, wanted in {
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
         "production_ready": False,
-    }
+    }.items():
+        if state_model.get(key) != wanted:
+            fail(f"architecture transition compatibility projection must remain fail-closed: {key}")
 
-
-def project_status() -> dict[str, object]:
-    payload = json.loads(BASE_STATUS.read_text(encoding="utf-8"))
-    current = payload["current"]
-    program = current["architecture_program"]
-    accepted_slices = list(program.get("accepted_slices", []))
-    for accepted in ("AR-8", "AR-9", "AR-10"):
-        if accepted not in accepted_slices:
-            accepted_slices.append(accepted)
-    program["accepted_slices"] = accepted_slices
-    program["current_slice"] = "AR-11"
-    program["next_slice_after_acceptance"] = "AR-12"
-    program["ar8_progress"] = ar8_progress(projection_fields=False)
-    program["ar8_acceptance"] = ar8_acceptance()
-    program.pop("ar9_current", None)
-    program["ar9_acceptance"] = ar9_acceptance()
-    program.pop("ar10_current", None)
-    program["ar10_acceptance"] = ar10_acceptance()
-    program["ar11_current"] = ar11_projection()
-    program["subject_domain_authorities"] = {
-        "credential_authority": "architecture/credential-authority.json",
-        "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
-        "credential_lifecycle": "architecture/credential-lifecycle.json",
-        "operator_contract": "architecture/operator-contract.json",
-        "profile_security": "architecture/profile-security.json",
-        "architecture_map": "architecture/README.md",
-    }
-    current["current_delivery_map"] = delivery_map(current["current_delivery_map"])
-    current["architecture_complete"] = False
-    current["production_core_gate"] = "BLOCKED"
-    current["next_repository_step"] = {
-        "name": "AR-11 — Release-set / Promotion Architecture",
-        "status": "current",
-        "tracking_issue": AR11_ISSUE,
-        "program_tracking_issue": 266,
-        "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
-        "previous_acceptance_evidence": AR10_ACCEPTANCE_EVIDENCE,
-    }
-    payload.setdefault("implementation", {})["architecture_rebaseline_v3"] = AR_IMPLEMENTATION_STATUS
-    payload["production_ready"] = False
-    payload["as_of"] = "2026-08-19"
-    return payload
-
-
-def project_transition() -> dict[str, object]:
-    payload = json.loads(BASE_TRANSITION.read_text(encoding="utf-8"))
-    payload["status"] = "ACTIVE_AFTER_AR10_ACCEPTANCE"
-    payload["current_slice"] = "AR-11"
-    payload["next_slice_after_acceptance"] = "AR-12"
-    accepted_slices = list(payload.get("accepted_slices", []))
-    for accepted in ("AR-8", "AR-9", "AR-10"):
-        if accepted not in accepted_slices:
-            accepted_slices.append(accepted)
-    payload["accepted_slices"] = accepted_slices
-    payload["ar8_progress"] = ar8_progress(projection_fields=True)
-    payload["ar8_acceptance"] = ar8_acceptance()
-    payload.pop("ar9_current", None)
-    payload["ar9_acceptance"] = ar9_acceptance()
-    payload.pop("ar10_current", None)
-    payload["ar10_acceptance"] = ar10_acceptance()
-    payload["ar11_current"] = ar11_projection()
-    payload["current_delivery_map"] = delivery_map(payload["current_delivery_map"])
-    policy = payload["architecture_inventory_policy"]
-    policy["ar8_current_subject_projection"] = "architecture/inventory.json::subject_domain_authorities"
-    policy["ar8_current_composition_root"] = "architecture/credential-authority.json"
-    policy["ar8b_registry_role"] = "IMMUTABLE_ACCEPTED_PROVENANCE_DATASET"
-    policy["ar9_d1_evolution_projection"] = AR9_PROJECTION
-    policy["ar9_d1_evolution_source"] = AR9_AUTHORITY
-    policy["ar9_acceptance_evidence"] = AR9_ACCEPTANCE_EVIDENCE
-    policy["ar10_runtime_cutover_projection"] = AR10_PROJECTION
-    policy["ar10_runtime_cutover_source"] = AR10_AUTHORITY
-    policy["ar10_acceptance_evidence"] = AR10_ACCEPTANCE_EVIDENCE
-    app = payload.get("application_architecture", {})
-    app["program_handoff_status"] = "AR10_ACCEPTED_AR11_CURRENT"
-    app["program_next_required_subslice"] = "AR-11"
-    return payload
-
-
-def serialized(payload: object) -> str:
-    return json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False) + "\n"
-
-
-def validate(status: dict[str, object], transition: dict[str, object]) -> None:
-    current = status["current"]
-    program = current["architecture_program"]
-    if program.get("current_slice") != "AR-11" or "AR-10" not in program.get("accepted_slices", []):
-        raise ValueError("program must advance to AR-11 only after accepted AR-10")
-    if program.get("ar8_progress") != ar8_progress(projection_fields=False):
-        raise ValueError("docs/status.json accepted AR-8 progress drifted")
-    if transition.get("ar8_progress") != ar8_progress(projection_fields=True):
-        raise ValueError("architecture transition accepted AR-8 progress drifted")
-    if program.get("ar9_acceptance") != ar9_acceptance() or transition.get("ar9_acceptance") != ar9_acceptance():
-        raise ValueError("status and transition AR-9 acceptance projection drifted")
-    if program.get("ar10_acceptance") != ar10_acceptance() or transition.get("ar10_acceptance") != ar10_acceptance():
-        raise ValueError("status and transition AR-10 acceptance projection drifted")
-    if program.get("ar11_current") != ar11_projection() or transition.get("ar11_current") != ar11_projection():
-        raise ValueError("status and transition AR-11 current projection drifted")
-    expected_delivery = current["current_delivery_map"]
-    if expected_delivery != transition.get("current_delivery_map"):
-        raise ValueError("status and transition CURRENT_DELIVERY_MAP projections must match exactly")
-    if expected_delivery.get("next_gate", {}).get("issue") != AR11_ISSUE:
-        raise ValueError("AR-11 acceptance gate must point to implementation issue #372")
-    invariants = expected_delivery.get("invariants", {})
-    required = {
-        "full_ar8_accepted": True,
-        "ar9_accepted": True,
-        "ar9_blocked": False,
-        "ar10_accepted": True,
-        "ar10_blocked": False,
-        "ar11_blocked": False,
+    status_delivery = current.get("current_delivery_map")
+    transition_delivery = transition.get("current_delivery_map")
+    if not isinstance(status_delivery, dict) or not isinstance(transition_delivery, dict):
+        fail("tracked compatibility projections lost current_delivery_map")
+    if status_delivery != transition_delivery:
+        fail("status/transition current_delivery_map compatibility snapshots diverged")
+    invariants = status_delivery.get("invariants")
+    if not isinstance(invariants, dict):
+        fail("current_delivery_map.invariants compatibility projection is missing")
+    for key, wanted in {
+        "source_present_not_equal_production_enabled": True,
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
         "production_ready": False,
         "production_mutation": False,
-    }
-    for key, wanted in required.items():
+    }.items():
         if invariants.get(key) != wanted:
-            raise ValueError(f"CURRENT_DELIVERY_MAP invariant {key} drifted")
-    if status.get("implementation", {}).get("architecture_rebaseline_v3") != AR_IMPLEMENTATION_STATUS:
-        raise ValueError("implementation architecture-program status drifted from accepted AR-10/current AR-11")
-    if current.get("architecture_complete") is not False:
-        raise ValueError("architecture must remain incomplete during AR-11")
-    if current.get("production_core_gate") != "BLOCKED" or status.get("production_ready") is not False:
-        raise ValueError("production gates must remain fail-closed during AR-11")
+            fail(f"current_delivery_map compatibility invariant drifted: {key}")
+
+
+def validate(status: dict[str, Any], transition: dict[str, Any], policy: dict[str, Any], sequence: dict[str, Any]) -> None:
+    validate_static_authority(policy, sequence)
+    validate_historical_acceptance(status, transition)
+    validate_fail_closed(status, transition)
+
+
+def self_test(status: dict[str, Any], transition: dict[str, Any], policy: dict[str, Any], sequence: dict[str, Any]) -> None:
+    validate(status, transition, policy, sequence)
+
+    bad_policy = copy.deepcopy(policy)
+    bad_policy["projection_policy"]["authoritative"] = True
+    try:
+        validate(status, transition, bad_policy, sequence)
+    except ProjectionError:
+        pass
+    else:
+        fail("authoritative tracked-projection negative fixture unexpectedly passed")
+
+    bad_status = copy.deepcopy(status)
+    bad_status["production_ready"] = True
+    try:
+        validate(bad_status, transition, policy, sequence)
+    except ProjectionError:
+        pass
+    else:
+        fail("premature production-ready negative fixture unexpectedly passed")
+
+    bad_transition = copy.deepcopy(transition)
+    bad_transition["state_model"]["production_core_gate"] = "AUTHORIZED"
+    try:
+        validate(status, bad_transition, policy, sequence)
+    except ProjectionError:
+        pass
+    else:
+        fail("premature production authorization negative fixture unexpectedly passed")
+
+    bad_history = copy.deepcopy(status)
+    bad_history["current"]["architecture_program"]["ar10_acceptance"]["implementation_merge"] = "0" * 40
+    try:
+        validate(bad_history, transition, policy, sequence)
+    except ProjectionError:
+        pass
+    else:
+        fail("historical acceptance mutation negative fixture unexpectedly passed")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
+    mode.add_argument("--write", action="store_true")
     mode.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
-    expected_status = project_status()
-    expected_transition = project_transition()
-    validate(expected_status, expected_transition)
+
+    status = load_json(STATUS)
+    transition = load_json(TRANSITION)
+    policy = load_json(POLICY)
+    sequence = load_json(SEQUENCE)
+
+    if args.self_test:
+        self_test(status, transition, policy, sequence)
+        print("Lifecycle compatibility projection negative matrix passed.")
+        return 0
+
+    validate(status, transition, policy, sequence)
     if args.write:
-        STATUS.write_text(serialized(expected_status), encoding="utf-8", newline="\n")
-        TRANSITION.write_text(serialized(expected_transition), encoding="utf-8", newline="\n")
-        print("Wrote accepted AR-10 status/transition and current AR-11 projections.")
-    elif args.check:
-        actual_status = json.loads(STATUS.read_text(encoding="utf-8"))
-        actual_transition = json.loads(TRANSITION.read_text(encoding="utf-8"))
-        validate(actual_status, actual_transition)
-        if actual_status != expected_status or actual_transition != expected_transition:
-            raise SystemExit("accepted AR-10/current AR-11 status/transition projections are stale; run --write")
-        print("AR-10 accepted-main status/transition and current AR-11 projection are current while production remains blocked.")
+        print(
+            "No source write performed: live accepted/current architecture state is Git-derived; "
+            "tracked status/transition data is compatibility-only."
+        )
     else:
-        negative = copy.deepcopy(expected_status)
-        negative["current"]["current_delivery_map"]["invariants"]["production_core_gate"] = "AUTHORIZED"
-        try:
-            validate(negative, expected_transition)
-        except ValueError:
-            print("Post-AR-10 premature production authorization fixture rejected as expected.")
-        else:
-            raise SystemExit("premature production authorization negative fixture unexpectedly passed")
-        stale_issue = copy.deepcopy(expected_status)
-        stale_issue["current"]["current_delivery_map"]["next_gate"]["issue"] = AR10_ISSUE
-        try:
-            validate(stale_issue, expected_transition)
-        except ValueError:
-            print("Stale AR-10 acceptance issue projection rejected as expected.")
-        else:
-            raise SystemExit("stale AR-10 acceptance issue negative fixture unexpectedly passed")
-        stale_block = copy.deepcopy(expected_status)
-        stale_block["current"]["current_delivery_map"]["invariants"]["ar10_blocked"] = True
-        try:
-            validate(stale_block, expected_transition)
-        except ValueError:
-            print("Contradictory accepted-and-blocked AR-10 projection rejected as expected.")
-        else:
-            raise SystemExit("accepted-and-blocked AR-10 negative fixture unexpectedly passed")
+        print(
+            "Lifecycle compatibility projections are fail-closed and historical provenance is stable; "
+            "live accepted/current state remains exclusively Git-derived."
+        )
     return 0
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-        print(f"AR-10 accepted/current AR-11 projection failed: {error}", file=sys.stderr)
+    except ProjectionError as error:
+        print(f"lifecycle compatibility projection check failed: {error}", file=sys.stderr)
         raise SystemExit(1) from error
