@@ -514,10 +514,7 @@ fn is_bridge_control_file(relative_path: &str) -> bool {
 }
 
 fn is_ephemeral_browser_lock(relative_path: &str) -> bool {
-    matches!(
-        relative_path,
-        FIREFOX_PARENT_LOCK_PATH | FIREFOX_LOCK_PATH
-    )
+    matches!(relative_path, FIREFOX_PARENT_LOCK_PATH | FIREFOX_LOCK_PATH)
 }
 
 fn hash_file(path: &Path) -> Result<u64, LocalProfileError> {
