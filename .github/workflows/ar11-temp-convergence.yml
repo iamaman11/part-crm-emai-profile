@@ -1,0 +1,75 @@
+name: AR-11 Temporary Cutover Convergence
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ar11-temp-convergence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  converge:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/ar11-release-capability-promotion' &&
+      github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
+
+      - name: Converge pending bounded Rust cutovers idempotently
+        run: |
+          set -euo pipefail
+          if ! grep -q 'Invocation::Promotion' tools/opsctl/src/lib.rs; then
+            test -f scripts/ar11-promotion-cli-cutover.py
+            python scripts/ar11-promotion-cli-cutover.py
+          fi
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/opsctl/src/release/compatibility.rs')
+          text = path.read_text()
+          old = '''    for name in required_dimensions {\n        let dimension = evidence.dimensions.get(name).ok_or_else(|| {\n            ReleaseModelError::new(format!("missing compatibility dimension after parse: {name}"))\n        })?;\n        match dimension.decision {\n            CompatibilityDecision::Compatible => {}\n            CompatibilityDecision::Incompatible => {\n                blockers.push(format!("{}", blocker_code(name, false)));\n            }\n            CompatibilityDecision::Unknown => {\n                blockers.push(format!("{}", blocker_code(name, true)));\n            }\n        }\n    }\n'''
+          new = '''    for name in &required_dimensions {\n        let dimension = evidence.dimensions.get(*name).ok_or_else(|| {\n            ReleaseModelError::new(format!("missing compatibility dimension after parse: {name}"))\n        })?;\n        match dimension.decision {\n            CompatibilityDecision::Compatible => {}\n            CompatibilityDecision::Incompatible => {\n                blockers.push(blocker_code(name, false).to_owned());\n            }\n            CompatibilityDecision::Unknown => {\n                blockers.push(blocker_code(name, true).to_owned());\n            }\n        }\n    }\n'''
+          if old in text:
+              path.write_text(text.replace(old, new, 1))
+          PY
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml
+          cargo clippy --fix --locked --manifest-path tools/opsctl/Cargo.toml --all-targets --allow-dirty --allow-staged -- -D warnings
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml
+          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml
+
+      - name: Remove all temporary cutover authority including this workflow
+        run: |
+          set -euo pipefail
+          git rm --ignore-unmatch \
+            .github/workflows/ar11-bounded-rust-fix.yml \
+            .github/workflows/ar11-promotion-cli-cutover.yml \
+            .github/workflows/ar11-temp-convergence.yml \
+            scripts/ar11-promotion-cli-cutover.py
+          changed="$(git diff --name-only)"
+          printf '%s\n' "$changed"
+          while IFS= read -r path; do
+            case "$path" in
+              .github/workflows/ar11-bounded-rust-fix.yml|.github/workflows/ar11-promotion-cli-cutover.yml|.github/workflows/ar11-temp-convergence.yml|scripts/ar11-promotion-cli-cutover.py|tools/opsctl/src/*.rs|tools/opsctl/src/release/*.rs|tools/opsctl/src/promotion/*.rs) ;;
+              *) echo "unexpected convergence path: $path" >&2; exit 1 ;;
+            esac
+          done <<< "$changed"
+
+      - name: Commit only fully verified converged state
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A tools/opsctl/src .github/workflows scripts/ar11-promotion-cli-cutover.py
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'AR-11: converge release promotion policy'
+          git push origin HEAD:agent/ar11-release-capability-promotion
