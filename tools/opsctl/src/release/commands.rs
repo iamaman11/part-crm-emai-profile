@@ -1,7 +1,9 @@
 use crate::release::ReleaseAction;
 use crate::release::artifact::verify_artifacts;
 use crate::release::compatibility::{CompatibilityEvidence, evaluate};
+use crate::release::input_topology::ReleaseInputTopology;
 use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
+use crate::release::static_compatibility;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -20,11 +22,22 @@ pub struct ReleaseRunRequest<'a> {
 pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> {
     let manifest = load_manifest(request.release_set)?;
     let value = match request.action {
-        ReleaseAction::Inspect => inspect(&manifest),
+        ReleaseAction::Inspect => {
+            let topology = ReleaseInputTopology::load(request.root)?;
+            let resolved = topology.resolve(request.root)?;
+            inspect(&manifest, resolved.len())
+        }
         ReleaseAction::Verify => {
             let artifact_root = request
                 .artifact_root
                 .ok_or_else(|| ReleaseModelError::new("release verify requires --artifact-root"))?;
+            let static_blockers = static_compatibility::evaluate(request.root, &manifest, false)?;
+            if !static_blockers.is_empty() {
+                return Err(ReleaseModelError::new(format!(
+                    "RELEASE_STATIC_IDENTITY_MISMATCH: {}",
+                    static_blockers.join(",")
+                )));
+            }
             verify(&manifest, artifact_root)?
         }
         ReleaseAction::Compatibility => {
@@ -63,7 +76,7 @@ fn load_manifest(path: &Path) -> Result<ReleaseSetManifest, ReleaseModelError> {
     ReleaseSetManifest::parse_json(&input)
 }
 
-fn inspect(manifest: &ReleaseSetManifest) -> serde_json::Value {
+fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_json::Value {
     let components = manifest
         .components
         .values()
@@ -92,6 +105,7 @@ fn inspect(manifest: &ReleaseSetManifest) -> serde_json::Value {
         "components": components,
         "capability_profile_compatibility": manifest.capability_profile_compatibility,
         "artifact_count": manifest.artifact_inventory.len(),
+        "release_input_count": release_input_count,
         "mutation_executed": false
     })
 }
