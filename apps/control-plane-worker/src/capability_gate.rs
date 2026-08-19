@@ -253,7 +253,8 @@ pub fn select_profile(
         return Err(ProfileSelectionError::EnvironmentNotAllowed);
     }
 
-    if environment == "production" && profile.authorization == ProfileAuthorization::ProductionBlocked
+    if environment == "production"
+        && profile.authorization == ProfileAuthorization::ProductionBlocked
     {
         return Err(ProfileSelectionError::ProductionNotAuthorized);
     }
@@ -264,9 +265,9 @@ pub fn select_profile(
 #[must_use]
 pub fn route_activation_unit(route: RouteClass, path: &str) -> Option<ActivationUnit> {
     match route {
-        RouteClass::HealthApi | RouteClass::BindingProbeApi | RouteClass::AuthenticatedSessionApi => {
-            Some(ActivationUnit::Foundation)
-        }
+        RouteClass::HealthApi
+        | RouteClass::BindingProbeApi
+        | RouteClass::AuthenticatedSessionApi => Some(ActivationUnit::Foundation),
         RouteClass::OwnerBootstrapApi
         | RouteClass::OwnerTransferApi
         | RouteClass::InvitationCollectionApi
@@ -324,15 +325,19 @@ pub fn route_activation_unit(route: RouteClass, path: &str) -> Option<Activation
 #[cfg(test)]
 mod tests {
     use super::{
-        ActivationUnit, PRODUCTION_CORE_V1_DIGEST, ProfileSelectionError,
-        REHEARSAL_CORE_V1_DIGEST, route_activation_unit, select_profile,
+        ActivationUnit, PRODUCTION_CORE_V1_DIGEST, ProfileSelectionError, REHEARSAL_CORE_V1_DIGEST,
+        route_activation_unit, select_profile,
     };
     use control_plane_contract::RouteClass;
 
     #[test]
     fn production_profile_is_blocked_before_ar17_pc1_authorization() {
         assert_eq!(
-            select_profile("production", "production-core-v1", PRODUCTION_CORE_V1_DIGEST),
+            select_profile(
+                "production",
+                "production-core-v1",
+                PRODUCTION_CORE_V1_DIGEST
+            ),
             Err(ProfileSelectionError::ProductionNotAuthorized)
         );
     }
@@ -346,7 +351,12 @@ mod tests {
         assert!(!profile.capabilities.enabled(ActivationUnit::MailboxAdmin));
         assert!(!profile.capabilities.enabled(ActivationUnit::MailboxJobs));
         assert!(!profile.capabilities.enabled(ActivationUnit::OutboundMail));
-        assert!(profile.capabilities.enabled_ids().contains("browser_profiles"));
+        assert!(
+            profile
+                .capabilities
+                .enabled_ids()
+                .contains("browser_profiles")
+        );
         Ok(())
     }
 
