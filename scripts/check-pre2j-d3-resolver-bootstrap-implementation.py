@@ -78,32 +78,42 @@ def historical_file(ref: str, relative: Path | str) -> bytes:
 def run_historical(args: list[str]) -> int:
     """Replay the immutable D3 checker against the exact D3-era config surface.
 
-    AR-11 intentionally removes mailbox-only bindings from the Core deployment
-    closure. That must not weaken or rewrite D3 history. The historical checker
-    therefore receives the exact transition-base promotion workflow and control
-    plane Wrangler config, while current source files are restored afterwards.
+    AR-11 intentionally removes mailbox-only bindings and the retired resolver
+    promotion workflow from the current Core deployment closure. That must not
+    weaken or rewrite D3 history. The historical checker therefore receives the
+    exact transition-base promotion workflow and control-plane Wrangler config.
+    If the workflow no longer exists in the current tree, it is materialized only
+    for the duration of the historical check and removed again afterwards.
     """
 
     ref, workflow = predecessor_metadata()
     promotion_path = ROOT / PROMOTION_WORKFLOW
     control_config_path = ROOT / CONTROL_PLANE_CONFIG
-    current_promotion = promotion_path.read_bytes()
+    current_promotion = promotion_path.read_bytes() if promotion_path.is_file() else None
     current_control_config = control_config_path.read_bytes()
     predecessor_promotion = historical_file(ref, workflow)
     predecessor_control_config = historical_file(ref, CONTROL_PLANE_CONFIG)
     try:
+        promotion_path.parent.mkdir(parents=True, exist_ok=True)
         promotion_path.write_bytes(predecessor_promotion)
         control_config_path.write_bytes(predecessor_control_config)
         return run([sys.executable, str(HISTORICAL_CHECKER), *args]).returncode
     finally:
-        promotion_path.write_bytes(current_promotion)
+        if current_promotion is None:
+            promotion_path.unlink(missing_ok=True)
+        else:
+            promotion_path.write_bytes(current_promotion)
         control_config_path.write_bytes(current_control_config)
 
 
 def main() -> int:
     args = sys.argv[1:]
-    promotion = (ROOT / PROMOTION_WORKFLOW).read_text(encoding="utf-8")
-    successor_active = (ROOT / SUCCESSOR_AUTHORITY).is_file() and HISTORICAL_MARKER not in promotion
+    promotion_path = ROOT / PROMOTION_WORKFLOW
+    promotion = promotion_path.read_text(encoding="utf-8") if promotion_path.is_file() else ""
+    successor_active = (
+        (ROOT / SUCCESSOR_AUTHORITY).is_file()
+        and (not promotion_path.is_file() or HISTORICAL_MARKER not in promotion)
+    )
     ar11_profile_aware_closure = (ROOT / AR11_RELEASE_AUTHORITY).is_file()
 
     if not successor_active:
