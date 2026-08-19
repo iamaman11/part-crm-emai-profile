@@ -178,6 +178,9 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    const REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
+    const GIT_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
     fn temp_dir(label: &str) -> std::io::Result<PathBuf> {
         let path = std::env::temp_dir().join(format!(
             "opsctl-ar11-{label}-{}-{}",
@@ -189,6 +192,15 @@ mod tests {
         }
         fs::create_dir_all(path.join("components"))?;
         Ok(path)
+    }
+
+    fn accepted_main_evidence() -> Result<String, String> {
+        let identity = json!({
+            "authority": "accepted-main",
+            "commit_sha": GIT_SHA,
+            "repository": REPOSITORY,
+        });
+        Ok(sha256_hex(canonical_json(&identity)?.as_bytes()))
     }
 
     fn manifest(root: &Path) -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
@@ -203,21 +215,21 @@ mod tests {
         let sha_a = sha256_hex(b"control");
         let sha_b = sha256_hex(b"resolver");
         let sha_c = sha256_hex(b"runtime");
-        let evidence = "7cb074c3b292300031c603af77c7d92af9603d3144eacdb8034065bbe4fbfcb4";
+        let evidence = accepted_main_evidence()?;
         let component_manifest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let mut value = json!({
           "schema_version": 1,
           "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{evidence}"),
           "source": {
-            "repository": "iamaman11/part-crm-emai-profile",
-            "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "repository": REPOSITORY,
+            "commit_sha": GIT_SHA,
             "accepted_main": true,
             "accepted_main_evidence_sha256": evidence
           },
           "components": {
-            "control_plane": {"release_id":"cp","source_commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_path":"components/control-plane.tar","artifact_sha256":sha_a,"artifact_size_bytes":7,"component_manifest_sha256":component_manifest},
-            "secret_resolver": {"release_id":"rs","source_commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_path":"components/resolver.tar","artifact_sha256":sha_b,"artifact_size_bytes":8,"component_manifest_sha256":component_manifest},
-            "runtime_bundle": {"release_id":"rt","source_commit_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_path":"components/runtime.tar","artifact_sha256":sha_c,"artifact_size_bytes":7,"component_manifest_sha256":component_manifest}
+            "control_plane": {"release_id":"cp","source_commit_sha":GIT_SHA,"artifact_path":"components/control-plane.tar","artifact_sha256":sha_a,"artifact_size_bytes":7,"component_manifest_sha256":component_manifest},
+            "secret_resolver": {"release_id":"rs","source_commit_sha":GIT_SHA,"artifact_path":"components/resolver.tar","artifact_sha256":sha_b,"artifact_size_bytes":8,"component_manifest_sha256":component_manifest},
+            "runtime_bundle": {"release_id":"rt","source_commit_sha":GIT_SHA,"artifact_path":"components/runtime.tar","artifact_sha256":sha_c,"artifact_size_bytes":7,"component_manifest_sha256":component_manifest}
           },
           "contracts": {}, "protocols": {}, "schemas": {}, "runtime_compatibility": {},
           "capability_profile_compatibility": ["rehearsal-core-v1"],
