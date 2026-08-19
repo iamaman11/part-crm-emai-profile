@@ -13,14 +13,25 @@ use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::{
+    Arc, Mutex,
+    mpsc::{self, Receiver, RecvTimeoutError},
+};
+use std::thread;
+use std::time::{Duration, Instant};
 
 const CONFIG_NAME: &str = "camoufox-config.json";
 const REAL_ENTRYPOINT: &str = "camouhost/real.py";
 const RUNTIME_LOCK_PATH: &str = "camouhost/runtime-lock.json";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_IPC_RESPONSE_BYTES: usize = 1024;
+const HELLO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+const LAUNCH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
+const CLOSE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
+const FORCE_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
+const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const IDENTITY_COMPATIBILITY_VERSION: u32 = 2;
 const FINGERPRINT_SOURCE_PREFIX: &str = "profile-stability-v1-probe-";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
@@ -253,7 +264,7 @@ impl ManagedCamouhostConfig {
 struct ProcessState {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
-    stdout: Option<BufReader<ChildStdout>>,
+    responses: Option<Receiver<Result<String, BridgePortError>>>,
     active_session: Option<SessionId>,
 }
 
@@ -262,7 +273,7 @@ impl ProcessState {
         Self {
             child: None,
             stdin: None,
-            stdout: None,
+            responses: None,
             active_session: None,
         }
     }
@@ -270,7 +281,7 @@ impl ProcessState {
     fn clear(&mut self) {
         self.child = None;
         self.stdin = None;
-        self.stdout = None;
+        self.responses = None;
         self.active_session = None;
     }
 }
@@ -397,7 +408,7 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         let stdin = child.stdin.take().ok_or(BridgePortError::Unavailable)?;
         let stdout = child.stdout.take().ok_or(BridgePortError::Unavailable)?;
         state.stdin = Some(stdin);
-        state.stdout = Some(BufReader::new(stdout));
+        state.responses = Some(spawn_response_reader(stdout));
         state.active_session = Some(session_id.clone());
         state.child = Some(child);
         Ok(())
@@ -422,12 +433,14 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         if state.active_session.as_ref() != Some(session_id) {
             return Err(BridgePortError::InvalidResponse);
         }
-        let status = state
-            .child
-            .as_mut()
-            .ok_or(BridgePortError::InvalidResponse)?
-            .wait()
-            .map_err(|_| BridgePortError::Unavailable)?;
+        state.stdin = None;
+        let status = wait_for_child_exit(
+            state
+                .child
+                .as_mut()
+                .ok_or(BridgePortError::InvalidResponse)?,
+            PROCESS_EXIT_TIMEOUT,
+        )?;
         if !status.success() {
             return Err(BridgePortError::InvalidResponse);
         }
@@ -443,12 +456,19 @@ impl ProcessControlPort for ManagedCamouhostProcess {
         if state.active_session.as_ref() != Some(session_id) {
             return Err(BridgePortError::InvalidResponse);
         }
+        state.stdin = None;
         let child = state
             .child
             .as_mut()
             .ok_or(BridgePortError::InvalidResponse)?;
-        child.kill().map_err(|_| BridgePortError::Unavailable)?;
-        child.wait().map_err(|_| BridgePortError::Unavailable)?;
+        if child
+            .try_wait()
+            .map_err(|_| BridgePortError::Unavailable)?
+            .is_none()
+        {
+            child.kill().map_err(|_| BridgePortError::Unavailable)?;
+        }
+        wait_for_child_exit(child, FORCE_EXIT_TIMEOUT)?;
         state.clear();
         Ok(())
     }
@@ -464,20 +484,86 @@ impl CamouhostPort for ManagedCamouhostIpc {
             .lock()
             .map_err(|_| BridgePortError::Unavailable)?;
         let frame = request_frame(message)?;
+        let timeout = response_timeout(message)?;
         let stdin = state.stdin.as_mut().ok_or(BridgePortError::Unavailable)?;
         stdin
             .write_all(frame.as_bytes())
             .and_then(|()| stdin.write_all(b"\n"))
             .and_then(|()| stdin.flush())
             .map_err(|_| BridgePortError::Unavailable)?;
-        let stdout = state.stdout.as_mut().ok_or(BridgePortError::Unavailable)?;
-        let response = read_bounded_line(stdout)?;
+        let responses = state
+            .responses
+            .as_ref()
+            .ok_or(BridgePortError::Unavailable)?;
+        let response = receive_response(responses, timeout)?;
         let parsed =
             CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
         parsed
             .validate_version()
             .map_err(|_| BridgePortError::InvalidResponse)?;
         Ok(parsed)
+    }
+}
+
+fn spawn_response_reader(
+    stdout: ChildStdout,
+) -> Receiver<Result<String, BridgePortError>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            match read_bounded_line(&mut reader) {
+                Ok(response) => {
+                    if sender.send(Ok(response)).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(error));
+                    break;
+                }
+            }
+        }
+    });
+    receiver
+}
+
+fn receive_response(
+    responses: &Receiver<Result<String, BridgePortError>>,
+    timeout: Duration,
+) -> Result<String, BridgePortError> {
+    match responses.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(RecvTimeoutError::Timeout) => Err(BridgePortError::Unavailable),
+        Err(RecvTimeoutError::Disconnected) => Err(BridgePortError::InvalidResponse),
+    }
+}
+
+fn response_timeout(message: &CamouhostMessage) -> Result<Duration, BridgePortError> {
+    match message {
+        CamouhostMessage::Hello { .. } => Ok(HELLO_RESPONSE_TIMEOUT),
+        CamouhostMessage::Launch { .. } => Ok(LAUNCH_RESPONSE_TIMEOUT),
+        CamouhostMessage::Close { .. } => Ok(CLOSE_RESPONSE_TIMEOUT),
+        _ => Err(BridgePortError::InvalidResponse),
+    }
+}
+
+fn wait_for_child_exit(
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<ExitStatus, BridgePortError> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|_| BridgePortError::Unavailable)?
+        {
+            return Ok(status);
+        }
+        if started.elapsed() >= timeout {
+            return Err(BridgePortError::Unavailable);
+        }
+        thread::sleep(PROCESS_POLL_INTERVAL);
     }
 }
 
@@ -535,7 +621,7 @@ fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError
 mod tests {
     use super::{
         FINGERPRINT_SOURCE_PREFIX, IDENTITY_COMPATIBILITY_VERSION,
-        RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot, sha256_hex,
+        RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot, receive_response, sha256_hex,
     };
     use crate::browser_execution::persist_materialization_binding;
     use crate::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
@@ -555,7 +641,8 @@ mod tests {
     };
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::mpsc;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     struct FixedObservation(NetworkIdentityObservation);
 
@@ -657,6 +744,15 @@ mod tests {
             workspace.inventory()?.inventory_digest(),
             browser_identity,
         )?)
+    }
+
+    #[test]
+    fn ipc_response_wait_is_bounded() {
+        let (_sender, receiver) = mpsc::channel::<Result<String, BridgePortError>>();
+        assert_eq!(
+            receive_response(&receiver, Duration::from_millis(1)),
+            Err(BridgePortError::Unavailable)
+        );
     }
 
     #[test]
