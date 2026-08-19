@@ -335,7 +335,7 @@
       "invariants": {
         "source_present_not_equal_production_enabled": true,
         "full_ar8_accepted": true,
-        "ar9_blocked": true,
+        "ar9_blocked": false,
         "architecture_complete": false,
         "production_core_gate": "BLOCKED",
         "production_ready": false,
@@ -502,7 +502,7 @@
     "repository_local_product_phase": "accepted_phase_2i",
     "pre2j_architecture_remediation": "closed_r1_r9",
     "pre2j_product_readiness_remediation": "historical_issue_203_superseded_by_ar_v3",
-    "architecture_rebaseline_v3": "active_issue_266_ar8_after_ar8c_accepted_ar8d_gated_by_cleanup_dx_ar9_blocked",
+    "architecture_rebaseline_v3": "active_issue_266_ar9_accepted_ar10_current",
     "application_ownership": "r5_accepted_capability_owners_without_compatibility_facades",
     "frontend_api_ownership": "r6_accepted_feature_owned_capability_api"
   },
