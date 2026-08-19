@@ -1,0 +1,93 @@
+name: AR-10 Camoufox Candidate
+
+on:
+  pull_request:
+    paths:
+      - "runtime/camouhost/**"
+      - "tests/runtime-camouhost/**"
+      - "scripts/ar10-certify-camoufox-candidate.py"
+      - ".github/workflows/ar10-camoufox-candidate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ar10-camoufox-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-candidate:
+    name: AR-10 Camoufox Windows Candidate
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SOURCE_SHA) {
+            throw "expected $env:EXPECTED_SOURCE_SHA, got $actual"
+          }
+
+      - name: Set up exact Python 3.12.10
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.12.10"
+          architecture: "x64"
+          check-latest: false
+
+      - name: Verify exact Python runtime
+        shell: pwsh
+        run: |
+          $version = python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))"
+          if ($version.Trim() -ne "3.12.10") {
+            throw "AR-10 requires Python 3.12.10, got $version"
+          }
+
+      - name: Download and verify exact Camoufox wheel
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .ar10-downloads | Out-Null
+          python -m pip download --disable-pip-version-check --only-binary=:all: --no-deps "camoufox==0.5.4" --dest .ar10-downloads
+          $wheels = @(Get-ChildItem .ar10-downloads -Filter "camoufox-0.5.4-*.whl")
+          if ($wheels.Count -ne 1) {
+            throw "expected exactly one Camoufox 0.5.4 wheel, got $($wheels.Count)"
+          }
+          $actual = (Get-FileHash -Algorithm SHA256 $wheels[0].FullName).Hash.ToLowerInvariant()
+          $expected = "c3f5fc4de0416d0f3363c029267c61718a3fda9e2668f526aff982ae36c30703"
+          if ($actual -ne $expected) {
+            throw "Camoufox wheel SHA-256 mismatch"
+          }
+          "AR10_CAMOUFOX_WHEEL=$($wheels[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install exact Python package candidate
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check `
+            "$env:AR10_CAMOUFOX_WHEEL" `
+            "browserforge==1.2.4" `
+            "playwright==1.55.0"
+          python -c "import importlib.metadata as m; expected={'camoufox':'0.5.4','browserforge':'1.2.4','playwright':'1.55.0'}; actual={k:m.version(k) for k in expected}; assert actual == expected, (expected, actual); print(actual)"
+
+      - name: Pin and fetch exact Camoufox browser
+        shell: pwsh
+        run: |
+          camoufox set official/stable/152.0.4-beta.28
+          camoufox fetch
+          camoufox active
+          camoufox version
+
+      - name: Certify runtime inventory and persistent-context relaunch
+        shell: pwsh
+        run: |
+          python scripts/ar10-certify-camoufox-candidate.py --evidence ar10-candidate-evidence.json
+          Get-Content ar10-candidate-evidence.json
