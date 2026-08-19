@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: ar10-main-protection-once
@@ -108,5 +109,54 @@ jobs:
           removed = sorted(before_names - after_names)
           if removed:
               raise SystemExit(f'AR-10 hardening unexpectedly removed required checks: {removed}')
+          proof = {
+              'kind': 'AR10_HOSTED_MAIN_PROTECTION_CANDIDATE',
+              'source_sha': os.environ['GITHUB_SHA'],
+              'strict': True,
+              'before_required_contexts': len(before_names),
+              'after_required_contexts': len(after_names),
+              'required_contexts_added': additions,
+              'accepted_ar7_contexts_preserved': True,
+          }
+          Path('/tmp/ar10-main-protection-proof.json').write_text(
+              json.dumps(proof, sort_keys=True), encoding='utf-8'
+          )
           print(f'AR-10 main protection hardened additively: {len(before_names)} -> {len(after_names)} required contexts')
+          PY
+
+      - name: Publish hosted protection proof to AR-10 issue
+        env:
+          ISSUE_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          proof = json.loads(Path('/tmp/ar10-main-protection-proof.json').read_text(encoding='utf-8'))
+          body = (
+              '<!-- ar10-hosted-main-protection-proof -->\n'
+              'AR-10 hosted main-protection candidate verified.\n\n'
+              f"- source SHA: `{proof['source_sha']}`\n"
+              f"- strict required-status policy: `{str(proof['strict']).lower()}`\n"
+              f"- required contexts: `{proof['before_required_contexts']} -> {proof['after_required_contexts']}`\n"
+              f"- added: `{proof['required_contexts_added'][0]}` and `{proof['required_contexts_added'][1]}`\n"
+              f"- accepted AR-7 required contexts preserved: `{str(proof['accepted_ar7_contexts_preserved']).lower()}`\n"
+          )
+          payload = json.dumps({'body': body}).encode('utf-8')
+          request = urllib.request.Request(
+              'https://api.github.com/repos/iamaman11/part-crm-emai-profile/issues/368/comments',
+              data=payload,
+              method='POST',
+              headers={
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': f"Bearer {os.environ['ISSUE_TOKEN']}",
+                  'User-Agent': 'part-crm-ar10-protection-proof',
+                  'X-GitHub-Api-Version': '2022-11-28',
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              if response.status != 201:
+                  raise SystemExit(f'hosted protection proof comment failed: HTTP {response.status}')
           PY
