@@ -219,9 +219,51 @@ def validate(root: Path) -> None:
     validate_current_human_projection(root)
 
 
+def legacy_negative_self_test(root: Path) -> None:
+    baseline = legacy.validate(root)
+    if baseline:
+        raise ValueError("legacy documentation negative self-test requires a valid baseline: " + "; ".join(baseline))
+    fixtures = [
+        ("tracking rollback", Path("docs/status.json"), '"tracking_issue": 266', '"tracking_issue": 203', "tracking_issue"),
+        ("active slice rollback", Path("docs/status.json"), '"current_slice": "AR-9"', '"current_slice": "AR-8"', "current_slice"),
+        ("AR-8 acceptance rollback", Path("docs/status.json"), '"full_ar8_accepted": true', '"full_ar8_accepted": false', "full_ar8_accepted"),
+        ("AR-8 accepted-slice removal", Path("docs/status.json"), '"accepted_top_level_slice": "AR-8"', '"accepted_top_level_slice": "AR-7"', "accepted_top_level_slice"),
+        ("AR-9 reblock", Path("docs/status.json"), '"ar9_blocked": false', '"ar9_blocked": true', "ar9_blocked"),
+        ("premature architecture closeout", Path("docs/status.json"), '"architecture_complete": false', '"architecture_complete": true', "architecture_complete"),
+        ("premature gate authorization", Path("docs/status.json"), '"production_core_gate": "BLOCKED"', '"production_core_gate": "AUTHORIZED"', "Production"),
+        ("premature production readiness", Path("docs/status.json"), '"production_ready": false', '"production_ready": true', "CURRENT_DELIVERY_MAP"),
+        ("premature delivery-map production enablement", Path("docs/status.json"), '"gate": "PC-1_AFTER_AR-17_AUTHORIZATION"', '"status": true, "gate": "PC-1_AFTER_AR-17_AUTHORIZATION"', "CURRENT_DELIVERY_MAP"),
+        ("generation queue resurrection", legacy.TOPOLOGY, '"decision": "DELETE"', '"decision": "KEEP"', "GENERATION_VERIFICATION"),
+        ("legacy D3 production resurrection", legacy.TOPOLOGY, '"legacy_d3_production_lane": "DISABLE_FORWARD_EXECUTION"', '"legacy_d3_production_lane": "KEEP"', "D3"),
+        ("historical #203 resurrected", Path("docs/status.json"), '"forward_execution_authority": false', '"forward_execution_authority": true', "#203"),
+    ]
+    canonical_map_labels = {
+        "premature architecture closeout",
+        "premature gate authorization",
+        "premature production readiness",
+        "premature delivery-map production enablement",
+    }
+    for label, relative, old, new, expected in fixtures:
+        with legacy.tempfile.TemporaryDirectory(prefix="ar9-document-authority-") as directory:
+            fixture = Path(directory)
+            legacy.copy_fixture(root, fixture)
+            path = fixture / relative
+            if not legacy.mutate(path, old, new):
+                raise ValueError(f"legacy negative fixture source marker missing for {label}: {old}")
+            errors = legacy.validate(fixture)
+            specific = any(expected.lower() in error.lower() for error in errors)
+            canonical_map = label in canonical_map_labels and any(
+                "current_delivery_map" in error.lower() for error in errors
+            )
+            if not errors or not (specific or canonical_map):
+                raise ValueError(
+                    f"legacy negative fixture {label} was not rejected by its specific or canonical-map invariant: {errors}"
+                )
+    print("Legacy documentation authority negative fixtures remain covered through the AR-9 canonical delivery-map wrapper.")
+
+
 def self_test(root: Path) -> None:
-    if legacy.self_test(root) is not True:
-        raise ValueError("legacy documentation authority negative self-test failed")
+    legacy_negative_self_test(root)
     validate_subject_authority(root)
     validate_ar9_d1_authority(root)
     validate_acceptance_evidence(root)
