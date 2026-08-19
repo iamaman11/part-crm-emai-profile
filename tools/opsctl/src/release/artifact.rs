@@ -184,10 +184,7 @@ mod tests {
     fn temp_dir(label: &str) -> std::io::Result<PathBuf> {
         // Test thread names contain `::`, which is not a valid Windows path component.
         // Labels are unique per test, and the process id isolates concurrent cargo invocations.
-        let path = std::env::temp_dir().join(format!(
-            "opsctl-ar11-{label}-{}",
-            std::process::id()
-        ));
+        let path = std::env::temp_dir().join(format!("opsctl-ar11-{label}-{}", std::process::id()));
         if path.exists() {
             fs::remove_dir_all(&path)?;
         }
