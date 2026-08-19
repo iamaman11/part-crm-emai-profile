@@ -50,6 +50,14 @@
       "side_effect_class": "saved_provider_output_projection_only",
       "authority": "PYTHON_ALLOWED_BY_AR11",
       "rationale": "extracts Release Set/profile annotation from saved deployment metadata without hidden state"
+    },
+    {
+      "path": "scripts/check-release-input-generated-drift-ar11.py",
+      "classification": "KEEP_PYTHON",
+      "role": "release_input_negative_validator",
+      "side_effect_class": "ephemeral_local_fixture_only",
+      "authority": "PYTHON_ALLOWED_BY_AR11",
+      "rationale": "fail-fast negative proof that stale or missing deterministic generated release-input projections are rejected; no provider network, credentials, release decision or mutation"
     }
   ],
   "retirements": [
@@ -64,9 +72,9 @@
     "current_callable_python_mutator": false
   },
   "current_summary": {
-    "tracked_python_files": 120,
+    "tracked_python_files": 121,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 120,
+    "KEEP_PYTHON": 121,
     "MIGRATE_TO_RUST": 0,
     "WRAP_WITH_RUST": 0
   }
