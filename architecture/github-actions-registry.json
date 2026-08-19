@@ -57,10 +57,6 @@
       "category": "PERMANENT_REQUIRED"
     },
     {
-      "path": ".github/workflows/mailbox-secret-resolver-promotion.yml",
-      "category": "CURRENT_MANUAL_OPERATION"
-    },
-    {
       "path": ".github/workflows/mailbox-secret-resolver-release.yml",
       "category": "PERMANENT_REQUIRED"
     },
@@ -75,6 +71,14 @@
     {
       "path": ".github/workflows/release-architecture-gate.yml",
       "category": "PERMANENT_REQUIRED"
+    },
+    {
+      "path": ".github/workflows/release-set-build.yml",
+      "category": "PERMANENT_REQUIRED"
+    },
+    {
+      "path": ".github/workflows/release-set-promotion.yml",
+      "category": "CURRENT_MANUAL_OPERATION"
     },
     {
       "path": ".github/workflows/repository-quality-audit-gate.yml",
