@@ -17,6 +17,7 @@ ENGINE_PATH = ROOT / "scripts/generate-architecture-inventory-engine.py"
 INVENTORY_PATH = ROOT / "architecture/inventory.json"
 D1_EVOLUTION_SOURCE = "architecture/d1-evolution-ar9.json"
 RUNTIME_CUTOVER_SOURCE = "architecture/runtime-cutover-ar10.json"
+RELEASE_ARCHITECTURE_SOURCE = "architecture/release-architecture-ar11.json"
 AR9_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-19-ar9-final-acceptance.json"
 AR10_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-19-ar10-final-acceptance.json"
 AR11_ISSUE = 372
@@ -66,43 +67,52 @@ def completion_delivery_map() -> dict[str, object]:
         "acceptance_evidence": AR10_ACCEPTANCE_EVIDENCE,
     }
     value["current_blocker"] = {"issue": None, "status": "NONE", "blocks": "NONE"}
-    value["next_gate"] = {"id": "AR-11_ACCEPTANCE", "issue": AR11_ISSUE, "on_success": "AR-12_BECOMES_CURRENT"}
-    value["invariants"].update({
-        "source_present_not_equal_production_enabled": True,
-        "full_ar8_accepted": True,
-        "ar9_accepted": True,
-        "ar9_blocked": False,
-        "ar10_accepted": True,
-        "ar10_blocked": False,
-        "ar11_blocked": False,
-        "architecture_complete": False,
-        "production_core_gate": "BLOCKED",
-        "production_ready": False,
-        "production_mutation": False,
-    })
+    value["next_gate"] = {
+        "id": "AR-11_ACCEPTANCE",
+        "issue": AR11_ISSUE,
+        "on_success": "AR-12_BECOMES_CURRENT",
+    }
+    value["invariants"].update(
+        {
+            "source_present_not_equal_production_enabled": True,
+            "full_ar8_accepted": True,
+            "ar9_accepted": True,
+            "ar9_blocked": False,
+            "ar10_accepted": True,
+            "ar10_blocked": False,
+            "ar11_blocked": False,
+            "architecture_complete": False,
+            "production_core_gate": "BLOCKED",
+            "production_ready": False,
+            "production_mutation": False,
+        }
+    )
     return value
+
 
 def completion_progress() -> dict[str, object]:
     value = legacy_progress()
-    value.update({
-        "accepted_subslices": ["AR-8A", "AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"],
-        "current_subslice": None,
-        "current_implementation_issue": None,
-        "mandatory_remaining": [],
-        "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
-        "full_ar8_accepted": True,
-        "ar9_blocked": False,
-        "production_mutation": False,
-        "source_complete_candidate": False,
-        "completion_pr": 362,
-        "implemented_through": "AR-8F",
-        "accepted_top_level_slice": "AR-8",
-        "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
-        "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
-        "applicable_permanent_workflows": "14/14",
-        "accepted_main_reread": "874666f6ef6eb003425c9677d558378d6dc0daaf",
-        "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
-    })
+    value.update(
+        {
+            "accepted_subslices": ["AR-8A", "AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"],
+            "current_subslice": None,
+            "current_implementation_issue": None,
+            "mandatory_remaining": [],
+            "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
+            "full_ar8_accepted": True,
+            "ar9_blocked": False,
+            "production_mutation": False,
+            "source_complete_candidate": False,
+            "completion_pr": 362,
+            "implemented_through": "AR-8F",
+            "accepted_top_level_slice": "AR-8",
+            "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+            "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+            "applicable_permanent_workflows": "14/14",
+            "accepted_main_reread": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+            "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
+        }
+    )
     return value
 
 
@@ -118,7 +128,12 @@ def load_json(relative: str) -> dict[str, Any]:
 
 
 def file_sha256(relative: str) -> str:
-    canonical_text = (ROOT / relative).read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    canonical_text = (
+        (ROOT / relative)
+        .read_text(encoding="utf-8")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
     return hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
 
 
@@ -143,7 +158,10 @@ def subject_projection() -> dict[str, object]:
         "role": "CURRENT_SUBJECT_DOMAIN_PROJECTION",
         "composition_root": SUBJECTS["credential_authority"],
         "registry_provenance": "architecture/credential-authority-ar8b.json",
-        "sources": {name: {"path": path, "sha256": file_sha256(path)} for name, path in SUBJECTS.items()},
+        "sources": {
+            name: {"path": path, "sha256": file_sha256(path)}
+            for name, path in SUBJECTS.items()
+        },
         "credential_lifecycle_concern_ids": [entry.get("id") for entry in lifecycle.get("concerns", [])],
         "profile_security_domain_ids": domains,
         "operator_mode": operator.get("mode"),
@@ -199,26 +217,28 @@ def d1_evolution_projection() -> dict[str, object]:
         if historical.get("retroactive_runtime_compatibility_claims") is not False:
             raise ValueError(f"AR-9 D1 historical epoch invented compatibility claims: {component_id}")
         observed_ids.add(component_id)
-        projected_components.append({
-            "component_id": component_id,
-            "binding_identity": component.get("binding_identity"),
-            "migration_root": component.get("migration_root"),
-            "migration_ledger": component.get("migration_ledger"),
-            "current_repository_revision": component.get("current_repository_revision"),
-            "history_digest": component.get("history_digest"),
-            "historical_epoch": {
-                "status": historical.get("status"),
-                "ordered_set_identity": historical.get("ordered_set_identity"),
-                "per_file_sha256_freeze": freeze,
-                "retroactive_runtime_compatibility_claims": False,
-            },
-            "post_epoch_migration_count": len(component.get("post_epoch_migrations", [])),
-            "fresh_bootstrap_authority": component.get("fresh_bootstrap_authority"),
-            "upgrade_authority": component.get("upgrade_authority"),
-            "mutation_authority": component.get("mutation_authority"),
-            "concurrency_authority": component.get("concurrency_authority"),
-            "release_manifest_owner": component.get("release_manifest_owner"),
-        })
+        projected_components.append(
+            {
+                "component_id": component_id,
+                "binding_identity": component.get("binding_identity"),
+                "migration_root": component.get("migration_root"),
+                "migration_ledger": component.get("migration_ledger"),
+                "current_repository_revision": component.get("current_repository_revision"),
+                "history_digest": component.get("history_digest"),
+                "historical_epoch": {
+                    "status": historical.get("status"),
+                    "ordered_set_identity": historical.get("ordered_set_identity"),
+                    "per_file_sha256_freeze": freeze,
+                    "retroactive_runtime_compatibility_claims": False,
+                },
+                "post_epoch_migration_count": len(component.get("post_epoch_migrations", [])),
+                "fresh_bootstrap_authority": component.get("fresh_bootstrap_authority"),
+                "upgrade_authority": component.get("upgrade_authority"),
+                "mutation_authority": component.get("mutation_authority"),
+                "concurrency_authority": component.get("concurrency_authority"),
+                "release_manifest_owner": component.get("release_manifest_owner"),
+            }
+        )
     if observed_ids != {"catalog", "resolver"}:
         raise ValueError("AR-9 D1 projection requires exactly Catalog and Resolver")
 
@@ -291,8 +311,12 @@ def runtime_cutover_projection() -> dict[str, object]:
         "generation_identity": {
             "compatibility_version": identity.get("compatibility_version"),
             "fingerprint_policy_version": identity.get("fingerprint_policy_version"),
-            "normal_launch_may_regenerate_browserforge_identity": identity.get("normal_launch_may_regenerate_browserforge_identity"),
-            "incompatible_change_requires_candidate_generation": identity.get("incompatible_change_requires_candidate_generation"),
+            "normal_launch_may_regenerate_browserforge_identity": identity.get(
+                "normal_launch_may_regenerate_browserforge_identity"
+            ),
+            "incompatible_change_requires_candidate_generation": identity.get(
+                "incompatible_change_requires_candidate_generation"
+            ),
         },
         "opsctl": {
             "production_child_process_spawn_sites": opsctl.get("production_child_process_spawn_sites"),
@@ -306,11 +330,61 @@ def runtime_cutover_projection() -> dict[str, object]:
     }
 
 
+def release_architecture_projection() -> dict[str, object]:
+    authority = load_json(RELEASE_ARCHITECTURE_SOURCE)
+    if authority.get("schema_version") != 1 or authority.get("kind") != "AR11_RELEASE_ARCHITECTURE_SOURCE":
+        raise ValueError("AR-11 release architecture source identity/version is invalid")
+    if authority.get("owning_slice") != "AR-11" or authority.get("owning_issue") != AR11_ISSUE:
+        raise ValueError("AR-11 release architecture ownership drifted")
+    if authority.get("canonical_projection") != "architecture/inventory.json::release_architecture":
+        raise ValueError("AR-11 release architecture canonical projection drifted")
+    if authority.get("production_mutation") is not False:
+        raise ValueError("AR-11 release architecture may not mutate production")
+    if authority.get("architecture_complete") is not False or authority.get("production_ready") is not False:
+        raise ValueError("AR-11 release architecture may not advance production state")
+    if authority.get("production_core_gate") != "BLOCKED":
+        raise ValueError("AR-11 release architecture must keep Production Core blocked")
+
+    units = authority.get("activation_units")
+    profiles = authority.get("release_profiles")
+    surfaces = authority.get("execution_surfaces")
+    closures = authority.get("deployment_closures")
+    if not all(isinstance(value, list) for value in (units, profiles, surfaces, closures)):
+        raise ValueError("AR-11 release architecture collections are malformed")
+    if len(units) != 13 or len(profiles) != 5 or len(surfaces) < 20:
+        raise ValueError("AR-11 release architecture coverage is incomplete")
+
+    return {
+        "schema_version": 1,
+        "role": "CURRENT_AR11_RELEASE_ARCHITECTURE_PROJECTION",
+        "source_authority": RELEASE_ARCHITECTURE_SOURCE,
+        "source_sha256": file_sha256(RELEASE_ARCHITECTURE_SOURCE),
+        "source_status": authority.get("status"),
+        "tracking_issue": authority.get("owning_issue"),
+        "principles": authority.get("principles"),
+        "activation_units": units,
+        "release_profiles": profiles,
+        "execution_surfaces": surfaces,
+        "deployment_closures": closures,
+        "component_release_owners": authority.get("component_release_owners"),
+        "promotion_policy": authority.get("promotion_policy"),
+        "compatibility_dimensions": authority.get("compatibility_dimensions"),
+        "artifact_authority": authority.get("artifact_authority"),
+        "effective_state_model": authority.get("effective_state_model"),
+        "release_set": authority.get("release_set"),
+        "architecture_complete": False,
+        "production_core_gate": "BLOCKED",
+        "production_ready": False,
+        "production_mutation": False,
+    }
+
+
 def build_inventory() -> dict[str, object]:
     expected = engine.build_inventory()
     expected["subject_domain_authorities"] = subject_projection()
     expected["d1_evolution"] = d1_evolution_projection()
     expected["runtime_cutover"] = runtime_cutover_projection()
+    expected["release_architecture"] = release_architecture_projection()
     documentation = expected.setdefault("documentation_authority", {})
     documentation["current_credential_authority"] = SUBJECTS["credential_authority"]
     documentation["credential_registry_provenance"] = "architecture/credential-authority-ar8b.json"
@@ -326,6 +400,8 @@ def build_inventory() -> dict[str, object]:
     documentation["d1_evolution_source"] = D1_EVOLUTION_SOURCE
     documentation["runtime_cutover"] = "architecture/inventory.json::runtime_cutover"
     documentation["runtime_cutover_source"] = RUNTIME_CUTOVER_SOURCE
+    documentation["release_architecture"] = "architecture/inventory.json::release_architecture"
+    documentation["release_architecture_source"] = RELEASE_ARCHITECTURE_SOURCE
     return expected
 
 
@@ -337,15 +413,21 @@ def check_current(expected: dict[str, object]) -> None:
     try:
         actual = json.loads(INVENTORY_PATH.read_text(encoding="utf-8"))
     except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise SystemExit(f"architecture inventory is missing or malformed: {INVENTORY_PATH}: {error}") from error
+        raise SystemExit(
+            f"architecture inventory is missing or malformed: {INVENTORY_PATH}: {error}"
+        ) from error
     if actual != expected:
-        raise SystemExit("architecture/inventory.json is stale; run scripts/generate-architecture-inventory.py --write")
+        raise SystemExit(
+            "architecture/inventory.json is stale; run scripts/generate-architecture-inventory.py --write"
+        )
 
 
 def run(command: list[str]) -> None:
     result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
     if result.returncode != 0:
-        details = "\n".join(value.strip() for value in (result.stdout, result.stderr) if value.strip())
+        details = "\n".join(
+            value.strip() for value in (result.stdout, result.stderr) if value.strip()
+        )
         raise SystemExit(details or f"validator failed: {' '.join(command)}")
     if result.stdout.strip():
         print(result.stdout.strip())
@@ -367,23 +449,32 @@ def main() -> int:
     expected = build_inventory()
     if args.write:
         INVENTORY_PATH.write_text(serialized(expected), encoding="utf-8", newline="\n")
-        print("Wrote architecture/inventory.json with accepted AR-10 runtime cutover and current AR-11 projection.")
+        print(
+            "Wrote architecture/inventory.json with accepted AR-10 runtime cutover and current AR-11 release architecture projection."
+        )
     elif args.check:
         check_current(expected)
         engine.validate_full_documentation_authority()
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--check"])
-        print("Architecture inventory projects accepted AR-10 runtime cutover and current AR-11 while production remains blocked.")
+        print(
+            "Architecture inventory projects accepted AR-10 and current AR-11 release architecture while production remains blocked."
+        )
     else:
         engine.self_test(expected)
         mutated = json.loads(serialized(expected))
         mutated.pop("runtime_cutover", None)
         if mutated == expected:
             raise ValueError("AR-10 runtime cutover projection negative fixture did not mutate inventory")
-        try:
-            if mutated == build_inventory():
-                raise ValueError("missing AR-10 runtime cutover projection negative fixture unexpectedly matched")
-        except ValueError:
-            raise
+        if mutated == build_inventory():
+            raise ValueError(
+                "missing AR-10 runtime cutover projection negative fixture unexpectedly matched"
+            )
+        release_mutated = json.loads(serialized(expected))
+        release_mutated.pop("release_architecture", None)
+        if release_mutated == expected or release_mutated == build_inventory():
+            raise ValueError(
+                "missing AR-11 release architecture projection negative fixture unexpectedly matched"
+            )
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--self-test"])
         run(["node", ".github/scripts/architecture-authority-check.mjs", "--self-test"])
         run(["node", ".github/scripts/profile-security-authority-check.mjs", "--self-test"])
