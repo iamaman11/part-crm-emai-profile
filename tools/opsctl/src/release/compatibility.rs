@@ -1,11 +1,15 @@
 use crate::release::authority::ReleaseArchitecture;
 use crate::release::model::{CompatibilityDecision, ReleaseModelError, ReleaseSetManifest};
+use crate::release::static_compatibility;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
 const SCHEMA_VERSION: u64 = 1;
+// The v1 evidence envelope keeps the full accepted vocabulary for replay compatibility,
+// but only provider/runtime facts that cannot be derived from the immutable Release Set
+// are policy inputs. Static API/protocol/runtime decisions in this envelope are ignored.
 const REQUIRED_DIMENSIONS: [&str; 11] = [
     "catalog_d1",
     "resolver_d1",
@@ -17,6 +21,11 @@ const REQUIRED_DIMENSIONS: [&str; 11] = [
     "runtime_bundle",
     "profile_format",
     "browser_identity_policy",
+    "windows_profile_bridge",
+];
+const EXTERNAL_POLICY_DIMENSIONS: [&str; 3] = [
+    "catalog_d1",
+    "resolver_d1",
     "windows_profile_bridge",
 ];
 
@@ -163,31 +172,43 @@ pub fn evaluate(
     }
 
     let mailbox_admin = effective.is_enabled("mailbox_admin");
+    // Static compatibility is Rust-authoritative. Caller-supplied decisions for API,
+    // protocol, Camouhost, runtime/profile format, and browser identity cannot override it.
+    blockers.extend(static_compatibility::evaluate(root, manifest, mailbox_admin)?);
+
     let windows_delivery_present = authority
         .activation_units
         .values()
         .any(|unit| unit.requires_windows_profile_bridge && effective.is_enabled(&unit.id));
     let windows_required = environment == "production" && windows_delivery_present;
-    let required_dimensions = required_dimensions(mailbox_admin, windows_required);
+    let required_dimensions = required_external_dimensions(mailbox_admin, windows_required);
     for name in &required_dimensions {
         let dimension = evidence.dimensions.get(*name).ok_or_else(|| {
             ReleaseModelError::new(format!(
-                "missing compatibility dimension after parse: {name}"
+                "missing external compatibility dimension after parse: {name}"
             ))
         })?;
         match dimension.decision {
             CompatibilityDecision::Compatible => {}
             CompatibilityDecision::Incompatible => {
-                blockers.push(blocker_code(name, false).to_owned());
+                blockers.push(external_blocker_code(name, false).to_owned());
             }
             CompatibilityDecision::Unknown => {
-                blockers.push(blocker_code(name, true).to_owned());
+                blockers.push(external_blocker_code(name, true).to_owned());
             }
         }
     }
 
-    for (name, dimension) in &evidence.dimensions {
-        if !required_dimensions.contains(&name.as_str()) && !dimension.decision.is_compatible() {
+    for name in EXTERNAL_POLICY_DIMENSIONS {
+        if required_dimensions.contains(name) {
+            continue;
+        }
+        let dimension = evidence.dimensions.get(name).ok_or_else(|| {
+            ReleaseModelError::new(format!(
+                "missing external compatibility dimension after parse: {name}"
+            ))
+        })?;
+        if !dimension.decision.is_compatible() {
             warnings.push(format!(
                 "{name} is {} but is outside the selected deployment closure",
                 if dimension.decision == CompatibilityDecision::Unknown {
@@ -240,6 +261,7 @@ impl CompatibilityResult {
             "warnings": self.warnings,
             "required_steps": self.required_steps,
             "rollback_compatibility": self.rollback_compatibility,
+            "static_policy_authority": "opsctl.release.compatibility",
             "mutation_executed": false
         })
     }
@@ -255,22 +277,13 @@ fn blocked(code: &str) -> CompatibilityResult {
     }
 }
 
-fn required_dimensions(mailbox_admin: bool, windows_required: bool) -> BTreeSet<&'static str> {
-    let mut required = [
-        "catalog_d1",
-        "public_api",
-        "frontend_api",
-        "bridge_protocol",
-        "camouhost_ipc",
-        "runtime_bundle",
-        "profile_format",
-        "browser_identity_policy",
-    ]
-    .into_iter()
-    .collect::<BTreeSet<_>>();
+fn required_external_dimensions(
+    mailbox_admin: bool,
+    windows_required: bool,
+) -> BTreeSet<&'static str> {
+    let mut required = ["catalog_d1"].into_iter().collect::<BTreeSet<_>>();
     if mailbox_admin {
         required.insert("resolver_d1");
-        required.insert("resolver_protocol");
     }
     if windows_required {
         required.insert("windows_profile_bridge");
@@ -278,17 +291,9 @@ fn required_dimensions(mailbox_admin: bool, windows_required: bool) -> BTreeSet<
     required
 }
 
-fn blocker_code(name: &str, unknown: bool) -> &'static str {
+fn external_blocker_code(name: &str, unknown: bool) -> &'static str {
     match (name, unknown) {
         ("catalog_d1" | "resolver_d1", _) => "SCHEMA_INCOMPATIBLE",
-        (
-            "public_api" | "frontend_api" | "resolver_protocol" | "bridge_protocol"
-            | "camouhost_ipc",
-            _,
-        ) => "PROTOCOL_INCOMPATIBLE",
-        ("runtime_bundle" | "profile_format" | "browser_identity_policy", _) => {
-            "RUNTIME_INCOMPATIBLE"
-        }
         ("windows_profile_bridge", _) => "WINDOWS_DELIVERY_UNSATISFIED",
         (_, true) => "PROVIDER_STATE_UNKNOWN",
         _ => "RELEASE_INCOMPATIBLE",
@@ -383,15 +388,15 @@ mod tests {
           "dimensions":{
             "catalog_d1":{"decision":"MAYBE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"opsctl.d1.compatibility"},
             "resolver_d1":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"opsctl.d1.compatibility"},
-            "public_api":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"saved"},
-            "frontend_api":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"saved"},
-            "resolver_protocol":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"saved"},
-            "bridge_protocol":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"saved"},
-            "camouhost_ipc":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"saved"},
-            "runtime_bundle":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"saved"},
-            "profile_format":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"saved"},
-            "browser_identity_policy":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"saved"},
-            "windows_profile_bridge":{"decision":"UNKNOWN","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"saved"}
+            "public_api":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
+            "frontend_api":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
+            "resolver_protocol":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
+            "bridge_protocol":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
+            "camouhost_ipc":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
+            "runtime_bundle":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
+            "profile_format":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
+            "browser_identity_policy":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
+            "windows_profile_bridge":{"decision":"UNKNOWN","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"external.windows.delivery"}
           }
         }"#;
         assert!(CompatibilityEvidence::parse_json(input).is_err());
