@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - agent/ar11-release-capability-promotion
 
 permissions:
   contents: read
@@ -14,6 +15,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  projection-maintenance:
+    name: AR-11 deterministic projection maintenance
+    if: github.event_name == 'push' && github.ref == 'refs/heads/agent/ar11-release-capability-promotion' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact branch head with bounded write credentials
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: true
+
+      - name: Generate canonical projection and apply mechanical Rust fixes
+        run: |
+          set -euo pipefail
+          cargo clippy --fix --locked --manifest-path tools/opsctl/Cargo.toml --all-targets --allow-dirty --allow-staged -- -D warnings
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml
+          python scripts/generate-architecture-inventory.py --write
+
+      - name: Enforce generated-change allowlist
+        id: changes
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only)"
+          printf '%s\n' "$changed"
+          if [ -z "$changed" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          while IFS= read -r path; do
+            case "$path" in
+              architecture/inventory.json|tools/opsctl/src/*.rs|tools/opsctl/src/*/*.rs) ;;
+              *) echo "unexpected generated path: $path" >&2; exit 1 ;;
+            esac
+          done <<< "$changed"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit deterministic generated output to the AR-11 branch only
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add architecture/inventory.json tools/opsctl/src
+          git commit -m 'AR-11: regenerate canonical release projection'
+          git push origin HEAD:agent/ar11-release-capability-promotion
+
   linux:
     name: Release capability and promotion policy
     runs-on: ubuntu-latest
@@ -33,6 +82,9 @@ jobs:
         run: |
           node .github/scripts/release-architecture-ar11.mjs
           node .github/scripts/release-architecture-ar11.mjs --self-test
+
+      - name: Verify canonical inventory projection
+        run: python scripts/generate-architecture-inventory.py --check
 
       - name: Verify native opsctl release policy foundation
         run: |
