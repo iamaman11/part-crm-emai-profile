@@ -13,7 +13,6 @@ browser-execution-domain.workspace = true
 encrypted-generation-domain.workspace = true
 profile-platform-primitives.workspace = true
 runtime-bundle-domain.workspace = true
-serde_json.workspace = true
 session-domain.workspace = true
 sha2.workspace = true
 
