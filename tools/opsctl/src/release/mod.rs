@@ -8,6 +8,7 @@ pub mod authority;
 pub mod commands;
 pub mod compatibility;
 pub mod digest;
+pub mod input_topology;
 pub mod model;
 pub mod static_compatibility;
 
