@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,11 +24,14 @@ IPC_VERSION = "1"
 MAX_FRAME_LENGTH = 512
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_URL_BYTES = 2048
+BROWSER_CLOSE_QUIESCENCE_SECONDS = 10.0
+BROWSER_CLOSE_POLL_SECONDS = 0.05
 SESSION_PATTERN = re.compile(r"[A-Za-z0-9_-]{8,96}\Z")
 CONFIG_NAME = "camoufox-config.json"
 USER_DATA_NAME = "user_data"
 BRIDGE_LOCK_NAME = ".profile-platform.lock"
 RUNTIME_LOCK_NAME = "runtime-lock.json"
+FIREFOX_LOCK_NAMES = (".parentlock", "lock")
 
 PROFILE_ROOT_ENV = "CAMOUHOST_PROFILE_ROOT"
 RUNTIME_LOCK_ENV = "CAMOUHOST_RUNTIME_LOCK"
@@ -332,17 +336,107 @@ def launch_verified_context(
         with contextlib.suppress(BaseException):
             with contextlib.redirect_stdout(sys.stderr):
                 manager.__exit__(*sys.exc_info())
+        with contextlib.suppress(BaseException):
+            wait_for_browser_quiescence(root)
         raise
 
 
-def close_context(manager: Any, _context: Any, _root: Path) -> None:
-    # Camoufox.__exit__ synchronously closes the persistent BrowserContext and tears down
-    # Playwright. Firefox may retain user_data/lock or .parentlock path markers after that
-    # clean close; marker presence alone is not evidence that an OS-level writer lock remains.
-    # We therefore never delete those markers and never use their mere existence to relabel a
-    # proven clean close as a crash/recovery event.
+def firefox_writer_locks(root: Path) -> tuple[Path, ...]:
+    user_data_dir = root / USER_DATA_NAME
+    return tuple(user_data_dir / name for name in FIREFOX_LOCK_NAMES)
+
+
+def unix_parent_lock_is_active(path: Path) -> bool:
+    import errno
+    import fcntl
+
+    if path.is_symlink():
+        return True
+    try:
+        descriptor = os.open(path, os.O_RDWR)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise RuntimeContractError("Firefox parent-lock probe failed") from error
+    try:
+        try:
+            fcntl.lockf(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno in (errno.EACCES, errno.EAGAIN):
+                return True
+            raise RuntimeContractError("Firefox parent-lock probe failed") from error
+        fcntl.lockf(descriptor, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(descriptor)
+
+
+def windows_parent_lock_is_active(path: Path) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    if path.is_symlink():
+        return True
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    generic_read_write = 0x80000000 | 0x40000000
+    open_existing = 3
+    handle = create_file(str(path), generic_read_write, 0, None, open_existing, 0, None)
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle == invalid_handle:
+        error = ctypes.get_last_error()
+        if error in (2, 3):
+            return False
+        if error in (32, 33):
+            return True
+        raise RuntimeContractError("Firefox parent-lock probe failed")
+    if not close_handle(handle):
+        raise RuntimeContractError("Firefox parent-lock probe cleanup failed")
+    return False
+
+
+def firefox_writer_active(root: Path) -> bool:
+    parent_lock, legacy_lock = firefox_writer_locks(root)
+    if os.path.lexists(legacy_lock):
+        # Firefox uses this as the Unix symlink fallback. Its presence after a crash is
+        # ambiguous, so never delete or silently waive it here.
+        return True
+    if not os.path.lexists(parent_lock):
+        return False
+    if os.name == "nt":
+        return windows_parent_lock_is_active(parent_lock)
+    if os.name == "posix":
+        return unix_parent_lock_is_active(parent_lock)
+    raise RuntimeContractError("unsupported Firefox lock-probe platform")
+
+
+def wait_for_browser_quiescence(root: Path) -> None:
+    """Wait for Firefox to release its OS profile lock; never remove lock artifacts."""
+    deadline = time.monotonic() + BROWSER_CLOSE_QUIESCENCE_SECONDS
+    while firefox_writer_active(root):
+        if time.monotonic() >= deadline:
+            raise RuntimeContractError("Firefox writer lock remained active after clean close")
+        time.sleep(BROWSER_CLOSE_POLL_SECONDS)
+
+
+def close_context(manager: Any, _context: Any, root: Path) -> None:
     with contextlib.redirect_stdout(sys.stderr):
         manager.__exit__(None, None, None)
+    wait_for_browser_quiescence(root)
 
 
 def materialize_candidate_identity(root: Path) -> dict[str, str]:
