@@ -41,6 +41,7 @@ jobs:
           python scripts/release-compat-evidence-ar11.py --self-test
           python scripts/release-core-overlay-ar11.py --self-test
           python scripts/deployment-snapshot-ar11.py --self-test
+          python scripts/check-release-input-generated-drift-ar11.py
 
       - name: Verify deterministic canonical projection
         run: |
