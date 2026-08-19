@@ -28,6 +28,7 @@ AR10_ISSUE = 368
 AR10_AUTHORITY = "architecture/runtime-cutover-ar10.json"
 AR10_PROJECTION = "architecture/inventory.json::runtime_cutover"
 AR10_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR10.md"
+AR10_IMPLEMENTATION_STATUS = "active_issue_266_ar9_accepted_ar10_current"
 
 
 def ar8_progress(*, projection_fields: bool) -> dict[str, object]:
@@ -87,6 +88,7 @@ def delivery_map(base: dict[str, object]) -> dict[str, object]:
         "source_present_not_equal_production_enabled": True,
         "full_ar8_accepted": True,
         "ar9_accepted": True,
+        "ar9_blocked": False,
         "ar10_blocked": False,
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
@@ -181,6 +183,7 @@ def project_status() -> dict[str, object]:
         "canonical_projection": AR10_PROJECTION,
         "previous_acceptance_evidence": AR9_ACCEPTANCE_EVIDENCE,
     }
+    payload.setdefault("implementation", {})["architecture_rebaseline_v3"] = AR10_IMPLEMENTATION_STATUS
     payload["production_ready"] = False
     payload["as_of"] = "2026-08-19"
     return payload
@@ -243,6 +246,7 @@ def validate(status: dict[str, object], transition: dict[str, object]) -> None:
     required = {
         "full_ar8_accepted": True,
         "ar9_accepted": True,
+        "ar9_blocked": False,
         "ar10_blocked": False,
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
@@ -252,6 +256,8 @@ def validate(status: dict[str, object], transition: dict[str, object]) -> None:
     for key, wanted in required.items():
         if invariants.get(key) != wanted:
             raise ValueError(f"CURRENT_DELIVERY_MAP invariant {key} drifted")
+    if status.get("implementation", {}).get("architecture_rebaseline_v3") != AR10_IMPLEMENTATION_STATUS:
+        raise ValueError("implementation architecture-program status drifted from AR-10 current")
     if current.get("architecture_complete") is not False:
         raise ValueError("architecture must remain incomplete during AR-10")
     if current.get("production_core_gate") != "BLOCKED" or status.get("production_ready") is not False:
@@ -296,6 +302,14 @@ def main() -> int:
             print("Stale AR-9 acceptance issue projection rejected as expected.")
         else:
             raise SystemExit("stale AR-9 acceptance issue negative fixture unexpectedly passed")
+        stale_block = copy.deepcopy(expected_status)
+        stale_block["current"]["current_delivery_map"]["invariants"]["ar9_blocked"] = True
+        try:
+            validate(stale_block, expected_transition)
+        except ValueError:
+            print("Contradictory accepted-and-blocked AR-9 projection rejected as expected.")
+        else:
+            raise SystemExit("accepted-and-blocked AR-9 negative fixture unexpectedly passed")
     return 0
 
 
