@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use bridge_domain::{BridgePortError, CamouhostMessage, CamouhostPort};
 use browser_execution_domain::{
     BrowserIdentityManifest, MaterializationBinding, NetworkClass, NetworkIdentityObservation,
     NetworkIdentityPolicy,
@@ -34,7 +35,7 @@ const MAX_DIAGNOSTIC_SYMLINKS: usize = 32;
 struct FixedObservation(NetworkIdentityObservation);
 
 impl BrowserRuntimeObservationPort for FixedObservation {
-    type Error = bridge_domain::BridgePortError;
+    type Error = BridgePortError;
 
     fn observe(
         &mut self,
@@ -42,6 +43,50 @@ impl BrowserRuntimeObservationPort for FixedObservation {
         _device_id: &DeviceId,
     ) -> Result<BrowserRuntimeObservation, Self::Error> {
         Ok(BrowserRuntimeObservation::new(self.0.clone(), false))
+    }
+}
+
+struct StageTracingCamouhost<C> {
+    inner: C,
+}
+
+impl<C> StageTracingCamouhost<C> {
+    const fn new(inner: C) -> Self {
+        Self { inner }
+    }
+}
+
+impl<C> CamouhostPort for StageTracingCamouhost<C>
+where
+    C: CamouhostPort,
+{
+    fn exchange(
+        &mut self,
+        message: &CamouhostMessage,
+    ) -> Result<CamouhostMessage, BridgePortError> {
+        let stage = match message {
+            CamouhostMessage::Hello { .. } => "hello",
+            CamouhostMessage::Launch { .. } => "launch",
+            CamouhostMessage::Close { .. } => "close",
+            _ => "unexpected_request",
+        };
+        let result = self.inner.exchange(message);
+        match &result {
+            Ok(response) => {
+                let outcome = match response {
+                    CamouhostMessage::HelloAck { .. } => "hello_ack",
+                    CamouhostMessage::Ready { .. } => "ready",
+                    CamouhostMessage::Closed { clean: true, .. } => "closed_clean",
+                    CamouhostMessage::Closed { clean: false, .. } => "closed_unclean",
+                    _ => "unexpected_response",
+                };
+                eprintln!("AR10_MANAGED_IPC_STAGE={stage};OUTCOME={outcome}");
+            }
+            Err(error) => {
+                eprintln!("AR10_MANAGED_IPC_STAGE={stage};ERROR={error:?}");
+            }
+        }
+        result
     }
 }
 
@@ -285,7 +330,8 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
         Some("about:blank".to_owned()),
         None,
     )?;
-    let (mut process, mut camouhost) = ManagedCamouhostProcess::pair(config, slot);
+    let (mut process, camouhost) = ManagedCamouhostProcess::pair(config, slot);
+    let mut camouhost = StageTracingCamouhost::new(camouhost);
     let session = SessionId::parse("session_01JAR10REAL")?;
     RuntimeSessionOrchestrator::launch(&bundle, &session, &mut process, &mut camouhost)?;
     RuntimeSessionOrchestrator::close(&bundle, &session, &mut process, &mut camouhost)?;
