@@ -69,24 +69,1395 @@
       "/bridge"
     ],
     "classifiers": [
-      {"capability":"foundation","module":"crates/control-plane-contract/src/routes/foundation.rs"},
-      {"capability":"identity","module":"crates/control-plane-contract/src/routes/identity.rs"},
-      {"capability":"clients","module":"crates/control-plane-contract/src/routes/clients.rs"},
-      {"capability":"client_mail","module":"crates/control-plane-contract/src/routes/client_mail.rs"},
-      {"capability":"profiles","module":"crates/control-plane-contract/src/routes/profiles.rs"},
-      {"capability":"generations","module":"crates/control-plane-contract/src/routes/generations.rs"},
-      {"capability":"mailboxes","module":"crates/control-plane-contract/src/routes/mailboxes.rs"},
-      {"capability":"devices","module":"crates/control-plane-contract/src/routes/devices.rs"},
-      {"capability":"notifications","module":"crates/control-plane-contract/src/routes/notifications.rs"}
+      {
+        "capability": "foundation",
+        "module": "crates/control-plane-contract/src/routes/foundation.rs"
+      },
+      {
+        "capability": "identity",
+        "module": "crates/control-plane-contract/src/routes/identity.rs"
+      },
+      {
+        "capability": "clients",
+        "module": "crates/control-plane-contract/src/routes/clients.rs"
+      },
+      {
+        "capability": "client_mail",
+        "module": "crates/control-plane-contract/src/routes/client_mail.rs"
+      },
+      {
+        "capability": "profiles",
+        "module": "crates/control-plane-contract/src/routes/profiles.rs"
+      },
+      {
+        "capability": "generations",
+        "module": "crates/control-plane-contract/src/routes/generations.rs"
+      },
+      {
+        "capability": "mailboxes",
+        "module": "crates/control-plane-contract/src/routes/mailboxes.rs"
+      },
+      {
+        "capability": "devices",
+        "module": "crates/control-plane-contract/src/routes/devices.rs"
+      },
+      {
+        "capability": "notifications",
+        "module": "crates/control-plane-contract/src/routes/notifications.rs"
+      }
     ],
-    "public_routes": []
+    "public_routes": [
+      {
+        "route_class": "HealthApi",
+        "capability": "foundation",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/health",
+        "example_path": "/api/v1/health",
+        "authenticated": false
+      },
+      {
+        "route_class": "BindingProbeApi",
+        "capability": "foundation",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/bindings",
+        "example_path": "/api/v1/bindings",
+        "authenticated": false
+      },
+      {
+        "route_class": "AuthenticatedSessionApi",
+        "capability": "foundation",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/session",
+        "example_path": "/api/v1/session",
+        "authenticated": true
+      },
+      {
+        "route_class": "OwnerBootstrapApi",
+        "capability": "identity",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/owner/bootstrap",
+        "example_path": "/api/v1/tenants/tenant_01/owner/bootstrap",
+        "authenticated": true
+      },
+      {
+        "route_class": "OwnerTransferApi",
+        "capability": "identity",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/owner/transfer",
+        "example_path": "/api/v1/tenants/tenant_01/owner/transfer",
+        "authenticated": true
+      },
+      {
+        "route_class": "InvitationCollectionApi",
+        "capability": "identity",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/invitations",
+        "example_path": "/api/v1/tenants/tenant_01/invitations",
+        "authenticated": true
+      },
+      {
+        "route_class": "InvitationAcceptApi",
+        "capability": "identity",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/invitations/{invitation_id}/accept",
+        "example_path": "/api/v1/tenants/tenant_01/invitations/invitation_01/accept",
+        "authenticated": true
+      },
+      {
+        "route_class": "MembershipCollectionApi",
+        "capability": "identity",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/members",
+        "example_path": "/api/v1/tenants/tenant_01/members",
+        "authenticated": true
+      },
+      {
+        "route_class": "MembershipStatusApi",
+        "capability": "identity",
+        "methods": [
+          "PUT"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/members/{actor_id}/status",
+        "example_path": "/api/v1/tenants/tenant_01/members/actor_01/status",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientCollectionApi",
+        "capability": "clients",
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients",
+        "example_path": "/api/v1/tenants/tenant_01/clients",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientResourceApi",
+        "capability": "clients",
+        "methods": [
+          "GET",
+          "PATCH"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientArchiveApi",
+        "capability": "clients",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/archive",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/archive",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientContactApi",
+        "capability": "clients",
+        "methods": [
+          "DELETE",
+          "PUT"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/contacts/{contact_point_id}",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/contacts/contact_01",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientMergeApi",
+        "capability": "clients",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/merge",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/merge",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientHistoryApi",
+        "capability": "clients",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/history",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/history",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientGrantApi",
+        "capability": "clients",
+        "methods": [
+          "DELETE",
+          "PUT"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/grants/{actor_id}",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/grants/actor_01",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientMailSearchApi",
+        "capability": "client_mail",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/mail/search",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/mail/search",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientMailMessageApi",
+        "capability": "client_mail",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/mail/message",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/mail/message",
+        "authenticated": true
+      },
+      {
+        "route_class": "ClientMailSendApi",
+        "capability": "client_mail",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/clients/{client_id}/mail/send",
+        "example_path": "/api/v1/tenants/tenant_01/clients/client_01/mail/send",
+        "authenticated": true
+      },
+      {
+        "route_class": "ProfileCollectionApi",
+        "capability": "profiles",
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/profiles",
+        "example_path": "/api/v1/tenants/tenant_01/profiles",
+        "authenticated": true
+      },
+      {
+        "route_class": "ProfileResourceApi",
+        "capability": "profiles",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}",
+        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01",
+        "authenticated": true
+      },
+      {
+        "route_class": "ProfileAssignmentApi",
+        "capability": "profiles",
+        "methods": [
+          "PUT"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/assignment",
+        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/assignment",
+        "authenticated": true
+      },
+      {
+        "route_class": "ProfileGrantApi",
+        "capability": "profiles",
+        "methods": [
+          "DELETE",
+          "PUT"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/grants/{actor_id}",
+        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/grants/actor_01",
+        "authenticated": true
+      },
+      {
+        "route_class": "ProfileCoordinatorApi",
+        "capability": "profiles",
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/coordinator",
+        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/coordinator",
+        "authenticated": true
+      },
+      {
+        "route_class": "ProfileGenerationCollectionApi",
+        "capability": "generations",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations",
+        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations",
+        "authenticated": true
+      },
+      {
+        "route_class": "ProfileGenerationResourceApi",
+        "capability": "generations",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}",
+        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01",
+        "authenticated": true
+      },
+      {
+        "route_class": "ProfileGenerationVerifyApi",
+        "capability": "generations",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/verify",
+        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/verify",
+        "authenticated": true
+      },
+      {
+        "route_class": "ProfileGenerationActivateApi",
+        "capability": "generations",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/activate",
+        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/activate",
+        "authenticated": true
+      },
+      {
+        "route_class": "ProfileGenerationDeactivateApi",
+        "capability": "generations",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/deactivate",
+        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/deactivate",
+        "authenticated": true
+      },
+      {
+        "route_class": "ProfileGenerationQuarantineApi",
+        "capability": "generations",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/profiles/{profile_id}/generations/{generation_id}/quarantine",
+        "example_path": "/api/v1/tenants/tenant_01/profiles/profile_01/generations/generation_01/quarantine",
+        "authenticated": true
+      },
+      {
+        "route_class": "MailboxBindingCollectionApi",
+        "capability": "mailboxes",
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes",
+        "example_path": "/api/v1/tenants/tenant_01/mailboxes",
+        "authenticated": true
+      },
+      {
+        "route_class": "MailboxBindingResourceApi",
+        "capability": "mailboxes",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}",
+        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01",
+        "authenticated": true
+      },
+      {
+        "route_class": "MailboxBindingRevokeApi",
+        "capability": "mailboxes",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/revoke",
+        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/revoke",
+        "authenticated": true
+      },
+      {
+        "route_class": "MailboxBrowserExecutionBindApi",
+        "capability": "mailboxes",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/browser-execution",
+        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/browser-execution",
+        "authenticated": true
+      },
+      {
+        "route_class": "MailboxJobCollectionApi",
+        "capability": "mailboxes",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs",
+        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs",
+        "authenticated": true
+      },
+      {
+        "route_class": "MailboxJobResourceApi",
+        "capability": "mailboxes",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}",
+        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01",
+        "authenticated": true
+      },
+      {
+        "route_class": "MailboxJobRunApi",
+        "capability": "mailboxes",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/mailboxes/{binding_id}/jobs/{job_id}/run",
+        "example_path": "/api/v1/tenants/tenant_01/mailboxes/mailbox_01/jobs/mailjob_01/run",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobClaimableApi",
+        "capability": "devices",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/claimable",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/claimable",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobClaimApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/claim",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/claim",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobHeartbeatApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/heartbeat",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/heartbeat",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceGenerationUploadCapabilityApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/generation-upload-capability",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-upload-capability",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceGenerationCommitApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/generation-commit",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/generation-commit",
+        "authenticated": true
+      },
+      {
+        "route_class": "DeviceJobOutcomeApi",
+        "capability": "devices",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/device-jobs/{job_id}/outcome",
+        "example_path": "/api/v1/tenants/tenant_01/device-jobs/devjob_01/outcome",
+        "authenticated": true
+      },
+      {
+        "route_class": "NotificationEventCollectionApi",
+        "capability": "notifications",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/notifications/events",
+        "example_path": "/api/v1/tenants/tenant_01/notifications/events",
+        "authenticated": true
+      },
+      {
+        "route_class": "NotificationEventAckApi",
+        "capability": "notifications",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/notifications/events/ack",
+        "example_path": "/api/v1/tenants/tenant_01/notifications/events/ack",
+        "authenticated": true
+      },
+      {
+        "route_class": "NotificationReplayCollectionApi",
+        "capability": "notifications",
+        "methods": [
+          "POST"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/notifications/replays",
+        "example_path": "/api/v1/tenants/tenant_01/notifications/replays",
+        "authenticated": true
+      },
+      {
+        "route_class": "NotificationOperationsApi",
+        "capability": "notifications",
+        "methods": [
+          "GET"
+        ],
+        "path_template": "/api/v1/tenants/{tenant_id}/notifications/operations",
+        "example_path": "/api/v1/tenants/tenant_01/notifications/operations",
+        "authenticated": true
+      }
+    ]
   },
-  "generated_contracts": [],
-  "application_architecture": {},
-  "runtime_authority_cleanup": {},
-  "python_operational_authority": {},
-  "github_governance_authority": {},
-  "credential_authority": {},
+  "generated_contracts": [
+    {
+      "name": "control-plane-public-api",
+      "canonical_source": "crates/control-plane-contract/src/public_api.rs",
+      "openapi": "contracts/generated/control-plane.openapi.json",
+      "typescript": "frontend/src/shared/api/generated/control-plane.ts",
+      "generator": "scripts/generate-frontend-contracts.py"
+    },
+    {
+      "name": "client-registry-api",
+      "canonical_source": "crates/control-plane-contract/src/client_registry_api.rs",
+      "openapi": "openapi/v1/fragments/client-registry.json",
+      "typescript": "frontend/src/shared/api/generated/client-registry.ts",
+      "generator": "scripts/generate-frontend-contracts.py"
+    },
+    {
+      "name": "query-mail-api",
+      "canonical_source": "crates/control-plane-contract/src/bin/export_query_mail.rs",
+      "openapi": "openapi/v1/fragments/query-mail.json",
+      "typescript": "frontend/src/shared/api/generated/query-mail.ts",
+      "generator": "scripts/generate-frontend-contracts.py"
+    },
+    {
+      "name": "operator-query-api",
+      "canonical_source": "crates/control-plane-contract/src/bin/export_operator_query.rs",
+      "openapi": "openapi/v1/fragments/operator-query.json",
+      "typescript": "frontend/src/shared/api/generated/operator-query.ts",
+      "generator": "scripts/generate-frontend-contracts.py"
+    },
+    {
+      "name": "profile-generation-api",
+      "canonical_source": "crates/control-plane-contract/src/profile_generation_api.rs",
+      "openapi": "contracts/generated/profile-generation.openapi.json",
+      "typescript": "frontend/src/shared/api/generated/profile-generation.ts",
+      "generator": "scripts/generate-frontend-contracts.py"
+    },
+    {
+      "name": "mailbox-api",
+      "canonical_source": "crates/control-plane-contract/src/mailbox_api.rs",
+      "openapi": "contracts/generated/mailbox.openapi.json",
+      "typescript": "frontend/src/shared/api/generated/mailbox.ts",
+      "generator": "scripts/generate-frontend-contracts.py"
+    },
+    {
+      "name": "coordinator-api",
+      "canonical_source": "crates/control-plane-contract/src/coordinator_api.rs",
+      "openapi": "contracts/generated/coordinator.openapi.json",
+      "typescript": "frontend/src/shared/api/generated/coordinator.ts",
+      "generator": "scripts/generate-frontend-contracts.py"
+    }
+  ],
+  "application_architecture": {
+    "schema_version": 1,
+    "status": "ACCEPTED_AR4C_APPLICATION_ARCHITECTURE_REMEDIATION",
+    "topology_source": "architecture/runtime-topology-ar2.json",
+    "base_contract_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
+    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
+    "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
+    "composition_taxonomy": [
+      "CONFORMING_COMPOSITION_SEAM",
+      "TRANSPORT_COMPOSITION_DEBT",
+      "ROUTE_OWNERSHIP_DEBT",
+      "INTENTIONAL_RUNTIME_BOUNDARY",
+      "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
+      "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
+      "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
+      "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED"
+    ],
+    "runtime_resources": [
+      {
+        "id": "control_plane_worker",
+        "kind": "WORKER",
+        "owner": "apps/control-plane-worker",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/lib.rs"
+        ]
+      },
+      {
+        "id": "static_assets",
+        "kind": "WORKER_STATIC_ASSETS",
+        "owner": "frontend",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc"
+        ]
+      },
+      {
+        "id": "mailbox_secret_resolver_worker",
+        "kind": "WORKER",
+        "owner": "apps/mailbox-secret-resolver-worker",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc",
+          "architecture/pre2j-d3-resolver-bootstrap-authority.json"
+        ]
+      },
+      {
+        "id": "catalog_d1",
+        "kind": "D1",
+        "owner": "control-plane/catalog",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "migrations/d1"
+        ]
+      },
+      {
+        "id": "resolver_d1",
+        "kind": "D1",
+        "owner": "mailbox-secret-resolver",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc",
+          "migrations/resolver-d1"
+        ]
+      },
+      {
+        "id": "profile_objects",
+        "kind": "R2",
+        "owner": "profile-generation",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc"
+        ]
+      },
+      {
+        "id": "profile_coordinator",
+        "kind": "DURABLE_OBJECT",
+        "owner": "profile/session coordination",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/profile_coordinator.rs"
+        ]
+      },
+      {
+        "id": "notification_hub",
+        "kind": "DURABLE_OBJECT",
+        "owner": "realtime notifications",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/realtime_notifications.rs"
+        ]
+      },
+      {
+        "id": "integration_events",
+        "kind": "QUEUE",
+        "owner": "notifications/integration-events",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "producer": "scheduled D1 outbox dispatcher",
+        "consumer": "control-plane queue handler",
+        "failure_boundary": "D1 durable delivery state + bounded Queue retry; realtime overlay is non-authoritative",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/integration_events.rs"
+        ]
+      },
+      {
+        "id": "mailbox_jobs",
+        "kind": "QUEUE",
+        "owner": "mailbox scheduling",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "producer": "scheduled D1 dispatcher",
+        "consumer": "control-plane queue handler",
+        "failure_boundary": "D1 job/version authority + bounded Queue retry",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/mailbox_scheduling.rs"
+        ]
+      },
+      {
+        "id": "mailbox_jobs_dlq",
+        "kind": "QUEUE_DLQ",
+        "owner": "mailbox operations",
+        "decision": "KEEP",
+        "execution_slice": "PC-3_MUTABLE_RECOVERY_ONLY_AFTER_AUTHORITY",
+        "producer": "MAILBOX_JOBS consumer retry exhaustion",
+        "consumer": "NO_CURRENT_AUTOMATIC_CONSUMER; FUTURE_OPERATOR_RECOVERY",
+        "failure_boundary": "inspect current D1 authority before controlled requeue/rerun/retire",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc"
+        ]
+      },
+      {
+        "id": "generation_verification",
+        "kind": "QUEUE",
+        "owner": "legacy profile-generation transport",
+        "decision": "DELETE",
+        "execution_slice": "AR-5_SOURCE_BINDING_REMOVAL",
+        "producer": "NO_PRODUCTION_PRODUCER_PROVEN; WRANGLER PRODUCER BINDING ONLY",
+        "consumer": "NONE",
+        "failure_boundary": "synchronous generation verification is authoritative",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/lib.rs",
+          "crates/cloudflare-adapters/src/control_plane_queue.rs",
+          "apps/control-plane-worker/src/profile_generations.rs"
+        ]
+      },
+      {
+        "id": "mailbox_secret_resolver_service",
+        "kind": "SERVICE_BINDING",
+        "owner": "mailbox credential boundary",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc",
+          "crates/cloudflare-adapters/src/cloud_mailbox_secrets.rs"
+        ]
+      },
+      {
+        "id": "control_plane_schedule",
+        "kind": "CRON",
+        "owner": "control-plane dispatchers",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/wrangler.jsonc",
+          "apps/control-plane-worker/src/lib.rs"
+        ]
+      },
+      {
+        "id": "resolver_reconciliation_schedule",
+        "kind": "CRON",
+        "owner": "mailbox-secret-resolver key reconciliation",
+        "decision": "KEEP",
+        "execution_slice": "NONE",
+        "evidence": [
+          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc"
+        ]
+      },
+      {
+        "id": "gmail_api",
+        "kind": "PROVIDER_LANE",
+        "owner": "mailbox provider adapters",
+        "decision": "KEEP",
+        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+        "evidence": [
+          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"
+        ]
+      },
+      {
+        "id": "imap_read",
+        "kind": "PROVIDER_LANE",
+        "owner": "mailbox provider adapters",
+        "decision": "KEEP",
+        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+        "evidence": [
+          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"
+        ]
+      },
+      {
+        "id": "smtp_send",
+        "kind": "PROVIDER_LANE",
+        "owner": "outbound mail provider adapters",
+        "decision": "KEEP",
+        "execution_slice": "PC-4_ACTIVATION",
+        "evidence": [
+          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"
+        ]
+      },
+      {
+        "id": "microsoft_graph_oauth_read_delta",
+        "kind": "PROVIDER_LANE",
+        "owner": "mailbox provider adapters",
+        "decision": "KEEP",
+        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+        "evidence": [
+          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs",
+          "apps/control-plane-worker/src/mailbox_microsoft_graph_oauth.rs"
+        ]
+      },
+      {
+        "id": "microsoft_graph_mail_send",
+        "kind": "PROVIDER_LANE",
+        "owner": "outbound mail",
+        "decision": "DEFER",
+        "execution_slice": "SEPARATE_ACCEPTANCE_IF_IMPLEMENTED",
+        "evidence": [
+          "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
+        ]
+      },
+      {
+        "id": "browser_bridge_mailbox_lane",
+        "kind": "LOCAL_RUNTIME_LANE",
+        "owner": "Profile Bridge/browser mailbox execution",
+        "decision": "KEEP",
+        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
+        "evidence": [
+          "apps/profile-bridge",
+          "apps/control-plane-worker/src/mailbox_bindings.rs"
+        ]
+      }
+    ],
+    "runtime_processes": [
+      {
+        "id": "control_plane_worker",
+        "runtime_kind": "CLOUDFLARE_WORKER",
+        "entrypoint": "apps/control-plane-worker/src/lib.rs",
+        "transport_owner": "apps/control-plane-worker",
+        "route_classifier": "crates/control-plane-contract/src/lib.rs::classify_route",
+        "composition_root": "apps/control-plane-worker/src/composition.rs",
+        "state_authority": "D1/application-owned repositories plus accepted R2/DO runtime boundaries",
+        "resource_refs": [
+          "control_plane_worker",
+          "static_assets",
+          "catalog_d1",
+          "profile_objects",
+          "profile_coordinator",
+          "notification_hub",
+          "integration_events",
+          "mailbox_jobs",
+          "mailbox_jobs_dlq",
+          "generation_verification",
+          "mailbox_secret_resolver_service",
+          "control_plane_schedule"
+        ],
+        "status": "CENTRAL_COMPOSITION_ROOT_AR4A_ACCEPTED"
+      },
+      {
+        "id": "mailbox_secret_resolver_worker",
+        "runtime_kind": "ISOLATED_CLOUDFLARE_WORKER",
+        "entrypoint": "apps/mailbox-secret-resolver-worker/src/lib.rs",
+        "transport_owner": "apps/mailbox-secret-resolver-worker",
+        "composition_root": "apps/mailbox-secret-resolver-worker",
+        "state_authority": "dedicated resolver D1 encrypted credential/replay boundary",
+        "resource_refs": [
+          "mailbox_secret_resolver_worker",
+          "resolver_d1",
+          "resolver_reconciliation_schedule"
+        ],
+        "status": "INTENTIONAL_RUNTIME_BOUNDARY"
+      },
+      {
+        "id": "profile_bridge",
+        "runtime_kind": "WINDOWS_LOCAL_RUNTIME",
+        "entrypoint": "apps/profile-bridge/src/main.rs",
+        "transport_owner": "apps/profile-bridge",
+        "composition_root": "apps/profile-bridge",
+        "state_authority": "local encrypted workspace/cache/outbox under cloud device/profile authority",
+        "resource_refs": [
+          "browser_bridge_mailbox_lane"
+        ],
+        "status": "INTENTIONAL_RUNTIME_BOUNDARY"
+      }
+    ],
+    "capability_ownership": [
+      {
+        "id": "identity",
+        "transport": "apps/control-plane-worker/src/identity.rs",
+        "application_owner": "crates/use-cases-identity",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "clients",
+        "transport": "apps/control-plane-worker/src/clients.rs",
+        "application_owner": "crates/use-cases-clients",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "operator_queries",
+        "transport": "apps/control-plane-worker/src/operator_queries.rs",
+        "application_owner": "crates/use-cases-query",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::query_repository",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
+        "remediation_slice": "AR-4A"
+      },
+      {
+        "id": "client_mail_query",
+        "transport": "apps/control-plane-worker/src/client_mail_query.rs",
+        "application_owner": "crates/use-cases-query",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::{query_repository,client_mail_eligibility_repository,client_mail_query_provider}",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
+        "remediation_slice": "AR-4A"
+      },
+      {
+        "id": "outbound_mail",
+        "transport": "apps/control-plane-worker/src/client_mail_send.rs",
+        "application_owner": "crates/use-cases-mailboxes::outbound_mail",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::{client_mail_eligibility_repository,query_repository,client_mail_query_provider,outbound_mail_intent_repository,client_mail_outbound_provider}",
+        "status": "AR4C_COMPOSITION_EXTRACTION_ACCEPTED",
+        "remediation_slice": "AR-4C"
+      },
+      {
+        "id": "profiles",
+        "transport": "apps/control-plane-worker/src/profiles.rs",
+        "application_owner": "crates/use-cases::profiles/profile_assignments/profile_grants",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::profile_application",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "profile_generations",
+        "transport": "apps/control-plane-worker/src/profile_generations.rs",
+        "application_owner": "crates/use-cases::generations",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::profile_generation_application",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "mailbox_bindings",
+        "transport": "apps/control-plane-worker/src/mailbox_bindings.rs",
+        "application_owner": "crates/use-cases-mailboxes",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "mailbox_jobs",
+        "transport": "apps/control-plane-worker/src/mailbox_jobs.rs",
+        "application_owner": "crates/use-cases-mailboxes",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::{mailbox_job_application,mailbox_job_provider}",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
+        "remediation_slice": "AR-4A"
+      },
+      {
+        "id": "devices",
+        "transport": "apps/control-plane-worker/src/device_jobs.rs",
+        "application_owner": "crates/use-cases-devices",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs",
+        "status": "CONFORMING_COMPOSITION_SEAM",
+        "remediation_slice": null
+      },
+      {
+        "id": "notifications",
+        "transport": "apps/control-plane-worker/src/notifications.rs",
+        "application_owner": "crates/use-cases-notifications",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "apps/control-plane-worker/src/composition.rs::{notification_operations_repository,notification_cursor_repository}",
+        "status": "AR4A_CENTRALIZED_COMPOSITION_ACCEPTED",
+        "remediation_slice": "AR-4A"
+      },
+      {
+        "id": "profile_coordination",
+        "transport": "apps/control-plane-worker/src/profile_coordinator_ingress.rs",
+        "application_owner": "crates/use-cases::coordinator_ingress + crates/session-domain",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "accepted coordinator ingress/adapter boundary",
+        "status": "INTENTIONAL_RUNTIME_BOUNDARY",
+        "remediation_slice": null
+      },
+      {
+        "id": "mailbox_secret_resolution",
+        "transport": "apps/mailbox-secret-resolver-worker/src/lib.rs",
+        "application_owner": "apps/mailbox-secret-resolver-worker application/security modules",
+        "ports_owner": "resolver-private contract/storage/provider boundary",
+        "composition_seam": "isolated resolver Worker and dedicated resolver D1",
+        "status": "INTENTIONAL_RUNTIME_BOUNDARY",
+        "remediation_slice": null
+      },
+      {
+        "id": "profile_bridge_runtime",
+        "transport": "apps/profile-bridge/src/main.rs",
+        "application_owner": "bridge/device/browser runtime domains and application ports",
+        "ports_owner": "crates/application-ports",
+        "composition_seam": "Windows Profile Bridge runtime boundary",
+        "status": "INTENTIONAL_RUNTIME_BOUNDARY",
+        "remediation_slice": "AR-15_DELIVERY_ONLY"
+      }
+    ],
+    "composition_findings": [
+      {
+        "id": "general_composition_root_debt",
+        "status": "AR4A_COMPOSITION_ROOT_CONSOLIDATION_ACCEPTED",
+        "owner_slice": "AR-4A",
+        "evidence": [
+          "apps/control-plane-worker/src/composition.rs::query_repository",
+          "apps/control-plane-worker/src/composition.rs::notification_operations_repository",
+          "apps/control-plane-worker/src/composition.rs::notification_cursor_repository",
+          "apps/control-plane-worker/src/composition.rs::client_mail_eligibility_repository",
+          "apps/control-plane-worker/src/composition.rs::client_mail_query_provider",
+          "apps/control-plane-worker/src/composition.rs::mailbox_job_provider"
+        ]
+      },
+      {
+        "id": "client_mail_route_ownership",
+        "status": "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
+        "owner_slice": "AR-4B",
+        "evidence": [
+          "crates/control-plane-contract/src/routes/client_mail.rs::ClientMailSearchApi",
+          "crates/control-plane-contract/src/routes/client_mail.rs::ClientMailMessageApi",
+          "crates/control-plane-contract/src/routes/client_mail.rs::ClientMailSendApi"
+        ]
+      },
+      {
+        "id": "outbound_mail_composition",
+        "status": "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED",
+        "owner_slice": "AR-4C",
+        "evidence": [
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::outbound_mail_intent_repository",
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::client_mail_outbound_provider",
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::D1OutboundMailIntentRepository::new",
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::D1MailboxRepository::new",
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::CloudflareGmailOutboundMailProvider::new",
+          "apps/control-plane-worker/src/composition/outbound_mail.rs::CloudflareSmtpOutboundMailProvider::new"
+        ]
+      },
+      {
+        "id": "profile_application_extraction",
+        "status": "CONDITIONAL_EXTRACTION_NOT_REQUIRED",
+        "owner_slice": "AR-4D",
+        "decision": "NOT_REQUIRED",
+        "evidence": [
+          "apps/control-plane-worker/src/profiles.rs::crate::composition::profile_application",
+          "apps/control-plane-worker/src/profile_generations.rs::crate::composition::profile_generation_application",
+          "crates/use-cases/src/lib.rs::profiles",
+          "crates/use-cases/src/lib.rs::generations"
+        ]
+      }
+    ],
+    "remediation_state": {
+      "accepted_through": "AR-4C",
+      "status": "ACCEPTED",
+      "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
+      "next_required_slice": "AR-5"
+    },
+    "conditional_ar4d": {
+      "decision": "NOT_REQUIRED",
+      "reason": "Profile and Generation transports already use explicit composition seams; no measurable dependency-isolation benefit currently justifies extraction",
+      "reopen_policy": "ONLY_BY_LATER_ACCEPTED_EVIDENCE"
+    },
+    "next_required_slice_after_ar4c": "AR-5",
+    "production_mutation": false
+  },
+  "runtime_authority_cleanup": {
+    "schema_version": 1,
+    "status": "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP",
+    "topology_decision_source": "architecture/runtime-topology-ar2.json",
+    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
+    "implementation_issue": 290,
+    "implementation_pr": 291,
+    "exact_green_head": "afed435bb714794d6c4f252be6b44c592ee31b2b",
+    "implementation_merge": "82d251a1d6666199c6eace393eedc1766157fcee",
+    "applicable_permanent_workflows": "13/13",
+    "generation_verification": {
+      "topology_decision": "DELETE",
+      "wrangler_producer_binding": "ABSENT",
+      "runtime_contract_binding": "ABSENT",
+      "deployment_manifest_identity": "ABSENT",
+      "queue_workload": "ABSENT",
+      "verification_authority": "SYNCHRONOUS_APPLICATION_ROUTE"
+    },
+    "preserved_queue_producers": [
+      "INTEGRATION_EVENTS",
+      "MAILBOX_JOBS"
+    ],
+    "application_architecture_accepted_through": "AR-4C",
+    "ar4d": "NOT_REQUIRED_UNLESS_LATER_ACCEPTED_EVIDENCE_REOPENS",
+    "production_mutation": false,
+    "next_required_slice": "AR-6"
+  },
+  "python_operational_authority": {
+    "schema_version": 1,
+    "status": "ACCEPTED_AR6_PYTHON_OPSCTL_FOUNDATION",
+    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR6.md",
+    "python_estate": "architecture/python-estate-ar6.json",
+    "implementation_issue": 294,
+    "implementation_pr": 295,
+    "exact_green_head": "9b06d542873ffa3122e53e107105098e21f5933c",
+    "implementation_merge": "d0229fedd81ee870822b6d9394bc4ee313ea3a3c",
+    "applicable_permanent_workflows": "13/13",
+    "python_summary": {
+      "tracked_python_files": 116,
+      "KEEP_PYTHON": 108,
+      "MIGRATE_TO_RUST": 2,
+      "DELETE_AFTER_SEQUENCE": 6,
+      "WRAP_WITH_RUST": 0
+    },
+    "opsctl": {
+      "path": "tools/opsctl",
+      "mode": "READ_ONLY_FOUNDATION",
+      "commands": [
+        "doctor",
+        "status",
+        "inventory"
+      ],
+      "third_party_dependencies": false,
+      "provider_mutation": false
+    },
+    "future_cutovers": {
+      "AR-10": "DELETE_AFTER_SEQUENCE",
+      "AR-11": "MIGRATE_TO_RUST"
+    },
+    "application_architecture_accepted_through": "AR-4C",
+    "runtime_authority_cleanup_accepted_through": "AR-5",
+    "production_mutation": false,
+    "next_required_slice": "AR-7"
+  },
+  "github_governance_authority": {
+    "schema_version": 1,
+    "status": "ACCEPTED_AR7_GITHUB_GOVERNANCE",
+    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR7.md",
+    "contract": "architecture/github-governance-ar7.json",
+    "validator": ".github/scripts/github-governance.mjs",
+    "workflow": ".github/workflows/github-governance-gate.yml",
+    "implementation_issue": 298,
+    "implementation_pr": 299,
+    "exact_green_head": "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7",
+    "implementation_merge": "3492273cb9237850e3fa27343cc5edbdb0f66aa1",
+    "applicable_permanent_workflows": "14/14",
+    "hosted_audit": {
+      "run_id": 31953316327,
+      "contract_job": "success",
+      "hosted_state_job": "success"
+    },
+    "direct_main_negative_probe": {
+      "result": "HTTP_409_REJECTED",
+      "message": "Changes must be made through a pull request. 21 of 21 required status checks are expected.",
+      "sentinel_present_after_probe": false
+    },
+    "main_protection": {
+      "mechanism": "classic_branch_protection",
+      "required_check_count": 21,
+      "require_pull_request": true,
+      "require_conversation_resolution": true,
+      "enforce_admins": true,
+      "strict_required_status_checks": true,
+      "allow_force_pushes": false,
+      "allow_deletions": false
+    },
+    "environments": {
+      "rehearsal": {
+        "allowed_branches": [
+          "main"
+        ],
+        "minimum_reviewers": 0
+      },
+      "staging": {
+        "allowed_branches": [
+          "main"
+        ],
+        "minimum_reviewers": 0
+      },
+      "production": {
+        "allowed_branches": [
+          "main"
+        ],
+        "minimum_reviewers": 1,
+        "can_admins_bypass": false
+      }
+    },
+    "production_mutation": false,
+    "next_required_slice": "AR-8"
+  },
+  "credential_authority": {
+    "schema_version": 1,
+    "status": "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY",
+    "source_authority": "architecture/credential-authority-ar8b.json",
+    "source_git_blob_sha1": "cc348ef7b6454d7272b99340c64518ab3620d1e5",
+    "metadata_only": true,
+    "canonical_environments": [
+      "rehearsal",
+      "staging",
+      "production"
+    ],
+    "invariants": {
+      "plaintext_in_git": "FORBIDDEN",
+      "competing_registry": "FORBIDDEN",
+      "mutable_authorities_per_concern": 1,
+      "production_mutation": false,
+      "ar9_blocked": true
+    },
+    "authority_counts": {
+      "credentials": 18,
+      "dynamic_credential_domains": 1,
+      "future_trust_domains": 1
+    },
+    "authority_ids": [
+      "github.governance-audit",
+      "github.hosted-admin-operator",
+      "github.ar8c-staging-bootstrap-admin",
+      "cloudflare.ar8c-staging-bootstrap",
+      "cloudflare.ar8c-token-issuer-bootstrap",
+      "github.actions-runtime-api",
+      "cloudflare.platform-api",
+      "cloudflare.access-service-auth",
+      "cloudflare.resolver-secret-bundle-transport",
+      "cloudflare.control-plane-secret-bundle-transport",
+      "cloudflare.deploy-manifest-protected-input",
+      "control-plane.client-contact-protection",
+      "mailbox-resolver.caller-auth",
+      "profile-generation.r2-access",
+      "resolver.encryption-keyring",
+      "resolver.handle-hmac",
+      "resolver.google-oauth-application",
+      "resolver.microsoft-oauth-application",
+      "resolver.mailbox-credentials",
+      "windows.release-signing-trust"
+    ],
+    "static_binding_names": [
+      "CLIENT_CONTACT_PROTECTION_KEYRING",
+      "CLOUDFLARE_ACCESS_CLIENT_ID",
+      "CLOUDFLARE_ACCESS_CLIENT_SECRET",
+      "CLOUDFLARE_API_TOKEN",
+      "CLOUDFLARE_BOOTSTRAP_TOKEN",
+      "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON",
+      "CLOUDFLARE_DEPLOY_MANIFEST_JSON",
+      "CLOUDFLARE_RESOLVER_SECRETS_JSON",
+      "CLOUDFLARE_TOKEN_ISSUER_TOKEN",
+      "GH_ADMIN_OPERATOR_TOKEN",
+      "GH_BOOTSTRAP_ADMIN_TOKEN",
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
+      "GOOGLE_OAUTH_CLIENT_SECRET",
+      "GOVERNANCE_AUDIT_TOKEN",
+      "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
+      "MAILBOX_RESOLVER_ENCRYPTION_KEYRING",
+      "MAILBOX_RESOLVER_HANDLE_HMAC_KEY",
+      "MICROSOFT_OAUTH_CLIENT_SECRET",
+      "R2_GENERATION_ACCESS_KEY_ID",
+      "R2_GENERATION_SECRET_ACCESS_KEY"
+    ],
+    "future_cutovers": {
+      "github.governance-audit": "AR-8C",
+      "github.hosted-admin-operator": "AR-8C",
+      "github.ar8c-staging-bootstrap-admin": "AR-8C",
+      "cloudflare.ar8c-staging-bootstrap": "AR-8C",
+      "cloudflare.ar8c-token-issuer-bootstrap": "AR-8C",
+      "github.actions-runtime-api": "EXISTING_GITHUB_ACTIONS_RUNTIME",
+      "cloudflare.platform-api": "AR-8C",
+      "cloudflare.access-service-auth": "AR-8C",
+      "cloudflare.resolver-secret-bundle-transport": "AR-8C",
+      "cloudflare.control-plane-secret-bundle-transport": "AR-8C",
+      "cloudflare.deploy-manifest-protected-input": "AR-8C",
+      "control-plane.client-contact-protection": "AR-8D",
+      "mailbox-resolver.caller-auth": "AR-8D",
+      "profile-generation.r2-access": "AR-8C",
+      "resolver.encryption-keyring": "AR-8D",
+      "resolver.handle-hmac": "AR-8D",
+      "resolver.google-oauth-application": "AR-8E",
+      "resolver.microsoft-oauth-application": "AR-8E",
+      "resolver.mailbox-credentials": "EXISTING_AR8A",
+      "windows.release-signing-trust": "AR-15B"
+    },
+    "operational_lifecycle": {
+      "schema_version": 1,
+      "status": "ACCEPTED_AR8C_OPERATIONAL_CREDENTIAL_LIFECYCLE",
+      "implementation_issue": 314,
+      "accepted_base": "4e4d1c25226384858ca8905377ee155bedabc6d4",
+      "metadata_only": true,
+      "stage_order": [
+        "issue_or_import",
+        "validate",
+        "bind",
+        "switch",
+        "verify",
+        "revoke_previous"
+      ],
+      "concern_ids": [
+        "cloudflare.access-service-auth",
+        "cloudflare.ar8c-staging-bootstrap",
+        "cloudflare.ar8c-token-issuer-bootstrap",
+        "cloudflare.control-plane-secret-bundle-transport",
+        "cloudflare.deploy-manifest-protected-input",
+        "cloudflare.platform-api",
+        "cloudflare.resolver-secret-bundle-transport",
+        "github.ar8c-staging-bootstrap-admin",
+        "github.governance-audit",
+        "github.hosted-admin-operator",
+        "profile-generation.r2-access"
+      ],
+      "hosted_reconciliation": {
+        "github": {
+          "accepted_main_only": true,
+          "pull_request_exposure": false,
+          "metadata_only": true,
+          "readback_values": false,
+          "executor_binding": "GH_ADMIN_OPERATOR_TOKEN",
+          "live_audit_environments": [
+            "staging"
+          ]
+        },
+        "cloudflare": {
+          "accepted_main_only": true,
+          "audit_environment": "staging",
+          "read_only": true,
+          "api_token_binding": "CLOUDFLARE_API_TOKEN",
+          "verify_endpoint": "GET /user/tokens/verify",
+          "required_token_status": "active",
+          "worker_secret_contract_source": "wrangler.secrets.required",
+          "deploy_manifest_binding": "CLOUDFLARE_DEPLOY_MANIFEST_JSON",
+          "secret_binding_metadata_endpoint": "GET /accounts/{account_id}/workers/scripts/{script_name}/secrets/{secret_name}"
+        }
+      },
+      "production_mutation": false,
+      "opsctl_mutation": false,
+      "acceptance": {
+        "issue": 314,
+        "implementation_pr": 315,
+        "implementation_exact_green_head": "8e2e699156bdbca085b44a73b331cf3922b79c54",
+        "implementation_merge": "7cdfdfc3982f23635017d9352a8c08a903e00f33",
+        "applicable_permanent_workflows": "14/14",
+        "hosted_verified_main": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b",
+        "provider_bootstrap": {
+          "run_id": 32063820617,
+          "run_attempt": 1,
+          "source_sha": "03c8b2280a9ed592569a68a2cf8c8e1f549957a6",
+          "conclusion": "success"
+        },
+        "promotion": {
+          "run_id": 32068326946,
+          "run_attempt": 2,
+          "source_sha": "a78f29a1bf402c83fab3a813bf89115519d0dd98",
+          "conclusion": "success",
+          "resolver_release": {
+            "run_id": 32067978790,
+            "artifact_id": 9300729822,
+            "artifact_digest": "sha256:a20090bef6ac570d9dc0db07d705ec86aef35f958bbe1d2be0b5b1f4f9d63c5f",
+            "release_id": "mailbox-secret-resolver-v1-sha256-c4e94819e2e8abfdec65115809cf536a6e68d86d3029bcc58413dbcf787fb788",
+            "worker_sha256": "5ce3d4ad47b52c045d4a610d325320e706265e1abb0db64b368cc7962f503f28"
+          },
+          "control_plane_release": {
+            "run_id": 32067978783,
+            "artifact_id": 9300736107,
+            "artifact_digest": "sha256:d512fea2ceeb1ce5825e7474438907cdfb70ab0ec8743112306e0d6282abc52b",
+            "release_id": "cloudflare-v1-sha256-1f5aec9c82e4e5002bfc2a2e9111fef5b5b3bd94bdd851994197b480baeabb6f"
+          },
+          "evidence_artifact": {
+            "artifact_id": 9300866099,
+            "artifact_digest": "sha256:62034d3b9b8d7b101a7652c2d86833fb7014029ccbd64cf4af69dab303c35751"
+          },
+          "d1_exact_match": true,
+          "access_health_smoke": "success"
+        },
+        "bootstrap_retirement": {
+          "run_id": 32070555089,
+          "run_attempt": 1,
+          "source_sha": "e083b44eddff852672e62609978fe1dbad99227f",
+          "conclusion": "success"
+        },
+        "steady_state_governance": {
+          "run_id": 32071104508,
+          "run_attempt": 1,
+          "source_sha": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b",
+          "contract_job": "success",
+          "github_hosted_state_job": "success",
+          "operational_credential_hosted_state_job": "success"
+        },
+        "metadata_only": true,
+        "production_mutation": false
+      }
+    }
+  },
   "current_delivery_map": {
     "schema_version": 1,
     "canonical_authority": "architecture/inventory.json::current_delivery_map",
@@ -139,7 +1510,7 @@
     "invariants": {
       "source_present_not_equal_production_enabled": true,
       "full_ar8_accepted": true,
-      "ar9_blocked": false,
+      "ar9_blocked": true,
       "architecture_complete": false,
       "production_core_gate": "BLOCKED",
       "production_ready": false,
@@ -148,10 +1519,531 @@
       "ar10_blocked": false
     }
   },
-  "documentation_authority": {},
-  "document_status": [],
-  "program_state": {},
-  "subject_domain_authorities": {},
-  "d1_evolution": {},
-  "runtime_cutover": {}
+  "documentation_authority": {
+    "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+    "tracking_issue": 266,
+    "current_slice": "AR-10",
+    "transition": "architecture/architecture-rebaseline-v3-transition.json",
+    "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
+    "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
+    "runtime_topology_projection_owner": "AR-3",
+    "runtime_authority_cleanup_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
+    "python_operational_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR6.md",
+    "python_estate": "architecture/python-estate-ar6.json",
+    "github_governance_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR7.md",
+    "github_governance_contract": "architecture/github-governance-ar7.json",
+    "credential_authority_source": "architecture/credential-authority-ar8b.json",
+    "credential_authority_projection": "architecture/inventory.json::credential_authority",
+    "current_delivery_map": "architecture/inventory.json::current_delivery_map",
+    "ar8_umbrella_issue": 308,
+    "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
+    "application_architecture_base_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
+    "application_architecture_projection": "architecture/inventory.json::application_architecture",
+    "development_projection": "docs/DEVELOPMENT_PLAN.md",
+    "readiness_projection": "docs/status.json",
+    "index": "docs/INDEX.md",
+    "architecture": "docs/ARCHITECTURE.md",
+    "data_classification": "docs/DATA_CLASSIFICATION.md",
+    "ui_target": "docs/UI_ARCHITECTURE.md",
+    "accepted_capabilities": "docs/DEVELOPER_CAPABILITY_MATRIX.md",
+    "security": "docs/THREAT_MODEL.md",
+    "accepted_phase_ledger": "architecture/accepted-phases.json",
+    "historical_pre2j_product_readiness": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
+    "historical_pre2j_architecture_closeout": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+    "current_credential_authority": "architecture/credential-authority.json",
+    "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
+    "credential_lifecycle": "architecture/credential-lifecycle.json",
+    "operator_contract": "architecture/operator-contract.json",
+    "profile_security": "architecture/profile-security.json",
+    "ar8_completion_tracking_issue": 361,
+    "ar8_completion_pr": 362,
+    "ar8_acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
+    "ar9_acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
+    "d1_evolution": "architecture/inventory.json::d1_evolution",
+    "d1_evolution_source": "architecture/d1-evolution-ar9.json",
+    "runtime_cutover": "architecture/inventory.json::runtime_cutover",
+    "runtime_cutover_source": "architecture/runtime-cutover-ar10.json"
+  },
+  "document_status": [
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+      "status": "CURRENT_AUTHORITY",
+      "scope": "architecture_program_execution"
+    },
+    {
+      "path": "docs/DEVELOPMENT_PLAN.md",
+      "status": "GENERATED_PROJECTION",
+      "scope": "product_program_projection_and_accepted_phase_provenance"
+    },
+    {
+      "path": "docs/status.json",
+      "status": "GENERATED_PROJECTION",
+      "scope": "machine_readable_program_and_readiness_state"
+    },
+    {
+      "path": "docs/INDEX.md",
+      "status": "GENERATED_PROJECTION",
+      "scope": "documentation_authority_navigation"
+    },
+    {
+      "path": "README.md",
+      "status": "GENERATED_PROJECTION",
+      "scope": "repository_entrypoint"
+    },
+    {
+      "path": "docs/README.md",
+      "status": "GENERATED_PROJECTION",
+      "scope": "documentation_entrypoint"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "status": "STABLE_AUTHORITY",
+      "scope": "accepted_architecture_invariants"
+    },
+    {
+      "path": "docs/DATA_CLASSIFICATION.md",
+      "status": "STABLE_AUTHORITY",
+      "scope": "data_privacy_classification"
+    },
+    {
+      "path": "docs/THREAT_MODEL.md",
+      "status": "STABLE_AUTHORITY",
+      "scope": "repository_security_threat_model"
+    },
+    {
+      "path": "docs/UI_ARCHITECTURE.md",
+      "status": "STABLE_AUTHORITY",
+      "scope": "ui_architecture_target"
+    },
+    {
+      "path": "docs/DEVELOPER_CAPABILITY_MATRIX.md",
+      "status": "STABLE_AUTHORITY",
+      "scope": "accepted_capability_evidence"
+    },
+    {
+      "path": "architecture/accepted-phases.json",
+      "status": "STABLE_AUTHORITY",
+      "scope": "immutable_accepted_product_phase_provenance"
+    },
+    {
+      "path": "architecture/architecture-rebaseline-v3-transition.json",
+      "status": "GENERATED_PROJECTION",
+      "scope": "architecture_program_transition_state"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR0.md",
+      "status": "EVIDENCE",
+      "scope": "ar0_research_acceptance"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md",
+      "status": "EVIDENCE",
+      "scope": "ar0_second_pass_research"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
+      "status": "EVIDENCE",
+      "scope": "ar2_runtime_topology_and_d3_compatibility_acceptance"
+    },
+    {
+      "path": "architecture/runtime-topology-ar2.json",
+      "status": "STABLE_AUTHORITY",
+      "scope": "accepted_ar2_runtime_topology_decision_input_for_ar3"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
+      "status": "EVIDENCE",
+      "scope": "ar3_application_architecture_contract_accepted"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md",
+      "status": "EVIDENCE",
+      "scope": "ar4a_composition_root_consolidation_accepted"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md",
+      "status": "EVIDENCE",
+      "scope": "ar4b_client_mail_route_ownership_accepted"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
+      "status": "EVIDENCE",
+      "scope": "ar4c_outbound_mail_composition_accepted"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
+      "status": "EVIDENCE",
+      "scope": "ar5_runtime_authority_cleanup_accepted"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR6.md",
+      "status": "EVIDENCE",
+      "scope": "ar6_python_estate_and_read_only_opsctl_accepted"
+    },
+    {
+      "path": "architecture/python-estate-ar6.json",
+      "status": "STABLE_AUTHORITY",
+      "scope": "accepted_ar6_full_python_disposition"
+    },
+    {
+      "path": "docs/ARCHITECTURE_REBASELINE_V3_AR7.md",
+      "status": "EVIDENCE",
+      "scope": "ar7_github_governance_and_operational_boundaries_accepted"
+    },
+    {
+      "path": "architecture/github-governance-ar7.json",
+      "status": "STABLE_AUTHORITY",
+      "scope": "accepted_ar7_github_governance_contract"
+    },
+    {
+      "path": "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md",
+      "status": "EVIDENCE",
+      "scope": "ar8c_protected_staging_provider_execution_authority"
+    },
+    {
+      "path": "architecture/ar8-staging-provider-bootstrap-contract.json",
+      "status": "STABLE_AUTHORITY",
+      "scope": "ar8c_staging_provider_execution_contract"
+    },
+    {
+      "path": "docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json",
+      "status": "EVIDENCE",
+      "scope": "post_ar8c_cleanup_dx_acceptance"
+    },
+    {
+      "path": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
+      "status": "ACCEPTED_HISTORICAL",
+      "scope": "superseded_predecessor_forward_execution"
+    },
+    {
+      "path": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+      "status": "ACCEPTED_HISTORICAL",
+      "scope": "accepted_r1_r9_closeout"
+    },
+    {
+      "path": "IMPLEMENTATION_PLAN.md",
+      "status": "SUPERSEDED",
+      "scope": "compatibility_entrypoint_to_preserved_history"
+    },
+    {
+      "path": "PROFILE_LIFECYCLE_PLAN.md",
+      "status": "SUPERSEDED",
+      "scope": "compatibility_entrypoint_to_preserved_history"
+    }
+  ],
+  "program_state": {
+    "accepted_product_phase": "Phase 2I",
+    "accepted_architecture_slices": [
+      "AR-0",
+      "AR-1",
+      "AR-2",
+      "AR-3",
+      "AR-4A",
+      "AR-4B",
+      "AR-4C",
+      "AR-5",
+      "AR-6",
+      "AR-7",
+      "AR-8",
+      "AR-9"
+    ],
+    "current_architecture_slice": "AR-10",
+    "next_architecture_slice_after_acceptance": "AR-11",
+    "ar8_progress": {
+      "umbrella_issue": 308,
+      "accepted_subslices": [
+        "AR-8A",
+        "AR-8B",
+        "AR-8C",
+        "AR-8D",
+        "AR-8E",
+        "AR-8F"
+      ],
+      "current_subslice": null,
+      "current_implementation_issue": null,
+      "mandatory_remaining": [],
+      "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
+      "full_ar8_accepted": true,
+      "ar9_blocked": false,
+      "production_mutation": false,
+      "source_complete_candidate": false,
+      "completion_pr": 362,
+      "implemented_through": "AR-8F",
+      "accepted_top_level_slice": "AR-8",
+      "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+      "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+      "applicable_permanent_workflows": "14/14",
+      "accepted_main_reread": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+      "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json"
+    },
+    "ar8b_acceptance": {
+      "issue": 309,
+      "implementation_pr": 312,
+      "exact_green_head": "743276b578bb15042e8a42beff0e14f7698e61b0",
+      "implementation_merge": "4e4d1c25226384858ca8905377ee155bedabc6d4",
+      "applicable_permanent_workflows": "14/14"
+    },
+    "ar8c_acceptance": {
+      "issue": 314,
+      "implementation_pr": 315,
+      "implementation_exact_green_head": "8e2e699156bdbca085b44a73b331cf3922b79c54",
+      "implementation_merge": "7cdfdfc3982f23635017d9352a8c08a903e00f33",
+      "applicable_permanent_workflows": "14/14",
+      "hosted_verified_main": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b",
+      "provider_bootstrap": {
+        "run_id": 32063820617,
+        "run_attempt": 1,
+        "source_sha": "03c8b2280a9ed592569a68a2cf8c8e1f549957a6",
+        "conclusion": "success"
+      },
+      "promotion": {
+        "run_id": 32068326946,
+        "run_attempt": 2,
+        "source_sha": "a78f29a1bf402c83fab3a813bf89115519d0dd98",
+        "conclusion": "success",
+        "resolver_release": {
+          "run_id": 32067978790,
+          "artifact_id": 9300729822,
+          "artifact_digest": "sha256:a20090bef6ac570d9dc0db07d705ec86aef35f958bbe1d2be0b5b1f4f9d63c5f",
+          "release_id": "mailbox-secret-resolver-v1-sha256-c4e94819e2e8abfdec65115809cf536a6e68d86d3029bcc58413dbcf787fb788",
+          "worker_sha256": "5ce3d4ad47b52c045d4a610d325320e706265e1abb0db64b368cc7962f503f28"
+        },
+        "control_plane_release": {
+          "run_id": 32067978783,
+          "artifact_id": 9300736107,
+          "artifact_digest": "sha256:d512fea2ceeb1ce5825e7474438907cdfb70ab0ec8743112306e0d6282abc52b",
+          "release_id": "cloudflare-v1-sha256-1f5aec9c82e4e5002bfc2a2e9111fef5b5b3bd94bdd851994197b480baeabb6f"
+        },
+        "evidence_artifact": {
+          "artifact_id": 9300866099,
+          "artifact_digest": "sha256:62034d3b9b8d7b101a7652c2d86833fb7014029ccbd64cf4af69dab303c35751"
+        },
+        "d1_exact_match": true,
+        "access_health_smoke": "success"
+      },
+      "bootstrap_retirement": {
+        "run_id": 32070555089,
+        "run_attempt": 1,
+        "source_sha": "e083b44eddff852672e62609978fe1dbad99227f",
+        "conclusion": "success"
+      },
+      "steady_state_governance": {
+        "run_id": 32071104508,
+        "run_attempt": 1,
+        "source_sha": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b",
+        "contract_job": "success",
+        "github_hosted_state_job": "success",
+        "operational_credential_hosted_state_job": "success"
+      },
+      "metadata_only": true,
+      "production_mutation": false
+    },
+    "current_delivery_map": "architecture/inventory.json::current_delivery_map",
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false,
+    "production_mutation_allowed_during_ar0_ar17": false,
+    "production_ready_authority": "PC-1_AFTER_AR-17_AUTHORIZATION"
+  },
+  "subject_domain_authorities": {
+    "schema_version": 1,
+    "role": "CURRENT_SUBJECT_DOMAIN_PROJECTION",
+    "composition_root": "architecture/credential-authority.json",
+    "registry_provenance": "architecture/credential-authority-ar8b.json",
+    "sources": {
+      "credential_authority": {
+        "path": "architecture/credential-authority.json",
+        "sha256": "d7ad45094c867b855749334b2a51d06d8d2496b9ff6e74970c88a524c5f01bfd"
+      },
+      "credential_lifecycle": {
+        "path": "architecture/credential-lifecycle.json",
+        "sha256": "8f4acce098fe2612f63856e7a94531189f9e5877ae5add19d69c666861ebb800"
+      },
+      "operator_contract": {
+        "path": "architecture/operator-contract.json",
+        "sha256": "1d9aa17ff767685222cff8422b7c3a534366618abccecf9836a93321c9c9cd65"
+      },
+      "profile_security": {
+        "path": "architecture/profile-security.json",
+        "sha256": "ee410f7f3047128aa410c3ea8098803d476a7592a09f792e6acff3c672d88811"
+      }
+    },
+    "credential_lifecycle_concern_ids": [
+      "resolver.encryption-keyring",
+      "resolver.handle-hmac",
+      "mailbox-resolver.caller-auth",
+      "control-plane.client-contact-protection",
+      "profile-generation.r2-access",
+      "resolver.google-oauth-application",
+      "resolver.microsoft-oauth-application"
+    ],
+    "profile_security_domain_ids": [
+      "profile-generation.encryption-key-hierarchy",
+      "profile-identity.entropy-root",
+      "profile-bridge.device-private-key",
+      "profile-network.proxy-credential",
+      "profile-bridge.enrollment-claim",
+      "profile-generation.short-lived-object-access"
+    ],
+    "operator_mode": "READ_ONLY_METADATA_ONLY",
+    "completion_provenance": {
+      "lifecycle_candidate": "docs/evidence/ar8-completion-lifecycle-candidate.json",
+      "operator_rehearsal_candidate": "docs/evidence/ar8-operator-rehearsal-candidate.json",
+      "secret_transport_successor_candidate": "docs/evidence/ar8-d-secret-transport-successor-candidate.json"
+    },
+    "source_completion": {
+      "tracking_issue": 361,
+      "umbrella_issue": 308,
+      "completion_pr": 362,
+      "implemented_through": "AR-8F",
+      "state": "ACCEPTED_MAIN",
+      "accepted_main_through": "AR-8",
+      "full_ar8_accepted": true,
+      "ar9_blocked": false,
+      "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+      "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+      "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
+      "production_mutation": false
+    }
+  },
+  "d1_evolution": {
+    "schema_version": 1,
+    "role": "ACCEPTED_AR9_D1_EVOLUTION_PROJECTION",
+    "source_authority": "architecture/d1-evolution-ar9.json",
+    "source_status": "accepted",
+    "acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
+    "tracking_issue": 366,
+    "start_base": "10c317d7187e6a86c5e2ed6d1cd92c2e76c0c256",
+    "migration_classes": [
+      "EXPAND",
+      "BACKFILL",
+      "CONTRACT",
+      "REPAIR"
+    ],
+    "ledger_states": [
+      "EXACT",
+      "BEHIND_KNOWN_PREFIX",
+      "AHEAD_KNOWN_COMPATIBLE",
+      "AHEAD_KNOWN_INCOMPATIBLE",
+      "DIVERGED",
+      "UNKNOWN_MIGRATION",
+      "CORRUPT_LEDGER"
+    ],
+    "rollout_decisions": [
+      "SAFE",
+      "MIGRATION_REQUIRED",
+      "DEPLOY_FIRST",
+      "MIGRATE_FIRST",
+      "CODE_ROLLBACK_SAFE",
+      "CODE_ROLLBACK_BLOCKED",
+      "FAIL_FORWARD_REQUIRED",
+      "CONTRACT_BLOCKED",
+      "RECOVERY_REQUIRED"
+    ],
+    "mutation_authority": "GITHUB_ACTIONS_PROTECTED_ENVIRONMENT_PLUS_PINNED_WRANGLER",
+    "policy_authority": "OPSCTL_NATIVE_RUST_READ_PLAN_VERIFY",
+    "new_opsctl_process_spawn_sites": 0,
+    "opsctl_provider_credentials": false,
+    "resource_auto_provisioning_allowed": false,
+    "database_lock_required_by_default": false,
+    "components": [
+      {
+        "component_id": "catalog",
+        "binding_identity": "CATALOG_DB",
+        "migration_root": "migrations/d1",
+        "migration_ledger": "d1_migrations",
+        "current_repository_revision": "0026_outbound_mail_intents.sql",
+        "history_digest": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
+        "historical_epoch": {
+          "status": "FROZEN_CONSUMED_HISTORY_CANDIDATE",
+          "ordered_set_identity": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
+          "per_file_sha256_freeze": {
+            "status": "FROZEN",
+            "algorithm": "sha256",
+            "count": 26
+          },
+          "retroactive_runtime_compatibility_claims": false
+        },
+        "post_epoch_migration_count": 0,
+        "fresh_bootstrap_authority": "scripts/cloudflare-d1-bootstrap.py",
+        "upgrade_authority": "PINNED_WRANGLER_D1_MIGRATIONS_APPLY",
+        "mutation_authority": "AR9_PROTECTED_D1_MIGRATION_EXECUTOR",
+        "concurrency_authority": "GITHUB_ACTIONS_PER_ENVIRONMENT_COMPONENT_SERIALIZATION",
+        "release_manifest_owner": "scripts/cloudflare-release.py"
+      },
+      {
+        "component_id": "resolver",
+        "binding_identity": "RESOLVER_DB",
+        "migration_root": "migrations/resolver-d1",
+        "migration_ledger": "d1_migrations",
+        "current_repository_revision": "0004_refresh_owner_hmac_version.sql",
+        "history_digest": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
+        "historical_epoch": {
+          "status": "FROZEN_CONSUMED_HISTORY_CANDIDATE",
+          "ordered_set_identity": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
+          "per_file_sha256_freeze": {
+            "status": "FROZEN",
+            "algorithm": "sha256",
+            "count": 4
+          },
+          "retroactive_runtime_compatibility_claims": false
+        },
+        "post_epoch_migration_count": 0,
+        "fresh_bootstrap_authority": "D3_RESOLVER_FIRST_BOOTSTRAP_AUTHORITY",
+        "upgrade_authority": "PINNED_WRANGLER_D1_MIGRATIONS_APPLY",
+        "mutation_authority": "AR9_PROTECTED_D1_MIGRATION_EXECUTOR",
+        "concurrency_authority": "GITHUB_ACTIONS_PER_ENVIRONMENT_COMPONENT_SERIALIZATION",
+        "release_manifest_owner": "scripts/mailbox-secret-resolver-release.py"
+      }
+    ],
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false,
+    "production_mutation": false
+  },
+  "runtime_cutover": {
+    "schema_version": 1,
+    "role": "CURRENT_AR10_RUNTIME_CUTOVER_PROJECTION",
+    "source_authority": "architecture/runtime-cutover-ar10.json",
+    "source_status": "AR10_IMPLEMENTED_PENDING_ACCEPTANCE",
+    "tracking_issue": 368,
+    "completion_pr": 371,
+    "start_base": "5933a5e30a534209138485556b4a895706af765a",
+    "real_runtime": {
+      "repository_integrated": true,
+      "production_certified": false,
+      "entrypoint": "runtime/camouhost/real.py",
+      "runtime_lock": "runtime/camouhost/runtime-lock.json",
+      "python": "3.12",
+      "camoufox_python": {
+        "version": "0.5.5",
+        "source_repository": "daijro/camoufox",
+        "source_commit": "cd83f7fd2fdf631dfde0c7eb53bd3d30f102ec4a"
+      },
+      "camoufox_browser": {
+        "version": "152.0.4-beta.28",
+        "source_repository": "daijro/camoufox",
+        "release_commit": "0583c3ec94f5a9df5cb2d09553fbfe80589b6e2d"
+      },
+      "browserforge": "1.2.4",
+      "playwright": "1.60.0",
+      "persistent_context_required": true,
+      "stable_generation_user_data_dir": true
+    },
+    "generation_identity": {
+      "compatibility_version": 2,
+      "fingerprint_policy_version": "profile-stability-v1",
+      "normal_launch_may_regenerate_browserforge_identity": false,
+      "incompatible_change_requires_candidate_generation": true
+    },
+    "opsctl": {
+      "production_child_process_spawn_sites": 0,
+      "provider_mutation_authority": false
+    },
+    "legacy_executables_remaining": 0,
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false,
+    "production_mutation": false
+  }
 }
