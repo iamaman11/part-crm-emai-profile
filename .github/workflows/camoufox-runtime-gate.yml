@@ -72,6 +72,9 @@ jobs:
           AR10_RUNTIME_ROOT: ${{ github.workspace }}/runtime
         run: cargo test --locked -p profile-bridge --test real_camoufox_runtime -- --nocapture
 
+      - name: Enforce parity-gated AR-10 closeout policy
+        run: python3.12 scripts/check-ar10-runtime-cutover.py --closeout
+
   bridge-regression-windows:
     name: Profile Bridge Windows regression
     runs-on: windows-latest
