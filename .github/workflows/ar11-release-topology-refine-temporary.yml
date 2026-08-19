@@ -1,0 +1,546 @@
+name: AR-11 Release Topology Refine Temporary
+
+on:
+  push:
+    branches:
+      - agent/ar11-release-capability-promotion
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ar11-release-topology-refine-temporary
+  cancel-in-progress: true
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: agent/ar11-release-capability-promotion
+          fetch-depth: 1
+
+      - name: Refine canonical topology and consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+          import json
+          from pathlib import Path
+
+          authority_path = Path('architecture/release-architecture-ar11.json')
+          authority = json.loads(authority_path.read_text(encoding='utf-8'))
+          rows = authority['release_inputs']
+          by_id = {row['input_id']: row for row in rows}
+
+          generated = {
+              'public_api_fragment_client_registry': 'crates/control-plane-contract/src/client_registry_api.rs',
+              'public_api_fragment_operator_query': 'crates/control-plane-contract/src/bin/export_operator_query.rs',
+              'public_api_fragment_query_mail': 'crates/control-plane-contract/src/bin/export_query_mail.rs',
+          }
+          for input_id, owner in generated.items():
+              row = by_id[input_id]
+              source = row.pop('canonical_source', None)
+              if source is not None:
+                  row['generated_projection'] = source
+              if row.get('generated_projection') != row.get('release_identity_source'):
+                  raise SystemExit(f'{input_id}: generated projection identity mismatch')
+              row['semantic_owner'] = owner
+              row['generator'] = 'scripts/generate-frontend-contracts.py'
+              checks = row.setdefault('verification', [])
+              if 'scripts/generate-frontend-contracts.py --check' not in checks:
+                  checks.insert(0, 'scripts/generate-frontend-contracts.py --check')
+
+          resolver_sources = [
+              (
+                  'resolver_service_server_contract',
+                  'apps/mailbox-secret-resolver-worker/src/contract.rs',
+                  'mailbox-secret-resolver Worker wire payload contract',
+              ),
+              (
+                  'resolver_service_auth_contract',
+                  'crates/control-plane-contract/src/resolver_service_auth.rs',
+                  'shared resolver service authentication wire contract',
+              ),
+              (
+                  'resolver_service_request_contract',
+                  'crates/cloudflare-adapters/src/resolver_request.rs',
+                  'control-plane resolver request signing/wire contract',
+              ),
+              (
+                  'resolver_service_client_contract',
+                  'crates/cloudflare-adapters/src/cloud_mailbox_secrets.rs',
+                  'control-plane resolver response/client adapter contract',
+              ),
+          ]
+          insert_at = next(i for i, row in enumerate(rows) if row['input_id'] == 'camouhost_main')
+          additions = []
+          for input_id, source, owner in resolver_sources:
+              if input_id in by_id:
+                  continue
+              additions.append({
+                  'input_id': input_id,
+                  'kind': 'SERVICE_PROTOCOL_CONTRACT',
+                  'semantic_owner': owner,
+                  'canonical_source': source,
+                  'release_identity_source': source,
+                  'compatibility_dimension': 'resolver_service_protocol',
+                  'required_for_release_set': True,
+                  'verification': ['cargo test --locked'],
+                  'consumers': [
+                      'release_set.resolver_service_protocol',
+                      'release.compatibility',
+                      'promotion.compatibility',
+                  ],
+              })
+          rows[insert_at:insert_at] = additions
+          authority_path.write_text(json.dumps(authority, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              if new in text:
+                  return
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: expected exactly one replacement source, found {text.count(old)}')
+              file.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'scripts/release-set-ar11.py',
+              '    contract_paths = release_input_paths_for_consumer(inputs, "release_set.contracts")\n    runtime_files = release_input_paths_for_consumer(inputs, "runtime_bundle.files")',
+              '    contract_paths = release_input_paths_for_consumer(inputs, "release_set.contracts")\n    resolver_protocol_paths = release_input_paths_for_consumer(\n        inputs, "release_set.resolver_service_protocol"\n    )\n    runtime_files = release_input_paths_for_consumer(inputs, "runtime_bundle.files")',
+          )
+          replace_once(
+              'scripts/release-set-ar11.py',
+              '    contracts_identity = source_file_set_identity(contract_paths)\n    runtime_lock = json.loads((ROOT / runtime_lock_relative).read_text(encoding="utf-8"))',
+              '    contracts_identity = source_file_set_identity(contract_paths)\n    resolver_protocol_identity = source_file_set_identity(resolver_protocol_paths)\n    runtime_lock = json.loads((ROOT / runtime_lock_relative).read_text(encoding="utf-8"))',
+          )
+          replace_once(
+              'scripts/release-set-ar11.py',
+              '                "resolver_protocol": "mailbox-secret-resolver-v1",',
+              '                "resolver_service_protocol": resolver_protocol_identity,',
+          )
+          replace_once(
+              'scripts/release-set-ar11.py',
+              '    if release_input_path(inputs, "camouhost_runtime_lock") not in release_input_paths_for_consumer(\n        inputs, "runtime_bundle.files"\n    ):\n        fail("runtime lock is not part of runtime bundle identity")',
+              '    resolver_protocol = release_input_paths_for_consumer(\n        inputs, "release_set.resolver_service_protocol"\n    )\n    if len(resolver_protocol) != 4:\n        fail("resolver service protocol identity must contain exactly four current wire owners")\n    if release_input_path(inputs, "camouhost_runtime_lock") not in release_input_paths_for_consumer(\n        inputs, "runtime_bundle.files"\n    ):\n        fail("runtime lock is not part of runtime bundle identity")',
+          )
+
+          promotion = Path('tools/opsctl/tests/promotion_ar11.rs')
+          text = promotion.read_text(encoding='utf-8')
+          old = '''    let runtime_input = resolved
+        .iter()
+        .find(|input| input.input.input_id == "camouhost_runtime_lock")
+        .ok_or("canonical runtime lock input is missing")?;
+    let runtime_lock_bytes = fs::read(&runtime_input.absolute_path)?;
+    let runtime_lock: Value = serde_json::from_slice(&runtime_lock_bytes)?;
+    let protocols = json!({
+        "public_api_contract_sha256": contract_sha,
+        "camouhost_ipc_version": runtime_lock["camouhost_ipc_version"],
+        "resolver_protocol": "mailbox-secret-resolver-v1",
+    });'''
+          new = '''    let mut resolver_protocol_files = resolved
+        .iter()
+        .filter(|input| input.input.consumed_by("release_set.resolver_service_protocol"))
+        .map(|input| {
+            json!({
+                "path": input.input.release_identity_source,
+                "sha256": input.sha256,
+                "size_bytes": input.size_bytes,
+            })
+        })
+        .collect::<Vec<_>>();
+    resolver_protocol_files.sort_by(|left, right| {
+        left["path"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["path"].as_str().unwrap_or_default())
+    });
+    let resolver_protocol_identity = Value::Array(resolver_protocol_files.clone());
+    let resolver_protocol_sha =
+        sha256_hex(canonical_json(&resolver_protocol_identity)?.as_bytes());
+    let resolver_protocol = json!({
+        "files": resolver_protocol_files,
+        "sha256": resolver_protocol_sha,
+    });
+
+    let runtime_input = resolved
+        .iter()
+        .find(|input| input.input.input_id == "camouhost_runtime_lock")
+        .ok_or("canonical runtime lock input is missing")?;
+    let runtime_lock_bytes = fs::read(&runtime_input.absolute_path)?;
+    let runtime_lock: Value = serde_json::from_slice(&runtime_lock_bytes)?;
+    let protocols = json!({
+        "public_api_contract_sha256": contract_sha,
+        "camouhost_ipc_version": runtime_lock["camouhost_ipc_version"],
+        "resolver_service_protocol": resolver_protocol,
+    });'''
+          if new not in text:
+              if text.count(old) != 1:
+                  raise SystemExit('promotion_ar11.rs: resolver protocol fixture replacement source drifted')
+              promotion.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+          cat > tools/opsctl/src/release/static_compatibility.rs <<'RS'
+          use crate::release::digest::{canonical_json, sha256_hex};
+          use crate::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
+          use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
+          use serde_json::{Map, Value, json};
+          use std::fs;
+          use std::path::Path;
+
+          /// Evaluate compatibility dimensions that are completely determined by the immutable
+          /// Release Set and the exact source checkout. Release-critical repository paths are
+          /// resolved exclusively from the canonical AR-11 release input topology.
+          pub fn evaluate(
+              root: &Path,
+              manifest: &ReleaseSetManifest,
+              _mailbox_admin: bool,
+          ) -> Result<Vec<String>, ReleaseModelError> {
+              let topology = ReleaseInputTopology::load(root)?;
+              let resolved = topology.resolve(root)?;
+
+              let mut blockers = Vec::new();
+              if !contracts_match(&resolved, &manifest.contracts)? {
+                  blockers.push("PROTOCOL_INCOMPATIBLE:contracts".to_owned());
+              }
+              if !protocols_match(&resolved, &manifest.contracts, &manifest.protocols)? {
+                  blockers.push("PROTOCOL_INCOMPATIBLE:runtime_protocols".to_owned());
+              }
+              if !runtime_matches(&resolved, &manifest.runtime_compatibility)? {
+                  blockers.push("RUNTIME_INCOMPATIBLE:runtime_identity".to_owned());
+              }
+              blockers.sort();
+              blockers.dedup();
+              Ok(blockers)
+          }
+
+          fn input_set_identity(
+              resolved: &[ResolvedReleaseInput],
+              consumer: &str,
+          ) -> Result<Value, ReleaseModelError> {
+              let mut files = resolved
+                  .iter()
+                  .filter(|input| input.input.consumed_by(consumer))
+                  .map(|input| {
+                      json!({
+                          "path": input.input.release_identity_source,
+                          "sha256": input.sha256,
+                          "size_bytes": input.size_bytes,
+                      })
+                  })
+                  .collect::<Vec<_>>();
+              files.sort_by(|left, right| {
+                  left["path"]
+                      .as_str()
+                      .unwrap_or_default()
+                      .cmp(right["path"].as_str().unwrap_or_default())
+              });
+              if files.is_empty() {
+                  return Err(ReleaseModelError::new(format!(
+                      "canonical release input topology has no inputs for {consumer}"
+                  )));
+              }
+              let identity = Value::Array(files.clone());
+              let canonical = canonical_json(&identity).map_err(ReleaseModelError::new)?;
+              Ok(json!({
+                  "files": files,
+                  "sha256": sha256_hex(canonical.as_bytes()),
+              }))
+          }
+
+          fn contracts_match(
+              resolved: &[ResolvedReleaseInput],
+              value: &Value,
+          ) -> Result<bool, ReleaseModelError> {
+              Ok(value == &input_set_identity(resolved, "release_set.contracts")?)
+          }
+
+          fn protocols_match(
+              resolved: &[ResolvedReleaseInput],
+              contracts: &Value,
+              value: &Value,
+          ) -> Result<bool, ReleaseModelError> {
+              let protocols = object(value, "protocols")?;
+              let contract_object = object(contracts, "contracts")?;
+              if required_string(protocols, "public_api_contract_sha256")?
+                  != required_string(contract_object, "sha256")?
+              {
+                  return Ok(false);
+              }
+
+              let expected_resolver_protocol =
+                  input_set_identity(resolved, "release_set.resolver_service_protocol")?;
+              if required(protocols, "resolver_service_protocol")? != &expected_resolver_protocol {
+                  return Ok(false);
+              }
+
+              let runtime_lock = resolved_input(resolved, "camouhost_runtime_lock")?;
+              let runtime_lock = load_json_object(&runtime_lock.absolute_path, "runtime lock")?;
+              let expected_ipc = required_u64(&runtime_lock, "camouhost_ipc_version")?;
+              Ok(required_u64(protocols, "camouhost_ipc_version")? == expected_ipc)
+          }
+
+          fn runtime_matches(
+              resolved: &[ResolvedReleaseInput],
+              value: &Value,
+          ) -> Result<bool, ReleaseModelError> {
+              let runtime = object(value, "runtime_compatibility")?;
+              let runtime_lock = resolved_input(resolved, "camouhost_runtime_lock")?;
+              if required_string(runtime, "runtime_lock_sha256")? != runtime_lock.sha256 {
+                  return Ok(false);
+              }
+              let lock = load_json_object(&runtime_lock.absolute_path, "runtime lock")?;
+              for (manifest_field, lock_field) in [
+                  ("runtime_role", "runtime_role"),
+                  ("profile_format", "fingerprint_config_schema"),
+                  ("browser_identity_policy", "fingerprint_policy_version"),
+              ] {
+                  if required_string(runtime, manifest_field)? != required_string(&lock, lock_field)? {
+                      return Ok(false);
+                  }
+              }
+              Ok(required_string(runtime, "runtime_role")? == "real_camoufox")
+          }
+
+          fn resolved_input<'a>(
+              resolved: &'a [ResolvedReleaseInput],
+              input_id: &str,
+          ) -> Result<&'a ResolvedReleaseInput, ReleaseModelError> {
+              resolved
+                  .iter()
+                  .find(|input| input.input.input_id == input_id)
+                  .ok_or_else(|| {
+                      ReleaseModelError::new(format!(
+                          "canonical release input topology is missing {input_id}"
+                      ))
+                  })
+          }
+
+          fn load_json_object(path: &Path, label: &str) -> Result<Map<String, Value>, ReleaseModelError> {
+              let text = fs::read_to_string(path).map_err(|error| {
+                  ReleaseModelError::new(format!("cannot read {label} {}: {error}", path.display()))
+              })?;
+              let value: Value = serde_json::from_str(&text)
+                  .map_err(|error| ReleaseModelError::new(format!("invalid {label} JSON: {error}")))?;
+              value
+                  .as_object()
+                  .cloned()
+                  .ok_or_else(|| ReleaseModelError::new(format!("{label} must be a JSON object")))
+          }
+
+          fn required<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a Value, ReleaseModelError> {
+              object
+                  .get(key)
+                  .ok_or_else(|| ReleaseModelError::new(format!("missing static compatibility field: {key}")))
+          }
+
+          fn required_string(object: &Map<String, Value>, key: &str) -> Result<String, ReleaseModelError> {
+              required(object, key)?
+                  .as_str()
+                  .map(ToOwned::to_owned)
+                  .ok_or_else(|| ReleaseModelError::new(format!("field {key} must be a string")))
+          }
+
+          fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, ReleaseModelError> {
+              required(object, key)?
+                  .as_u64()
+                  .ok_or_else(|| ReleaseModelError::new(format!("field {key} must be an unsigned integer")))
+          }
+
+          fn object<'a>(value: &'a Value, label: &str) -> Result<&'a Map<String, Value>, ReleaseModelError> {
+              value
+                  .as_object()
+                  .ok_or_else(|| ReleaseModelError::new(format!("{label} must be a JSON object")))
+          }
+
+          #[cfg(test)]
+          mod tests {
+              use crate::release::input_topology::ReleaseInputTopology;
+              use std::path::PathBuf;
+
+              fn root() -> PathBuf {
+                  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+              }
+
+              #[test]
+              fn contract_and_resolver_protocol_inventory_are_owned_by_canonical_topology()
+              -> Result<(), Box<dyn std::error::Error>> {
+                  let topology = ReleaseInputTopology::load(&root())?;
+                  let contracts = topology.inputs_for_consumer("release_set.contracts");
+                  assert_eq!(contracts.len(), 10);
+                  assert!(
+                      contracts
+                          .iter()
+                          .any(|input| input.release_identity_source == "openapi/v1/openapi.json")
+                  );
+                  assert!(
+                      contracts
+                          .iter()
+                          .all(|input| input.release_identity_source != "openapi/v1/control-plane.yaml")
+                  );
+                  let resolver =
+                      topology.inputs_for_consumer("release_set.resolver_service_protocol");
+                  assert_eq!(resolver.len(), 4);
+                  assert!(resolver.iter().all(|input| {
+                      input.compatibility_dimension == "resolver_service_protocol"
+                          && input.required_for_release_set
+                  }));
+                  for generated_path in [
+                      "openapi/v1/fragments/client-registry.json",
+                      "openapi/v1/fragments/operator-query.json",
+                      "openapi/v1/fragments/query-mail.json",
+                  ] {
+                      let input = contracts
+                          .iter()
+                          .find(|input| input.release_identity_source == generated_path)
+                          .expect("generated public API projection must be release-critical");
+                      assert_eq!(input.generated_projection.as_deref(), Some(generated_path));
+                      assert_eq!(input.generator.as_deref(), Some("scripts/generate-frontend-contracts.py"));
+                  }
+                  Ok(())
+              }
+          }
+          RS
+
+          cat > tools/opsctl/tests/release_input_topology_ar11.rs <<'RS'
+          use opsctl::release::input_topology::ReleaseInputTopology;
+          use std::fs;
+          use std::path::{Path, PathBuf};
+
+          fn temp_root(label: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+              let root = std::env::temp_dir().join(format!(
+                  "opsctl-ar11-topology-{label}-{}",
+                  std::process::id()
+              ));
+              if root.exists() {
+                  fs::remove_dir_all(&root)?;
+              }
+              fs::create_dir_all(&root)?;
+              Ok(root)
+          }
+
+          fn one_input(path: &str) -> String {
+              format!(
+                  r#"{{
+                    "schema_version":1,
+                    "kind":"AR11_RELEASE_ARCHITECTURE_SOURCE",
+                    "release_inputs":[{{
+                      "input_id":"fixture",
+                      "kind":"FIXTURE",
+                      "semantic_owner":"fixture",
+                      "canonical_source":"{path}",
+                      "release_identity_source":"{path}",
+                      "compatibility_dimension":"fixture",
+                      "required_for_release_set":true,
+                      "verification":["fixture"],
+                      "consumers":["fixture"]
+                    }}]
+                  }}"#
+              )
+          }
+
+          #[test]
+          fn missing_release_identity_source_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+              let root = temp_root("missing")?;
+              let topology = ReleaseInputTopology::parse_json(&one_input("missing.txt"))?;
+              let error = topology.resolve(&root).expect_err("missing source must fail closed");
+              assert!(error.to_string().contains("RELEASE_INPUT_MISSING"));
+              fs::remove_dir_all(root)?;
+              Ok(())
+          }
+
+          #[test]
+          fn content_change_changes_resolved_identity() -> Result<(), Box<dyn std::error::Error>> {
+              let root = temp_root("digest")?;
+              fs::write(root.join("input.txt"), b"first")?;
+              let topology = ReleaseInputTopology::parse_json(&one_input("input.txt"))?;
+              let first = topology.resolve(&root)?;
+              fs::write(root.join("input.txt"), b"second")?;
+              let second = topology.resolve(&root)?;
+              assert_ne!(first[0].sha256, second[0].sha256);
+              assert_eq!(first[0].size_bytes, second[0].size_bytes);
+              fs::remove_dir_all(root)?;
+              Ok(())
+          }
+
+          #[cfg(unix)]
+          #[test]
+          fn symlink_release_identity_source_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
+              use std::os::unix::fs::symlink;
+              let root = temp_root("symlink")?;
+              fs::write(root.join("target.txt"), b"target")?;
+              symlink("target.txt", root.join("input.txt"))?;
+              let topology = ReleaseInputTopology::parse_json(&one_input("input.txt"))?;
+              let error = topology.resolve(&root).expect_err("symlink source must fail closed");
+              assert!(error.to_string().contains("SYMLINK"));
+              fs::remove_dir_all(root)?;
+              Ok(())
+          }
+
+          #[test]
+          fn canonical_topology_binds_generated_and_resolver_protocol_inputs()
+          -> Result<(), Box<dyn std::error::Error>> {
+              let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+              let topology = ReleaseInputTopology::load(&root)?;
+              let resolver = topology.inputs_for_consumer("release_set.resolver_service_protocol");
+              assert_eq!(resolver.len(), 4);
+              let contracts = topology.inputs_for_consumer("release_set.contracts");
+              for path in [
+                  "openapi/v1/fragments/client-registry.json",
+                  "openapi/v1/fragments/operator-query.json",
+                  "openapi/v1/fragments/query-mail.json",
+              ] {
+                  let input = contracts
+                      .iter()
+                      .find(|input| input.release_identity_source == path)
+                      .ok_or("generated public API projection missing from canonical topology")?;
+                  assert_eq!(input.generated_projection.as_deref(), Some(path));
+                  assert!(input.canonical_source.is_none());
+                  assert_eq!(
+                      input.generator.as_deref(),
+                      Some("scripts/generate-frontend-contracts.py")
+                  );
+              }
+              Ok(())
+          }
+          RS
+
+      - name: Format, regenerate projection, and verify locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml
+          python scripts/generate-architecture-inventory.py --write
+          python scripts/generate-frontend-contracts.py --check
+          python scripts/release-set-ar11.py self-test
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/check-documentation-authority.py
+          node .github/scripts/release-architecture-ar11.mjs
+
+      - name: Commit bounded refinement only when changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths=(
+            architecture/release-architecture-ar11.json
+            architecture/inventory.json
+            scripts/release-set-ar11.py
+            tools/opsctl/src/release/static_compatibility.rs
+            tools/opsctl/tests/promotion_ar11.rs
+            tools/opsctl/tests/release_input_topology_ar11.rs
+          )
+          if git diff --quiet -- "${paths[@]}" && git diff --cached --quiet; then
+            echo "bounded topology refinement already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "${paths[@]}"
+          test -z "$(git diff --cached --name-only | grep -v -F -f <(printf '%s\n' "${paths[@]}") || true)"
+          git commit -m "AR-11: content-address resolver protocol topology"
+          git push origin HEAD:agent/ar11-release-capability-promotion
