@@ -195,7 +195,6 @@ def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
     lib = sources["lib.rs"]
     cli = sources["cli.rs"]
     main = sources["main.rs"]
-    d1_facade = sources["d1.rs"]
     production_by_path = production_sources(sources)
     production_source = "\n".join(production_by_path.values())
     d1_source = "\n".join(
@@ -272,13 +271,8 @@ def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
     for marker in FORBIDDEN_MUTATION_CAPABILITIES:
         if marker in production_source:
             fail(f"opsctl read-only boundary contains forbidden mutation capability: {marker}")
-    if production_source.count("Command::new(") != 1 or production_source.count("Command::new(&python)") != 1:
-        fail("opsctl may spawn exactly one accepted AR-6 canonical Python validator process site")
-    if "Command::new(" not in production_by_path["doctor.rs"]:
-        fail("the sole accepted AR-6 process bridge must be isolated in doctor.rs")
-    for path, text in production_by_path.items():
-        if path != "doctor.rs" and "Command::new(" in text:
-            fail(f"opsctl child-process authority escaped doctor.rs: {path}")
+    if "Command::new(" in production_source or "std::process::Command" in production_source:
+        fail("AR-10 requires zero child-process spawn authority in production opsctl")
     if "Command::new(" in d1_source:
         fail("native AR-9 opsctl D1 semantics must not spawn child processes")
     if "Command::new(" in future_source:
@@ -299,6 +293,8 @@ def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
         '"credential-lifecycle"',
         '"rotation-plan"',
         '"mutation_executed\\\":false',
+        '"child_processes\\\":0',
+        '"mode\\\":\\\"native-read-only\\\"',
         "read-only and metadata-only",
         "d1 status",
         "d1 plan",
@@ -741,6 +737,14 @@ def self_test() -> None:
     authority = load_d1_authority(ROOT)
     validate_d1_authority_document(ROOT, authority)
 
+    doctor_process = dict(sources)
+    doctor_process["doctor.rs"] = doctor_process["doctor.rs"].replace(
+        "pub(crate) fn run(root: &Path)",
+        'fn forbidden() { let _ = Command::new("python"); }\n\npub(crate) fn run(root: &Path)',
+        1,
+    )
+    expect_rejected("legacy doctor child-process bridge", doctor_process, cargo, lock)
+
     process_sources = dict(sources)
     process_sources["d1.rs"] += '\nfn forbidden() { let _ = Command::new("wrangler").arg("deploy"); }\n'
     expect_rejected("mutable D1 process-spawn", process_sources, cargo, lock)
@@ -837,7 +841,7 @@ def self_test() -> None:
         fail("contradictory derived rollout negative fixture unexpectedly passed")
 
     print(
-        "opsctl modular layout, sole doctor bridge, native D1/future namespace subprocess and mutation, "
+        "opsctl modular layout, zero child-process authority, native D1/future namespace subprocess and mutation, "
         "append-only history, derived rollout, historical-freeze and dependency negative fixtures rejected."
     )
 
@@ -851,9 +855,9 @@ def main() -> int:
     else:
         validate()
         print(
-            "opsctl modular tree is fail-closed: thin main, one accepted AR-6 doctor Python bridge, "
-            "native Rust D1 semantics, source-reserved future families without activation/process/provider authority, "
-            "frozen+append-only D1 histories and reproducible exact serde_json dependency."
+            "opsctl modular tree is fail-closed: thin main, zero production child processes, native Rust doctor/D1 semantics, "
+            "source-reserved future families without activation/process/provider authority, frozen+append-only D1 histories "
+            "and reproducible exact serde_json dependency."
         )
     return 0
 
