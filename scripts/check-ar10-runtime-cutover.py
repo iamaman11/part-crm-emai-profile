@@ -99,7 +99,7 @@ def validate_runtime_lock(root: Path) -> None:
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         fail(f"runtime lock is invalid JSON: {error}")
     if parsed != EXPECTED_LOCK:
-        fail("runtime lock drifted from the exact AR-10 accepted component identity")
+        fail("runtime lock drifted from the exact AR-10 candidate component identity")
     if canonical_json_bytes(parsed) != raw:
         fail("runtime lock must use canonical JSON encoding")
 
@@ -239,11 +239,17 @@ def validate_acceptance_projection(root: Path) -> None:
     read_regular(root, AR10_EVIDENCE)
 
 
-def validate(root: Path) -> None:
+def validate_preflight(root: Path) -> None:
+    """Validate successor runtime before parity/retirement is allowed to run."""
     validate_runtime_lock(root)
     validate_real_runtime(root)
     validate_synthetic_runtime(root)
     validate_opsctl(root)
+
+
+def validate_closeout(root: Path) -> None:
+    """Validate final AR-10 state only after successor parity has already been proved."""
+    validate_preflight(root)
     validate_legacy_retirement(root)
     validate_acceptance_projection(root)
 
@@ -259,11 +265,21 @@ def self_test() -> None:
         fail("normal-launch regeneration negative self-test failed")
     if re.fullmatch(r"[0-9a-f]{64}", "0" * 64) is None:
         fail("digest self-test failed")
+    if LEGACY_EXECUTABLES != {
+        "check_mail.py",
+        "profile_manager.py",
+        "test_fingerprint_consistency.py",
+        "tools/cloud_profile_smoke.py",
+        "tools/fingerprint_certify.py",
+        "tools/profile_browser.py",
+    }:
+        fail("legacy retirement cohort self-test drifted")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--closeout", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args()
 
@@ -274,9 +290,12 @@ def main() -> int:
         if arguments.self_test:
             self_test()
             print("AR-10 runtime cutover policy negative self-test passed.")
+        elif arguments.closeout:
+            validate_closeout(arguments.root.resolve())
+            print("AR-10 real runtime, identity, opsctl and executable-retirement closeout policy passed.")
         else:
-            validate(arguments.root.resolve())
-            print("AR-10 real runtime, identity, opsctl and executable-retirement policy passed.")
+            validate_preflight(arguments.root.resolve())
+            print("AR-10 successor runtime preflight policy passed; parity may run before retirement.")
     except (GateError, OSError, UnicodeError, json.JSONDecodeError) as error:
         print(f"AR-10 runtime cutover policy failed: {error}", file=sys.stderr)
         return 1
