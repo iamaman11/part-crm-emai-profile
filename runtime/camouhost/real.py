@@ -409,19 +409,43 @@ def windows_parent_lock_is_active(path: Path) -> bool:
     return False
 
 
+def modern_unix_legacy_lock_is_stale(path: Path) -> bool:
+    """Recognize Firefox's obsolete +PID symlink only after the fcntl lock is free."""
+    if not path.is_symlink():
+        return False
+    try:
+        target = os.readlink(path)
+    except OSError as error:
+        raise RuntimeContractError("Firefox legacy-lock probe failed") from error
+    _host, separator, pid = target.rpartition(":")
+    return separator == ":" and pid.startswith("+") and pid[1:].isdigit()
+
+
 def firefox_writer_active(root: Path) -> bool:
     parent_lock, legacy_lock = firefox_writer_locks(root)
-    if os.path.lexists(legacy_lock):
-        # Firefox uses this as the Unix symlink fallback. Its presence after a crash is
-        # ambiguous, so never delete or silently waive it here.
+    parent_present = os.path.lexists(parent_lock)
+    legacy_present = os.path.lexists(legacy_lock)
+
+    if parent_present:
+        if os.name == "nt":
+            if windows_parent_lock_is_active(parent_lock):
+                return True
+        elif os.name == "posix":
+            if unix_parent_lock_is_active(parent_lock):
+                return True
+        else:
+            raise RuntimeContractError("unsupported Firefox lock-probe platform")
+    elif legacy_present:
+        # Without the primary lock artifact we cannot prove that a legacy marker is stale.
         return True
-    if not os.path.lexists(parent_lock):
+
+    if not legacy_present:
         return False
-    if os.name == "nt":
-        return windows_parent_lock_is_active(parent_lock)
-    if os.name == "posix":
-        return unix_parent_lock_is_active(parent_lock)
-    raise RuntimeContractError("unsupported Firefox lock-probe platform")
+    if os.name == "posix" and modern_unix_legacy_lock_is_stale(legacy_lock):
+        # Firefox itself treats +PID as obsolete once the primary fcntl lock was obtained.
+        # Do not unlink it here; the next Firefox owner remains responsible for cleanup.
+        return False
+    return True
 
 
 def wait_for_browser_quiescence(root: Path) -> None:
@@ -572,7 +596,10 @@ def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] == "--materialize-identity":
         try:
             report = materialize_candidate_identity(Path(sys.argv[2]))
-        except (OSError, RuntimeContractError, importlib.metadata.PackageNotFoundError):
+        except RuntimeContractError as error:
+            print(f"candidate identity materialization failed: {error}", file=sys.stderr)
+            return 7
+        except (OSError, importlib.metadata.PackageNotFoundError):
             print("candidate identity materialization failed", file=sys.stderr)
             return 7
         print(json.dumps(report, ensure_ascii=True, separators=(",", ":"), sort_keys=True))
