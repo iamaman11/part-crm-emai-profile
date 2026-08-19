@@ -48,10 +48,8 @@ fn authority(rows: &[String]) -> String {
 #[test]
 fn missing_release_identity_source_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
     let root = temp_root("missing")?;
-    let topology = ReleaseInputTopology::parse_json(&authority(&[canonical_input(
-        "missing",
-        "missing.txt",
-    )]))?;
+    let topology =
+        ReleaseInputTopology::parse_json(&authority(&[canonical_input("missing", "missing.txt")]))?;
     let error = topology
         .resolve(&root)
         .expect_err("missing release identity source must fail closed");
@@ -66,8 +64,8 @@ fn duplicate_release_input_id_fails_closed() {
         canonical_input("duplicate", "first.txt"),
         canonical_input("duplicate", "second.txt"),
     ]);
-    let error = ReleaseInputTopology::parse_json(&source)
-        .expect_err("duplicate input_id must fail closed");
+    let error =
+        ReleaseInputTopology::parse_json(&source).expect_err("duplicate input_id must fail closed");
     assert!(error.to_string().contains("duplicate release input id"));
 }
 
@@ -76,10 +74,8 @@ fn content_drift_changes_resolved_release_identity() -> Result<(), Box<dyn std::
     let root = temp_root("digest-drift")?;
     let path = root.join("input.txt");
     fs::write(&path, b"first")?;
-    let topology = ReleaseInputTopology::parse_json(&authority(&[canonical_input(
-        "digest",
-        "input.txt",
-    )]))?;
+    let topology =
+        ReleaseInputTopology::parse_json(&authority(&[canonical_input("digest", "input.txt")]))?;
     let first = topology.resolve(&root)?;
     fs::write(&path, b"second")?;
     let second = topology.resolve(&root)?;
@@ -97,14 +93,16 @@ fn symlink_release_identity_source_fails_closed() -> Result<(), Box<dyn std::err
     let root = temp_root("symlink")?;
     fs::write(root.join("target.txt"), b"target")?;
     symlink("target.txt", root.join("input.txt"))?;
-    let topology = ReleaseInputTopology::parse_json(&authority(&[canonical_input(
-        "symlink",
-        "input.txt",
-    )]))?;
+    let topology =
+        ReleaseInputTopology::parse_json(&authority(&[canonical_input("symlink", "input.txt")]))?;
     let error = topology
         .resolve(&root)
         .expect_err("symlink release identity source must fail closed");
-    assert!(error.to_string().contains("RELEASE_INPUT_SYMLINK_FORBIDDEN"));
+    assert!(
+        error
+            .to_string()
+            .contains("RELEASE_INPUT_SYMLINK_FORBIDDEN")
+    );
     fs::remove_dir_all(root)?;
     Ok(())
 }
