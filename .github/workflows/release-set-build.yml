@@ -195,7 +195,7 @@ jobs:
           test "$release_dir" = "artifacts/release-sets/$release_id"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release verify --release-set "$release_dir/release-set.json" --artifact-root "$release_dir" \
-            | jq -e '.verified == true and .mutation_executed == false' >/dev/null
+            | jq -e '.decision == "VALID" and .mutation_executed == false' >/dev/null
           echo "release_dir=$release_dir" >> "$GITHUB_OUTPUT"
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
