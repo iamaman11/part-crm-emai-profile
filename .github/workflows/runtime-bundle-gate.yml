@@ -29,11 +29,13 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Compile Step 7 Python sources
+      - name: Compile Step 7 and AR-10 Python sources
         run: >-
           python -m py_compile
           tools/runtime_bundle.py
           runtime/camouhost/main.py
+          runtime/camouhost/real.py
+          tests/runtime-camouhost/test_runtime_contract.py
           scripts/check-step7-runtime-bundle.py
           scripts/test-step7-runtime-bundle.py
           scripts/test-step7-fake-camouhost.py
@@ -53,6 +55,9 @@ jobs:
 
       - name: Test fake Camouhost subprocess lifecycle
         run: python scripts/test-step7-fake-camouhost.py
+
+      - name: Test AR-10 real Camouhost fail-closed contract
+        run: python -m unittest discover -s tests/runtime-camouhost -v
 
       - name: Check runtime bundle domain for WASM
         run: >-
@@ -74,11 +79,20 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
+      - name: Compile AR-10 Python sources
+        run: >-
+          python -m py_compile
+          runtime/camouhost/real.py
+          tests/runtime-camouhost/test_runtime_contract.py
+
       - name: Test runtime bundle domain
         run: cargo test --locked -p runtime-bundle-domain
 
       - name: Test fake Camouhost subprocess lifecycle
         run: python scripts/test-step7-fake-camouhost.py
+
+      - name: Test AR-10 real Camouhost fail-closed contract
+        run: python -m unittest discover -s tests/runtime-camouhost -v
 
       - name: Rebuild Profile Bridge release artifact
         run: cargo build --locked --release -p profile-bridge
