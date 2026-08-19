@@ -505,9 +505,7 @@ impl CamouhostPort for ManagedCamouhostIpc {
     }
 }
 
-fn spawn_response_reader(
-    stdout: ChildStdout,
-) -> Receiver<Result<String, BridgePortError>> {
+fn spawn_response_reader(stdout: ChildStdout) -> Receiver<Result<String, BridgePortError>> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -554,10 +552,7 @@ fn wait_for_child_exit(
 ) -> Result<ExitStatus, BridgePortError> {
     let started = Instant::now();
     loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|_| BridgePortError::Unavailable)?
-        {
+        if let Some(status) = child.try_wait().map_err(|_| BridgePortError::Unavailable)? {
             return Ok(status);
         }
         if started.elapsed() >= timeout {
