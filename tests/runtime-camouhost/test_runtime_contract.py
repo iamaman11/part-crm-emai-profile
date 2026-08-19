@@ -28,8 +28,6 @@ class RuntimeContractTests(unittest.TestCase):
         self.manifest = json.loads(
             (ROOT / "runtime" / "camouhost" / "runtime-candidate.json").read_text()
         )
-        self.manifest["launch_eligible"] = True
-        self.manifest["browser"]["artifact_sha256"] = "2" * 64
         self.runtime_manifest.write_text(json.dumps(self.manifest), encoding="utf-8")
         self.config = {
             "navigator.userAgent": "ua",
@@ -80,10 +78,15 @@ class RuntimeContractTests(unittest.TestCase):
         right = {"a": 1, "b": 2}
         self.assertEqual(real.canonical_sha256(left), real.canonical_sha256(right))
 
-    def test_candidate_manifest_fails_closed_until_artifact_digest_is_resolved(self):
+    def test_candidate_manifest_has_verified_exact_browser_artifact(self):
         candidate_path = ROOT / "runtime" / "camouhost" / "runtime-candidate.json"
-        with self.assertRaisesRegex(real.ContractError, "not launch eligible"):
-            real._runtime_manifest(candidate_path)
+        manifest = real._runtime_manifest(candidate_path)
+        self.assertTrue(manifest["launch_eligible"])
+        self.assertEqual(
+            manifest["browser"]["artifact_sha256"],
+            "386fc2f41139685f9a1a9cef0d024bc041d899c315ea538d561171b5b282e57d",
+        )
+        self.assertFalse(manifest["certification"]["project_accepted"])
 
     def test_valid_materialization_reaches_browser_inventory_gate(self):
         prepared = self.prepare()
