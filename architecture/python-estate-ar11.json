@@ -68,7 +68,7 @@
     "required_previous_classification": "MIGRATE_TO_RUST",
     "required_cutover_slice": "AR-11",
     "rust_target": "tools/opsctl release/promotion command family",
-    "historical_evidence": "immutable Git history through AR-8D transition checker",
+    "historical_evidence": "static exact Git commit/blob provenance through the AR-8D transition checker; historical executable replay is forbidden",
     "current_callable_python_mutator": false
   },
   "current_summary": {
