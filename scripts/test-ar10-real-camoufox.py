@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CAMOUHOST = ROOT / "runtime/camouhost/real.py"
 RUNTIME_LOCK = ROOT / "runtime/camouhost/runtime-lock.json"
 SESSION = "session_01JAR10REALCAMOUFOX"
+BRIDGE_LOCK_CONTENT = "profile-platform-bridge-lock-v1\ndevice_01JAR10REALCAMOUFOX\n1\n"
 
 PAGE = b"""<!doctype html><meta charset='utf-8'><script>
 const hadStorage = localStorage.getItem('ar10-marker') === 'persisted';
@@ -92,16 +93,45 @@ def base_env(root: Path, report: dict[str, str], url: str) -> dict[str, str]:
     return env
 
 
-def materialize(root: Path) -> dict[str, str]:
+def materializer_env() -> dict[str, str]:
+    return {
+        **os.environ,
+        "CAMOUHOST_RUNTIME_LOCK": str(RUNTIME_LOCK),
+        "CAMOUHOST_HEADLESS_MODE": "virtual",
+    }
+
+
+def write_bridge_lock(root: Path) -> None:
+    (root / ".profile-platform.lock").write_text(BRIDGE_LOCK_CONTENT, encoding="utf-8")
+
+
+def expect_materialization_requires_bridge_lock(root: Path) -> None:
     root.mkdir()
     completed = subprocess.run(
         [sys.executable, str(CAMOUHOST), "--materialize-identity", str(root)],
         cwd=ROOT,
-        env={
-            **os.environ,
-            "CAMOUHOST_RUNTIME_LOCK": str(RUNTIME_LOCK),
-            "CAMOUHOST_HEADLESS_MODE": "virtual",
-        },
+        env=materializer_env(),
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 7:
+        raise AssertionError(
+            "candidate materialization without Bridge ownership did not fail closed: "
+            f"rc={completed.returncode} out={completed.stdout!r} err={completed.stderr[-500:]!r}"
+        )
+    if (root / "camoufox-config.json").exists() or (root / "user_data").exists():
+        raise AssertionError("unowned candidate materialization mutated browser identity/state")
+
+
+def materialize(root: Path) -> dict[str, str]:
+    root.mkdir()
+    write_bridge_lock(root)
+    completed = subprocess.run(
+        [sys.executable, str(CAMOUHOST), "--materialize-identity", str(root)],
+        cwd=ROOT,
+        env=materializer_env(),
         text=True,
         capture_output=True,
         timeout=180,
@@ -121,10 +151,6 @@ def materialize(root: Path) -> dict[str, str]:
         raise AssertionError(f"unexpected materialization report: {report}")
     if report["runtime_lock_sha256"] != canonical_lock_digest():
         raise AssertionError("materialized runtime lock identity drifted")
-    (root / ".profile-platform.lock").write_text(
-        "profile-platform-bridge-lock-v1\ndevice_01JAR10REALCAMOUFOX\n1\n",
-        encoding="utf-8",
-    )
     return report
 
 
@@ -218,6 +244,7 @@ def main() -> int:
     try:
         with tempfile.TemporaryDirectory(prefix="ar10-real-camoufox-") as temporary:
             base = Path(temporary)
+            expect_materialization_requires_bridge_lock(base / "generation-unowned")
             first_root = base / "generation-a"
             second_root = base / "generation-b"
             first = materialize(first_root)
