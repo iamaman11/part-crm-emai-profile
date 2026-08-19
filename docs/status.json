@@ -224,6 +224,15 @@
         "metadata_only": true,
         "production_mutation": false
       },
+      "ar9_current": {
+        "tracking_issue": 366,
+        "source_authority": "architecture/d1-evolution-ar9.json",
+        "canonical_projection": "architecture/inventory.json::d1_evolution",
+        "production_mutation": false,
+        "architecture_complete": false,
+        "production_core_gate": "BLOCKED",
+        "production_ready": false
+      },
       "subject_domain_authorities": {
         "credential_authority": "architecture/credential-authority.json",
         "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
@@ -303,7 +312,7 @@
       },
       "next_gate": {
         "id": "AR-9_ACCEPTANCE",
-        "issue": null,
+        "issue": 366,
         "on_success": "AR-10_BECOMES_CURRENT"
       },
       "invariants": {
@@ -319,8 +328,11 @@
     "next_repository_step": {
       "name": "AR-9 — D1 Evolution / Schema Compatibility",
       "status": "current",
-      "tracking_issue": 266,
+      "tracking_issue": 366,
+      "program_tracking_issue": 266,
       "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+      "slice_authority": "architecture/d1-evolution-ar9.json",
+      "canonical_projection": "architecture/inventory.json::d1_evolution",
       "previous_acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json"
     }
   },

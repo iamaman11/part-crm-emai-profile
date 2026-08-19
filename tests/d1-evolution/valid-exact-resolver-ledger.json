@@ -1,0 +1,8 @@
+{
+  "rows": [
+    {"id": 1, "name": "0001_resolver_security_boundary.sql"},
+    {"id": 2, "name": "0002_oauth_refresh_fencing.sql"},
+    {"id": 3, "name": "0003_lookup_hmac_versions.sql"},
+    {"id": 4, "name": "0004_refresh_owner_hmac_version.sql"}
+  ]
+}

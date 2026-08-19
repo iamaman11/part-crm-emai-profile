@@ -4,6 +4,10 @@
 This authority is intentionally narrower than D4 migration policy. It is only for an empty database:
 it concatenates the exact accepted migration inventory with the canonical d1_migrations ledger so the
 result can be sent through Wrangler's remote SQL-file import path. It never upgrades a non-empty DB.
+
+AR-9 extends the existing bootstrap authority with a convergence proof for both D1 components. The
+historical Catalog bootstrap bytes/evidence format remain unchanged; the same builder is exercised for
+Catalog and Resolver and compared with sequential migrations using a normalized final schema state.
 """
 
 from __future__ import annotations
@@ -20,9 +24,15 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS_DIR = ROOT / "migrations" / "d1"
+RESOLVER_MIGRATIONS_DIR = ROOT / "migrations" / "resolver-d1"
+COMPONENT_MIGRATION_ROOTS = {
+    "catalog": MIGRATIONS_DIR,
+    "resolver": RESOLVER_MIGRATIONS_DIR,
+}
 DEFAULT_OUTPUT = ROOT / "artifacts" / "cloudflare-d1-bootstrap" / "bootstrap.sql"
 DEFAULT_EVIDENCE = ROOT / "docs" / "evidence" / "2026-08-14-pre2j-d3a-empty-d1-bootstrap.json"
 MIGRATION_RE = re.compile(r"^(?P<number>[0-9]{4})_[a-z0-9_]+\.sql$")
+FORBIDDEN_FK_DISABLE_RE = re.compile(r"\bpragma\s+foreign_keys\s*=\s*(?:off|0)\b", re.IGNORECASE)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REMOTE_PROOF_SOURCE_SHA = "493d399b9531776aa8208242a5d1c05681764231"
@@ -78,6 +88,15 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def canonical_json_sha256(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return sha256_bytes(payload.encode("utf-8"))
+
+
+def quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
 def validated_migrations(directory: Path = MIGRATIONS_DIR) -> list[Path]:
     if not directory.is_dir() or directory.is_symlink():
         fail(f"migration directory must be a real directory: {directory}")
@@ -91,6 +110,11 @@ def validated_migrations(directory: Path = MIGRATIONS_DIR) -> list[Path]:
         match = MIGRATION_RE.fullmatch(path.name)
         if match is None:
             fail(f"unexpected D1 migration filename: {path.name}")
+        text = path.read_text(encoding="utf-8")
+        if "\x00" in text:
+            fail(f"migration contains a NUL byte: {path.name}")
+        if FORBIDDEN_FK_DISABLE_RE.search(text):
+            fail(f"migration must not disable foreign key enforcement: {path.name}")
         numbers.append(int(match.group("number")))
     expected = list(range(1, len(migrations) + 1))
     if numbers != expected:
@@ -131,8 +155,6 @@ def build_bootstrap_bytes(directory: Path = MIGRATIONS_DIR) -> bytes:
     parts = [empty_guard_sql(), ledger_sql()]
     for migration in migrations:
         text = migration.read_text(encoding="utf-8")
-        if "\x00" in text:
-            fail(f"migration contains a NUL byte: {migration.name}")
         parts.append(text.rstrip() + "\n")
         escaped_name = migration.name.replace("'", "''")
         parts.append(f'INSERT INTO "{LEDGER_NAME}" (name) VALUES (\'{escaped_name}\');\n')
@@ -149,7 +171,12 @@ def write_bootstrap(path: Path) -> tuple[int, str]:
     return len(payload), sha256_bytes(payload)
 
 
+def normalize_sql(value: str) -> str:
+    return " ".join(value.split())
+
+
 def schema_signature(connection: sqlite3.Connection) -> list[tuple[str, str, str, str]]:
+    """Historical Catalog bootstrap signature retained for accepted D3 evidence."""
     rows = connection.execute(
         """
         SELECT type, name, tbl_name, COALESCE(sql, '') AS sql
@@ -163,10 +190,134 @@ def schema_signature(connection: sqlite3.Connection) -> list[tuple[str, str, str
     return [(str(row[0]), str(row[1]), str(row[2]), str(row[3])) for row in rows]
 
 
+def application_tables(connection: sqlite3.Connection) -> list[str]:
+    return [
+        str(row[0])
+        for row in connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name NOT LIKE 'sqlite_%'
+              AND name != ?
+            ORDER BY name
+            """,
+            (LEDGER_NAME,),
+        ).fetchall()
+    ]
+
+
+def normalized_schema_state(connection: sqlite3.Connection) -> dict[str, Any]:
+    """Return deterministic final D1 structure without volatile ledger timestamps."""
+    objects = [
+        {
+            "type": str(row[0]),
+            "name": str(row[1]),
+            "table": str(row[2]),
+            "sql": normalize_sql(str(row[3] or "")),
+        }
+        for row in connection.execute(
+            """
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_master
+            WHERE name NOT LIKE 'sqlite_%'
+              AND name != ?
+            ORDER BY type, name
+            """,
+            (LEDGER_NAME,),
+        ).fetchall()
+    ]
+    columns: list[dict[str, Any]] = []
+    indexes: list[dict[str, Any]] = []
+    foreign_keys: list[dict[str, Any]] = []
+    for table in application_tables(connection):
+        quoted_table = quote_identifier(table)
+        for row in connection.execute(f"PRAGMA table_info({quoted_table})").fetchall():
+            columns.append(
+                {
+                    "table": table,
+                    "cid": int(row[0]),
+                    "name": str(row[1]),
+                    "type": str(row[2]),
+                    "notnull": int(row[3]),
+                    "default": None if row[4] is None else str(row[4]),
+                    "pk": int(row[5]),
+                }
+            )
+        for row in connection.execute(f"PRAGMA index_list({quoted_table})").fetchall():
+            index_name = str(row[1])
+            index_columns = [
+                None if item[2] is None else str(item[2])
+                for item in connection.execute(
+                    f"PRAGMA index_info({quote_identifier(index_name)})"
+                ).fetchall()
+            ]
+            indexes.append(
+                {
+                    "table": table,
+                    "name": index_name,
+                    "unique": int(row[2]),
+                    "origin": str(row[3]),
+                    "partial": int(row[4]),
+                    "columns": index_columns,
+                }
+            )
+        for row in connection.execute(f"PRAGMA foreign_key_list({quoted_table})").fetchall():
+            foreign_keys.append(
+                {
+                    "table": table,
+                    "id": int(row[0]),
+                    "seq": int(row[1]),
+                    "parent_table": str(row[2]),
+                    "from": None if row[3] is None else str(row[3]),
+                    "to": None if row[4] is None else str(row[4]),
+                    "on_update": str(row[5]),
+                    "on_delete": str(row[6]),
+                    "match": str(row[7]),
+                }
+            )
+    indexes.sort(key=lambda item: (item["table"], item["name"]))
+    foreign_keys.sort(key=lambda item: (item["table"], item["id"], item["seq"]))
+    state = {
+        "objects": objects,
+        "columns": columns,
+        "indexes": indexes,
+        "foreign_keys": foreign_keys,
+        "ledger": ledger_names(connection),
+    }
+    return {**state, "schema_signature": canonical_json_sha256(state)}
+
+
+def foreign_key_violations(connection: sqlite3.Connection) -> list[list[Any]]:
+    return [list(row) for row in connection.execute("PRAGMA foreign_key_check").fetchall()]
+
+
+def assert_foreign_keys_clean(connection: sqlite3.Connection, label: str) -> None:
+    violations = foreign_key_violations(connection)
+    if violations:
+        fail(f"{label} foreign_key_check failed: {violations}")
+
+
+def assert_integrity_clean(connection: sqlite3.Connection, label: str) -> None:
+    rows = connection.execute("PRAGMA integrity_check").fetchall()
+    if rows != [("ok",)]:
+        fail(f"{label} integrity_check failed: {rows}")
+
+
 def apply_sequential(connection: sqlite3.Connection, migrations: list[Path]) -> None:
+    """Historical parity helper: apply SQL in order without synthesizing a ledger."""
     for migration in migrations:
         connection.executescript(migration.read_text(encoding="utf-8"))
     connection.commit()
+
+
+def apply_sequential_with_ledger(connection: sqlite3.Connection, migrations: list[Path]) -> None:
+    """Model Wrangler migration semantics for convergence: successful migrations append to the ledger."""
+    connection.executescript(ledger_sql())
+    for migration in migrations:
+        connection.executescript(migration.read_text(encoding="utf-8"))
+        connection.execute(f'INSERT INTO "{LEDGER_NAME}" (name) VALUES (?)', (migration.name,))
+        connection.commit()
 
 
 def ledger_names(connection: sqlite3.Connection) -> list[str]:
@@ -174,6 +325,7 @@ def ledger_names(connection: sqlite3.Connection) -> list[str]:
 
 
 def prove_bootstrap_parity(directory: Path = MIGRATIONS_DIR) -> None:
+    """Preserve the original Catalog bootstrap parity proof used by historical D3 evidence."""
     migrations = validated_migrations(directory)
     expected_names = [path.name for path in migrations]
     sequential = sqlite3.connect(":memory:")
@@ -188,6 +340,48 @@ def prove_bootstrap_parity(directory: Path = MIGRATIONS_DIR) -> None:
             fail("empty-D1 bootstrap schema differs from sequential migration semantics")
         if ledger_names(bootstrap) != expected_names:
             fail("empty-D1 bootstrap ledger differs from exact migration inventory")
+    finally:
+        sequential.close()
+        bootstrap.close()
+
+
+def prove_component_convergence(component: str, directory: Path) -> dict[str, Any]:
+    migrations = validated_migrations(directory)
+    sequential = sqlite3.connect(":memory:")
+    bootstrap = sqlite3.connect(":memory:")
+    try:
+        sequential.execute("PRAGMA foreign_keys = ON")
+        bootstrap.execute("PRAGMA foreign_keys = ON")
+        if sequential.execute("PRAGMA foreign_keys").fetchone() != (1,):
+            fail(f"{component} sequential proof did not enable foreign key enforcement")
+        if bootstrap.execute("PRAGMA foreign_keys").fetchone() != (1,):
+            fail(f"{component} bootstrap proof did not enable foreign key enforcement")
+
+        apply_sequential_with_ledger(sequential, migrations)
+        bootstrap.executescript(build_bootstrap_bytes(directory).decode("utf-8"))
+        bootstrap.commit()
+
+        assert_foreign_keys_clean(sequential, f"{component} sequential")
+        assert_foreign_keys_clean(bootstrap, f"{component} bootstrap")
+        assert_integrity_clean(sequential, f"{component} sequential")
+        assert_integrity_clean(bootstrap, f"{component} bootstrap")
+
+        expected_ledger = [path.name for path in migrations]
+        if ledger_names(sequential) != expected_ledger or ledger_names(bootstrap) != expected_ledger:
+            fail(f"{component} convergence ledger differs from exact migration inventory")
+
+        sequential_state = normalized_schema_state(sequential)
+        bootstrap_state = normalized_schema_state(bootstrap)
+        if sequential_state != bootstrap_state:
+            fail(f"{component} fresh bootstrap and sequential migrations do not converge")
+        return {
+            "component": component,
+            "migration_count": len(migrations),
+            "latest": migrations[-1].name,
+            "schema_signature": sequential_state["schema_signature"],
+            "foreign_key_check": "CLEAN",
+            "integrity_check": "ok",
+        }
     finally:
         sequential.close()
         bootstrap.close()
@@ -349,9 +543,14 @@ def check_repository_policy() -> None:
     if first != second:
         fail("identical migration inputs produced non-deterministic bootstrap SQL")
     prove_bootstrap_parity()
+    convergence = [
+        prove_component_convergence(component, directory)
+        for component, directory in COMPONENT_MIGRATION_ROOTS.items()
+    ]
     print(
         "Empty-D1 bootstrap policy passed: "
-        f"migrations={len(validated_migrations())} bytes={len(first)} sha256={sha256_bytes(first)}."
+        f"migrations={len(validated_migrations())} bytes={len(first)} sha256={sha256_bytes(first)} "
+        f"convergence={json.dumps(convergence, sort_keys=True, separators=(',', ':'))}."
     )
 
 
@@ -361,6 +560,33 @@ def expect_rejected(label: str, operation: Any) -> None:
     except (BootstrapError, sqlite3.DatabaseError):
         return
     fail(f"negative bootstrap fixture unexpectedly passed: {label}")
+
+
+def prove_fk_corruption_detected() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        # SQLite starts with FK enforcement disabled. Build an intentionally corrupt synthetic DB,
+        # then enable enforcement before invoking the same invariant check used by convergence.
+        connection.executescript(
+            """
+            CREATE TABLE parent(id INTEGER PRIMARY KEY);
+            CREATE TABLE child(
+                id INTEGER PRIMARY KEY,
+                parent_id INTEGER NOT NULL REFERENCES parent(id)
+            );
+            INSERT INTO child(id, parent_id) VALUES (1, 999);
+            """
+        )
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = ON")
+        if connection.execute("PRAGMA foreign_keys").fetchone() != (1,):
+            fail("negative FK fixture could not enable foreign key enforcement")
+        expect_rejected(
+            "foreign-key corruption",
+            lambda: assert_foreign_keys_clean(connection, "negative fixture"),
+        )
+    finally:
+        connection.close()
 
 
 def self_test() -> None:
@@ -373,6 +599,9 @@ def self_test() -> None:
             shutil.copyfile(migration, fixture / migration.name)
 
         prove_bootstrap_parity(fixture)
+        prove_component_convergence("catalog-fixture", fixture)
+        prove_component_convergence("resolver", RESOLVER_MIGRATIONS_DIR)
+        prove_fk_corruption_detected()
 
         missing = fixture / migrations[min(1, len(migrations) - 1)].name
         saved = missing.read_bytes()
@@ -384,6 +613,12 @@ def self_test() -> None:
         duplicate.write_text("SELECT 1;\n", encoding="utf-8")
         expect_rejected("non-contiguous migration", lambda: validated_migrations(fixture))
         duplicate.unlink()
+
+        forbidden_fk = fixture / migrations[-1].name
+        original_fk_bytes = forbidden_fk.read_bytes()
+        forbidden_fk.write_text("PRAGMA foreign_keys = OFF;\n", encoding="utf-8")
+        expect_rejected("migration foreign_keys OFF", lambda: validated_migrations(fixture))
+        forbidden_fk.write_bytes(original_fk_bytes)
 
         connection = sqlite3.connect(":memory:")
         try:
@@ -492,7 +727,7 @@ def self_test() -> None:
             lambda: verify_remote_evidence_document(expanded_scope),
         )
 
-    print("Empty-D1 bootstrap deterministic and negative self-tests passed.")
+    print("Empty-D1 bootstrap deterministic, convergence, FK and negative self-tests passed.")
 
 
 def main() -> int:

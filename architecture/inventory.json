@@ -1503,7 +1503,7 @@
     },
     "next_gate": {
       "id": "AR-9_ACCEPTANCE",
-      "issue": null,
+      "issue": 366,
       "on_success": "AR-10_BECOMES_CURRENT"
     },
     "invariants": {
@@ -1554,7 +1554,9 @@
     "profile_security": "architecture/profile-security.json",
     "ar8_completion_tracking_issue": 361,
     "ar8_completion_pr": 362,
-    "ar8_acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json"
+    "ar8_acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
+    "d1_evolution": "architecture/inventory.json::d1_evolution",
+    "d1_evolution_source": "architecture/d1-evolution-ar9.json"
   },
   "document_status": [
     {
@@ -1896,5 +1898,99 @@
       "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
       "production_mutation": false
     }
+  },
+  "d1_evolution": {
+    "schema_version": 1,
+    "role": "CURRENT_AR9_D1_EVOLUTION_PROJECTION",
+    "source_authority": "architecture/d1-evolution-ar9.json",
+    "source_status": "candidate",
+    "tracking_issue": 366,
+    "start_base": "10c317d7187e6a86c5e2ed6d1cd92c2e76c0c256",
+    "migration_classes": [
+      "EXPAND",
+      "BACKFILL",
+      "CONTRACT",
+      "REPAIR"
+    ],
+    "ledger_states": [
+      "EXACT",
+      "BEHIND_KNOWN_PREFIX",
+      "AHEAD_KNOWN_COMPATIBLE",
+      "AHEAD_KNOWN_INCOMPATIBLE",
+      "DIVERGED",
+      "UNKNOWN_MIGRATION",
+      "CORRUPT_LEDGER"
+    ],
+    "rollout_decisions": [
+      "SAFE",
+      "MIGRATION_REQUIRED",
+      "DEPLOY_FIRST",
+      "MIGRATE_FIRST",
+      "CODE_ROLLBACK_SAFE",
+      "CODE_ROLLBACK_BLOCKED",
+      "FAIL_FORWARD_REQUIRED",
+      "CONTRACT_BLOCKED",
+      "RECOVERY_REQUIRED"
+    ],
+    "mutation_authority": "GITHUB_ACTIONS_PROTECTED_ENVIRONMENT_PLUS_PINNED_WRANGLER",
+    "policy_authority": "OPSCTL_NATIVE_RUST_READ_PLAN_VERIFY",
+    "new_opsctl_process_spawn_sites": 0,
+    "opsctl_provider_credentials": false,
+    "resource_auto_provisioning_allowed": false,
+    "database_lock_required_by_default": false,
+    "components": [
+      {
+        "component_id": "catalog",
+        "binding_identity": "CATALOG_DB",
+        "migration_root": "migrations/d1",
+        "migration_ledger": "d1_migrations",
+        "current_repository_revision": "0026_outbound_mail_intents.sql",
+        "history_digest": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
+        "historical_epoch": {
+          "status": "FROZEN_CONSUMED_HISTORY_CANDIDATE",
+          "ordered_set_identity": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
+          "per_file_sha256_freeze": {
+            "status": "FROZEN",
+            "algorithm": "sha256",
+            "count": 26
+          },
+          "retroactive_runtime_compatibility_claims": false
+        },
+        "post_epoch_migration_count": 0,
+        "fresh_bootstrap_authority": "scripts/cloudflare-d1-bootstrap.py",
+        "upgrade_authority": "PINNED_WRANGLER_D1_MIGRATIONS_APPLY",
+        "mutation_authority": "AR9_PROTECTED_D1_MIGRATION_EXECUTOR",
+        "concurrency_authority": "GITHUB_ACTIONS_PER_ENVIRONMENT_COMPONENT_SERIALIZATION",
+        "release_manifest_owner": "scripts/cloudflare-release.py"
+      },
+      {
+        "component_id": "resolver",
+        "binding_identity": "RESOLVER_DB",
+        "migration_root": "migrations/resolver-d1",
+        "migration_ledger": "d1_migrations",
+        "current_repository_revision": "0004_refresh_owner_hmac_version.sql",
+        "history_digest": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
+        "historical_epoch": {
+          "status": "FROZEN_CONSUMED_HISTORY_CANDIDATE",
+          "ordered_set_identity": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
+          "per_file_sha256_freeze": {
+            "status": "FROZEN",
+            "algorithm": "sha256",
+            "count": 4
+          },
+          "retroactive_runtime_compatibility_claims": false
+        },
+        "post_epoch_migration_count": 0,
+        "fresh_bootstrap_authority": "D3_RESOLVER_FIRST_BOOTSTRAP_AUTHORITY",
+        "upgrade_authority": "PINNED_WRANGLER_D1_MIGRATIONS_APPLY",
+        "mutation_authority": "AR9_PROTECTED_D1_MIGRATION_EXECUTOR",
+        "concurrency_authority": "GITHUB_ACTIONS_PER_ENVIRONMENT_COMPONENT_SERIALIZATION",
+        "release_manifest_owner": "scripts/mailbox-secret-resolver-release.py"
+      }
+    ],
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false,
+    "production_mutation": false
   }
 }

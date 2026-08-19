@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "kind": "D1_EVOLUTION_AUTHORITY",
+  "status": "candidate",
+  "program_slice": "AR-9",
+  "tracking_issue": 366,
+  "start_base": "10c317d7187e6a86c5e2ed6d1cd92c2e76c0c256",
+  "canonical_projection": "architecture/inventory.json::d1_evolution",
+  "production_mutation": false,
+  "architecture_complete": false,
+  "production_core_gate": "BLOCKED",
+  "production_ready": false,
+  "global_policy": {
+    "migration_classes": ["EXPAND", "BACKFILL", "CONTRACT", "REPAIR"],
+    "ledger_states": [
+      "EXACT",
+      "BEHIND_KNOWN_PREFIX",
+      "AHEAD_KNOWN_COMPATIBLE",
+      "AHEAD_KNOWN_INCOMPATIBLE",
+      "DIVERGED",
+      "UNKNOWN_MIGRATION",
+      "CORRUPT_LEDGER"
+    ],
+    "rollout_decisions": [
+      "SAFE",
+      "MIGRATION_REQUIRED",
+      "DEPLOY_FIRST",
+      "MIGRATE_FIRST",
+      "CODE_ROLLBACK_SAFE",
+      "CODE_ROLLBACK_BLOCKED",
+      "FAIL_FORWARD_REQUIRED",
+      "CONTRACT_BLOCKED",
+      "RECOVERY_REQUIRED"
+    ],
+    "failure_modes": [
+      "RETRY_SAFE",
+      "PARTIAL_PREFIX_REEVALUATE",
+      "FAIL_FORWARD_ONLY",
+      "MANUAL_RECOVERY_REQUIRED"
+    ],
+    "rollback_authority": [
+      "CODE_ROLLBACK",
+      "FAIL_FORWARD",
+      "TIME_TRAVEL_EMERGENCY",
+      "MANUAL_RECONCILIATION"
+    ],
+    "down_migrations_are_rollback_authority": false,
+    "automatic_time_travel_restore": false,
+    "resource_auto_provisioning_allowed": false,
+    "database_lock_required_by_default": false,
+    "mutation_authority": "GITHUB_ACTIONS_PROTECTED_ENVIRONMENT_PLUS_PINNED_WRANGLER",
+    "policy_authority": "OPSCTL_NATIVE_RUST_READ_PLAN_VERIFY",
+    "new_opsctl_process_spawn_sites": 0,
+    "opsctl_provider_credentials": false
+  },
+  "components": [
+    {
+      "component_id": "catalog",
+      "runtime_owner": "control-plane",
+      "binding_identity": "CATALOG_DB",
+      "migration_root": "migrations/d1",
+      "migration_ledger": "d1_migrations",
+      "historical_epoch": {
+        "status": "FROZEN_CONSUMED_HISTORY_CANDIDATE",
+        "start_base": "10c317d7187e6a86c5e2ed6d1cd92c2e76c0c256",
+        "ordered_history": [
+          {"name": "0001_catalog.sql", "git_blob_sha1": "1faea67567cca5ba9ba0ee211fcde89921400279", "sha256": "0c6ede10a18b46b3f9195bbfea0f3c0d84d47fd200a529d159eab1a0f7916f79"},
+          {"name": "0002_identity_acl.sql", "git_blob_sha1": "ffd07babbf3afeb4c20101c55f7c2574fd1d03fa", "sha256": "bed2dd0415a80cad82cc895b8f5e1c27bf380291764251d295669cadd0b8d534"},
+          {"name": "0003_governed_commands.sql", "git_blob_sha1": "d4f27d7cd53ee81ae31ced552c49d3696ab96a75", "sha256": "2a6679c5c80bfd212398e5579f24e87e87b906bbb9a664600d3216928d71fa9a"},
+          {"name": "0004_profile_coordinator_projection.sql", "git_blob_sha1": "80df57e6fbdfb82af98898a20d9c0731a52d977a", "sha256": "1c89f68de4915ad1655b8e775fabcc6b970fabfb912cd117cf1f566ceaed9ffb"},
+          {"name": "0005_profile_generation_state_guards.sql", "git_blob_sha1": "4b1c02e9f974499edd525b0803ca6a6216c48ea6", "sha256": "77e58767790c197d721ed5fb64924e9315cddf08640bcb3be55789953c25e2ea"},
+          {"name": "0006_profile_generation_registry.sql", "git_blob_sha1": "abaf43a9fc110417e5c93c2de6f8f3d2b64031fd", "sha256": "0531ea168b7142e6ba74c32f2ffa06c0eb5076af62c9b08877b7aea9af047652"},
+          {"name": "0007_profile_generation_integrity_guards.sql", "git_blob_sha1": "b1921c8f4bf06bffd104d25942b4d45324d2bc8a", "sha256": "cbdb168bc4eeafaeeb797b15e1d51055936c6695d3ebc96af68f7bf9ebc4cc5f"},
+          {"name": "0008_profile_generation_deactivation.sql", "git_blob_sha1": "79773895ec877bdde05279bc11e696126b272b7b", "sha256": "37741e19291a6ced0046fd396b1faf8c7dce734d00bd4d1648c14bad3a27c924"},
+          {"name": "0009_governed_mutation_error_taxonomy.sql", "git_blob_sha1": "f3941a0b3a4e3015627a13bdf97cee90f8545cea", "sha256": "57ee3453eff22292751a2bfbc28d3344dbb8caa4e99a7fc48d7f4d941c9d52b9"},
+          {"name": "0010_mailbox_vertical_slice.sql", "git_blob_sha1": "01d6ce775cd7ee73b6d9f8ac921859328ba1668b", "sha256": "93aa2c30c0fe87ea4d8e42d9916e2da28dd02084da485317e8668c40850d51b5"},
+          {"name": "0011_mailbox_governed_guards.sql", "git_blob_sha1": "0da592524726774a726b6e79e74d0112bd48a6ef", "sha256": "40e2b9733116150455eda39bbc5c8969c15d0e0fcec77466ed9391b33802804e"},
+          {"name": "0012_integration_event_foundation.sql", "git_blob_sha1": "4afbb383708c67453b557d3a998a350a6b430a11", "sha256": "238651aaf093a4d186aa95b2f98820a22927addec5b15702180e681f347eb688"},
+          {"name": "0013_notification_delivery_hardening.sql", "git_blob_sha1": "a56815fa63bf24689738a58bbf5d90768f5a43c9", "sha256": "81263d3a754aacbbe23f3daed146ba6c10422a9d46e094dfbdd263cd51e72b80"},
+          {"name": "0014_client_contact_protection.sql", "git_blob_sha1": "a49cfc70e817f2a08cf79cf1f8c3f2ac46e7cdeb", "sha256": "22ba74da5511d9f9f25df7fa3b3945334848e6538af586fe451a26a9e72df9b0"},
+          {"name": "0015_client_merge_assignment_history.sql", "git_blob_sha1": "ecda5210d5cd1fb57ddca7e570c341c84e9997f9", "sha256": "3be8a65c56a560f50ffa947e22fc6c5b8ec9cf1aa38ec464d1168108a605c850"},
+          {"name": "0016_mailbox_cloud_lane.sql", "git_blob_sha1": "7c97041396d2070af54102a5c902169c4f1f7dd9", "sha256": "99a089cdd72a243e306763c5fef9d9af8b1c1411919c65c0f9fafdd6d4730713"},
+          {"name": "0017_mailbox_queue_coordination.sql", "git_blob_sha1": "68bef52723cbb2e782d4aada56e010221e8b992d", "sha256": "9fe56efe4a5b73d3ec6d24136ca3d589678d64b06cfdd8ead5183552f9be9d00"},
+          {"name": "0018_device_authorizations_and_jobs.sql", "git_blob_sha1": "af80a91085696881a9975b0d5cfd650015197183", "sha256": "7e3324b12652b9183f8f27409ef8d2c80da962824f5ea6d1a8e96667cb14615f"},
+          {"name": "0019_device_actor_bindings.sql", "git_blob_sha1": "2eeb5c19bb5192dc48bf38041f53d3235d390ce6", "sha256": "67af34f8ac051f5b3eb97502b6e4d86e33ff0be4db628e1c64717ea34bb1fc6b"},
+          {"name": "0020_browser_mailbox_execution_bindings.sql", "git_blob_sha1": "bf163f04cab5852f5b46dbe30224b4e50d50a9b7", "sha256": "6dc05342868f6003f628c4df52663e3674363400d9a57eca10d91184727becbc"},
+          {"name": "0021_device_generation_commit.sql", "git_blob_sha1": "66d52e14c4eb78443737b9eae967f81928503273", "sha256": "08a2f2b1392f3b32b49cc22452bbc8843f6da8c1c0e20e5d44534c2138d633cd"},
+          {"name": "0022_profile_creator_grant.sql", "git_blob_sha1": "68bc7013ae36ccd2deb75065eeb0ab6cd7b60848", "sha256": "269e4eaf2678c8876dd2b36f7fe61d7144773768bd350a2d6f90628a7a24e9d9"},
+          {"name": "0023_mailbox_client_associations.sql", "git_blob_sha1": "98323f58a460bf3b306c49845924917b8df92fbc", "sha256": "80309c90355b7de8649707226326509367aa77a557bcca71a05cc2b8979755dd"},
+          {"name": "0024_mailbox_onboarding_lifecycle.sql", "git_blob_sha1": "e2c8483fa96dbb5842f6ad17084d9324fad479c3", "sha256": "3d3b72039823ec6ee9a1d81c2ac2f509cdad31f2dcd0fd2f20c7a6eb9dac09b5"},
+          {"name": "0025_microsoft_graph_provider.sql", "git_blob_sha1": "caeebff5618dfc4348b9331d36dd9ff3d433ea6b", "sha256": "a2b1a79cb8ff02ed8a49813f6c73f71904d863cfc2d936cdc62581c51a563a91"},
+          {"name": "0026_outbound_mail_intents.sql", "git_blob_sha1": "e2c4ddc54b1c4ba49f15b70ef5d0b8ec7068801b", "sha256": "05672a54905e94a8b6df4828a91750b20c279ff7a1b44e30308ee022eb409016"}
+        ],
+        "ordered_set_identity_algorithm": "sha256(canonical-json(name+sha256))",
+        "ordered_set_identity": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
+        "per_file_sha256_freeze": {"status": "FROZEN", "algorithm": "sha256", "count": 26},
+        "retroactive_runtime_compatibility_claims": false
+      },
+      "post_epoch_migrations": [],
+      "history_digest_algorithm": "sha256(canonical-json(name+sha256))",
+      "history_digest": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
+      "current_repository_revision": "0026_outbound_mail_intents.sql",
+      "fresh_bootstrap_authority": "scripts/cloudflare-d1-bootstrap.py",
+      "upgrade_authority": "PINNED_WRANGLER_D1_MIGRATIONS_APPLY",
+      "mutation_authority": "AR9_PROTECTED_D1_MIGRATION_EXECUTOR",
+      "concurrency_authority": "GITHUB_ACTIONS_PER_ENVIRONMENT_COMPONENT_SERIALIZATION",
+      "release_manifest_owner": "scripts/cloudflare-release.py",
+      "compatibility_policy": {
+        "historical_epoch_runtime_compatibility": "UNKNOWN_FAIL_CLOSED",
+        "new_migrations_require_full_contract": true,
+        "remote_ledger_must_be_known_canonical_order": true,
+        "known_prefix_is_recoverable": true,
+        "unknown_or_diverged_is_fail_closed": true
+      },
+      "recovery_policy": {
+        "ordinary_code_rollback_uses_compatible_release": true,
+        "down_sql_used": false,
+        "time_travel_role": "EMERGENCY_PRIMITIVE_ONLY",
+        "automatic_restore": false,
+        "remote_restore_rehearsal_owner": "AR-14"
+      }
+    },
+    {
+      "component_id": "resolver",
+      "runtime_owner": "mailbox-secret-resolver",
+      "binding_identity": "RESOLVER_DB",
+      "migration_root": "migrations/resolver-d1",
+      "migration_ledger": "d1_migrations",
+      "historical_epoch": {
+        "status": "FROZEN_CONSUMED_HISTORY_CANDIDATE",
+        "start_base": "10c317d7187e6a86c5e2ed6d1cd92c2e76c0c256",
+        "ordered_history": [
+          {"name": "0001_resolver_security_boundary.sql", "git_blob_sha1": "d8770b8711657d51de2304a84ce27939705c4991", "sha256": "002267474f75ba430586a5ebe02dc8a624e5d33326c3be7e52123911d1b2c224"},
+          {"name": "0002_oauth_refresh_fencing.sql", "git_blob_sha1": "0b0845d04b1a908f9c5b536ab9d4898a2e4a3e6b", "sha256": "18678d9b73830d4982ebfbed4c3ae7b29ce0b068e0c4593e8a393c8907a74a1d"},
+          {"name": "0003_lookup_hmac_versions.sql", "git_blob_sha1": "89900b3b6d9b3a20ff7d962e59f81423c8c4e710", "sha256": "0d1086845c7082a85cde2208917eef7df22bb0e389b3d350ca608b5f9d972db8"},
+          {"name": "0004_refresh_owner_hmac_version.sql", "git_blob_sha1": "6de4439a6e304e03e2943ea75e0df2c730e79975", "sha256": "0d5796f8749dd8420894e190d6d44c61f2de3fa14e15be9a5a70983fce6450bc"}
+        ],
+        "ordered_set_identity_algorithm": "sha256(canonical-json(name+sha256))",
+        "ordered_set_identity": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
+        "per_file_sha256_freeze": {"status": "FROZEN", "algorithm": "sha256", "count": 4},
+        "retroactive_runtime_compatibility_claims": false
+      },
+      "post_epoch_migrations": [],
+      "history_digest_algorithm": "sha256(canonical-json(name+sha256))",
+      "history_digest": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
+      "current_repository_revision": "0004_refresh_owner_hmac_version.sql",
+      "fresh_bootstrap_authority": "D3_RESOLVER_FIRST_BOOTSTRAP_AUTHORITY",
+      "upgrade_authority": "PINNED_WRANGLER_D1_MIGRATIONS_APPLY",
+      "mutation_authority": "AR9_PROTECTED_D1_MIGRATION_EXECUTOR",
+      "concurrency_authority": "GITHUB_ACTIONS_PER_ENVIRONMENT_COMPONENT_SERIALIZATION",
+      "release_manifest_owner": "scripts/mailbox-secret-resolver-release.py",
+      "compatibility_policy": {
+        "historical_epoch_runtime_compatibility": "UNKNOWN_FAIL_CLOSED",
+        "new_migrations_require_full_contract": true,
+        "remote_ledger_must_be_known_canonical_order": true,
+        "known_prefix_is_recoverable": true,
+        "unknown_or_diverged_is_fail_closed": true
+      },
+      "recovery_policy": {
+        "ordinary_code_rollback_uses_compatible_release": true,
+        "down_sql_used": false,
+        "time_travel_role": "EMERGENCY_PRIMITIVE_ONLY",
+        "automatic_restore": false,
+        "remote_restore_rehearsal_owner": "AR-14"
+      }
+    }
+  ],
+  "new_migration_contract": {
+    "required_fields": [
+      "component", "migration_file", "migration_revision", "sha256", "migration_class",
+      "old_runtime_compatible_after", "new_runtime_compatible_before", "rollout_order",
+      "backfill_required", "backfill_authority", "backfill_completion_predicate",
+      "verification_invariants", "failure_mode", "recovery_mode", "code_rollback_allowed",
+      "fail_forward_required", "contract_preconditions", "destructive"
+    ],
+    "rollout_order_vocabulary": ["MIGRATE_BEFORE_CODE", "CODE_BEFORE_MIGRATE", "EITHER", "SEPARATE_CONTRACT_RELEASE"],
+    "contract_precondition_vocabulary": [
+      "replacement_active",
+      "backfill_complete",
+      "old_readers_writers_retired",
+      "known_good_compatible"
+    ],
+    "rollout_order_is_derived": true,
+    "contract_rules": {
+      "CONTRACT_requires_prior_EXPAND": true,
+      "CONTRACT_requires_backfill_complete_when_required": true,
+      "CONTRACT_requires_old_readers_writers_retired": true,
+      "CONTRACT_requires_known_good_compatibility": true,
+      "CONTRACT_cannot_first_introduce_replacement_representation": true,
+      "destructive_cannot_be_implicitly_rollback_safe": true,
+      "fail_forward_requires_explicit_recovery": true
+    }
+  }
+}

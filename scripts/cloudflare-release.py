@@ -28,6 +28,7 @@ RELEASE_DIR = ROOT / "artifacts" / "cloudflare-release"
 FRONTEND_DIST = Path("frontend/dist")
 WORKER_BUILD_DIR = Path("apps/control-plane-worker/build")
 DEPLOYMENT_CONFIG = Path("deploy/cloudflare/wrangler.jsonc")
+D1_EVOLUTION = Path("architecture/d1-evolution-ar9.json")
 # worker-build 0.8.5 emits the deployable module closure at the build root while
 # retaining build/worker/shim.mjs as the Wrangler-compatible entrypoint alias.
 # Do not hash .tmp/intermediate files or non-runtime package/type metadata.
@@ -168,7 +169,7 @@ def contract_inventory(root: Path) -> dict[str, Any]:
     return inventory
 
 
-def migration_inventory(root: Path) -> dict[str, Any]:
+def migration_paths(root: Path) -> list[Path]:
     directory = root / "migrations" / "d1"
     require_directory(directory, "D1 migration directory")
     migrations = sorted(directory.glob("*.sql"), key=lambda path: path.name)
@@ -182,6 +183,11 @@ def migration_inventory(root: Path) -> dict[str, Any]:
         fail("D1 migration set must not be empty")
     if len(numbers) != len(set(numbers)) or numbers != sorted(numbers):
         fail("D1 migration sequence must be unique and monotonically ordered")
+    return migrations
+
+
+def migration_inventory(root: Path) -> dict[str, Any]:
+    migrations = migration_paths(root)
     inventory = inventory_repo_files(root, migrations)
     inventory.update(
         {
@@ -192,6 +198,73 @@ def migration_inventory(root: Path) -> dict[str, Any]:
         }
     )
     return inventory
+
+
+def evolution_history_identity(root: Path) -> tuple[list[dict[str, str]], str]:
+    entries = [
+        {"name": path.name, "sha256": sha256_file(path)}
+        for path in migration_paths(root)
+    ]
+    return entries, sha256_bytes(canonical_compact(entries))
+
+
+def load_schema_contract(root: Path) -> dict[str, str]:
+    path = root / D1_EVOLUTION
+    try:
+        authority = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ReleaseError(f"cannot read D1 evolution authority: {error}") from error
+    if not isinstance(authority, dict) or authority.get("kind") != "D1_EVOLUTION_AUTHORITY":
+        fail("D1 evolution authority identity is invalid")
+    components = authority.get("components")
+    if not isinstance(components, list):
+        fail("D1 evolution authority component inventory is missing")
+    matches = [
+        value
+        for value in components
+        if isinstance(value, dict) and value.get("component_id") == "catalog"
+    ]
+    if len(matches) != 1:
+        fail("D1 evolution authority must contain exactly one catalog component")
+    component = matches[0]
+    if component.get("migration_root") != "migrations/d1":
+        fail("catalog D1 evolution migration root drifted")
+    historical = component.get("historical_epoch")
+    policy = component.get("compatibility_policy")
+    if not isinstance(historical, dict) or not isinstance(policy, dict):
+        fail("catalog D1 historical/compatibility policy is missing")
+    entries, history_digest = evolution_history_identity(root)
+    observed = historical.get("ordered_history")
+    if not isinstance(observed, list):
+        fail("catalog D1 frozen history is missing")
+    observed_identity = [
+        {"name": value.get("name"), "sha256": value.get("sha256")}
+        for value in observed
+        if isinstance(value, dict)
+    ]
+    if observed_identity != entries:
+        fail("catalog D1 frozen migration identities differ from exact source bytes")
+    freeze = historical.get("per_file_sha256_freeze")
+    if (
+        historical.get("ordered_set_identity_algorithm") != "sha256(canonical-json(name+sha256))"
+        or historical.get("ordered_set_identity") != history_digest
+        or not isinstance(freeze, dict)
+        or freeze.get("status") != "FROZEN"
+        or freeze.get("algorithm") != "sha256"
+        or freeze.get("count") != len(entries)
+    ):
+        fail("catalog D1 historical epoch is not fully frozen")
+    target = component.get("current_repository_revision")
+    if not isinstance(target, str) or target != entries[-1]["name"]:
+        fail("catalog current repository revision differs from frozen history")
+    return {
+        "database_component": "catalog",
+        "target_schema_revision": target,
+        "supported_schema_min": target,
+        "supported_schema_max": target,
+        "migration_history_digest": history_digest,
+        "compatibility_policy_digest": sha256_bytes(canonical_compact(policy)),
+    }
 
 
 def load_toolchain_identity(root: Path) -> dict[str, Any]:
@@ -389,6 +462,7 @@ def build_manifest_payload(
         },
         "contracts": contract_inventory(root),
         "migrations": migration_inventory(root),
+        "schema_contract": load_schema_contract(root),
         "build": load_toolchain_identity(root),
     }
 
@@ -437,6 +511,9 @@ def verify_manifest_document(manifest: dict[str, Any]) -> None:
     del payload["release_id"]
     if release_id_for(payload) != release_id:
         fail("release identifier does not match canonical manifest payload")
+    schema_contract = manifest.get("schema_contract")
+    if not isinstance(schema_contract, dict) or schema_contract.get("database_component") != "catalog":
+        fail("release manifest Catalog schema contract is invalid")
     validate_manifest_has_no_sensitive_authority(manifest)
 
 
@@ -515,15 +592,19 @@ def verify_release_directory(
 
     contracts = manifest.get("contracts")
     migrations = manifest.get("migrations")
+    schema_contract = manifest.get("schema_contract")
     build = manifest.get("build")
     actual_contracts = contract_inventory(root)
     actual_migrations = migration_inventory(root)
     release_migrations = migration_inventory(release_directory)
+    actual_schema_contract = load_schema_contract(root)
     actual_build = load_toolchain_identity(root)
     if contracts != actual_contracts:
         fail("generated contract identity no longer matches the exact source checkout")
     if migrations != actual_migrations or migrations != release_migrations:
         fail("D1 migration-set identity no longer matches the exact source checkout")
+    if schema_contract != actual_schema_contract:
+        fail("Catalog schema contract no longer matches the exact D1 evolution authority")
     if build != actual_build:
         fail("build/toolchain identity no longer matches repository authorities")
     return manifest
@@ -703,18 +784,21 @@ def build_release(
 def check_repository_policy(root: Path) -> None:
     contracts = contract_inventory(root)
     migrations = migration_inventory(root)
+    schema_contract = load_schema_contract(root)
     build = load_toolchain_identity(root)
     if contracts.get("version") != CONTRACT_VERSION:
         fail("generated contract version identity is not canonical v1")
     if migrations.get("latest") is None:
         fail("D1 migration latest identity is missing")
+    if schema_contract.get("target_schema_revision") != migrations.get("latest"):
+        fail("Catalog schema target must equal the exact current migration revision")
     if build["worker"]["worker_build"] == "latest":
         fail("mutable worker-build identity is prohibited")
     print(
         "Cloudflare D2 release policy passed: "
         f"contracts={contracts['sha256']} migrations={migrations['sha256']} "
-        f"rust={build['rust']['channel']} node={build['frontend']['node']} "
-        f"worker-build={build['worker']['worker_build']}."
+        f"schema={schema_contract['target_schema_revision']} rust={build['rust']['channel']} "
+        f"node={build['frontend']['node']} worker-build={build['worker']['worker_build']}."
     )
 
 
@@ -746,8 +830,44 @@ def create_mock_repo(root: Path) -> None:
         "export type Fixture = true;\n", encoding="utf-8"
     )
     (root / "migrations" / "d1").mkdir(parents=True)
-    (root / "migrations" / "d1" / "0001_fixture.sql").write_text(
-        "CREATE TABLE fixture(id TEXT);\n", encoding="utf-8"
+    migration = root / "migrations" / "d1" / "0001_fixture.sql"
+    migration.write_text("CREATE TABLE fixture(id TEXT);\n", encoding="utf-8")
+    entries, history_digest = evolution_history_identity(root)
+    d1_path = root / D1_EVOLUTION
+    d1_path.parent.mkdir(parents=True, exist_ok=True)
+    d1_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "D1_EVOLUTION_AUTHORITY",
+                "components": [
+                    {
+                        "component_id": "catalog",
+                        "migration_root": "migrations/d1",
+                        "current_repository_revision": entries[-1]["name"],
+                        "historical_epoch": {
+                            "ordered_history": [
+                                {**entry, "git_blob_sha1": "0" * 40} for entry in entries
+                            ],
+                            "ordered_set_identity_algorithm": "sha256(canonical-json(name+sha256))",
+                            "ordered_set_identity": history_digest,
+                            "per_file_sha256_freeze": {
+                                "status": "FROZEN",
+                                "algorithm": "sha256",
+                                "count": len(entries),
+                            },
+                        },
+                        "compatibility_policy": {
+                            "historical_epoch_runtime_compatibility": "UNKNOWN_FAIL_CLOSED",
+                            "new_migrations_require_full_contract": True,
+                        },
+                    }
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
     )
     (root / "frontend" / "package.json").write_text(
         json.dumps(
@@ -808,6 +928,14 @@ def self_test() -> None:
             fail("identical D2 inputs produced non-deterministic manifests")
         if first_archive.read_bytes() != second_archive.read_bytes():
             fail("identical D2 inputs produced non-deterministic release archives")
+        schema_contract = first.get("schema_contract")
+        if not isinstance(schema_contract, dict) or not (
+            schema_contract.get("database_component") == "catalog"
+            and schema_contract.get("target_schema_revision") == "0001_fixture.sql"
+            and schema_contract.get("supported_schema_min") == "0001_fixture.sql"
+            and schema_contract.get("supported_schema_max") == "0001_fixture.sql"
+        ):
+            fail("Catalog fixture release did not bind the exact conservative schema contract")
 
         mutated_frontend = first_dir / "frontend" / "index.html"
         mutated_frontend.write_text("mutated\n", encoding="utf-8")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate canonical inventory after accepted AR-8 and hand off to AR-9."""
+"""Generate canonical inventory after accepted AR-8 and during AR-9."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE_PATH = ROOT / "scripts/generate-architecture-inventory-engine.py"
 INVENTORY_PATH = ROOT / "architecture/inventory.json"
+D1_EVOLUTION_SOURCE = "architecture/d1-evolution-ar9.json"
 SUBJECTS = {
     "credential_authority": "architecture/credential-authority.json",
     "credential_lifecycle": "architecture/credential-lifecycle.json",
@@ -58,7 +59,7 @@ def completion_delivery_map() -> dict[str, object]:
         "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
     }
     value["current_blocker"] = {"issue": None, "status": "NONE", "blocks": "NONE"}
-    value["next_gate"] = {"id": "AR-9_ACCEPTANCE", "issue": None, "on_success": "AR-10_BECOMES_CURRENT"}
+    value["next_gate"] = {"id": "AR-9_ACCEPTANCE", "issue": 366, "on_success": "AR-10_BECOMES_CURRENT"}
     value["invariants"].update({
         "source_present_not_equal_production_enabled": True,
         "full_ar8_accepted": True,
@@ -142,25 +143,101 @@ def subject_projection() -> dict[str, object]:
             "secret_transport_successor_candidate": "docs/evidence/ar8-d-secret-transport-successor-candidate.json",
         },
         "source_completion": {
-        "tracking_issue": 361,
-        "umbrella_issue": 308,
-        "completion_pr": 362,
-        "implemented_through": "AR-8F",
-        "state": "ACCEPTED_MAIN",
-        "accepted_main_through": "AR-8",
-        "full_ar8_accepted": True,
-        "ar9_blocked": False,
-        "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
-        "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
-        "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
+            "tracking_issue": 361,
+            "umbrella_issue": 308,
+            "completion_pr": 362,
+            "implemented_through": "AR-8F",
+            "state": "ACCEPTED_MAIN",
+            "accepted_main_through": "AR-8",
+            "full_ar8_accepted": True,
+            "ar9_blocked": False,
+            "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+            "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+            "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
+            "production_mutation": False,
+        },
+    }
+
+
+def d1_evolution_projection() -> dict[str, object]:
+    authority = load_json(D1_EVOLUTION_SOURCE)
+    if authority.get("kind") != "D1_EVOLUTION_AUTHORITY" or authority.get("schema_version") != 1:
+        raise ValueError("AR-9 D1 evolution authority identity/version is invalid")
+    if authority.get("canonical_projection") != "architecture/inventory.json::d1_evolution":
+        raise ValueError("AR-9 D1 evolution authority canonical projection drifted")
+    if authority.get("production_mutation") is not False:
+        raise ValueError("AR-9 D1 evolution authority must remain non-production-mutating")
+    policy = authority.get("global_policy")
+    components = authority.get("components")
+    if not isinstance(policy, dict) or not isinstance(components, list) or len(components) != 2:
+        raise ValueError("AR-9 D1 evolution authority policy/components are malformed")
+
+    projected_components: list[dict[str, object]] = []
+    observed_ids: set[str] = set()
+    for component in components:
+        if not isinstance(component, dict):
+            raise ValueError("AR-9 D1 component must be an object")
+        component_id = component.get("component_id")
+        historical = component.get("historical_epoch")
+        freeze = historical.get("per_file_sha256_freeze") if isinstance(historical, dict) else None
+        if component_id not in {"catalog", "resolver"} or component_id in observed_ids:
+            raise ValueError("AR-9 D1 component identity set is invalid")
+        if not isinstance(historical, dict) or not isinstance(freeze, dict) or freeze.get("status") != "FROZEN":
+            raise ValueError(f"AR-9 D1 historical epoch is not frozen: {component_id}")
+        if historical.get("retroactive_runtime_compatibility_claims") is not False:
+            raise ValueError(f"AR-9 D1 historical epoch invented compatibility claims: {component_id}")
+        observed_ids.add(component_id)
+        projected_components.append({
+            "component_id": component_id,
+            "binding_identity": component.get("binding_identity"),
+            "migration_root": component.get("migration_root"),
+            "migration_ledger": component.get("migration_ledger"),
+            "current_repository_revision": component.get("current_repository_revision"),
+            "history_digest": component.get("history_digest"),
+            "historical_epoch": {
+                "status": historical.get("status"),
+                "ordered_set_identity": historical.get("ordered_set_identity"),
+                "per_file_sha256_freeze": freeze,
+                "retroactive_runtime_compatibility_claims": False,
+            },
+            "post_epoch_migration_count": len(component.get("post_epoch_migrations", [])),
+            "fresh_bootstrap_authority": component.get("fresh_bootstrap_authority"),
+            "upgrade_authority": component.get("upgrade_authority"),
+            "mutation_authority": component.get("mutation_authority"),
+            "concurrency_authority": component.get("concurrency_authority"),
+            "release_manifest_owner": component.get("release_manifest_owner"),
+        })
+    if observed_ids != {"catalog", "resolver"}:
+        raise ValueError("AR-9 D1 projection requires exactly Catalog and Resolver")
+
+    return {
+        "schema_version": 1,
+        "role": "CURRENT_AR9_D1_EVOLUTION_PROJECTION",
+        "source_authority": D1_EVOLUTION_SOURCE,
+        "source_status": authority.get("status"),
+        "tracking_issue": authority.get("tracking_issue"),
+        "start_base": authority.get("start_base"),
+        "migration_classes": policy.get("migration_classes"),
+        "ledger_states": policy.get("ledger_states"),
+        "rollout_decisions": policy.get("rollout_decisions"),
+        "mutation_authority": policy.get("mutation_authority"),
+        "policy_authority": policy.get("policy_authority"),
+        "new_opsctl_process_spawn_sites": policy.get("new_opsctl_process_spawn_sites"),
+        "opsctl_provider_credentials": policy.get("opsctl_provider_credentials"),
+        "resource_auto_provisioning_allowed": policy.get("resource_auto_provisioning_allowed"),
+        "database_lock_required_by_default": policy.get("database_lock_required_by_default"),
+        "components": projected_components,
+        "architecture_complete": False,
+        "production_core_gate": "BLOCKED",
+        "production_ready": False,
         "production_mutation": False,
-    },
     }
 
 
 def build_inventory() -> dict[str, object]:
     expected = engine.build_inventory()
     expected["subject_domain_authorities"] = subject_projection()
+    expected["d1_evolution"] = d1_evolution_projection()
     documentation = expected.setdefault("documentation_authority", {})
     documentation["current_credential_authority"] = SUBJECTS["credential_authority"]
     documentation["credential_registry_provenance"] = "architecture/credential-authority-ar8b.json"
@@ -170,6 +247,8 @@ def build_inventory() -> dict[str, object]:
     documentation["ar8_completion_tracking_issue"] = 361
     documentation["ar8_completion_pr"] = 362
     documentation["ar8_acceptance_evidence"] = "docs/evidence/2026-08-18-ar8-final-acceptance.json"
+    documentation["d1_evolution"] = "architecture/inventory.json::d1_evolution"
+    documentation["d1_evolution_source"] = D1_EVOLUTION_SOURCE
     return expected
 
 
@@ -211,14 +290,23 @@ def main() -> int:
     expected = build_inventory()
     if args.write:
         INVENTORY_PATH.write_text(serialized(expected), encoding="utf-8", newline="\n")
-        print("Wrote architecture/inventory.json with accepted AR-8 and AR-9 handoff projection.")
+        print("Wrote architecture/inventory.json with accepted AR-8 and current AR-9 D1 evolution projection.")
     elif args.check:
         check_current(expected)
         engine.validate_full_documentation_authority()
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--check"])
-        print("Architecture inventory projects accepted AR-8 subject-domain authorities; AR-9 is current while production remains blocked.")
+        print("Architecture inventory projects accepted AR-8 subject-domain authorities and current AR-9 D1 evolution while production remains blocked.")
     else:
         engine.self_test(expected)
+        mutated = json.loads(serialized(expected))
+        mutated.pop("d1_evolution", None)
+        if mutated == expected:
+            raise ValueError("D1 evolution projection negative fixture did not mutate inventory")
+        try:
+            if mutated == build_inventory():
+                raise ValueError("missing D1 evolution projection negative fixture unexpectedly matched")
+        except ValueError:
+            raise
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--self-test"])
         run(["node", ".github/scripts/architecture-authority-check.mjs", "--self-test"])
         run(["node", ".github/scripts/profile-security-authority-check.mjs", "--self-test"])

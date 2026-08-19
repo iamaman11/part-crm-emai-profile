@@ -1,0 +1,485 @@
+name: Protected D1 Migration Executor
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Exact protected target environment
+        required: true
+        type: string
+      source_sha:
+        description: Exact accepted-main source SHA
+        required: true
+        type: string
+      component:
+        description: catalog or resolver
+        required: true
+        type: string
+      account_id:
+        description: Exact Cloudflare account ID for the protected environment
+        required: true
+        type: string
+      database_name:
+        description: Exact existing D1 database name
+        required: true
+        type: string
+      database_id:
+        description: Exact existing D1 database UUID
+        required: true
+        type: string
+      target_release_manifest_json:
+        description: Exact target component release manifest JSON
+        required: true
+        type: string
+      current_release_manifest_json:
+        description: Exact currently deployed component release manifest JSON
+        required: true
+        type: string
+      known_good_release_manifest_json:
+        description: Exact last-known-good component release manifest JSON
+        required: true
+        type: string
+      preconditions_json:
+        description: Mechanical CONTRACT precondition evidence JSON; use {} when not applicable
+        required: false
+        default: '{}'
+        type: string
+      mutation_authorized:
+        description: Explicit caller authorization for the migration mutation
+        required: true
+        type: boolean
+      confirmation:
+        description: Must equal source_sha:environment:component:database_id
+        required: true
+        type: string
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected target environment
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      source_sha:
+        description: Exact accepted-main source SHA
+        required: true
+        type: string
+      component:
+        description: D1 component
+        required: true
+        type: choice
+        options:
+          - catalog
+          - resolver
+      account_id:
+        description: Exact Cloudflare account ID for the protected environment
+        required: true
+        type: string
+      database_name:
+        description: Exact existing D1 database name
+        required: true
+        type: string
+      database_id:
+        description: Exact existing D1 database UUID
+        required: true
+        type: string
+      target_release_manifest_json:
+        description: Exact target component release manifest JSON
+        required: true
+        type: string
+      current_release_manifest_json:
+        description: Exact current component release manifest JSON
+        required: true
+        type: string
+      known_good_release_manifest_json:
+        description: Exact last-known-good component release manifest JSON
+        required: true
+        type: string
+      preconditions_json:
+        description: Mechanical CONTRACT precondition evidence JSON; use {} when not applicable
+        required: false
+        default: '{}'
+        type: string
+      mutation_authorized:
+        description: Explicitly authorize this migration mutation
+        required: true
+        default: false
+        type: boolean
+      confirmation:
+        description: Must equal source_sha:environment:component:database_id
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d1-migration-${{ inputs.environment }}-${{ inputs.component }}-${{ inputs.database_id }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    name: Validate D1 mutation inputs before protected Environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      TARGET_ENVIRONMENT: ${{ inputs.environment }}
+      COMPONENT: ${{ inputs.component }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id }}
+      DATABASE_NAME: ${{ inputs.database_name }}
+      DATABASE_ID: ${{ inputs.database_id }}
+      MUTATION_AUTHORIZED: ${{ inputs.mutation_authorized }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+    steps:
+      - name: Fail closed before any Environment binding
+        run: |
+          set -euo pipefail
+          test "$TARGET_ENVIRONMENT" = "staging" || test "$TARGET_ENVIRONMENT" = "production"
+          test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
+          test "$MUTATION_AUTHORIZED" = "true"
+          test -n "$SOURCE_SHA"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$DATABASE_NAME"
+          test -n "$DATABASE_ID"
+          test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
+
+  migrate:
+    needs: authorize
+    name: ${{ inputs.environment }} / ${{ inputs.component }} / exact D1 migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      TARGET_ENVIRONMENT: ${{ inputs.environment }}
+      COMPONENT: ${{ inputs.component }}
+      DATABASE_NAME: ${{ inputs.database_name }}
+      DATABASE_ID: ${{ inputs.database_id }}
+      TARGET_RELEASE_MANIFEST_JSON: ${{ inputs.target_release_manifest_json }}
+      CURRENT_RELEASE_MANIFEST_JSON: ${{ inputs.current_release_manifest_json }}
+      KNOWN_GOOD_RELEASE_MANIFEST_JSON: ${{ inputs.known_good_release_manifest_json }}
+      PRECONDITIONS_JSON: ${{ inputs.preconditions_json }}
+      MUTATION_AUTHORIZED: ${{ inputs.mutation_authorized }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+    steps:
+      - name: Reject non-main, non-exact, or disabled mutation authority
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$TARGET_ENVIRONMENT" = "staging" || test "$TARGET_ENVIRONMENT" = "production"
+          test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
+          test "$MUTATION_AUTHORIZED" = "true"
+          test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test "$CLOUDFLARE_ACCOUNT_ID" = "${{ inputs.account_id }}"
+
+      - name: Checkout exact accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify source and production authorization gate
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          status = json.loads(Path('docs/status.json').read_text(encoding='utf-8'))
+          if os.environ['TARGET_ENVIRONMENT'] == 'production':
+              delivery = status['current']['current_delivery_map']
+              assert delivery['production_authorized']['status'] is True, 'production D1 mutation remains blocked before Production Core authorization'
+          PY
+
+      - name: Set up pinned Node and npm
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce exact provider executor and native policy engine
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v24.19.0"
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+          test "$(npx --yes wrangler@4.94.0 --version)" = "4.94.0"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID python scripts/check-opsctl-readonly.py
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo build --locked --manifest-path tools/opsctl/Cargo.toml
+
+      - name: Materialize exact metadata inputs and provider config
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/d1-migration
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          out = Path('artifacts/d1-migration')
+          documents = {
+              'target-release.json': os.environ['TARGET_RELEASE_MANIFEST_JSON'],
+              'current-release.json': os.environ['CURRENT_RELEASE_MANIFEST_JSON'],
+              'known-good-release.json': os.environ['KNOWN_GOOD_RELEASE_MANIFEST_JSON'],
+              'preconditions.json': os.environ['PRECONDITIONS_JSON'],
+          }
+          for name, raw in documents.items():
+              value = json.loads(raw)
+              if not isinstance(value, dict):
+                  raise SystemExit(f'{name} must contain exactly one JSON object')
+              (out / name).write_text(json.dumps(value, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+
+          component = os.environ['COMPONENT']
+          if component == 'catalog':
+              binding = 'CATALOG_DB'
+              migrations_dir = '../../migrations/d1'
+          elif component == 'resolver':
+              binding = 'RESOLVER_DB'
+              migrations_dir = '../../migrations/resolver-d1'
+          else:
+              raise SystemExit('unsupported component')
+          config = {
+              'name': 'd1-migration-executor',
+              'main': '../../tests/d1-runtime/worker.mjs',
+              'compatibility_date': '2026-08-05',
+              'account_id': os.environ['CLOUDFLARE_ACCOUNT_ID'],
+              'd1_databases': [{
+                  'binding': binding,
+                  'database_name': os.environ['DATABASE_NAME'],
+                  'database_id': os.environ['DATABASE_ID'],
+                  'migrations_dir': migrations_dir,
+              }],
+          }
+          (out / 'wrangler.json').write_text(json.dumps(config, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+          (out / 'context.json').write_text(json.dumps({
+              'schema_version': 1,
+              'source_sha': os.environ['SOURCE_SHA'],
+              'environment': os.environ['TARGET_ENVIRONMENT'],
+              'component': component,
+              'database_name': os.environ['DATABASE_NAME'],
+              'database_id': os.environ['DATABASE_ID'],
+              'mutation_authorized': True,
+              'automatic_restore_allowed': False,
+              'resource_auto_provisioning_allowed': False,
+          }, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+          PY
+
+      - name: Verify exact remote database identity before any mutation
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          npx --yes wrangler@4.94.0 d1 info "$DATABASE_NAME" \
+            --config artifacts/d1-migration/wrangler.json \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-migration/provider-identity.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          document = json.loads(Path('artifacts/d1-migration/provider-identity.json').read_text())
+          expected = {os.environ['DATABASE_NAME'], os.environ['DATABASE_ID']}
+          def paired(value):
+              if isinstance(value, dict):
+                  scalar_values = {item for item in value.values() if isinstance(item, str)}
+                  if expected.issubset(scalar_values):
+                      return True
+                  return any(paired(item) for item in value.values())
+              if isinstance(value, list):
+                  return any(paired(item) for item in value)
+              return False
+          assert paired(document), 'provider identity does not contain the exact database name and UUID in one object'
+          PY
+
+      - name: Read remote migration ledger through pinned Wrangler
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
+            --remote \
+            --config artifacts/d1-migration/wrangler.json \
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-migration/ledger-before.json
+
+      - name: Normalize and classify remote ledger with credential-free opsctl
+        run: |
+          set -euo pipefail
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
+            --component "$COMPONENT" \
+            --ledger-json artifacts/d1-migration/ledger-before.json > artifacts/d1-migration/status-before.json
+
+      - name: Run credential-free native plan, compatibility, and rollback-blocker gates
+        id: policy
+        run: |
+          set -euo pipefail
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 plan \
+            --component "$COMPONENT" \
+            --ledger-json artifacts/d1-migration/ledger-before.json \
+            --release-manifest artifacts/d1-migration/target-release.json \
+            --current-manifest artifacts/d1-migration/current-release.json \
+            --known-good-manifest artifacts/d1-migration/known-good-release.json \
+            --preconditions-json artifacts/d1-migration/preconditions.json > artifacts/d1-migration/plan.json
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 compatibility \
+            --component "$COMPONENT" \
+            --ledger-json artifacts/d1-migration/ledger-before.json \
+            --release-manifest artifacts/d1-migration/target-release.json > artifacts/d1-migration/compatibility.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          plan = json.loads(Path('artifacts/d1-migration/plan.json').read_text())
+          compatibility = json.loads(Path('artifacts/d1-migration/compatibility.json').read_text())
+          assert plan['allowed'] is True, plan
+          assert compatibility['allowed'] is True, compatibility
+          blocked = {'CODE_ROLLBACK_BLOCKED', 'FAIL_FORWARD_REQUIRED', 'CONTRACT_BLOCKED', 'RECOVERY_REQUIRED'}
+          assert plan['decision'] not in blocked, plan
+          required = bool(plan.get('planned_migrations'))
+          with Path('/tmp/d1-policy-output').open('w', encoding='utf-8') as handle:
+              handle.write(f"apply_required={'true' if required else 'false'}\n")
+          PY
+          cat /tmp/d1-policy-output >> "$GITHUB_OUTPUT"
+
+      - name: Capture metadata-only pre-migration Time Travel bookmark
+        if: steps.policy.outputs.apply_required == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          npx --yes wrangler@4.94.0 d1 time-travel info "$DATABASE_NAME" \
+            --config artifacts/d1-migration/wrangler.json \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-migration/pre-migration-bookmark.json
+
+      - name: Apply planned migrations with pinned Wrangler only
+        if: steps.policy.outputs.apply_required == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          npx --yes wrangler@4.94.0 d1 migrations apply "$DATABASE_NAME" \
+            --remote \
+            --config artifacts/d1-migration/wrangler.json \
+            --experimental-provision=false \
+            --experimental-auto-create=false
+
+      - name: Reread remote ledger through pinned Wrangler
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
+            --remote \
+            --config artifacts/d1-migration/wrangler.json \
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-migration/ledger-after.json
+
+      - name: Require exact target through credential-free opsctl verify
+        run: |
+          set -euo pipefail
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 verify \
+            --component "$COMPONENT" \
+            --ledger-json artifacts/d1-migration/ledger-after.json \
+            --release-manifest artifacts/d1-migration/target-release.json > artifacts/d1-migration/verify.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          verify = json.loads(Path('artifacts/d1-migration/verify.json').read_text())
+          assert verify['ledger_state'] == 'EXACT', verify
+          assert verify['decision'] == 'SAFE', verify
+          assert verify['allowed'] is True, verify
+          assert verify['mutation_executed'] is False, verify
+          PY
+
+      - name: Verify post-apply database invariants
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN"
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
+            --remote \
+            --config artifacts/d1-migration/wrangler.json \
+            --command "PRAGMA foreign_key_check" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-migration/foreign-key-check.json
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
+            --remote \
+            --config artifacts/d1-migration/wrangler.json \
+            --command "PRAGMA integrity_check" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-migration/integrity-check.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          fk = json.loads(Path('artifacts/d1-migration/foreign-key-check.json').read_text())
+          integrity = json.loads(Path('artifacts/d1-migration/integrity-check.json').read_text())
+          assert len(fk) == 1 and fk[0]['success'] is True and fk[0]['results'] == [], fk
+          assert len(integrity) == 1 and integrity[0]['success'] is True, integrity
+          rows = integrity[0]['results']
+          assert len(rows) == 1 and list(rows[0].values()) == ['ok'], integrity
+          PY
+
+      - name: Build metadata-only migration evidence
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('artifacts/d1-migration')
+          def load(name, optional=False):
+              path = root / name
+              if optional and not path.exists():
+                  return None
+              return json.loads(path.read_text(encoding='utf-8'))
+          evidence = {
+              'schema_version': 1,
+              'evidence_kind': 'protected-d1-migration-execution',
+              'context': load('context.json'),
+              'provider_identity': load('provider-identity.json'),
+              'status_before': load('status-before.json'),
+              'plan': load('plan.json'),
+              'compatibility': load('compatibility.json'),
+              'pre_migration_bookmark': load('pre-migration-bookmark.json', optional=True),
+              'ledger_before': load('ledger-before.json'),
+              'ledger_after': load('ledger-after.json'),
+              'verify': load('verify.json'),
+              'foreign_key_check': load('foreign-key-check.json'),
+              'integrity_check': load('integrity-check.json'),
+              'automatic_restore_executed': False,
+              'secret_material_recorded': False,
+          }
+          (root / 'evidence.json').write_text(json.dumps(evidence, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+          for sensitive in ('wrangler.json', 'target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json'):
+              (root / sensitive).unlink(missing_ok=True)
+          PY
+
+      - name: Upload metadata-only D1 migration evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: d1-migration-evidence-${{ inputs.environment }}-${{ inputs.component }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/d1-migration/evidence.json
+          if-no-files-found: error
+          retention-days: 30

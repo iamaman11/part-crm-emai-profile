@@ -194,7 +194,9 @@
     "current_delivery_map_projection": "architecture/inventory.json::current_delivery_map",
     "ar8_current_subject_projection": "architecture/inventory.json::subject_domain_authorities",
     "ar8_current_composition_root": "architecture/credential-authority.json",
-    "ar8b_registry_role": "IMMUTABLE_ACCEPTED_PROVENANCE_DATASET"
+    "ar8b_registry_role": "IMMUTABLE_ACCEPTED_PROVENANCE_DATASET",
+    "ar9_d1_evolution_projection": "architecture/inventory.json::d1_evolution",
+    "ar9_d1_evolution_source": "architecture/d1-evolution-ar9.json"
   },
   "preserve_accepted_history": [
     "repository_steps_0_10",
@@ -493,7 +495,7 @@
     },
     "next_gate": {
       "id": "AR-9_ACCEPTANCE",
-      "issue": null,
+      "issue": 366,
       "on_success": "AR-10_BECOMES_CURRENT"
     },
     "invariants": {
@@ -525,5 +527,14 @@
     "evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
     "metadata_only": true,
     "production_mutation": false
+  },
+  "ar9_current": {
+    "tracking_issue": 366,
+    "source_authority": "architecture/d1-evolution-ar9.json",
+    "canonical_projection": "architecture/inventory.json::d1_evolution",
+    "production_mutation": false,
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false
   }
 }
