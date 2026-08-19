@@ -164,3 +164,12 @@ production_core_gate = BLOCKED
 production_ready = false
 production_mutation = false
 ```
+
+
+## Final acceptance — 2026-08-19
+
+AR-10 is accepted. Implementation PR #371 was exact-head green at `c7f8ac9704433d3e52d3b79f985c9ac60aa068db` across 16/16 permanent workflows, merged by guarded squash to accepted `main` `7ab5edf583f541d08ff732624af25881d430d427`, and reread from that accepted main. Live `main` protection preserves the accepted AR-7 required-check baseline and additionally requires `Real Camoufox cold-launch proof` plus `Profile Bridge Windows regression` (23 required contexts total).
+
+The accepted runtime path is the native Profile Bridge -> bounded typed/versioned IPC -> real pinned Camouhost/Camoufox persistent-context chain. Persistent browser state, generation-stable fingerprint identity, OS-level Firefox writer ownership, rollback/ambiguous-close behavior, malformed/oversized/replayed IPC rejection, zero remaining AR-10 historical direct executables, and zero `opsctl` production child-process spawn authority are permanent regression evidence.
+
+Acceptance does **not** authorize production: `architecture_complete=false`, `production_core_gate=BLOCKED`, `production_ready=false`, `production_mutation=false`. AR-11 — Release-set / Promotion Architecture is current under issue #372; AR-12 follows only after AR-11 acceptance. Canonical machine evidence is `docs/evidence/2026-08-19-ar10-final-acceptance.json`.

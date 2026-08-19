@@ -8,8 +8,8 @@ current-authority hierarchy live in [`INDEX.md`](INDEX.md).
 - **Accepted repository-local product phase:** Phase 2I.
 - **Architecture Re-baseline v3:** active, tracked by issue #266.
 - **Accepted top-level architecture slices:** AR-0 through AR-9; AR-8A…AR-8F are accepted and AR-10 is current.
-- **Current accepted checkpoint:** AR-9 — D1 Evolution / Schema Compatibility.
-- **Current implementation:** AR-10 — Runtime and Historical Executable Simplification.
+- **Current accepted checkpoint:** AR-10 — D1 Evolution / Schema Compatibility.
+- **Current implementation:** AR-11 — Runtime and Historical Executable Simplification.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
@@ -21,12 +21,12 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
 | Source implemented | **ACCEPTED** | AR-9 source is accepted on `main`; AR-10 is the current architecture slice. |
-| Accepted on main | **COMPLETE THROUGH AR-9** | AR-8 and AR-9 are accepted; AR-9 evidence is `docs/evidence/2026-08-19-ar9-final-acceptance.json`. |
+| Accepted on main | **COMPLETE THROUGH AR-10** | AR-8 and AR-9 are accepted; AR-9 evidence is `docs/evidence/2026-08-19-ar9-final-acceptance.json`. |
 | Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; later architecture acceptance does not imply a broader staging or production deployment. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
 | Current blocker | **NONE** | AR-9 is accepted; no predecessor blocker remains. |
-| Next gate | **AR-10 acceptance** | AR-10 — Runtime and Historical Executable Simplification is the current slice. |
+| Next gate | **AR-11 acceptance** | AR-10 — Runtime and Historical Executable Simplification is the current slice. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
