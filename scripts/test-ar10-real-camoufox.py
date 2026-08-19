@@ -105,6 +105,22 @@ def write_bridge_lock(root: Path) -> None:
     (root / ".profile-platform.lock").write_text(BRIDGE_LOCK_CONTENT, encoding="utf-8")
 
 
+def assert_clean_launch_lock_state(root: Path) -> None:
+    bridge_lock = root / ".profile-platform.lock"
+    if bridge_lock.read_text(encoding="utf-8") != BRIDGE_LOCK_CONTENT:
+        raise AssertionError("candidate materialization changed Bridge writer ownership evidence")
+    for lock_path in (
+        root / ".parentlock",
+        root / "lock",
+        root / "user_data" / ".parentlock",
+        root / "user_data" / "lock",
+    ):
+        if lock_path.exists() or lock_path.is_symlink():
+            raise AssertionError(
+                f"clean candidate materialization retained Firefox lock: {lock_path.relative_to(root)}"
+            )
+
+
 def expect_materialization_requires_bridge_lock(root: Path) -> None:
     root.mkdir()
     completed = subprocess.run(
@@ -151,6 +167,7 @@ def materialize(root: Path) -> dict[str, str]:
         raise AssertionError(f"unexpected materialization report: {report}")
     if report["runtime_lock_sha256"] != canonical_lock_digest():
         raise AssertionError("materialized runtime lock identity drifted")
+    assert_clean_launch_lock_state(root)
     return report
 
 
@@ -262,6 +279,7 @@ def main() -> int:
                     f"first generation was contaminated before first launch: {observed_first}"
                 )
 
+            assert_clean_launch_lock_state(first_root)
             run_cold_launch(first_root, first, url)
             observed_second = server.observations.get(timeout=15)
             if observed_second != (True, True):
@@ -270,6 +288,7 @@ def main() -> int:
                     f"{observed_second}"
                 )
 
+            assert_clean_launch_lock_state(first_root)
             run_cold_launch(second_root, second, url)
             observed_other = server.observations.get(timeout=15)
             if observed_other != (False, False):
@@ -277,10 +296,11 @@ def main() -> int:
                     f"browser state crossed generation boundary: {observed_other}"
                 )
 
+            assert_clean_launch_lock_state(second_root)
             expect_prelaunch_identity_rejection(first_root, first, url)
             expect_probe_drift_rejection(first_root, first, url)
 
-        print("AR-10 real Camoufox cold-launch, identity and persistence evidence passed.")
+        print("AR-10 real Camoufox cold-launch, identity, lock-cleanliness and persistence evidence passed.")
         return 0
     finally:
         server.shutdown()
