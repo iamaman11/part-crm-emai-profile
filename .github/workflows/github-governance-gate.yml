@@ -26,6 +26,7 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Verify exact source checkout
@@ -41,6 +42,14 @@ jobs:
 
       - name: Enforce Node version
         run: test "$(node --version)" = "v24.19.0"
+
+      - name: Validate one-merge architecture acceptance contract
+        run: |
+          node .github/scripts/architecture-acceptance.mjs contract
+          node .github/scripts/architecture-acceptance.mjs derive | python -m json.tool
+
+      - name: Prove architecture acceptance drift fails closed
+        run: node .github/scripts/architecture-acceptance.mjs self-test
 
       - name: Validate AR-7 governance contract
         run: node .github/scripts/github-governance.mjs contract
