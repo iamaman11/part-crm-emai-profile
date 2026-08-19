@@ -52,6 +52,18 @@ def main() -> int:
         run(script, [sys.executable, str(ROOT / "scripts" / script)])
 
     run(
+        "one-merge architecture acceptance contract",
+        ["node", str(ROOT / ".github" / "scripts" / "architecture-acceptance.mjs"), "contract"],
+    )
+    run(
+        "derived architecture acceptance state",
+        ["node", str(ROOT / ".github" / "scripts" / "architecture-acceptance.mjs"), "derive"],
+    )
+    run(
+        "architecture acceptance negative matrix",
+        ["node", str(ROOT / ".github" / "scripts" / "architecture-acceptance.mjs"), "self-test"],
+    )
+    run(
         "static D3 transition provenance negative matrix",
         ["node", str(ROOT / ".github" / "scripts" / "ar8-d-secret-transport-successor.mjs"), "--self-test"],
     )
