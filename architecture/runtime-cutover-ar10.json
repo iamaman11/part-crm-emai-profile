@@ -70,11 +70,50 @@
     "clean_close_uses_immutable_generation_commit": true,
     "crash_or_ambiguous_close_requires_recovery": true
   },
+  "failure_matrix": {
+    "firefox_writer_lock_test": "scripts/test-ar10-firefox-writer-locks.py",
+    "managed_runtime_rollback_test": "apps/profile-bridge/tests/runtime_failure_matrix.rs",
+    "malformed_and_unsupported_ipc_test": "crates/bridge-domain/src/lib.rs",
+    "bounded_managed_ipc_test": "apps/profile-bridge/src/camouhost_process.rs",
+    "real_runtime_persistence_test": "scripts/test-ar10-real-camoufox.py",
+    "ambiguous_close_never_clean": true,
+    "rollback_failure_preserved": true,
+    "browser_lock_deletion_forbidden": true
+  },
   "opsctl": {
     "doctor_python_child_processes": 0,
     "production_child_process_spawn_sites": 0,
     "provider_mutation_authority": false,
-    "python_validators_retained_as_independent_ci_tools": true
+    "python_validators_retained_as_independent_ci_tools": true,
+    "ar10_obligations": "2/2",
+    "credential_cli": {
+      "canonical_commands": [
+        "credentials status",
+        "credentials rotation-plan"
+      ],
+      "legacy_flat_authorities": 0,
+      "readiness_owner": "AR-13"
+    }
+  },
+  "github_governance_extension": {
+    "base_authority": "architecture/github-governance-ar7.json",
+    "mode": "ADDITIVE_REQUIRED_CHECKS_ONLY",
+    "permanent_workflow": ".github/workflows/camoufox-runtime-gate.yml",
+    "required_job_contexts": [
+      "Real Camoufox cold-launch proof",
+      "Profile Bridge Windows regression"
+    ],
+    "historical_ar7_required_checks_may_be_removed": false,
+    "hosted_main_protection_required_before_guarded_merge": true,
+    "live_validator": ".github/scripts/ar10-github-governance-extension.mjs"
+  },
+  "build_reproducibility": {
+    "camoufox_linux_runner": "ubuntu-24.04",
+    "camoufox_windows_runner": "windows-2025",
+    "checkout_action_pinned_by_commit": true,
+    "rust_locked_mode": true,
+    "runtime_component_tuple_exact": true,
+    "floating_latest_forbidden": true
   },
   "python_estate": {
     "accepted_ar6_baseline": "architecture/python-estate-ar6.json",
@@ -103,6 +142,9 @@
     "identity_mismatch_fail_closed": "PENDING_FINAL_GREEN_HEAD",
     "bridge_to_real_camoufox_chain": "PENDING_FINAL_GREEN_HEAD",
     "windows_profile_bridge_regression": "PENDING_FINAL_GREEN_HEAD",
+    "managed_runtime_failure_matrix": "PENDING_FINAL_GREEN_HEAD",
+    "firefox_writer_lock_failure_matrix": "PENDING_FINAL_GREEN_HEAD",
+    "hosted_camoufox_required_checks": "PENDING_GUARDED_MERGE_CONFIGURATION",
     "legacy_retirement": "RETIRED_AFTER_SUCCESSOR_PARITY"
   },
   "external_evidence": {
