@@ -119,7 +119,6 @@ def base_env(root: Path, report: dict[str, str], url: str) -> dict[str, str]:
 def managed_env(
     root: Path,
     report: dict[str, str],
-    url: str,
     *,
     sanitized: bool,
 ) -> dict[str, str]:
@@ -136,7 +135,6 @@ def managed_env(
             "CAMOUHOST_EXPECTED_CONFIG_SHA256": report["fingerprint_config_sha256"],
             "CAMOUHOST_EXPECTED_PROBE_SHA256": report["profile_stable_probe_sha256"],
             "CAMOUHOST_HEADLESS_MODE": "virtual",
-            "CAMOUHOST_INITIAL_URL": url,
             "PYTHONUNBUFFERED": "1",
         }
     )
@@ -245,7 +243,7 @@ def launch_probe(
     process = subprocess.Popen(
         [sys.executable, str(CAMOUHOST)],
         cwd=cwd,
-        env=managed_env(root, report, "about:blank", sanitized=sanitized),
+        env=managed_env(root, report, sanitized=sanitized),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
