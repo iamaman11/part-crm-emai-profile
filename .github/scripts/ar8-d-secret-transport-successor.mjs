@@ -80,7 +80,7 @@ function currentSuccessorErrors() {
   for (const marker of ['wrangler@4.94.0 secret list', 'promotion preflight', 'promotion verify', 'release-set-promotion-staging']) {
     if (!promotion.includes(marker)) errors.push(`current AR-11 promotion is missing ${JSON.stringify(marker)}`);
   }
-  const checker = run('node', [AR11_CHECKER, '--pre-cutover'], { check: false });
+  const checker = run('node', [AR11_CHECKER], { check: false });
   if (checker.status !== 0) errors.push(`AR-11 successor checker failed: ${(checker.stderr || checker.stdout).trim()}`);
   return errors;
 }

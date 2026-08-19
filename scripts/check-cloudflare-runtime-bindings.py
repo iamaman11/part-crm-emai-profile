@@ -278,7 +278,7 @@ def main() -> int:
         validate_resolver_source_isolation(resolver)
         validate_ar2_topology(topology)
         run_checker(AR8D_CHECKER)
-        run_checker(AR11_CHECKER, "--pre-cutover")
+        run_checker(AR11_CHECKER)
         self_test(control, topology)
         print(
             "Cloudflare profile-aware Core topology, historical D3 evidence, and AR-11 successor checks passed."

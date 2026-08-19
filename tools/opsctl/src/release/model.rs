@@ -215,6 +215,18 @@ fn parse_source(value: &Value) -> Result<ReleaseSetSource, ReleaseModelError> {
         &accepted_main_evidence_sha256,
         "source.accepted_main_evidence_sha256",
     )?;
+    let accepted_main_identity = serde_json::json!({
+        "authority": "accepted-main",
+        "commit_sha": commit_sha,
+        "repository": repository,
+    });
+    let canonical = canonical_json(&accepted_main_identity).map_err(ReleaseModelError::new)?;
+    let expected_evidence = sha256_hex(canonical.as_bytes());
+    if accepted_main_evidence_sha256 != expected_evidence {
+        return Err(ReleaseModelError::new(
+            "SOURCE_NOT_ACCEPTED: accepted-main evidence does not bind repository and commit SHA",
+        ));
+    }
     Ok(ReleaseSetSource {
         repository,
         commit_sha,

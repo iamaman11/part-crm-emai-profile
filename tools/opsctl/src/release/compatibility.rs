@@ -23,11 +23,8 @@ const REQUIRED_DIMENSIONS: [&str; 11] = [
     "browser_identity_policy",
     "windows_profile_bridge",
 ];
-const EXTERNAL_POLICY_DIMENSIONS: [&str; 3] = [
-    "catalog_d1",
-    "resolver_d1",
-    "windows_profile_bridge",
-];
+const EXTERNAL_POLICY_DIMENSIONS: [&str; 3] =
+    ["catalog_d1", "resolver_d1", "windows_profile_bridge"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompatibilityDimension {
@@ -174,7 +171,11 @@ pub fn evaluate(
     let mailbox_admin = effective.is_enabled("mailbox_admin");
     // Static compatibility is Rust-authoritative. Caller-supplied decisions for API,
     // protocol, Camouhost, runtime/profile format, and browser identity cannot override it.
-    blockers.extend(static_compatibility::evaluate(root, manifest, mailbox_admin)?);
+    blockers.extend(static_compatibility::evaluate(
+        root,
+        manifest,
+        mailbox_admin,
+    )?);
 
     let windows_delivery_present = authority
         .activation_units

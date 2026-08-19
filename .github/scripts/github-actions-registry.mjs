@@ -48,19 +48,19 @@ function validatePolicy(policy, trackedPaths) {
   expect(policy?.duplicate_registration_paths_forbidden === true, 'duplicate registration paths must remain forbidden');
 
   const registrations = Array.isArray(policy?.active_registrations) ? policy.active_registrations : [];
-  expect(registrations.length === 20, 'registry policy must classify exactly 20 current active registrations');
+  expect(registrations.length === 21, 'registry policy must classify exactly 21 current active registrations');
   const paths = registrations.map((entry) => entry?.path);
   expect(paths.every((value) => typeof value === 'string' && value.startsWith(`${WORKFLOWS_RELATIVE}/`) && /\.ya?ml$/i.test(value)), 'every active registration path must be a workflow YAML path');
   expect(new Set(paths).size === paths.length, 'registry policy active paths must be unique');
   expect(registrations.every((entry) => ALLOWED_CATEGORIES.has(entry?.category)), 'registry policy contains an unsupported active category');
-  expect(registrations.filter((entry) => entry.category === 'PERMANENT_REQUIRED').length === 19, 'registry policy must classify exactly 19 permanent workflows');
+  expect(registrations.filter((entry) => entry.category === 'PERMANENT_REQUIRED').length === 20, 'registry policy must classify exactly 20 permanent workflows');
   expect(registrations.filter((entry) => entry.category === 'CURRENT_MANUAL_OPERATION').length === 1, 'registry policy must classify exactly one current manual operation');
   expect(registrations.some((entry) => entry.path === '.github/workflows/camoufox-runtime-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Camoufox Runtime Gate must be a permanent AR-10 gate');
   expect(registrations.some((entry) => entry.path === '.github/workflows/github-governance-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'GitHub Governance Gate must remain permanent');
   expect(registrations.some((entry) => entry.path === '.github/workflows/quality-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Quality Gate must remain permanent');
   expect(registrations.some((entry) => entry.path === '.github/workflows/release-architecture-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Release Architecture Gate must be a permanent AR-11 gate');
   expect(registrations.some((entry) => entry.path === '.github/workflows/mailbox-secret-resolver-release.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Mailbox Secret Resolver Release must remain permanent');
-  expect(registrations.some((entry) => entry.path === '.github/workflows/mailbox-secret-resolver-promotion.yml' && entry.category === 'CURRENT_MANUAL_OPERATION'), 'Mailbox Secret Resolver Promotion must remain the current manual operation');
+  expect(registrations.some((entry) => entry.path === '.github/workflows/release-set-promotion.yml' && entry.category === 'CURRENT_MANUAL_OPERATION'), 'Release Set Promotion must be the single current manual operation');
   expect(sameStringSet(paths, trackedPaths), 'tracked workflow files must equal the canonical active registry projection exactly');
   return errors;
 }

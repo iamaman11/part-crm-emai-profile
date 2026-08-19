@@ -34,6 +34,13 @@ jobs:
           node .github/scripts/release-architecture-ar11.mjs
           node .github/scripts/release-architecture-ar11.mjs --self-test
           node .github/scripts/frontend-capability-ar11.mjs
+          node .github/scripts/release-operational-ar11.mjs
+          node .github/scripts/release-operational-ar11.mjs --self-test
+          node .github/scripts/ar8-d-secret-transport-successor.mjs
+          python scripts/release-set-ar11.py self-test
+          python scripts/release-compat-evidence-ar11.py --self-test
+          python scripts/release-core-overlay-ar11.py --self-test
+          python scripts/deployment-snapshot-ar11.py --self-test
 
       - name: Verify deterministic canonical projection
         run: python scripts/generate-architecture-inventory.py --check

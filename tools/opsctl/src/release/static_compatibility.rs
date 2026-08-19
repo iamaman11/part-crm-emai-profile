@@ -45,7 +45,9 @@ fn contracts_match(root: &Path, value: &Value) -> Result<bool, ReleaseModelError
                 .get("path")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
-                .ok_or_else(|| ReleaseModelError::new("contracts.files entry path must be a string"))
+                .ok_or_else(|| {
+                    ReleaseModelError::new("contracts.files entry path must be a string")
+                })
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
     let expected_paths = CONTRACT_FILES
@@ -83,7 +85,9 @@ fn protocols_match(
     if required_u64(protocols, "camouhost_ipc_version")? != expected_ipc {
         return Ok(false);
     }
-    if mailbox_admin && required_string(protocols, "resolver_protocol")? != "mailbox-secret-resolver-v1" {
+    if mailbox_admin
+        && required_string(protocols, "resolver_protocol")? != "mailbox-secret-resolver-v1"
+    {
         return Ok(false);
     }
     Ok(true)
@@ -108,10 +112,17 @@ fn runtime_matches(root: &Path, value: &Value) -> Result<bool, ReleaseModelError
     Ok(required_string(runtime, "runtime_role")? == "real_camoufox")
 }
 
-fn file_matches(path: impl AsRef<Path>, expected_hash: &str, expected_size: u64) -> Result<bool, ReleaseModelError> {
+fn file_matches(
+    path: impl AsRef<Path>,
+    expected_hash: &str,
+    expected_size: u64,
+) -> Result<bool, ReleaseModelError> {
     let path = path.as_ref();
     let metadata = fs::symlink_metadata(path).map_err(|error| {
-        ReleaseModelError::new(format!("static compatibility input missing at {}: {error}", path.display()))
+        ReleaseModelError::new(format!(
+            "static compatibility input missing at {}: {error}",
+            path.display()
+        ))
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != expected_size {
         return Ok(false);
@@ -121,10 +132,16 @@ fn file_matches(path: impl AsRef<Path>, expected_hash: &str, expected_size: u64)
 
 fn file_sha256(path: &Path) -> Result<String, ReleaseModelError> {
     let mut file = File::open(path).map_err(|error| {
-        ReleaseModelError::new(format!("cannot open static compatibility input {}: {error}", path.display()))
+        ReleaseModelError::new(format!(
+            "cannot open static compatibility input {}: {error}",
+            path.display()
+        ))
     })?;
     sha256_reader_hex(&mut file).map_err(|error| {
-        ReleaseModelError::new(format!("cannot hash static compatibility input {}: {error}", path.display()))
+        ReleaseModelError::new(format!(
+            "cannot hash static compatibility input {}: {error}",
+            path.display()
+        ))
     })
 }
 
