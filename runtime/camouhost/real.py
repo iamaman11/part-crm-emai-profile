@@ -331,9 +331,8 @@ def launch_verified_context(
         raise
 
 
-def close_context(manager: Any, context: Any) -> None:
+def close_context(manager: Any, _context: Any) -> None:
     with contextlib.redirect_stdout(sys.stderr):
-        context.close()
         manager.__exit__(None, None, None)
 
 
