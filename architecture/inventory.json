@@ -2058,7 +2058,7 @@
     "schema_version": 1,
     "role": "CURRENT_AR11_RELEASE_ARCHITECTURE_PROJECTION",
     "source_authority": "architecture/release-architecture-ar11.json",
-    "source_sha256": "330bff704d719fdbc885c01fecfc48d608805a1fa31c31d828b844ebcdc4cbb7",
+    "source_sha256": "f2498ead0ce4aa7c0f57c7533cf19bcef206010dac30fa1084d04c1a97840e4d",
     "source_status": "current_candidate",
     "tracking_issue": 372,
     "principles": {
