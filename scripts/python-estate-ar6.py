@@ -156,6 +156,11 @@ EXPLICIT_KEEP: dict[str, tuple[str, str, str]] = {
         "synthetic_local_fixture_state_only",
         "repository contract evidence fake; not production Camoufox authority",
     ),
+    "runtime/camouhost/real.py": (
+        "supported_camoufox_outer_adapter",
+        "governed_local_profile_runtime_only",
+        "Python-native Camoufox adapter is an implementation detail behind native Profile Bridge preflight/lifecycle authority; it does not own cloud/profile lifecycle or provider mutation",
+    ),
     "tools/r2_s3_canary.py": (
         "external_provider_canary",
         "disposable_canary_object_put_delete",
