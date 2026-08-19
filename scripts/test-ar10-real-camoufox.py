@@ -24,6 +24,29 @@ CAMOUHOST = ROOT / "runtime/camouhost/real.py"
 RUNTIME_LOCK = ROOT / "runtime/camouhost/runtime-lock.json"
 SESSION = "session_01JAR10REALCAMOUFOX"
 BRIDGE_LOCK_CONTENT = "profile-platform-bridge-lock-v1\ndevice_01JAR10REALCAMOUFOX\n1\n"
+MANAGED_PARENT_ENV = {
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DISPLAY",
+    "GDK_BACKEND",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LOCALAPPDATA",
+    "LOGNAME",
+    "PATH",
+    "SHELL",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "USER",
+    "USERPROFILE",
+    "WAYLAND_DISPLAY",
+    "WSL_DISTRO_NAME",
+    "WSL_INTEROP",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_RUNTIME_DIR",
+}
 
 PAGE = b"""<!doctype html><meta charset='utf-8'><script>
 const hadStorage = localStorage.getItem('ar10-marker') === 'persisted';
@@ -93,6 +116,33 @@ def base_env(root: Path, report: dict[str, str], url: str) -> dict[str, str]:
     return env
 
 
+def managed_env(
+    root: Path,
+    report: dict[str, str],
+    url: str,
+    *,
+    sanitized: bool,
+) -> dict[str, str]:
+    env = (
+        {key: os.environ[key] for key in MANAGED_PARENT_ENV if key in os.environ}
+        if sanitized
+        else os.environ.copy()
+    )
+    env.update(
+        {
+            "CAMOUHOST_PROFILE_ROOT": str(root),
+            "CAMOUHOST_RUNTIME_LOCK": str(RUNTIME_LOCK),
+            "CAMOUHOST_EXPECTED_RUNTIME_LOCK_SHA256": report["runtime_lock_sha256"],
+            "CAMOUHOST_EXPECTED_CONFIG_SHA256": report["fingerprint_config_sha256"],
+            "CAMOUHOST_EXPECTED_PROBE_SHA256": report["profile_stable_probe_sha256"],
+            "CAMOUHOST_HEADLESS_MODE": "virtual",
+            "CAMOUHOST_INITIAL_URL": url,
+            "PYTHONUNBUFFERED": "1",
+        }
+    )
+    return env
+
+
 def materializer_env() -> dict[str, str]:
     return {
         **os.environ,
@@ -114,9 +164,6 @@ def assert_clean_launch_lock_state(root: Path) -> None:
     if user_data.is_symlink() or (user_data.exists() and not user_data.is_dir()):
         raise AssertionError("generation-owned user_data must remain a real directory")
 
-    # Firefox may retain its own user_data/.parentlock or user_data/lock marker after a
-    # clean exit. Marker presence alone is not active-writer evidence. Root-level browser
-    # lock artifacts are still forbidden because Profile Bridge owns that namespace.
     for lock_path in (root / ".parentlock", root / "lock"):
         if lock_path.exists() or lock_path.is_symlink():
             raise AssertionError(
@@ -186,6 +233,67 @@ def exchange(process: subprocess.Popen[str], frame: str) -> str:
             stderr = process.stderr.read()[-2000:]
         raise AssertionError(f"Camouhost produced no response for {frame!r}: {stderr}")
     return response
+
+
+def launch_probe(
+    root: Path,
+    report: dict[str, str],
+    *,
+    sanitized: bool,
+    cwd: Path,
+) -> tuple[str, int, str]:
+    process = subprocess.Popen(
+        [sys.executable, str(CAMOUHOST)],
+        cwd=cwd,
+        env=managed_env(root, report, "about:blank", sanitized=sanitized),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    try:
+        hello = exchange(process, "hello|1")
+        if hello != "hello_ack|1":
+            return hello, process.wait(timeout=30), ""
+        launch = exchange(process, f"launch|{SESSION}")
+        if launch == f"ready|{SESSION}":
+            close = exchange(process, f"close|{SESSION}")
+            returncode = process.wait(timeout=60)
+            stderr = process.stderr.read()[-1000:] if process.stderr is not None else ""
+            return f"{launch};{close}", returncode, stderr
+        returncode = process.wait(timeout=60)
+        stderr = process.stderr.read()[-1000:] if process.stderr is not None else ""
+        return launch, returncode, stderr
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=30)
+
+
+def prove_managed_environment_boundary(base: Path) -> None:
+    cases = [
+        ("sanitized_repo_cwd", True, ROOT),
+        ("full_runtime_cwd", False, ROOT / "runtime"),
+        ("exact_managed", True, ROOT / "runtime"),
+    ]
+    outcomes: dict[str, tuple[str, int, str]] = {}
+    for label, sanitized, cwd in cases:
+        root = base / f"generation-{label}"
+        report = materialize(root)
+        outcomes[label] = launch_probe(root, report, sanitized=sanitized, cwd=cwd)
+
+    expected_prefix = f"ready|{SESSION};closed|{SESSION}|true"
+    exact = outcomes["exact_managed"]
+    if exact[0] != expected_prefix or exact[1] != 0:
+        compact = {
+            label: {"frame": frame, "rc": rc, "stderr": stderr}
+            for label, (frame, rc, stderr) in outcomes.items()
+        }
+        raise AssertionError(
+            "managed sanitized launch differs from direct runtime; differential="
+            + json.dumps(compact, ensure_ascii=True, sort_keys=True)
+        )
 
 
 def run_cold_launch(root: Path, report: dict[str, str], url: str) -> None:
@@ -302,8 +410,9 @@ def main() -> int:
             assert_clean_launch_lock_state(second_root)
             expect_prelaunch_identity_rejection(first_root, first, url)
             expect_probe_drift_rejection(first_root, first, url)
+            prove_managed_environment_boundary(base)
 
-        print("AR-10 real Camoufox cold-launch, identity, Bridge ownership and persistence evidence passed.")
+        print("AR-10 real Camoufox cold-launch, identity, Bridge ownership, managed environment and persistence evidence passed.")
         return 0
     finally:
         server.shutdown()
