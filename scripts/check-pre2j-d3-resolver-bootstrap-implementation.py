@@ -17,6 +17,7 @@ SUCCESSOR_CHECKER = Path(".github/scripts/ar8-d-secret-transport-successor.mjs")
 AR11_RELEASE_AUTHORITY = Path("architecture/release-architecture-ar11.json")
 PROMOTION_WORKFLOW = Path(".github/workflows/mailbox-secret-resolver-promotion.yml")
 PROMOTION_SCRIPT = Path("scripts/mailbox-secret-resolver-promotion.py")
+PROMOTION_CORE = Path("scripts/_mailbox_secret_resolver_promotion_core.py")
 CONTROL_PLANE_CONFIG = Path("deploy/cloudflare/wrangler.jsonc")
 HISTORICAL_MARKER = "validate-secrets"
 
@@ -84,27 +85,30 @@ def restore_optional_file(path: Path, current: bytes | None) -> None:
 
 
 def run_historical(args: list[str]) -> int:
-    """Replay immutable D3 checks against the exact retired executable surface.
+    """Replay immutable D3 checks against the exact retired executable closure.
 
     AR-11 intentionally removes mailbox-only deployment authority from the current
     Core closure. Historical proof therefore materializes the exact predecessor
-    promotion workflow, promotion helper and control-plane config only for the
+    promotion workflow, wrapper, wrapper core and control-plane config only for the
     duration of the D3 check, then restores the current tree byte-for-byte.
     """
 
     ref, workflow = predecessor_metadata()
     promotion_path = ROOT / PROMOTION_WORKFLOW
     promotion_script_path = ROOT / PROMOTION_SCRIPT
+    promotion_core_path = ROOT / PROMOTION_CORE
     control_config_path = ROOT / CONTROL_PLANE_CONFIG
 
     current_promotion = promotion_path.read_bytes() if promotion_path.is_file() else None
     current_promotion_script = (
         promotion_script_path.read_bytes() if promotion_script_path.is_file() else None
     )
+    current_promotion_core = promotion_core_path.read_bytes() if promotion_core_path.is_file() else None
     current_control_config = control_config_path.read_bytes()
 
     predecessor_promotion = historical_file(ref, workflow)
     predecessor_promotion_script = historical_file(ref, PROMOTION_SCRIPT)
+    predecessor_promotion_core = historical_file(ref, PROMOTION_CORE)
     predecessor_control_config = historical_file(ref, CONTROL_PLANE_CONFIG)
 
     try:
@@ -112,11 +116,13 @@ def run_historical(args: list[str]) -> int:
         promotion_script_path.parent.mkdir(parents=True, exist_ok=True)
         promotion_path.write_bytes(predecessor_promotion)
         promotion_script_path.write_bytes(predecessor_promotion_script)
+        promotion_core_path.write_bytes(predecessor_promotion_core)
         control_config_path.write_bytes(predecessor_control_config)
         return run([sys.executable, str(HISTORICAL_CHECKER), *args]).returncode
     finally:
         restore_optional_file(promotion_path, current_promotion)
         restore_optional_file(promotion_script_path, current_promotion_script)
+        restore_optional_file(promotion_core_path, current_promotion_core)
         control_config_path.write_bytes(current_control_config)
 
 
