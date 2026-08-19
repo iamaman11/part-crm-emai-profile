@@ -122,9 +122,12 @@ where
         }
     };
 
+    if command == "credentials" {
+        return parse_credentials_invocation(root, iterator);
+    }
+
     match command.as_str() {
         "d1" => parse_d1_invocation(root, iterator),
-        "credentials" => parse_credentials_invocation(root, iterator),
         "release" => parse_release_invocation(root, iterator),
         "promotion" => parse_promotion_invocation(root, iterator),
         _ => {
@@ -292,6 +295,23 @@ where
     }
     let ledger_json =
         ledger_json.ok_or_else(|| OpsctlError::new("d1", "--ledger-json is required"))?;
+    if action.requires_release_manifest() && release_manifest.is_none() {
+        return Err(OpsctlError::new(
+            "d1",
+            format!("d1 {} requires --release-manifest", action.name()),
+        ));
+    }
+    if action == d1::D1Action::Status
+        && (release_manifest.is_some()
+            || current_manifest.is_some()
+            || known_good_manifest.is_some()
+            || preconditions_json.is_some())
+    {
+        return Err(OpsctlError::new(
+            "d1",
+            "d1 status accepts only component, ledger and authority inputs",
+        ));
+    }
 
     Ok(Invocation::D1 {
         root,
@@ -672,13 +692,31 @@ fn set_once<T>(slot: &mut Option<T>, value: T, flag: &str) -> Result<(), OpsctlE
 
 #[cfg(test)]
 mod tests {
-    use super::{Invocation, ReadCommand, parse_invocation};
+    use super::{CredentialsAction, Invocation, ReadCommand, parse_invocation};
+    use crate::d1::D1Action;
     use crate::release::ReleaseAction;
     use std::ffi::OsString;
     use std::path::PathBuf;
 
     fn args(values: &[&str]) -> Vec<OsString> {
-        values.iter().map(OsString::from).collect()
+        values.iter().copied().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn parses_existing_read_only_surface() {
+        for (name, expected) in [
+            ("doctor", ReadCommand::Doctor),
+            ("status", ReadCommand::Status),
+            ("inventory", ReadCommand::Inventory),
+        ] {
+            assert_eq!(
+                parse_invocation(args(&["opsctl", name])),
+                Ok(Invocation::Run {
+                    root: None,
+                    command: expected,
+                })
+            );
+        }
     }
 
     #[test]
@@ -690,6 +728,105 @@ mod tests {
                 root: Some(PathBuf::from(".")),
                 command: ReadCommand::Inventory,
             })
+        );
+    }
+
+    #[test]
+    fn parses_modular_credentials_metadata_surface() {
+        assert_eq!(
+            parse_invocation(args(&["opsctl", "credentials", "status"])),
+            Ok(Invocation::Credentials {
+                root: None,
+                action: CredentialsAction::Status,
+            })
+        );
+        assert_eq!(
+            parse_invocation(args(&["opsctl", "credentials", "rotation-plan"])),
+            Ok(Invocation::Credentials {
+                root: None,
+                action: CredentialsAction::RotationPlan,
+            })
+        );
+    }
+
+    #[test]
+    fn legacy_flat_credentials_spellings_are_not_cli_authorities() {
+        assert!(parse_invocation(args(&["opsctl", "credential-lifecycle"])).is_err());
+        assert!(parse_invocation(args(&["opsctl", "rotation-plan"])).is_err());
+    }
+
+    #[test]
+    fn credentials_readiness_remains_owned_by_ar13() {
+        assert!(parse_invocation(args(&["opsctl", "credentials", "readiness"])).is_err());
+    }
+
+    #[test]
+    fn parses_native_d1_surface() {
+        assert_eq!(
+            parse_invocation(args(&[
+                "opsctl",
+                "--root",
+                "/repo",
+                "d1",
+                "plan",
+                "--component",
+                "catalog",
+                "--ledger-json",
+                "ledger.json",
+                "--release-manifest",
+                "target.json",
+                "--current-manifest",
+                "current.json",
+                "--known-good-manifest",
+                "known-good.json",
+                "--preconditions-json",
+                "preconditions.json",
+            ])),
+            Ok(Invocation::D1 {
+                root: Some(PathBuf::from("/repo")),
+                action: D1Action::Plan,
+                component: "catalog".to_owned(),
+                ledger_json: PathBuf::from("ledger.json"),
+                release_manifest: Some(PathBuf::from("target.json")),
+                current_manifest: Some(PathBuf::from("current.json")),
+                known_good_manifest: Some(PathBuf::from("known-good.json")),
+                preconditions_json: Some(PathBuf::from("preconditions.json")),
+                authority: None,
+            })
+        );
+    }
+
+    #[test]
+    fn d1_status_rejects_release_context() {
+        assert!(
+            parse_invocation(args(&[
+                "opsctl",
+                "d1",
+                "status",
+                "--component",
+                "catalog",
+                "--ledger-json",
+                "ledger.json",
+                "--known-good-manifest",
+                "known-good.json",
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn d1_plan_requires_release_manifest() {
+        assert!(
+            parse_invocation(args(&[
+                "opsctl",
+                "d1",
+                "plan",
+                "--component",
+                "catalog",
+                "--ledger-json",
+                "ledger.json",
+            ]))
+            .is_err()
         );
     }
 
@@ -747,5 +884,19 @@ mod tests {
     fn promotion_namespace_remains_fail_closed_until_activated() {
         let invocation = parse_invocation(args(&["opsctl", "promotion", "plan"]));
         assert!(invocation.is_err());
+    }
+
+    #[test]
+    fn rejects_mutation_commands() {
+        for command in [
+            "deploy",
+            "provision",
+            "promote",
+            "delete",
+            "rotate",
+            "migrate",
+        ] {
+            assert!(parse_invocation(args(&["opsctl", command])).is_err());
+        }
     }
 }
