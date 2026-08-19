@@ -128,9 +128,9 @@ where
     let action_value = iterator
         .next()
         .ok_or_else(|| OpsctlError::new("credentials", "missing credentials action"))?;
-    let action_text = action_value.to_str().ok_or_else(|| {
-        OpsctlError::new("credentials", "credentials action must be valid UTF-8")
-    })?;
+    let action_text = action_value
+        .to_str()
+        .ok_or_else(|| OpsctlError::new("credentials", "credentials action must be valid UTF-8"))?;
     let action = match action_text {
         "status" => CredentialsAction::Status,
         "rotation-plan" => CredentialsAction::RotationPlan,
@@ -144,7 +144,10 @@ where
     if let Some(extra) = iterator.next() {
         return Err(OpsctlError::new(
             "credentials",
-            format!("unexpected credentials argument: {}", extra.to_string_lossy()),
+            format!(
+                "unexpected credentials argument: {}",
+                extra.to_string_lossy()
+            ),
         ));
     }
     Ok(Invocation::Credentials { root, action })
