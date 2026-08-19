@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove the canonical Wrangler binding inventory matches accepted runtime source constants."""
+"""Prove canonical Wrangler bindings match runtime source and the active AR-11 Core closure."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "deploy" / "cloudflare" / "wrangler.jsonc"
+RELEASE_ARCHITECTURE = ROOT / "architecture" / "release-architecture-ar11.json"
 RUNTIME_RUST_ROOTS = (
     ROOT / "apps" / "control-plane-worker" / "src",
     ROOT / "crates" / "cloudflare-adapters" / "src",
@@ -18,18 +19,9 @@ RUNTIME_RUST_ROOTS = (
 )
 
 SOURCE_CONSTANTS = {
-    "asset": (
-        "crates/control-plane-contract/src/lib.rs",
-        "STATIC_ASSETS_BINDING",
-    ),
-    "d1": (
-        "crates/control-plane-contract/src/lib.rs",
-        "D1_CATALOG_BINDING",
-    ),
-    "r2": (
-        "crates/control-plane-contract/src/lib.rs",
-        "R2_PROFILES_BINDING",
-    ),
+    "asset": ("crates/control-plane-contract/src/lib.rs", "STATIC_ASSETS_BINDING"),
+    "d1": ("crates/control-plane-contract/src/lib.rs", "D1_CATALOG_BINDING"),
+    "r2": ("crates/control-plane-contract/src/lib.rs", "R2_PROFILES_BINDING"),
     "profile_coordinator": (
         "crates/control-plane-contract/src/lib.rs",
         "PROFILE_COORDINATOR_BINDING",
@@ -50,10 +42,7 @@ SOURCE_CONSTANTS = {
         "crates/cloudflare-adapters/src/cloud_mailbox_secrets.rs",
         "MAILBOX_SECRET_RESOLVER_BINDING",
     ),
-    "access_issuer": (
-        "apps/control-plane-worker/src/access_session.rs",
-        "ACCESS_ISSUER_VAR",
-    ),
+    "access_issuer": ("apps/control-plane-worker/src/access_session.rs", "ACCESS_ISSUER_VAR"),
     "access_audience": (
         "apps/control-plane-worker/src/access_session.rs",
         "ACCESS_AUDIENCE_VAR",
@@ -82,6 +71,18 @@ SOURCE_CONSTANTS = {
         "apps/control-plane-worker/src/composition.rs",
         "R2_GENERATION_SECRET_ACCESS_KEY_BINDING",
     ),
+    "canonical_environment": (
+        "apps/control-plane-worker/src/capability_gate.rs",
+        "CANONICAL_ENVIRONMENT_VAR",
+    ),
+    "capability_profile_id": (
+        "apps/control-plane-worker/src/capability_gate.rs",
+        "CAPABILITY_PROFILE_ID_VAR",
+    ),
+    "capability_profile_digest": (
+        "apps/control-plane-worker/src/capability_gate.rs",
+        "CAPABILITY_PROFILE_DIGEST_VAR",
+    ),
 }
 
 
@@ -104,7 +105,9 @@ def rust_constant(relative_path: str, symbol: str, runtime_text: str) -> str:
         text,
     )
     if match is None:
-        raise BindingInventoryError(f"runtime binding constant {symbol} is missing from {relative_path}")
+        raise BindingInventoryError(
+            f"runtime binding constant {symbol} is missing from {relative_path}"
+        )
     value = match.group(1)
     if runtime_text.count(symbol) < 2:
         raise BindingInventoryError(f"runtime binding constant {symbol} is defined but no longer used")
@@ -148,7 +151,9 @@ def array_value(value: object, label: str) -> list[object]:
     return value
 
 
-def binding_names(items: object, label: str) -> set[str]:
+def binding_names(items: object, label: str, *, optional: bool = False) -> set[str]:
+    if items is None and optional:
+        return set()
     names: set[str] = set()
     for item in array_value(items, label):
         binding = object_value(item, f"{label} entry").get("binding")
@@ -160,6 +165,59 @@ def binding_names(items: object, label: str) -> set[str]:
     return names
 
 
+def release_profiles() -> dict[str, dict[str, object]]:
+    try:
+        document = object_value(
+            json.loads(RELEASE_ARCHITECTURE.read_text(encoding="utf-8")),
+            "release architecture",
+        )
+    except (OSError, json.JSONDecodeError) as error:
+        raise BindingInventoryError(f"cannot read AR-11 release architecture: {error}") from error
+    if (
+        document.get("kind") != "AR11_RELEASE_ARCHITECTURE_SOURCE"
+        or document.get("schema_version") != 1
+        or document.get("production_core_gate") != "BLOCKED"
+    ):
+        raise BindingInventoryError("AR-11 release architecture identity/state drifted")
+    profiles: dict[str, dict[str, object]] = {}
+    for value in array_value(document.get("release_profiles"), "release_profiles"):
+        profile = object_value(value, "release profile")
+        profile_id = profile.get("profile_id")
+        if not isinstance(profile_id, str) or not profile_id or profile_id in profiles:
+            raise BindingInventoryError("release profile identity set is invalid")
+        profiles[profile_id] = profile
+    return profiles
+
+
+def validate_profile_selection(
+    environment: str,
+    variables: dict[str, object],
+    source: dict[str, str],
+    profiles: dict[str, dict[str, object]],
+) -> None:
+    if variables.get(source["canonical_environment"]) != environment:
+        raise BindingInventoryError(f"{environment} canonical environment identity drifted")
+    profile_id = variables.get(source["capability_profile_id"])
+    profile_digest = variables.get(source["capability_profile_digest"])
+    expected_profile_id = "rehearsal-core-v1" if environment == "staging" else "production-core-v1"
+    if profile_id != expected_profile_id:
+        raise BindingInventoryError(
+            f"{environment} must select exactly {expected_profile_id}; observed {profile_id!r}"
+        )
+    profile = profiles.get(expected_profile_id)
+    if profile is None:
+        raise BindingInventoryError(f"selected profile is absent from AR-11 authority: {expected_profile_id}")
+    allowed = profile.get("allowed_environments")
+    if not isinstance(allowed, list) or environment not in allowed:
+        raise BindingInventoryError(
+            f"selected profile {expected_profile_id} is not allowed in {environment}"
+        )
+    if not isinstance(profile_digest, str) or re.fullmatch(r"[0-9a-f]{64}", profile_digest) is None:
+        raise BindingInventoryError(f"{environment} capability profile digest is malformed")
+    if environment == "production" and profile.get("current_authorization") != "BLOCKED":
+        raise BindingInventoryError("AR-11 production profile must remain BLOCKED")
+
+
 def validate_config(document: dict[str, object], source: dict[str, str]) -> None:
     assets = object_value(document.get("assets"), "assets")
     if assets.get("binding") != source["asset"]:
@@ -169,22 +227,22 @@ def validate_config(document: dict[str, object], source: dict[str, str]) -> None
     if set(envs) != {"staging", "production"}:
         raise BindingInventoryError("runtime binding proof requires exactly staging and production")
 
+    profiles = release_profiles()
     expected_vars = {
         source["access_issuer"],
         source["access_audience"],
         source["r2_account_id"],
         source["r2_bucket_name"],
+        source["canonical_environment"],
+        source["capability_profile_id"],
+        source["capability_profile_digest"],
     }
-    expected_secrets = {
+    expected_core_secrets = {
         source["contact_keyring"],
-        source["mailbox_resolver_caller_auth"],
         source["r2_access_key_id"],
         source["r2_secret_access_key"],
     }
-    expected_queues = {
-        source["integration_events_queue"],
-        source["mailbox_jobs_queue"],
-    }
+    expected_core_queues = {source["integration_events_queue"]}
     expected_durable = {
         source["profile_coordinator"]: "ProfileCoordinator",
         source["notification_hub"]: "NotificationHub",
@@ -195,11 +253,14 @@ def validate_config(document: dict[str, object], source: dict[str, str]) -> None
         variables = object_value(config.get("vars"), f"env.{environment}.vars")
         if set(variables) != expected_vars:
             raise BindingInventoryError(f"{environment} vars do not match runtime source")
+        validate_profile_selection(environment, variables, source, profiles)
 
         secrets = object_value(config.get("secrets"), f"env.{environment}.secrets")
         required = array_value(secrets.get("required"), f"env.{environment}.secrets.required")
-        if set(required) != expected_secrets or len(required) != len(expected_secrets):
-            raise BindingInventoryError(f"{environment} secret-name inventory does not match runtime source")
+        if set(required) != expected_core_secrets or len(required) != len(expected_core_secrets):
+            raise BindingInventoryError(
+                f"{environment} Core secret-name closure does not match runtime source"
+            )
 
         if binding_names(config.get("d1_databases"), f"env.{environment}.d1_databases") != {source["d1"]}:
             raise BindingInventoryError(f"{environment} D1 binding does not match runtime source")
@@ -207,10 +268,18 @@ def validate_config(document: dict[str, object], source: dict[str, str]) -> None
             raise BindingInventoryError(f"{environment} R2 binding does not match runtime source")
 
         queues = object_value(config.get("queues"), f"env.{environment}.queues")
-        if binding_names(queues.get("producers"), f"env.{environment}.queues.producers") != expected_queues:
-            raise BindingInventoryError(f"{environment} queue producers do not match runtime source")
-        if binding_names(config.get("services"), f"env.{environment}.services") != {source["mailbox_secret_resolver"]}:
-            raise BindingInventoryError(f"{environment} service binding does not match runtime source")
+        if binding_names(queues.get("producers"), f"env.{environment}.queues.producers") != expected_core_queues:
+            raise BindingInventoryError(
+                f"{environment} Core queue producer closure does not match active profile"
+            )
+        if binding_names(config.get("services"), f"env.{environment}.services", optional=True):
+            raise BindingInventoryError(
+                f"{environment} Core service closure must not require mailbox-secret-resolver"
+            )
+        if source["mailbox_jobs_queue"] in expected_core_queues:
+            raise BindingInventoryError("Core closure unexpectedly requires mailbox jobs")
+        if source["mailbox_resolver_caller_auth"] in expected_core_secrets:
+            raise BindingInventoryError("Core closure unexpectedly requires resolver caller auth")
 
         durable = object_value(config.get("durable_objects"), f"env.{environment}.durable_objects")
         observed: dict[str, str] = {}
@@ -224,7 +293,9 @@ def validate_config(document: dict[str, object], source: dict[str, str]) -> None
                 raise BindingInventoryError(f"duplicate Durable Object binding {name}")
             observed[name] = class_name
         if observed != expected_durable:
-            raise BindingInventoryError(f"{environment} Durable Object bindings do not match runtime source")
+            raise BindingInventoryError(
+                f"{environment} Durable Object bindings do not match runtime source"
+            )
 
 
 def main() -> int:
@@ -245,7 +316,9 @@ def main() -> int:
         try:
             validate_config(tampered, source)
         except BindingInventoryError:
-            print("Cloudflare runtime binding inventory and negative drift fixture passed.")
+            print(
+                "Cloudflare profile-aware runtime binding inventory and negative drift fixture passed."
+            )
             return 0
         raise BindingInventoryError("missing NotificationHub negative fixture unexpectedly passed")
     except (OSError, json.JSONDecodeError, BindingInventoryError, KeyError) as error:

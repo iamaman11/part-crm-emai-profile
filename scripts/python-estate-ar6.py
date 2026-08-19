@@ -21,6 +21,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "architecture" / "python-estate-ar6.json"
 AR10_OVERLAY = ROOT / "architecture" / "python-estate-ar10.json"
+AR11_OVERLAY = ROOT / "architecture" / "python-estate-ar11.json"
 SCHEMA_VERSION = 1
 ALLOWED = {"KEEP_PYTHON", "MIGRATE_TO_RUST", "WRAP_WITH_RUST", "DELETE_AFTER_SEQUENCE"}
 FUTURE_FIELDS = {
@@ -302,6 +303,71 @@ def build_current_rows(
     return rows
 
 
+def apply_ar11_overlay(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    overlay = load_json(AR11_OVERLAY)
+    if (
+        overlay.get("schema_version") != 1
+        or overlay.get("status") != "AR11_CURRENT_PYTHON_ESTATE_OVERLAY"
+        or overlay.get("owning_slice") != "AR-11"
+        or overlay.get("parent_overlay") != "architecture/python-estate-ar10.json"
+    ):
+        fail("AR-11 Python estate overlay identity/version drifted")
+    policy = overlay.get("policy")
+    if not isinstance(policy, dict):
+        fail("AR-11 Python estate overlay policy is missing")
+    for field, expected in {
+        "global_python_to_rust_rewrite": False,
+        "baseline_rewrite_allowed": False,
+        "unknown_delta_policy": "FAIL_CLOSED",
+        "production_mutation": False,
+        "operational_provider_mutator_must_be_rust": True,
+    }.items():
+        if policy.get(field) != expected:
+            fail(f"AR-11 Python estate overlay policy drifted: {field}")
+    by_path = {row["path"]: copy.deepcopy(row) for row in rows}
+    retirements = overlay.get("retirements")
+    if not isinstance(retirements, list) or len(retirements) != len(set(retirements)):
+        fail("AR-11 Python retirements must be a unique array")
+    for path in retirements:
+        row = by_path.get(path)
+        if (
+            not isinstance(path, str)
+            or row is None
+            or row.get("classification") != "MIGRATE_TO_RUST"
+            or row.get("cutover_slice") != "AR-11"
+        ):
+            fail(f"AR-11 may retire only its accepted MIGRATE_TO_RUST cohort: {path}")
+        del by_path[path]
+    additions = overlay.get("additions")
+    if not isinstance(additions, list):
+        fail("AR-11 Python additions must be an array")
+    for row in additions:
+        if not isinstance(row, dict):
+            fail("AR-11 Python addition must be an object")
+        path = row.get("path")
+        required = ("path", "classification", "role", "side_effect_class", "authority", "rationale")
+        if (
+            not isinstance(path, str)
+            or not path
+            or path in by_path
+            or row.get("classification") != "KEEP_PYTHON"
+            or any(not isinstance(row.get(field), str) or not row[field] for field in required)
+        ):
+            fail(f"AR-11 Python addition is malformed/unreviewed: {path!r}")
+        by_path[path] = copy.deepcopy(row)
+    current = sorted(by_path.values(), key=lambda row: row["path"])
+    counts = {name: 0 for name in sorted(ALLOWED)}
+    for row in current:
+        counts[row["classification"]] += 1
+    expected_summary = {"tracked_python_files": len(current), **counts}
+    if overlay.get("current_summary") != expected_summary:
+        fail(
+            "AR-11 Python estate current_summary drifted: "
+            f"expected={expected_summary}, observed={overlay.get('current_summary')}"
+        )
+    return current, overlay
+
+
 def _import_names(tree: ast.AST) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -452,6 +518,7 @@ def build_inventory(root: Path = ROOT) -> dict[str, Any]:
     baseline_rows = validate_frozen_baseline(baseline, overlay)
     additions, retirements = validate_overlay_shape(overlay)
     rows = build_current_rows(baseline_rows, additions, retirements)
+    rows, ar11_overlay = apply_ar11_overlay(rows)
     tracked = tracked_python(root)
     row_paths = [row["path"] for row in rows]
     if row_paths != tracked:
@@ -463,16 +530,16 @@ def build_inventory(root: Path = ROOT) -> dict[str, Any]:
     for row in rows:
         counts[row["classification"]] += 1
     summary = {"tracked_python_files": len(rows), **counts}
-    if overlay.get("current_summary") != summary:
+    if ar11_overlay.get("current_summary") != summary:
         fail(
-            "AR-10 Python estate overlay current_summary drifted: "
-            f"expected={summary}, observed={overlay.get('current_summary')}"
+            "AR-11 Python estate overlay current_summary drifted: "
+            f"expected={summary}, observed={ar11_overlay.get('current_summary')}"
         )
     return {
         "schema_version": 1,
-        "status": "CURRENT_PYTHON_ESTATE_VIA_AR6_BASELINE_PLUS_AR10_OVERLAY",
+        "status": "CURRENT_PYTHON_ESTATE_VIA_AR6_BASELINE_PLUS_AR10_AR11_OVERLAYS",
         "accepted_program_checkpoint": "AR-6",
-        "current_owning_slice": "AR-10",
+        "current_owning_slice": "AR-11",
         "summary": summary,
         "files": rows,
     }

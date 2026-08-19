@@ -20,8 +20,9 @@ use repository::resolve_repo_root;
 
 /// Execute one already-parsed project-specific operational policy command.
 ///
-/// This function is the library composition root. It does not own provider
-/// credentials, hidden state, deployment scheduling, or runtime application logic.
+/// This function is the library composition root. Its operational policy authority
+/// remains read-only and metadata-only: it does not own provider credentials,
+/// hidden state, deployment scheduling, or runtime application logic.
 pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
     match invocation {
         Invocation::Help => Ok(HELP.to_owned()),
@@ -65,6 +66,57 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                 authority_path: authority.as_deref(),
             })
             .map_err(|error| OpsctlError::new("d1", error.to_string()))
+        }
+        Invocation::Release {
+            root,
+            action,
+            release_set,
+            artifact_root,
+            profile_id,
+            environment,
+            evidence_json,
+            current_release_set,
+        } => {
+            let repo_root = resolve_repo_root(root.as_deref(), "release")?;
+            release::commands::run(release::commands::ReleaseRunRequest {
+                root: &repo_root,
+                action,
+                release_set: &release_set,
+                artifact_root: artifact_root.as_deref(),
+                profile_id: profile_id.as_deref(),
+                environment: environment.as_deref(),
+                evidence_json: evidence_json.as_deref(),
+                current_release_set: current_release_set.as_deref(),
+            })
+            .map_err(|error| OpsctlError::new("release", error.to_string()))
+        }
+
+        Invocation::Promotion {
+            root,
+            action,
+            release_set,
+            profile_id,
+            environment,
+            snapshot,
+            evidence_json,
+            current_release_set,
+            known_good_release_set,
+            expected_current_release_set_id,
+        } => {
+            let repo_root = resolve_repo_root(root.as_deref(), "promotion")?;
+            promotion::commands::run(promotion::commands::PromotionRunRequest {
+                root: &repo_root,
+                action,
+                release_set: &release_set,
+                profile_id: &profile_id,
+                environment: &environment,
+                snapshot: &snapshot,
+                evidence_json: &evidence_json,
+                current_release_set: current_release_set.as_deref(),
+                known_good_release_set: known_good_release_set.as_deref(),
+                expected_current_release_set_id: expected_current_release_set_id.as_deref(),
+            })
+            .map_err(|error| OpsctlError::new("promotion", error.to_string()))
         }
     }
 }

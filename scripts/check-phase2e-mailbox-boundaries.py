@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Enforce Phase 2E cloud mailbox ownership, runtime and privacy boundaries."""
+"""Enforce Phase 2E cloud mailbox ownership, runtime and privacy boundaries.
+
+Phase 2E source/runtime guarantees remain accepted even when AR-11 keeps mailbox
+capabilities production-disabled. The checker therefore proves both halves of the
+contract: mailbox code/ports/adapters still exist and remain safe, while the active
+Core deployment closure must not bind mailbox jobs or the secret resolver.
+"""
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +49,24 @@ INNER_RUNTIME_FRAGMENTS = (
     "Socket::",
     "MAILBOX_SECRET_RESOLVER",
 )
+MAILBOX_ACTIVATION_UNITS = {
+    "mailbox_admin",
+    "mailbox_client_binding",
+    "mailbox_browser_binding",
+    "mailbox_read",
+    "mailbox_jobs",
+    "outbound_mail",
+}
+CORE_DISABLED_MAILBOX_RESOURCES = {
+    "mailbox_jobs",
+    "mailbox_jobs_dlq",
+    "mailbox_secret_resolver_worker",
+    "resolver_d1",
+    "resolver_reconciliation_schedule",
+    "mailbox_secret_resolver_service",
+}
+CORE_FORBIDDEN_BINDINGS = {"MAILBOX_JOBS", "MAILBOX_SECRET_RESOLVER"}
+CORE_FORBIDDEN_CREDENTIALS = {"MAILBOX_RESOLVER_CALLER_AUTH_KEY"}
 
 
 def fail(message: str) -> None:
@@ -77,6 +102,87 @@ def assert_metadata_only(name: str, source: str) -> None:
     for term in SENSITIVE_TERMS:
         if term in lowered:
             fail(f"{name} must remain metadata-only; found {term}")
+
+
+def load_ar11_authority(root: Path) -> dict[str, object]:
+    path = root / "architecture" / "release-architecture-ar11.json"
+    try:
+        value = json.loads(read(path))
+    except json.JSONDecodeError as error:
+        fail(f"AR-11 release architecture is invalid JSON: {error}")
+    if not isinstance(value, dict):
+        fail("AR-11 release architecture must be an object")
+    if (
+        value.get("schema_version") != 1
+        or value.get("kind") != "AR11_RELEASE_ARCHITECTURE_SOURCE"
+        or value.get("production_mutation") is not False
+        or value.get("architecture_complete") is not False
+        or value.get("production_ready") is not False
+        or value.get("production_core_gate") != "BLOCKED"
+    ):
+        fail("AR-11 release architecture identity or production-block state drifted")
+    return value
+
+
+def assert_core_mailbox_disabled(root: Path, wrangler: str) -> None:
+    authority = load_ar11_authority(root)
+    profiles_raw = authority.get("release_profiles")
+    closures_raw = authority.get("deployment_closures")
+    if not isinstance(profiles_raw, list) or not isinstance(closures_raw, list):
+        fail("AR-11 Core profile/deployment closure collections are malformed")
+
+    profiles = {
+        item.get("profile_id"): item
+        for item in profiles_raw
+        if isinstance(item, dict) and isinstance(item.get("profile_id"), str)
+    }
+    closures = {
+        item.get("closure_id"): item
+        for item in closures_raw
+        if isinstance(item, dict) and isinstance(item.get("closure_id"), str)
+    }
+    for profile_id in ("rehearsal-core-v1", "production-core-v1"):
+        profile = profiles.get(profile_id)
+        if not isinstance(profile, dict):
+            fail(f"AR-11 Core profile missing: {profile_id}")
+        disabled = profile.get("disabled_activation_units")
+        if not isinstance(disabled, list) or not MAILBOX_ACTIVATION_UNITS.issubset(set(disabled)):
+            fail(f"{profile_id} must keep every Phase 2E mailbox activation unit disabled")
+        if profile_id == "production-core-v1" and profile.get("current_authorization") != "BLOCKED":
+            fail("production-core-v1 must remain BLOCKED during AR-11")
+
+    for closure_id in ("rehearsal-core-v1", "production-core-v1"):
+        closure = closures.get(closure_id)
+        if not isinstance(closure, dict):
+            fail(f"AR-11 Core deployment closure missing: {closure_id}")
+        optional = closure.get("optional_or_disabled_resources")
+        required_bindings = closure.get("required_bindings")
+        required_credentials = closure.get("required_credentials")
+        if not isinstance(optional, list) or not CORE_DISABLED_MAILBOX_RESOURCES.issubset(set(optional)):
+            fail(f"{closure_id} must classify mailbox resources as optional/disabled")
+        if not isinstance(required_bindings, list) or CORE_FORBIDDEN_BINDINGS.intersection(required_bindings):
+            fail(f"{closure_id} must not require mailbox operational bindings")
+        if not isinstance(required_credentials, list) or CORE_FORBIDDEN_CREDENTIALS.intersection(required_credentials):
+            fail(f"{closure_id} must not require mailbox resolver credentials")
+
+    assert_contains(
+        "wrangler.jsonc Core projection",
+        wrangler,
+        (
+            '"binding": "INTEGRATION_EVENTS"',
+            '"CAPABILITY_PROFILE_ID": "rehearsal-core-v1"',
+            '"CAPABILITY_PROFILE_ID": "production-core-v1"',
+        ),
+    )
+    assert_absent(
+        "wrangler.jsonc Core projection",
+        wrangler,
+        (
+            '"binding": "MAILBOX_JOBS"',
+            '"binding": "MAILBOX_SECRET_RESOLVER"',
+            '"MAILBOX_RESOLVER_CALLER_AUTH_KEY"',
+        ),
+    )
 
 
 def enforce(root: Path) -> None:
@@ -321,16 +427,7 @@ def enforce(root: Path) -> None:
         fail("real Client Mail provider must not be called directly from the Worker transport router")
 
     wrangler = read(root / "deploy" / "cloudflare" / "wrangler.jsonc")
-    assert_contains(
-        "wrangler.jsonc",
-        wrangler,
-        (
-            '"binding": "MAILBOX_JOBS"',
-            '"max_retries": 6',
-            '"dead_letter_queue"',
-            '"binding": "MAILBOX_SECRET_RESOLVER"',
-        ),
-    )
+    assert_core_mailbox_disabled(root, wrangler)
 
     for path in (
         worker / "mailbox_queue_evidence.rs",
@@ -353,18 +450,33 @@ def enforce(root: Path) -> None:
 
 
 def self_test() -> None:
+    rejected = False
     try:
         assert_absent("negative-inner-runtime", "pub fn x(_: worker::Env) {}", INNER_RUNTIME_FRAGMENTS)
     except AssertionError:
-        pass
-    else:
+        rejected = True
+    if not rejected:
         fail("Phase 2E inner-runtime negative fixture unexpectedly passed")
 
+    rejected = False
     try:
         assert_metadata_only("negative-queue", "struct Envelope { subject: String }")
     except AssertionError:
-        return
-    fail("Phase 2E privacy negative fixture unexpectedly passed")
+        rejected = True
+    if not rejected:
+        fail("Phase 2E privacy negative fixture unexpectedly passed")
+
+    rejected = False
+    try:
+        assert_absent(
+            "negative-core-binding",
+            '{"binding":"MAILBOX_JOBS"}',
+            ('"MAILBOX_JOBS"',),
+        )
+    except AssertionError:
+        rejected = True
+    if not rejected:
+        fail("Phase 2E Core mailbox-binding negative fixture unexpectedly passed")
 
 
 def main() -> int:
@@ -377,7 +489,9 @@ def main() -> int:
         print("Phase 2E mailbox negative fixtures rejected as expected.")
         return 0
     enforce(args.root)
-    print("Phase 2E cloud mailbox runtime, Queue and privacy boundaries passed.")
+    print(
+        "Phase 2E mailbox source/runtime/privacy boundaries and AR-11 Core deployment disablement passed."
+    )
     return 0
 
 

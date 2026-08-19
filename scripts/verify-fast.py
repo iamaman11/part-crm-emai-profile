@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fast, cross-platform pre-push verification for repository-local failures.
 
-This intentionally runs only cheap deterministic checks. Full acceptance still belongs to
+This intentionally runs only cheap deterministic current-state checks. Full acceptance still belongs to
 permanent GitHub Actions workflows on one unchanged exact head.
 """
 
@@ -46,12 +46,19 @@ def main() -> int:
         "check-documentation-authority.py",
         "check-phase1a-event-boundaries.py",
         "check-phase2e-mailbox-boundaries.py",
-        "check-pre2j-d3-resolver-bootstrap-authority.py",
         "check-pre2j-d3-resolver-bootstrap-implementation.py",
     ]
     for script in scripts:
         run(script, [sys.executable, str(ROOT / "scripts" / script)])
 
+    run(
+        "static D3 transition provenance negative matrix",
+        ["node", str(ROOT / ".github" / "scripts" / "ar8-d-secret-transport-successor.mjs"), "--self-test"],
+    )
+    run(
+        "current Release Set operational negative matrix",
+        ["node", str(ROOT / ".github" / "scripts" / "release-operational-ar11.mjs"), "--self-test"],
+    )
     run(
         "Phase 1A durable outbox and consumer idempotency",
         [sys.executable, str(ROOT / "scripts" / "test-integration-event-foundation.py")],
@@ -71,10 +78,6 @@ def main() -> int:
     run(
         "resolver release negative provenance",
         [sys.executable, str(ROOT / "scripts" / "mailbox-secret-resolver-release.py"), "self-test"],
-    )
-    run(
-        "resolver promotion secret and same-bits policy",
-        [sys.executable, str(ROOT / "scripts" / "mailbox-secret-resolver-promotion.py"), "self-test"],
     )
 
     status_path = ROOT / "docs" / "status.json"

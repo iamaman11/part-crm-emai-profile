@@ -20,6 +20,7 @@ import {
 
 type Props = {
   clientId: string;
+  outboundMailEnabled: boolean;
 };
 
 type RelatedMailbox = {
@@ -71,7 +72,7 @@ async function loadRelatedMailboxes(
   return related.filter((item): item is RelatedMailbox => item !== null);
 }
 
-export function ClientMailPanel({ clientId }: Props) {
+export function ClientMailPanel({ clientId, outboundMailEnabled }: Props) {
   const { tenantId } = useTenant();
   const [lastInput, setLastInput] = useState<ClientMailSearchInput | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
@@ -108,6 +109,7 @@ export function ClientMailPanel({ clientId }: Props) {
   }
 
   function openComposer(operation: ClientMailSendOperationDto, source: MailMessageBodyDto | null) {
+    if (!outboundMailEnabled) return;
     setComposer({ operation, source });
   }
 
@@ -122,13 +124,17 @@ export function ClientMailPanel({ clientId }: Props) {
       </p>
 
       <StatusMessage state={mailboxQuery.error ?? null} />
-      <button
-        type="button"
-        disabled={mailboxQuery.isPending || composerMailboxes.length === 0}
-        onClick={() => openComposer('NEW', null)}
-      >
-        Compose
-      </button>
+      {outboundMailEnabled ? (
+        <button
+          type="button"
+          disabled={mailboxQuery.isPending || composerMailboxes.length === 0}
+          onClick={() => openComposer('NEW', null)}
+        >
+          Compose
+        </button>
+      ) : (
+        <p className="muted">Outbound mail is disabled by the active release profile.</p>
+      )}
 
       {authRequiredMailboxes.length > 0 && (
         <p className="muted">
@@ -143,7 +149,7 @@ export function ClientMailPanel({ clientId }: Props) {
         </p>
       )}
 
-      {composer && (
+      {outboundMailEnabled && composer && (
         <ClientMailComposer
           key={`${composer.operation}:${composer.source?.summary.reference.providerReference ?? 'new'}`}
           tenantId={tenantId}
@@ -242,17 +248,19 @@ export function ClientMailPanel({ clientId }: Props) {
             {message.data.summary.sender ?? 'Unknown sender'} ·{' '}
             {new Date(message.data.summary.receivedAtMs).toLocaleString()}
           </p>
-          <div>
-            <button type="button" onClick={() => openComposer('REPLY', message.data ?? null)}>
-              Reply
-            </button>{' '}
-            <button type="button" onClick={() => openComposer('REPLY_ALL', message.data ?? null)}>
-              Reply all
-            </button>{' '}
-            <button type="button" onClick={() => openComposer('FORWARD', message.data ?? null)}>
-              Forward
-            </button>
-          </div>
+          {outboundMailEnabled ? (
+            <div>
+              <button type="button" onClick={() => openComposer('REPLY', message.data ?? null)}>
+                Reply
+              </button>{' '}
+              <button type="button" onClick={() => openComposer('REPLY_ALL', message.data ?? null)}>
+                Reply all
+              </button>{' '}
+              <button type="button" onClick={() => openComposer('FORWARD', message.data ?? null)}>
+                Forward
+              </button>
+            </div>
+          ) : null}
           <SafeMailBody
             textBody={message.data.textBody}
             htmlBody={message.data.htmlBody}

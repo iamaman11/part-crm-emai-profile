@@ -4,6 +4,11 @@
 Tracked configuration contains binding names and placeholder tokens only. Real staging/production
 resource identities are supplied by controlled JSON manifests at release time. Secret *names* are
 part of Wrangler configuration; secret values never enter the manifests or rendered document.
+
+AR-11 makes the tracked Wrangler template the Core deployment closure: mailbox jobs and the
+mailbox-secret-resolver service remain source-present but are intentionally absent from Core.
+Capability selection is carried by the canonical environment/profile projection rather than by
+independent feature flags.
 """
 
 from __future__ import annotations
@@ -40,7 +45,6 @@ ENVIRONMENT_KEYS = {
     "d1_databases",
     "r2_buckets",
     "queues",
-    "services",
     "durable_objects",
 }
 MANIFEST_FIELDS = {
@@ -69,9 +73,8 @@ ISOLATED_FIELDS = {
     "mailbox_jobs_dlq",
     "mailbox_secret_resolver_service",
 }
-REQUIRED_SECRETS = [
+REQUIRED_CORE_SECRETS = [
     "CLIENT_CONTACT_PROTECTION_KEYRING",
-    "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
     "R2_GENERATION_ACCESS_KEY_ID",
     "R2_GENERATION_SECRET_ACCESS_KEY",
 ]
@@ -80,14 +83,13 @@ EXPECTED_VARS = {
     "ACCESS_AUDIENCE",
     "R2_GENERATION_ACCOUNT_ID",
     "R2_GENERATION_BUCKET_NAME",
+    "CANONICAL_ENVIRONMENT",
+    "CAPABILITY_PROFILE_ID",
+    "CAPABILITY_PROFILE_DIGEST",
 }
 EXPECTED_D1 = {"CATALOG_DB"}
 EXPECTED_R2 = {"PROFILE_OBJECTS"}
-EXPECTED_QUEUE_PRODUCERS = {
-    "INTEGRATION_EVENTS",
-    "MAILBOX_JOBS",
-}
-EXPECTED_SERVICE_BINDINGS = {"MAILBOX_SECRET_RESOLVER"}
+EXPECTED_CORE_QUEUE_PRODUCERS = {"INTEGRATION_EVENTS"}
 EXPECTED_DURABLE_OBJECTS = {
     "PROFILE_COORDINATOR": "ProfileCoordinator",
     "NOTIFICATION_HUB": "NotificationHub",
@@ -96,6 +98,7 @@ RESOURCE_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 D1_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 ACCOUNT_ID = re.compile(r"^[0-9a-f]{32}$")
 AUDIENCE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ConfigError(ValueError):
@@ -194,19 +197,31 @@ def validate_environment_template(environment: str, config: dict[str, object]) -
 
     variables = require_object(config.get("vars"), f"env.{environment}.vars")
     if set(variables) != EXPECTED_VARS:
-        raise ConfigError(f"{environment} vars do not match accepted Worker runtime requirements")
+        raise ConfigError(f"{environment} vars do not match accepted Core runtime requirements")
     expected_variable_tokens = {
         "ACCESS_ISSUER": f"${{{prefix}_ACCESS_ISSUER}}",
         "ACCESS_AUDIENCE": f"${{{prefix}_ACCESS_AUDIENCE}}",
         "R2_GENERATION_ACCOUNT_ID": f"${{{prefix}_ACCOUNT_ID}}",
         "R2_GENERATION_BUCKET_NAME": f"${{{prefix}_R2_BUCKET_NAME}}",
     }
-    if variables != expected_variable_tokens:
-        raise ConfigError(f"{environment} variable placeholders are not canonical")
+    for key, expected in expected_variable_tokens.items():
+        if variables.get(key) != expected:
+            raise ConfigError(f"{environment} variable placeholder drifted for {key}")
+    if variables.get("CANONICAL_ENVIRONMENT") != environment:
+        raise ConfigError(f"{environment} canonical environment projection drifted")
+    expected_profile = "rehearsal-core-v1" if environment == "staging" else "production-core-v1"
+    if variables.get("CAPABILITY_PROFILE_ID") != expected_profile:
+        raise ConfigError(f"{environment} capability profile projection must select {expected_profile}")
+    profile_digest = variables.get("CAPABILITY_PROFILE_DIGEST")
+    if not isinstance(profile_digest, str) or SHA256.fullmatch(profile_digest) is None:
+        raise ConfigError(f"{environment} capability profile digest must be lowercase SHA-256")
+    for key in variables:
+        if re.match(r"^(ENABLE_|FEATURE_|SHOW_)", key):
+            raise ConfigError(f"independent capability flag is forbidden in {environment}: {key}")
 
     secrets = require_object(config.get("secrets"), f"env.{environment}.secrets")
-    if secrets != {"required": REQUIRED_SECRETS}:
-        raise ConfigError(f"{environment} required secret-name inventory drifted")
+    if secrets != {"required": REQUIRED_CORE_SECRETS}:
+        raise ConfigError(f"{environment} Core required secret-name inventory drifted")
 
     d1 = require_array(config.get("d1_databases"), f"env.{environment}.d1_databases")
     d1_bindings = {require_object(item, "D1 binding").get("binding") for item in d1}
@@ -232,17 +247,13 @@ def validate_environment_template(environment: str, config: dict[str, object]) -
     queues = require_object(config.get("queues"), f"env.{environment}.queues")
     producers = require_array(queues.get("producers"), f"env.{environment}.queues.producers")
     producer_bindings = {require_object(item, "queue producer").get("binding") for item in producers}
-    if producer_bindings != EXPECTED_QUEUE_PRODUCERS or len(producers) != 2:
-        raise ConfigError(f"{environment} queue producer bindings drifted")
-    expected_queues = {
-        "INTEGRATION_EVENTS": f"${{{prefix}_INTEGRATION_EVENTS_QUEUE}}",
-        "MAILBOX_JOBS": f"${{{prefix}_MAILBOX_JOBS_QUEUE}}",
-    }
-    for item in producers:
-        producer = require_object(item, "queue producer")
-        binding = string(producer.get("binding"), "queue producer binding")
-        if producer.get("queue") != expected_queues[binding]:
-            raise ConfigError(f"{environment} queue producer placeholder drifted for {binding}")
+    if producer_bindings != EXPECTED_CORE_QUEUE_PRODUCERS or len(producers) != 1:
+        raise ConfigError(f"{environment} Core queue producer bindings drifted")
+    if producers[0] != {
+        "binding": "INTEGRATION_EVENTS",
+        "queue": f"${{{prefix}_INTEGRATION_EVENTS_QUEUE}}",
+    }:
+        raise ConfigError(f"{environment} INTEGRATION_EVENTS queue placeholder drifted")
 
     consumers = require_array(queues.get("consumers"), f"env.{environment}.queues.consumers")
     expected_consumers = [
@@ -250,27 +261,10 @@ def validate_environment_template(environment: str, config: dict[str, object]) -
             "queue": f"${{{prefix}_INTEGRATION_EVENTS_QUEUE}}",
             "max_batch_size": 10,
             "max_batch_timeout": 5,
-        },
-        {
-            "queue": f"${{{prefix}_MAILBOX_JOBS_QUEUE}}",
-            "max_batch_size": 10,
-            "max_batch_timeout": 5,
-            "max_retries": 6,
-            "dead_letter_queue": f"${{{prefix}_MAILBOX_JOBS_DLQ}}",
-        },
+        }
     ]
     if consumers != expected_consumers:
-        raise ConfigError(f"{environment} queue consumer policy drifted")
-
-    services = require_array(config.get("services"), f"env.{environment}.services")
-    service_bindings = {require_object(item, "service binding").get("binding") for item in services}
-    if service_bindings != EXPECTED_SERVICE_BINDINGS or services != [
-        {
-            "binding": "MAILBOX_SECRET_RESOLVER",
-            "service": f"${{{prefix}_MAILBOX_SECRET_RESOLVER_SERVICE}}",
-        }
-    ]:
-        raise ConfigError(f"{environment} service binding inventory drifted")
+        raise ConfigError(f"{environment} Core queue consumer policy drifted")
 
     durable = require_object(config.get("durable_objects"), f"env.{environment}.durable_objects")
     bindings = require_array(durable.get("bindings"), f"env.{environment}.durable_objects.bindings")
@@ -429,6 +423,12 @@ def self_test() -> None:
         raise ConfigError("staging R2 account identity diverged from deploy account")
     if production_vars["R2_GENERATION_ACCOUNT_ID"] != production["account_id"]:
         raise ConfigError("production R2 account identity diverged from deploy account")
+    if staging_vars["CAPABILITY_PROFILE_ID"] != "rehearsal-core-v1":
+        raise ConfigError("staging Core profile projection drifted")
+    if production_vars["CAPABILITY_PROFILE_ID"] != "production-core-v1":
+        raise ConfigError("production Core profile projection drifted")
+    if "services" in staging_env or "services" in production_env:
+        raise ConfigError("Core render unexpectedly includes mailbox-secret-resolver service binding")
     if "${" in json.dumps(rendered):
         raise ConfigError("positive render fixture retained a placeholder")
 
@@ -455,7 +455,7 @@ def self_test() -> None:
         except ConfigError:
             continue
         raise ConfigError(f"negative fixture unexpectedly passed: {label}")
-    print("Cloudflare deploy configuration positive and negative fixtures passed.")
+    print("Cloudflare profile-aware Core deploy configuration positive and negative fixtures passed.")
 
 
 def main() -> int:
@@ -471,7 +471,7 @@ def main() -> int:
 
     if args.check:
         validate_template()
-        print("Canonical Cloudflare Wrangler template is valid and complete.")
+        print("Canonical profile-aware Core Cloudflare Wrangler template is valid and complete.")
         return 0
     if args.self_test:
         self_test()

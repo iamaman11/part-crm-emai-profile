@@ -1,0 +1,335 @@
+name: Release Set Promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_set_id:
+        description: Immutable GitHub Release tag `release-set-v1-sha256-...`
+        required: true
+        type: string
+      expected_current_release_set_id:
+        description: Current provider Release Set ID or NONE for a fresh staging Worker
+        required: true
+        default: NONE
+        type: string
+      confirmation:
+        description: Must equal `<release_set_id>:<expected_current_release_set_id>`
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-set-promotion-staging
+  cancel-in-progress: false
+
+jobs:
+  promote-staging-core:
+    name: Promote immutable Release Set to staging Core
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      deployments: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SET_ID: ${{ inputs.release_set_id }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current_release_set_id }}
+      TARGET_PROFILE: rehearsal-core-v1
+      TARGET_ENVIRONMENT: staging
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
+      CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
+      CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+    steps:
+      - name: Validate immutable operator intent before credentials are used
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SET_ID" =~ ^release-set-v1-sha256-[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_CURRENT" == "NONE" || "$EXPECTED_CURRENT" =~ ^release-set-v1-sha256-[0-9a-f]{64}$ ]]
+          test "${{ inputs.confirmation }}" = "$RELEASE_SET_ID:$EXPECTED_CURRENT"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+
+      - name: Resolve durable Release Set identity and exact accepted-main source
+        id: target
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_SET_ID" > "$RUNNER_TEMP/target-release.json"
+          source_sha="$(jq -r '.target_commitish' "$RUNNER_TEMP/target-release.json")"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          test "$source_sha" = "$main_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact source bound by durable Release Set
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ steps.target.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Node runtime for provider executor only
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Download exact durable Release Set assets and verify bytes in Rust
+        run: |
+          set -euo pipefail
+          asset_root="$RUNNER_TEMP/target-assets"
+          release_root="$RUNNER_TEMP/target-release-set"
+          mkdir -p "$asset_root" "$release_root/components"
+          gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
+          for name in release-set.json control-plane.tar secret-resolver.tar runtime-bundle.tar profile-bridge.zip; do
+            test -f "$asset_root/$name"
+          done
+          cp "$asset_root/release-set.json" "$release_root/release-set.json"
+          cp "$asset_root/control-plane.tar" "$release_root/components/control-plane.tar"
+          cp "$asset_root/secret-resolver.tar" "$release_root/components/secret-resolver.tar"
+          cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
+          cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
+          test "$(jq -r '.release_set_id' "$release_root/release-set.json")" = "$RELEASE_SET_ID"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . release verify --release-set "$release_root/release-set.json" --artifact-root "$release_root" \
+            | tee "$RUNNER_TEMP/release-verify.json" | jq -e '.decision == "VALID" and .mutation_executed == false' >/dev/null
+          echo "TARGET_RELEASE_ROOT=$release_root" >> "$GITHUB_ENV"
+
+      - name: Extract only immutable control-plane component and render no-rebuild Core overlay
+        run: |
+          set -euo pipefail
+          control_extract="$RUNNER_TEMP/control-release"
+          mkdir -p "$control_extract"
+          tar -xf "$TARGET_RELEASE_ROOT/components/control-plane.tar" -C "$control_extract"
+          manifest="$(find "$control_extract" -type f -name release-manifest.json -print -quit)"
+          test -n "$manifest"
+          control_root="$(dirname "$manifest")"
+          config="$control_root/deploy/cloudflare/wrangler.jsonc"
+          test -f "$config"
+          deploy_manifest="$RUNNER_TEMP/deploy-manifest.json"
+          umask 077
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$deploy_manifest"
+          chmod 0600 "$deploy_manifest"
+          python scripts/release-core-overlay-ar11.py \
+            --source-config "$config" \
+            --release-root "$control_root" \
+            --deploy-manifest "$deploy_manifest" \
+            --environment staging \
+            --output "$RUNNER_TEMP/wrangler.staging.json"
+          test -z "$(grep -n 'worker-build\|npm run build\|MAILBOX_JOBS\|MAILBOX_SECRET_RESOLVER' "$RUNNER_TEMP/wrangler.staging.json" || true)"
+          echo "CONTROL_RELEASE_ROOT=$control_root" >> "$GITHUB_ENV"
+          echo "CONTROL_RELEASE_MANIFEST=$manifest" >> "$GITHUB_ENV"
+          echo "DEPLOY_MANIFEST=$deploy_manifest" >> "$GITHUB_ENV"
+          echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
+
+      - name: Observe current provider state without mutation
+        id: observe
+        run: |
+          set -euo pipefail
+          account_id="$(jq -r '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
+          worker_name="$(jq -r '.control_plane.worker_name // .worker_name' "$DEPLOY_MANIFEST")"
+          r2_bucket="$(jq -r '.control_plane.r2_bucket_name // .r2_bucket_name' "$DEPLOY_MANIFEST")"
+          queue_name="$(jq -r '.control_plane.integration_events_queue // .integration_events_queue' "$DEPLOY_MANIFEST")"
+          custom_domain="$(jq -r '.control_plane.custom_domain // .custom_domain' "$DEPLOY_MANIFEST")"
+          test -n "$account_id"; test -n "$worker_name"; test -n "$r2_bucket"; test -n "$queue_name"; test -n "$custom_domain"
+
+          http_code="$(curl --silent --show-error --output "$RUNNER_TEMP/deployments-api.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
+          if [ "$http_code" = 200 ]; then
+            jq '.result.deployments[0] // {}' "$RUNNER_TEMP/deployments-api.json" > "$RUNNER_TEMP/current-deployment.json"
+          elif [ "$http_code" = 404 ]; then
+            printf '{}\n' > "$RUNNER_TEMP/current-deployment.json"
+          else
+            cat "$RUNNER_TEMP/deployments-api.json" >&2
+            echo "unexpected Cloudflare deployment observation HTTP $http_code" >&2
+            exit 1
+          fi
+          python scripts/deployment-identity-ar11.py \
+            --status "$RUNNER_TEMP/current-deployment.json" \
+            --output "$RUNNER_TEMP/current-identity.json"
+          current_id="$(jq -r '.release_set_id // "NONE"' "$RUNNER_TEMP/current-identity.json")"
+          test "$current_id" = "$EXPECTED_CURRENT"
+          if [ "$current_id" != NONE ]; then
+            mkdir -p "$RUNNER_TEMP/current-release"
+            gh release download "$current_id" --repo "$GITHUB_REPOSITORY" --pattern release-set.json --dir "$RUNNER_TEMP/current-release"
+            test "$(jq -r '.release_set_id' "$RUNNER_TEMP/current-release/release-set.json")" = "$current_id"
+            echo "current_release=$RUNNER_TEMP/current-release/release-set.json" >> "$GITHUB_OUTPUT"
+          fi
+
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote \
+            --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
+            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/catalog-ledger.json"
+          npx --yes wrangler@4.94.0 r2 bucket info "$r2_bucket" --json \
+            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/r2-info.json"
+          npx --yes wrangler@4.94.0 queues info "$queue_name" \
+            --config "$WRANGLER_CONFIG" --env staging >/dev/null
+          jq -n --arg name "$queue_name" '{name:$name}' > "$RUNNER_TEMP/queue-info.json"
+          npx --yes wrangler@4.94.0 secret list --name "$worker_name" --json \
+            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/secret-list.json"
+          collected_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          snapshot_args=(
+            --environment staging
+            --collected-at "$collected_at"
+            --deployment-status "$RUNNER_TEMP/current-deployment.json"
+            --catalog-ledger "$RUNNER_TEMP/catalog-ledger.json"
+            --r2-list "$RUNNER_TEMP/r2-info.json"
+            --queue-list "$RUNNER_TEMP/queue-info.json"
+            --secret-list "$RUNNER_TEMP/secret-list.json"
+            --rendered-config "$WRANGLER_CONFIG"
+            --deploy-manifest "$DEPLOY_MANIFEST"
+            --output "$RUNNER_TEMP/pre-snapshot.json"
+          )
+          if [ "$current_id" != NONE ]; then
+            snapshot_args+=(--current-release-set "$RUNNER_TEMP/current-release/release-set.json")
+          fi
+          python scripts/deployment-snapshot-ar11.py "${snapshot_args[@]}"
+          echo "custom_domain=$custom_domain" >> "$GITHUB_OUTPUT"
+
+      - name: Produce native D1 and release compatibility evidence
+        run: |
+          set -euo pipefail
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . d1 compatibility --component catalog \
+            --ledger-json "$RUNNER_TEMP/catalog-ledger.json" \
+            --release-manifest "$CONTROL_RELEASE_MANIFEST" \
+            > "$RUNNER_TEMP/catalog-d1-compatibility.json"
+          python scripts/release-compat-evidence-ar11.py \
+            --release-set-id "$RELEASE_SET_ID" \
+            --catalog-d1 "$RUNNER_TEMP/catalog-d1-compatibility.json" \
+            --output "$RUNNER_TEMP/compatibility-evidence.json"
+          current_args=()
+          if [ -n "${{ steps.observe.outputs.current_release }}" ]; then
+            current_args=(--current-release-set "${{ steps.observe.outputs.current_release }}")
+          fi
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . release compatibility \
+            --release-set "$TARGET_RELEASE_ROOT/release-set.json" \
+            --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
+            --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
+            "${current_args[@]}" \
+            | tee "$RUNNER_TEMP/release-compatibility.json" \
+            | jq -e '.compatible == true and .mutation_executed == false' >/dev/null
+
+      - name: Native promotion plan and preflight are sole policy authority
+        id: policy
+        run: |
+          set -euo pipefail
+          current_args=()
+          known_good_args=()
+          if [ -n "${{ steps.observe.outputs.current_release }}" ]; then
+            current_args=(--current-release-set "${{ steps.observe.outputs.current_release }}")
+            known_good_args=(--known-good-release-set "${{ steps.observe.outputs.current_release }}")
+          fi
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . promotion plan \
+            --release-set "$TARGET_RELEASE_ROOT/release-set.json" \
+            --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
+            --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
+            --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
+            --expected-current "$EXPECTED_CURRENT" \
+            "${current_args[@]}" > "$RUNNER_TEMP/promotion-plan.json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . promotion preflight \
+            --release-set "$TARGET_RELEASE_ROOT/release-set.json" \
+            --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
+            --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
+            --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
+            --expected-current "$EXPECTED_CURRENT" \
+            "${current_args[@]}" "${known_good_args[@]}" > "$RUNNER_TEMP/promotion-preflight.json"
+          jq -e '.ready == true and .decision == "READY" and .mutation_executed == false' "$RUNNER_TEMP/promotion-preflight.json" >/dev/null
+          decision="$(jq -r '.decision' "$RUNNER_TEMP/promotion-plan.json")"
+          test "$decision" = PLAN -o "$decision" = NO_CHANGE
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+
+      - name: Prove exact extracted bits can deploy without rebuilding
+        if: steps.policy.outputs.decision == 'PLAN'
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4.94.0 deploy \
+            --dry-run \
+            --config "$WRANGLER_CONFIG" \
+            --env staging \
+            --experimental-autoconfig=false
+
+      - name: Deploy exact Release Set bits only after READY preflight
+        if: steps.policy.outputs.decision == 'PLAN'
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4.94.0 deploy \
+            --config "$WRANGLER_CONFIG" \
+            --env staging \
+            --experimental-autoconfig=false \
+            --message "release_set=$RELEASE_SET_ID profile=$TARGET_PROFILE"
+
+      - name: Re-observe provider state and verify convergence in Rust
+        run: |
+          set -euo pipefail
+          account_id="$(jq -r '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
+          worker_name="$(jq -r '.control_plane.worker_name // .worker_name' "$DEPLOY_MANIFEST")"
+          r2_bucket="$(jq -r '.control_plane.r2_bucket_name // .r2_bucket_name' "$DEPLOY_MANIFEST")"
+          queue_name="$(jq -r '.control_plane.integration_events_queue // .integration_events_queue' "$DEPLOY_MANIFEST")"
+          curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments" \
+            | jq '.result.deployments[0]' > "$RUNNER_TEMP/post-deployment.json"
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote \
+            --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
+            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-catalog-ledger.json"
+          npx --yes wrangler@4.94.0 r2 bucket info "$r2_bucket" --json \
+            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-r2-info.json"
+          npx --yes wrangler@4.94.0 queues info "$queue_name" \
+            --config "$WRANGLER_CONFIG" --env staging >/dev/null
+          jq -n --arg name "$queue_name" '{name:$name}' > "$RUNNER_TEMP/post-queue-info.json"
+          npx --yes wrangler@4.94.0 secret list --name "$worker_name" --json \
+            --config "$WRANGLER_CONFIG" --env staging > "$RUNNER_TEMP/post-secret-list.json"
+          python scripts/deployment-snapshot-ar11.py \
+            --environment staging \
+            --collected-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --deployment-status "$RUNNER_TEMP/post-deployment.json" \
+            --catalog-ledger "$RUNNER_TEMP/post-catalog-ledger.json" \
+            --r2-list "$RUNNER_TEMP/post-r2-info.json" \
+            --queue-list "$RUNNER_TEMP/post-queue-info.json" \
+            --secret-list "$RUNNER_TEMP/post-secret-list.json" \
+            --rendered-config "$WRANGLER_CONFIG" \
+            --deploy-manifest "$DEPLOY_MANIFEST" \
+            --current-release-set "$TARGET_RELEASE_ROOT/release-set.json" \
+            --output "$RUNNER_TEMP/post-snapshot.json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . promotion verify \
+            --release-set "$TARGET_RELEASE_ROOT/release-set.json" \
+            --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
+            --snapshot "$RUNNER_TEMP/post-snapshot.json" \
+            --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
+            | tee "$RUNNER_TEMP/promotion-verify.json" \
+            | jq -e '.verified == true and .decision == "VERIFIED" and .mutation_executed == false' >/dev/null
+
+      - name: Smoke exact staging origin
+        env:
+          CUSTOM_DOMAIN: ${{ steps.observe.outputs.custom_domain }}
+        run: |
+          set -euo pipefail
+          response="$RUNNER_TEMP/health-response"
+          curl --silent --show-error --fail \
+            --connect-timeout 10 --max-time 30 \
+            -H "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" \
+            -o "$response" "https://$CUSTOM_DOMAIN/health"
+          test "$(cat "$response")" = ok
+
+      - name: Upload metadata-only promotion evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-set-promotion-staging-${{ inputs.release_set_id }}
+          path: |
+            ${{ runner.temp }}/release-verify.json
+            ${{ runner.temp }}/release-compatibility.json
+            ${{ runner.temp }}/promotion-plan.json
+            ${{ runner.temp }}/promotion-preflight.json
+            ${{ runner.temp }}/pre-snapshot.json
+            ${{ runner.temp }}/post-snapshot.json
+            ${{ runner.temp }}/promotion-verify.json
+          if-no-files-found: error
+          retention-days: 30

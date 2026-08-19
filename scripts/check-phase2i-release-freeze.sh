@@ -44,36 +44,15 @@ if [[ -f architecture/pre2j-d3-resolver-bootstrap-implementation.json ]]; then
     node .github/scripts/ar8-d-secret-transport-successor.mjs \
       --base-ref "origin/${base_ref}"
     node .github/scripts/ar8-d-secret-transport-successor.mjs --self-test
-
-    predecessor_ref="$(python - <<'PY'
-import json
-from pathlib import Path
-
-authority = json.loads(
-    Path("architecture/ar8-d-secret-transport-successor.json").read_text(encoding="utf-8")
-)
-print(authority["predecessor"]["transition_base_main"])
-PY
-)"
-    (
-      promotion_workflow=".github/workflows/mailbox-secret-resolver-promotion.yml"
-      current_promotion="$(mktemp)"
-      cp "$promotion_workflow" "$current_promotion"
-      restore_current_promotion() {
-        cp "$current_promotion" "$promotion_workflow"
-        rm -f "$current_promotion"
-      }
-      trap restore_current_promotion EXIT
-      git show "${predecessor_ref}:${promotion_workflow}" > "$promotion_workflow"
-      python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py \
-        --base-ref "origin/${base_ref}"
-      python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
-    )
-  else
-    python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py \
-      --base-ref "origin/${base_ref}"
-    python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
   fi
+
+  # The governed D3 dispatcher owns historical materialization. In AR-11 the
+  # legacy promotion workflow may be intentionally absent from the current tree;
+  # replay must come from the predecessor Git object instead of restoring a
+  # retired executable authority into current source.
+  python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py \
+    --base-ref "origin/${base_ref}"
+  python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
 fi
 
 if git diff --quiet "origin/${base_ref}" -- migrations/d1; then
@@ -166,8 +145,38 @@ print(
 PY
 fi
 
-node .github/scripts/ar8-completion-lifecycle.mjs
-node .github/scripts/ar8-completion-lifecycle.mjs --self-test
+# AR-8 completion lifecycle is accepted history and still checks the exact D3-era
+# routine-promotion surface. AR-11 deliberately retires that executable from the
+# current tree, so materialize the predecessor bytes only inside this bounded
+# historical replay and remove them again before returning to current-source checks.
+(
+  routine_promotion=".github/workflows/mailbox-secret-resolver-promotion.yml"
+  if [[ ! -f "$routine_promotion" ]]; then
+    readarray -t predecessor < <(python - <<'PY'
+import json
+from pathlib import Path
+
+authority = json.loads(
+    Path("architecture/ar8-d-secret-transport-successor.json").read_text(encoding="utf-8")
+)
+predecessor = authority["predecessor"]
+print(predecessor["transition_base_main"])
+print(predecessor["promotion_workflow"])
+PY
+)
+    predecessor_ref="${predecessor[0]}"
+    predecessor_workflow="${predecessor[1]}"
+    cleanup_historical_promotion() {
+      rm -f "$routine_promotion"
+    }
+    trap cleanup_historical_promotion EXIT
+    git show "${predecessor_ref}:${predecessor_workflow}" > "$routine_promotion"
+  fi
+  node .github/scripts/ar8-completion-lifecycle.mjs
+  node .github/scripts/ar8-completion-lifecycle.mjs --self-test
+)
+
+test ! -e .github/workflows/mailbox-secret-resolver-promotion.yml
 python scripts/check-contract-compatibility.py
 python scripts/test-d1-schema.py
 

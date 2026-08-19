@@ -6,8 +6,8 @@
 **Subordinate pre-production/tooling issue:** #268  
 **Accepted activation prerequisite:** AR-0 / PR #267  
 **Accepted AR-0 main:** `e00420704950af5ca9352d2f0f02d3a9c9688527`  
-**Current accepted architecture checkpoint:** AR-10 — D1 Evolution / Schema Compatibility
-**Current implementation:** AR-11 — Runtime and Historical Executable Simplification
+**Current accepted architecture checkpoint:** AR-10 — Runtime and Historical Executable Simplification
+**Current implementation:** AR-11 — Release-set / Promotion Architecture
 **Accepted product phase:** Phase 2I  
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
@@ -15,7 +15,7 @@
 
 ## 1. Authority
 
-This file is the single current architecture/program execution authority after the AR-1 authority cutover. AR-10 is the latest accepted checkpoint, accepted through PR #371 / accepted main `7ab5edf583f541d08ff732624af25881d430d427` with repository evidence in `docs/evidence/2026-08-19-ar10-final-acceptance.json`; AR-11 is current under issue #372. AR-8A…AR-8F and final closeout are accepted through PR #362 / accepted main `874666f6ef6eb003425c9677d558378d6dc0daaf`; issue #352 remains accepted history; AR-10 is the current implementation slice. AR-7 remains the accepted GitHub governance/Environment checkpoint and authority for that concern. Its accepted GitHub governance authority is `architecture/github-governance-ar7.json`, with acceptance evidence in `docs/ARCHITECTURE_REBASELINE_V3_AR7.md`; AR-6 remains the accepted full Python estate/read-only Rust `opsctl` checkpoint. AR-5 remains the accepted Wrangler/runtime-authority cleanup. The latest application-architecture remediation remains AR-4C in `architecture/inventory.json`, with AR-4C/AR-4B/AR-4A evidence preserved and the AR-3 base contract unchanged; the accepted AR-2 runtime-topology decision remains `architecture/runtime-topology-ar2.json`. AR-4D remains `NOT_REQUIRED` unless later accepted evidence reopens it.
+This file is the single current architecture/program execution authority after the AR-1 authority cutover. AR-10 is the latest accepted checkpoint, accepted through PR #371 / accepted main `7ab5edf583f541d08ff732624af25881d430d427` with repository evidence in `docs/evidence/2026-08-19-ar10-final-acceptance.json`; AR-11 is current under issue #372. AR-8A…AR-8F and final closeout are accepted through PR #362 / accepted main `874666f6ef6eb003425c9677d558378d6dc0daaf`; issue #352 remains accepted history; AR-11 is the current implementation slice. AR-7 remains the accepted GitHub governance/Environment checkpoint and authority for that concern. Its accepted GitHub governance authority is `architecture/github-governance-ar7.json`, with acceptance evidence in `docs/ARCHITECTURE_REBASELINE_V3_AR7.md`; AR-6 remains the accepted full Python estate/read-only Rust `opsctl` checkpoint. AR-5 remains the accepted Wrangler/runtime-authority cleanup. The latest application-architecture remediation remains AR-4C in `architecture/inventory.json`, with AR-4C/AR-4B/AR-4A evidence preserved and the AR-3 base contract unchanged; the accepted AR-2 runtime-topology decision remains `architecture/runtime-topology-ar2.json`. AR-4D remains `NOT_REQUIRED` unless later accepted evidence reopens it.
 
 The accepted AR-0 research package is preserved without rewriting:
 
@@ -75,9 +75,9 @@ AR-5   Wrangler / Runtime Authority Cleanup                      DONE / ACCEPTED
 AR-6   Full Python Estate + read-only Rust opsctl                DONE / ACCEPTED
 AR-7   Environments + GitHub Governance + Operational Boundaries DONE / ACCEPTED
 AR-8   Secrets / Keys / OAuth Refresh Concurrency                 DONE / ACCEPTED
-AR-9   D1 Evolution / Schema Compatibility                         DONE / ACCEPTED
-AR-10  Runtime and Historical Executable Simplification              DONE / ACCEPTED
-AR-11  Release-set / Promotion Architecture                           CURRENT                           CURRENT
+AR-9   D1 Evolution / Schema Compatibility                       DONE / ACCEPTED
+AR-10  Runtime and Historical Executable Simplification          DONE / ACCEPTED
+AR-11  Release-set / Promotion Architecture                      CURRENT
 AR-12  Fresh Rehearsal Environment
 AR-13  Rotation Rehearsal
 AR-14  Remote Recovery Rehearsal
@@ -104,12 +104,12 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
 | Source implemented | **ACCEPTED** | AR-10 source is accepted on `main`; AR-11 is the current architecture slice. |
-| Accepted on main | **COMPLETE THROUGH AR-10** | AR-8 and AR-9 are accepted; AR-9 evidence is `docs/evidence/2026-08-19-ar9-final-acceptance.json`. |
+| Accepted on main | **COMPLETE THROUGH AR-10** | AR-8, AR-9 and AR-10 are accepted; latest evidence is `docs/evidence/2026-08-19-ar10-final-acceptance.json`. |
 | Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; later AR-8 acceptance does not imply a broader staging or production deployment. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
-| Current blocker | **NONE** | AR-9 is accepted; no predecessor blocker remains. |
-| Next gate | **AR-11 acceptance** | AR-10 — Runtime and Historical Executable Simplification is the current slice. |
+| Current blocker | **NONE** | AR-10 is accepted; no predecessor blocker remains. |
+| Next gate | **AR-11 acceptance** | AR-11 — Release-set / Promotion Architecture is the current slice under issue #372. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 

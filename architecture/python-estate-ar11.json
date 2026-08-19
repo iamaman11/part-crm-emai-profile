@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "status": "AR11_CURRENT_PYTHON_ESTATE_OVERLAY",
+  "owning_slice": "AR-11",
+  "parent_overlay": "architecture/python-estate-ar10.json",
+  "policy": {
+    "global_python_to_rust_rewrite": false,
+    "baseline_rewrite_allowed": false,
+    "unknown_delta_policy": "FAIL_CLOSED",
+    "production_mutation": false,
+    "operational_provider_mutator_must_be_rust": true
+  },
+  "additions": [
+    {
+      "path": "scripts/release-set-ar11.py",
+      "classification": "KEEP_PYTHON",
+      "role": "deterministic_release_generator",
+      "side_effect_class": "local_artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_AR11",
+      "rationale": "deterministic Release Set packaging adapter; no provider network, credentials, promotion decision or provider mutation"
+    },
+    {
+      "path": "scripts/release-compat-evidence-ar11.py",
+      "classification": "KEEP_PYTHON",
+      "role": "compatibility_evidence_adapter",
+      "side_effect_class": "local_metadata_projection_only",
+      "authority": "PYTHON_ALLOWED_BY_AR11",
+      "rationale": "projects native opsctl D1 results and external Windows facts without deciding compatibility"
+    },
+    {
+      "path": "scripts/release-core-overlay-ar11.py",
+      "classification": "KEEP_PYTHON",
+      "role": "deployment_config_renderer",
+      "side_effect_class": "local_config_render_only",
+      "authority": "PYTHON_ALLOWED_BY_AR11",
+      "rationale": "staging-only no-rebuild path/resource substitution; native opsctl owns release/promotion policy"
+    },
+    {
+      "path": "scripts/deployment-snapshot-ar11.py",
+      "classification": "KEEP_PYTHON",
+      "role": "provider_observation_adapter",
+      "side_effect_class": "saved_provider_output_projection_only",
+      "authority": "PYTHON_ALLOWED_BY_AR11",
+      "rationale": "projects already-saved Cloudflare observations into DeploymentSnapshot; no provider calls or mutation"
+    },
+    {
+      "path": "scripts/deployment-identity-ar11.py",
+      "classification": "KEEP_PYTHON",
+      "role": "provider_observation_adapter",
+      "side_effect_class": "saved_provider_output_projection_only",
+      "authority": "PYTHON_ALLOWED_BY_AR11",
+      "rationale": "extracts Release Set/profile annotation from saved deployment metadata without hidden state"
+    },
+    {
+      "path": "scripts/check-release-input-generated-drift-ar11.py",
+      "classification": "KEEP_PYTHON",
+      "role": "release_input_negative_validator",
+      "side_effect_class": "ephemeral_local_fixture_only",
+      "authority": "PYTHON_ALLOWED_BY_AR11",
+      "rationale": "fail-fast negative proof that stale or missing deterministic generated release-input projections are rejected; no provider network, credentials, release decision or mutation"
+    }
+  ],
+  "retirements": [
+    "scripts/mailbox-secret-resolver-promotion.py",
+    "scripts/_mailbox_secret_resolver_promotion_core.py"
+  ],
+  "retirement_contract": {
+    "required_previous_classification": "MIGRATE_TO_RUST",
+    "required_cutover_slice": "AR-11",
+    "rust_target": "tools/opsctl release/promotion command family",
+    "historical_evidence": "static exact Git commit/blob provenance through the AR-8D transition checker; historical executable replay is forbidden",
+    "current_callable_python_mutator": false
+  },
+  "current_summary": {
+    "tracked_python_files": 121,
+    "DELETE_AFTER_SEQUENCE": 0,
+    "KEEP_PYTHON": 121,
+    "MIGRATE_TO_RUST": 0,
+    "WRAP_WITH_RUST": 0
+  }
+}

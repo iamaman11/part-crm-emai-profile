@@ -40,12 +40,14 @@
         "ACCESS_ISSUER": "${STAGING_ACCESS_ISSUER}",
         "ACCESS_AUDIENCE": "${STAGING_ACCESS_AUDIENCE}",
         "R2_GENERATION_ACCOUNT_ID": "${STAGING_ACCOUNT_ID}",
-        "R2_GENERATION_BUCKET_NAME": "${STAGING_R2_BUCKET_NAME}"
+        "R2_GENERATION_BUCKET_NAME": "${STAGING_R2_BUCKET_NAME}",
+        "CANONICAL_ENVIRONMENT": "staging",
+        "CAPABILITY_PROFILE_ID": "rehearsal-core-v1",
+        "CAPABILITY_PROFILE_DIGEST": "40ebe3bc1d890757f00433d0ff814720be1ffcd691fff35aea5244a05fc1f45a"
       },
       "secrets": {
         "required": [
           "CLIENT_CONTACT_PROTECTION_KEYRING",
-          "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
           "R2_GENERATION_ACCESS_KEY_ID",
           "R2_GENERATION_SECRET_ACCESS_KEY"
         ]
@@ -68,10 +70,6 @@
           {
             "binding": "INTEGRATION_EVENTS",
             "queue": "${STAGING_INTEGRATION_EVENTS_QUEUE}"
-          },
-          {
-            "binding": "MAILBOX_JOBS",
-            "queue": "${STAGING_MAILBOX_JOBS_QUEUE}"
           }
         ],
         "consumers": [
@@ -79,22 +77,9 @@
             "queue": "${STAGING_INTEGRATION_EVENTS_QUEUE}",
             "max_batch_size": 10,
             "max_batch_timeout": 5
-          },
-          {
-            "queue": "${STAGING_MAILBOX_JOBS_QUEUE}",
-            "max_batch_size": 10,
-            "max_batch_timeout": 5,
-            "max_retries": 6,
-            "dead_letter_queue": "${STAGING_MAILBOX_JOBS_DLQ}"
           }
         ]
       },
-      "services": [
-        {
-          "binding": "MAILBOX_SECRET_RESOLVER",
-          "service": "${STAGING_MAILBOX_SECRET_RESOLVER_SERVICE}"
-        }
-      ],
       "durable_objects": {
         "bindings": [
           {
@@ -121,12 +106,14 @@
         "ACCESS_ISSUER": "${PRODUCTION_ACCESS_ISSUER}",
         "ACCESS_AUDIENCE": "${PRODUCTION_ACCESS_AUDIENCE}",
         "R2_GENERATION_ACCOUNT_ID": "${PRODUCTION_ACCOUNT_ID}",
-        "R2_GENERATION_BUCKET_NAME": "${PRODUCTION_R2_BUCKET_NAME}"
+        "R2_GENERATION_BUCKET_NAME": "${PRODUCTION_R2_BUCKET_NAME}",
+        "CANONICAL_ENVIRONMENT": "production",
+        "CAPABILITY_PROFILE_ID": "production-core-v1",
+        "CAPABILITY_PROFILE_DIGEST": "92ccb88e7b74c89e4f39a5349eb5bf0da6a2d6f9ccc4a89d72ab462cb08e0868"
       },
       "secrets": {
         "required": [
           "CLIENT_CONTACT_PROTECTION_KEYRING",
-          "MAILBOX_RESOLVER_CALLER_AUTH_KEY",
           "R2_GENERATION_ACCESS_KEY_ID",
           "R2_GENERATION_SECRET_ACCESS_KEY"
         ]
@@ -149,10 +136,6 @@
           {
             "binding": "INTEGRATION_EVENTS",
             "queue": "${PRODUCTION_INTEGRATION_EVENTS_QUEUE}"
-          },
-          {
-            "binding": "MAILBOX_JOBS",
-            "queue": "${PRODUCTION_MAILBOX_JOBS_QUEUE}"
           }
         ],
         "consumers": [
@@ -160,22 +143,9 @@
             "queue": "${PRODUCTION_INTEGRATION_EVENTS_QUEUE}",
             "max_batch_size": 10,
             "max_batch_timeout": 5
-          },
-          {
-            "queue": "${PRODUCTION_MAILBOX_JOBS_QUEUE}",
-            "max_batch_size": 10,
-            "max_batch_timeout": 5,
-            "max_retries": 6,
-            "dead_letter_queue": "${PRODUCTION_MAILBOX_JOBS_DLQ}"
           }
         ]
       },
-      "services": [
-        {
-          "binding": "MAILBOX_SECRET_RESOLVER",
-          "service": "${PRODUCTION_MAILBOX_SECRET_RESOLVER_SERVICE}"
-        }
-      ],
       "durable_objects": {
         "bindings": [
           {

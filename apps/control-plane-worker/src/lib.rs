@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod access_session;
+mod capability_gate;
 mod client_mail_query;
 mod client_mail_send;
 mod clients;
@@ -35,6 +36,7 @@ pub use profile_coordinator::ProfileCoordinator;
 pub use realtime_notifications::NotificationHub;
 
 use access_session::session_response;
+use capability_gate::ActivationUnit;
 use cloudflare_adapters::control_plane_queue::ControlPlaneQueueMessage;
 use cloudflare_adapters::d1_catalog::D1CatalogRepository;
 use cloudflare_adapters::d1_idempotency::D1IdempotencyRepository;
@@ -48,14 +50,29 @@ use control_plane_contract::{
 use profile_platform_primitives::{ActorId, ProfileId, TenantId};
 use session_domain::coordinator::coordinator_object_name;
 use worker::{
-    Context, Env, MessageBatch, Method, Request, Response, Result, ScheduleContext, ScheduledEvent,
-    event,
+    Context, Env, MessageBatch, MessageExt, Method, Request, Response, Result, ScheduleContext,
+    ScheduledEvent, event,
 };
 
 #[event(fetch, respond_with_errors)]
 pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<Response> {
     let path = request.path();
     let route = classify_route(request.method().as_ref(), &path);
+
+    if !matches!(
+        route,
+        RouteClass::HealthApi
+            | RouteClass::DynamicRouteNotFound
+            | RouteClass::BridgeDeniedByDefault
+            | RouteClass::StaticAssets
+    ) {
+        match capability_gate::route_enabled(&env, route, &path) {
+            Ok(true) => {}
+            Ok(false) => return Response::error("Not Found", 404),
+            Err(_) => return Response::error("Capability Profile Unavailable", 503),
+        }
+    }
+
     match route {
         RouteClass::HealthApi => Response::ok("control-plane-ready"),
         RouteClass::BindingProbeApi => binding_probe(&env),
@@ -67,7 +84,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
                 .fetch_request(request)
                 .await
         }
-        RouteClass::AuthenticatedSessionApi => session_response(&request, &env).await,
+        RouteClass::AuthenticatedSessionApi => capability_session_response(&request, &env).await,
         RouteClass::ClientCollectionApi
         | RouteClass::ClientResourceApi
         | RouteClass::ClientArchiveApi
@@ -163,10 +180,18 @@ pub async fn control_plane_queue(
     for message in message_batch.messages()? {
         match message.body().clone() {
             ControlPlaneQueueMessage::IntegrationEvent(event) => {
-                integration_events::consume_one(&message, event, &env).await?;
+                if capability_gate::unit_enabled(&env, ActivationUnit::Notifications)? {
+                    integration_events::consume_one(&message, event, &env).await?;
+                } else {
+                    message.retry();
+                }
             }
             ControlPlaneQueueMessage::MailboxJob(job) => {
-                mailbox_scheduling::consume_one(&message, job, &env).await?;
+                if capability_gate::unit_enabled(&env, ActivationUnit::MailboxJobs)? {
+                    mailbox_scheduling::consume_one(&message, job, &env).await?;
+                } else {
+                    message.retry();
+                }
             }
         }
     }
@@ -175,12 +200,43 @@ pub async fn control_plane_queue(
 
 #[event(scheduled)]
 pub async fn control_plane_schedule(_event: ScheduledEvent, env: Env, _context: ScheduleContext) {
-    if integration_events::dispatch_pending(&env).await.is_err() {
-        worker::console_error!("notification scheduled operation failed");
+    match capability_gate::unit_enabled(&env, ActivationUnit::Notifications) {
+        Ok(true) => {
+            if integration_events::dispatch_pending(&env).await.is_err() {
+                worker::console_error!("notification scheduled operation failed");
+            }
+        }
+        Ok(false) => {}
+        Err(_) => worker::console_error!("notification capability profile unavailable"),
     }
-    if mailbox_scheduling::dispatch_pending(&env).await.is_err() {
-        worker::console_error!("mailbox scheduled operation failed");
+    match capability_gate::unit_enabled(&env, ActivationUnit::MailboxJobs) {
+        Ok(true) => {
+            if mailbox_scheduling::dispatch_pending(&env).await.is_err() {
+                worker::console_error!("mailbox scheduled operation failed");
+            }
+        }
+        Ok(false) => {}
+        Err(_) => worker::console_error!("mailbox capability profile unavailable"),
     }
+}
+
+async fn capability_session_response(request: &Request, env: &Env) -> Result<Response> {
+    let mut response = session_response(request, env).await?;
+    if response.status_code() == 200 {
+        let profile = capability_gate::active_profile(env)?;
+        response
+            .headers_mut()
+            .set(capability_gate::RELEASE_PROFILE_HEADER, profile.id)?;
+        response.headers_mut().set(
+            capability_gate::RELEASE_PROFILE_DIGEST_HEADER,
+            profile.digest,
+        )?;
+        response.headers_mut().set(
+            capability_gate::EFFECTIVE_CAPABILITIES_HEADER,
+            &profile.capabilities.enabled_ids(),
+        )?;
+    }
+    Ok(response)
 }
 
 async fn dispatch_profile_coordinator(request: &mut Request, env: &Env) -> Result<Response> {
@@ -211,8 +267,12 @@ fn binding_probe(env: &Env) -> Result<Response> {
     let _generation_upload_signer = composition::generation_upload_capability_signer(env)?;
     let _integration_events_queue =
         env.queue(integration_events::INTEGRATION_EVENTS_QUEUE_BINDING)?;
-    let _mailbox_jobs_queue = env.queue(mailbox_scheduling::MAILBOX_JOBS_QUEUE_BINDING)?;
-    let _mailbox_secret_resolver = env.service("MAILBOX_SECRET_RESOLVER")?;
+    if capability_gate::unit_enabled(env, ActivationUnit::MailboxJobs)? {
+        let _mailbox_jobs_queue = env.queue(mailbox_scheduling::MAILBOX_JOBS_QUEUE_BINDING)?;
+    }
+    if capability_gate::unit_enabled(env, ActivationUnit::MailboxAdmin)? {
+        let _mailbox_secret_resolver = env.service("MAILBOX_SECRET_RESOLVER")?;
+    }
     let coordinator = env.durable_object(PROFILE_COORDINATOR_BINDING)?;
     let coordinator_id = coordinator.id_from_name(&coordinator_object_name(
         &ProfileId::parse("profile_binding_probe")

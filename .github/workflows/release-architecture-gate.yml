@@ -1,0 +1,99 @@
+name: Release Architecture Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-architecture-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Release capability and promotion policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Validate canonical release architecture source
+        run: |
+          node .github/scripts/release-architecture-ar11.mjs
+          node .github/scripts/release-architecture-ar11.mjs --self-test
+          node .github/scripts/frontend-capability-ar11.mjs
+          node .github/scripts/release-operational-ar11.mjs
+          node .github/scripts/release-operational-ar11.mjs --self-test
+          node .github/scripts/ar8-d-secret-transport-successor.mjs
+          python scripts/release-set-ar11.py self-test
+          python scripts/release-compat-evidence-ar11.py --self-test
+          python scripts/release-core-overlay-ar11.py --self-test
+          python scripts/deployment-snapshot-ar11.py --self-test
+          python scripts/check-release-input-generated-drift-ar11.py
+
+      - name: Verify deterministic canonical projection
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          path = Path('architecture/release-architecture-ar11.json')
+          text = path.read_text(encoding='utf-8').replace('\r\n', '\n').replace('\r', '\n')
+          print(f'AR-11 release architecture sha256={hashlib.sha256(text.encode("utf-8")).hexdigest()}')
+          PY
+          python scripts/generate-architecture-inventory.py --check
+
+      - name: Verify native opsctl release policy foundation
+        run: |
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml
+
+      - name: Prove production remains blocked
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          authority = json.loads(Path('architecture/release-architecture-ar11.json').read_text())
+          assert authority['architecture_complete'] is False
+          assert authority['production_core_gate'] == 'BLOCKED'
+          assert authority['production_ready'] is False
+          assert authority['production_mutation'] is False
+          core = next(p for p in authority['release_profiles'] if p['profile_id'] == 'production-core-v1')
+          assert core['current_authorization'] == 'BLOCKED'
+          assert 'AR-15_UNSATISFIED' in core['blockers']
+          assert 'AR-17_NOT_ACCEPTED' in core['blockers']
+          PY
+
+  windows:
+    name: Release policy Windows regression
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Verify opsctl release authority on Windows
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml
