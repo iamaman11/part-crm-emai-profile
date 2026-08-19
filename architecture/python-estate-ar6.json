@@ -24,9 +24,9 @@
     "production_mutation": false
   },
   "summary": {
-    "tracked_python_files": 122,
+    "tracked_python_files": 119,
     "DELETE_AFTER_SEQUENCE": 6,
-    "KEEP_PYTHON": 114,
+    "KEEP_PYTHON": 111,
     "MIGRATE_TO_RUST": 2,
     "WRAP_WITH_RUST": 0
   },
@@ -62,14 +62,6 @@
       "side_effect_class": "synthetic_local_fixture_state_only",
       "authority": "PYTHON_ALLOWED_BY_AR6",
       "rationale": "repository contract evidence fake; not production Camoufox authority"
-    },
-    {
-      "path": "runtime/camouhost/real.py",
-      "classification": "KEEP_PYTHON",
-      "role": "supported_camoufox_outer_adapter",
-      "side_effect_class": "governed_local_profile_runtime_only",
-      "authority": "PYTHON_ALLOWED_BY_AR6",
-      "rationale": "Python-native Camoufox adapter is an implementation detail behind native Profile Bridge preflight/lifecycle authority; it does not own cloud/profile lifecycle or provider mutation"
     },
     {
       "path": "scripts/_ar3_application_architecture.py",
@@ -114,14 +106,6 @@
       "side_effect_class": "repository_read_only",
       "authority": "PYTHON_ALLOWED_BY_AR6",
       "rationale": "accepted provenance validation remains legitimate Python"
-    },
-    {
-      "path": "scripts/check-ar10-runtime-cutover.py",
-      "classification": "KEEP_PYTHON",
-      "role": "validator",
-      "side_effect_class": "repository_validation_only",
-      "authority": "PYTHON_ALLOWED_BY_AR6",
-      "rationale": "validators remain legitimate Python"
     },
     {
       "path": "scripts/check-architecture.py",
@@ -654,14 +638,6 @@
       "side_effect_class": "artifact_generation_only",
       "authority": "PYTHON_ALLOWED_BY_AR6",
       "rationale": "deterministic contract rendering remains legitimate Python"
-    },
-    {
-      "path": "scripts/test-ar10-real-camoufox.py",
-      "classification": "KEEP_PYTHON",
-      "role": "test",
-      "side_effect_class": "test_only",
-      "authority": "PYTHON_ALLOWED_BY_AR6",
-      "rationale": "tests remain legitimate Python"
     },
     {
       "path": "scripts/test-architecture-inventory-negative.py",
