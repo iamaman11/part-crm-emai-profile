@@ -7,7 +7,8 @@ use opsctl::release::digest::{canonical_json, sha256_hex};
 use opsctl::release::model::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 const REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
 const GIT_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -29,6 +30,49 @@ fn accepted_main_evidence() -> Result<String, String> {
     Ok(sha256_hex(canonical_json(&identity)?.as_bytes()))
 }
 
+fn source_file_identity(root: &Path, relative: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    let bytes = fs::read(root.join(relative))?;
+    Ok(json!({
+        "path": relative,
+        "sha256": sha256_hex(&bytes),
+        "size_bytes": bytes.len() as u64,
+    }))
+}
+
+fn static_compatibility_fields() -> Result<(Value, Value, Value), Box<dyn std::error::Error>> {
+    let root = repo_root();
+    let mut contract_files = vec![
+        source_file_identity(&root, "openapi/v1/control-plane.yaml")?,
+        source_file_identity(&root, "contracts/generated/control-plane.openapi.json")?,
+    ];
+    contract_files.sort_by(|left, right| {
+        left["path"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["path"].as_str().unwrap_or_default())
+    });
+    let contracts = json!({
+        "files": contract_files,
+        "sha256": sha256_hex(canonical_json(&contract_files)?.as_bytes()),
+    });
+
+    let control_contract = fs::read(root.join("crates/control-plane-contract/src/lib.rs"))?;
+    let runtime_lock_bytes = fs::read(root.join("runtime/camouhost/runtime-lock.json"))?;
+    let runtime_lock: Value = serde_json::from_slice(&runtime_lock_bytes)?;
+    let protocols = json!({
+        "control_plane_contract_sha256": sha256_hex(&control_contract),
+        "camouhost_ipc_version": runtime_lock["camouhost_ipc_version"],
+        "resolver_protocol": "mailbox-secret-resolver-v1",
+    });
+    let runtime_compatibility = json!({
+        "runtime_lock_sha256": sha256_hex(&runtime_lock_bytes),
+        "runtime_role": runtime_lock["runtime_role"],
+        "profile_format": runtime_lock["fingerprint_config_schema"],
+        "browser_identity_policy": runtime_lock["fingerprint_policy_version"],
+    });
+    Ok((contracts, protocols, runtime_compatibility))
+}
+
 fn component(release_id: &str, path: &str, digest: &str, size: u64) -> Value {
     json!({
         "release_id": release_id,
@@ -42,6 +86,7 @@ fn component(release_id: &str, path: &str, digest: &str, size: u64) -> Value {
 
 fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
     let evidence = accepted_main_evidence()?;
+    let (contracts, protocols, runtime_compatibility) = static_compatibility_fields()?;
     let mut value = json!({
         "schema_version": 1,
         "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{SHA_A}"),
@@ -53,20 +98,19 @@ fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
         },
         "components": {
             "control_plane": component("control-plane-v1", "components/control-plane.tar", SHA_A, 10),
-            "frontend": component("frontend-v1", "components/frontend.tar", SHA_A, 14),
+            "frontend": component("frontend-v1", "components/control-plane.tar", SHA_A, 10),
             "secret_resolver": component("resolver-v1", "components/resolver.tar", SHA_B, 11),
             "runtime_bundle": component("runtime-v1", "components/runtime.tar", SHA_C, 12),
             "profile_bridge": component("bridge-v1", "components/profile-bridge.zip", SHA_D, 13)
         },
-        "contracts": {"openapi_sha256": SHA_A},
-        "protocols": {"bridge":"v1","camouhost_ipc":"v1","resolver":"v1"},
-        "schemas": {"catalog":{"min":1,"max":26,"target":26},"resolver":{"min":1,"max":2,"target":2}},
-        "runtime_compatibility": {"runtime_bundle":"v1","profile_format":"v1","browser_identity_policy":"v1"},
+        "contracts": contracts,
+        "protocols": protocols,
+        "schemas": {"d1_evolution_authority_sha256": SHA_A},
+        "runtime_compatibility": runtime_compatibility,
         "capability_profile_compatibility": ["rehearsal-core-v1", "production-core-v1"],
         "build_provenance": {"toolchain":"rust-1.97.1","lockfile_sha256":SHA_A},
         "artifact_inventory": [
             {"path":"components/control-plane.tar","sha256":SHA_A,"size_bytes":10,"kind":"component"},
-            {"path":"components/frontend.tar","sha256":SHA_A,"size_bytes":14,"kind":"component"},
             {"path":"components/resolver.tar","sha256":SHA_B,"size_bytes":11,"kind":"component"},
             {"path":"components/runtime.tar","sha256":SHA_C,"size_bytes":12,"kind":"component"},
             {"path":"components/profile-bridge.zip","sha256":SHA_D,"size_bytes":13,"kind":"component"}
