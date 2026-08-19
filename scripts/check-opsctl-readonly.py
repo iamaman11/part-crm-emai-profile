@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed if modular Rust opsctl or its AR-9 D1 authority gains unreviewed capability."""
+"""Fail closed if modular Rust opsctl or its frozen AR-9 D1 authority gains unreviewed capability."""
 
 from __future__ import annotations
 
@@ -21,8 +21,10 @@ MAIN = SRC / "main.rs"
 CARGO = Path("tools/opsctl/Cargo.toml")
 LOCK = Path("tools/opsctl/Cargo.lock")
 D1_AUTHORITY = Path("architecture/d1-evolution-ar9.json")
-EXPECTED_COMMANDS = {"Doctor", "Status", "Inventory", "CredentialLifecycle", "RotationPlan"}
-EXPECTED_PARSE_LITERALS = {"doctor", "status", "inventory", "credential-lifecycle", "rotation-plan"}
+EXPECTED_COMMANDS = {"Doctor", "Status", "Inventory"}
+EXPECTED_PARSE_LITERALS = {"doctor", "status", "inventory"}
+EXPECTED_CREDENTIAL_VARIANTS = {"Status", "RotationPlan"}
+EXPECTED_CREDENTIAL_ACTIONS = {"status", "rotation-plan"}
 EXPECTED_D1_ACTIONS = {"status", "plan", "compatibility", "verify"}
 EXPECTED_MIGRATION_CLASSES = {"EXPAND", "BACKFILL", "CONTRACT", "REPAIR"}
 EXPECTED_LEDGER_STATES = {
@@ -191,10 +193,36 @@ def parse_dependency_table(cargo: str) -> dict[str, str]:
     return result
 
 
+def enum_variants(source: str, name: str) -> set[str]:
+    match = re.search(rf"pub enum {re.escape(name)}\s*\{{(?P<body>.*?)\n\}}", source, re.S)
+    if match is None:
+        fail(f"opsctl {name} enum is missing from cli.rs")
+    return {
+        line.strip().rstrip(",")
+        for line in match.group("body").splitlines()
+        if line.strip()
+    }
+
+
+def match_actions(source: str, function_name: str) -> set[str]:
+    function = re.search(
+        rf"fn {re.escape(function_name)}.*?(?=\nfn [a-zA-Z0-9_]+|\n#\[cfg\(test\)\])",
+        source,
+        re.S,
+    )
+    if function is None:
+        fail(f"opsctl {function_name} is missing from cli.rs")
+    action = re.search(r"let action = match action_text \{(?P<body>.*?)\n\s*\};", function.group(0), re.S)
+    if action is None:
+        fail(f"opsctl {function_name} action match is missing")
+    return set(re.findall(r'^\s*"([a-z][a-z0-9_-]*)"\s*=>', action.group("body"), re.M))
+
+
 def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
     lib = sources["lib.rs"]
     cli = sources["cli.rs"]
     main = sources["main.rs"]
+    credentials = sources["credentials/mod.rs"]
     production_by_path = production_sources(sources)
     production_source = "\n".join(production_by_path.values())
     d1_source = "\n".join(
@@ -236,14 +264,17 @@ def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
         if marker not in main:
             fail(f"opsctl main.rs lost thin-entrypoint marker: {marker}")
 
-    enum = re.search(r"pub enum ReadCommand\s*\{(?P<body>.*?)\n\}", cli, re.S)
-    if enum is None:
-        fail("opsctl ReadCommand enum is missing from cli.rs")
-    commands = {line.strip().rstrip(",") for line in enum.group("body").splitlines() if line.strip()}
+    commands = enum_variants(cli, "ReadCommand")
     if commands != EXPECTED_COMMANDS:
         fail(
-            f"opsctl legacy read command surface must be exactly {sorted(EXPECTED_COMMANDS)}; "
+            f"opsctl top-level read command surface must be exactly {sorted(EXPECTED_COMMANDS)}; "
             f"observed={sorted(commands)}"
+        )
+    credential_variants = enum_variants(cli, "CredentialsAction")
+    if credential_variants != EXPECTED_CREDENTIAL_VARIANTS:
+        fail(
+            "opsctl credentials action variants must be exactly "
+            f"{sorted(EXPECTED_CREDENTIAL_VARIANTS)}; observed={sorted(credential_variants)}"
         )
 
     parser = re.search(r"fn parse_command\(.*?\n\}", cli, re.S)
@@ -251,19 +282,40 @@ def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
         fail("opsctl parse_command is missing from cli.rs")
     literals = set(re.findall(r'^\s*"([a-z][a-z0-9_-]*)"\s*=>', parser.group(0), re.M))
     if literals != EXPECTED_PARSE_LITERALS:
-        fail(f"opsctl legacy parser surface drifted: {sorted(literals)}")
+        fail(f"opsctl top-level parser surface drifted: {sorted(literals)}")
+    if 'if command == "credentials" {' not in cli or "parse_credentials_invocation(root, iterator)" not in cli:
+        fail("opsctl modular credentials dispatcher is missing")
+    credential_actions = match_actions(cli, "parse_credentials_invocation")
+    if credential_actions != EXPECTED_CREDENTIAL_ACTIONS:
+        fail(
+            "opsctl credentials action surface must be exactly "
+            f"{sorted(EXPECTED_CREDENTIAL_ACTIONS)}; observed={sorted(credential_actions)}"
+        )
+    if "credential-lifecycle" in literals or "rotation-plan" in literals:
+        fail("legacy flat credential spellings must not remain top-level CLI authorities")
 
-    d1_parser = re.search(r"let action = match action_text \{(?P<body>.*?)\n\s*\};", cli, re.S)
-    if d1_parser is None:
-        fail("opsctl native D1 action parser is missing")
-    d1_actions = set(
-        re.findall(r'^\s*"([a-z][a-z0-9_-]*)"\s*=>', d1_parser.group("body"), re.M)
-    )
+    d1_actions = match_actions(cli, "parse_d1_invocation")
     if d1_actions != EXPECTED_D1_ACTIONS:
         fail(
             f"opsctl D1 action surface must be exactly {sorted(EXPECTED_D1_ACTIONS)}; "
             f"observed={sorted(d1_actions)}"
         )
+
+    for marker in (
+        "pub use cli::{CredentialsAction",
+        "Invocation::Credentials { root, action }",
+        "CredentialsAction::Status => credentials::lifecycle(&repo_root)",
+        "CredentialsAction::RotationPlan => credentials::rotation_plan(&repo_root)",
+    ):
+        if marker not in lib:
+            fail(f"opsctl credentials composition lost marker: {marker}")
+
+    if 'ACTIVE_METADATA_COMMANDS: &[&str] = &["status", "rotation-plan"]' not in credentials:
+        fail("credentials active metadata command set drifted")
+    if 'DEFERRED_OPERATIONAL_COMMANDS: &[&str] = &["readiness"]' not in credentials:
+        fail("credentials deferred operational command set drifted")
+    if 'DEFERRED_OPERATIONAL_OWNER: &str = "AR-13"' not in credentials:
+        fail("credentials deferred operational owner drifted")
 
     for marker in FORBIDDEN_RUNTIME_MARKERS:
         if marker in production_source:
@@ -296,6 +348,8 @@ def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
         '"child_processes\\\":0',
         '"mode\\\":\\\"native-read-only\\\"',
         "read-only and metadata-only",
+        "credentials status",
+        "credentials rotation-plan",
         "d1 status",
         "d1 plan",
         "d1 compatibility",
@@ -334,10 +388,6 @@ def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
             fail(f"future opsctl namespace {relative} lost target commands {sorted(commands)}")
         if "PROVIDER_MUTATION_AUTHORITY: bool = false" not in text:
             fail(f"future opsctl namespace {relative} must remain non-mutating before activation")
-    if 'TARGET_COMMANDS: &[&str] = &["status", "readiness", "rotation-plan"]' not in sources["credentials/mod.rs"]:
-        fail("credentials target namespace drifted")
-    if 'ACTIVATION_OWNER: &str = "AR-10/AR-13"' not in sources["credentials/mod.rs"]:
-        fail("credentials namespace owner drifted")
     if 'TARGET_COMMAND: &str = "readiness"' not in sources["readiness.rs"]:
         fail("aggregate readiness target namespace drifted")
     if 'ACTIVATION_OWNER: &str = "AR-16"' not in sources["readiness.rs"]:
@@ -753,18 +803,34 @@ def self_test() -> None:
     filesystem_sources["d1.rs"] += '\nfn forbidden_write() { let _ = fs::write("state.json", b"mutable"); }\n'
     expect_rejected("filesystem mutation capability", filesystem_sources, cargo, lock)
 
-    expanded_sources = dict(sources)
-    expanded_sources["cli.rs"] = expanded_sources["cli.rs"].replace(
+    expanded_d1 = dict(sources)
+    expanded_d1["cli.rs"] = expanded_d1["cli.rs"].replace(
         '"verify" => d1::D1Action::Verify,',
         '"verify" => d1::D1Action::Verify,\n        "apply" => d1::D1Action::Verify,',
         1,
     )
-    expect_rejected("mutable D1 command-surface", expanded_sources, cargo, lock)
+    expect_rejected("mutable D1 command-surface", expanded_d1, cargo, lock)
+
+    flat_credentials = dict(sources)
+    flat_credentials["cli.rs"] = flat_credentials["cli.rs"].replace(
+        '"inventory" => Ok(ReadCommand::Inventory),',
+        '"inventory" => Ok(ReadCommand::Inventory),\n        "credential-lifecycle" => Ok(ReadCommand::Status),',
+        1,
+    )
+    expect_rejected("legacy flat credentials authority", flat_credentials, cargo, lock)
+
+    expanded_credentials = dict(sources)
+    expanded_credentials["cli.rs"] = expanded_credentials["cli.rs"].replace(
+        '"rotation-plan" => CredentialsAction::RotationPlan,',
+        '"rotation-plan" => CredentialsAction::RotationPlan,\n        "readiness" => CredentialsAction::Status,',
+        1,
+    )
+    expect_rejected("premature AR-13 credentials readiness", expanded_credentials, cargo, lock)
 
     future_activation = dict(sources)
     future_activation["cli.rs"] = future_activation["cli.rs"].replace(
-        '"rotation-plan" => Ok(ReadCommand::RotationPlan),',
-        '"rotation-plan" => Ok(ReadCommand::RotationPlan),\n        "release" => Ok(ReadCommand::Status),',
+        '"inventory" => Ok(ReadCommand::Inventory),',
+        '"inventory" => Ok(ReadCommand::Inventory),\n        "release" => Ok(ReadCommand::Status),',
         1,
     )
     expect_rejected("premature future namespace activation", future_activation, cargo, lock)
@@ -841,7 +907,7 @@ def self_test() -> None:
         fail("contradictory derived rollout negative fixture unexpectedly passed")
 
     print(
-        "opsctl modular layout, zero child-process authority, native D1/future namespace subprocess and mutation, "
+        "opsctl modular credentials, zero child-process authority, native D1/future namespace subprocess and mutation, "
         "append-only history, derived rollout, historical-freeze and dependency negative fixtures rejected."
     )
 
@@ -855,9 +921,9 @@ def main() -> int:
     else:
         validate()
         print(
-            "opsctl modular tree is fail-closed: thin main, zero production child processes, native Rust doctor/D1 semantics, "
-            "source-reserved future families without activation/process/provider authority, frozen+append-only D1 histories "
-            "and reproducible exact serde_json dependency."
+            "opsctl modular tree is fail-closed: thin main, modular credentials metadata reads, zero production child "
+            "processes, native Rust doctor/D1 semantics, source-reserved future families without activation/process/provider "
+            "authority, frozen+append-only D1 histories and reproducible exact serde_json dependency."
         )
     return 0
 
