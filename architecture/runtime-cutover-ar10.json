@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "kind": "RUNTIME_CUTOVER_AUTHORITY",
-  "status": "AR10_IMPLEMENTED_PENDING_ACCEPTANCE",
+  "status": "accepted",
   "owning_slice": "AR-10",
   "owning_issue": 368,
   "completion_pr": 371,
@@ -136,15 +136,15 @@
   },
   "legacy_executables_remaining": 0,
   "repository_acceptance_evidence": {
-    "real_camoufox_cold_launch": "PENDING_FINAL_GREEN_HEAD",
-    "cookie_and_localstorage_persistence": "PENDING_FINAL_GREEN_HEAD",
-    "cross_generation_isolation": "PENDING_FINAL_GREEN_HEAD",
-    "identity_mismatch_fail_closed": "PENDING_FINAL_GREEN_HEAD",
-    "bridge_to_real_camoufox_chain": "PENDING_FINAL_GREEN_HEAD",
-    "windows_profile_bridge_regression": "PENDING_FINAL_GREEN_HEAD",
-    "managed_runtime_failure_matrix": "PENDING_FINAL_GREEN_HEAD",
-    "firefox_writer_lock_failure_matrix": "PENDING_FINAL_GREEN_HEAD",
-    "hosted_camoufox_required_checks": "PENDING_GUARDED_MERGE_CONFIGURATION",
+    "real_camoufox_cold_launch": "ACCEPTED_EXACT_GREEN_HEAD",
+    "cookie_and_localstorage_persistence": "ACCEPTED_EXACT_GREEN_HEAD",
+    "cross_generation_isolation": "ACCEPTED_EXACT_GREEN_HEAD",
+    "identity_mismatch_fail_closed": "ACCEPTED_EXACT_GREEN_HEAD",
+    "bridge_to_real_camoufox_chain": "ACCEPTED_EXACT_GREEN_HEAD",
+    "windows_profile_bridge_regression": "ACCEPTED_EXACT_GREEN_HEAD",
+    "managed_runtime_failure_matrix": "ACCEPTED_EXACT_GREEN_HEAD",
+    "firefox_writer_lock_failure_matrix": "ACCEPTED_EXACT_GREEN_HEAD",
+    "hosted_camoufox_required_checks": "ACCEPTED_MAIN_23_REQUIRED_CONTEXTS",
     "legacy_retirement": "RETIRED_AFTER_SUCCESSOR_PARITY"
   },
   "external_evidence": {
@@ -154,5 +154,18 @@
     "trusted_windows_signing_and_updater": "AR-15",
     "production_rollout": "PC-1_AFTER_AR17"
   },
-  "next_slice_after_acceptance": "AR-11"
+  "next_slice_after_acceptance": "AR-11",
+  "acceptance": {
+    "evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json",
+    "implementation_pr": 371,
+    "exact_green_head": "c7f8ac9704433d3e52d3b79f985c9ac60aa068db",
+    "implementation_merge": "7ab5edf583f541d08ff732624af25881d430d427",
+    "implementation_main_reread": "7ab5edf583f541d08ff732624af25881d430d427",
+    "applicable_permanent_workflows": "16/16",
+    "behind_by": 0,
+    "blocking_reviews": 0,
+    "unresolved_review_threads": 0,
+    "hosted_required_status_contexts": 23,
+    "production_mutation": false
+  }
 }

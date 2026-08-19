@@ -4,8 +4,8 @@
 **Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Tracking:** issue #266  
 **Accepted product phase:** Phase 2I  
-**Current accepted architecture checkpoint:** AR-9 — D1 Evolution / Schema Compatibility
-**Current implementation:** AR-10 — Runtime and Historical Executable Simplification
+**Current accepted architecture checkpoint:** AR-10 — D1 Evolution / Schema Compatibility
+**Current implementation:** AR-11 — Runtime and Historical Executable Simplification
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `production_ready=false`
@@ -63,12 +63,12 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
 | Source implemented | **ACCEPTED** | AR-9 source is accepted on `main`; AR-10 is the current architecture slice. |
-| Accepted on main | **COMPLETE THROUGH AR-9** | AR-8 and AR-9 are accepted; AR-9 evidence is `docs/evidence/2026-08-19-ar9-final-acceptance.json`. |
+| Accepted on main | **COMPLETE THROUGH AR-10** | AR-8 and AR-9 are accepted; AR-9 evidence is `docs/evidence/2026-08-19-ar9-final-acceptance.json`. |
 | Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; later architecture acceptance does not imply a broader staging or production deployment. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
 | Current blocker | **NONE** | AR-9 is accepted; no predecessor blocker remains. |
-| Next gate | **AR-10 acceptance** | AR-10 — Runtime and Historical Executable Simplification is the current slice. |
+| Next gate | **AR-11 acceptance** | AR-10 — Runtime and Historical Executable Simplification is the current slice. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
@@ -108,8 +108,8 @@ AR-6   Full Python Estate + read-only Rust opsctl                DONE / ACCEPTED
 AR-7   Environments + GitHub Governance + Operational Boundaries DONE / ACCEPTED
 AR-8   Secrets / Keys / OAuth Refresh Concurrency                 DONE / ACCEPTED
 AR-9   D1 Evolution / Schema Compatibility                        DONE / ACCEPTED
-AR-10  Runtime and Historical Executable Simplification          CURRENT
-AR-11  Release-set / Promotion Architecture
+AR-10  Runtime and Historical Executable Simplification              DONE / ACCEPTED
+AR-11  Release-set / Promotion Architecture                           CURRENT                           CURRENT
 AR-12  Fresh Rehearsal Environment
 AR-13  Rotation Rehearsal
 AR-14  Remote Recovery Rehearsal

@@ -1,6 +1,6 @@
 {
   "schema_version": 13,
-  "status": "ACTIVE_AFTER_AR9_ACCEPTANCE",
+  "status": "ACTIVE_AFTER_AR10_ACCEPTANCE",
   "program": "Architecture Re-baseline v3",
   "tracking_issue": 266,
   "subordinate_preproduction_issue": 268,
@@ -18,10 +18,11 @@
     "AR-6",
     "AR-7",
     "AR-8",
-    "AR-9"
+    "AR-9",
+    "AR-10"
   ],
-  "current_slice": "AR-10",
-  "next_slice_after_acceptance": "AR-11",
+  "current_slice": "AR-11",
+  "next_slice_after_acceptance": "AR-12",
   "ar8_progress": {
     "umbrella_issue": 308,
     "accepted_subslices": [
@@ -200,7 +201,8 @@
     "ar9_d1_evolution_source": "architecture/d1-evolution-ar9.json",
     "ar9_acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
     "ar10_runtime_cutover_projection": "architecture/inventory.json::runtime_cutover",
-    "ar10_runtime_cutover_source": "architecture/runtime-cutover-ar10.json"
+    "ar10_runtime_cutover_source": "architecture/runtime-cutover-ar10.json",
+    "ar10_acceptance_evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json"
   },
   "preserve_accepted_history": [
     "repository_steps_0_10",
@@ -274,8 +276,8 @@
     "implementation_issue": 286,
     "applicable_permanent_workflows": "13/13",
     "next_required_slice": "AR-5",
-    "program_handoff_status": "AR9_ACCEPTED_AR10_CURRENT",
-    "program_next_required_subslice": "AR-10"
+    "program_handoff_status": "AR10_ACCEPTED_AR11_CURRENT",
+    "program_next_required_subslice": "AR-11"
   },
   "runtime_authority_cleanup": {
     "status": "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP",
@@ -458,20 +460,21 @@
     "schema_version": 1,
     "canonical_authority": "architecture/inventory.json::current_delivery_map",
     "program": "Architecture Re-baseline v3",
-    "accepted_checkpoint": "AR-9",
-    "current_work": "AR-10",
+    "accepted_checkpoint": "AR-10",
+    "current_work": "AR-11",
     "source_implemented": {
       "status": "ACCEPTED",
-      "through": "AR-9",
-      "current_subslice": "AR-10",
-      "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR9_CLOSEOUT"
+      "through": "AR-10",
+      "current_subslice": "AR-11",
+      "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR10_CLOSEOUT"
     },
     "accepted_on_main": {
       "status": "COMPLETE",
-      "through": "AR-9",
+      "through": "AR-10",
       "full_ar8_accepted": true,
       "ar9_accepted": true,
-      "acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json"
+      "ar10_accepted": true,
+      "acceptance_evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json"
     },
     "staging_live": {
       "status": "PARTIAL",
@@ -499,9 +502,9 @@
       "blocks": "NONE"
     },
     "next_gate": {
-      "id": "AR-10_ACCEPTANCE",
-      "issue": 368,
-      "on_success": "AR-11_BECOMES_CURRENT"
+      "id": "AR-11_ACCEPTANCE",
+      "issue": 372,
+      "on_success": "AR-12_BECOMES_CURRENT"
     },
     "invariants": {
       "source_present_not_equal_production_enabled": true,
@@ -512,7 +515,9 @@
       "production_ready": false,
       "production_mutation": false,
       "ar9_accepted": true,
-      "ar10_blocked": false
+      "ar10_accepted": true,
+      "ar10_blocked": false,
+      "ar11_blocked": false
     }
   },
   "post_ar8c_cleanup_acceptance": {
@@ -549,11 +554,25 @@
     "metadata_only": true,
     "production_mutation": false
   },
-  "ar10_current": {
-    "tracking_issue": 368,
-    "source_authority": "architecture/runtime-cutover-ar10.json",
-    "canonical_projection": "architecture/inventory.json::runtime_cutover",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR10.md",
+  "ar10_acceptance": {
+    "issue": 368,
+    "implementation_pr": 371,
+    "exact_green_head": "c7f8ac9704433d3e52d3b79f985c9ac60aa068db",
+    "implementation_merge": "7ab5edf583f541d08ff732624af25881d430d427",
+    "applicable_permanent_workflows": "16/16",
+    "behind_by": 0,
+    "blocking_reviews": 0,
+    "unresolved_review_threads": 0,
+    "accepted_main_reread": "7ab5edf583f541d08ff732624af25881d430d427",
+    "evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json",
+    "metadata_only": true,
+    "production_mutation": false
+  },
+  "ar11_current": {
+    "tracking_issue": 372,
+    "name": "AR-11 — Release-set / Promotion Architecture",
+    "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+    "status": "current",
     "production_mutation": false,
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",

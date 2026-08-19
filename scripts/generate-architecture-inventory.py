@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate canonical inventory after accepted AR-9 and during AR-10."""
+"""Generate canonical inventory after accepted AR-10 and during AR-11."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ INVENTORY_PATH = ROOT / "architecture/inventory.json"
 D1_EVOLUTION_SOURCE = "architecture/d1-evolution-ar9.json"
 RUNTIME_CUTOVER_SOURCE = "architecture/runtime-cutover-ar10.json"
 AR9_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-19-ar9-final-acceptance.json"
+AR10_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-19-ar10-final-acceptance.json"
+AR11_ISSUE = 372
 SUBJECTS = {
     "credential_authority": "architecture/credential-authority.json",
     "credential_lifecycle": "architecture/credential-lifecycle.json",
@@ -32,51 +34,53 @@ engine = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(engine)
 legacy_delivery_map = engine.current_delivery_map
 legacy_progress = engine.expected_ar8_progress
-engine.CURRENT_SLICE = "AR-10"
-engine.NEXT_SLICE = "AR-11"
-engine.CURRENT_DELIVERY_CHECKPOINT = "AR-9"
+engine.CURRENT_SLICE = "AR-11"
+engine.NEXT_SLICE = "AR-12"
+engine.CURRENT_DELIVERY_CHECKPOINT = "AR-10"
 engine.AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"]
 engine.AR8_CURRENT_SUBSLICE = None
 engine.AR8D_IMPLEMENTATION_ISSUE = None
 engine.AR8_MANDATORY_REMAINING = []
 engine.AR8_IMPLEMENTATION_ENTRY_GATE = "AR8_ACCEPTED_MAIN_AR9_CURRENT"
-for accepted in ("AR-8", "AR-9"):
+for accepted in ("AR-8", "AR-9", "AR-10"):
     if accepted not in engine.ACCEPTED_SLICES:
         engine.ACCEPTED_SLICES = [*engine.ACCEPTED_SLICES, accepted]
 
 
 def completion_delivery_map() -> dict[str, object]:
     value = legacy_delivery_map()
-    value["accepted_checkpoint"] = "AR-9"
-    value["current_work"] = "AR-10"
+    value["accepted_checkpoint"] = "AR-10"
+    value["current_work"] = "AR-11"
     value["source_implemented"] = {
         "status": "ACCEPTED",
-        "through": "AR-9",
-        "current_subslice": "AR-10",
-        "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR9_CLOSEOUT",
+        "through": "AR-10",
+        "current_subslice": "AR-11",
+        "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR10_CLOSEOUT",
     }
     value["accepted_on_main"] = {
         "status": "COMPLETE",
-        "through": "AR-9",
+        "through": "AR-10",
         "full_ar8_accepted": True,
         "ar9_accepted": True,
-        "acceptance_evidence": AR9_ACCEPTANCE_EVIDENCE,
+        "ar10_accepted": True,
+        "acceptance_evidence": AR10_ACCEPTANCE_EVIDENCE,
     }
     value["current_blocker"] = {"issue": None, "status": "NONE", "blocks": "NONE"}
-    value["next_gate"] = {"id": "AR-10_ACCEPTANCE", "issue": 368, "on_success": "AR-11_BECOMES_CURRENT"}
+    value["next_gate"] = {"id": "AR-11_ACCEPTANCE", "issue": AR11_ISSUE, "on_success": "AR-12_BECOMES_CURRENT"}
     value["invariants"].update({
         "source_present_not_equal_production_enabled": True,
         "full_ar8_accepted": True,
         "ar9_accepted": True,
         "ar9_blocked": False,
+        "ar10_accepted": True,
         "ar10_blocked": False,
+        "ar11_blocked": False,
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
         "production_ready": False,
         "production_mutation": False,
     })
     return value
-
 
 def completion_progress() -> dict[str, object]:
     value = legacy_progress()
@@ -249,6 +253,8 @@ def runtime_cutover_projection() -> dict[str, object]:
         raise ValueError("AR-10 runtime cutover authority identity/version is invalid")
     if authority.get("owning_slice") != "AR-10" or authority.get("owning_issue") != 368:
         raise ValueError("AR-10 runtime cutover ownership drifted")
+    if authority.get("status") != "accepted":
+        raise ValueError("AR-10 runtime cutover authority must be accepted after accepted main")
     if authority.get("production_mutation") is not False:
         raise ValueError("AR-10 runtime cutover must remain non-production-mutating")
     if authority.get("architecture_complete") is not False or authority.get("production_ready") is not False:
@@ -262,7 +268,8 @@ def runtime_cutover_projection() -> dict[str, object]:
         raise ValueError("AR-10 runtime cutover authority is incomplete")
     return {
         "schema_version": 1,
-        "role": "CURRENT_AR10_RUNTIME_CUTOVER_PROJECTION",
+        "role": "ACCEPTED_AR10_RUNTIME_CUTOVER_PROJECTION",
+        "acceptance_evidence": AR10_ACCEPTANCE_EVIDENCE,
         "source_authority": RUNTIME_CUTOVER_SOURCE,
         "source_status": authority.get("status"),
         "tracking_issue": authority.get("owning_issue"),
@@ -314,6 +321,7 @@ def build_inventory() -> dict[str, object]:
     documentation["ar8_completion_pr"] = 362
     documentation["ar8_acceptance_evidence"] = "docs/evidence/2026-08-18-ar8-final-acceptance.json"
     documentation["ar9_acceptance_evidence"] = AR9_ACCEPTANCE_EVIDENCE
+    documentation["ar10_acceptance_evidence"] = AR10_ACCEPTANCE_EVIDENCE
     documentation["d1_evolution"] = "architecture/inventory.json::d1_evolution"
     documentation["d1_evolution_source"] = D1_EVOLUTION_SOURCE
     documentation["runtime_cutover"] = "architecture/inventory.json::runtime_cutover"
@@ -359,12 +367,12 @@ def main() -> int:
     expected = build_inventory()
     if args.write:
         INVENTORY_PATH.write_text(serialized(expected), encoding="utf-8", newline="\n")
-        print("Wrote architecture/inventory.json with accepted AR-9 and current AR-10 runtime-cutover projection.")
+        print("Wrote architecture/inventory.json with accepted AR-10 runtime cutover and current AR-11 projection.")
     elif args.check:
         check_current(expected)
         engine.validate_full_documentation_authority()
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--check"])
-        print("Architecture inventory projects accepted AR-9 and current AR-10 runtime cutover while production remains blocked.")
+        print("Architecture inventory projects accepted AR-10 runtime cutover and current AR-11 while production remains blocked.")
     else:
         engine.self_test(expected)
         mutated = json.loads(serialized(expected))

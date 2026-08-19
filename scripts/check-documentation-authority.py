@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Current documentation authority checker after accepted AR-9 and during AR-10."""
+"""Current documentation authority checker after accepted AR-10 and during AR-11."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ AR10_ISSUE = 368
 AR10_AUTHORITY = Path("architecture/runtime-cutover-ar10.json")
 AR10_PROJECTION = "architecture/inventory.json::runtime_cutover"
 AR10_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR10.md")
+AR10_ACCEPTANCE_EVIDENCE = Path("docs/evidence/2026-08-19-ar10-final-acceptance.json")
+AR11_ISSUE = 372
 SUBJECT_FILES = (
     Path("architecture/credential-authority.json"),
     Path("architecture/credential-lifecycle.json"),
@@ -36,15 +38,15 @@ spec.loader.exec_module(legacy)
 
 legacy_expected_current_delivery_map = legacy.expected_current_delivery_map
 legacy.STATUS_DATE = "2026-08-19"
-legacy.CURRENT_SLICE = "AR-10"
-legacy.NEXT_SLICE = "AR-11"
-legacy.CURRENT_DELIVERY_CHECKPOINT = "AR-9"
+legacy.CURRENT_SLICE = "AR-11"
+legacy.NEXT_SLICE = "AR-12"
+legacy.CURRENT_DELIVERY_CHECKPOINT = "AR-10"
 legacy.AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"]
 legacy.AR8_CURRENT_SUBSLICE = None
 legacy.AR8D_IMPLEMENTATION_ISSUE = None
 legacy.AR8_IMPLEMENTATION_ENTRY_GATE = "AR8_ACCEPTED_MAIN_AR9_CURRENT"
 legacy.AR8_MANDATORY_REMAINING = []
-for accepted in ("AR-8", "AR-9"):
+for accepted in ("AR-8", "AR-9", "AR-10"):
     if accepted not in legacy.ACCEPTED_SLICES:
         legacy.ACCEPTED_SLICES = [*legacy.ACCEPTED_SLICES, accepted]
 for required in (
@@ -53,6 +55,7 @@ for required in (
     AR9_AUTHORITY,
     AR10_AUTHORITY,
     AR10_EVIDENCE,
+    AR10_ACCEPTANCE_EVIDENCE,
 ):
     if required not in legacy.REQUIRED_FILES:
         legacy.REQUIRED_FILES = (*legacy.REQUIRED_FILES, required)
@@ -70,42 +73,38 @@ SUPERSEDED_LEGACY_PROJECTION_ERRORS = {
 
 def expected_current_delivery_map() -> dict[str, object]:
     base = legacy_expected_current_delivery_map()
-    base["accepted_checkpoint"] = "AR-9"
-    base["current_work"] = "AR-10"
+    base["accepted_checkpoint"] = "AR-10"
+    base["current_work"] = "AR-11"
     base["source_implemented"] = {
         "status": "ACCEPTED",
-        "through": "AR-9",
-        "current_subslice": "AR-10",
-        "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR9_CLOSEOUT",
+        "through": "AR-10",
+        "current_subslice": "AR-11",
+        "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR10_CLOSEOUT",
     }
     base["accepted_on_main"] = {
         "status": "COMPLETE",
-        "through": "AR-9",
+        "through": "AR-10",
         "full_ar8_accepted": True,
         "ar9_accepted": True,
-        "acceptance_evidence": AR9_ACCEPTANCE_EVIDENCE.as_posix(),
+        "ar10_accepted": True,
+        "acceptance_evidence": AR10_ACCEPTANCE_EVIDENCE.as_posix(),
     }
     base["current_blocker"] = {"issue": None, "status": "NONE", "blocks": "NONE"}
-    base["next_gate"] = {
-        "id": "AR-10_ACCEPTANCE",
-        "issue": AR10_ISSUE,
-        "on_success": "AR-11_BECOMES_CURRENT",
-    }
-    base["invariants"].update(
-        {
-            "source_present_not_equal_production_enabled": True,
-            "full_ar8_accepted": True,
-            "ar9_accepted": True,
-            "ar9_blocked": False,
-            "ar10_blocked": False,
-            "architecture_complete": False,
-            "production_core_gate": "BLOCKED",
-            "production_ready": False,
-            "production_mutation": False,
-        }
-    )
+    base["next_gate"] = {"id": "AR-11_ACCEPTANCE", "issue": AR11_ISSUE, "on_success": "AR-12_BECOMES_CURRENT"}
+    base["invariants"].update({
+        "source_present_not_equal_production_enabled": True,
+        "full_ar8_accepted": True,
+        "ar9_accepted": True,
+        "ar9_blocked": False,
+        "ar10_accepted": True,
+        "ar10_blocked": False,
+        "ar11_blocked": False,
+        "architecture_complete": False,
+        "production_core_gate": "BLOCKED",
+        "production_ready": False,
+        "production_mutation": False,
+    })
     return base
-
 
 def validate_ar8_progress(
     value: object,
@@ -311,12 +310,12 @@ def validate_ar10_runtime_authority(root: Path) -> None:
     if (
         source.get("kind") != "RUNTIME_CUTOVER_AUTHORITY"
         or source.get("schema_version") != 1
-        or source.get("status") != "AR10_IMPLEMENTED_PENDING_ACCEPTANCE"
+        or source.get("status") != "accepted"
         or source.get("owning_slice") != "AR-10"
         or source.get("owning_issue") != AR10_ISSUE
         or source.get("completion_pr") != 371
     ):
-        raise ValueError("AR-10 runtime-cutover source authority identity/state drifted")
+        raise ValueError("AR-10 runtime-cutover accepted source authority identity/state drifted")
     for key, wanted in {
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
@@ -328,8 +327,36 @@ def validate_ar10_runtime_authority(root: Path) -> None:
             raise ValueError(f"AR-10 runtime-cutover source {key} drifted")
     if source.get("real_runtime", {}).get("production_certified") is not False:
         raise ValueError("AR-10 repository integration must not masquerade as production certification")
-    if not (root / AR10_EVIDENCE).is_file():
-        raise ValueError("AR-10 runtime evidence document is missing")
+    accepted = source.get("acceptance")
+    if not isinstance(accepted, dict) or accepted.get("implementation_merge") != "7ab5edf583f541d08ff732624af25881d430d427":
+        raise ValueError("AR-10 runtime authority lost guarded-merge acceptance provenance")
+    evidence = load_json(root, AR10_ACCEPTANCE_EVIDENCE)
+    exact = {
+        "kind": "AR10_FINAL_ACCEPTANCE",
+        "accepted_program_checkpoint": "AR-10",
+        "tracking_issue": AR10_ISSUE,
+        "implementation_pr": 371,
+        "implementation_exact_green_head": "c7f8ac9704433d3e52d3b79f985c9ac60aa068db",
+        "implementation_merge": "7ab5edf583f541d08ff732624af25881d430d427",
+        "implementation_main_reread": "7ab5edf583f541d08ff732624af25881d430d427",
+        "applicable_permanent_workflows": "16/16",
+        "failed_workflows": 0,
+        "pending_workflows": 0,
+        "behind_by": 0,
+        "blocking_reviews": 0,
+        "unresolved_review_threads": 0,
+        "architecture_complete": False,
+        "production_core_gate": "BLOCKED",
+        "production_ready": False,
+        "production_authorized": False,
+        "production_enabled": False,
+        "production_mutation": False,
+        "next_slice": "AR-11",
+        "next_slice_issue": AR11_ISSUE,
+    }
+    for key, wanted in exact.items():
+        if evidence.get(key) != wanted:
+            raise ValueError(f"AR-10 final acceptance evidence {key} drifted")
 
     inventory = load_json(root, Path("architecture/inventory.json"))
     projection = inventory.get("runtime_cutover")
@@ -337,11 +364,12 @@ def validate_ar10_runtime_authority(root: Path) -> None:
         raise ValueError("canonical inventory lost AR-10 runtime_cutover projection")
     if (
         projection.get("source_authority") != AR10_AUTHORITY.as_posix()
-        or projection.get("source_status") != "AR10_IMPLEMENTED_PENDING_ACCEPTANCE"
+        or projection.get("source_status") != "accepted"
+        or projection.get("acceptance_evidence") != AR10_ACCEPTANCE_EVIDENCE.as_posix()
         or projection.get("tracking_issue") != AR10_ISSUE
         or projection.get("legacy_executables_remaining") != 0
     ):
-        raise ValueError("canonical inventory AR-10 runtime-cutover projection identity drifted")
+        raise ValueError("canonical inventory accepted AR-10 runtime-cutover projection identity drifted")
     for key, wanted in {
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
@@ -351,53 +379,20 @@ def validate_ar10_runtime_authority(root: Path) -> None:
         if projection.get(key) != wanted:
             raise ValueError(f"canonical inventory AR-10 runtime projection {key} drifted")
 
-
 def validate_current_human_projection(root: Path) -> None:
     required = {
-        "README.md": (
-            "Current accepted checkpoint:** AR-9",
-            "Current implementation:** AR-10",
-            "COMPLETE THROUGH AR-9",
-            "AR-10 acceptance",
-        ),
-        "docs/README.md": (
-            "Current accepted checkpoint:** AR-9",
-            "Current implementation:** AR-10",
-            "COMPLETE THROUGH AR-9",
-            "AR-10 acceptance",
-        ),
-        "docs/INDEX.md": (
-            "AR-9 is accepted",
-            "AR-10 is the current implementation slice",
-            "COMPLETE THROUGH AR-9",
-        ),
-        "docs/DEVELOPMENT_PLAN.md": (
-            "Current accepted architecture checkpoint:** AR-9",
-            "Current implementation:** AR-10",
-            "AR-9   D1 Evolution / Schema Compatibility",
-            "AR-10  Runtime and Historical Executable Simplification",
-            "COMPLETE THROUGH AR-9",
-        ),
-        "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md": (
-            "Current accepted architecture checkpoint:** AR-9",
-            "Current implementation:** AR-10",
-            "AR-9   D1 Evolution / Schema Compatibility",
-            "AR-10  Runtime and Historical Executable Simplification",
-            "Binding `opsctl` evolution contract",
-        ),
-        "docs/DEVELOPER_CAPABILITY_MATRIX.md": (
-            "AR-9 source is accepted on `main`; AR-10 is the current architecture slice.",
-            "COMPLETE THROUGH AR-9",
-            "AR-10 acceptance",
-            "production_ready=false",
-        ),
+        "README.md": ("Current accepted checkpoint:** AR-10", "Current implementation:** AR-11", "COMPLETE THROUGH AR-10", "AR-11 acceptance"),
+        "docs/README.md": ("Current accepted checkpoint:** AR-10", "Current implementation:** AR-11", "COMPLETE THROUGH AR-10", "AR-11 acceptance"),
+        "docs/INDEX.md": ("AR-10 is accepted", "AR-11 is the current implementation slice", "COMPLETE THROUGH AR-10"),
+        "docs/DEVELOPMENT_PLAN.md": ("Current accepted architecture checkpoint:** AR-10", "Current implementation:** AR-11", "AR-10  Runtime and Historical Executable Simplification", "AR-11  Release-set / Promotion Architecture", "COMPLETE THROUGH AR-10"),
+        "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md": ("Current accepted architecture checkpoint:** AR-10", "Current implementation:** AR-11", "AR-10  Runtime and Historical Executable Simplification", "AR-11  Release-set / Promotion Architecture", "Binding `opsctl` evolution contract"),
+        "docs/DEVELOPER_CAPABILITY_MATRIX.md": ("AR-10 source is accepted on `main`; AR-11 is the current architecture slice.", "COMPLETE THROUGH AR-10", "AR-11 acceptance", "production_ready=false"),
     }
     for relative, markers in required.items():
-        text = (root / relative).read_text(encoding="utf-8")
+        body = (root / relative).read_text(encoding="utf-8")
         for marker in markers:
-            if marker not in text:
+            if marker not in body:
                 raise ValueError(f"{relative} missing accepted/current architecture marker: {marker}")
-
 
 def validate(root: Path) -> None:
     errors = current_legacy_errors(root)
@@ -451,7 +446,7 @@ def legacy_negative_self_test(root: Path) -> None:
         )
     status_fixtures = [
         ("tracking rollback", ("current", "architecture_program", "tracking_issue"), 266, 203, "tracking_issue", False),
-        ("active slice rollback", ("current", "architecture_program", "current_slice"), "AR-10", "AR-9", "current_slice", False),
+        ("active slice rollback", ("current", "architecture_program", "current_slice"), "AR-11", "AR-10", "current_slice", False),
         ("AR-8 acceptance rollback", ("current", "architecture_program", "ar8_progress", "full_ar8_accepted"), True, False, "full_ar8_accepted", False),
         ("AR-9 reblock", ("current", "architecture_program", "ar8_progress", "ar9_blocked"), False, True, "ar9_blocked", False),
         ("premature architecture closeout", ("current", "architecture_complete"), False, True, "architecture_complete", False),

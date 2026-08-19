@@ -1462,20 +1462,21 @@
     "schema_version": 1,
     "canonical_authority": "architecture/inventory.json::current_delivery_map",
     "program": "Architecture Re-baseline v3",
-    "accepted_checkpoint": "AR-9",
-    "current_work": "AR-10",
+    "accepted_checkpoint": "AR-10",
+    "current_work": "AR-11",
     "source_implemented": {
       "status": "ACCEPTED",
-      "through": "AR-9",
-      "current_subslice": "AR-10",
-      "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR9_CLOSEOUT"
+      "through": "AR-10",
+      "current_subslice": "AR-11",
+      "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR10_CLOSEOUT"
     },
     "accepted_on_main": {
       "status": "COMPLETE",
-      "through": "AR-9",
+      "through": "AR-10",
       "full_ar8_accepted": true,
       "ar9_accepted": true,
-      "acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json"
+      "ar10_accepted": true,
+      "acceptance_evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json"
     },
     "staging_live": {
       "status": "PARTIAL",
@@ -1503,9 +1504,9 @@
       "blocks": "NONE"
     },
     "next_gate": {
-      "id": "AR-10_ACCEPTANCE",
-      "issue": 368,
-      "on_success": "AR-11_BECOMES_CURRENT"
+      "id": "AR-11_ACCEPTANCE",
+      "issue": 372,
+      "on_success": "AR-12_BECOMES_CURRENT"
     },
     "invariants": {
       "source_present_not_equal_production_enabled": true,
@@ -1516,13 +1517,15 @@
       "production_ready": false,
       "production_mutation": false,
       "ar9_accepted": true,
-      "ar10_blocked": false
+      "ar10_accepted": true,
+      "ar10_blocked": false,
+      "ar11_blocked": false
     }
   },
   "documentation_authority": {
     "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
     "tracking_issue": 266,
-    "current_slice": "AR-10",
+    "current_slice": "AR-11",
     "transition": "architecture/architecture-rebaseline-v3-transition.json",
     "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
@@ -1559,6 +1562,7 @@
     "ar8_completion_pr": 362,
     "ar8_acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
     "ar9_acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
+    "ar10_acceptance_evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json",
     "d1_evolution": "architecture/inventory.json::d1_evolution",
     "d1_evolution_source": "architecture/d1-evolution-ar9.json",
     "runtime_cutover": "architecture/inventory.json::runtime_cutover",
@@ -1745,10 +1749,11 @@
       "AR-6",
       "AR-7",
       "AR-8",
-      "AR-9"
+      "AR-9",
+      "AR-10"
     ],
-    "current_architecture_slice": "AR-10",
-    "next_architecture_slice_after_acceptance": "AR-11",
+    "current_architecture_slice": "AR-11",
+    "next_architecture_slice_after_acceptance": "AR-12",
     "ar8_progress": {
       "umbrella_issue": 308,
       "accepted_subslices": [
@@ -2003,9 +2008,10 @@
   },
   "runtime_cutover": {
     "schema_version": 1,
-    "role": "CURRENT_AR10_RUNTIME_CUTOVER_PROJECTION",
+    "role": "ACCEPTED_AR10_RUNTIME_CUTOVER_PROJECTION",
+    "acceptance_evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json",
     "source_authority": "architecture/runtime-cutover-ar10.json",
-    "source_status": "AR10_IMPLEMENTED_PENDING_ACCEPTANCE",
+    "source_status": "accepted",
     "tracking_issue": 368,
     "completion_pr": 371,
     "start_base": "5933a5e30a534209138485556b4a895706af765a",

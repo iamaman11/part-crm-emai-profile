@@ -20,6 +20,7 @@ RUNTIME_LOCK = Path("runtime/camouhost/runtime-lock.json")
 OPSCTL_SOURCE = Path("tools/opsctl/src")
 ADR = Path("docs/adr/ADR-0001-fingerprint-stability-policy.md")
 AR10_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR10.md")
+AR10_ACCEPTANCE_EVIDENCE = Path("docs/evidence/2026-08-19-ar10-final-acceptance.json")
 AR10_AUTHORITY = Path("architecture/runtime-cutover-ar10.json")
 PYTHON_ESTATE_BASELINE = Path("architecture/python-estate-ar6.json")
 PYTHON_ESTATE_GENERATOR = Path("scripts/python-estate-ar6.py")
@@ -275,8 +276,8 @@ def validate_acceptance_projection(root: Path) -> None:
         if marker not in adr:
             fail(f"ADR-0001 lost required policy class/upgrade invariant: {marker}")
     authority = json.loads(read_regular(root, AR10_AUTHORITY))
-    if authority.get("schema_version") != 1 or authority.get("status") != "AR10_IMPLEMENTED_PENDING_ACCEPTANCE":
-        fail("AR-10 runtime-cutover machine authority has invalid state")
+    if authority.get("schema_version") != 1 or authority.get("status") != "accepted":
+        fail("AR-10 runtime-cutover machine authority must be accepted after guarded merge")
     if authority.get("production_mutation") is not False or authority.get("production_ready") is not False:
         fail("AR-10 must remain production fail-closed")
     if authority.get("legacy_executables_remaining") != 0:
@@ -284,6 +285,11 @@ def validate_acceptance_projection(root: Path) -> None:
     if authority.get("real_runtime", {}).get("production_certified") is not False:
         fail("repository integration must not masquerade as external production certification")
     read_regular(root, AR10_EVIDENCE)
+    evidence = json.loads(read_regular(root, AR10_ACCEPTANCE_EVIDENCE))
+    if evidence.get("kind") != "AR10_FINAL_ACCEPTANCE" or evidence.get("implementation_merge") != "7ab5edf583f541d08ff732624af25881d430d427":
+        fail("AR-10 final acceptance evidence identity drifted")
+    if evidence.get("applicable_permanent_workflows") != "16/16" or evidence.get("production_mutation") is not False:
+        fail("AR-10 final acceptance evidence is incomplete or production-mutating")
 
 
 def validate_preflight(root: Path) -> None:
