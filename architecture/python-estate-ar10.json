@@ -31,10 +31,17 @@
       "reason": "repository-local real Camoufox integration evidence fixture"
     }
   ],
-  "retirements": [],
+  "retirements": [
+    "check_mail.py",
+    "profile_manager.py",
+    "test_fingerprint_consistency.py",
+    "tools/cloud_profile_smoke.py",
+    "tools/fingerprint_certify.py",
+    "tools/profile_browser.py"
+  ],
   "current_summary": {
-    "tracked_python_files": 122,
-    "DELETE_AFTER_SEQUENCE": 6,
+    "tracked_python_files": 116,
+    "DELETE_AFTER_SEQUENCE": 0,
     "KEEP_PYTHON": 114,
     "MIGRATE_TO_RUST": 2,
     "WRAP_WITH_RUST": 0
