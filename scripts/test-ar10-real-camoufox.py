@@ -28,7 +28,7 @@ PAGE = b"""<!doctype html><meta charset='utf-8'><script>
 const hadStorage = localStorage.getItem('ar10-marker') === 'persisted';
 const hadCookie = document.cookie.includes('ar10-marker=persisted');
 localStorage.setItem('ar10-marker', 'persisted');
-document.cookie = 'ar10-marker=persisted; Path=/; SameSite=Lax';
+document.cookie = 'ar10-marker=persisted; Max-Age=86400; Path=/; SameSite=Lax';
 const observed = new XMLHttpRequest();
 observed.open('GET', '/observed?storage=' + String(hadStorage) + '&cookie=' + String(hadCookie), false);
 observed.send();
@@ -97,14 +97,20 @@ def materialize(root: Path) -> dict[str, str]:
     completed = subprocess.run(
         [sys.executable, str(CAMOUHOST), "--materialize-identity", str(root)],
         cwd=ROOT,
-        env={**os.environ, "CAMOUHOST_RUNTIME_LOCK": str(RUNTIME_LOCK), "CAMOUHOST_HEADLESS_MODE": "virtual"},
+        env={
+            **os.environ,
+            "CAMOUHOST_RUNTIME_LOCK": str(RUNTIME_LOCK),
+            "CAMOUHOST_HEADLESS_MODE": "virtual",
+        },
         text=True,
         capture_output=True,
         timeout=180,
         check=False,
     )
     if completed.returncode != 0:
-        raise AssertionError(f"candidate identity materialization failed: {completed.stderr[-2000:]}")
+        raise AssertionError(
+            f"candidate identity materialization failed: {completed.stderr[-2000:]}"
+        )
     report = json.loads(completed.stdout)
     if set(report) != {
         "fingerprint_config_sha256",
@@ -218,22 +224,31 @@ def main() -> int:
             second = materialize(second_root)
 
             if first["fingerprint_config_sha256"] == second["fingerprint_config_sha256"]:
-                raise AssertionError("independent candidate generations unexpectedly share exact fingerprint config")
+                raise AssertionError(
+                    "independent candidate generations unexpectedly share exact fingerprint config"
+                )
 
             run_cold_launch(first_root, first, url)
             observed_first = server.observations.get(timeout=15)
             if observed_first != (False, False):
-                raise AssertionError(f"first generation was contaminated before first launch: {observed_first}")
+                raise AssertionError(
+                    f"first generation was contaminated before first launch: {observed_first}"
+                )
 
             run_cold_launch(first_root, first, url)
             observed_second = server.observations.get(timeout=15)
             if observed_second != (True, True):
-                raise AssertionError(f"cookie/localStorage did not survive clean cold relaunch: {observed_second}")
+                raise AssertionError(
+                    "durable cookie/localStorage did not survive clean cold relaunch: "
+                    f"{observed_second}"
+                )
 
             run_cold_launch(second_root, second, url)
             observed_other = server.observations.get(timeout=15)
             if observed_other != (False, False):
-                raise AssertionError(f"browser state crossed generation boundary: {observed_other}")
+                raise AssertionError(
+                    f"browser state crossed generation boundary: {observed_other}"
+                )
 
             expect_prelaunch_identity_rejection(first_root, first, url)
             expect_probe_drift_rejection(first_root, first, url)
