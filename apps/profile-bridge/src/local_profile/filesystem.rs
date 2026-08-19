@@ -11,6 +11,7 @@ const GENERATION_MARKER_CONTENT: &str = "profile-platform-generation-v1\n";
 const BRIDGE_LOCK_FILE: &str = ".profile-platform.lock";
 const BROWSER_STATE_DIRECTORY: &str = "user_data";
 const FIREFOX_PARENT_LOCK_PATH: &str = "user_data/.parentlock";
+const FIREFOX_WINDOWS_PARENT_LOCK_PATH: &str = "user_data/parent.lock";
 const FIREFOX_LOCK_PATH: &str = "user_data/lock";
 const MAX_INVENTORY_FILES: usize = 100_000;
 const MAX_RELATIVE_PATH_BYTES: usize = 512;
@@ -514,7 +515,10 @@ fn is_bridge_control_file(relative_path: &str) -> bool {
 }
 
 fn is_ephemeral_browser_lock(relative_path: &str) -> bool {
-    matches!(relative_path, FIREFOX_PARENT_LOCK_PATH | FIREFOX_LOCK_PATH)
+    matches!(
+        relative_path,
+        FIREFOX_PARENT_LOCK_PATH | FIREFOX_WINDOWS_PARENT_LOCK_PATH | FIREFOX_LOCK_PATH
+    )
 }
 
 fn hash_file(path: &Path) -> Result<u64, LocalProfileError> {
