@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+const REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
 const GIT_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -17,6 +18,15 @@ const SHA_D: &str = "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn accepted_main_evidence() -> Result<String, String> {
+    let identity = json!({
+        "authority": "accepted-main",
+        "commit_sha": GIT_SHA,
+        "repository": REPOSITORY,
+    });
+    Ok(sha256_hex(canonical_json(&identity)?.as_bytes()))
 }
 
 fn component(release_id: &str, path: &str, digest: &str, size: u64) -> Value {
@@ -31,14 +41,15 @@ fn component(release_id: &str, path: &str, digest: &str, size: u64) -> Value {
 }
 
 fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
+    let evidence = accepted_main_evidence()?;
     let mut value = json!({
         "schema_version": 1,
         "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{SHA_A}"),
         "source": {
-            "repository": "iamaman11/part-crm-emai-profile",
+            "repository": REPOSITORY,
             "commit_sha": GIT_SHA,
             "accepted_main": true,
-            "accepted_main_evidence_sha256": SHA_A
+            "accepted_main_evidence_sha256": evidence
         },
         "components": {
             "control_plane": component("control-plane-v1", "components/control-plane.tar", SHA_A, 10),
