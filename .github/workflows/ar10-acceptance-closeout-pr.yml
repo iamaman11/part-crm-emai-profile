@@ -23,6 +23,33 @@ jobs:
           ref: agent/ar10-acceptance-closeout
           fetch-depth: 0
 
+      - name: Normalize current-sequence formatting for deterministic transform
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          for relative in ('docs/DEVELOPMENT_PLAN.md', 'docs/ARCHITECTURE_REBASELINE_V3_PLAN.md'):
+              path = Path(relative)
+              text = path.read_text(encoding='utf-8')
+              text, count10 = re.subn(
+                  r'^AR-10\s+Runtime and Historical Executable Simplification\s+CURRENT$',
+                  'AR-10  Runtime and Historical Executable Simplification              DONE / ACCEPTED',
+                  text,
+                  count=1,
+                  flags=re.MULTILINE,
+              )
+              text, count11 = re.subn(
+                  r'^AR-11\s+Release-set / Promotion Architecture\s*$',
+                  'AR-11  Release-set / Promotion Architecture                           CURRENT',
+                  text,
+                  count=1,
+                  flags=re.MULTILINE,
+              )
+              if count10 != 1 or count11 != 1:
+                  raise SystemExit(f'{relative}: sequence normalization did not match exactly once')
+              path.write_text(text, encoding='utf-8', newline='\n')
+          PY
+
       - name: Apply deterministic acceptance transformation
         run: python .github/scripts/ar10-acceptance-closeout-once.py
 
