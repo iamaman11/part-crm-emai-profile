@@ -84,7 +84,7 @@ pub async fn main(mut request: Request, env: Env, _context: Context) -> Result<R
                 .fetch_request(request)
                 .await
         }
-        RouteClass::AuthenticatedSessionApi => session_response(&request, &env).await,
+        RouteClass::AuthenticatedSessionApi => capability_session_response(&request, &env).await,
         RouteClass::ClientCollectionApi
         | RouteClass::ClientResourceApi
         | RouteClass::ClientArchiveApi
@@ -218,6 +218,25 @@ pub async fn control_plane_schedule(_event: ScheduledEvent, env: Env, _context: 
         Ok(false) => {}
         Err(_) => worker::console_error!("mailbox capability profile unavailable"),
     }
+}
+
+async fn capability_session_response(request: &Request, env: &Env) -> Result<Response> {
+    let mut response = session_response(request, env).await?;
+    if response.status_code() == 200 {
+        let profile = capability_gate::active_profile(env)?;
+        response
+            .headers_mut()
+            .set(capability_gate::RELEASE_PROFILE_HEADER, profile.id)?;
+        response.headers_mut().set(
+            capability_gate::RELEASE_PROFILE_DIGEST_HEADER,
+            profile.digest,
+        )?;
+        response.headers_mut().set(
+            capability_gate::EFFECTIVE_CAPABILITIES_HEADER,
+            &profile.capabilities.enabled_ids(),
+        )?;
+    }
+    Ok(response)
 }
 
 async fn dispatch_profile_coordinator(request: &mut Request, env: &Env) -> Result<Response> {
