@@ -28,7 +28,10 @@ pub(crate) fn run(root: &Path) -> Result<String, OpsctlError> {
         validate_json_authority(root, relative)?;
     }
 
-    Ok("{\"schema_version\":2,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"implementation\":\"native\",\"mutation_executed\":false,\"child_processes\":0,\"validators_execution\":\"independent-ci\",\"authorities\":[\"architecture/inventory.json\",\"architecture/python-estate-ar6.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"architecture/operator-contract.json\",\"docs/status.json\"]}\n".to_owned())
+    // AR-10 removes the implementation-time Python child-process bridge without changing the
+    // accepted AR-6 read-only machine-output contract. The implementation detail is proved by
+    // Rust/static tests rather than by expanding this public JSON shape.
+    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/python-estate-ar6.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"architecture/operator-contract.json\",\"docs/status.json\"]}\n".to_owned())
 }
 
 fn require_regular_file(root: &Path, relative: &str) -> Result<(), OpsctlError> {
@@ -83,6 +86,7 @@ fn validate_json_authority(root: &Path, relative: &str) -> Result<(), OpsctlErro
 #[cfg(test)]
 mod tests {
     use super::run;
+    use serde_json::Value;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -114,14 +118,19 @@ mod tests {
     }
 
     #[test]
-    fn doctor_is_native_and_does_not_require_validator_execution()
+    fn doctor_is_native_but_preserves_the_accepted_v1_read_only_output()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = root()?;
         let output = run(&root)?;
-        assert!(output.contains("\"mode\":\"read-only\""));
-        assert!(output.contains("\"implementation\":\"native\""));
-        assert!(output.contains("\"child_processes\":0"));
-        assert!(output.contains("\"validators_execution\":\"independent-ci\""));
+        let parsed: Value = serde_json::from_str(&output)?;
+        assert_eq!(parsed["schema_version"], 1);
+        assert_eq!(parsed["command"], "doctor");
+        assert_eq!(parsed["status"], "ok");
+        assert_eq!(parsed["mode"], "read-only");
+        assert_eq!(parsed["mutation_executed"], false);
+        assert!(parsed.get("implementation").is_none());
+        assert!(parsed.get("child_processes").is_none());
+        assert!(parsed.get("validators_execution").is_none());
         fs::remove_dir_all(root)?;
         Ok(())
     }
