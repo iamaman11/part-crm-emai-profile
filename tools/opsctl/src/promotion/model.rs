@@ -103,7 +103,9 @@ pub struct PromotionFence {
 }
 
 impl PromotionFence {
-    pub fn new(expected_current_release_set_id: impl Into<String>) -> Result<Self, PromotionModelError> {
+    pub fn new(
+        expected_current_release_set_id: impl Into<String>,
+    ) -> Result<Self, PromotionModelError> {
         let expected_current_release_set_id = expected_current_release_set_id.into();
         require_non_empty(
             "expected_current_release_set_id",
