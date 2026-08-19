@@ -5,9 +5,10 @@ The shared validator in `_cloudflare_runtime_bindings_core.py` proves the curren
 source-to-Wrangler binding inventory. This entrypoint preserves the accepted
 AR-2 topology, resolver-isolation and D3 compatibility invariants and applies
 AR-5's accepted deletion authority for the legacy GENERATION_VERIFICATION Queue.
-When AR-8D introduces the governed secret-transport successor, the accepted D3
-promotion ceremony remains checked against its immutable predecessor workflow
-while the current workflow is checked by the AR-8D successor authority.
+AR-11 additionally makes the deployed Queue closure capability-profile aware:
+source-present Mail transport remains part of the accepted topology, while a
+Core profile does not require its bindings/resources until `mailbox_jobs` is
+activated. Historical D3 checks remain bound to their immutable predecessor.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTROL_CONFIG = ROOT / "deploy/cloudflare/wrangler.jsonc"
 RESOLVER_CONFIG = ROOT / "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc"
 TOPOLOGY = ROOT / "architecture/runtime-topology-ar2.json"
+RELEASE_ARCHITECTURE = ROOT / "architecture/release-architecture-ar11.json"
 PROMOTION_WORKFLOW = ROOT / ".github/workflows/mailbox-secret-resolver-promotion.yml"
 PROMOTION_ENTRYPOINT = ROOT / "scripts/mailbox-secret-resolver-promotion.py"
 PROMOTION_CORE = ROOT / "scripts/_mailbox_secret_resolver_promotion_core.py"
@@ -126,33 +128,66 @@ def producer_bindings(control: dict[str, Any], environment: str) -> set[str]:
     return observed
 
 
+def ar11_core_profile_aware() -> bool:
+    if not RELEASE_ARCHITECTURE.is_file():
+        return False
+    authority = load(RELEASE_ARCHITECTURE, "AR-11 release architecture")
+    if (
+        authority.get("schema_version") != 1
+        or authority.get("kind") != "AR11_RELEASE_ARCHITECTURE_SOURCE"
+        or authority.get("production_core_gate") != "BLOCKED"
+        or authority.get("production_mutation") is not False
+    ):
+        fail("AR-11 release architecture identity/state drifted")
+    profiles = array_value(authority.get("release_profiles"), "release profiles")
+    for profile in profiles:
+        row = object_value(profile, "release profile")
+        if row.get("profile_id") == "production-core-v1":
+            disabled = row.get("disabled_activation_units")
+            if not isinstance(disabled, list) or "mailbox_jobs" not in disabled:
+                fail("production-core-v1 must keep mailbox_jobs disabled")
+            return True
+    fail("AR-11 release architecture lacks production-core-v1")
+
+
 def validate_queue_consumers(control: dict[str, Any]) -> None:
-    expected = {
-        "staging": {
-            "${STAGING_INTEGRATION_EVENTS_QUEUE}",
-            "${STAGING_MAILBOX_JOBS_QUEUE}",
-        },
-        "production": {
-            "${PRODUCTION_INTEGRATION_EVENTS_QUEUE}",
-            "${PRODUCTION_MAILBOX_JOBS_QUEUE}",
-        },
-    }
+    if ar11_core_profile_aware():
+        expected = {
+            "staging": {"${STAGING_INTEGRATION_EVENTS_QUEUE}"},
+            "production": {"${PRODUCTION_INTEGRATION_EVENTS_QUEUE}"},
+        }
+        expectation = "active Core profile closure"
+    else:
+        expected = {
+            "staging": {
+                "${STAGING_INTEGRATION_EVENTS_QUEUE}",
+                "${STAGING_MAILBOX_JOBS_QUEUE}",
+            },
+            "production": {
+                "${PRODUCTION_INTEGRATION_EVENTS_QUEUE}",
+                "${PRODUCTION_MAILBOX_JOBS_QUEUE}",
+            },
+        }
+        expectation = "pre-AR-11 integration-events + mailbox-jobs topology"
     for environment, wanted in expected.items():
         observed = consumer_queues(control, environment)
         if observed != wanted:
             fail(
-                f"{environment} Queue consumers must be exactly integration-events + mailbox-jobs; "
+                f"{environment} Queue consumers must match {expectation}; "
                 f"observed={sorted(observed)!r}"
             )
 
 
 def validate_queue_producers(control: dict[str, Any]) -> None:
-    wanted = {"INTEGRATION_EVENTS", "MAILBOX_JOBS"}
+    wanted = {"INTEGRATION_EVENTS"} if ar11_core_profile_aware() else {
+        "INTEGRATION_EVENTS",
+        "MAILBOX_JOBS",
+    }
     for environment in ("staging", "production"):
         observed = producer_bindings(control, environment)
         if observed != wanted:
             fail(
-                f"{environment} Queue producer bindings must be exactly integration-events + mailbox-jobs; "
+                f"{environment} Queue producer bindings must match the active deployment closure; "
                 f"observed={sorted(observed)!r}"
             )
 
@@ -451,6 +486,38 @@ def self_test(control: dict[str, Any], topology: dict[str, Any], workflow: str) 
     else:
         fail("GENERATION_VERIFICATION consumer negative fixture unexpectedly passed")
 
+    if ar11_core_profile_aware():
+        restored_mailbox_jobs = copy.deepcopy(control)
+        production = object_value(
+            object_value(restored_mailbox_jobs["env"], "env")["production"], "production"
+        )
+        queues = object_value(production["queues"], "queues")
+        array_value(queues["producers"], "producers").append(
+            {
+                "binding": "MAILBOX_JOBS",
+                "queue": "${PRODUCTION_MAILBOX_JOBS_QUEUE}",
+            }
+        )
+        array_value(queues["consumers"], "consumers").append(
+            {
+                "queue": "${PRODUCTION_MAILBOX_JOBS_QUEUE}",
+                "max_batch_size": 10,
+                "max_batch_timeout": 5,
+            }
+        )
+        try:
+            validate_queue_producers(restored_mailbox_jobs)
+        except Ar2TopologyError:
+            pass
+        else:
+            fail("disabled mailbox_jobs producer unexpectedly passed Core closure")
+        try:
+            validate_queue_consumers(restored_mailbox_jobs)
+        except Ar2TopologyError:
+            pass
+        else:
+            fail("disabled mailbox_jobs consumer unexpectedly passed Core closure")
+
     drifted_topology = copy.deepcopy(topology)
     for row in drifted_topology["resources"]:
         if row["id"] == "generation_verification":
@@ -498,8 +565,9 @@ def main() -> int:
         validate_d3_gate(d3_workflow)
         self_test(control, topology, d3_workflow)
         print(
-            "AR-5 runtime authority cleanup, accepted AR-2 topology, resolver isolation, "
-            "and governed D3-to-AR-8D production fail-closed compatibility checks passed."
+            "AR-5 runtime authority cleanup, accepted AR-2 topology, profile-aware AR-11 "
+            "deployment closure, resolver isolation, and governed D3-to-AR-8D production "
+            "fail-closed compatibility checks passed."
         )
         return 0
     except (OSError, json.JSONDecodeError, Ar2TopologyError, KeyError) as error:
