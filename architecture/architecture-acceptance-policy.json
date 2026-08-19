@@ -45,6 +45,14 @@
     "duplicate_contexts_forbidden": true,
     "all_must_succeed_on_exact_candidate": true
   },
+  "applicable_permanent_workflows": {
+    "registry": "architecture/github-actions-registry.json",
+    "category": "PERMANENT_REQUIRED",
+    "applicability_rule": "canonical workflow declares pull_request trigger",
+    "every_applicable_workflow_must_have_exact_candidate_run": true,
+    "all_must_succeed_on_exact_candidate": true,
+    "missing_run_fails_closed": true
+  },
   "acceptance_metadata": {
     "storage": "annotated_git_tag",
     "namespace": "architecture/accepted/",

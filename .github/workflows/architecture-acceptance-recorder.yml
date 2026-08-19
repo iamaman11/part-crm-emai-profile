@@ -156,7 +156,7 @@ jobs:
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
           python - <<'PY'
-          import json, os, subprocess
+          import json, os, re, subprocess
           from pathlib import Path
 
           def pointer(document, value):
@@ -191,20 +191,28 @@ jobs:
 
           registry = json.loads(Path('architecture/github-actions-registry.json').read_text(encoding='utf-8'))
           permanent = {row['path'] for row in registry.get('active_registrations', []) if row.get('category') == 'PERMANENT_REQUIRED'}
+          applicable_expected = set()
+          trigger_pattern = re.compile(r'^  pull_request:\s*(?:#.*)?$', re.MULTILINE)
+          for workflow_path in permanent:
+              body = Path(workflow_path).read_text(encoding='utf-8')
+              if trigger_pattern.search(body):
+                  applicable_expected.add(workflow_path)
+          if not applicable_expected:
+              raise SystemExit('canonical registry yields no pull-request-applicable permanent workflows')
+
           runs = json.loads(Path('workflow-runs.json').read_text(encoding='utf-8'))
           if runs.get('total_count', 0) > 100:
               raise SystemExit('exact-head workflow-run count exceeds bounded recorder page')
-          applicable = {}
+          applicable_observed = {}
           for run in runs.get('workflow_runs', []):
               workflow_path = run.get('path')
-              if workflow_path in permanent and run.get('head_sha') == os.environ['PR_HEAD_SHA'] and run.get('event') == 'pull_request':
-                  if workflow_path not in applicable or int(run.get('id', 0)) > int(applicable[workflow_path].get('id', 0)):
-                      applicable[workflow_path] = run
-          if not applicable:
-              raise SystemExit('no applicable permanent exact-head workflows were observed')
-          not_green = [workflow_path for workflow_path, run in applicable.items() if run.get('status') != 'completed' or run.get('conclusion') != 'success']
-          if not_green:
-              raise SystemExit(f'applicable permanent workflows are not exact-green: {not_green}')
+              if workflow_path in applicable_expected and run.get('head_sha') == os.environ['PR_HEAD_SHA'] and run.get('event') == 'pull_request':
+                  if workflow_path not in applicable_observed or int(run.get('id', 0)) > int(applicable_observed[workflow_path].get('id', 0)):
+                      applicable_observed[workflow_path] = run
+          missing_runs = sorted(applicable_expected - set(applicable_observed))
+          not_green = sorted(workflow_path for workflow_path, run in applicable_observed.items() if run.get('status') != 'completed' or run.get('conclusion') != 'success')
+          if missing_runs or not_green:
+              raise SystemExit(f'applicable permanent workflows incomplete: missing={missing_runs}, not_green={not_green}')
 
           review = json.loads(Path('review-state.json').read_text(encoding='utf-8'))['data']['repository']['pullRequest']
           threads = review['reviewThreads']
@@ -232,8 +240,8 @@ jobs:
               'merge_tree': merge_tree,
               'required_status_contexts_total': len(required),
               'required_status_contexts_success': len(required),
-              'applicable_permanent_workflows_total': len(applicable),
-              'applicable_permanent_workflows_success': len(applicable),
+              'applicable_permanent_workflows_total': len(applicable_expected),
+              'applicable_permanent_workflows_success': len(applicable_expected),
               'behind_by': 0,
               'blocking_reviews': 0,
               'unresolved_review_threads': 0,
