@@ -281,9 +281,7 @@ fn resolve_regular_repo_file(
         };
         cursor.push(part);
         let metadata = fs::symlink_metadata(&cursor).map_err(|error| {
-            ReleaseModelError::new(format!(
-                "RELEASE_INPUT_MISSING: {relative}: {error}"
-            ))
+            ReleaseModelError::new(format!("RELEASE_INPUT_MISSING: {relative}: {error}"))
         })?;
         if metadata.file_type().is_symlink() {
             return Err(ReleaseModelError::new(format!(
