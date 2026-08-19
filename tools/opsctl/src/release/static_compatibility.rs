@@ -21,7 +21,12 @@ pub fn evaluate(
     if !contracts_match(&resolved, &manifest.contracts)? {
         blockers.push("PROTOCOL_INCOMPATIBLE:contracts".to_owned());
     }
-    if !protocols_match(&resolved, &manifest.contracts, &manifest.protocols, mailbox_admin)? {
+    if !protocols_match(
+        &resolved,
+        &manifest.contracts,
+        &manifest.protocols,
+        mailbox_admin,
+    )? {
         blockers.push("PROTOCOL_INCOMPATIBLE:runtime_protocols".to_owned());
     }
     if !runtime_matches(&resolved, &manifest.runtime_compatibility)? {
@@ -76,7 +81,8 @@ fn contracts_match(
             })
         })
         .collect::<Vec<_>>();
-    let canonical = canonical_json(&Value::Array(canonical_entries)).map_err(ReleaseModelError::new)?;
+    let canonical =
+        canonical_json(&Value::Array(canonical_entries)).map_err(ReleaseModelError::new)?;
     let expected_digest = sha256_hex(canonical.as_bytes());
     Ok(required_string(contracts, "sha256")? == expected_digest)
 }
@@ -198,8 +204,8 @@ mod tests {
     }
 
     #[test]
-    fn contract_inventory_is_owned_by_canonical_topology()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn contract_inventory_is_owned_by_canonical_topology() -> Result<(), Box<dyn std::error::Error>>
+    {
         let topology = ReleaseInputTopology::load(&root())?;
         let contracts = topology.inputs_for_consumer("release_set.contracts");
         assert_eq!(contracts.len(), 10);
@@ -208,9 +214,11 @@ mod tests {
                 .iter()
                 .any(|input| input.release_identity_source == "openapi/v1/openapi.json")
         );
-        assert!(contracts.iter().all(|input| {
-            input.release_identity_source != "openapi/v1/control-plane.yaml"
-        }));
+        assert!(
+            contracts
+                .iter()
+                .all(|input| { input.release_identity_source != "openapi/v1/control-plane.yaml" })
+        );
         Ok(())
     }
 }
