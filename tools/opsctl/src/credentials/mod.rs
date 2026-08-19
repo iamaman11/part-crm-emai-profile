@@ -2,9 +2,8 @@ use crate::OpsctlError;
 use crate::repository::canonical_json_document;
 use std::path::Path;
 
-/// Current accepted AR-8/AR-9 metadata projection behind the legacy
-/// `credential-lifecycle` CLI spelling. The future nested `credentials status`
-/// spelling is intentionally not activated in AR-9.
+/// Accepted metadata-only credential lifecycle projection behind
+/// `opsctl credentials status`.
 pub(crate) fn lifecycle(root: &Path) -> Result<String, OpsctlError> {
     canonical_json_document(
         root,
@@ -13,14 +12,18 @@ pub(crate) fn lifecycle(root: &Path) -> Result<String, OpsctlError> {
     )
 }
 
-/// Current accepted metadata-only rotation/recovery contract behind the legacy
-/// `rotation-plan` CLI spelling. AR-13 owns the future rehearsal-backed
-/// `credentials rotation-plan` family.
+/// Accepted metadata-only rotation/recovery projection behind
+/// `opsctl credentials rotation-plan`.
+///
+/// This command does not rotate credentials. AR-13 owns rehearsal-backed
+/// readiness and mutation semantics.
 pub(crate) fn rotation_plan(root: &Path) -> Result<String, OpsctlError> {
     canonical_json_document(root, "architecture/operator-contract.json", "rotation-plan")
 }
 
-/// Target command family. This is documentation/compile-time structure only;
-/// AR-9 does not expose these values as executable CLI actions.
-pub const TARGET_COMMANDS: &[&str] = &["status", "readiness", "rotation-plan"];
-pub const ACTIVATION_OWNER: &str = "AR-10/AR-13";
+/// AR-10 activates only metadata reads in the modular credentials namespace.
+pub const ACTIVE_METADATA_COMMANDS: &[&str] = &["status", "rotation-plan"];
+
+/// AR-13 owns the first rehearsal-backed readiness/rotation operational semantics.
+pub const DEFERRED_OPERATIONAL_COMMANDS: &[&str] = &["readiness"];
+pub const DEFERRED_OPERATIONAL_OWNER: &str = "AR-13";
