@@ -76,11 +76,15 @@ For an existing generation:
 
 - browser state lives in a stable generation-owned `user_data_dir`;
 - one complete canonical `camoufox-config.json` is materialized once for the candidate generation and retained;
-- `camoufox-identity.json` binds the config digest, profile-stable probe digest, policy/config schema, exact component tuple and runtime-lock digest;
-- `BrowserIdentityManifest.fingerprint_source` binds the identity-file digest while `fingerprint_config_sha256` binds the exact config bytes;
-- every allowed relaunch reuses that exact config rather than invoking random/default BrowserForge identity generation;
-- normal launch validates the Bridge writer lock, materialization binding, runtime inventory identity, identity file, config digest and profile-stable probe before reporting `ready`;
+- `BrowserIdentityManifest.fingerprint_config_sha256` binds the exact canonical config bytes;
+- `BrowserIdentityManifest.fingerprint_source` is versioned as `profile-stability-v1-probe-<sha256>` and binds the accepted profile-stable probe without creating a second identity sidecar authority;
+- the approved runtime-bundle inventory binds both the exact real Camouhost entrypoint and `runtime-lock.json`, while `BrowserIdentityManifest.runtime_version/runtime_inventory_sha256` binds the selected bundle to the materialized generation;
+- every allowed relaunch reuses the exact retained config rather than invoking random/default BrowserForge identity generation;
+- normal launch validates Bridge writer ownership, materialization freshness, network policy, runtime inventory identity, config digest and profile-stable probe before reporting `ready`;
+- the one-time launch binding is published only after those checks and is consumed by the managed subprocess spawn exactly once;
 - an incompatible runtime/policy/config transition requires a candidate generation and recertification rather than in-place mutation.
+
+This deliberately uses the already accepted manifest + runtime-inventory authorities instead of introducing `camoufox-identity.json` or another mutable state file. Fewer authorities reduce drift and replay surface without weakening cryptographic binding.
 
 Raw fingerprint config, profile entropy, profile payload and credentials are not normal log/audit/support evidence.
 
