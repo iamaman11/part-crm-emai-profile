@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { type FormEvent } from 'react';
+import { useCapabilities } from '../../app/CapabilityContext';
 import { useTenant } from '../../app/TenantContext';
 import { createClient, getClient, getClientHistory, listClients } from './api';
 import { StatusMessage } from '../../shared/ui/StatusMessage';
@@ -21,6 +22,7 @@ export function ClientsWorkspace({
   onClientSelected: (clientId: string) => void;
 }) {
   const { tenantId } = useTenant();
+  const { enabled } = useCapabilities();
   const queryClient = useQueryClient();
   const requireTenant = tenantId.length > 0;
 
@@ -136,7 +138,7 @@ export function ClientsWorkspace({
             client={selectedClient}
             onMutated={refreshSelected}
           />
-          <ClientMailPanel clientId={selectedClient.clientId} />
+          {enabled('mailbox_read') ? <ClientMailPanel clientId={selectedClient.clientId} /> : null}
         </>
       )}
 
