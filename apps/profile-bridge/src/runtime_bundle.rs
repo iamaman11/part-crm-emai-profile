@@ -209,16 +209,9 @@ mod tests {
         RuntimeManifestError, RuntimePlatform, Sha256Digest,
     };
 
+    #[derive(Default)]
     struct CloseFailCamouhost {
         inner: FakeCamouhost,
-    }
-
-    impl Default for CloseFailCamouhost {
-        fn default() -> Self {
-            Self {
-                inner: FakeCamouhost::default(),
-            }
-        }
     }
 
     impl CamouhostPort for CloseFailCamouhost {
