@@ -25,6 +25,7 @@ const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_IPC_RESPONSE_BYTES: usize = 1024;
 const IDENTITY_COMPATIBILITY_VERSION: u32 = 2;
 const FINGERPRINT_SOURCE_PREFIX: &str = "profile-stability-v1-probe-";
+const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
 #[derive(Clone)]
 pub struct RuntimeBindingSlot {
@@ -198,7 +199,13 @@ fn valid_sha256(value: &str) -> bool {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
