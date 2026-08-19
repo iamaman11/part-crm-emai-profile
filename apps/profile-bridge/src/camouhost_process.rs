@@ -1,18 +1,15 @@
+use crate::ProcessControlPort;
 use crate::browser_execution::BrowserLaunchBlocker;
-use crate::browser_preflight::{
-    BoundBrowserLaunchPreflight, BrowserRuntimeObservationPort,
-};
+use crate::browser_preflight::{BoundBrowserLaunchPreflight, BrowserRuntimeObservationPort};
 use crate::local_profile::GenerationWorkspace;
-use crate::operator_flow::{BrowserLaunchPreflightPort, RuntimeBundleSelectionPort};
+use crate::operator_flow::BrowserLaunchPreflightPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
-use crate::{ProcessControlPort};
 use bridge_domain::{
     BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort,
 };
 use browser_execution_domain::{MaterializationBinding, NetworkIdentityPolicy};
 use profile_platform_primitives::{DeviceId, SessionId};
 use runtime_bundle_domain::BundleRelativePath;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
@@ -21,15 +18,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-const IDENTITY_NAME: &str = "camoufox-identity.json";
 const CONFIG_NAME: &str = "camoufox-config.json";
 const REAL_ENTRYPOINT: &str = "camouhost/real.py";
 const RUNTIME_LOCK_PATH: &str = "camouhost/runtime-lock.json";
-const MAX_IDENTITY_BYTES: u64 = 64 * 1024;
+const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_IPC_RESPONSE_BYTES: usize = 1024;
-const FINGERPRINT_POLICY: &str = "profile-stability-v1";
-const FINGERPRINT_CONFIG_SCHEMA: &str = "camoufox-canonical-config-v1";
-const IDENTITY_SOURCE_PREFIX: &str = "identity-v1-";
+const IDENTITY_COMPATIBILITY_VERSION: u32 = 2;
+const FINGERPRINT_SOURCE_PREFIX: &str = "profile-stability-v1-probe-";
 
 #[derive(Clone)]
 pub struct RuntimeBindingSlot {
@@ -80,6 +75,8 @@ struct RuntimeLaunchBinding {
     entrypoint_sha256: String,
 }
 
+/// Wraps the already accepted browser preflight and publishes one launch capability only after
+/// generation, writer, network and runtime identity have all been verified.
 pub struct RuntimeBindingBrowserLaunchPreflight<O> {
     inner: BoundBrowserLaunchPreflight<O>,
     expected: MaterializationBinding,
@@ -136,115 +133,37 @@ fn validate_runtime_identity(
     runtime_bundle: &ApprovedRuntimeBundle,
 ) -> Result<RuntimeLaunchBinding, BrowserLaunchBlocker> {
     let browser_identity = expected.browser_identity();
-    if browser_identity.compatibility_version() < 2 {
-        return Err(BrowserLaunchBlocker::MaterializationStale);
-    }
-    let source = browser_identity.fingerprint_source();
-    let identity_digest = source
-        .strip_prefix(IDENTITY_SOURCE_PREFIX)
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    if !valid_sha256(identity_digest) {
-        return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
-    }
-
-    let identity_path = workspace.path().join(IDENTITY_NAME);
-    let identity_bytes = read_regular_bounded(&identity_path, MAX_IDENTITY_BYTES)?;
-    if sha256_hex(&identity_bytes) != identity_digest {
-        return Err(BrowserLaunchBlocker::MaterializationStale);
-    }
-    let identity: Value = serde_json::from_slice(&identity_bytes)
-        .map_err(|_| BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    let object = identity
-        .as_object()
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    let required = [
-        "browser",
-        "components",
-        "fingerprint_config_schema",
-        "fingerprint_config_sha256",
-        "fingerprint_policy_version",
-        "profile_stable_probe_sha256",
-        "runtime_lock_sha256",
-        "schema_version",
-    ];
-    if object.len() != required.len() || required.iter().any(|key| !object.contains_key(*key)) {
-        return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
-    }
-    if object.get("schema_version").and_then(Value::as_u64) != Some(1)
-        || object
-            .get("fingerprint_policy_version")
-            .and_then(Value::as_str)
-            != Some(FINGERPRINT_POLICY)
-        || object
-            .get("fingerprint_config_schema")
-            .and_then(Value::as_str)
-            != Some(FINGERPRINT_CONFIG_SCHEMA)
-    {
+    if browser_identity.compatibility_version() != IDENTITY_COMPATIBILITY_VERSION {
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
 
-    let config_sha256 = required_digest(object, "fingerprint_config_sha256")?;
+    let probe_sha256 = browser_identity
+        .fingerprint_source()
+        .strip_prefix(FINGERPRINT_SOURCE_PREFIX)
+        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
+    if !valid_sha256(probe_sha256) {
+        return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
+    }
+
+    let config_bytes = read_regular_bounded(&workspace.path().join(CONFIG_NAME), MAX_CONFIG_BYTES)?;
+    let config_sha256 = sha256_hex(&config_bytes);
     if config_sha256 != browser_identity.fingerprint_config_sha256() {
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
-    let probe_sha256 = required_digest(object, "profile_stable_probe_sha256")?;
-    let runtime_lock_sha256 = required_digest(object, "runtime_lock_sha256")?;
 
-    let config_bytes = read_regular_bounded(&workspace.path().join(CONFIG_NAME), 1024 * 1024)?;
-    if sha256_hex(&config_bytes) != config_sha256 {
+    let runtime_lock_sha256 = inventory_digest(runtime_bundle, RUNTIME_LOCK_PATH)?.to_owned();
+    if runtime_bundle.manifest().entrypoint().as_str() != REAL_ENTRYPOINT {
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
-
-    let runtime_lock = inventory_digest(runtime_bundle, RUNTIME_LOCK_PATH)?;
-    if runtime_lock != runtime_lock_sha256 {
-        return Err(BrowserLaunchBlocker::MaterializationStale);
-    }
-    let entrypoint = runtime_bundle.manifest().entrypoint().as_str();
-    if entrypoint != REAL_ENTRYPOINT {
-        return Err(BrowserLaunchBlocker::MaterializationStale);
-    }
-    let entrypoint_sha256 = inventory_digest(runtime_bundle, entrypoint)?.to_owned();
-
-    let browser = object
-        .get("browser")
-        .and_then(Value::as_object)
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    let components = object
-        .get("components")
-        .and_then(Value::as_object)
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    for key in ["repository", "release_commit", "version"] {
-        if browser.get(key).and_then(Value::as_str).is_none_or(str::is_empty) {
-            return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
-        }
-    }
-    for key in ["browserforge", "camoufox_python", "playwright"] {
-        if components.get(key).and_then(Value::as_str).is_none_or(str::is_empty) {
-            return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
-        }
-    }
+    let entrypoint_sha256 = inventory_digest(runtime_bundle, REAL_ENTRYPOINT)?.to_owned();
 
     Ok(RuntimeLaunchBinding {
         profile_root: workspace.path().to_path_buf(),
-        runtime_lock_sha256: runtime_lock_sha256.to_owned(),
-        fingerprint_config_sha256: config_sha256.to_owned(),
+        runtime_lock_sha256,
+        fingerprint_config_sha256: config_sha256,
         profile_stable_probe_sha256: probe_sha256.to_owned(),
         entrypoint_sha256,
     })
-}
-
-fn required_digest<'a>(
-    object: &'a serde_json::Map<String, Value>,
-    key: &str,
-) -> Result<&'a str, BrowserLaunchBlocker> {
-    let value = object
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or(BrowserLaunchBlocker::InvalidMaterializationEvidence)?;
-    if !valid_sha256(value) {
-        return Err(BrowserLaunchBlocker::InvalidMaterializationEvidence);
-    }
-    Ok(value)
 }
 
 fn inventory_digest<'a>(
@@ -310,8 +229,11 @@ impl ManagedCamouhostConfig {
         }
         if initial_url.as_deref().is_some_and(|url| {
             url.len() > 2048
-                || url.contains(['\n', '\r'])
-                || !url.starts_with(("https://", "http://", "about:"))
+                || url.contains('\n')
+                || url.contains('\r')
+                || !(url.starts_with("https://")
+                    || url.starts_with("http://")
+                    || url.starts_with("about:"))
         }) {
             return Err(BridgePortError::InvalidResponse);
         }
@@ -537,18 +459,7 @@ impl CamouhostPort for ManagedCamouhostIpc {
             .and_then(|()| stdin.flush())
             .map_err(|_| BridgePortError::Unavailable)?;
         let stdout = state.stdout.as_mut().ok_or(BridgePortError::Unavailable)?;
-        let mut response = String::new();
-        stdout
-            .read_line(&mut response)
-            .map_err(|_| BridgePortError::Unavailable)?;
-        if response.is_empty()
-            || response.len() > MAX_IPC_RESPONSE_BYTES
-            || !response.ends_with('\n')
-            || response.contains('\r')
-        {
-            return Err(BridgePortError::InvalidResponse);
-        }
-        response.pop();
+        let response = read_bounded_line(stdout)?;
         let parsed = CamouhostMessage::parse(&response)
             .map_err(|_| BridgePortError::InvalidResponse)?;
         parsed
@@ -556,6 +467,31 @@ impl CamouhostPort for ManagedCamouhostIpc {
             .map_err(|_| BridgePortError::InvalidResponse)?;
         Ok(parsed)
     }
+}
+
+fn read_bounded_line(reader: &mut BufReader<ChildStdout>) -> Result<String, BridgePortError> {
+    let mut bytes = Vec::new();
+    loop {
+        let available = reader.fill_buf().map_err(|_| BridgePortError::Unavailable)?;
+        if available.is_empty() {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |index| index + 1);
+        if bytes.len().saturating_add(consumed) > MAX_IPC_RESPONSE_BYTES {
+            return Err(BridgePortError::InvalidResponse);
+        }
+        bytes.extend_from_slice(&available[..consumed]);
+        reader.consume(consumed);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if bytes.last() != Some(&b'\n') || bytes.contains(&b'\r') || bytes.contains(&b'\0') {
+        return Err(BridgePortError::InvalidResponse);
+    }
+    bytes.pop();
+    String::from_utf8(bytes).map_err(|_| BridgePortError::InvalidResponse)
 }
 
 fn request_frame(message: &CamouhostMessage) -> Result<String, BridgePortError> {
@@ -586,7 +522,7 @@ fn verify_file_digest(path: &Path, expected: &str) -> Result<(), BridgePortError
 #[cfg(test)]
 mod tests {
     use super::{
-        FINGERPRINT_CONFIG_SCHEMA, FINGERPRINT_POLICY, IDENTITY_NAME, IDENTITY_SOURCE_PREFIX,
+        FINGERPRINT_SOURCE_PREFIX, IDENTITY_COMPATIBILITY_VERSION,
         RuntimeBindingBrowserLaunchPreflight, RuntimeBindingSlot, sha256_hex,
     };
     use crate::browser_execution::persist_materialization_binding;
@@ -605,7 +541,6 @@ mod tests {
         BundleRelativePath, InventoryEntry, RuntimeInventory, RuntimeManifest, RuntimePlatform,
         Sha256Digest,
     };
-    use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -686,8 +621,34 @@ mod tests {
         )?)
     }
 
+    fn binding(
+        workspace: &GenerationWorkspace,
+        tenant: TenantId,
+        profile: ProfileId,
+        generation: GenerationId,
+        approved: &ApprovedRuntimeBundle,
+        config_sha256: String,
+        probe_sha256: &str,
+    ) -> Result<MaterializationBinding, Box<dyn std::error::Error>> {
+        let browser_identity = BrowserIdentityManifest::new(
+            IDENTITY_COMPATIBILITY_VERSION,
+            approved.manifest().runtime_version(),
+            approved.manifest().inventory_sha256().as_str(),
+            format!("{FINGERPRINT_SOURCE_PREFIX}{probe_sha256}"),
+            config_sha256,
+        )?;
+        Ok(MaterializationBinding::new(
+            tenant,
+            profile,
+            generation,
+            "d".repeat(64),
+            workspace.inventory()?.inventory_digest(),
+            browser_identity,
+        )?)
+    }
+
     #[test]
-    fn runtime_identity_is_cryptographically_bound_before_slot_publication()
+    fn exact_config_and_probe_are_bound_before_slot_publication()
     -> Result<(), Box<dyn std::error::Error>> {
         let root_path = root_path()?;
         let root = MaterializationRoot::open_or_create(&root_path)?;
@@ -697,54 +658,22 @@ mod tests {
         let device = DeviceId::parse("device_01JAR10RUNTIME")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 7)?;
-
         let config = b"{}\n";
         fs::write(workspace.path().join("camoufox-config.json"), config)?;
-        let config_sha256 = sha256_hex(config);
-        let runtime_lock_sha256 = "b".repeat(64);
-        let probe_sha256 = "c".repeat(64);
-        let identity = json!({
-            "browser": {
-                "release_commit": "0583c3ec94f5a9df5cb2d09553fbfe80589b6e2d",
-                "repository": "daijro/camoufox",
-                "version": "152.0.4-beta.28"
-            },
-            "components": {
-                "browserforge": "1.2.4",
-                "camoufox_python": "0.5.5",
-                "playwright": "1.60.0"
-            },
-            "fingerprint_config_schema": FINGERPRINT_CONFIG_SCHEMA,
-            "fingerprint_config_sha256": config_sha256,
-            "fingerprint_policy_version": FINGERPRINT_POLICY,
-            "profile_stable_probe_sha256": probe_sha256,
-            "runtime_lock_sha256": runtime_lock_sha256,
-            "schema_version": 1
-        });
-        let mut identity_bytes = serde_json::to_vec(&identity)?;
-        identity_bytes.push(b'\n');
-        fs::write(workspace.path().join(IDENTITY_NAME), &identity_bytes)?;
-        let source = format!("{IDENTITY_SOURCE_PREFIX}{}", sha256_hex(&identity_bytes));
-        let approved = bundle(&runtime_lock_sha256)?;
-        let browser_identity = BrowserIdentityManifest::new(
-            2,
-            approved.manifest().runtime_version(),
-            approved.manifest().inventory_sha256().as_str(),
-            source,
-            config_sha256,
-        )?;
-        let binding = MaterializationBinding::new(
+        let approved = bundle(&"b".repeat(64))?;
+        let expected = binding(
+            &workspace,
             tenant,
             profile,
             generation,
-            "d".repeat(64),
-            workspace.inventory()?.inventory_digest(),
-            browser_identity,
+            &approved,
+            sha256_hex(config),
+            &"c".repeat(64),
         )?;
-        persist_materialization_binding(&workspace, &binding)?;
+        persist_materialization_binding(&workspace, &expected)?;
         let slot = RuntimeBindingSlot::new();
         let mut preflight = RuntimeBindingBrowserLaunchPreflight::new(
-            binding,
+            expected,
             policy()?,
             FixedObservation(observation()?),
             slot.clone(),
@@ -757,52 +686,33 @@ mod tests {
     }
 
     #[test]
-    fn runtime_lock_substitution_is_rejected_before_slot_publication()
+    fn config_substitution_is_rejected_before_slot_publication()
     -> Result<(), Box<dyn std::error::Error>> {
         let root_path = root_path()?;
         let root = MaterializationRoot::open_or_create(&root_path)?;
-        let tenant = TenantId::parse("tenant_01JAR10LOCK")?;
-        let profile = ProfileId::parse("profile_01JAR10LOCK")?;
-        let generation = GenerationId::parse("generation_01JAR10LOCK")?;
-        let device = DeviceId::parse("device_01JAR10LOCK")?;
+        let tenant = TenantId::parse("tenant_01JAR10DRIFT")?;
+        let profile = ProfileId::parse("profile_01JAR10DRIFT")?;
+        let generation = GenerationId::parse("generation_01JAR10DRIFT")?;
+        let device = DeviceId::parse("device_01JAR10DRIFT")?;
         let workspace = root.create_generation(&tenant, &profile, &generation)?;
         let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 8)?;
         let config = b"{}\n";
         fs::write(workspace.path().join("camoufox-config.json"), config)?;
-        let config_sha256 = sha256_hex(config);
-        let identity = json!({
-            "browser": {"release_commit":"x","repository":"daijro/camoufox","version":"152.0.4-beta.28"},
-            "components": {"browserforge":"1.2.4","camoufox_python":"0.5.5","playwright":"1.60.0"},
-            "fingerprint_config_schema": FINGERPRINT_CONFIG_SCHEMA,
-            "fingerprint_config_sha256": config_sha256,
-            "fingerprint_policy_version": FINGERPRINT_POLICY,
-            "profile_stable_probe_sha256": "c".repeat(64),
-            "runtime_lock_sha256": "b".repeat(64),
-            "schema_version": 1
-        });
-        let mut identity_bytes = serde_json::to_vec(&identity)?;
-        identity_bytes.push(b'\n');
-        fs::write(workspace.path().join(IDENTITY_NAME), &identity_bytes)?;
-        let approved = bundle(&"f".repeat(64))?;
-        let browser_identity = BrowserIdentityManifest::new(
-            2,
-            approved.manifest().runtime_version(),
-            approved.manifest().inventory_sha256().as_str(),
-            format!("{IDENTITY_SOURCE_PREFIX}{}", sha256_hex(&identity_bytes)),
-            config_sha256,
-        )?;
-        let binding = MaterializationBinding::new(
+        let approved = bundle(&"b".repeat(64))?;
+        let expected = binding(
+            &workspace,
             tenant,
             profile,
             generation,
-            "d".repeat(64),
-            workspace.inventory()?.inventory_digest(),
-            browser_identity,
+            &approved,
+            sha256_hex(config),
+            &"c".repeat(64),
         )?;
-        persist_materialization_binding(&workspace, &binding)?;
+        persist_materialization_binding(&workspace, &expected)?;
+        fs::write(workspace.path().join("camoufox-config.json"), b"{\"drift\":true}\n")?;
         let slot = RuntimeBindingSlot::new();
         let mut preflight = RuntimeBindingBrowserLaunchPreflight::new(
-            binding,
+            expected,
             policy()?,
             FixedObservation(observation()?),
             slot.clone(),
