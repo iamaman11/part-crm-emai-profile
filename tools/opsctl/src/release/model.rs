@@ -52,8 +52,9 @@ pub struct ReleaseSetIdentity {
 
 impl ReleaseSetIdentity {
     pub fn parse_json(input: &str) -> Result<Self, ReleaseModelError> {
-        let value: Value = serde_json::from_str(input)
-            .map_err(|error| ReleaseModelError::new(format!("invalid release-set JSON: {error}")))?;
+        let value: Value = serde_json::from_str(input).map_err(|error| {
+            ReleaseModelError::new(format!("invalid release-set JSON: {error}"))
+        })?;
         let root = object(&value, "release-set root")?;
 
         let schema_version = required_u64(root, "schema_version")?;
@@ -70,7 +71,9 @@ impl ReleaseSetIdentity {
         let source_object = object(source_value, "source")?;
         let repository = required_string(source_object, "repository")?;
         if repository.trim().is_empty() {
-            return Err(ReleaseModelError::new("source.repository must not be empty"));
+            return Err(ReleaseModelError::new(
+                "source.repository must not be empty",
+            ));
         }
         let commit_sha = required_string(source_object, "commit_sha")?;
         validate_sha256_like(&commit_sha, "source.commit_sha")?;
@@ -164,7 +167,10 @@ fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, ReleaseMo
         .ok_or_else(|| ReleaseModelError::new(format!("field {key} must be an unsigned integer")))
 }
 
-fn object<'a>(value: &'a Value, context: &str) -> Result<&'a Map<String, Value>, ReleaseModelError> {
+fn object<'a>(
+    value: &'a Value,
+    context: &str,
+) -> Result<&'a Map<String, Value>, ReleaseModelError> {
     value
         .as_object()
         .ok_or_else(|| ReleaseModelError::new(format!("{context} must be a JSON object")))
