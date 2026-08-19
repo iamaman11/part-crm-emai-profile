@@ -71,6 +71,24 @@
     "historical_evidence": "static exact Git commit/blob provenance through the AR-8D transition checker; historical executable replay is forbidden",
     "current_callable_python_mutator": false
   },
+  "post_ar11_cleanup": {
+    "tracking_issue": 375,
+    "production_mutation": false,
+    "retained_transition_provenance": [
+      {
+        "path": "scripts/check-documentation-authority-legacy.py",
+        "disposition": "TRANSITION_PROVENANCE_ONLY",
+        "current_callable_authority": false,
+        "current_importers_required": 0,
+        "replacement_authorities": [
+          "scripts/check-documentation-authority.py",
+          ".github/scripts/architecture-acceptance.mjs",
+          "architecture/architecture-acceptance-policy.json"
+        ],
+        "rationale": "pre-AR-9 mutable lifecycle/documentation engine is retained only as readable historical provenance; current validation no longer imports, monkey-patches or executes it"
+      }
+    ]
+  },
   "current_summary": {
     "tracked_python_files": 121,
     "DELETE_AFTER_SEQUENCE": 0,
