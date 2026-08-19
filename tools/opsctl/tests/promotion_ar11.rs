@@ -51,9 +51,10 @@ fn static_compatibility_fields() -> Result<(Value, Value, Value), Box<dyn std::e
             .unwrap_or_default()
             .cmp(right["path"].as_str().unwrap_or_default())
     });
+    let contract_identity = Value::Array(contract_files.clone());
     let contracts = json!({
         "files": contract_files,
-        "sha256": sha256_hex(canonical_json(&contract_files)?.as_bytes()),
+        "sha256": sha256_hex(canonical_json(&contract_identity)?.as_bytes()),
     });
 
     let control_contract = fs::read(root.join("crates/control-plane-contract/src/lib.rs"))?;
