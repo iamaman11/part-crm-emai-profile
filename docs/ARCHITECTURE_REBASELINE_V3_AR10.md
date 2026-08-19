@@ -29,11 +29,11 @@ This document is implementation evidence, not a second program roadmap. `docs/AR
 The implementation starts from these repository truths:
 
 1. `runtime/camouhost/main.py` is a deterministic synthetic fixture and does not launch Camoufox.
-2. `tools/profile_browser.py` is research-only but already demonstrates real Camoufox startup, a persistent `user_data_dir`, one-time fingerprint-config materialization, config SHA-256 identity and repeat-launch probing.
+2. `tools/profile_browser.py` was the research-only direct-launch predecessor; successor parity was mechanically proven on `fdaf9e5071bf48b25bb0a60e95895fe349bc789f`, after which the file was retired with the rest of the exact AR-10 cohort.
 3. Profile Bridge already owns materialization freshness, writer ownership, browser-lock recovery, network preflight, runtime preflight, dirty-generation publication and fenced/CAS commit semantics.
 4. `BrowserIdentityManifest` and runtime bundle primitives already exist and are extended through generation-scoped identity evidence rather than replaced by a parallel lifecycle.
-5. ADR-0001 remains proposed until executable AR-10 evidence supports its acceptance in this PR.
-6. AR-6 owns the accepted Python estate classification: the six `DELETE_AFTER_SEQUENCE` browser/profile executables are retired only after successor parity; the remaining Python estate is not subject to a global Python-to-Rust rewrite.
+5. ADR-0001 is accepted only after executable AR-10 parity evidence established the repository-owned identity/runtime contract.
+6. AR-6 remains the immutable Python-estate baseline; after successor parity the six `DELETE_AFTER_SEQUENCE` browser/profile executables were retired through the bounded AR-10 overlay, with no global Python-to-Rust rewrite.
 7. AR-10 also removes the final `opsctl doctor -> Python validators` child-process compatibility bridge while retaining legitimate standalone Python validators.
 
 ## Binding supported topology
@@ -119,6 +119,16 @@ The real subprocess adapter consumes a one-time runtime binding published only a
 9. Accept ADR-0001 only when the executable contract and evidence are present on the same candidate.
 10. Run the complete permanent positive/negative/replay/failure matrix on one unchanged exact head.
 11. Only after guarded merge and accepted-main reread may projections advance to `AR-10 accepted / AR-11 next`.
+
+## Current implementation checkpoint
+
+- accepted predecessor: AR-9 final green `6110a32ade85d08c6ad93d9064190fff768e7cc2`, accepted main `5933a5e30a534209138485556b4a895706af765a`;
+- successor parity source head: `fdaf9e5071bf48b25bb0a60e95895fe349bc789f`;
+- exact six AR-10 historical direct executables: retired after that parity proof;
+- AR-10 Python estate overlay: 116 tracked, `DELETE_AFTER_SEQUENCE=0`;
+- ADR-0001: accepted after executable evidence;
+- real runtime production certification: still `false`; physical Windows/proxy/specialized-site evidence remains later;
+- final exact-green PR head / guarded merge / accepted-main reread: still pending and must be recorded only after the final unchanged candidate passes.
 
 ## Repository-owned acceptance floor
 

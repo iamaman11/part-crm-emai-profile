@@ -1462,19 +1462,20 @@
     "schema_version": 1,
     "canonical_authority": "architecture/inventory.json::current_delivery_map",
     "program": "Architecture Re-baseline v3",
-    "accepted_checkpoint": "AR-8",
-    "current_work": "AR-9",
+    "accepted_checkpoint": "AR-9",
+    "current_work": "AR-10",
     "source_implemented": {
       "status": "ACCEPTED",
-      "through": "AR-8",
-      "current_subslice": "AR-9",
-      "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR8_CLOSEOUT"
+      "through": "AR-9",
+      "current_subslice": "AR-10",
+      "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR9_CLOSEOUT"
     },
     "accepted_on_main": {
       "status": "COMPLETE",
-      "through": "AR-8",
+      "through": "AR-9",
       "full_ar8_accepted": true,
-      "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json"
+      "ar9_accepted": true,
+      "acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json"
     },
     "staging_live": {
       "status": "PARTIAL",
@@ -1502,24 +1503,26 @@
       "blocks": "NONE"
     },
     "next_gate": {
-      "id": "AR-9_ACCEPTANCE",
-      "issue": 366,
-      "on_success": "AR-10_BECOMES_CURRENT"
+      "id": "AR-10_ACCEPTANCE",
+      "issue": 368,
+      "on_success": "AR-11_BECOMES_CURRENT"
     },
     "invariants": {
       "source_present_not_equal_production_enabled": true,
       "full_ar8_accepted": true,
-      "ar9_blocked": false,
+      "ar9_blocked": true,
       "architecture_complete": false,
       "production_core_gate": "BLOCKED",
       "production_ready": false,
-      "production_mutation": false
+      "production_mutation": false,
+      "ar9_accepted": true,
+      "ar10_blocked": false
     }
   },
   "documentation_authority": {
     "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
     "tracking_issue": 266,
-    "current_slice": "AR-9",
+    "current_slice": "AR-10",
     "transition": "architecture/architecture-rebaseline-v3-transition.json",
     "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
@@ -1555,8 +1558,11 @@
     "ar8_completion_tracking_issue": 361,
     "ar8_completion_pr": 362,
     "ar8_acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
+    "ar9_acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
     "d1_evolution": "architecture/inventory.json::d1_evolution",
-    "d1_evolution_source": "architecture/d1-evolution-ar9.json"
+    "d1_evolution_source": "architecture/d1-evolution-ar9.json",
+    "runtime_cutover": "architecture/inventory.json::runtime_cutover",
+    "runtime_cutover_source": "architecture/runtime-cutover-ar10.json"
   },
   "document_status": [
     {
@@ -1738,10 +1744,11 @@
       "AR-5",
       "AR-6",
       "AR-7",
-      "AR-8"
+      "AR-8",
+      "AR-9"
     ],
-    "current_architecture_slice": "AR-9",
-    "next_architecture_slice_after_acceptance": "AR-10",
+    "current_architecture_slice": "AR-10",
+    "next_architecture_slice_after_acceptance": "AR-11",
     "ar8_progress": {
       "umbrella_issue": 308,
       "accepted_subslices": [
@@ -1901,9 +1908,10 @@
   },
   "d1_evolution": {
     "schema_version": 1,
-    "role": "CURRENT_AR9_D1_EVOLUTION_PROJECTION",
+    "role": "ACCEPTED_AR9_D1_EVOLUTION_PROJECTION",
     "source_authority": "architecture/d1-evolution-ar9.json",
-    "source_status": "candidate",
+    "source_status": "accepted",
+    "acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
     "tracking_issue": 366,
     "start_base": "10c317d7187e6a86c5e2ed6d1cd92c2e76c0c256",
     "migration_classes": [
@@ -1988,6 +1996,51 @@
         "release_manifest_owner": "scripts/mailbox-secret-resolver-release.py"
       }
     ],
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false,
+    "production_mutation": false
+  },
+  "runtime_cutover": {
+    "schema_version": 1,
+    "role": "CURRENT_AR10_RUNTIME_CUTOVER_PROJECTION",
+    "source_authority": "architecture/runtime-cutover-ar10.json",
+    "source_status": "AR10_IMPLEMENTED_PENDING_ACCEPTANCE",
+    "tracking_issue": 368,
+    "completion_pr": 371,
+    "start_base": "5933a5e30a534209138485556b4a895706af765a",
+    "real_runtime": {
+      "repository_integrated": true,
+      "production_certified": false,
+      "entrypoint": "runtime/camouhost/real.py",
+      "runtime_lock": "runtime/camouhost/runtime-lock.json",
+      "python": "3.12",
+      "camoufox_python": {
+        "version": "0.5.5",
+        "source_repository": "daijro/camoufox",
+        "source_commit": "cd83f7fd2fdf631dfde0c7eb53bd3d30f102ec4a"
+      },
+      "camoufox_browser": {
+        "version": "152.0.4-beta.28",
+        "source_repository": "daijro/camoufox",
+        "release_commit": "0583c3ec94f5a9df5cb2d09553fbfe80589b6e2d"
+      },
+      "browserforge": "1.2.4",
+      "playwright": "1.60.0",
+      "persistent_context_required": true,
+      "stable_generation_user_data_dir": true
+    },
+    "generation_identity": {
+      "compatibility_version": 2,
+      "fingerprint_policy_version": "profile-stability-v1",
+      "normal_launch_may_regenerate_browserforge_identity": false,
+      "incompatible_change_requires_candidate_generation": true
+    },
+    "opsctl": {
+      "production_child_process_spawn_sites": 0,
+      "provider_mutation_authority": false
+    },
+    "legacy_executables_remaining": 0,
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
     "production_ready": false,
