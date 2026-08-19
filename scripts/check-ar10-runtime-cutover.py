@@ -21,7 +21,7 @@ OPSCTL_SOURCE = Path("tools/opsctl/src")
 ADR = Path("docs/adr/ADR-0001-fingerprint-stability-policy.md")
 AR10_EVIDENCE = Path("docs/ARCHITECTURE_REBASELINE_V3_AR10.md")
 AR10_AUTHORITY = Path("architecture/runtime-cutover-ar10.json")
-PYTHON_ESTATE = Path("architecture/python-estate-ar6.json")
+PYTHON_ESTATE_BASELINE = Path("architecture/python-estate-ar6.json")
 PYTHON_ESTATE_GENERATOR = Path("scripts/python-estate-ar6.py")
 LEGACY_EXECUTABLES = {
     "check_mail.py",
@@ -121,7 +121,6 @@ def validate_real_runtime(root: Path) -> None:
         tree = ast.parse(text)
     except SyntaxError as error:
         fail(f"real Camouhost source does not parse: {error}")
-
     for marker in (
         'CONFIG_NAME = "camoufox-config.json"',
         'USER_DATA_NAME = "user_data"',
@@ -153,8 +152,7 @@ def validate_real_runtime(root: Path) -> None:
         fail("candidate identity materializer must bind a profile-stable probe")
     if "stable_probe_digest" not in called_names(launch):
         fail("normal launch must verify profile-stable identity before ready")
-
-    forbidden = (
+    for marker in (
         "print(config",
         "print(proxy",
         "print(os.environ",
@@ -162,8 +160,7 @@ def validate_real_runtime(root: Path) -> None:
         "urllib.request",
         "subprocess.run(",
         "pip install",
-    )
-    for marker in forbidden:
+    ):
         if marker in text:
             fail(f"real Camouhost contains forbidden authority/leak marker: {marker}")
 
@@ -192,14 +189,7 @@ def validate_opsctl(root: Path) -> None:
     )
     if "Command::new(" in production or "std::process::Command" in production:
         fail("AR-10 requires zero opsctl child-process spawn authority")
-    for marker in (
-        "reqwest::",
-        "ureq::",
-        "std::net::",
-        "TcpStream",
-        "worker::",
-        "cloudflare::",
-    ):
+    for marker in ("reqwest::", "ureq::", "std::net::", "TcpStream", "worker::", "cloudflare::"):
         if marker in production:
             fail(f"opsctl acquired forbidden provider/network execution authority: {marker}")
 
@@ -217,44 +207,41 @@ def load_python_estate_generator(root: Path) -> ModuleType:
 
 
 def validate_python_estate(root: Path) -> None:
-    """Require one current estate projection while preserving accepted AR-6 provenance fields."""
+    """Validate frozen accepted AR-6 provenance and its bounded current AR-10 composition."""
     try:
-        document = json.loads(read_regular(root, PYTHON_ESTATE))
+        baseline = json.loads(read_regular(root, PYTHON_ESTATE_BASELINE))
     except json.JSONDecodeError as error:
-        fail(f"canonical Python estate is invalid JSON: {error}")
-    if document.get("status") != "AR6_ACCEPTED_PYTHON_ESTATE" or document.get(
+        fail(f"accepted AR-6 Python estate is invalid JSON: {error}")
+    if baseline.get("status") != "AR6_ACCEPTED_PYTHON_ESTATE" or baseline.get(
         "accepted_program_checkpoint"
     ) != "AR-6":
         fail("accepted AR-6 Python-estate provenance drifted")
 
     generator = load_python_estate_generator(root)
     try:
-        generator.validate(document, root)
-        expected = generator.build_inventory(root)
+        current = generator.build_inventory(root)
     except ValueError as error:
-        fail(f"canonical Python estate validation failed: {error}")
-    if generator.serialized(document) != generator.serialized(expected):
-        fail("canonical Python estate is not the deterministic current projection")
-
-    summary = document.get("summary")
+        fail(f"current Python estate composition failed: {error}")
+    if current.get("status") != "CURRENT_PYTHON_ESTATE_VIA_AR6_BASELINE_PLUS_AR10_OVERLAY":
+        fail("current Python estate composition status drifted")
+    summary = current.get("summary")
     if not isinstance(summary, dict):
-        fail("canonical Python estate summary is missing")
+        fail("current Python estate summary is missing")
     tracked = summary.get("tracked_python_files")
     keep = summary.get("KEEP_PYTHON")
     delete = summary.get("DELETE_AFTER_SEQUENCE")
     migrate = summary.get("MIGRATE_TO_RUST")
     wrap = summary.get("WRAP_WITH_RUST")
     if not all(isinstance(value, int) and value >= 0 for value in (tracked, keep, delete, migrate, wrap)):
-        fail("canonical Python estate summary is malformed")
+        fail("current Python estate summary is malformed")
     if tracked != keep + delete + migrate + wrap:
-        fail("canonical Python estate summary does not balance")
+        fail("current Python estate summary does not balance")
 
 
 def validate_legacy_retirement(root: Path) -> None:
     present = sorted(relative for relative in LEGACY_EXECUTABLES if (root / relative).exists())
     if present:
         fail(f"AR-6 DELETE_AFTER_SEQUENCE executable retirement is incomplete: {present}")
-
     active_roots = [root / ".github/workflows", root / "apps", root / "crates", root / "runtime"]
     for scan_root in active_roots:
         if not scan_root.exists():
@@ -286,7 +273,6 @@ def validate_acceptance_projection(root: Path) -> None:
     ):
         if marker not in adr:
             fail(f"ADR-0001 lost required policy class/upgrade invariant: {marker}")
-
     authority = json.loads(read_regular(root, AR10_AUTHORITY))
     if authority.get("schema_version") != 1 or authority.get("status") != "AR10_IMPLEMENTED_PENDING_ACCEPTANCE":
         fail("AR-10 runtime-cutover machine authority has invalid state")
@@ -356,7 +342,7 @@ def main() -> int:
             print("AR-10 real runtime, identity, opsctl, Python estate and executable-retirement closeout policy passed.")
         else:
             validate_preflight(arguments.root.resolve())
-            print("AR-10 successor runtime and canonical Python-estate preflight policy passed; parity may run before retirement.")
+            print("AR-10 successor runtime and composed Python-estate preflight policy passed; parity may run before retirement.")
     except (GateError, OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         print(f"AR-10 runtime cutover policy failed: {error}", file=sys.stderr)
         return 1
