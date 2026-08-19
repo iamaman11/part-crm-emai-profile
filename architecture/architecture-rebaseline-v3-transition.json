@@ -506,7 +506,7 @@
     "invariants": {
       "source_present_not_equal_production_enabled": true,
       "full_ar8_accepted": true,
-      "ar9_blocked": true,
+      "ar9_blocked": false,
       "architecture_complete": false,
       "production_core_gate": "BLOCKED",
       "production_ready": false,
