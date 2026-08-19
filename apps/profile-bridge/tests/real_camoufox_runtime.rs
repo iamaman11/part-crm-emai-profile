@@ -170,6 +170,7 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
     let generation = GenerationId::parse("generation_01JAR10REAL")?;
     let device = DeviceId::parse("device_01JAR10REAL")?;
     let workspace = root.create_generation(&tenant, &profile, &generation)?;
+    let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 9)?;
 
     let output = Command::new(&python)
         .arg(&real_runtime)
@@ -195,7 +196,6 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
     }
 
     let bundle = approved_runtime(&runtime_root)?;
-    let lock = BridgeWorkspaceLock::acquire(&workspace, &device, 9)?;
     let browser_identity = BrowserIdentityManifest::new(
         2,
         bundle.manifest().runtime_version(),
