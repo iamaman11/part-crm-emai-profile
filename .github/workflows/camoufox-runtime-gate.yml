@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: camoufox-runtime-gate-${{ github.workflow }}-${{ github.ref }}
@@ -23,141 +23,12 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Verify exact source checkout
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
-
-      - name: Materialize deterministic AR-9 accepted -> AR-10 current projections
-        env:
-          PR_HEAD_REF: ${{ github.head_ref }}
-        run: |
-          python3.12 - <<'PY'
-          import json
-          from pathlib import Path
-
-          d1_path = Path("architecture/d1-evolution-ar9.json")
-          d1 = json.loads(d1_path.read_text(encoding="utf-8"))
-          assert d1["kind"] == "D1_EVOLUTION_AUTHORITY"
-          assert d1["tracking_issue"] == 366
-          if d1["status"] == "candidate":
-              d1["status"] = "accepted"
-              d1["acceptance"] = {
-                  "implementation_pr": 367,
-                  "exact_green_head": "6110a32ade85d08c6ad93d9064190fff768e7cc2",
-                  "implementation_merge": "5933a5e30a534209138485556b4a895706af765a",
-                  "accepted_main_reread": "5933a5e30a534209138485556b4a895706af765a",
-                  "applicable_permanent_workflows": "15/15",
-                  "behind_by": 0,
-                  "blocking_reviews": 0,
-                  "unresolved_review_threads": 0,
-                  "evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
-                  "production_mutation": False,
-              }
-              d1_path.write_text(json.dumps(d1, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-          else:
-              assert d1["status"] == "accepted"
-              assert d1["acceptance"]["implementation_merge"] == "5933a5e30a534209138485556b4a895706af765a"
-
-          def replace_if_needed(text: str, before: str, after: str, label: str) -> str:
-              if before in text:
-                  if text.count(before) != 1:
-                      raise AssertionError(f"{label}: expected one old match")
-                  return text.replace(before, after, 1)
-              if after not in text:
-                  raise AssertionError(f"{label}: neither old nor new projection found")
-              return text
-
-          plan_path = Path("docs/ARCHITECTURE_REBASELINE_V3_PLAN.md")
-          plan = plan_path.read_text(encoding="utf-8")
-          plan = replace_if_needed(
-              plan,
-              "**Current accepted architecture checkpoint:** AR-8 — complete secrets / keys / credentials hardening\n**Current implementation:** AR-9 — D1 Evolution / Schema Compatibility",
-              "**Current accepted architecture checkpoint:** AR-9 — D1 Evolution / Schema Compatibility\n**Current implementation:** AR-10 — Runtime and Historical Executable Simplification",
-              "plan header",
-          )
-          plan = replace_if_needed(
-              plan,
-              "AR-8 is the latest accepted checkpoint.",
-              "AR-9 is the latest accepted checkpoint, accepted through PR #367 / accepted main `5933a5e30a534209138485556b4a895706af765a` with repository evidence in `docs/evidence/2026-08-19-ar9-final-acceptance.json`.",
-              "latest accepted checkpoint",
-          )
-          plan = replace_if_needed(plan, "AR-9 is the current implementation slice.", "AR-10 is the current implementation slice.", "current implementation slice")
-          plan = replace_if_needed(
-              plan,
-              "AR-9   D1 Evolution / Schema Compatibility                         CURRENT\nAR-10  Runtime and Historical Executable Simplification",
-              "AR-9   D1 Evolution / Schema Compatibility                         DONE / ACCEPTED\nAR-10  Runtime and Historical Executable Simplification              CURRENT",
-              "binding sequence",
-          )
-          plan = replace_if_needed(
-              plan,
-              "| Source implemented | **ACCEPTED** | AR-8 source is accepted on `main`; AR-9 is the current architecture slice. |\n| Accepted on main | **COMPLETE THROUGH AR-8** | AR-8A…AR-8F and final closeout are accepted; `full_ar8_accepted=true`. |",
-              "| Source implemented | **ACCEPTED** | AR-9 source is accepted on `main`; AR-10 is the current architecture slice. |\n| Accepted on main | **COMPLETE THROUGH AR-9** | AR-8 and AR-9 are accepted; AR-9 evidence is `docs/evidence/2026-08-19-ar9-final-acceptance.json`. |",
-              "delivery accepted rows",
-          )
-          plan = replace_if_needed(
-              plan,
-              "| Current blocker | **NONE** | AR-8 is accepted; no AR-8 blocker remains. |\n| Next gate | **AR-9 acceptance** | AR-9 — D1 Evolution / Schema Compatibility is the current slice. |",
-              "| Current blocker | **NONE** | AR-9 is accepted; no predecessor blocker remains. |\n| Next gate | **AR-10 acceptance** | AR-10 — Runtime and Historical Executable Simplification is the current slice. |",
-              "delivery next gate",
-          )
-          plan_path.write_text(plan, encoding="utf-8", newline="\n")
-
-          ar10_path = Path("docs/ARCHITECTURE_REBASELINE_V3_AR10.md")
-          ar10 = ar10_path.read_text(encoding="utf-8")
-          ar10 = replace_if_needed(
-              ar10,
-              "2. `tools/profile_browser.py` is research-only but already demonstrates real Camoufox startup, a persistent `user_data_dir`, one-time fingerprint-config materialization, config SHA-256 identity and repeat-launch probing.",
-              "2. `tools/profile_browser.py` was the research-only direct-launch predecessor; successor parity was mechanically proven on `fdaf9e5071bf48b25bb0a60e95895fe349bc789f`, after which the file was retired with the rest of the exact AR-10 cohort.",
-              "AR-10 predecessor fact",
-          )
-          ar10 = replace_if_needed(
-              ar10,
-              "5. ADR-0001 remains proposed until executable AR-10 evidence supports its acceptance in this PR.",
-              "5. ADR-0001 is accepted only after executable AR-10 parity evidence established the repository-owned identity/runtime contract.",
-              "AR-10 ADR fact",
-          )
-          ar10 = replace_if_needed(
-              ar10,
-              "6. AR-6 owns the accepted Python estate classification: the six `DELETE_AFTER_SEQUENCE` browser/profile executables are retired only after successor parity; the remaining Python estate is not subject to a global Python-to-Rust rewrite.",
-              "6. AR-6 remains the immutable Python-estate baseline; after successor parity the six `DELETE_AFTER_SEQUENCE` browser/profile executables were retired through the bounded AR-10 overlay, with no global Python-to-Rust rewrite.",
-              "AR-10 Python estate fact",
-          )
-          marker = "## Repository-owned acceptance floor\n"
-          checkpoint = """## Current implementation checkpoint\n\n- accepted predecessor: AR-9 final green `6110a32ade85d08c6ad93d9064190fff768e7cc2`, accepted main `5933a5e30a534209138485556b4a895706af765a`;\n- successor parity source head: `fdaf9e5071bf48b25bb0a60e95895fe349bc789f`;\n- exact six AR-10 historical direct executables: retired after that parity proof;\n- AR-10 Python estate overlay: 116 tracked, `DELETE_AFTER_SEQUENCE=0`;\n- ADR-0001: accepted after executable evidence;\n- real runtime production certification: still `false`; physical Windows/proxy/specialized-site evidence remains later;\n- final exact-green PR head / guarded merge / accepted-main reread: still pending and must be recorded only after the final unchanged candidate passes.\n\n"""
-          if checkpoint not in ar10:
-              if ar10.count(marker) != 1:
-                  raise AssertionError("AR-10 acceptance-floor marker drifted")
-              ar10 = ar10.replace(marker, checkpoint + marker, 1)
-          ar10_path.write_text(ar10, encoding="utf-8", newline="\n")
-          PY
-          python3.12 scripts/generate-ar8-completion-status.py --write
-          python3.12 scripts/generate-architecture-inventory.py --write
-
-          if git diff --quiet -- \
-            architecture/d1-evolution-ar9.json \
-            architecture/architecture-rebaseline-v3-transition.json \
-            architecture/inventory.json \
-            docs/status.json \
-            docs/ARCHITECTURE_REBASELINE_V3_PLAN.md \
-            docs/ARCHITECTURE_REBASELINE_V3_AR10.md; then
-            echo "Canonical projections already materialized."
-          else
-            test -n "$PR_HEAD_REF"
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add \
-              architecture/d1-evolution-ar9.json \
-              architecture/architecture-rebaseline-v3-transition.json \
-              architecture/inventory.json \
-              docs/status.json \
-              docs/ARCHITECTURE_REBASELINE_V3_PLAN.md \
-              docs/ARCHITECTURE_REBASELINE_V3_AR10.md
-            git commit -m "AR-10: materialize canonical post-AR9 projections"
-            git push origin "HEAD:${PR_HEAD_REF}"
-          fi
 
       - name: Require Python 3.12 and virtual display support
         run: |
