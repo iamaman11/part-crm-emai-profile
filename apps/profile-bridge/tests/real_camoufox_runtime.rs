@@ -249,7 +249,7 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
         profile,
         generation,
         "d".repeat(64),
-        workspace.inventory()?.inventory_digest(),
+        workspace.materialization_inventory_digest()?,
         browser_identity,
     )?;
     persist_materialization_binding(&workspace, &binding)?;
