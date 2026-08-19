@@ -5,9 +5,7 @@ use browser_execution_domain::{
     NetworkIdentityPolicy,
 };
 use profile_bridge::browser_execution::persist_materialization_binding;
-use profile_bridge::browser_preflight::{
-    BrowserRuntimeObservation, BrowserRuntimeObservationPort,
-};
+use profile_bridge::browser_preflight::{BrowserRuntimeObservation, BrowserRuntimeObservationPort};
 use profile_bridge::camouhost_process::{
     ManagedCamouhostConfig, ManagedCamouhostProcess, RuntimeBindingBrowserLaunchPreflight,
     RuntimeBindingSlot, RuntimeDisplayMode,
