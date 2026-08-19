@@ -16,7 +16,6 @@ import json
 import os
 import re
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -24,14 +23,11 @@ IPC_VERSION = "1"
 MAX_FRAME_LENGTH = 512
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_URL_BYTES = 2048
-BROWSER_CLOSE_QUIESCENCE_SECONDS = 10.0
-BROWSER_CLOSE_POLL_SECONDS = 0.05
 SESSION_PATTERN = re.compile(r"[A-Za-z0-9_-]{8,96}\Z")
 CONFIG_NAME = "camoufox-config.json"
 USER_DATA_NAME = "user_data"
 BRIDGE_LOCK_NAME = ".profile-platform.lock"
 RUNTIME_LOCK_NAME = "runtime-lock.json"
-FIREFOX_LOCK_NAMES = (".parentlock", "lock")
 
 PROFILE_ROOT_ENV = "CAMOUHOST_PROFILE_ROOT"
 RUNTIME_LOCK_ENV = "CAMOUHOST_RUNTIME_LOCK"
@@ -336,32 +332,17 @@ def launch_verified_context(
         with contextlib.suppress(BaseException):
             with contextlib.redirect_stdout(sys.stderr):
                 manager.__exit__(*sys.exc_info())
-        with contextlib.suppress(BaseException):
-            wait_for_browser_quiescence(root)
         raise
 
 
-def firefox_writer_locks(root: Path) -> tuple[Path, ...]:
-    user_data_dir = root / USER_DATA_NAME
-    return tuple(user_data_dir / name for name in FIREFOX_LOCK_NAMES)
-
-
-def wait_for_browser_quiescence(root: Path) -> None:
-    """Wait for Firefox to release its own profile locks; never remove them ourselves."""
-    deadline = time.monotonic() + BROWSER_CLOSE_QUIESCENCE_SECONDS
-    while True:
-        present = [path for path in firefox_writer_locks(root) if os.path.lexists(path)]
-        if not present:
-            return
-        if time.monotonic() >= deadline:
-            raise RuntimeContractError("Firefox writer lock remained after clean close")
-        time.sleep(BROWSER_CLOSE_POLL_SECONDS)
-
-
-def close_context(manager: Any, _context: Any, root: Path) -> None:
+def close_context(manager: Any, _context: Any, _root: Path) -> None:
+    # Camoufox.__exit__ synchronously closes the persistent BrowserContext and tears down
+    # Playwright. Firefox may retain user_data/lock or .parentlock path markers after that
+    # clean close; marker presence alone is not evidence that an OS-level writer lock remains.
+    # We therefore never delete those markers and never use their mere existence to relabel a
+    # proven clean close as a crash/recovery event.
     with contextlib.redirect_stdout(sys.stderr):
         manager.__exit__(None, None, None)
-    wait_for_browser_quiescence(root)
 
 
 def materialize_candidate_identity(root: Path) -> dict[str, str]:
