@@ -73,6 +73,10 @@
       "category": "PERMANENT_REQUIRED"
     },
     {
+      "path": ".github/workflows/release-architecture-gate.yml",
+      "category": "PERMANENT_REQUIRED"
+    },
+    {
       "path": ".github/workflows/repository-quality-audit-gate.yml",
       "category": "PERMANENT_REQUIRED"
     },
