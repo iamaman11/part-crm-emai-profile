@@ -269,7 +269,8 @@ def validate_acceptance_projection(root: Path) -> None:
         "Origin-Deterministic",
         "Network-Bound",
         "Session-Dynamic",
-        "candidate generation",
+        "## Runtime И Browser Upgrades",
+        "Автоматический silent upgrade запрещен.",
     ):
         if marker not in adr:
             fail(f"ADR-0001 lost required policy class/upgrade invariant: {marker}")
