@@ -4,9 +4,7 @@ use crate::browser_preflight::{BoundBrowserLaunchPreflight, BrowserRuntimeObserv
 use crate::local_profile::GenerationWorkspace;
 use crate::operator_flow::BrowserLaunchPreflightPort;
 use crate::runtime_bundle::ApprovedRuntimeBundle;
-use bridge_domain::{
-    BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort,
-};
+use bridge_domain::{BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort};
 use browser_execution_domain::{MaterializationBinding, NetworkIdentityPolicy};
 use profile_platform_primitives::{DeviceId, SessionId};
 use runtime_bundle_domain::BundleRelativePath;
@@ -93,11 +91,7 @@ impl<O> RuntimeBindingBrowserLaunchPreflight<O> {
         slot: RuntimeBindingSlot,
     ) -> Self {
         Self {
-            inner: BoundBrowserLaunchPreflight::new(
-                expected.clone(),
-                network_policy,
-                observations,
-            ),
+            inner: BoundBrowserLaunchPreflight::new(expected.clone(), network_policy, observations),
             expected,
             slot,
         }
@@ -117,12 +111,8 @@ where
         workspace_epoch: u64,
         runtime_bundle: &ApprovedRuntimeBundle,
     ) -> Result<(), Self::Error> {
-        self.inner.evaluate_before_launch(
-            workspace,
-            device_id,
-            workspace_epoch,
-            runtime_bundle,
-        )?;
+        self.inner
+            .evaluate_before_launch(workspace, device_id, workspace_epoch, runtime_bundle)?;
         let binding = validate_runtime_identity(workspace, &self.expected, runtime_bundle)?;
         self.slot.publish(binding)
     }
@@ -396,7 +386,10 @@ impl ManagedCamouhostProcess {
 impl ProcessControlPort for ManagedCamouhostProcess {
     fn spawn(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
         let binding = self.slot.take()?;
-        let mut state = self.shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+        let mut state = self
+            .shared
+            .lock()
+            .map_err(|_| BridgePortError::Unavailable)?;
         if state.child.is_some() || state.active_session.is_some() {
             return Err(BridgePortError::Unavailable);
         }
@@ -411,7 +404,10 @@ impl ProcessControlPort for ManagedCamouhostProcess {
     }
 
     fn request_graceful_close(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
-        let state = self.shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+        let state = self
+            .shared
+            .lock()
+            .map_err(|_| BridgePortError::Unavailable)?;
         if state.active_session.as_ref() != Some(session_id) {
             return Err(BridgePortError::InvalidResponse);
         }
@@ -419,7 +415,10 @@ impl ProcessControlPort for ManagedCamouhostProcess {
     }
 
     fn confirm_stopped(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
-        let mut state = self.shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+        let mut state = self
+            .shared
+            .lock()
+            .map_err(|_| BridgePortError::Unavailable)?;
         if state.active_session.as_ref() != Some(session_id) {
             return Err(BridgePortError::InvalidResponse);
         }
@@ -437,7 +436,10 @@ impl ProcessControlPort for ManagedCamouhostProcess {
     }
 
     fn force_terminate(&mut self, session_id: &SessionId) -> Result<(), BridgePortError> {
-        let mut state = self.shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+        let mut state = self
+            .shared
+            .lock()
+            .map_err(|_| BridgePortError::Unavailable)?;
         if state.active_session.as_ref() != Some(session_id) {
             return Err(BridgePortError::InvalidResponse);
         }
@@ -457,7 +459,10 @@ impl CamouhostPort for ManagedCamouhostIpc {
         &mut self,
         message: &CamouhostMessage,
     ) -> Result<CamouhostMessage, BridgePortError> {
-        let mut state = self.shared.lock().map_err(|_| BridgePortError::Unavailable)?;
+        let mut state = self
+            .shared
+            .lock()
+            .map_err(|_| BridgePortError::Unavailable)?;
         let frame = request_frame(message)?;
         let stdin = state.stdin.as_mut().ok_or(BridgePortError::Unavailable)?;
         stdin
@@ -467,8 +472,8 @@ impl CamouhostPort for ManagedCamouhostIpc {
             .map_err(|_| BridgePortError::Unavailable)?;
         let stdout = state.stdout.as_mut().ok_or(BridgePortError::Unavailable)?;
         let response = read_bounded_line(stdout)?;
-        let parsed = CamouhostMessage::parse(&response)
-            .map_err(|_| BridgePortError::InvalidResponse)?;
+        let parsed =
+            CamouhostMessage::parse(&response).map_err(|_| BridgePortError::InvalidResponse)?;
         parsed
             .validate_version()
             .map_err(|_| BridgePortError::InvalidResponse)?;
@@ -479,7 +484,9 @@ impl CamouhostPort for ManagedCamouhostIpc {
 fn read_bounded_line(reader: &mut BufReader<ChildStdout>) -> Result<String, BridgePortError> {
     let mut bytes = Vec::new();
     loop {
-        let available = reader.fill_buf().map_err(|_| BridgePortError::Unavailable)?;
+        let available = reader
+            .fill_buf()
+            .map_err(|_| BridgePortError::Unavailable)?;
         if available.is_empty() {
             return Err(BridgePortError::InvalidResponse);
         }
@@ -506,9 +513,7 @@ fn request_frame(message: &CamouhostMessage) -> Result<String, BridgePortError> 
         CamouhostMessage::Hello { version } if *version == CAMOUHOST_IPC_VERSION => {
             Ok(format!("hello|{version}"))
         }
-        CamouhostMessage::Launch { session_id } => {
-            Ok(format!("launch|{}", session_id.as_str()))
-        }
+        CamouhostMessage::Launch { session_id } => Ok(format!("launch|{}", session_id.as_str())),
         CamouhostMessage::Close { session_id } => Ok(format!("close|{}", session_id.as_str())),
         _ => Err(BridgePortError::InvalidResponse),
     }
@@ -716,7 +721,10 @@ mod tests {
             &"c".repeat(64),
         )?;
         persist_materialization_binding(&workspace, &expected)?;
-        fs::write(workspace.path().join("camoufox-config.json"), b"{\"drift\":true}\n")?;
+        fs::write(
+            workspace.path().join("camoufox-config.json"),
+            b"{\"drift\":true}\n",
+        )?;
         let slot = RuntimeBindingSlot::new();
         let mut preflight = RuntimeBindingBrowserLaunchPreflight::new(
             expected,
@@ -724,9 +732,11 @@ mod tests {
             FixedObservation(observation()?),
             slot.clone(),
         );
-        assert!(preflight
-            .evaluate_before_launch(&workspace, &device, 8, &approved)
-            .is_err());
+        assert!(
+            preflight
+                .evaluate_before_launch(&workspace, &device, 8, &approved)
+                .is_err()
+        );
         assert!(slot.take().is_err());
         lock.release()?;
         remove_test_root(&root_path)?;
