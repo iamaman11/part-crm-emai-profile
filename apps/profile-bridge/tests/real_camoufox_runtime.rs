@@ -162,7 +162,10 @@ fn collect_symlink_paths(
         let path = child.path();
         let metadata = fs::symlink_metadata(&path)?;
         if metadata.file_type().is_symlink() {
-            let relative = path.strip_prefix(root)?.to_string_lossy().replace('\\', "/");
+            let relative = path
+                .strip_prefix(root)?
+                .to_string_lossy()
+                .replace('\\', "/");
             output.push(relative);
         } else if metadata.is_dir() {
             collect_symlink_paths(root, &path, output)?;
