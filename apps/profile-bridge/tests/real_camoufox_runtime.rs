@@ -327,7 +327,7 @@ fn bridge_preflight_launches_real_camoufox_through_managed_ipc()
         python,
         runtime_root,
         RuntimeDisplayMode::VirtualHeadful,
-        Some("about:blank".to_owned()),
+        None,
         None,
     )?;
     let (mut process, camouhost) = ManagedCamouhostProcess::pair(config, slot);
