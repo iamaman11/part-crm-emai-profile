@@ -91,10 +91,11 @@
       "tools/fingerprint_certify.py",
       "tools/profile_browser.py"
     ],
-    "legacy_executables_remaining": 6,
-    "retirement_allowed_before_successor_parity": false
+    "legacy_executables_remaining": 0,
+    "retirement_allowed_before_successor_parity": false,
+    "retirement_parity_source_head": "fdaf9e5071bf48b25bb0a60e95895fe349bc789f"
   },
-  "legacy_executables_remaining": 6,
+  "legacy_executables_remaining": 0,
   "repository_acceptance_evidence": {
     "real_camoufox_cold_launch": "PENDING_FINAL_GREEN_HEAD",
     "cookie_and_localstorage_persistence": "PENDING_FINAL_GREEN_HEAD",
@@ -102,7 +103,7 @@
     "identity_mismatch_fail_closed": "PENDING_FINAL_GREEN_HEAD",
     "bridge_to_real_camoufox_chain": "PENDING_FINAL_GREEN_HEAD",
     "windows_profile_bridge_regression": "PENDING_FINAL_GREEN_HEAD",
-    "legacy_retirement": "BLOCKED_UNTIL_SUCCESSOR_PARITY"
+    "legacy_retirement": "RETIRED_AFTER_SUCCESSOR_PARITY"
   },
   "external_evidence": {
     "physical_supported_windows_host": "REQUIRED_LATER",
