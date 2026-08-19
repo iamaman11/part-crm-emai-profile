@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bridge_domain::{
-    BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort,
-    CamouhostProtocolError,
+    BridgePortError, CAMOUHOST_IPC_VERSION, CamouhostMessage, CamouhostPort, CamouhostProtocolError,
 };
 use profile_bridge::FakeCamouhost;
 use profile_platform_primitives::SessionId;
