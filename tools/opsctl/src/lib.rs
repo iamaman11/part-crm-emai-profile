@@ -13,7 +13,7 @@ pub mod release;
 mod repository;
 mod status;
 
-pub use cli::{HELP, Invocation, ReadCommand, parse_invocation};
+pub use cli::{CredentialsAction, HELP, Invocation, ReadCommand, parse_invocation};
 pub use error::OpsctlError;
 
 use repository::resolve_repo_root;
@@ -32,8 +32,13 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                 ReadCommand::Doctor => doctor::run(&repo_root),
                 ReadCommand::Status => status::run(&repo_root),
                 ReadCommand::Inventory => inventory::run(&repo_root),
-                ReadCommand::CredentialLifecycle => credentials::lifecycle(&repo_root),
-                ReadCommand::RotationPlan => credentials::rotation_plan(&repo_root),
+            }
+        }
+        Invocation::Credentials { root, action } => {
+            let repo_root = resolve_repo_root(root.as_deref(), "credentials")?;
+            match action {
+                CredentialsAction::Status => credentials::lifecycle(&repo_root),
+                CredentialsAction::RotationPlan => credentials::rotation_plan(&repo_root),
             }
         }
         Invocation::D1 {
@@ -66,15 +71,15 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Invocation, OpsctlError, ReadCommand, execute};
+    use super::{CredentialsAction, Invocation, OpsctlError, execute};
     use std::path::PathBuf;
 
     #[test]
-    fn credential_lifecycle_reads_subject_authority() -> Result<(), OpsctlError> {
+    fn credentials_status_preserves_lifecycle_metadata_contract() -> Result<(), OpsctlError> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let output = execute(Invocation::Run {
+        let output = execute(Invocation::Credentials {
             root: Some(root),
-            command: ReadCommand::CredentialLifecycle,
+            action: CredentialsAction::Status,
         })?;
         assert!(output.contains("\"kind\": \"CREDENTIAL_LIFECYCLE_AUTHORITY\""));
         assert!(output.contains("\"routine_release_rotates_runtime_secrets\": false"));
@@ -83,11 +88,12 @@ mod tests {
     }
 
     #[test]
-    fn rotation_plan_reads_subject_operator_contract() -> Result<(), OpsctlError> {
+    fn credentials_rotation_plan_preserves_metadata_only_operator_contract()
+    -> Result<(), OpsctlError> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let output = execute(Invocation::Run {
+        let output = execute(Invocation::Credentials {
             root: Some(root),
-            command: ReadCommand::RotationPlan,
+            action: CredentialsAction::RotationPlan,
         })?;
         assert!(output.contains("\"kind\": \"OPERATOR_CONTRACT_AUTHORITY\""));
         assert!(output.contains("\"mode\": \"READ_ONLY_METADATA_ONLY\""));
