@@ -4,8 +4,8 @@
 **Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Tracking:** issue #266  
 **Accepted product phase:** Phase 2I  
-**Current accepted architecture checkpoint:** AR-8 — complete secrets / keys / credentials hardening
-**Current implementation:** AR-9 — D1 Evolution / Schema Compatibility
+**Current accepted architecture checkpoint:** AR-9 — D1 Evolution / Schema Compatibility
+**Current implementation:** AR-10 — Runtime and Historical Executable Simplification
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `production_ready=false`
@@ -43,8 +43,9 @@ advance during Architecture Re-baseline v3.
 - AR-7 — Environments + GitHub Governance + Operational Boundaries: **DONE / ACCEPTED**.
 - AR-8A…AR-8F + final closeout: **DONE / ACCEPTED**; AR-8 is accepted on `main`.
 - Post-AR-8C cleanup / DX issue #352: **DONE / ACCEPTED**.
-- AR-9: **CURRENT — D1 Evolution / Schema Compatibility**.
-- AR-9…AR-17: ordered future architecture slices.
+- AR-9 — D1 Evolution / Schema Compatibility: **DONE / ACCEPTED**; accepted provenance is `docs/evidence/2026-08-19-ar9-final-acceptance.json`.
+- AR-10: **CURRENT — Runtime and Historical Executable Simplification**.
+- AR-11…AR-17: ordered future architecture slices.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
@@ -53,7 +54,7 @@ advance during Architecture Re-baseline v3.
 - `GENERATION_VERIFICATION=DELETE`; AR-5 accepted source/Wrangler/deployment authority cleanup while preserving synchronous verification semantics.
 - Historical D3/#251 repository-side machinery is preserved; its old production lane is disabled for forward execution.
 - AR-6 accepted `architecture/python-estate-ar6.json` and the capability-bounded read-only `tools/opsctl` foundation; Draft PR #269 remains feasibility history only.
-- AR-7 accepted classic `main` protection and Environment boundaries; AR-8 is fully accepted, including the AR-8C staging provider/credential foundation and AR-8D/E/F completion. Issue #352 remains accepted history; AR-9 is current.
+- AR-7 accepted classic `main` protection and Environment boundaries; AR-8 and AR-9 are fully accepted. Issue #352 remains accepted history; AR-10 is current.
 
 ## 2A. CURRENT_DELIVERY_MAP
 
@@ -61,13 +62,13 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
-| Source implemented | **ACCEPTED** | AR-8 source is accepted on `main`; AR-9 is the current architecture slice. |
-| Accepted on main | **COMPLETE THROUGH AR-8** | AR-8A…AR-8F and final closeout are accepted; `full_ar8_accepted=true`. |
-| Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; later AR-8 acceptance does not imply a broader staging or production deployment. |
+| Source implemented | **ACCEPTED** | AR-9 source is accepted on `main`; AR-10 is the current architecture slice. |
+| Accepted on main | **COMPLETE THROUGH AR-9** | AR-8 and AR-9 are accepted; AR-9 evidence is `docs/evidence/2026-08-19-ar9-final-acceptance.json`. |
+| Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; later architecture acceptance does not imply a broader staging or production deployment. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
-| Current blocker | **NONE** | AR-8 is accepted; no AR-8 blocker remains. |
-| Next gate | **AR-9 acceptance** | AR-9 — D1 Evolution / Schema Compatibility is the current slice. |
+| Current blocker | **NONE** | AR-9 is accepted; no predecessor blocker remains. |
+| Next gate | **AR-10 acceptance** | AR-10 — Runtime and Historical Executable Simplification is the current slice. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
@@ -106,8 +107,8 @@ AR-5   Wrangler / Runtime Authority Cleanup                      DONE / ACCEPTED
 AR-6   Full Python Estate + read-only Rust opsctl                DONE / ACCEPTED
 AR-7   Environments + GitHub Governance + Operational Boundaries DONE / ACCEPTED
 AR-8   Secrets / Keys / OAuth Refresh Concurrency                 DONE / ACCEPTED
-AR-9   D1 Evolution / Schema Compatibility                         CURRENT
-AR-10  Runtime and Historical Executable Simplification
+AR-9   D1 Evolution / Schema Compatibility                        DONE / ACCEPTED
+AR-10  Runtime and Historical Executable Simplification          CURRENT
 AR-11  Release-set / Promotion Architecture
 AR-12  Fresh Rehearsal Environment
 AR-13  Rotation Rehearsal
@@ -227,11 +228,11 @@ Every bounded AR candidate follows one immutable-head protocol:
 
 ## 11. Immediate next action
 
-Post-AR-7 exact-head CI and GitHub Actions supply-chain hardening is **DONE / ACCEPTED** through
-issue #302 / PR #303; exact-green candidate `e8022adb799184628f5c5706c9651d0245386d55` was merged
-through protected `main` as merge commit `d94bc315faad45ed376fb302b843642fb4397659`. The accepted
-architecture checkpoint remains AR-7; the immediate next sequential slice is
-**AR-8 — Secrets / Keys / OAuth Refresh Concurrency**.
+AR-9 — D1 Evolution / Schema Compatibility is **DONE / ACCEPTED** through issue #366 / PR #367;
+exact-green candidate `6110a32ade85d08c6ad93d9064190fff768e7cc2` was accepted on protected `main` as
+`5933a5e30a534209138485556b4a895706af765a`, with repository evidence in
+`docs/evidence/2026-08-19-ar9-final-acceptance.json`. The current sequential slice is
+**AR-10 — Runtime and Historical Executable Simplification**, issue #368 / Draft PR #371.
 
 Throughout AR-0…AR-17:
 
