@@ -3,15 +3,13 @@ use crate::d1;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub const HELP: &str = "opsctl — project-specific read-only operations interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n    opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [D1 OPTIONS]\n\nCOMMANDS:\n    doctor                Validate canonical repository authorities\n    status                Print canonical docs/status.json\n    inventory             Print canonical architecture/inventory.json\n    credential-lifecycle  Print canonical credential lifecycle metadata\n    rotation-plan         Print canonical operator rotation/recovery contract\n    d1 status             Classify a saved D1 migration ledger against canonical history\n    d1 plan               Build a deterministic migration/rollback plan\n    d1 compatibility      Evaluate runtime/schema compatibility\n    d1 verify             Verify a post-apply ledger against a release schema contract\n\nD1 OPTIONS:\n    --component ID              catalog or resolver\n    --ledger-json PATH          Saved machine-readable Wrangler D1 ledger query result\n    --release-manifest PATH     Target release; required for plan/compatibility/verify\n    --current-manifest PATH     Current runtime schema contract; plan rollback context\n    --known-good-manifest PATH  Known-good rollback release schema contract\n    --preconditions-json PATH   Metadata-only CONTRACT precondition evidence\n    --authority PATH            Optional D1 evolution authority override for fixtures\n\nGLOBAL OPTIONS:\n    --root PATH  Explicit repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nThis AR-9 interface is read-only and metadata-only. D1 commands parse saved provider output and never execute Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. Future release/promotion/credentials/recovery/readiness namespaces are source-reserved but intentionally not executable until their owning AR slices.\n";
+pub const HELP: &str = "opsctl — project-specific read-only operations interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n    opsctl [--root PATH] credentials <ACTION>\n    opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [D1 OPTIONS]\n\nCOMMANDS:\n    doctor                     Validate canonical repository authorities\n    status                     Print canonical docs/status.json\n    inventory                  Print canonical architecture/inventory.json\n    credentials status         Print canonical credential lifecycle metadata\n    credentials rotation-plan  Print canonical operator rotation/recovery metadata\n    d1 status                  Classify a saved D1 migration ledger against canonical history\n    d1 plan                    Build a deterministic migration/rollback plan\n    d1 compatibility           Evaluate runtime/schema compatibility\n    d1 verify                  Verify a post-apply ledger against a release schema contract\n\nD1 OPTIONS:\n    --component ID              catalog or resolver\n    --ledger-json PATH          Saved machine-readable Wrangler D1 ledger query result\n    --release-manifest PATH     Target release; required for plan/compatibility/verify\n    --current-manifest PATH     Current runtime schema contract; plan rollback context\n    --known-good-manifest PATH  Known-good rollback release schema contract\n    --preconditions-json PATH   Metadata-only CONTRACT precondition evidence\n    --authority PATH            Optional D1 evolution authority override for fixtures\n\nGLOBAL OPTIONS:\n    --root PATH  Explicit repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nThis AR-10 interface is read-only and metadata-only. D1 commands parse saved provider output and credentials commands expose only the pre-existing repository metadata semantics. opsctl never executes Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. AR-13 owns rehearsal-backed credential readiness/rotation operational semantics; release/promotion/recovery/readiness namespaces remain source-reserved until their owning AR slices.\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadCommand {
     Doctor,
     Status,
     Inventory,
-    CredentialLifecycle,
-    RotationPlan,
 }
 
 impl ReadCommand {
@@ -21,7 +19,21 @@ impl ReadCommand {
             Self::Doctor => "doctor",
             Self::Status => "status",
             Self::Inventory => "inventory",
-            Self::CredentialLifecycle => "credential-lifecycle",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialsAction {
+    Status,
+    RotationPlan,
+}
+
+impl CredentialsAction {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Status => "status",
             Self::RotationPlan => "rotation-plan",
         }
     }
@@ -34,6 +46,10 @@ pub enum Invocation {
     Run {
         root: Option<PathBuf>,
         command: ReadCommand,
+    },
+    Credentials {
+        root: Option<PathBuf>,
+        action: CredentialsAction,
     },
     D1 {
         root: Option<PathBuf>,
@@ -85,6 +101,9 @@ where
     if command == "d1" {
         return parse_d1_invocation(root, iterator);
     }
+    if command == "credentials" {
+        return parse_credentials_invocation(root, iterator);
+    }
 
     let read_command = parse_command(&command)?;
     if let Some(extra) = iterator.next() {
@@ -97,6 +116,41 @@ where
         root,
         command: read_command,
     })
+}
+
+fn parse_credentials_invocation<I>(
+    root: Option<PathBuf>,
+    mut iterator: I,
+) -> Result<Invocation, OpsctlError>
+where
+    I: Iterator<Item = OsString>,
+{
+    let action_value = iterator
+        .next()
+        .ok_or_else(|| OpsctlError::new("credentials", "missing credentials action"))?;
+    let action_text = action_value
+        .to_str()
+        .ok_or_else(|| OpsctlError::new("credentials", "credentials action must be valid UTF-8"))?;
+    let action = match action_text {
+        "status" => CredentialsAction::Status,
+        "rotation-plan" => CredentialsAction::RotationPlan,
+        other => {
+            return Err(OpsctlError::new(
+                "credentials",
+                format!("unsupported credentials action: {other}"),
+            ));
+        }
+    };
+    if let Some(extra) = iterator.next() {
+        return Err(OpsctlError::new(
+            "credentials",
+            format!(
+                "unexpected credentials argument: {}",
+                extra.to_string_lossy()
+            ),
+        ));
+    }
+    Ok(Invocation::Credentials { root, action })
 }
 
 fn parse_d1_invocation<I>(root: Option<PathBuf>, mut iterator: I) -> Result<Invocation, OpsctlError>
@@ -260,8 +314,6 @@ fn parse_command(value: &str) -> Result<ReadCommand, OpsctlError> {
         "doctor" => Ok(ReadCommand::Doctor),
         "status" => Ok(ReadCommand::Status),
         "inventory" => Ok(ReadCommand::Inventory),
-        "credential-lifecycle" => Ok(ReadCommand::CredentialLifecycle),
-        "rotation-plan" => Ok(ReadCommand::RotationPlan),
         other => Err(OpsctlError::new(
             "parse",
             format!(
@@ -273,7 +325,7 @@ fn parse_command(value: &str) -> Result<ReadCommand, OpsctlError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Invocation, ReadCommand, parse_invocation};
+    use super::{CredentialsAction, Invocation, ReadCommand, parse_invocation};
     use crate::d1::D1Action;
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -288,8 +340,6 @@ mod tests {
             ("doctor", ReadCommand::Doctor),
             ("status", ReadCommand::Status),
             ("inventory", ReadCommand::Inventory),
-            ("credential-lifecycle", ReadCommand::CredentialLifecycle),
-            ("rotation-plan", ReadCommand::RotationPlan),
         ] {
             assert_eq!(
                 parse_invocation(args(&["opsctl", name])),
@@ -299,6 +349,35 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn parses_modular_credentials_metadata_surface() {
+        assert_eq!(
+            parse_invocation(args(&["opsctl", "credentials", "status"])),
+            Ok(Invocation::Credentials {
+                root: None,
+                action: CredentialsAction::Status,
+            })
+        );
+        assert_eq!(
+            parse_invocation(args(&["opsctl", "credentials", "rotation-plan"])),
+            Ok(Invocation::Credentials {
+                root: None,
+                action: CredentialsAction::RotationPlan,
+            })
+        );
+    }
+
+    #[test]
+    fn legacy_flat_credentials_spellings_are_not_cli_authorities() {
+        assert!(parse_invocation(args(&["opsctl", "credential-lifecycle"])).is_err());
+        assert!(parse_invocation(args(&["opsctl", "rotation-plan"])).is_err());
+    }
+
+    #[test]
+    fn credentials_readiness_remains_owned_by_ar13() {
+        assert!(parse_invocation(args(&["opsctl", "credentials", "readiness"])).is_err());
     }
 
     #[test]

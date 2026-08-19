@@ -53,8 +53,7 @@ pub fn persist_materialization_binding(
     workspace: &GenerationWorkspace,
     binding: &MaterializationBinding,
 ) -> Result<(), BrowserLaunchBlocker> {
-    let inventory = workspace.inventory()?;
-    if inventory.inventory_digest() != binding.materialized_inventory_digest() {
+    if workspace.materialization_inventory_digest()? != binding.materialized_inventory_digest() {
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
     let path = materialization_sidecar(workspace, binding.generation_id())?;
@@ -124,7 +123,7 @@ pub fn evaluate_browser_launch(
         }
     }
 
-    if workspace.inventory()?.inventory_digest() != expected.materialized_inventory_digest() {
+    if workspace.materialization_inventory_digest()? != expected.materialized_inventory_digest() {
         return Err(BrowserLaunchBlocker::MaterializationStale);
     }
 
@@ -350,10 +349,25 @@ mod tests {
             profile,
             generation,
             "c".repeat(64),
-            workspace.inventory()?.inventory_digest(),
+            workspace.materialization_inventory_digest()?,
             identity()?,
         )?;
         persist_materialization_binding(&workspace, &binding)?;
+        evaluate_browser_launch(
+            &workspace,
+            &device,
+            1,
+            &binding,
+            &policy("route-a")?,
+            &observation("route-a")?,
+            false,
+        )?;
+
+        fs::create_dir(workspace.path().join("user_data"))?;
+        fs::write(
+            workspace.path().join("user_data/storage-state.bin"),
+            b"mutable-browser-state",
+        )?;
         evaluate_browser_launch(
             &workspace,
             &device,
@@ -398,7 +412,7 @@ mod tests {
             profile,
             generation,
             "c".repeat(64),
-            workspace.inventory()?.inventory_digest(),
+            workspace.materialization_inventory_digest()?,
             identity()?,
         )?;
         persist_materialization_binding(&workspace, &binding)?;
@@ -436,7 +450,7 @@ mod tests {
             profile,
             generation,
             "c".repeat(64),
-            workspace.inventory()?.inventory_digest(),
+            workspace.materialization_inventory_digest()?,
             identity()?,
         )?;
         persist_materialization_binding(&workspace, &binding)?;
@@ -474,7 +488,7 @@ mod tests {
             profile,
             generation,
             "c".repeat(64),
-            workspace.inventory()?.inventory_digest(),
+            workspace.materialization_inventory_digest()?,
             identity()?,
         )?;
         persist_materialization_binding(&workspace, &binding)?;

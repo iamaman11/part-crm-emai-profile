@@ -48,13 +48,14 @@ function validatePolicy(policy, trackedPaths) {
   expect(policy?.duplicate_registration_paths_forbidden === true, 'duplicate registration paths must remain forbidden');
 
   const registrations = Array.isArray(policy?.active_registrations) ? policy.active_registrations : [];
-  expect(registrations.length === 18, 'registry policy must classify exactly 18 current active registrations');
+  expect(registrations.length === 19, 'registry policy must classify exactly 19 current active registrations');
   const paths = registrations.map((entry) => entry?.path);
   expect(paths.every((value) => typeof value === 'string' && value.startsWith(`${WORKFLOWS_RELATIVE}/`) && /\.ya?ml$/i.test(value)), 'every active registration path must be a workflow YAML path');
   expect(new Set(paths).size === paths.length, 'registry policy active paths must be unique');
   expect(registrations.every((entry) => ALLOWED_CATEGORIES.has(entry?.category)), 'registry policy contains an unsupported active category');
-  expect(registrations.filter((entry) => entry.category === 'PERMANENT_REQUIRED').length === 17, 'registry policy must classify exactly 17 permanent workflows');
+  expect(registrations.filter((entry) => entry.category === 'PERMANENT_REQUIRED').length === 18, 'registry policy must classify exactly 18 permanent workflows');
   expect(registrations.filter((entry) => entry.category === 'CURRENT_MANUAL_OPERATION').length === 1, 'registry policy must classify exactly one current manual operation');
+  expect(registrations.some((entry) => entry.path === '.github/workflows/camoufox-runtime-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Camoufox Runtime Gate must be a permanent AR-10 gate');
   expect(registrations.some((entry) => entry.path === '.github/workflows/github-governance-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'GitHub Governance Gate must remain permanent');
   expect(registrations.some((entry) => entry.path === '.github/workflows/quality-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Quality Gate must remain permanent');
   expect(registrations.some((entry) => entry.path === '.github/workflows/mailbox-secret-resolver-release.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Mailbox Secret Resolver Release must remain permanent');

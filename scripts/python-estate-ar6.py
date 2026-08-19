@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""AR-6 full Git-tracked Python estate generator and fail-closed checker."""
+"""Validate the frozen AR-6 Python estate plus explicitly owned later deltas.
+
+AR-6 established the complete Git-tracked Python classification baseline. Later
+architecture slices may add or retire Python only through a bounded machine-readable
+overlay; they may not silently rewrite the accepted AR-6 baseline.
+"""
 
 from __future__ import annotations
 
 import argparse
 import ast
 import copy
+import hashlib
 import json
 import subprocess
 import sys
@@ -14,6 +20,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "architecture" / "python-estate-ar6.json"
+AR10_OVERLAY = ROOT / "architecture" / "python-estate-ar10.json"
 SCHEMA_VERSION = 1
 ALLOWED = {"KEEP_PYTHON", "MIGRATE_TO_RUST", "WRAP_WITH_RUST", "DELETE_AFTER_SEQUENCE"}
 FUTURE_FIELDS = {
@@ -61,212 +68,238 @@ PROVIDER_MUTATION_TERMS = (
     "r2 object put",
     "secret put",
 )
-
-FUTURE_DECISIONS: dict[str, dict[str, str]] = {
-    "check_mail.py": {
-        "classification": "DELETE_AFTER_SEQUENCE",
-        "role": "retired_legacy_marker",
-        "side_effect_class": "none_retired_fail_closed",
-        "rust_target": "existing mailbox application/control-plane + Profile Bridge authorities",
-        "artifact_type": "retired compatibility marker",
-        "cutover_slice": "AR-10",
-        "compatibility_requirement": "no accepted workflow or operator contract may depend on this retired launcher marker",
-        "retirement_proof": "repository reference scan + permanent mailbox/Profile Bridge gates pass after deletion",
+GENERIC_KEEP_ROLES = {"validator", "generator", "test", "test_or_fixture"}
+AR10_ADDITION_DECISIONS: dict[str, dict[str, str]] = {
+    "runtime/camouhost/real.py": {
+        "classification": "KEEP_PYTHON",
+        "role": "real_runtime_adapter",
+        "side_effect_class": "generation_scoped_local_browser_runtime",
+        "authority": "PYTHON_ALLOWED_BY_AR10",
+        "rationale": "Camoufox is Python-native; native Profile Bridge remains lifecycle and launch authority",
     },
-    "profile_manager.py": {
-        "classification": "DELETE_AFTER_SEQUENCE",
-        "role": "retired_legacy_marker",
-        "side_effect_class": "none_retired_fail_closed",
-        "rust_target": "apps/profile-bridge",
-        "artifact_type": "retired compatibility marker",
-        "cutover_slice": "AR-10",
-        "compatibility_requirement": "Profile Bridge remains the only accepted local profile lifecycle authority",
-        "retirement_proof": "repository reference scan + Windows/Profile Bridge permanent gates pass after deletion",
+    "scripts/check-ar10-runtime-cutover.py": {
+        "classification": "KEEP_PYTHON",
+        "role": "validator",
+        "side_effect_class": "repository_validation_only",
+        "authority": "PYTHON_ALLOWED_BY_AR10",
+        "rationale": "AR-10 fail-closed runtime/executable cutover validator",
     },
-    "test_fingerprint_consistency.py": {
-        "classification": "DELETE_AFTER_SEQUENCE",
-        "role": "retired_legacy_marker",
-        "side_effect_class": "none_retired_fail_closed",
-        "rust_target": "certification application port + accepted Profile Bridge runtime boundary",
-        "artifact_type": "retired compatibility marker",
-        "cutover_slice": "AR-10",
-        "compatibility_requirement": "accepted certification evidence must not depend on this retired launcher marker",
-        "retirement_proof": "zero accepted references + certification/Profile Bridge permanent gates green after deletion",
+    "scripts/test-ar10-real-camoufox.py": {
+        "classification": "KEEP_PYTHON",
+        "role": "test",
+        "side_effect_class": "test_only",
+        "authority": "PYTHON_ALLOWED_BY_AR10",
+        "rationale": "repository-local real Camoufox integration evidence fixture",
     },
-    "tools/cloud_profile_smoke.py": {
-        "classification": "DELETE_AFTER_SEQUENCE",
-        "role": "legacy_direct_profile_r2_smoke_tool",
-        "side_effect_class": "external_profile_object_and_pointer_mutation",
-        "rust_target": "Profile Bridge + control-plane generation APIs + bounded R2 canary evidence",
-        "artifact_type": "legacy direct profile/R2 smoke executable",
-        "cutover_slice": "AR-10",
-        "compatibility_requirement": "profile generation, restore and synchronization evidence remains covered without direct Python profile lifecycle or profiles/v1 pointer mutation authority",
-        "retirement_proof": "zero accepted workflow/operator references + Profile Bridge/generation/R2 canary gates green after deletion",
-    },
-    "tools/fingerprint_certify.py": {
-        "classification": "DELETE_AFTER_SEQUENCE",
-        "role": "legacy_direct_browser_certification_tool",
-        "side_effect_class": "disposable_profile_clone_browser_execution",
-        "rust_target": "certification application port + accepted Profile Bridge/Camoufox runtime boundary",
-        "artifact_type": "legacy direct browser certification executable",
-        "cutover_slice": "AR-10",
-        "compatibility_requirement": "fingerprint certification remains available through the accepted certification/runtime boundary without importing the legacy direct browser launcher",
-        "retirement_proof": "zero accepted workflow/operator references + certification/Profile Bridge permanent gates green after deletion",
-    },
-    "tools/profile_browser.py": {
-        "classification": "DELETE_AFTER_SEQUENCE",
-        "role": "legacy_direct_browser_runtime_tool",
-        "side_effect_class": "local_profile_runtime_mutation",
-        "rust_target": "apps/profile-bridge + accepted Camoufox runtime boundary",
-        "artifact_type": "legacy direct runtime executable",
-        "cutover_slice": "AR-10",
-        "compatibility_requirement": "all accepted browser/profile execution remains available through Profile Bridge without direct Python lifecycle authority",
-        "retirement_proof": "zero accepted workflow/runtime references + Profile Bridge/runtime-bundle gates green after deletion",
-    },
-    "scripts/mailbox-secret-resolver-promotion.py": {
-        "classification": "MIGRATE_TO_RUST",
-        "role": "legacy_d3_operational_promotion_entrypoint",
-        "side_effect_class": "environment_gated_provider_promotion",
-        "rust_target": "opsctl release/promotion command family",
-        "artifact_type": "typed operational command",
-        "cutover_slice": "AR-11",
-        "compatibility_requirement": "preserve D3 preflight/attestation/same-bits semantics and AR-2 production fail-closed interlock until AR-11 replacement is accepted",
-        "retirement_proof": "GitHub workflows call only accepted Rust operational authority; Python entrypoint has zero legitimate callers and can be removed without weakening D3/AR-11 gates",
-    },
-    "scripts/_mailbox_secret_resolver_promotion_core.py": {
-        "classification": "MIGRATE_TO_RUST",
-        "role": "legacy_d3_operational_promotion_core",
-        "side_effect_class": "environment_gated_provider_promotion",
-        "rust_target": "opsctl release/promotion command family",
-        "artifact_type": "typed operational library",
-        "cutover_slice": "AR-11",
-        "compatibility_requirement": "preserve accepted D3 validation, identity, deployment-closure and same-bits invariants exactly through cutover",
-        "retirement_proof": "Rust AR-11 positive/negative fixtures cover accepted D3 invariants and no accepted Python wrapper imports this core",
+    "scripts/test-ar10-firefox-writer-locks.py": {
+        "classification": "KEEP_PYTHON",
+        "role": "test",
+        "side_effect_class": "test_only",
+        "authority": "PYTHON_ALLOWED_BY_AR10",
+        "rationale": "OS-level Firefox writer-lock ownership and fail-closed regression matrix",
     },
 }
 
-EXPLICIT_KEEP: dict[str, tuple[str, str, str]] = {
-    "scripts/check-external-review-attestations.py": (
-        "external_review_attestation_verifier",
-        "github_api_read_only",
-        "terminal external-evidence verification performs bounded GitHub API GETs and may consume a workflow-scoped token; it has no mutation surface",
-    ),
-    "runtime/camouhost/main.py": (
-        "synthetic_runtime_fixture",
-        "synthetic_local_fixture_state_only",
-        "repository contract evidence fake; not production Camoufox authority",
-    ),
-    "tools/r2_s3_canary.py": (
-        "external_provider_canary",
-        "disposable_canary_object_put_delete",
-        "bounded canary mutation is test/evidence only and must never become production object lifecycle authority",
-    ),
-    "tools/runtime_bundle.py": (
-        "runtime_bundle_generator",
-        "artifact_generation_only",
-        "deterministic artifact generator remains legitimate Python",
-    ),
-    "scripts/accepted_phase_provenance.py": (
-        "provenance_validator",
-        "repository_read_only",
-        "accepted provenance validation remains legitimate Python",
-    ),
-    "scripts/cloudflare-d1-bootstrap.py": (
-        "bootstrap_sql_generator",
-        "artifact_generation_and_local_sqlite_only",
-        "builds/verifies SQL; remote execution remains Wrangler/workflow authority",
-    ),
-    "scripts/cloudflare-deploy-config.py": (
-        "deployment_config_generator",
-        "artifact_generation_only",
-        "renderer/validator remains legitimate Python; it does not deploy",
-    ),
-    "scripts/cloudflare-release.py": (
-        "immutable_release_generator",
-        "artifact_generation_only",
-        "release artifact/provenance generator remains Python; AR-11 owns later operational release-set semantics",
-    ),
-    "scripts/mailbox-secret-resolver-d1-bootstrap.py": (
-        "bootstrap_sql_generator",
-        "artifact_generation_and_local_sqlite_only",
-        "builds/verifies resolver bootstrap SQL; remote execution remains Wrangler/workflow authority",
-    ),
-    "scripts/mailbox-secret-resolver-release.py": (
-        "immutable_release_generator",
-        "artifact_generation_only",
-        "resolver artifact/provenance generator remains Python; AR-11 owns later operational release-set semantics",
-    ),
-    "scripts/prepare-external-evidence.py": (
-        "evidence_preparer",
-        "evidence_artifact_only",
-        "research/evidence helper remains legitimate Python",
-    ),
-    "scripts/python-estate-ar6.py": (
-        "estate_generator",
-        "repository_validation_and_inventory_generation",
-        "AR-6 canonical Python estate generator/checker remains legitimate Python",
-    ),
-    "scripts/render-openapi.py": (
-        "contract_generator",
-        "artifact_generation_only",
-        "deterministic contract rendering remains legitimate Python",
-    ),
-    "scripts/verify-fast.py": (
-        "developer_verifier",
-        "repository_validation_only",
-        "developer verification orchestration is non-authoritative/read-only",
-    ),
-}
+
+class EstateError(ValueError):
+    pass
+
+
+def fail(message: str) -> None:
+    raise EstateError(message)
+
+
+def run_git(args: list[str], root: Path = ROOT) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=root,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        fail(f"git {' '.join(args)} failed: {detail}")
+    return completed.stdout
 
 
 def tracked_python(root: Path = ROOT) -> list[str]:
-    completed = subprocess.run(
-        ["git", "ls-files", "--", "*.py"],
-        cwd=root,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        raise ValueError("AR-6 Python estate requires a Git checkout")
-    paths = sorted(line.strip() for line in completed.stdout.splitlines() if line.strip())
-    if not paths or len(paths) != len(set(paths)):
-        raise ValueError("tracked Python path inventory must be non-empty and unique")
+    output = run_git(["ls-files", "-z", "--", "*.py"], root)
+    paths = sorted(path for path in output.split("\0") if path)
+    if len(paths) != len(set(paths)):
+        fail("Git-tracked Python inventory contains duplicate paths")
     return paths
 
 
-def keep(path: str, role: str, side_effect_class: str, rationale: str) -> dict[str, Any]:
-    return {
-        "path": path,
-        "classification": "KEEP_PYTHON",
-        "role": role,
-        "side_effect_class": side_effect_class,
-        "authority": "PYTHON_ALLOWED_BY_AR6",
-        "rationale": rationale,
-    }
+def read_regular(path: Path) -> bytes:
+    if path.is_symlink() or not path.is_file():
+        fail(f"required Python-estate authority is missing/not regular: {path.relative_to(ROOT)}")
+    return path.read_bytes()
 
 
-def classify(path: str) -> dict[str, Any]:
-    if path in FUTURE_DECISIONS:
-        return {"path": path, "authority": "FUTURE_CUTOVER_REQUIRED", **FUTURE_DECISIONS[path]}
-    if path in EXPLICIT_KEEP:
-        role, side_effect, rationale = EXPLICIT_KEEP[path]
-        return keep(path, role, side_effect, rationale)
-    if path.startswith("tests/"):
-        return keep(path, "test_or_fixture", "test_only", "tests and fixtures remain legitimate Python")
-    if path.startswith("scripts/check-") or path.startswith("scripts/check_"):
-        return keep(path, "validator", "repository_validation_only", "validators remain legitimate Python")
-    if path.startswith("scripts/test-") or path.startswith("scripts/test_"):
-        return keep(path, "test", "test_only", "tests remain legitimate Python")
-    if path.startswith("scripts/generate-"):
-        return keep(path, "generator", "artifact_generation_only", "deterministic generators remain legitimate Python")
-    if path in {
-        "scripts/_ar3_application_architecture.py",
-        "scripts/_architecture_inventory_core.py",
-        "scripts/_cloudflare_runtime_bindings_core.py",
-    }:
-        return keep(path, "validator_core", "repository_validation_only", "validator core remains legitimate Python")
-    raise ValueError(f"unclassified tracked Python path: {path}")
+def load_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(read_regular(path).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        fail(f"cannot parse {path.relative_to(ROOT)}: {error}")
+    if not isinstance(value, dict):
+        fail(f"{path.relative_to(ROOT)} must contain one JSON object")
+    return value
+
+
+def git_blob_sha1(raw: bytes) -> str:
+    header = f"blob {len(raw)}\0".encode("ascii")
+    return hashlib.sha1(header + raw, usedforsecurity=False).hexdigest()
+
+
+def rows_by_path(rows: object, label: str) -> dict[str, dict[str, Any]]:
+    if not isinstance(rows, list):
+        fail(f"{label} files must be an array")
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("path"), str) or not row["path"]:
+            fail(f"{label} contains a malformed row")
+        path = row["path"]
+        if path in result:
+            fail(f"{label} contains duplicate path: {path}")
+        result[path] = row
+    return result
+
+
+def validate_summary(document: dict[str, Any], rows: list[dict[str, Any]], label: str) -> None:
+    counts = {name: 0 for name in sorted(ALLOWED)}
+    for row in rows:
+        classification = row.get("classification")
+        if classification not in ALLOWED:
+            fail(f"{label} contains invalid classification for {row.get('path')}: {classification!r}")
+        counts[classification] += 1
+    expected = {"tracked_python_files": len(rows), **counts}
+    if document.get("summary") != expected:
+        fail(f"{label} summary drifted: expected={expected}, observed={document.get('summary')}")
+
+
+def validate_frozen_baseline(
+    baseline: dict[str, Any], overlay: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    if baseline.get("schema_version") != SCHEMA_VERSION:
+        fail("AR-6 Python estate schema version drifted")
+    if baseline.get("status") != "AR6_ACCEPTED_PYTHON_ESTATE":
+        fail("AR-6 Python estate accepted status drifted")
+    if baseline.get("accepted_program_checkpoint") != "AR-6" or baseline.get("owning_slice") != "AR-6":
+        fail("AR-6 Python estate checkpoint/ownership drifted")
+    if set(baseline.get("classification_vocabulary", [])) != ALLOWED:
+        fail("AR-6 Python estate classification vocabulary drifted")
+    baseline_rows = rows_by_path(baseline.get("files"), "AR-6 Python estate")
+    for path, row in baseline_rows.items():
+        classification = row.get("classification")
+        if classification not in ALLOWED:
+            fail(f"invalid frozen Python classification for {path}: {classification!r}")
+        if classification != "KEEP_PYTHON":
+            missing = sorted(
+                field
+                for field in FUTURE_FIELDS
+                if not isinstance(row.get(field), str) or not row[field]
+            )
+            if missing:
+                fail(f"frozen future-cutover row {path} lacks metadata: {missing}")
+    validate_summary(baseline, list(baseline_rows.values()), "AR-6 Python estate")
+
+    baseline_contract = overlay.get("baseline")
+    if not isinstance(baseline_contract, dict):
+        fail("AR-10 Python estate overlay lacks frozen baseline contract")
+    if baseline_contract.get("path") != "architecture/python-estate-ar6.json":
+        fail("AR-10 Python estate overlay points at the wrong baseline")
+    if baseline_contract.get("accepted_program_checkpoint") != "AR-6":
+        fail("AR-10 Python estate overlay changed the accepted baseline checkpoint")
+    if baseline_contract.get("immutable") is not True:
+        fail("AR-10 Python estate baseline must remain immutable")
+    expected_blob = baseline_contract.get("git_blob_sha1")
+    actual_blob = git_blob_sha1(read_regular(INVENTORY))
+    if not isinstance(expected_blob, str) or expected_blob != actual_blob:
+        fail(
+            "accepted AR-6 Python estate bytes changed; later slices must use an overlay, "
+            f"expected_blob={expected_blob!r} actual_blob={actual_blob}"
+        )
+    return baseline_rows
+
+
+def validate_overlay_shape(overlay: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    if overlay.get("schema_version") != 1 or overlay.get("status") != "AR10_CURRENT_PYTHON_ESTATE_OVERLAY":
+        fail("AR-10 Python estate overlay schema/status drifted")
+    if overlay.get("owning_slice") != "AR-10":
+        fail("AR-10 Python estate overlay ownership drifted")
+    policy = overlay.get("policy")
+    if not isinstance(policy, dict):
+        fail("AR-10 Python estate overlay policy is missing")
+    for field, expected in {
+        "global_python_to_rust_rewrite": False,
+        "baseline_rewrite_allowed": False,
+        "unknown_delta_policy": "FAIL_CLOSED",
+        "production_mutation": False,
+    }.items():
+        if policy.get(field) != expected:
+            fail(f"AR-10 Python estate overlay policy drifted: {field}")
+
+    additions = overlay.get("additions")
+    if not isinstance(additions, list):
+        fail("AR-10 Python estate additions must be an array")
+    addition_by_path: dict[str, dict[str, Any]] = {}
+    for row in additions:
+        if not isinstance(row, dict) or not isinstance(row.get("path"), str) or not row["path"]:
+            fail("AR-10 Python estate addition is malformed")
+        path = row["path"]
+        if path in addition_by_path:
+            fail(f"duplicate AR-10 Python estate addition: {path}")
+        if row.get("classification") != "KEEP_PYTHON":
+            fail(f"AR-10 addition must remain KEEP_PYTHON: {path}")
+        if not isinstance(row.get("reason"), str) or not row["reason"]:
+            fail(f"AR-10 addition requires an explicit reason: {path}")
+        if path not in AR10_ADDITION_DECISIONS:
+            fail(f"AR-10 addition lacks explicit semantic review in checker: {path}")
+        addition_by_path[path] = row
+    if set(addition_by_path) != set(AR10_ADDITION_DECISIONS):
+        fail(
+            "AR-10 Python addition cohort drifted: "
+            f"overlay={sorted(addition_by_path)} expected={sorted(AR10_ADDITION_DECISIONS)}"
+        )
+
+    retirements = overlay.get("retirements")
+    if not isinstance(retirements, list) or any(
+        not isinstance(path, str) or not path for path in retirements
+    ):
+        fail("AR-10 Python retirements must be an array of non-empty paths")
+    retirement_set = set(retirements)
+    if len(retirement_set) != len(retirements):
+        fail("AR-10 Python estate retirements contain duplicates")
+    return addition_by_path, retirement_set
+
+
+def addition_row(path: str) -> dict[str, Any]:
+    decision = AR10_ADDITION_DECISIONS.get(path)
+    if decision is None:
+        fail(f"unclassified AR-10 Python addition: {path}")
+    return {"path": path, **decision}
+
+
+def build_current_rows(
+    baseline_rows: dict[str, dict[str, Any]],
+    additions: dict[str, dict[str, Any]],
+    retirements: set[str],
+) -> list[dict[str, Any]]:
+    for path in retirements:
+        row = baseline_rows.get(path)
+        if row is None:
+            fail(f"AR-10 retirement is not present in frozen AR-6 baseline: {path}")
+        if row.get("classification") != "DELETE_AFTER_SEQUENCE" or row.get("cutover_slice") != "AR-10":
+            fail(f"AR-10 may retire only its accepted DELETE_AFTER_SEQUENCE cohort: {path}")
+    for path in additions:
+        if path in baseline_rows:
+            fail(f"AR-10 addition already exists in frozen AR-6 baseline: {path}")
+
+    rows = [copy.deepcopy(row) for path, row in baseline_rows.items() if path not in retirements]
+    rows.extend(addition_row(path) for path in additions)
+    rows.sort(key=lambda row: row["path"])
+    return rows
 
 
 def _import_names(tree: ast.AST) -> set[str]:
@@ -302,13 +335,20 @@ def semantic_capabilities(source: str, *, label: str) -> tuple[set[str], set[str
     try:
         tree = ast.parse(source, filename=label)
     except SyntaxError as error:
-        raise ValueError(f"tracked Python must parse as Python: {label}: {error}") from error
-
+        fail(f"tracked Python must parse as Python: {label}: {error}")
     imports = _import_names(tree)
     capabilities: set[str] = set()
-    if any(name == prefix or name.startswith(prefix + ".") for name in imports for prefix in NETWORK_IMPORT_PREFIXES):
+    if any(
+        name == prefix or name.startswith(prefix + ".")
+        for name in imports
+        for prefix in NETWORK_IMPORT_PREFIXES
+    ):
         capabilities.add("network_io")
-    if any(name == prefix or name.startswith(prefix + ".") for name in imports for prefix in BROWSER_IMPORT_PREFIXES):
+    if any(
+        name == prefix or name.startswith(prefix + ".")
+        for name in imports
+        for prefix in BROWSER_IMPORT_PREFIXES
+    ):
         capabilities.add("browser_runtime")
     if "subprocess" in imports:
         capabilities.add("process_exec")
@@ -337,18 +377,15 @@ def semantic_capabilities(source: str, *, label: str) -> tuple[set[str], set[str
         name = _call_name(node)
         literals = _string_literals(node)
         upper_literals = {value.upper() for value in literals}
-
         if name in {"os.getenv", "os.environ.get"} and any(
             marker in value for value in upper_literals for marker in SECRET_ENV_MARKERS
         ):
             capabilities.add("secret_environment_access")
-
         if name.startswith("subprocess."):
             capabilities.add("process_exec")
             lowered = " ".join(sorted(value.lower() for value in literals))
             if "wrangler" in lowered and any(term in lowered for term in PROVIDER_MUTATION_TERMS):
                 capabilities.add("provider_mutation_subprocess")
-
         if (
             name.endswith(".write_text")
             or name.endswith(".write_bytes")
@@ -357,7 +394,8 @@ def semantic_capabilities(source: str, *, label: str) -> tuple[set[str], set[str
             or name.endswith(".rename")
             or name.endswith(".replace")
             or name.endswith(".touch")
-            or name in {
+            or name
+            in {
                 "os.remove",
                 "os.replace",
                 "os.rename",
@@ -370,107 +408,81 @@ def semantic_capabilities(source: str, *, label: str) -> tuple[set[str], set[str
             }
         ):
             capabilities.add("filesystem_mutation")
-
     return capabilities, imported_modules
 
 
-def semantic_validate(path: str, row: dict[str, Any], root: Path = ROOT) -> None:
-    source_path = root / path
-    if source_path.is_symlink() or not source_path.is_file():
-        raise ValueError(f"tracked Python path must be a regular file for semantic review: {path}")
-    try:
-        source = source_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as error:
-        raise ValueError(f"cannot read tracked Python as UTF-8 for semantic review: {path}") from error
-
-    capabilities, imported_modules = semantic_capabilities(source, label=path)
-    classification = row["classification"]
-    role = row["role"]
-
-    if classification == "KEEP_PYTHON":
-        explicit_only = sorted(capabilities & EXPLICIT_ONLY_CAPABILITIES)
-        if explicit_only and path not in EXPLICIT_KEEP:
-            raise ValueError(
-                f"Python KEEP decision requires explicit semantic review for {path}: capabilities={explicit_only}"
-            )
-
-        future_modules = {Path(future_path).stem: future_path for future_path in FUTURE_DECISIONS}
-        dependencies = sorted(
-            future_modules[module]
-            for module in imported_modules & set(future_modules)
-        )
-        if dependencies and role not in {"test", "test_or_fixture"}:
-            raise ValueError(
-                f"KEEP_PYTHON path depends directly on future-cutover Python: {path}: {dependencies}"
-            )
-
-    if "provider_mutation_subprocess" in capabilities and classification == "KEEP_PYTHON":
-        raise ValueError(
-            f"KEEP_PYTHON may not execute Wrangler/provider mutation semantics: {path}"
-        )
-
-
 def semantic_validate_all(rows: list[dict[str, Any]], root: Path = ROOT) -> None:
+    future_modules = {
+        Path(row["path"]).stem: row["path"]
+        for row in rows
+        if row.get("classification") != "KEEP_PYTHON"
+    }
     for row in rows:
-        semantic_validate(row["path"], row, root)
+        path = row["path"]
+        source_path = root / path
+        if source_path.is_symlink() or not source_path.is_file():
+            fail(f"current Python estate path must be a regular tracked file: {path}")
+        try:
+            source = source_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            fail(f"cannot read tracked Python as UTF-8 for semantic review: {path}: {error}")
+        capabilities, imported_modules = semantic_capabilities(source, label=path)
+        classification = row["classification"]
+        role = row.get("role")
+        if classification == "KEEP_PYTHON":
+            explicit_only = sorted(capabilities & EXPLICIT_ONLY_CAPABILITIES)
+            if explicit_only and role in GENERIC_KEEP_ROLES:
+                fail(
+                    f"KEEP_PYTHON requires explicit semantic role for {path}: "
+                    f"capabilities={explicit_only} role={role!r}"
+                )
+            dependencies = sorted(
+                future_modules[module]
+                for module in imported_modules & set(future_modules)
+            )
+            if dependencies and role not in {"test", "test_or_fixture"}:
+                fail(f"KEEP_PYTHON path depends on future-cutover Python: {path}: {dependencies}")
+        if "provider_mutation_subprocess" in capabilities and classification == "KEEP_PYTHON":
+            fail(f"KEEP_PYTHON may not execute Wrangler/provider mutation semantics: {path}")
 
 
 def build_inventory(root: Path = ROOT) -> dict[str, Any]:
-    rows = [classify(path) for path in tracked_python(root)]
+    baseline = load_json(INVENTORY)
+    overlay = load_json(AR10_OVERLAY)
+    baseline_rows = validate_frozen_baseline(baseline, overlay)
+    additions, retirements = validate_overlay_shape(overlay)
+    rows = build_current_rows(baseline_rows, additions, retirements)
+    tracked = tracked_python(root)
+    row_paths = [row["path"] for row in rows]
+    if row_paths != tracked:
+        missing = sorted(set(tracked) - set(row_paths))
+        stale = sorted(set(row_paths) - set(tracked))
+        fail(f"current Python estate drift: missing={missing}, stale={stale}")
     semantic_validate_all(rows, root)
-    summary = {name: 0 for name in sorted(ALLOWED)}
+    counts = {name: 0 for name in sorted(ALLOWED)}
     for row in rows:
-        summary[row["classification"]] += 1
+        counts[row["classification"]] += 1
+    summary = {"tracked_python_files": len(rows), **counts}
+    if overlay.get("current_summary") != summary:
+        fail(
+            "AR-10 Python estate overlay current_summary drifted: "
+            f"expected={summary}, observed={overlay.get('current_summary')}"
+        )
     return {
-        "schema_version": SCHEMA_VERSION,
-        "status": "AR6_ACCEPTED_PYTHON_ESTATE",
-        "scope": "ALL_GIT_TRACKED_PYTHON_STRONGER_THAN_EXECUTABLE_ONLY",
+        "schema_version": 1,
+        "status": "CURRENT_PYTHON_ESTATE_VIA_AR6_BASELINE_PLUS_AR10_OVERLAY",
         "accepted_program_checkpoint": "AR-6",
-        "owning_slice": "AR-6",
-        "classification_vocabulary": sorted(ALLOWED),
-        "policy": {
-            "global_python_to_rust_rewrite": False,
-            "unknown_path_policy": "FAIL_CLOSED",
-            "python_allowed_for": ["validators", "generators", "tests_fixtures", "research_evidence", "explicit_helpers"],
-            "mutable_authority_rule": "ONE_MUTABLE_CONCERN_ONE_LEGITIMATE_AUTHORITY",
-            "production_mutation": False,
-        },
-        "summary": {"tracked_python_files": len(rows), **summary},
+        "current_owning_slice": "AR-10",
+        "summary": summary,
         "files": rows,
     }
 
 
 def validate(document: dict[str, Any], root: Path = ROOT) -> None:
-    if document.get("schema_version") != SCHEMA_VERSION or document.get("status") != "AR6_ACCEPTED_PYTHON_ESTATE":
-        raise ValueError("AR-6 Python estate schema/status drifted")
-    rows = document.get("files")
-    if not isinstance(rows, list):
-        raise ValueError("AR-6 Python estate files must be an array")
-    paths = [row.get("path") for row in rows if isinstance(row, dict)]
-    if len(paths) != len(rows) or any(not isinstance(path, str) or not path for path in paths):
-        raise ValueError("every AR-6 Python estate row requires a path")
-    if len(paths) != len(set(paths)):
-        raise ValueError("AR-6 Python estate contains duplicate paths")
-    tracked = tracked_python(root)
-    if paths != tracked:
-        missing = sorted(set(tracked) - set(paths))
-        stale = sorted(set(paths) - set(tracked))
-        raise ValueError(f"AR-6 Python estate drift: missing={missing}, stale={stale}")
-    for row in rows:
-        classification = row.get("classification")
-        if classification not in ALLOWED:
-            raise ValueError(f"invalid Python classification for {row.get('path')}: {classification!r}")
-        expected = classify(row["path"])
-        if row != expected:
-            raise ValueError(f"Python classification decision drifted for {row['path']}")
-        if classification != "KEEP_PYTHON":
-            missing = sorted(field for field in FUTURE_FIELDS if not isinstance(row.get(field), str) or not row[field])
-            if missing:
-                raise ValueError(f"future-cutover row {row['path']} lacks metadata: {missing}")
-    semantic_validate_all(rows, root)
-    expected_summary = build_inventory(root)["summary"]
-    if document.get("summary") != expected_summary:
-        raise ValueError("AR-6 Python estate summary drifted")
+    """Compatibility helper: validate a generated current-estate document."""
+    expected = build_inventory(root)
+    if document != expected:
+        fail("current Python estate document drifted from frozen baseline + AR-10 overlay")
 
 
 def serialized(document: dict[str, Any]) -> str:
@@ -481,63 +493,49 @@ def self_test() -> None:
     expected = build_inventory()
     validate(expected)
 
-    missing = copy.deepcopy(expected)
-    missing["files"] = missing["files"][1:]
-    try:
-        validate(missing)
-    except ValueError:
-        pass
-    else:
-        raise ValueError("missing Python path negative fixture unexpectedly passed")
+    baseline_raw = read_regular(INVENTORY)
+    if git_blob_sha1(baseline_raw) != load_json(AR10_OVERLAY)["baseline"]["git_blob_sha1"]:
+        fail("frozen baseline identity self-test failed")
 
-    duplicate = copy.deepcopy(expected)
-    duplicate["files"].append(copy.deepcopy(duplicate["files"][0]))
+    unknown_overlay = copy.deepcopy(load_json(AR10_OVERLAY))
+    unknown_overlay["additions"].append(
+        {
+            "path": "scripts/check-unreviewed-future.py",
+            "classification": "KEEP_PYTHON",
+            "reason": "negative fixture",
+        }
+    )
     try:
-        validate(duplicate)
-    except ValueError:
+        validate_overlay_shape(unknown_overlay)
+    except EstateError:
         pass
     else:
-        raise ValueError("duplicate Python path negative fixture unexpectedly passed")
-
-    migration = copy.deepcopy(expected)
-    row = next(item for item in migration["files"] if item["path"] == "scripts/mailbox-secret-resolver-promotion.py")
-    row.pop("retirement_proof")
-    try:
-        validate(migration)
-    except ValueError:
-        pass
-    else:
-        raise ValueError("incomplete migration metadata negative fixture unexpectedly passed")
-
-    try:
-        classify("scripts/future-unclassified-operational.py")
-    except ValueError:
-        pass
-    else:
-        raise ValueError("unknown Python path fail-closed fixture unexpectedly passed")
+        fail("unknown Python overlay addition negative fixture unexpectedly passed")
 
     capabilities, _ = semantic_capabilities(
         "import urllib.request\nurllib.request.urlopen('https://example.invalid')\n",
         label="scripts/check-future-network.py",
     )
     if "network_io" not in capabilities or not (capabilities & EXPLICIT_ONLY_CAPABILITIES):
-        raise ValueError("semantic capability detector lost network negative fixture")
+        fail("semantic capability detector lost network negative fixture")
 
     _, imported = semantic_capabilities(
         "from profile_browser import browser_environment\n",
         label="tools/future-keeper.py",
     )
     if "profile_browser" not in imported:
-        raise ValueError("semantic dependency detector lost future-cutover negative fixture")
+        fail("semantic dependency detector lost future-cutover negative fixture")
 
     provider_capabilities, _ = semantic_capabilities(
         "import subprocess\nsubprocess.run(['npx', 'wrangler', 'deploy'], check=True)\n",
         label="scripts/check-future-provider.py",
     )
     if "provider_mutation_subprocess" not in provider_capabilities:
-        raise ValueError("semantic capability detector lost provider-mutation negative fixture")
+        fail("semantic capability detector lost provider-mutation negative fixture")
 
-    print("AR-6 Python estate semantic and inventory negative fixtures rejected as expected.")
+    print(
+        "Frozen AR-6 Python estate, bounded AR-10 overlay and semantic capability negative fixtures rejected as expected."
+    )
 
 
 def main() -> int:
@@ -550,22 +548,16 @@ def main() -> int:
     if args.self_test:
         self_test()
         return 0
-    expected = build_inventory()
     if args.write:
-        INVENTORY.parent.mkdir(parents=True, exist_ok=True)
-        INVENTORY.write_text(serialized(expected), encoding="utf-8", newline="\n")
-        print(f"Wrote {INVENTORY.relative_to(ROOT)} with {len(expected['files'])} tracked Python files.")
-        return 0
-    try:
-        actual = json.loads(INVENTORY.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ValueError(f"cannot read AR-6 Python estate: {error}") from error
-    validate(actual)
-    if serialized(actual) != serialized(expected):
-        raise ValueError("AR-6 Python estate is not deterministic/current; run --write")
+        fail(
+            "architecture/python-estate-ar6.json is an immutable accepted baseline; "
+            "later Python deltas must be recorded in the owning architecture overlay"
+        )
+    current = build_inventory()
     print(
-        f"AR-6 Python estate is current: {len(expected['files'])} tracked files, "
-        "zero unclassified; semantic capability audit passed."
+        f"Python estate current via frozen AR-6 baseline + AR-10 overlay: "
+        f"{current['summary']['tracked_python_files']} tracked files, zero unclassified; "
+        "semantic capability audit passed."
     )
     return 0
 
@@ -573,6 +565,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except ValueError as error:
-        print(f"AR-6 Python estate error: {error}", file=sys.stderr)
+    except (EstateError, OSError, UnicodeError, json.JSONDecodeError) as error:
+        print(f"Python estate error: {error}", file=sys.stderr)
         raise SystemExit(1) from error

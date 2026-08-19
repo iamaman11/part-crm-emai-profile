@@ -1,7 +1,7 @@
 # Developer Capability and Module Matrix
 
 **Status:** normative accepted implementation/evidence orientation  
-**Date:** 2026-08-18
+**Date:** 2026-08-19
 **Execution authority:** [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](./ARCHITECTURE_REBASELINE_V3_PLAN.md)
 **Generated projection:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
 
@@ -31,13 +31,13 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
-| Source implemented | **ACCEPTED** | AR-8 source is accepted on `main`; AR-9 is the current architecture slice. |
-| Accepted on main | **COMPLETE THROUGH AR-8** | AR-8A…AR-8F and final closeout are accepted; `full_ar8_accepted=true`. |
-| Staging live | **PARTIAL** | AR-8C staging provider/credential foundation remains the bounded live staging evidence; later AR-8 acceptance does not imply broader staging or production deployment. |
+| Source implemented | **ACCEPTED** | AR-9 source is accepted on `main`; AR-10 is the current architecture slice. |
+| Accepted on main | **COMPLETE THROUGH AR-9** | AR-8 and AR-9 are accepted; AR-9 evidence is `docs/evidence/2026-08-19-ar9-final-acceptance.json`. |
+| Staging live | **PARTIAL** | AR-8C staging provider/credential foundation remains the bounded live staging evidence; later architecture acceptance does not imply broader staging or production deployment. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
-| Current blocker | **NONE** | AR-8 is accepted; no AR-8 blocker remains. |
-| Next gate | **AR-9 acceptance** | AR-9 — D1 Evolution / Schema Compatibility is the current slice. |
+| Current blocker | **NONE** | AR-9 is accepted; no predecessor blocker remains. |
+| Next gate | **AR-10 acceptance** | AR-10 — Runtime and Historical Executable Simplification is the current slice. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
@@ -53,7 +53,7 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 | Profile coordinator | Composed | Durable Object journal, sequence/version/epoch/fencing, timeout/drain/recovery, application-thin HTTP ingress and D1 projection; Phase 2F revalidates authoritative session/device/epoch/fence before accepting browser/device generation work. | Remote production concurrency evidence is External. |
 | Full Profile Bridge operator flow | Composed / Synthetic | Phase 2F repository-local executable composes claim, device identity, Coordinator lease/fence, generation ownership, browser/network preflight, writer lock, graceful retained dirty close, immutable encrypted candidate, exact verify, authoritative commit, local successor/rematerialization and ownership release. Phase 2H exposes only safe supported operator guidance for device/session/recovery surfaces and does not impersonate device agents. | Real Camoufox, production keys, remote enrollment/coordinator, physical devices and real provider/R2 execution remain External. |
 | Local profile lifecycle / materialization | Composed / Synthetic | Workspace marking/inventory/lock ownership, clone-only recovery, quota/support policy, retained writer ownership through dirty-generation commit, irreversible supersede and deterministic post-commit rematerialization recovery. | Real browser/kernel-lock and physical multi-device evidence remains Phase 2J External. |
-| Encrypted cloud generations | Composed / Synthetic | XChaCha20-Poly1305 immutable container plus Phase 2F canonical exact generation key/checksum/metadata policy, short-lived create-only upload capability, exact verification and fenced/CAS activation sequencing. | Production R2/device unwrap/remote recovery atomicity evidence remains External. |
+| Encrypted cloud generations | Composed / Synthetic | XChaCha20-Poly1305 immutable container plus Phase 2F canonical exact generation key/checksum/metadata policy, short-lived create-only upload capability, exact verification and fenced/CAS activation sequencing. | Production R2/device unwrap/remote recovery atomicity evidence is External. |
 | Mailbox operations baseline | Composed / Synthetic | Phase 2E accepts decomposed `mailbox-domain`, independent `use-cases-mailboxes`, Gmail API/IMAP outer adapters, durable Queue retry/DLQ/idempotency/fencing, opaque fixed-service secret resolution, auth/suspended lifecycle and metadata-only provider observations; Phase 2F accepts the durable browser/device lane; Phase 2H adds generated bounded mailbox binding discovery in the standalone operator UI. | Real Gmail/IMAP/Camoufox/physical-device provider execution remains External evidence. |
 | React standalone operator UI | Composed / Synthetic | Phase 2H accepts useful feature-owned surfaces for `/`, `/clients`, `/clients/:clientId`, `/profiles`, `/profiles/:profileId`, `/users`, `/mailboxes`, `/sessions`, `/devices`, `/audit` and `/settings`; generated operator-query DTOs back profile/member/mailbox directories; Clients/Profiles use canonical detail navigation; network/offline state is explicit; unsupported device/audit operations remain truthful rather than decorative or authority-bypassing. | Phase 2I integrated E2E/security/recovery/operational behavior is accepted; Phase 2J supplies real rollout evidence. |
 | Client Mail standalone UI | Composed / Synthetic | Phase 2H wires the accepted Phase 2D/2E/2F application path end-to-end through generated Rust/OpenAPI/TypeScript request/response contracts, thin authenticated Worker ingress, D1 mailbox eligibility and real frontend search/get-message calls. Search terms and provider message references are body-carried rather than URL-carried. | Phase 2I integrated failure/recovery proof is accepted; real provider/device execution remains Phase 2J External evidence. |
@@ -70,7 +70,7 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 | Complete standalone UI | Composed / Synthetic | Phase 2H implementation PR #164 was accepted from exact source head `9add9b94d0de255b93e5a7c24584fcf6756462a7` and guarded squash merge `a32768feddb3da69b872e701bc529aad3521e1b0`, with exactly 12/12 permanent workflows success, `behind_by=0`, reviews=0 and unresolved review threads=0. | Phase 2I integrated E2E/security/recovery/operations hardening is accepted; Phase 2J closes real rollout evidence. |
 | Integrated release-candidate hardening | Composed / Synthetic | Phase 2I implementation PR #168 was accepted from exact source head `c1075337cfc582d0f4c00ec34b1aa7cda9ac1101` and guarded squash merge `800c634147d6300ea3989ff0cf87ade6e2387ee9`, with exactly 12/12 permanent workflows success, `behind_by=0`, reviews=0 and unresolved review threads=0. Repository-owned scope includes executable security/failure/recovery/DR, metadata-safe operations/capacity, dependency/license/threat-model, support-bundle and release-freeze evidence. | Real Cloudflare/provider/Camoufox/physical-device/signing/key/independent-review evidence remains Phase 2J External; `production_ready=false` remains unchanged. |
 | External CRM integration | Target / Future | Future-only contract-isolated Party/adapter direction is documented separately. | No active CRM implementation; it may be considered only after standalone Phase 2J. |
-| Production readiness | External | Repository/source evidence includes accepted AR-8 plus the bounded AR-8C staging foundation; both remain independent from production state. | `production_core_gate=BLOCKED` and `production_ready=false`; only AR-17 may authorize the Core gate and only successful PC-1 may enable accepted `production-core-v1` scope. |
+| Production readiness | External | Repository/source evidence includes accepted AR-9 plus the bounded AR-8C staging foundation; both remain independent from production state. | `production_core_gate=BLOCKED` and `production_ready=false`; only AR-17 may authorize the Core gate and only successful PC-1 may enable accepted `production-core-v1` scope. |
 
 ## 4. Architecture Obligation Status
 
@@ -91,7 +91,7 @@ because phase numbering changed.
 | 6.2 | Durable-before-notify | **Accepted through Phase 2I.** Phase 1B durable delivery remains canonical; Phase 2G live fanout occurs only after durable `Delivered`; Phase 2H UI continues to treat realtime as invalidation/refetch rather than success authority. | Preserve through Phase 2J. |
 | 6.3 | At-least-once consumer idempotency | **Accepted through Phase 2I.** Notification replay, mailbox/device consumers and realtime duplicate delivery remain duplicate-neutral at canonical state/UI logical-state boundaries. | Preserve for every later consumer/surface. |
 | 6.4 | Authorization-before-projection | **Accepted through Phase 2I.** Live membership/grants precede projection/provider access and realtime subscription/catch-up; Phase 2H operator lists and Client Mail transport call accepted authorization/query application paths rather than recreating ACL in UI. | Preserve continuously through Phase 2J. |
-| 6.5 | PII contact protection | **Accepted through Phase 2B/2D** — protected D1 contacts, separate versioned encryption/HMAC domains and tenant-first exact lookup are accepted; query reuse remains grant-safe. | Preserve continuously; fuzzy/prefix PII indexing still requires a separate accepted ADR. |
+| 6.5 | PII contact protection | **Accepted through Phase 2B/2D** — protected D1 contacts, separate versioned encryption/HMAC domains and tenant-first exact lookup are accepted; query reuse remains grant-safe. | Preserve continuously; fuzzy/prefix PII indexing still requires a separate ADR. |
 | 6.6 | Profile materialization | **Accepted repository-local through Phase 2I** — browser/device integration, retained writer ownership, immutable dirty-generation evolution and deterministic rematerialization/recovery evidence are composed/synthetic. | Phase 2I accepted broader repository-local recovery/E2E evidence; Phase 2J supplies real physical/provider evidence. |
 
 ## 5. Current Module Ownership

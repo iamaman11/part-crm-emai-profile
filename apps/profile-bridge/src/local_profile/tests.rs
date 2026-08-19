@@ -88,6 +88,75 @@ fn recovery_is_clone_only_and_detects_clone_mutation() -> Result<(), Box<dyn std
 }
 
 #[test]
+fn recovery_preserves_browser_state_but_not_ephemeral_firefox_locks()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root_path = test_root("browser-state-recovery")?;
+    let root = MaterializationRoot::open_or_create(&root_path)?;
+    let (tenant_id, profile_id) = ids()?;
+    let source_id = GenerationId::parse("generation_01JSTEP8P")?;
+    let recovery_id = GenerationId::parse("generation_01JSTEP8Q")?;
+    let source = root.create_generation(&tenant_id, &profile_id, &source_id)?;
+    let user_data = source.path().join("user_data");
+    fs::create_dir(&user_data)?;
+    fs::write(
+        user_data.join("cookies.sqlite"),
+        b"persistent-browser-state",
+    )?;
+    fs::write(user_data.join("lock"), b"ephemeral-firefox-legacy-lock")?;
+    fs::write(
+        user_data.join(".parentlock"),
+        b"ephemeral-firefox-posix-lock-marker",
+    )?;
+    fs::write(
+        user_data.join("parent.lock"),
+        b"ephemeral-firefox-windows-lock-marker",
+    )?;
+
+    let materialization_before = source.materialization_inventory_digest()?;
+    let source_inventory = source.inventory()?;
+    assert!(
+        source_inventory
+            .entries()
+            .iter()
+            .any(|entry| entry.relative_path() == "user_data/cookies.sqlite")
+    );
+    for ephemeral in [
+        "user_data/lock",
+        "user_data/.parentlock",
+        "user_data/parent.lock",
+    ] {
+        assert!(
+            source_inventory
+                .entries()
+                .iter()
+                .all(|entry| entry.relative_path() != ephemeral)
+        );
+    }
+
+    let recovery = RecoveryClone::create(&source, &root, &tenant_id, &profile_id, &recovery_id)?;
+    assert_eq!(
+        fs::read(recovery.workspace().path().join("user_data/cookies.sqlite"))?,
+        b"persistent-browser-state"
+    );
+    for ephemeral in ["lock", ".parentlock", "parent.lock"] {
+        assert!(
+            !recovery
+                .workspace()
+                .path()
+                .join("user_data")
+                .join(ephemeral)
+                .exists()
+        );
+    }
+    assert_eq!(
+        recovery.workspace().materialization_inventory_digest()?,
+        materialization_before
+    );
+    fs::remove_dir_all(root_path)?;
+    Ok(())
+}
+
+#[test]
 fn forgotten_window_policy_progresses_warn_drain_force_close()
 -> Result<(), Box<dyn std::error::Error>> {
     let policy = ForgottenWindowPolicy::new(100, 200, 500)?;

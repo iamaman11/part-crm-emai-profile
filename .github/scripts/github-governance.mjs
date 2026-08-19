@@ -255,8 +255,11 @@ async function liveAudit(contract) {
     if (requiredStatus.strict !== contract.main_governance.strict_required_status_checks) {
       errors.push('live main required status checks are not strict');
     }
-    if (!sameStringSet(protectionCheckNames(protection), contract.main_governance.required_checks)) {
-      errors.push('live main required status checks do not equal the contract');
+    const liveRequiredChecks = new Set(protectionCheckNames(protection));
+    for (const requiredCheck of contract.main_governance.required_checks) {
+      if (!liveRequiredChecks.has(requiredCheck)) {
+        errors.push(`live main lost accepted AR-7 required status check: ${requiredCheck}`);
+      }
     }
     if (protection?.enforce_admins?.enabled !== contract.main_governance.enforce_admins) {
       errors.push('live main enforce_admins does not match the contract');

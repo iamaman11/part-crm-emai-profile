@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "kind": "RUNTIME_CUTOVER_AUTHORITY",
+  "status": "AR10_IMPLEMENTED_PENDING_ACCEPTANCE",
+  "owning_slice": "AR-10",
+  "owning_issue": 368,
+  "completion_pr": 371,
+  "exact_start_base": "5933a5e30a534209138485556b4a895706af765a",
+  "architecture_complete": false,
+  "production_core_gate": "BLOCKED",
+  "production_ready": false,
+  "production_mutation": false,
+  "supported_topology": [
+    "native_rust_profile_bridge",
+    "approved_runtime_bundle",
+    "generation_writer_network_runtime_preflight",
+    "one_time_runtime_launch_binding",
+    "typed_versioned_ipc_v1",
+    "real_camouhost_python_adapter",
+    "pinned_camoufox_persistent_context"
+  ],
+  "real_runtime": {
+    "repository_integrated": true,
+    "production_certified": false,
+    "runtime_role": "real_camoufox",
+    "runtime_lock": "runtime/camouhost/runtime-lock.json",
+    "entrypoint": "runtime/camouhost/real.py",
+    "python": "3.12",
+    "camoufox_python": {
+      "version": "0.5.5",
+      "source_repository": "daijro/camoufox",
+      "source_commit": "cd83f7fd2fdf631dfde0c7eb53bd3d30f102ec4a"
+    },
+    "camoufox_browser": {
+      "version": "152.0.4-beta.28",
+      "source_repository": "daijro/camoufox",
+      "release_commit": "0583c3ec94f5a9df5cb2d09553fbfe80589b6e2d"
+    },
+    "browserforge": "1.2.4",
+    "playwright": "1.60.0",
+    "persistent_context_required": true,
+    "stable_generation_user_data_dir": true,
+    "floating_latest_forbidden": true
+  },
+  "synthetic_runtime": {
+    "entrypoint": "runtime/camouhost/main.py",
+    "role": "synthetic_contract_fixture_only",
+    "production_authority": false
+  },
+  "generation_identity": {
+    "compatibility_version": 2,
+    "fingerprint_policy_version": "profile-stability-v1",
+    "fingerprint_config_schema": "camoufox-canonical-config-v1",
+    "config_file": "camoufox-config.json",
+    "config_sha256_bound_in_browser_identity_manifest": true,
+    "profile_stable_probe_sha256_bound_in_fingerprint_source": true,
+    "runtime_inventory_sha256_bound_in_browser_identity_manifest": true,
+    "runtime_lock_sha256_bound_in_approved_bundle_inventory": true,
+    "normal_launch_may_regenerate_browserforge_identity": false,
+    "incompatible_change_requires_candidate_generation": true
+  },
+  "bridge_safety": {
+    "active_generation_freshness": true,
+    "runtime_bundle_preflight": true,
+    "coordinator_lease_epoch_fencing": true,
+    "single_writer_ownership": true,
+    "browser_lock_blind_deletion": false,
+    "network_identity_preflight": true,
+    "one_time_launch_binding_after_preflight": true,
+    "clean_close_uses_immutable_generation_commit": true,
+    "crash_or_ambiguous_close_requires_recovery": true
+  },
+  "failure_matrix": {
+    "firefox_writer_lock_test": "scripts/test-ar10-firefox-writer-locks.py",
+    "managed_runtime_rollback_test": "apps/profile-bridge/tests/runtime_failure_matrix.rs",
+    "malformed_and_unsupported_ipc_test": "crates/bridge-domain/src/lib.rs",
+    "bounded_managed_ipc_test": "apps/profile-bridge/src/camouhost_process.rs",
+    "real_runtime_persistence_test": "scripts/test-ar10-real-camoufox.py",
+    "ambiguous_close_never_clean": true,
+    "rollback_failure_preserved": true,
+    "browser_lock_deletion_forbidden": true
+  },
+  "opsctl": {
+    "doctor_python_child_processes": 0,
+    "production_child_process_spawn_sites": 0,
+    "provider_mutation_authority": false,
+    "python_validators_retained_as_independent_ci_tools": true,
+    "ar10_obligations": "2/2",
+    "credential_cli": {
+      "canonical_commands": [
+        "credentials status",
+        "credentials rotation-plan"
+      ],
+      "legacy_flat_authorities": 0,
+      "readiness_owner": "AR-13"
+    }
+  },
+  "github_governance_extension": {
+    "base_authority": "architecture/github-governance-ar7.json",
+    "mode": "ADDITIVE_REQUIRED_CHECKS_ONLY",
+    "permanent_workflow": ".github/workflows/camoufox-runtime-gate.yml",
+    "required_job_contexts": [
+      "Real Camoufox cold-launch proof",
+      "Profile Bridge Windows regression"
+    ],
+    "historical_ar7_required_checks_may_be_removed": false,
+    "hosted_main_protection_required_before_guarded_merge": true,
+    "live_validator": ".github/scripts/ar10-github-governance-extension.mjs"
+  },
+  "build_reproducibility": {
+    "camoufox_linux_runner": "ubuntu-24.04",
+    "camoufox_windows_runner": "windows-2025",
+    "checkout_action_pinned_by_commit": true,
+    "rust_locked_mode": true,
+    "runtime_component_tuple_exact": true,
+    "floating_latest_forbidden": true
+  },
+  "python_estate": {
+    "accepted_ar6_baseline": "architecture/python-estate-ar6.json",
+    "ar10_overlay": "architecture/python-estate-ar10.json",
+    "global_python_to_rust_rewrite": false
+  },
+  "legacy_executables": {
+    "retirement_owner": "AR-10",
+    "retire_exactly": [
+      "check_mail.py",
+      "profile_manager.py",
+      "test_fingerprint_consistency.py",
+      "tools/cloud_profile_smoke.py",
+      "tools/fingerprint_certify.py",
+      "tools/profile_browser.py"
+    ],
+    "legacy_executables_remaining": 0,
+    "retirement_allowed_before_successor_parity": false,
+    "retirement_parity_source_head": "fdaf9e5071bf48b25bb0a60e95895fe349bc789f"
+  },
+  "legacy_executables_remaining": 0,
+  "repository_acceptance_evidence": {
+    "real_camoufox_cold_launch": "PENDING_FINAL_GREEN_HEAD",
+    "cookie_and_localstorage_persistence": "PENDING_FINAL_GREEN_HEAD",
+    "cross_generation_isolation": "PENDING_FINAL_GREEN_HEAD",
+    "identity_mismatch_fail_closed": "PENDING_FINAL_GREEN_HEAD",
+    "bridge_to_real_camoufox_chain": "PENDING_FINAL_GREEN_HEAD",
+    "windows_profile_bridge_regression": "PENDING_FINAL_GREEN_HEAD",
+    "managed_runtime_failure_matrix": "PENDING_FINAL_GREEN_HEAD",
+    "firefox_writer_lock_failure_matrix": "PENDING_FINAL_GREEN_HEAD",
+    "hosted_camoufox_required_checks": "PENDING_GUARDED_MERGE_CONFIGURATION",
+    "legacy_retirement": "RETIRED_AFTER_SUCCESSOR_PARITY"
+  },
+  "external_evidence": {
+    "physical_supported_windows_host": "REQUIRED_LATER",
+    "real_proxy_provider_coherence": "REQUIRED_LATER",
+    "specialized_fingerprint_sites": "REQUIRED_LATER",
+    "trusted_windows_signing_and_updater": "AR-15",
+    "production_rollout": "PC-1_AFTER_AR17"
+  },
+  "next_slice_after_acceptance": "AR-11"
+}
