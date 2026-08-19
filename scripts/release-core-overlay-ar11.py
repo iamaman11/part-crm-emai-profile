@@ -76,8 +76,16 @@ def control_manifest(document: dict[str, Any], environment: str) -> dict[str, st
     missing = REQUIRED_CONTROL_FIELDS - set(candidate)
     if missing:
         fail(f"control_plane manifest is missing Core fields: {sorted(missing)}")
-    result = {field: bounded(candidate[field], f"control_plane.{field}") for field in REQUIRED_CONTROL_FIELDS}
-    for field in ("worker_name", "d1_database_name", "r2_bucket_name", "integration_events_queue"):
+    result = {
+        field: bounded(candidate[field], f"control_plane.{field}")
+        for field in REQUIRED_CONTROL_FIELDS
+    }
+    for field in (
+        "worker_name",
+        "d1_database_name",
+        "r2_bucket_name",
+        "integration_events_queue",
+    ):
         if RESOURCE_RE.fullmatch(result[field]) is None:
             fail(f"control_plane.{field} is not a bounded Cloudflare resource name")
     if ACCOUNT_RE.fullmatch(result["account_id"]) is None:
@@ -87,10 +95,21 @@ def control_manifest(document: dict[str, Any], environment: str) -> dict[str, st
     if AUDIENCE_RE.fullmatch(result["access_audience"]) is None:
         fail("control_plane.access_audience shape is invalid")
     issuer = urlparse(result["access_issuer"])
-    if issuer.scheme != "https" or not issuer.hostname or issuer.path not in ("", "/") or issuer.query or issuer.fragment:
+    if (
+        issuer.scheme != "https"
+        or not issuer.hostname
+        or issuer.path not in ("", "/")
+        or issuer.query
+        or issuer.fragment
+    ):
         fail("control_plane.access_issuer must be one HTTPS origin")
     domain = result["custom_domain"]
-    if "/" in domain or ":" in domain or "." not in domain or domain.endswith(".workers.dev"):
+    if (
+        "/" in domain
+        or ":" in domain
+        or "." not in domain
+        or domain.endswith(".workers.dev")
+    ):
         fail("control_plane.custom_domain is invalid")
     return result
 
@@ -118,7 +137,10 @@ def render(
     vars_value = selected.get("vars")
     if not isinstance(vars_value, dict):
         fail("selected environment vars are missing")
-    if vars_value.get("CANONICAL_ENVIRONMENT") != "staging" or vars_value.get("CAPABILITY_PROFILE_ID") != "rehearsal-core-v1":
+    if (
+        vars_value.get("CANONICAL_ENVIRONMENT") != "staging"
+        or vars_value.get("CAPABILITY_PROFILE_ID") != "rehearsal-core-v1"
+    ):
         fail("selected immutable config is not the AR-11 rehearsal Core profile")
 
     replacements = {
@@ -143,17 +165,30 @@ def render(
         return value
 
     selected = substitute(selected)
+    if not isinstance(selected, dict):
+        fail("rendered selected Core environment must remain an object")
+    # `secrets.required` is repository policy metadata, not Wrangler deployment input.
+    # Secret values are never transported here; remote binding names are observed with
+    # `wrangler secret list` and validated before the exact-bits deploy.
+    selected.pop("secrets", None)
     serialized_selected = json.dumps(selected, sort_keys=True)
     if "${STAGING_" in serialized_selected:
         fail("selected Core environment still contains unresolved staging placeholders")
-    if "MAILBOX_JOBS" in serialized_selected or "MAILBOX_SECRET_RESOLVER" in serialized_selected:
+    if (
+        "MAILBOX_JOBS" in serialized_selected
+        or "MAILBOX_SECRET_RESOLVER" in serialized_selected
+    ):
         fail("Mail operational dependency unexpectedly entered Core deployment closure")
 
     worker_entry = release_root / "worker" / "worker" / "shim.mjs"
     frontend = release_root / "frontend"
     if worker_entry.is_symlink() or not worker_entry.is_file():
         fail("immutable release Worker entrypoint is missing")
-    if frontend.is_symlink() or not frontend.is_dir() or not (frontend / "index.html").is_file():
+    if (
+        frontend.is_symlink()
+        or not frontend.is_dir()
+        or not (frontend / "index.html").is_file()
+    ):
         fail("immutable release frontend assets are missing")
 
     rendered = dict(config)
@@ -172,7 +207,9 @@ def render(
     if output.exists():
         fail(f"promotion overlay already exists: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(rendered, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    output.write_text(
+        json.dumps(rendered, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def self_test() -> None:
@@ -197,7 +234,12 @@ def main() -> int:
         if args.self_test:
             self_test()
             return 0
-        if None in (args.source_config, args.release_root, args.deploy_manifest, args.output):
+        if None in (
+            args.source_config,
+            args.release_root,
+            args.deploy_manifest,
+            args.output,
+        ):
             fail("source-config, release-root, deploy-manifest and output are required")
         render(
             source_config=args.source_config,
