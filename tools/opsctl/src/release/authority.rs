@@ -55,10 +55,7 @@ impl ReleaseArchitecture {
     pub fn load(root: &Path) -> Result<Self, ReleaseAuthorityError> {
         let path = root.join(DEFAULT_AUTHORITY_PATH);
         let input = fs::read_to_string(&path).map_err(|error| {
-            ReleaseAuthorityError::new(format!(
-                "failed to read {}: {error}",
-                path.display()
-            ))
+            ReleaseAuthorityError::new(format!("failed to read {}: {error}", path.display()))
         })?;
         Self::parse_json(&input)
     }
@@ -332,10 +329,7 @@ fn parse_activation_unit(value: &Value) -> Result<ActivationUnit, ReleaseAuthori
         source_present: required_bool(object, "source_present")?,
         accepted: required_bool(object, "accepted")?,
         activation_gate: required_string(object, "activation_gate")?,
-        requires_windows_profile_bridge: required_bool(
-            object,
-            "requires_windows_profile_bridge",
-        )?,
+        requires_windows_profile_bridge: required_bool(object, "requires_windows_profile_bridge")?,
     })
 }
 
@@ -469,19 +463,13 @@ fn optional_string(
     }
 }
 
-fn required_bool(
-    object: &Map<String, Value>,
-    field: &str,
-) -> Result<bool, ReleaseAuthorityError> {
+fn required_bool(object: &Map<String, Value>, field: &str) -> Result<bool, ReleaseAuthorityError> {
     required(object, field)?
         .as_bool()
         .ok_or_else(|| ReleaseAuthorityError::new(format!("{field} must be a boolean")))
 }
 
-fn required_u64(
-    object: &Map<String, Value>,
-    field: &str,
-) -> Result<u64, ReleaseAuthorityError> {
+fn required_u64(object: &Map<String, Value>, field: &str) -> Result<u64, ReleaseAuthorityError> {
     required(object, field)?
         .as_u64()
         .ok_or_else(|| ReleaseAuthorityError::new(format!("{field} must be an unsigned integer")))
