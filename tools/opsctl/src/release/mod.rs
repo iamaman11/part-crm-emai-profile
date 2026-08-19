@@ -4,6 +4,7 @@
 //! no provider credentials, network clients, deployment execution or mutation authority.
 
 pub mod authority;
+pub mod digest;
 pub mod model;
 
 pub const TARGET_COMMANDS: &[&str] = &["inspect", "verify", "compatibility"];
