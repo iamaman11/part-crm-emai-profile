@@ -108,6 +108,20 @@ jobs:
                   raise SystemExit('Release Architecture Gate insertion point drifted')
               text = text.replace(anchor, expanded, 1)
           gate.write_text(text)
+
+          # 6. Canonical Actions registry must describe the post-cutover workflow surface.
+          registry = Path('.github/scripts/github-actions-registry.mjs')
+          text = registry.read_text()
+          replacements = [
+              ("registrations.length === 20, 'registry policy must classify exactly 20 current active registrations'", "registrations.length === 21, 'registry policy must classify exactly 21 current active registrations'"),
+              ("entry.category === 'PERMANENT_REQUIRED').length === 19, 'registry policy must classify exactly 19 permanent workflows'", "entry.category === 'PERMANENT_REQUIRED').length === 20, 'registry policy must classify exactly 20 permanent workflows'"),
+              ("registrations.some((entry) => entry.path === '.github/workflows/mailbox-secret-resolver-promotion.yml' && entry.category === 'CURRENT_MANUAL_OPERATION'), 'Mailbox Secret Resolver Promotion must remain the current manual operation'", "registrations.some((entry) => entry.path === '.github/workflows/release-set-promotion.yml' && entry.category === 'CURRENT_MANUAL_OPERATION'), 'Release Set Promotion must be the single current manual operation'"),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'Actions registry cutover insertion drifted: {old}')
+              text = text.replace(old, new, 1)
+          registry.write_text(text)
           PY
 
           git rm --ignore-unmatch \
@@ -133,12 +147,13 @@ jobs:
           python scripts/check-cloudflare-runtime-bindings.py
           python scripts/generate-architecture-inventory.py --write
           python scripts/generate-architecture-inventory.py --check
+          find scripts -type d -name __pycache__ -prune -exec rm -rf {} +
 
       - name: Enforce exact maintenance path allowlist and self-remove
         run: |
           set -euo pipefail
           git rm .github/workflows/ar11-final-cutover-maintenance.yml
-          changed="$(git diff --name-only)"
+          changed="$({ git diff --name-only; git diff --cached --name-only; } | sort -u)"
           printf '%s\n' "$changed"
           while IFS= read -r file; do
             case "$file" in
@@ -148,6 +163,7 @@ jobs:
               .github/workflows/quality-gate.yml|\
               .github/workflows/release-architecture-gate.yml|\
               .github/scripts/ar8-d-secret-transport-successor.mjs|\
+              .github/scripts/github-actions-registry.mjs|\
               scripts/mailbox-secret-resolver-promotion.py|\
               scripts/_mailbox_secret_resolver_promotion_core.py|\
               scripts/python-estate-ar6.py|\
@@ -157,24 +173,23 @@ jobs:
               tools/opsctl/src/release/static_compatibility.rs|\
               tools/opsctl/src/promotion/preflight.rs|\
               architecture/inventory.json) ;;
+              '') ;;
               *) echo "unexpected AR-11 final cutover path: $file" >&2; exit 1 ;;
             esac
           done <<< "$changed"
+          node .github/scripts/github-actions-registry.mjs contract
+          node .github/scripts/github-actions-registry.mjs self-test
 
       - name: Commit verified cutover without generated build artifacts
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A -- \
-            .github/workflows/ar11-final-cutover-maintenance.yml \
-            .github/workflows/ar11-rustfmt-once.yml \
-            .github/workflows/mailbox-secret-resolver-promotion.yml \
+          git add -- \
             .github/workflows/quality-gate.yml \
             .github/workflows/release-architecture-gate.yml \
             .github/scripts/ar8-d-secret-transport-successor.mjs \
-            scripts/mailbox-secret-resolver-promotion.py \
-            scripts/_mailbox_secret_resolver_promotion_core.py \
+            .github/scripts/github-actions-registry.mjs \
             scripts/python-estate-ar6.py \
             scripts/check-cloudflare-runtime-bindings.py \
             tools/opsctl/src/release/model.rs \
@@ -182,7 +197,39 @@ jobs:
             tools/opsctl/src/release/static_compatibility.rs \
             tools/opsctl/src/promotion/preflight.rs \
             architecture/inventory.json
-          test -z "$(git status --porcelain --untracked-files=all | grep -vE '^(M |D |A |R |C |UU|\?\?)' || true)"
+          unstaged="$(git diff --name-only)"
+          if [[ -n "$unstaged" ]]; then
+            printf 'unstaged AR-11 cutover paths remain:\n%s\n' "$unstaged" >&2
+            exit 1
+          fi
+          untracked="$(git ls-files --others --exclude-standard)"
+          if [[ -n "$untracked" ]]; then
+            printf 'unexpected untracked files after AR-11 cutover:\n%s\n' "$untracked" >&2
+            exit 1
+          fi
+          cached="$({ git diff --cached --name-only; } | sort -u)"
+          while IFS= read -r file; do
+            case "$file" in
+              .github/workflows/ar11-final-cutover-maintenance.yml|\
+              .github/workflows/ar11-rustfmt-once.yml|\
+              .github/workflows/mailbox-secret-resolver-promotion.yml|\
+              .github/workflows/quality-gate.yml|\
+              .github/workflows/release-architecture-gate.yml|\
+              .github/scripts/ar8-d-secret-transport-successor.mjs|\
+              .github/scripts/github-actions-registry.mjs|\
+              scripts/mailbox-secret-resolver-promotion.py|\
+              scripts/_mailbox_secret_resolver_promotion_core.py|\
+              scripts/python-estate-ar6.py|\
+              scripts/check-cloudflare-runtime-bindings.py|\
+              tools/opsctl/src/release/model.rs|\
+              tools/opsctl/src/release/compatibility.rs|\
+              tools/opsctl/src/release/static_compatibility.rs|\
+              tools/opsctl/src/promotion/preflight.rs|\
+              architecture/inventory.json) ;;
+              '') ;;
+              *) echo "unexpected staged AR-11 final cutover path: $file" >&2; exit 1 ;;
+            esac
+          done <<< "$cached"
           if git diff --cached --quiet; then exit 0; fi
           git commit -m 'AR-11: cut over D3 promotion authority to Rust'
           git push origin HEAD:agent/ar11-release-capability-promotion
