@@ -88,6 +88,7 @@ impl ReleaseArchitecture {
                 "promotion_policy",
                 "effective_state_model",
                 "component_release_owners",
+                "release_inputs",
                 "compatibility_dimensions",
                 "release_set",
             ],
