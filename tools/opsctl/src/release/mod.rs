@@ -9,6 +9,7 @@ pub mod commands;
 pub mod compatibility;
 pub mod digest;
 pub mod model;
+pub mod static_compatibility;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseAction {
