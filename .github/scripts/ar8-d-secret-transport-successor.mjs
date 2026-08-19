@@ -70,7 +70,7 @@ function currentSuccessorErrors() {
     ' secrets delete ',
     'worker-build --release',
     'cargo build',
-    'npm run build',
+    'run: npm run build',
     'environment: production',
   ];
   const lowered = ` ${promotion.toLowerCase()} `;
