@@ -23,9 +23,14 @@ const INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT: &str =
 
 pub(crate) fn run(root: &Path) -> Result<String, OpsctlError> {
     let native_contract: Value = serde_json::from_str(INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT)
-        .map_err(|error| OpsctlError::new("doctor", format!("native doctor contract invalid: {error}")))?;
+        .map_err(|error| {
+            OpsctlError::new("doctor", format!("native doctor contract invalid: {error}"))
+        })?;
     if native_contract.get("mode").and_then(Value::as_str) != Some("native-read-only")
-        || native_contract.get("child_processes").and_then(Value::as_u64) != Some(0)
+        || native_contract
+            .get("child_processes")
+            .and_then(Value::as_u64)
+            != Some(0)
     {
         return Err(OpsctlError::new(
             "doctor",
