@@ -61,11 +61,52 @@ pub fn verify_artifacts(
             .checked_add(artifact.size_bytes)
             .ok_or_else(|| ReleaseModelError::new("artifact byte total overflow"))?;
     }
+    verify_component_manifests(manifest, &expected)?;
 
     Ok(ArtifactVerification {
         verified_files: manifest.artifact_inventory.len(),
         verified_bytes,
     })
+}
+
+fn verify_component_manifests(
+    manifest: &ReleaseSetManifest,
+    inventory: &BTreeMap<&str, &ArtifactIdentity>,
+) -> Result<(), ReleaseModelError> {
+    for component in manifest.components.values() {
+        let manifest_path = component_manifest_path(&component.component_id)?;
+        let artifact = inventory.get(manifest_path).ok_or_else(|| {
+            ReleaseModelError::new(format!(
+                "COMPONENT_MANIFEST_MISMATCH: component {} durable manifest is absent: {manifest_path}",
+                component.component_id
+            ))
+        })?;
+        if artifact.kind != "manifest" {
+            return Err(ReleaseModelError::new(format!(
+                "COMPONENT_MANIFEST_MISMATCH: component {} manifest path {manifest_path} must have artifact kind manifest",
+                component.component_id
+            )));
+        }
+        if artifact.sha256 != component.component_manifest_sha256 {
+            return Err(ReleaseModelError::new(format!(
+                "COMPONENT_MANIFEST_MISMATCH: component {} expected manifest sha256={} observed={}",
+                component.component_id, component.component_manifest_sha256, artifact.sha256
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn component_manifest_path(component_id: &str) -> Result<&'static str, ReleaseModelError> {
+    match component_id {
+        "control_plane" | "frontend" => Ok("manifests/control-plane-manifest.json"),
+        "secret_resolver" => Ok("manifests/secret-resolver-manifest.json"),
+        "runtime_bundle" => Ok("manifests/runtime-bundle-manifest.json"),
+        "profile_bridge" => Ok("manifests/profile-bridge-manifest.json"),
+        other => Err(ReleaseModelError::new(format!(
+            "COMPONENT_MANIFEST_MISMATCH: no durable manifest path is defined for component {other}"
+        ))),
+    }
 }
 
 fn remove_verified_control_manifest(
@@ -218,6 +259,7 @@ mod tests {
             fs::remove_dir_all(&path)?;
         }
         fs::create_dir_all(path.join("components"))?;
+        fs::create_dir_all(path.join("manifests"))?;
         Ok(path)
     }
 
@@ -239,11 +281,19 @@ mod tests {
         for (name, bytes) in files {
             fs::write(root.join("components").join(name), bytes)?;
         }
+        let component_manifest_bytes = b"manifest";
+        for name in [
+            "control-plane-manifest.json",
+            "secret-resolver-manifest.json",
+            "runtime-bundle-manifest.json",
+        ] {
+            fs::write(root.join("manifests").join(name), component_manifest_bytes)?;
+        }
         let sha_a = sha256_hex(b"control");
         let sha_b = sha256_hex(b"resolver");
         let sha_c = sha256_hex(b"runtime");
         let evidence = accepted_main_evidence()?;
-        let component_manifest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let component_manifest = sha256_hex(component_manifest_bytes);
         let mut value = json!({
           "schema_version": 1,
           "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{evidence}"),
@@ -264,9 +314,17 @@ mod tests {
           "artifact_inventory": [
             {"path":"components/control-plane.tar","sha256":sha_a,"size_bytes":7,"kind":"component"},
             {"path":"components/resolver.tar","sha256":sha_b,"size_bytes":8,"kind":"component"},
-            {"path":"components/runtime.tar","sha256":sha_c,"size_bytes":7,"kind":"component"}
+            {"path":"components/runtime.tar","sha256":sha_c,"size_bytes":7,"kind":"component"},
+            {"path":"manifests/control-plane-manifest.json","sha256":component_manifest,"size_bytes":8,"kind":"manifest"},
+            {"path":"manifests/secret-resolver-manifest.json","sha256":component_manifest,"size_bytes":8,"kind":"manifest"},
+            {"path":"manifests/runtime-bundle-manifest.json","sha256":component_manifest,"size_bytes":8,"kind":"manifest"}
           ]
         });
+        refresh_release_set_id(&mut value)?;
+        Ok(value)
+    }
+
+    fn refresh_release_set_id(value: &mut Value) -> Result<(), Box<dyn std::error::Error>> {
         let mut identity = value.clone();
         identity
             .as_object_mut()
@@ -274,7 +332,7 @@ mod tests {
             .remove("release_set_id");
         let digest = sha256_hex(canonical_json(&identity)?.as_bytes());
         value["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{digest}"));
-        Ok(value)
+        Ok(())
     }
 
     fn manifest(root: &Path) -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
@@ -289,8 +347,8 @@ mod tests {
         let root = temp_dir("exact")?;
         let manifest = manifest(&root)?;
         let result = verify_artifacts(&manifest, &root)?;
-        assert_eq!(result.verified_files, 3);
-        assert_eq!(result.verified_bytes, 22);
+        assert_eq!(result.verified_files, 6);
+        assert_eq!(result.verified_bytes, 46);
         fs::remove_dir_all(root)?;
         Ok(())
     }
@@ -303,8 +361,8 @@ mod tests {
         let manifest = ReleaseSetManifest::parse_json(&input)?;
         fs::write(root.join("release-set.json"), input)?;
         let result = verify_artifacts(&manifest, &root)?;
-        assert_eq!(result.verified_files, 3);
-        assert_eq!(result.verified_bytes, 22);
+        assert_eq!(result.verified_files, 6);
+        assert_eq!(result.verified_bytes, 46);
         fs::remove_dir_all(root)?;
         Ok(())
     }
@@ -336,6 +394,37 @@ mod tests {
         let manifest = manifest(&root)?;
         fs::write(root.join("components/control-plane.tar"), b"CONTROL")?;
         assert!(verify_artifacts(&manifest, &root).is_err());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_component_manifest_identity_mismatch() -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_dir("manifest-identity")?;
+        let mut value = manifest_value(&root)?;
+        value["components"]["runtime_bundle"]["component_manifest_sha256"] =
+            Value::String("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned());
+        refresh_release_set_id(&mut value)?;
+        let manifest = ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?;
+        let error = verify_artifacts(&manifest, &root).expect_err("manifest identity mismatch must fail");
+        assert!(error.to_string().contains("COMPONENT_MANIFEST_MISMATCH"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_missing_durable_component_manifest() -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_dir("manifest-missing")?;
+        let mut value = manifest_value(&root)?;
+        value["artifact_inventory"]
+            .as_array_mut()
+            .ok_or("artifact inventory must be an array")?
+            .retain(|item| item["path"] != "manifests/runtime-bundle-manifest.json");
+        refresh_release_set_id(&mut value)?;
+        let manifest = ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?;
+        fs::remove_file(root.join("manifests/runtime-bundle-manifest.json"))?;
+        let error = verify_artifacts(&manifest, &root).expect_err("missing manifest must fail");
+        assert!(error.to_string().contains("COMPONENT_MANIFEST_MISMATCH"));
         fs::remove_dir_all(root)?;
         Ok(())
     }
