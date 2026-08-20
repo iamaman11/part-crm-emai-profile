@@ -302,9 +302,7 @@ mod tests {
     use super::evaluate_rollback_candidate;
     use crate::promotion::snapshot::DeploymentSnapshot;
     use crate::release::digest::{canonical_json, sha256_hex};
-    use crate::release::model::{
-        CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseSetManifest,
-    };
+    use crate::release::model::{CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
     use serde_json::{Value, json};
     use std::collections::BTreeSet;
 
@@ -345,7 +343,7 @@ mod tests {
         let mut identity = value.clone();
         identity
             .as_object_mut()
-            .expect("release fixture root")
+            .ok_or_else(|| ReleaseModelError::new("release fixture root must be an object"))?
             .remove("release_set_id");
         value["release_set_id"] = Value::String(format!(
             "{RELEASE_SET_ID_PREFIX}{}",
@@ -384,13 +382,7 @@ mod tests {
     fn compatible_known_good_is_compatible() -> Result<(), Box<dyn std::error::Error>> {
         let known_good = release()?;
         assert_eq!(
-            evaluate_rollback_candidate(
-                &known_good,
-                &snapshot(),
-                "rehearsal-core-v1",
-                true,
-                false
-            ),
+            evaluate_rollback_candidate(&known_good, &snapshot(), "rehearsal-core-v1", true, false),
             CompatibilityDecision::Compatible
         );
         Ok(())
@@ -402,13 +394,7 @@ mod tests {
         let mut state = snapshot();
         state.catalog_schema_revision = Some("9999_future.sql".to_owned());
         assert_eq!(
-            evaluate_rollback_candidate(
-                &known_good,
-                &state,
-                "rehearsal-core-v1",
-                false,
-                false
-            ),
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Incompatible
         );
         Ok(())
@@ -420,13 +406,7 @@ mod tests {
         let mut state = snapshot();
         state.camouhost_ipc_version = Some(2);
         assert_eq!(
-            evaluate_rollback_candidate(
-                &known_good,
-                &state,
-                "rehearsal-core-v1",
-                false,
-                false
-            ),
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Incompatible
         );
         Ok(())
@@ -438,13 +418,7 @@ mod tests {
         let mut state = snapshot();
         state.runtime_role = Some("fixture_runtime".to_owned());
         assert_eq!(
-            evaluate_rollback_candidate(
-                &known_good,
-                &state,
-                "rehearsal-core-v1",
-                false,
-                false
-            ),
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Incompatible
         );
         Ok(())
@@ -456,13 +430,7 @@ mod tests {
         let mut state = snapshot();
         state.contracts_sha256 = None;
         assert_eq!(
-            evaluate_rollback_candidate(
-                &known_good,
-                &state,
-                "rehearsal-core-v1",
-                false,
-                false
-            ),
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Unknown
         );
         Ok(())
@@ -484,13 +452,7 @@ mod tests {
         let mut state = snapshot();
         state.resolver_protocol = Some("resolver-v2".to_owned());
         assert_eq!(
-            evaluate_rollback_candidate(
-                &known_good,
-                &state,
-                "rehearsal-core-v1",
-                true,
-                false
-            ),
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", true, false),
             CompatibilityDecision::Incompatible
         );
         Ok(())
@@ -500,13 +462,7 @@ mod tests {
     fn unknown_windows_delivery_blocks() -> Result<(), Box<dyn std::error::Error>> {
         let known_good = release()?;
         assert_eq!(
-            evaluate_rollback_candidate(
-                &known_good,
-                &snapshot(),
-                "rehearsal-core-v1",
-                false,
-                true
-            ),
+            evaluate_rollback_candidate(&known_good, &snapshot(), "rehearsal-core-v1", false, true),
             CompatibilityDecision::Unknown
         );
         Ok(())
