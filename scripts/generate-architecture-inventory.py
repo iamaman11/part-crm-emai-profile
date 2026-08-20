@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-"""Generate canonical inventory after accepted AR-10 and during AR-11."""
+"""Generate the canonical architecture inventory without owning lifecycle acceptance.
+
+Live accepted/current Architecture Re-baseline v3 state is derived exclusively by
+`.github/scripts/architecture-acceptance.mjs derive`. Tracked lifecycle fields in
+`architecture/inventory.json` are compatibility snapshots: `--write` may synchronize
+those fields from the canonical deriver, while ordinary acceptance never depends on a
+projection-only source commit.
+"""
 
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import importlib.util
 import json
@@ -38,19 +46,6 @@ if spec is None or spec.loader is None:
     raise SystemExit("cannot load architecture inventory engine")
 engine = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(engine)
-legacy_delivery_map = engine.current_delivery_map
-legacy_progress = engine.expected_ar8_progress
-engine.CURRENT_SLICE = "AR-11"
-engine.NEXT_SLICE = "AR-12"
-engine.CURRENT_DELIVERY_CHECKPOINT = "AR-10"
-engine.AR8_ACCEPTED_SUBSLICES = ["AR-8A", "AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"]
-engine.AR8_CURRENT_SUBSLICE = None
-engine.AR8D_IMPLEMENTATION_ISSUE = None
-engine.AR8_MANDATORY_REMAINING = []
-engine.AR8_IMPLEMENTATION_ENTRY_GATE = "AR8_ACCEPTED_MAIN_AR9_CURRENT"
-for accepted in ("AR-8", "AR-9", "AR-10"):
-    if accepted not in engine.ACCEPTED_SLICES:
-        engine.ACCEPTED_SLICES = [*engine.ACCEPTED_SLICES, accepted]
 
 
 def current_credential_authority_source() -> tuple[dict[str, Any], dict[str, set[str]]]:
@@ -99,76 +94,28 @@ engine.credential_negative_self_test = current_credential_negative_self_test
 engine.print_credential_check_summary = print_current_credential_check_summary
 
 
-def completion_delivery_map() -> dict[str, object]:
-    value = legacy_delivery_map()
-    value["accepted_checkpoint"] = "AR-10"
-    value["current_work"] = "AR-11"
-    value["source_implemented"] = {
-        "status": "ACCEPTED",
-        "through": "AR-10",
-        "current_subslice": "AR-11",
-        "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR10_CLOSEOUT",
-    }
-    value["accepted_on_main"] = {
-        "status": "COMPLETE",
-        "through": "AR-10",
+def accepted_ar8_progress() -> dict[str, object]:
+    """Return immutable accepted AR-8 compatibility provenance, not live lifecycle state."""
+    return {
+        "umbrella_issue": 308,
+        "accepted_subslices": ["AR-8A", "AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"],
+        "current_subslice": None,
+        "current_implementation_issue": None,
+        "mandatory_remaining": [],
         "full_ar8_accepted": True,
-        "ar9_accepted": True,
-        "ar10_accepted": True,
-        "acceptance_evidence": AR10_ACCEPTANCE_EVIDENCE,
+        "ar9_blocked": False,
+        "production_mutation": False,
+        "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
+        "source_complete_candidate": False,
+        "completion_pr": 362,
+        "implemented_through": "AR-8F",
+        "accepted_top_level_slice": "AR-8",
+        "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+        "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+        "applicable_permanent_workflows": "14/14",
+        "accepted_main_reread": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+        "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
     }
-    value["current_blocker"] = {"issue": None, "status": "NONE", "blocks": "NONE"}
-    value["next_gate"] = {
-        "id": "AR-11_ACCEPTANCE",
-        "issue": AR11_ISSUE,
-        "on_success": "AR-12_BECOMES_CURRENT",
-    }
-    value["invariants"].update(
-        {
-            "source_present_not_equal_production_enabled": True,
-            "full_ar8_accepted": True,
-            "ar9_accepted": True,
-            "ar9_blocked": False,
-            "ar10_accepted": True,
-            "ar10_blocked": False,
-            "ar11_blocked": False,
-            "architecture_complete": False,
-            "production_core_gate": "BLOCKED",
-            "production_ready": False,
-            "production_mutation": False,
-        }
-    )
-    return value
-
-
-def completion_progress() -> dict[str, object]:
-    value = legacy_progress()
-    value.update(
-        {
-            "accepted_subslices": ["AR-8A", "AR-8B", "AR-8C", "AR-8D", "AR-8E", "AR-8F"],
-            "current_subslice": None,
-            "current_implementation_issue": None,
-            "mandatory_remaining": [],
-            "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
-            "full_ar8_accepted": True,
-            "ar9_blocked": False,
-            "production_mutation": False,
-            "source_complete_candidate": False,
-            "completion_pr": 362,
-            "implemented_through": "AR-8F",
-            "accepted_top_level_slice": "AR-8",
-            "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
-            "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
-            "applicable_permanent_workflows": "14/14",
-            "accepted_main_reread": "874666f6ef6eb003425c9677d558378d6dc0daaf",
-            "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
-        }
-    )
-    return value
-
-
-engine.current_delivery_map = completion_delivery_map
-engine.expected_ar8_progress = completion_progress
 
 
 def load_json(relative: str) -> dict[str, Any]:
@@ -185,6 +132,8 @@ def validate_derived_lifecycle_state(value: dict[str, Any]) -> dict[str, Any]:
     current = value.get("current_slice")
     if not isinstance(accepted, str) or not accepted:
         raise ValueError("Git-derived lifecycle state is missing accepted_checkpoint")
+    if not isinstance(current, str) or not current:
+        raise ValueError("Git-derived lifecycle state is missing current_slice")
     for field in ("architecture_complete", "production_ready", "production_mutation"):
         if not isinstance(value.get(field), bool):
             raise ValueError(f"Git-derived lifecycle state field {field} must be boolean")
@@ -225,6 +174,7 @@ def validate_derived_lifecycle_state(value: dict[str, Any]) -> dict[str, Any]:
         or authority.get("manual_accepted_checkpoint_authority") is not False
         or not isinstance(consumers, dict)
         or consumers.get("tracked_snapshot_may_decide_accepted_or_current_slice") is not False
+        or consumers.get("future_acceptance_requires_source_projection_commit") is not False
         or consumers.get("duplicate_lifecycle_derivation_algorithm_forbidden") is not True
     ):
         raise ValueError("lifecycle projection read-side authority policy drifted")
@@ -253,15 +203,111 @@ def derive_lifecycle_state() -> dict[str, Any]:
     return validate_derived_lifecycle_state(payload)
 
 
+def lifecycle_sequence_projection(derived: dict[str, Any]) -> dict[str, object]:
+    sequence = load_json(PROGRAM_SEQUENCE)
+    slices = sequence.get("slices")
+    if not isinstance(slices, list) or any(not isinstance(item, dict) for item in slices):
+        raise ValueError("static architecture program sequence is malformed")
+    ids = [item.get("id") for item in slices]
+    if any(not isinstance(item, str) or not item for item in ids):
+        raise ValueError("static architecture program sequence contains invalid slice ids")
+    accepted = derived["accepted_checkpoint"]
+    current = derived["current_slice"]
+    try:
+        accepted_index = ids.index(accepted)
+        current_index = ids.index(current)
+    except ValueError as error:
+        raise ValueError("Git-derived lifecycle state is absent from static sequence") from error
+    if current_index != accepted_index + 1:
+        raise ValueError("Git-derived lifecycle state is not contiguous in static sequence")
+    current_entry = slices[current_index]
+    return {
+        "accepted_slices": ids[: accepted_index + 1],
+        "accepted_checkpoint": accepted,
+        "current_slice": current,
+        "current_slice_name": current_entry.get("name"),
+        "next_slice_after_acceptance": current_entry.get("successor"),
+    }
+
+
+def current_delivery_map(
+    derived: dict[str, Any], sequence_state: dict[str, object]
+) -> dict[str, object]:
+    accepted = str(sequence_state["accepted_checkpoint"])
+    current = str(sequence_state["current_slice"])
+    next_slice = sequence_state.get("next_slice_after_acceptance")
+    accepted_slices = sequence_state["accepted_slices"]
+    if not isinstance(accepted_slices, list):
+        raise ValueError("accepted lifecycle sequence projection is malformed")
+    return {
+        "schema_version": 2,
+        "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT",
+        "lifecycle_authority": f"{ACCEPTANCE_DERIVER} derive",
+        "projection_policy": LIFECYCLE_PROJECTION_POLICY,
+        "program": "Architecture Re-baseline v3",
+        "accepted_checkpoint": accepted,
+        "current_work": current,
+        "source_implemented": {
+            "status": "ACCEPTED_THROUGH_CHECKPOINT",
+            "through": accepted,
+            "current_slice": current,
+            "current_slice_status": "NOT_STARTED_OR_NOT_ACCEPTED",
+            "current_slice_source": "GIT_DERIVED_SUCCESSOR",
+        },
+        "accepted_on_main": {
+            "status": "COMPLETE_THROUGH_CHECKPOINT",
+            "through": accepted,
+            "accepted_slices": accepted_slices,
+            "acceptance_authority": f"{ACCEPTANCE_DERIVER} derive",
+        },
+        "staging_live": {
+            "status": "PARTIAL",
+            "scope": "AR-8C_STAGING_PROVIDER_AND_CREDENTIAL_FOUNDATION_ONLY",
+            "evidence": "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md",
+            "hosted_verified_main": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b",
+        },
+        "production_authorized": {
+            "status": derived["production_core_gate"] == "AUTHORIZED",
+            "gate": "AR-17_ARCHITECTURE_CLOSEOUT_AND_PRODUCTION_CORE_AUTHORIZATION",
+        },
+        "production_enabled": {
+            "status": derived["production_ready"],
+            "gate": "PC-1_AFTER_AR-17_AUTHORIZATION",
+            "scope": "NONE" if derived["production_ready"] is False else "CANONICAL_RELEASE_PROFILE",
+        },
+        "post_ar8c_cleanup": {
+            "issue": 352,
+            "status": "ACCEPTED",
+            "evidence": "docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json",
+        },
+        "current_blocker": {"issue": None, "status": "NONE", "blocks": "NONE"},
+        "next_gate": {
+            "id": f"{current}_ACCEPTANCE",
+            "issue": None,
+            "on_success": f"{next_slice}_BECOMES_CURRENT" if isinstance(next_slice, str) else None,
+        },
+        "invariants": {
+            "source_present_not_equal_production_enabled": True,
+            "full_ar8_accepted": "AR-8" in accepted_slices,
+            "architecture_complete": derived["architecture_complete"],
+            "production_core_gate": derived["production_core_gate"],
+            "production_ready": derived["production_ready"],
+            "production_mutation": derived["production_mutation"],
+            "tracked_projection_authoritative": False,
+            "future_acceptance_requires_source_projection_commit": False,
+        },
+    }
+
+
 def validate_current_source_documents() -> None:
     for item in engine.DOCUMENT_STATUS:
         path = item.get("path") if isinstance(item, dict) else None
         if not isinstance(path, str) or not (ROOT / path).is_file():
             raise ValueError(f"document-status inventory path missing: {path!r}")
 
-    # Lifecycle state is read only from the generic Git-derived acceptance authority.
-    # Tracked status/inventory/transition fields remain compatibility projections and
-    # are deliberately not consumed here to decide accepted/current architecture state.
+    # Current lifecycle truth is read only from the generic Git-derived authority.
+    # Tracked status/inventory/transition fields are compatibility snapshots and are
+    # deliberately not consumed here to decide accepted/current architecture state.
     derive_lifecycle_state()
 
     runtime_gate = subprocess.run(
@@ -510,7 +556,7 @@ def release_architecture_projection() -> dict[str, object]:
 
     return {
         "schema_version": 1,
-        "role": "CURRENT_AR11_RELEASE_ARCHITECTURE_PROJECTION",
+        "role": "AR11_RELEASE_ARCHITECTURE_PROJECTION",
         "source_authority": RELEASE_ARCHITECTURE_SOURCE,
         "source_sha256": file_sha256(RELEASE_ARCHITECTURE_SOURCE),
         "source_status": authority.get("status"),
@@ -534,12 +580,24 @@ def release_architecture_projection() -> dict[str, object]:
 
 
 def build_inventory() -> dict[str, object]:
+    # The historical engine still owns stable/current invariants that are not lifecycle
+    # acceptance. We consume it, then replace only the explicitly registered lifecycle
+    # snapshot fields from canonical Git-derived state.
     expected = engine.build_inventory()
+    derived = derive_lifecycle_state()
+    sequence_state = lifecycle_sequence_projection(derived)
+    delivery = current_delivery_map(derived, sequence_state)
+
+    expected["current_delivery_map"] = delivery
     expected["subject_domain_authorities"] = subject_projection()
     expected["d1_evolution"] = d1_evolution_projection()
     expected["runtime_cutover"] = runtime_cutover_projection()
     expected["release_architecture"] = release_architecture_projection()
+
     documentation = expected.setdefault("documentation_authority", {})
+    documentation["current_slice"] = sequence_state["current_slice"]
+    documentation["lifecycle_projection_role"] = "NON_AUTHORITATIVE_SNAPSHOT"
+    documentation["lifecycle_authority"] = f"{ACCEPTANCE_DERIVER} derive"
     documentation["current_credential_authority"] = SUBJECTS["credential_authority"]
     documentation["credential_registry_provenance"] = "architecture/credential-authority-ar8b.json"
     documentation["credential_lifecycle"] = SUBJECTS["credential_lifecycle"]
@@ -556,11 +614,82 @@ def build_inventory() -> dict[str, object]:
     documentation["runtime_cutover_source"] = RUNTIME_CUTOVER_SOURCE
     documentation["release_architecture"] = "architecture/inventory.json::release_architecture"
     documentation["release_architecture_source"] = RELEASE_ARCHITECTURE_SOURCE
+
+    program = expected.setdefault("program_state", {})
+    program["accepted_architecture_slices"] = sequence_state["accepted_slices"]
+    program["current_architecture_slice"] = sequence_state["current_slice"]
+    program["next_architecture_slice_after_acceptance"] = sequence_state[
+        "next_slice_after_acceptance"
+    ]
+    program["ar8_progress"] = accepted_ar8_progress()
+    program["architecture_complete"] = derived["architecture_complete"]
+    program["production_core_gate"] = derived["production_core_gate"]
+    program["production_ready"] = derived["production_ready"]
+    program["production_mutation_allowed_during_ar0_ar17"] = False
+    program["lifecycle_projection_role"] = "NON_AUTHORITATIVE_SNAPSHOT"
+    program["lifecycle_authority"] = f"{ACCEPTANCE_DERIVER} derive"
     return expected
 
 
 def serialized(payload: object) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False) + "\n"
+
+
+def strip_lifecycle_snapshot_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Mask mutable lifecycle snapshot bytes for ordinary drift checking.
+
+    Future acceptance metadata may advance live state without a second source commit.
+    Stable/domain-owned inventory bytes must still compare exactly.
+    """
+    value = copy.deepcopy(payload)
+    value.pop("current_delivery_map", None)
+    documentation = value.get("documentation_authority")
+    if isinstance(documentation, dict):
+        for key in (
+            "current_slice",
+            "current_delivery_map",
+            "lifecycle_projection_role",
+            "lifecycle_authority",
+        ):
+            documentation.pop(key, None)
+    program = value.get("program_state")
+    if isinstance(program, dict):
+        for key in (
+            "accepted_architecture_slices",
+            "current_architecture_slice",
+            "next_architecture_slice_after_acceptance",
+            "ar8_progress",
+            "current_delivery_map",
+            "architecture_complete",
+            "production_core_gate",
+            "production_ready",
+            "production_mutation_allowed_during_ar0_ar17",
+            "lifecycle_projection_role",
+            "lifecycle_authority",
+        ):
+            program.pop(key, None)
+    return value
+
+
+def validate_tracked_snapshot_boundary(actual: dict[str, Any]) -> None:
+    delivery = actual.get("current_delivery_map")
+    if not isinstance(delivery, dict):
+        raise SystemExit("architecture inventory lost current_delivery_map compatibility snapshot")
+    invariants = delivery.get("invariants")
+    if not isinstance(invariants, dict):
+        raise SystemExit("architecture inventory lifecycle snapshot lost fail-closed invariants")
+    for key, wanted in {
+        "architecture_complete": False,
+        "production_core_gate": "BLOCKED",
+        "production_ready": False,
+        "production_mutation": False,
+    }.items():
+        if invariants.get(key) != wanted:
+            raise SystemExit(f"architecture inventory lifecycle snapshot is not fail-closed: {key}")
+    if delivery.get("projection_role") != "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT":
+        raise SystemExit("architecture inventory lifecycle snapshot lost explicit non-authoritative role")
+    if delivery.get("lifecycle_authority") != f"{ACCEPTANCE_DERIVER} derive":
+        raise SystemExit("architecture inventory lifecycle snapshot lost canonical authority pointer")
 
 
 def check_current(expected: dict[str, object]) -> None:
@@ -570,9 +699,13 @@ def check_current(expected: dict[str, object]) -> None:
         raise SystemExit(
             f"architecture inventory is missing or malformed: {INVENTORY_PATH}: {error}"
         ) from error
-    if actual != expected:
+    if not isinstance(actual, dict):
+        raise SystemExit("architecture/inventory.json must contain one JSON object")
+    validate_tracked_snapshot_boundary(actual)
+    if strip_lifecycle_snapshot_fields(actual) != strip_lifecycle_snapshot_fields(expected):
         raise SystemExit(
-            "architecture/inventory.json is stale; run scripts/generate-architecture-inventory.py --write"
+            "architecture/inventory.json stable/domain projection is stale; run "
+            "scripts/generate-architecture-inventory.py --write"
         )
 
 
@@ -603,15 +736,18 @@ def main() -> int:
     expected = build_inventory()
     if args.write:
         INVENTORY_PATH.write_text(serialized(expected), encoding="utf-8", newline="\n")
+        derived = derive_lifecycle_state()
         print(
-            "Wrote architecture/inventory.json with accepted AR-10 runtime cutover and current AR-11 release architecture projection."
+            "Wrote architecture/inventory.json as a non-authoritative snapshot of "
+            f"{derived['accepted_checkpoint']} accepted / {derived['current_slice']} current."
         )
     elif args.check:
         check_current(expected)
         engine.validate_full_documentation_authority()
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--check"])
         print(
-            "Architecture inventory projects accepted AR-10 and current AR-11 release architecture while production remains blocked."
+            "Architecture inventory stable/domain projection is current; lifecycle snapshot remains "
+            "non-authoritative and production remains fail-closed."
         )
     else:
         if engine.validate_credential_authority_source is not current_credential_authority_source:
@@ -633,13 +769,19 @@ def main() -> int:
             pass
         else:
             raise ValueError("Git-derived lifecycle successor mismatch negative fixture unexpectedly passed")
+        expected_sequence = lifecycle_sequence_projection(derived)
+        delivery = current_delivery_map(derived, expected_sequence)
+        if delivery.get("accepted_checkpoint") != derived.get("accepted_checkpoint"):
+            raise ValueError("lifecycle delivery projection lost canonical accepted checkpoint")
+        if delivery.get("current_work") != derived.get("current_slice"):
+            raise ValueError("lifecycle delivery projection lost canonical current slice")
+        if delivery.get("projection_role") != "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT":
+            raise ValueError("lifecycle delivery projection lost non-authoritative classification")
         engine.self_test(expected)
         run([sys.executable, "scripts/credential_authority.py", "--self-test"])
         mutated = json.loads(serialized(expected))
         mutated.pop("runtime_cutover", None)
-        if mutated == expected:
-            raise ValueError("AR-10 runtime cutover projection negative fixture did not mutate inventory")
-        if mutated == build_inventory():
+        if mutated == expected or mutated == build_inventory():
             raise ValueError(
                 "missing AR-10 runtime cutover projection negative fixture unexpectedly matched"
             )
