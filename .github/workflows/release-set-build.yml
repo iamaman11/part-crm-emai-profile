@@ -228,6 +228,7 @@ jobs:
           mkdir -p "$asset_dir"
           cp "$RELEASE_DIR/release-set.json" "$asset_dir/release-set.json"
           cp "$RELEASE_DIR/components/"* "$asset_dir/"
+          cp "$RELEASE_DIR/manifests/"* "$asset_dir/"
           if gh release view "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             existing="$RUNNER_TEMP/existing-release"
             mkdir -p "$existing"
