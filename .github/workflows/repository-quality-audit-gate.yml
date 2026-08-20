@@ -44,6 +44,7 @@ jobs:
           python -m py_compile scripts/check-mailbox-job-worker-application-boundary.py
           python -m py_compile scripts/check-frontend-feature-boundaries.py
           python -m py_compile scripts/generate-architecture-inventory.py
+          python -m py_compile scripts/check-historical-executable-debt.py
           python -m py_compile scripts/python-estate-ar6.py
           python -m py_compile scripts/check-opsctl-readonly.py
           python -m py_compile scripts/test-architecture-inventory-negative.py
@@ -208,6 +209,11 @@ jobs:
 
       - name: Prove architecture inventory drift is rejected
         run: python scripts/test-architecture-inventory-negative.py
+
+      - name: Classify historical executable debt
+        run: |
+          python scripts/check-historical-executable-debt.py
+          python scripts/check-historical-executable-debt.py --self-test
 
       - name: Audit AR-6 Python estate and read-only opsctl boundary
         run: |
