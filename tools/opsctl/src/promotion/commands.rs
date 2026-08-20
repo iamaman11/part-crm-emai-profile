@@ -11,6 +11,7 @@ use std::path::Path;
 
 pub struct PromotionRunRequest<'a> {
     pub root: &'a Path,
+    pub source_root: &'a Path,
     pub action: PromotionAction,
     pub release_set: &'a Path,
     pub profile_id: &'a str,
@@ -36,6 +37,7 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
     let value = match request.action {
         PromotionAction::Plan => build(PlanRequest {
             root: request.root,
+            source_root: request.source_root,
             target: &target,
             target_profile_id: request.profile_id,
             environment: request.environment,
@@ -52,6 +54,7 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
         ),
         PromotionAction::Preflight => preflight(PreflightRequest {
             root: request.root,
+            source_root: request.source_root,
             target: &target,
             target_profile_id: request.profile_id,
             environment: request.environment,
