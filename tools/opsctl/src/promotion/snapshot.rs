@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
+pub const DEPLOYMENT_SNAPSHOT_SCHEMA_VERSION: u64 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeploymentSnapshot {
     pub environment: String,
@@ -15,7 +17,9 @@ pub struct DeploymentSnapshot {
     pub logical_bindings: BTreeSet<String>,
     pub logical_credentials: BTreeSet<String>,
     pub catalog_ledger_sha256: Option<String>,
+    pub catalog_schema_revision: Option<String>,
     pub resolver_ledger_sha256: Option<String>,
+    pub resolver_schema_revision: Option<String>,
 }
 
 impl DeploymentSnapshot {
@@ -61,11 +65,11 @@ impl DeploymentSnapshot {
             ],
             "DeploymentSnapshot",
         )?;
-        if required_u64(root, "schema_version")? != 1
+        if required_u64(root, "schema_version")? != DEPLOYMENT_SNAPSHOT_SCHEMA_VERSION
             || required_string(root, "kind")? != "DEPLOYMENT_SNAPSHOT"
         {
             return Err(ReleaseModelError::new(
-                "unsupported DeploymentSnapshot identity/version",
+                "unsupported DeploymentSnapshot identity/version; only v2 is accepted before production",
             ));
         }
         let environment = required_string(root, "environment")?;
@@ -85,7 +89,7 @@ impl DeploymentSnapshot {
         let logical_resources = string_set(root, "observed_logical_resources")?;
         let logical_bindings = string_set(root, "observed_logical_bindings")?;
         let logical_credentials = string_set(root, "observed_logical_credentials")?;
-        let (catalog_ledger_sha256, resolver_ledger_sha256) = parse_d1(root)?;
+        let d1 = parse_d1(root)?;
         Ok(Self {
             environment,
             collected_at,
@@ -95,10 +99,20 @@ impl DeploymentSnapshot {
             logical_resources,
             logical_bindings,
             logical_credentials,
-            catalog_ledger_sha256,
-            resolver_ledger_sha256,
+            catalog_ledger_sha256: d1.catalog_ledger_sha256,
+            catalog_schema_revision: d1.catalog_schema_revision,
+            resolver_ledger_sha256: d1.resolver_ledger_sha256,
+            resolver_schema_revision: d1.resolver_schema_revision,
         })
     }
+}
+
+#[derive(Default)]
+struct D1State {
+    catalog_ledger_sha256: Option<String>,
+    catalog_schema_revision: Option<String>,
+    resolver_ledger_sha256: Option<String>,
+    resolver_schema_revision: Option<String>,
 }
 
 fn validate_metadata_arrays(root: &Map<String, Value>) -> Result<(), ReleaseModelError> {
@@ -131,17 +145,14 @@ fn validate_metadata_arrays(root: &Map<String, Value>) -> Result<(), ReleaseMode
     Ok(())
 }
 
-fn parse_d1(
-    root: &Map<String, Value>,
-) -> Result<(Option<String>, Option<String>), ReleaseModelError> {
+fn parse_d1(root: &Map<String, Value>) -> Result<D1State, ReleaseModelError> {
     let rows = array(required(root, "d1")?, "d1")?;
-    let mut catalog = None;
-    let mut resolver = None;
+    let mut state = D1State::default();
     for row in rows {
         let item = object(row, "d1 entry")?;
         reject_unknown_fields(
             item,
-            &["component", "binding", "database_id", "ledger_sha256"],
+            &["component", "binding", "database_id", "ledger_sha256", "schema_revision"],
             "d1 entry",
         )?;
         let component = required_string(item, "component")?;
@@ -154,18 +165,18 @@ fn parse_d1(
         let _database_id = required_string(item, "database_id")?;
         let ledger = required_string(item, "ledger_sha256")?;
         validate_sha256(&ledger, "d1.ledger_sha256")?;
-        let target = if component == "catalog" {
-            &mut catalog
+        let revision = required_string(item, "schema_revision")?;
+        validate_schema_revision(&revision, "d1.schema_revision")?;
+        let (ledger_target, revision_target) = if component == "catalog" {
+            (&mut state.catalog_ledger_sha256, &mut state.catalog_schema_revision)
         } else {
-            &mut resolver
+            (&mut state.resolver_ledger_sha256, &mut state.resolver_schema_revision)
         };
-        if target.replace(ledger).is_some() {
-            return Err(ReleaseModelError::new(format!(
-                "duplicate {component} D1 snapshot"
-            )));
+        if ledger_target.replace(ledger).is_some() || revision_target.replace(revision).is_some() {
+            return Err(ReleaseModelError::new(format!("duplicate {component} D1 snapshot")));
         }
     }
-    Ok((catalog, resolver))
+    Ok(state)
 }
 
 fn reject_secret_material(value: &Value, path: &str) -> Result<(), ReleaseModelError> {
@@ -180,14 +191,7 @@ fn reject_secret_material(value: &Value, path: &str) -> Result<(), ReleaseModelE
                 let normalized = key.to_ascii_lowercase();
                 if matches!(
                     normalized.as_str(),
-                    "secret"
-                        | "secret_value"
-                        | "token"
-                        | "access_token"
-                        | "refresh_token"
-                        | "password"
-                        | "private_key"
-                        | "credential_value"
+                    "secret" | "secret_value" | "token" | "access_token" | "refresh_token" | "password" | "private_key" | "credential_value"
                 ) {
                     return Err(ReleaseModelError::new(format!(
                         "secret material is forbidden in DeploymentSnapshot: {path}.{key}"
@@ -201,16 +205,13 @@ fn reject_secret_material(value: &Value, path: &str) -> Result<(), ReleaseModelE
     Ok(())
 }
 
-fn string_map(
-    root: &Map<String, Value>,
-    field: &str,
-) -> Result<Vec<(String, String)>, ReleaseModelError> {
+fn string_map(root: &Map<String, Value>, field: &str) -> Result<Vec<(String, String)>, ReleaseModelError> {
     let value = object(required(root, field)?, field)?;
     let mut result = Vec::with_capacity(value.len());
     for (key, value) in value {
-        let release_id = value
-            .as_str()
-            .ok_or_else(|| ReleaseModelError::new(format!("{field}.{key} must be a string")))?;
+        let release_id = value.as_str().ok_or_else(|| {
+            ReleaseModelError::new(format!("{field}.{key} must be a string"))
+        })?;
         if key.trim().is_empty() || release_id.trim().is_empty() {
             return Err(ReleaseModelError::new(format!(
                 "{field} keys/values must not be empty"
@@ -222,16 +223,13 @@ fn string_map(
     Ok(result)
 }
 
-fn string_set(
-    root: &Map<String, Value>,
-    field: &str,
-) -> Result<BTreeSet<String>, ReleaseModelError> {
+fn string_set(root: &Map<String, Value>, field: &str) -> Result<BTreeSet<String>, ReleaseModelError> {
     let values = array(required(root, field)?, field)?;
     let mut result = BTreeSet::new();
     for value in values {
-        let text = value
-            .as_str()
-            .ok_or_else(|| ReleaseModelError::new(format!("{field} must contain strings")))?;
+        let text = value.as_str().ok_or_else(|| {
+            ReleaseModelError::new(format!("{field} must contain strings"))
+        })?;
         if text.trim().is_empty() || !result.insert(text.to_owned()) {
             return Err(ReleaseModelError::new(format!(
                 "{field} contains an empty or duplicate value"
@@ -242,30 +240,21 @@ fn string_set(
 }
 
 fn required<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a Value, ReleaseModelError> {
-    object
-        .get(key)
-        .ok_or_else(|| ReleaseModelError::new(format!("missing snapshot field: {key}")))
+    object.get(key).ok_or_else(|| ReleaseModelError::new(format!("missing snapshot field: {key}")))
 }
 
 fn required_string(object: &Map<String, Value>, key: &str) -> Result<String, ReleaseModelError> {
-    required(object, key)?
-        .as_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| ReleaseModelError::new(format!("snapshot field {key} must be a string")))
+    required(object, key)?.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+        ReleaseModelError::new(format!("snapshot field {key} must be a string"))
+    })
 }
 
-fn optional_string(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<Option<String>, ReleaseModelError> {
+fn optional_string(object: &Map<String, Value>, key: &str) -> Result<Option<String>, ReleaseModelError> {
     match object.get(key) {
         Some(Value::Null) | None => Ok(None),
-        Some(value) => value
-            .as_str()
-            .map(|text| Some(text.to_owned()))
-            .ok_or_else(|| {
-                ReleaseModelError::new(format!("snapshot field {key} must be string/null"))
-            }),
+        Some(value) => value.as_str().map(|text| Some(text.to_owned())).ok_or_else(|| {
+            ReleaseModelError::new(format!("snapshot field {key} must be string/null"))
+        }),
     }
 }
 
@@ -276,41 +265,38 @@ fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, ReleaseMo
 }
 
 fn object<'a>(value: &'a Value, label: &str) -> Result<&'a Map<String, Value>, ReleaseModelError> {
-    value
-        .as_object()
-        .ok_or_else(|| ReleaseModelError::new(format!("{label} must be an object")))
+    value.as_object().ok_or_else(|| ReleaseModelError::new(format!("{label} must be an object")))
 }
 
 fn array<'a>(value: &'a Value, label: &str) -> Result<&'a Vec<Value>, ReleaseModelError> {
-    value
-        .as_array()
-        .ok_or_else(|| ReleaseModelError::new(format!("{label} must be an array")))
+    value.as_array().ok_or_else(|| ReleaseModelError::new(format!("{label} must be an array")))
 }
 
-fn reject_unknown_fields(
-    object: &Map<String, Value>,
-    allowed: &[&str],
-    label: &str,
-) -> Result<(), ReleaseModelError> {
+fn reject_unknown_fields(object: &Map<String, Value>, allowed: &[&str], label: &str) -> Result<(), ReleaseModelError> {
     for key in object.keys() {
         if !allowed.contains(&key.as_str()) {
-            return Err(ReleaseModelError::new(format!(
-                "unknown {label} field: {key}"
-            )));
+            return Err(ReleaseModelError::new(format!("unknown {label} field: {key}")));
         }
     }
     Ok(())
 }
 
 fn validate_sha256(value: &str, field: &str) -> Result<(), ReleaseModelError> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
         return Err(ReleaseModelError::new(format!(
             "{field} must be exactly 64 lowercase hexadecimal characters"
         )));
+    }
+    Ok(())
+}
+
+fn validate_schema_revision(value: &str, field: &str) -> Result<(), ReleaseModelError> {
+    if value.len() < 9
+        || !value.as_bytes()[0..4].iter().all(u8::is_ascii_digit)
+        || !value.ends_with(".sql")
+        || value.contains(['/', '\\'])
+    {
+        return Err(ReleaseModelError::new(format!("{field} is not a canonical migration revision")));
     }
     Ok(())
 }
@@ -321,15 +307,15 @@ mod tests {
 
     fn fixture() -> String {
         r#"{
-          "schema_version":1,
+          "schema_version":2,
           "kind":"DEPLOYMENT_SNAPSHOT",
           "environment":"staging",
-          "collected_at":"2026-08-19T00:00:00Z",
+          "collected_at":"2026-08-21T00:00:00Z",
           "release_set_id":null,
           "capability_profile_id":null,
           "component_release_ids":{},
           "workers":[],
-          "d1":[{"component":"catalog","binding":"CATALOG_DB","database_id":"db","ledger_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+          "d1":[{"component":"catalog","binding":"CATALOG_DB","database_id":"db","ledger_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","schema_revision":"0001_initial.sql"}],
           "r2":[],"queues":[],"dlqs":[],"durable_objects":[],"service_bindings":[],"routes":[],"schedules":[],"credential_metadata":[],
           "observed_logical_resources":["catalog_d1"],
           "observed_logical_bindings":["CATALOG_DB"],
@@ -339,12 +325,16 @@ mod tests {
     }
 
     #[test]
-    fn parses_metadata_only_snapshot() -> Result<(), Box<dyn std::error::Error>> {
+    fn parses_metadata_only_snapshot_v2() -> Result<(), Box<dyn std::error::Error>> {
         let snapshot = DeploymentSnapshot::parse_json(&fixture())?;
         assert_eq!(snapshot.environment, "staging");
-        assert!(snapshot.release_set_id.is_none());
-        assert!(snapshot.logical_resources.contains("catalog_d1"));
+        assert_eq!(snapshot.catalog_schema_revision.as_deref(), Some("0001_initial.sql"));
         Ok(())
+    }
+
+    #[test]
+    fn rejects_v1_snapshot() {
+        assert!(DeploymentSnapshot::parse_json(&fixture().replace("\"schema_version\":2", "\"schema_version\":1")).is_err());
     }
 
     #[test]

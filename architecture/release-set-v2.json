@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "kind": "AR11_RELEASE_SET_CONTRACT",
+  "status": "CURRENT_PRE_PRODUCTION",
+  "owning_program": "AR-11_FUNCTIONAL_CLOSURE",
+  "release_set_schema_version": 2,
+  "id_scheme": "release-set-v2-sha256-SHA256(canonical_identity_payload)",
+  "supported_release_set_prefixes": [
+    "release-set-v2-sha256-"
+  ],
+  "legacy_release_set_compatibility": false,
+  "first_production_release_has_occurred": false,
+  "source_acceptance": {
+    "accepted_source_evidence_required": true,
+    "current_head_equality_required": false,
+    "historical_v2_accepted_main_release_allowed": true
+  },
+  "component_manifest_policy": {
+    "embedded_manifest_required": true,
+    "external_manifest_sidecar_required": false,
+    "manifest_digest_required": true,
+    "manifest_release_id_must_match_component": true,
+    "manifest_source_sha_must_match_release_source": true,
+    "canonical_members": {
+      "control_plane": "release-manifest.json",
+      "frontend": "release-manifest.json",
+      "secret_resolver": "release-manifest.json",
+      "runtime_bundle": "runtime-manifest.json",
+      "profile_bridge": "profile-bridge-manifest.json"
+    }
+  },
+  "required_typed_sections": [
+    "source",
+    "components",
+    "contracts",
+    "protocols",
+    "schemas",
+    "runtime_compatibility",
+    "capability_profile_compatibility",
+    "build_provenance",
+    "artifact_inventory"
+  ],
+  "verification_error_families": [
+    "SOURCE_NOT_ACCEPTED",
+    "RELEASE_IDENTITY_MISMATCH",
+    "COMPONENT_MANIFEST_MISMATCH",
+    "ARTIFACT_DIGEST_MISMATCH",
+    "ARTIFACT_INVENTORY_MISMATCH",
+    "SCHEMA_IDENTITY_MISMATCH",
+    "PROTOCOL_INCOMPATIBLE",
+    "RUNTIME_INCOMPATIBLE",
+    "PROVENANCE_IDENTITY_MISMATCH",
+    "PROFILE_NOT_AUTHORIZED"
+  ],
+  "unknown_fields": "REJECT",
+  "unknown_versions": "REJECT",
+  "production_mutation": false,
+  "ar12_implementation": false
+}

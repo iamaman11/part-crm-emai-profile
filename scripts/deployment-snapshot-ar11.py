@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Project saved Cloudflare observations into an AR-11 DeploymentSnapshot.
+"""Project saved Cloudflare observations into DeploymentSnapshot v2.
 
-This adapter is observation-only. It does not authorize deployment, infer compatibility,
-create resources, read secret values, or maintain hidden release state. Current Release Set
-identity is read only from Worker version/deployment annotations written by the AR-11 executor.
+Observation-only adapter. It never authorizes deployment, infers compatibility, reads
+secret values, or maintains hidden release state. v1 snapshots/releases are intentionally
+unsupported before first production release.
 """
 
 from __future__ import annotations
@@ -16,7 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
-RELEASE_RE = re.compile(r"release_set=(release-set-v1-sha256-[0-9a-f]{64})\s+profile=([a-z0-9-]+)")
+RELEASE_RE = re.compile(r"release_set=(release-set-v2-sha256-[0-9a-f]{64})\s+profile=([a-z0-9-]+)")
+MIGRATION_RE = re.compile(r"^[0-9]{4}_[a-z0-9_]+\.sql$")
 CORE_BINDINGS = {
     "ASSETS",
     "CATALOG_DB",
@@ -71,6 +72,13 @@ def strings(value: Any) -> Iterable[str]:
 
 def contains_exact_string(value: Any, expected: str) -> bool:
     return any(item == expected for item in strings(value))
+
+
+def latest_migration_revision(value: Any, label: str) -> str:
+    names = sorted({text for text in strings(value) if MIGRATION_RE.fullmatch(text)})
+    if not names:
+        fail(f"{label} does not expose a canonical schema revision")
+    return names[-1]
 
 
 def current_identity(deployment_status: Any) -> tuple[str | None, str | None]:
@@ -133,11 +141,7 @@ def binding_inventory(config: dict[str, Any], selected: dict[str, Any]) -> set[s
 
 
 def secret_names(secret_list: Any) -> set[str]:
-    observed = {
-        value
-        for value in strings(secret_list)
-        if value in CORE_CREDENTIALS
-    }
+    observed = {value for value in strings(secret_list) if value in CORE_CREDENTIALS}
     unknown_sensitive = {
         value
         for value in strings(secret_list)
@@ -156,6 +160,8 @@ def current_components(path: Path | None, release_set_id: str | None) -> dict[st
     if path is None:
         fail("provider reports a current Release Set but its immutable manifest was not supplied")
     value = object_value(load(path, "current Release Set manifest"), "current Release Set manifest")
+    if value.get("schema_version") != 2:
+        fail("current provider Release Set is not schema v2")
     if value.get("release_set_id") != release_set_id:
         fail("current Release Set manifest does not match provider deployment annotation")
     components = object_value(value.get("components"), "current Release Set components")
@@ -179,8 +185,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     secret_list = load(args.secret_list, "secret-name list")
     config = object_value(load(args.rendered_config, "rendered Core config"), "rendered Core config")
     deploy_manifest = object_value(load(args.deploy_manifest, "deploy manifest"), "deploy manifest")
-    control = deploy_manifest.get("control_plane", deploy_manifest)
-    control = object_value(control, "control_plane deploy manifest")
+    control = object_value(deploy_manifest.get("control_plane", deploy_manifest), "control_plane deploy manifest")
     selected = rendered_core(config, "staging")
 
     release_set_id, profile_id = current_identity(deployment_status)
@@ -203,8 +208,29 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(d1_id, str) or not d1_id:
         fail("control_plane deploy manifest lacks d1_database_id")
 
+    d1 = [{
+        "component": "catalog",
+        "binding": "CATALOG_DB",
+        "database_id": d1_id,
+        "ledger_sha256": sha256_file(args.catalog_ledger),
+        "schema_revision": latest_migration_revision(catalog_ledger, "Catalog D1 ledger"),
+    }]
+    if args.resolver_ledger is not None:
+        resolver_ledger = load(args.resolver_ledger, "Resolver D1 ledger")
+        resolver_id = control.get("resolver_d1_database_id")
+        if not isinstance(resolver_id, str) or not resolver_id:
+            fail("resolver ledger supplied but deploy manifest lacks resolver_d1_database_id")
+        d1.append({
+            "component": "resolver",
+            "binding": "RESOLVER_DB",
+            "database_id": resolver_id,
+            "ledger_sha256": sha256_file(args.resolver_ledger),
+            "schema_revision": latest_migration_revision(resolver_ledger, "Resolver D1 ledger"),
+        })
+        logical_resources.add("resolver_d1")
+
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "DEPLOYMENT_SNAPSHOT",
         "environment": args.environment,
         "collected_at": args.collected_at,
@@ -212,12 +238,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "capability_profile_id": profile_id,
         "component_release_ids": components,
         "workers": [{"observed": deployment_status not in ({}, [], None)}],
-        "d1": [{
-            "component": "catalog",
-            "binding": "CATALOG_DB",
-            "database_id": d1_id,
-            "ledger_sha256": sha256_file(args.catalog_ledger),
-        }],
+        "d1": d1,
         "r2": [{"bucket_name": r2_name, "observed": "profile_objects" in logical_resources}],
         "queues": [{"queue_name": queue_name, "observed": "integration_events" in logical_resources}],
         "dlqs": [],
@@ -233,14 +254,16 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def self_test() -> None:
-    first = {"annotations": {"workers/message": "release_set=release-set-v1-sha256-" + "a" * 64 + " profile=rehearsal-core-v1"}}
-    second = {"message": "release_set=release-set-v1-sha256-" + "b" * 64 + " profile=rehearsal-core-v1"}
+    first = {"annotations": {"workers/message": "release_set=release-set-v2-sha256-" + "a" * 64 + " profile=rehearsal-core-v1"}}
+    second = {"message": "release_set=release-set-v2-sha256-" + "b" * 64 + " profile=rehearsal-core-v1"}
     if current_identity(first)[0] is None:
-        fail("current Release Set marker fixture was not detected")
+        fail("current Release Set v2 marker fixture was not detected")
+    if current_identity({"message": "release_set=release-set-v1-sha256-" + "a" * 64 + " profile=rehearsal-core-v1"})[0] is not None:
+        fail("legacy Release Set v1 marker unexpectedly retained executable compatibility")
     try:
         current_identity([first, second])
     except SnapshotError:
-        print("AR-11 DeploymentSnapshot adapter self-test passed.")
+        print("AR-11 DeploymentSnapshot v2 adapter self-test passed.")
         return
     fail("ambiguous deployment identity fixture unexpectedly passed")
 
@@ -251,6 +274,7 @@ def main() -> int:
     parser.add_argument("--collected-at")
     parser.add_argument("--deployment-status", type=Path)
     parser.add_argument("--catalog-ledger", type=Path)
+    parser.add_argument("--resolver-ledger", type=Path)
     parser.add_argument("--r2-list", type=Path)
     parser.add_argument("--queue-list", type=Path)
     parser.add_argument("--secret-list", type=Path)
@@ -277,7 +301,7 @@ def main() -> int:
             args.output,
         ]
         if any(value is None for value in required):
-            fail("all observation inputs except current-release-set are required")
+            fail("all observation inputs except resolver/current-release-set are required")
         result = build(args)
         if args.output.exists():
             fail(f"snapshot output already exists: {args.output}")
@@ -285,7 +309,7 @@ def main() -> int:
         args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         return 0
     except (OSError, SnapshotError) as error:
-        print(f"AR-11 DeploymentSnapshot error: {error}", file=sys.stderr)
+        print(f"AR-11 DeploymentSnapshot v2 error: {error}", file=sys.stderr)
         return 1
 
 

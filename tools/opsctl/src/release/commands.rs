@@ -34,7 +34,8 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
                 .artifact_root
                 .ok_or_else(|| ReleaseModelError::new("release verify requires --artifact-root"))?;
             let (_, source_verification) = verify_release_source(request.release_set, &manifest)?;
-            let static_blockers = static_compatibility::evaluate(request.source_root, &manifest, false)?;
+            let static_blockers =
+                static_compatibility::evaluate(request.source_root, &manifest, false)?;
             if !static_blockers.is_empty() {
                 return Err(ReleaseModelError::new(format!(
                     "RELEASE_STATIC_IDENTITY_MISMATCH: {}",
@@ -65,12 +66,17 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
     };
     serde_json::to_string_pretty(&value)
         .map(|output| format!("{output}\n"))
-        .map_err(|error| ReleaseModelError::new(format!("cannot serialize release output: {error}")))
+        .map_err(|error| {
+            ReleaseModelError::new(format!("cannot serialize release output: {error}"))
+        })
 }
 
 fn load_manifest(path: &Path) -> Result<ReleaseSetManifest, ReleaseModelError> {
     let input = fs::read_to_string(path).map_err(|error| {
-        ReleaseModelError::new(format!("RELEASE_SET_UNAVAILABLE: {}: {error}", path.display()))
+        ReleaseModelError::new(format!(
+            "RELEASE_SET_UNAVAILABLE: {}: {error}",
+            path.display()
+        ))
     })?;
     ReleaseSetManifest::parse_json(&input)
 }
@@ -85,7 +91,6 @@ fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_j
                 "release_id": component.release_id,
                 "artifact_sha256": component.artifact_sha256,
                 "artifact_size_bytes": component.artifact_size_bytes,
-                "component_manifest_path": component.component_manifest_path,
                 "component_manifest_sha256": component.component_manifest_sha256,
             })
         })
@@ -102,7 +107,7 @@ fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_j
             "commit_sha": manifest.source.commit_sha,
             "accepted_main": manifest.source.accepted_main,
             "accepted_main_evidence_sha256": manifest.source.accepted_main_evidence_sha256,
-            "accepted_main_evidence_role": "IDENTITY_BINDING; AcceptedSourceEvidence is acceptance authority"
+            "accepted_main_evidence_role": "IDENTITY_BINDING_ONLY; AcceptedSourceEvidence is acceptance authority"
         },
         "components": components,
         "capability_profile_compatibility": manifest.capability_profile_compatibility,
@@ -140,7 +145,9 @@ fn verify(
 fn required_text<'a>(value: Option<&'a str>, flag: &str) -> Result<&'a str, ReleaseModelError> {
     let value = value.ok_or_else(|| ReleaseModelError::new(format!("missing required {flag}")))?;
     if value.trim().is_empty() {
-        return Err(ReleaseModelError::new(format!("{flag} must not be empty")));
+        return Err(ReleaseModelError::new(format!(
+            "{flag} must not be empty"
+        )));
     }
     Ok(value)
 }

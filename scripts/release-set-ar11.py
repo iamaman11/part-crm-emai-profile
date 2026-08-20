@@ -1,29 +1,32 @@
 #!/usr/bin/env python3
-"""Build and validate the canonical AR-11 immutable Release Set manifest.
+"""Build and validate the canonical AR-11 immutable Release Set v2.
 
-This is a deterministic packaging generator only. It has no provider credentials,
-network access, deployment authority, mutable release registry, production mutation,
-or independent knowledge of release-critical repository paths. Those paths are owned
-by the canonical AR-11 release input topology and verified by native `opsctl`.
+Release Set v2 is the only executable pre-production contract. Component manifests are
+embedded in their immutable component archives; no legacy Release Set or manifest sidecar
+compatibility path exists. This script only packages deterministic bytes and has no provider,
+network, deployment, secret, or production mutation authority.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import shutil
 import tarfile
 import tempfile
+import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "iamaman11/part-crm-emai-profile"
-SCHEMA_VERSION = 1
-PREFIX = "release-set-v1-sha256-"
+SCHEMA_VERSION = 2
+PREFIX = "release-set-v2-sha256-"
 COMPONENT_DIR = "components"
-AUTHORITY_PATH = Path("architecture/release-architecture-ar11.json")
+RELEASE_ARCHITECTURE_PATH = Path("architecture/release-architecture-ar11.json")
+RELEASE_SET_CONTRACT_PATH = Path("architecture/release-set-v2.json")
 
 
 class ReleaseSetError(ValueError):
@@ -73,12 +76,37 @@ def safe_repo_relative(value: str, label: str) -> Path:
     return relative
 
 
-def load_release_authority() -> dict[str, Any]:
-    path = ROOT / AUTHORITY_PATH
-    regular(path, "release architecture authority")
-    value = json.loads(path.read_text(encoding="utf-8"))
+def load_json(path: Path, label: str) -> dict[str, Any]:
+    regular(path, label)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ReleaseSetError(f"{label} is invalid JSON: {error}") from error
     if not isinstance(value, dict):
-        fail("release architecture authority must be an object")
+        fail(f"{label} must be an object")
+    return value
+
+
+def load_release_set_contract() -> dict[str, Any]:
+    value = load_json(ROOT / RELEASE_SET_CONTRACT_PATH, "Release Set v2 contract")
+    if (
+        value.get("schema_version") != 1
+        or value.get("kind") != "AR11_RELEASE_SET_CONTRACT"
+        or value.get("release_set_schema_version") != SCHEMA_VERSION
+        or value.get("supported_release_set_prefixes") != [PREFIX]
+        or value.get("legacy_release_set_compatibility") is not False
+    ):
+        fail("Release Set v2 contract identity/policy mismatch")
+    manifest_policy = value.get("component_manifest_policy")
+    if not isinstance(manifest_policy, dict) or manifest_policy.get("embedded_manifest_required") is not True:
+        fail("Release Set v2 must require embedded component manifests")
+    if manifest_policy.get("external_manifest_sidecar_required") is not False:
+        fail("Release Set v2 must not require manifest sidecars")
+    return value
+
+
+def load_release_architecture() -> dict[str, Any]:
+    value = load_json(ROOT / RELEASE_ARCHITECTURE_PATH, "release architecture authority")
     if value.get("schema_version") != 1 or value.get("kind") != "AR11_RELEASE_ARCHITECTURE_SOURCE":
         fail("release architecture authority identity/schema mismatch")
     rows = value.get("release_inputs")
@@ -106,12 +134,9 @@ def release_input_map(authority: dict[str, Any]) -> dict[str, dict[str, Any]]:
             fail(f"duplicate release input id: {input_id}")
         if not isinstance(identity, str) or not identity:
             fail(f"release input {input_id} has invalid release_identity_source")
-        sources = [value for value in (canonical_source, generated_projection) if value is not None]
+        sources = [item for item in (canonical_source, generated_projection) if item is not None]
         if len(sources) != 1 or sources[0] != identity:
-            fail(
-                f"release input {input_id} must bind exactly one canonical/generated source "
-                "to release_identity_source"
-            )
+            fail(f"release input {input_id} must bind exactly one source to release_identity_source")
         safe_repo_relative(identity, f"release input {input_id}")
         if identity in identity_paths:
             fail(f"duplicate release identity path: {identity}")
@@ -130,17 +155,15 @@ def release_input_path(inputs: dict[str, dict[str, Any]], input_id: str) -> Path
     return safe_repo_relative(identity, f"release input {input_id}")
 
 
-def release_input_paths_for_consumer(
-    inputs: dict[str, dict[str, Any]], consumer: str
-) -> list[Path]:
+def release_input_paths_for_consumer(inputs: dict[str, dict[str, Any]], consumer: str) -> list[Path]:
     paths: list[Path] = []
     for input_id, row in inputs.items():
         consumers = row.get("consumers")
-        if not isinstance(consumers, list) or not all(isinstance(value, str) for value in consumers):
+        if not isinstance(consumers, list) or not all(isinstance(item, str) for item in consumers):
             fail(f"release input {input_id} has invalid consumers")
         if consumer in consumers:
             paths.append(release_input_path(inputs, input_id))
-    paths.sort(key=lambda value: value.as_posix())
+    paths.sort(key=lambda item: item.as_posix())
     if not paths:
         fail(f"canonical release input topology has no inputs for consumer {consumer}")
     return paths
@@ -152,53 +175,65 @@ def git_sha(value: str) -> str:
     return value
 
 
-def accepted_main_evidence(source_sha: str) -> str:
-    return sha256_bytes(
-        canonical(
-            {
-                "authority": "accepted-main",
-                "commit_sha": source_sha,
-                "repository": REPOSITORY,
-            }
-        )
-    )
+def accepted_main_identity(source_sha: str) -> str:
+    return sha256_bytes(canonical({"authority": "accepted-main", "commit_sha": source_sha, "repository": REPOSITORY}))
 
 
 def file_identity(path: Path) -> dict[str, Any]:
-    regular(path, "component artifact")
+    regular(path, "release artifact")
     return {"sha256": sha256_file(path), "size_bytes": path.stat().st_size}
 
 
 def source_file_set_identity(paths: list[Path]) -> dict[str, Any]:
     entries = []
-    for relative in sorted(paths, key=lambda value: value.as_posix()):
+    for relative in sorted(paths, key=lambda item: item.as_posix()):
         path = ROOT / relative
         regular(path, "release identity source")
-        entries.append(
-            {
-                "path": relative.as_posix(),
-                "sha256": sha256_file(path),
-                "size_bytes": path.stat().st_size,
-            }
-        )
+        entries.append({"path": relative.as_posix(), "sha256": sha256_file(path), "size_bytes": path.stat().st_size})
     return {"files": entries, "sha256": sha256_bytes(canonical(entries))}
 
 
-def deterministic_runtime_archive(
-    source_sha: str, destination: Path, runtime_files: list[Path]
-) -> tuple[str, str]:
-    if destination.exists():
-        fail(f"runtime component destination already exists: {destination}")
-    manifest = {
+def load_component_manifest(path: Path, *, source_sha: str) -> tuple[str, dict[str, Any], bytes]:
+    value = load_json(path, "component manifest")
+    release_id = value.get("release_id")
+    if not isinstance(release_id, str) or not release_id:
+        fail(f"component manifest lacks release_id: {path}")
+    source = value.get("source")
+    observed_sha = source.get("commit_sha") if isinstance(source, dict) else value.get("source_commit_sha")
+    if observed_sha != source_sha:
+        fail(f"component manifest source SHA differs from Release Set source: {path}")
+    return release_id, value, path.read_bytes()
+
+
+def schema_contract(manifest: dict[str, Any], component: str) -> dict[str, Any]:
+    value = manifest.get("schema_contract")
+    if not isinstance(value, dict) or value.get("database_component") != component:
+        fail(f"{component} component manifest lacks canonical schema_contract")
+    required = {
+        "database_component",
+        "target_schema_revision",
+        "supported_schema_min",
+        "supported_schema_max",
+        "migration_history_digest",
+        "compatibility_policy_digest",
+    }
+    if set(value) != required:
+        fail(f"{component} schema_contract field inventory drifted")
+    return value
+
+
+def deterministic_runtime_archive(source_sha: str, destination: Path, runtime_files: list[Path]) -> tuple[str, bytes]:
+    manifest: dict[str, Any] = {
         "schema_version": 1,
         "kind": "CAMOUFOX_RUNTIME_COMPONENT",
         "source_commit_sha": source_sha,
         "files": source_file_set_identity(runtime_files),
     }
     manifest["release_id"] = "runtime-bundle-v1-sha256-" + sha256_bytes(canonical(manifest))
+    manifest_bytes = document(manifest)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(destination, "w", format=tarfile.PAX_FORMAT) as archive:
-        members: list[tuple[str, bytes]] = [("runtime-manifest.json", document(manifest))]
+        members: list[tuple[str, bytes]] = [("runtime-manifest.json", manifest_bytes)]
         members.extend((relative.as_posix(), (ROOT / relative).read_bytes()) for relative in runtime_files)
         for name, data in sorted(members):
             pure = PurePosixPath(name)
@@ -210,26 +245,56 @@ def deterministic_runtime_archive(
             info.uid = info.gid = 0
             info.uname = info.gname = ""
             info.mtime = 0
-            archive.addfile(info, fileobj=__import__("io").BytesIO(data))
-    return str(manifest["release_id"]), sha256_bytes(document(manifest))
+            archive.addfile(info, fileobj=io.BytesIO(data))
+    return str(manifest["release_id"]), manifest_bytes
 
 
-def load_component_manifest(path: Path, *, source_sha: str, release_key: str = "release_id") -> tuple[str, str]:
-    regular(path, "component manifest")
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise ReleaseSetError(f"component manifest is invalid JSON: {path}: {error}") from error
-    if not isinstance(value, dict):
-        fail(f"component manifest must be an object: {path}")
-    release_id = value.get(release_key)
-    if not isinstance(release_id, str) or not release_id:
-        fail(f"component manifest lacks {release_key}: {path}")
-    source = value.get("source")
-    observed_sha = source.get("commit_sha") if isinstance(source, dict) else value.get("source_commit_sha")
-    if observed_sha != source_sha:
-        fail(f"component manifest source SHA differs from Release Set source: {path}")
-    return release_id, sha256_file(path)
+def deterministic_profile_bridge_package(source_sha: str, executable: Path, archive: Path, manifest_output: Path) -> None:
+    regular(executable, "Profile Bridge executable")
+    executable_identity = file_identity(executable)
+    payload: dict[str, Any] = {
+        "schema_version": 2,
+        "kind": "PROFILE_BRIDGE_COMPONENT",
+        "source_commit_sha": source_sha,
+        "protocol_version": 1,
+        "executable": {
+            "path": "profile-bridge.exe",
+            "sha256": executable_identity["sha256"],
+            "size_bytes": executable_identity["size_bytes"],
+        },
+    }
+    payload["release_id"] = "profile-bridge-v2-sha256-" + sha256_bytes(canonical(payload))
+    manifest_bytes = document(payload)
+    if archive.exists() or manifest_output.exists():
+        fail("Profile Bridge package output already exists")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    manifest_output.parent.mkdir(parents=True, exist_ok=True)
+    manifest_output.write_bytes(manifest_bytes)
+    with zipfile.ZipFile(archive, "w", allowZip64=False) as package:
+        for name, data, mode in (
+            ("profile-bridge-manifest.json", manifest_bytes, 0o100644),
+            ("profile-bridge.exe", executable.read_bytes(), 0o100755),
+        ):
+            info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_STORED
+            info.create_system = 3
+            info.external_attr = mode << 16
+            package.writestr(info, data)
+
+
+def component_row(release_id: str, source_sha: str, artifact_path: str, artifact: dict[str, Any], manifest_bytes: bytes) -> dict[str, Any]:
+    return {
+        "release_id": release_id,
+        "source_commit_sha": source_sha,
+        "artifact_path": artifact_path,
+        "artifact_sha256": artifact["sha256"],
+        "artifact_size_bytes": artifact["size_bytes"],
+        "component_manifest_sha256": sha256_bytes(manifest_bytes),
+    }
+
+
+def inventory(path: str, identity: dict[str, Any]) -> dict[str, Any]:
+    return {"path": path, "sha256": identity["sha256"], "size_bytes": identity["size_bytes"], "kind": "component"}
 
 
 def build(
@@ -244,14 +309,8 @@ def build(
     output_root: Path,
 ) -> Path:
     source_sha = git_sha(source_sha)
-    for path, label in (
-        (control_archive, "control-plane archive"),
-        (resolver_archive, "resolver archive"),
-        (profile_bridge_archive, "Profile Bridge archive"),
-    ):
-        regular(path, label)
-
-    authority = load_release_authority()
+    load_release_set_contract()
+    authority = load_release_architecture()
     inputs = release_input_map(authority)
     contract_paths = release_input_paths_for_consumer(inputs, "release_set.contracts")
     runtime_files = release_input_paths_for_consumer(inputs, "runtime_bundle.files")
@@ -263,10 +322,7 @@ def build(
     release_architecture_relative = release_input_path(inputs, "release_architecture_authority")
 
     contracts_identity = source_file_set_identity(contract_paths)
-    runtime_lock = json.loads((ROOT / runtime_lock_relative).read_text(encoding="utf-8"))
-    if not isinstance(runtime_lock, dict):
-        fail("runtime lock must be an object")
-
+    runtime_lock = load_json(ROOT / runtime_lock_relative, "runtime lock")
     profiles = sorted(
         item["profile_id"]
         for item in authority.get("release_profiles", [])
@@ -275,17 +331,13 @@ def build(
     if not profiles:
         fail("release architecture has no capability profiles")
 
-    control_release_id, control_manifest_sha = load_component_manifest(
-        control_manifest, source_sha=source_sha
-    )
-    resolver_release_id, resolver_manifest_sha = load_component_manifest(
-        resolver_manifest, source_sha=source_sha
-    )
-    bridge_release_id, bridge_manifest_sha = load_component_manifest(
-        profile_bridge_manifest, source_sha=source_sha
-    )
+    control_release_id, control_value, control_manifest_bytes = load_component_manifest(control_manifest, source_sha=source_sha)
+    resolver_release_id, resolver_value, resolver_manifest_bytes = load_component_manifest(resolver_manifest, source_sha=source_sha)
+    bridge_release_id, bridge_value, bridge_manifest_bytes = load_component_manifest(profile_bridge_manifest, source_sha=source_sha)
+    if bridge_value.get("schema_version") != 2 or bridge_value.get("kind") != "PROFILE_BRIDGE_COMPONENT":
+        fail("Profile Bridge must use the embedded-manifest v2 component format")
 
-    staging = Path(tempfile.mkdtemp(prefix="ar11-release-set-"))
+    staging = Path(tempfile.mkdtemp(prefix="ar11-release-set-v2-"))
     try:
         component_root = staging / COMPONENT_DIR
         component_root.mkdir(parents=True)
@@ -295,69 +347,43 @@ def build(
             "runtime": component_root / "runtime-bundle.tar",
             "bridge": component_root / "profile-bridge.zip",
         }
-        shutil.copyfile(control_archive, destinations["control"], follow_symlinks=False)
-        shutil.copyfile(resolver_archive, destinations["resolver"], follow_symlinks=False)
-        shutil.copyfile(profile_bridge_archive, destinations["bridge"], follow_symlinks=False)
-        runtime_release_id, runtime_manifest_sha = deterministic_runtime_archive(
-            source_sha, destinations["runtime"], runtime_files
-        )
-
+        for source, destination in (
+            (control_archive, destinations["control"]),
+            (resolver_archive, destinations["resolver"]),
+            (profile_bridge_archive, destinations["bridge"]),
+        ):
+            regular(source, "component archive")
+            shutil.copyfile(source, destination, follow_symlinks=False)
+        runtime_release_id, runtime_manifest_bytes = deterministic_runtime_archive(source_sha, destinations["runtime"], runtime_files)
         identities = {name: file_identity(path) for name, path in destinations.items()}
-        component_rows = {
-            "control_plane": component_row(
-                control_release_id,
-                source_sha,
-                "components/control-plane.tar",
-                identities["control"],
-                control_manifest_sha,
-            ),
-            "frontend": component_row(
-                f"{control_release_id}:frontend",
-                source_sha,
-                "components/control-plane.tar",
-                identities["control"],
-                control_manifest_sha,
-            ),
-            "secret_resolver": component_row(
-                resolver_release_id,
-                source_sha,
-                "components/secret-resolver.tar",
-                identities["resolver"],
-                resolver_manifest_sha,
-            ),
-            "runtime_bundle": component_row(
-                runtime_release_id,
-                source_sha,
-                "components/runtime-bundle.tar",
-                identities["runtime"],
-                runtime_manifest_sha,
-            ),
-            "profile_bridge": component_row(
-                bridge_release_id,
-                source_sha,
-                "components/profile-bridge.zip",
-                identities["bridge"],
-                bridge_manifest_sha,
-            ),
-        }
 
+        component_rows = {
+            "control_plane": component_row(control_release_id, source_sha, "components/control-plane.tar", identities["control"], control_manifest_bytes),
+            "frontend": component_row(control_release_id, source_sha, "components/control-plane.tar", identities["control"], control_manifest_bytes),
+            "secret_resolver": component_row(resolver_release_id, source_sha, "components/secret-resolver.tar", identities["resolver"], resolver_manifest_bytes),
+            "runtime_bundle": component_row(runtime_release_id, source_sha, "components/runtime-bundle.tar", identities["runtime"], runtime_manifest_bytes),
+            "profile_bridge": component_row(bridge_release_id, source_sha, "components/profile-bridge.zip", identities["bridge"], bridge_manifest_bytes),
+        }
         manifest: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "source": {
                 "repository": REPOSITORY,
                 "commit_sha": source_sha,
                 "accepted_main": True,
-                "accepted_main_evidence_sha256": accepted_main_evidence(source_sha),
+                "accepted_main_evidence_sha256": accepted_main_identity(source_sha),
             },
             "components": component_rows,
             "contracts": contracts_identity,
             "protocols": {
                 "public_api_contract_sha256": contracts_identity["sha256"],
                 "camouhost_ipc_version": runtime_lock["camouhost_ipc_version"],
+                "profile_bridge_protocol_version": bridge_value["protocol_version"],
                 "resolver_protocol": "mailbox-secret-resolver-v1",
             },
             "schemas": {
                 "d1_evolution_authority_sha256": sha256_file(ROOT / d1_authority_relative),
+                "catalog": schema_contract(control_value, "catalog"),
+                "resolver": schema_contract(resolver_value, "resolver"),
             },
             "runtime_compatibility": {
                 "runtime_lock_sha256": sha256_file(ROOT / runtime_lock_relative),
@@ -394,70 +420,19 @@ def build(
         raise
 
 
-def component_row(
-    release_id: str,
-    source_sha: str,
-    artifact_path: str,
-    identity: dict[str, Any],
-    manifest_sha: str,
-) -> dict[str, Any]:
-    return {
-        "release_id": release_id,
-        "source_commit_sha": source_sha,
-        "artifact_path": artifact_path,
-        "artifact_sha256": identity["sha256"],
-        "artifact_size_bytes": identity["size_bytes"],
-        "component_manifest_sha256": manifest_sha,
-    }
-
-
-def inventory(path: str, identity: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "path": path,
-        "sha256": identity["sha256"],
-        "size_bytes": identity["size_bytes"],
-        "kind": "component",
-    }
-
-
-def profile_bridge_manifest(source_sha: str, archive: Path, output: Path) -> None:
-    source_sha = git_sha(source_sha)
-    identity = file_identity(archive)
-    manifest: dict[str, Any] = {
-        "schema_version": 1,
-        "kind": "PROFILE_BRIDGE_COMPONENT",
-        "source_commit_sha": source_sha,
-        "artifact_sha256": identity["sha256"],
-        "artifact_size_bytes": identity["size_bytes"],
-    }
-    manifest["release_id"] = "profile-bridge-v1-sha256-" + sha256_bytes(canonical(manifest))
-    if output.exists():
-        fail(f"Profile Bridge manifest already exists: {output}")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(document(manifest))
-
-
 def self_test() -> None:
-    source = "a" * 40
-    first = accepted_main_evidence(source)
-    second = accepted_main_evidence(source)
-    if first != second or len(first) != 64:
-        fail("accepted-main evidence identity is not deterministic")
-    if accepted_main_evidence("b" * 40) == first:
-        fail("accepted-main evidence does not bind source SHA")
-
-    authority = load_release_authority()
+    contract = load_release_set_contract()
+    policy = contract["component_manifest_policy"]
+    if policy.get("external_manifest_sidecar_required") is not False:
+        fail("sidecar compatibility unexpectedly enabled")
+    if PREFIX != "release-set-v2-sha256-" or SCHEMA_VERSION != 2:
+        fail("pre-production Release Set contract must be v2-only")
+    authority = load_release_architecture()
     inputs = release_input_map(authority)
     contracts = release_input_paths_for_consumer(inputs, "release_set.contracts")
     if Path("openapi/v1/openapi.json") not in contracts:
         fail("canonical public API root is absent from release_set.contracts")
-    if any(path.as_posix().endswith("control-plane.yaml") for path in contracts):
-        fail("retired/nonexistent control-plane.yaml leaked into release identity")
-    if release_input_path(inputs, "camouhost_runtime_lock") not in release_input_paths_for_consumer(
-        inputs, "runtime_bundle.files"
-    ):
-        fail("runtime lock is not part of runtime bundle identity")
-    print("AR-11 Release Set generator self-test passed.")
+    print("AR-11 Release Set v2 generator self-test passed.")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -472,10 +447,11 @@ def parser() -> argparse.ArgumentParser:
     build_parser.add_argument("--profile-bridge-archive", type=Path, required=True)
     build_parser.add_argument("--profile-bridge-manifest", type=Path, required=True)
     build_parser.add_argument("--output-root", type=Path, required=True)
-    bridge = sub.add_parser("profile-bridge-manifest")
+    bridge = sub.add_parser("profile-bridge-package")
     bridge.add_argument("--source-sha", required=True)
+    bridge.add_argument("--executable", type=Path, required=True)
     bridge.add_argument("--archive", type=Path, required=True)
-    bridge.add_argument("--output", type=Path, required=True)
+    bridge.add_argument("--manifest", type=Path, required=True)
     sub.add_parser("self-test")
     return root
 
@@ -485,8 +461,8 @@ def main() -> int:
         args = parser().parse_args()
         if args.command == "self-test":
             self_test()
-        elif args.command == "profile-bridge-manifest":
-            profile_bridge_manifest(args.source_sha, args.archive, args.output)
+        elif args.command == "profile-bridge-package":
+            deterministic_profile_bridge_package(git_sha(args.source_sha), args.executable, args.archive, args.manifest)
         elif args.command == "build":
             build(
                 source_sha=args.source_sha,
@@ -502,7 +478,7 @@ def main() -> int:
             fail(f"unsupported command: {args.command}")
         return 0
     except (OSError, KeyError, json.JSONDecodeError, ReleaseSetError) as error:
-        print(f"AR-11 Release Set error: {error}", file=__import__("sys").stderr)
+        print(f"AR-11 Release Set v2 error: {error}", file=__import__("sys").stderr)
         return 1
 
 

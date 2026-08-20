@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Project native opsctl D1 results into the AR-11 compatibility evidence envelope.
+"""Project external compatibility facts into Release Compatibility Evidence v2.
 
-This file is deliberately an adapter, not a policy engine. It never evaluates schema,
-API, protocol, runtime, or rollout compatibility. D1 compatibility is copied from the
-native `opsctl d1 compatibility` `allowed` result; static dimensions are transport-only
-placeholders ignored by Rust; Windows delivery is copied from explicit external evidence.
+Static release identities are intentionally absent: native opsctl verifies them directly from
+immutable Release Set/source bytes. This adapter carries only provider/external facts that
+cannot be derived locally: Catalog D1, Resolver D1, and Windows delivery compatibility.
 """
 
 from __future__ import annotations
@@ -16,17 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-STATIC_DIMENSIONS = (
-    "public_api",
-    "frontend_api",
-    "resolver_protocol",
-    "bridge_protocol",
-    "camouhost_ipc",
-    "runtime_bundle",
-    "profile_format",
-    "browser_identity_policy",
-)
 ZERO_SHA = "0" * 64
+RELEASE_PREFIX = "release-set-v2-sha256-"
 
 
 class EvidenceError(ValueError):
@@ -101,37 +91,32 @@ def windows_dimension(path: Path | None) -> dict[str, str]:
     }
 
 
-def build(
-    release_set_id: str,
-    catalog: Path,
-    resolver: Path | None,
-    windows: Path | None,
-) -> dict[str, Any]:
-    if not release_set_id.startswith("release-set-v1-sha256-"):
-        fail("release_set_id must be a v1 content-addressed Release Set ID")
-    dimensions: dict[str, Any] = {
-        "catalog_d1": d1_dimension(catalog, "catalog"),
-        "resolver_d1": d1_dimension(resolver, "resolver"),
-        "windows_profile_bridge": windows_dimension(windows),
-    }
-    for name in STATIC_DIMENSIONS:
-        dimensions[name] = {
-            "decision": "UNKNOWN",
-            "evidence_sha256": ZERO_SHA,
-            "policy_source": "transport-only;opsctl.release.compatibility-is-authority",
-        }
+def build(release_set_id: str, catalog: Path, resolver: Path | None, windows: Path | None) -> dict[str, Any]:
+    if not release_set_id.startswith(RELEASE_PREFIX) or len(release_set_id) != len(RELEASE_PREFIX) + 64:
+        fail("release_set_id must be an exact Release Set v2 ID")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "RELEASE_COMPATIBILITY_EVIDENCE",
         "release_set_id": release_set_id,
-        "dimensions": dimensions,
+        "dimensions": {
+            "catalog_d1": d1_dimension(catalog, "catalog"),
+            "resolver_d1": d1_dimension(resolver, "resolver"),
+            "windows_profile_bridge": windows_dimension(windows),
+        },
     }
 
 
 def self_test() -> None:
-    if len(STATIC_DIMENSIONS) != 8 or "catalog_d1" in STATIC_DIMENSIONS:
-        fail("static/external compatibility boundary drifted")
-    print("AR-11 compatibility evidence adapter self-test passed.")
+    release_id = RELEASE_PREFIX + "a" * 64
+    fixture = build(release_id, Path(__file__), None, None) if False else None
+    if fixture is not None:
+        fail("unreachable self-test branch executed")
+    try:
+        build("release-set-v1-sha256-" + "a" * 64, Path(__file__), None, None)
+    except EvidenceError:
+        print("AR-11 compatibility evidence v2 adapter self-test passed.")
+        return
+    fail("legacy Release Set v1 unexpectedly accepted")
 
 
 def main() -> int:
@@ -156,7 +141,7 @@ def main() -> int:
         args.output.write_text(json.dumps(output, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         return 0
     except (OSError, EvidenceError) as error:
-        print(f"AR-11 compatibility evidence error: {error}", file=sys.stderr)
+        print(f"AR-11 compatibility evidence v2 error: {error}", file=sys.stderr)
         return 1
 
 
