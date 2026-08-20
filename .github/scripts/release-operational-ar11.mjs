@@ -156,12 +156,21 @@ function promotionErrors(promotion) {
     "if: needs.observe-preflight.outputs.decision == 'PLAN'",
     'environment: staging',
     'deployments: write',
-    'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
+    'Checkout exact target source before mutation verification',
     'Download and bind exact preflight authority before provider use',
+    'Re-verify fence and exact immutable Release Set before credentials',
     'mutation-fence.json',
+    "'.preflight_sha256'",
+    "'.plan_sha256'",
+    'cmp --silent "$asset_root/release-set.json" "$preflight_root/release-set.json"',
+    'release verify',
+    'Activate deploy credential after READY and exact-byte verification',
+    'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
+    'Re-observe expected-current fence and deploy exact Release Set v2 bits',
+    'deployment-identity-ar11.py',
+    'test "$current_id" = "$EXPECTED_CURRENT"',
     'gh release download "$RELEASE_SET_ID"',
     '--dry-run',
-    'Deploy exact Release Set v2 bits',
     '--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v1"',
   ], 'promotion phase 3 protected mutation'));
   errors.push(...forbidMarkers(mutate, [
@@ -173,6 +182,14 @@ function promotionErrors(promotion) {
     'promotion plan',
     'promotion preflight',
   ], 'promotion phase 3 protected mutation'));
+  const nativeVerify = mutate.indexOf('Re-verify fence and exact immutable Release Set before credentials');
+  const deployCredential = mutate.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
+  const reobserveFence = mutate.indexOf('Re-observe expected-current fence and deploy exact Release Set v2 bits');
+  const currentFence = mutate.indexOf('test "$current_id" = "$EXPECTED_CURRENT"', reobserveFence);
+  const actualDeploy = mutate.indexOf('--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v1"', reobserveFence);
+  if (!(nativeVerify >= 0 && deployCredential > nativeVerify && reobserveFence > deployCredential && currentFence > reobserveFence && actualDeploy > currentFence)) {
+    errors.push('mutation credential/fence ordering must be native verify -> credential activation -> expected-current re-observe -> deploy');
+  }
 
   errors.push(...requireMarkers(post, [
     'needs: [resolve-verify, observe-preflight, mutate]',
@@ -280,11 +297,29 @@ function selfTest() {
   }
 
   const rebuild = promotion.replace(
-    'Deploy exact Release Set v2 bits',
-    'run: cargo build --release\n      - name: Deploy exact Release Set v2 bits',
+    'Re-observe expected-current fence and deploy exact Release Set v2 bits',
+    'run: cargo build --release\n      - name: Re-observe expected-current fence and deploy exact Release Set v2 bits',
   );
   if (!promotionErrors(rebuild).some((error) => error.includes('cargo build'))) {
     throw new Error('promotion rebuild fixture unexpectedly passed');
+  }
+
+  const staleFenceBypass = promotion.replace(
+    'test "$current_id" = "$EXPECTED_CURRENT"',
+    'test -n "$current_id"',
+  );
+  if (!promotionErrors(staleFenceBypass).some((error) => error.includes('test "$current_id" = "$EXPECTED_CURRENT"'))) {
+    throw new Error('mutation stale-fence bypass fixture unexpectedly passed');
+  }
+
+  const earlyCredential = promotion
+    .replace('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}', 'DEPLOY_TOKEN: EARLY_FIXTURE_REMOVED')
+    .replace(
+      'Re-verify fence and exact immutable Release Set before credentials',
+      'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n      - name: Re-verify fence and exact immutable Release Set before credentials',
+    );
+  if (!promotionErrors(earlyCredential).some((error) => error.includes('credential/fence ordering'))) {
+    throw new Error('early deploy credential fixture unexpectedly passed');
   }
 
   const acceptedSourceProof = 'test "$GITHUB_SHA" = "$main_sha"';
