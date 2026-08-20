@@ -5,7 +5,7 @@ use crate::release;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub const HELP: &str = "opsctl — project-specific operations policy interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n    opsctl [--root PATH] credentials <ACTION>\n    opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [D1 OPTIONS]\n    opsctl [--root PATH] release <ACTION> --release-set PATH [RELEASE OPTIONS]\n    opsctl [--root PATH] promotion <ACTION> --release-set PATH --profile ID --environment ENV --snapshot PATH --evidence-json PATH [PROMOTION OPTIONS]\n\nCOMMANDS:\n    doctor                     Validate canonical repository authorities\n    status                     Print canonical docs/status.json\n    inventory                  Print canonical architecture/inventory.json\n    credentials status         Print canonical credential lifecycle metadata\n    credentials rotation-plan  Print canonical operator rotation/recovery metadata\n    d1 status                  Classify a saved D1 migration ledger against canonical history\n    d1 plan                    Build a deterministic migration/rollback plan\n    d1 compatibility           Evaluate runtime/schema compatibility\n    d1 verify                  Verify a post-apply ledger against a release schema contract\n    release inspect            Parse and inspect one immutable Release Set\n    release verify             Verify Release Set identity and exact artifact bytes\n    release compatibility      Evaluate Release Set + Capability Profile compatibility\n    promotion plan             Build a deterministic no-mutation transition plan\n    promotion preflight        Fail-closed gate before provider credential exposure\n    promotion verify           Verify observed state after provider mutation\n\nD1 OPTIONS:\n    --component ID              catalog or resolver\n    --ledger-json PATH          Saved machine-readable Wrangler D1 ledger query result\n    --release-manifest PATH     Target release; required for plan/compatibility/verify\n    --current-manifest PATH     Current runtime schema contract; plan rollback context\n    --known-good-manifest PATH  Known-good rollback release schema contract\n    --preconditions-json PATH   Metadata-only CONTRACT precondition evidence\n    --authority PATH            Optional D1 evolution authority override for fixtures\n\nRELEASE OPTIONS:\n    --release-set PATH          Target content-addressed Release Set manifest\n    --artifact-root PATH        Exact artifact tree; required for release verify\n    --profile ID                Target Capability Profile; compatibility only\n    --environment ID            rehearsal, staging, or production; compatibility only\n    --evidence-json PATH        Saved compatibility evidence; compatibility only\n    --current-release-set PATH  Optional current Release Set for rollback context\n\nPROMOTION OPTIONS:\n    --release-set PATH          Target immutable Release Set\n    --profile ID                Target Capability Profile\n    --environment ID            rehearsal, staging, or production\n    --snapshot PATH             Saved metadata-only DeploymentSnapshot\n    --evidence-json PATH        Saved release compatibility evidence\n    --current-release-set PATH  Optional current Release Set\n    --known-good-release-set PATH  Rollback candidate for preflight\n    --expected-current ID       Stale-plan fence (use NONE for fresh state)\n\nGLOBAL OPTIONS:\n    --root PATH  Explicit repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nAR-11 release commands remain local, read-only and metadata/artifact-verification-only. opsctl never executes Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. GitHub Actions/Environments retain orchestration/approval authority and provider executors retain actual mutation authority.\n";
+pub const HELP: &str = "opsctl — project-specific operations policy interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n    opsctl [--root PATH] credentials <ACTION>\n    opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [D1 OPTIONS]\n    opsctl [--root PATH] release <ACTION> --release-set PATH [RELEASE OPTIONS]\n    opsctl [--root PATH] promotion <ACTION> --release-set PATH --profile ID --environment ENV --snapshot PATH --evidence-json PATH [PROMOTION OPTIONS]\n\nCOMMANDS:\n    doctor                     Validate canonical repository authorities\n    status                     Print canonical docs/status.json\n    inventory                  Print canonical architecture/inventory.json\n    credentials status         Print canonical credential lifecycle metadata\n    credentials rotation-plan  Print canonical operator rotation/recovery metadata\n    d1 status                  Classify a saved D1 migration ledger against canonical history\n    d1 plan                    Build a deterministic migration/rollback plan\n    d1 compatibility           Evaluate runtime/schema compatibility\n    d1 verify                  Verify a post-apply ledger against a release schema contract\n    release inspect            Parse and inspect one immutable Release Set\n    release verify             Verify Release Set identity and exact artifact bytes\n    release compatibility      Evaluate Release Set + Capability Profile compatibility\n    promotion plan             Build a deterministic no-mutation transition plan\n    promotion preflight        Fail-closed gate before provider credential exposure\n    promotion verify           Verify observed state after provider mutation\n\nD1 OPTIONS:\n    --component ID              catalog or resolver\n    --ledger-json PATH          Saved machine-readable Wrangler D1 ledger query result\n    --release-manifest PATH     Target release; required for plan/compatibility/verify\n    --current-manifest PATH     Current runtime schema contract; plan rollback context\n    --known-good-manifest PATH  Known-good rollback release schema contract\n    --preconditions-json PATH   Metadata-only CONTRACT precondition evidence\n    --authority PATH            Optional D1 evolution authority override for fixtures\n\nRELEASE OPTIONS:\n    --release-set PATH          Target content-addressed Release Set manifest\n    --source-root PATH          Exact source tree for release provenance; defaults to --root\n    --artifact-root PATH        Exact artifact tree; required for release verify\n    --profile ID                Target Capability Profile; compatibility only\n    --environment ID            rehearsal, staging, or production; compatibility only\n    --evidence-json PATH        Saved compatibility evidence; compatibility only\n    --current-release-set PATH  Optional current Release Set for rollback context\n\nPROMOTION OPTIONS:\n    --release-set PATH          Target immutable Release Set\n    --source-root PATH          Exact target source tree; current --root remains policy authority\n    --profile ID                Target Capability Profile\n    --environment ID            rehearsal, staging, or production\n    --snapshot PATH             Saved metadata-only DeploymentSnapshot\n    --evidence-json PATH        Saved release compatibility evidence\n    --current-release-set PATH  Optional current Release Set\n    --known-good-release-set PATH  Rollback candidate for preflight\n    --expected-current ID       Stale-plan fence (use NONE for fresh state)\n\nGLOBAL OPTIONS:\n    --root PATH  Explicit current policy repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nAR-11 release commands remain local, read-only and metadata/artifact-verification-only. opsctl never executes Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. GitHub Actions/Environments retain orchestration/approval authority and provider executors retain actual mutation authority.\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadCommand {
@@ -68,6 +68,7 @@ pub enum Invocation {
         root: Option<PathBuf>,
         action: release::ReleaseAction,
         release_set: PathBuf,
+        source_root: Option<PathBuf>,
         artifact_root: Option<PathBuf>,
         profile_id: Option<String>,
         environment: Option<String>,
@@ -78,6 +79,7 @@ pub enum Invocation {
         root: Option<PathBuf>,
         action: promotion::PromotionAction,
         release_set: PathBuf,
+        source_root: Option<PathBuf>,
         profile_id: String,
         environment: String,
         snapshot: PathBuf,
@@ -352,6 +354,7 @@ where
     };
 
     let mut release_set: Option<PathBuf> = None;
+    let mut source_root: Option<PathBuf> = None;
     let mut artifact_root: Option<PathBuf> = None;
     let mut profile_id: Option<String> = None;
     let mut environment: Option<String> = None;
@@ -368,6 +371,12 @@ where
                     .next()
                     .ok_or_else(|| OpsctlError::new("release", "--release-set requires a value"))?;
                 set_once(&mut release_set, PathBuf::from(value), "--release-set")?;
+            }
+            "--source-root" => {
+                let value = iterator
+                    .next()
+                    .ok_or_else(|| OpsctlError::new("release", "--source-root requires a path"))?;
+                set_once(&mut source_root, PathBuf::from(value), "--source-root")?;
             }
             "--artifact-root" => {
                 let value = iterator.next().ok_or_else(|| {
@@ -420,6 +429,7 @@ where
         release_set.ok_or_else(|| OpsctlError::new("release", "--release-set is required"))?;
     match action {
         release::ReleaseAction::Inspect => {
+            reject_if_present(&source_root, "--source-root", action)?;
             reject_if_present(&artifact_root, "--artifact-root", action)?;
             reject_if_present(&profile_id, "--profile", action)?;
             reject_if_present(&environment, "--environment", action)?;
@@ -453,6 +463,7 @@ where
         root,
         action,
         release_set,
+        source_root,
         artifact_root,
         profile_id,
         environment,
@@ -502,6 +513,7 @@ where
     };
 
     let mut release_set: Option<PathBuf> = None;
+    let mut source_root: Option<PathBuf> = None;
     let mut profile_id: Option<String> = None;
     let mut environment: Option<String> = None;
     let mut snapshot: Option<PathBuf> = None;
@@ -520,6 +532,12 @@ where
                     OpsctlError::new("promotion", "--release-set requires a value")
                 })?;
                 set_once(&mut release_set, PathBuf::from(value), "--release-set")?;
+            }
+            "--source-root" => {
+                let value = iterator.next().ok_or_else(|| {
+                    OpsctlError::new("promotion", "--source-root requires a path")
+                })?;
+                set_once(&mut source_root, PathBuf::from(value), "--source-root")?;
             }
             "--profile" => {
                 let value = iterator
@@ -641,6 +659,7 @@ where
         root,
         action,
         release_set,
+        source_root,
         profile_id,
         environment,
         snapshot,
@@ -845,6 +864,7 @@ mod tests {
                 root: None,
                 action: ReleaseAction::Inspect,
                 release_set: PathBuf::from("release-set.json"),
+                source_root: None,
                 artifact_root: None,
                 profile_id: None,
                 environment: None,
@@ -878,6 +898,35 @@ mod tests {
             "rehearsal-core-v1",
         ]));
         assert!(invocation.is_err());
+    }
+
+    #[test]
+    fn release_compatibility_accepts_distinct_source_root() {
+        let invocation = parse_invocation(args(&[
+            "opsctl",
+            "--root",
+            "/policy",
+            "release",
+            "compatibility",
+            "--release-set",
+            "release-set.json",
+            "--source-root",
+            "/historical-source",
+            "--profile",
+            "rehearsal-core-v1",
+            "--environment",
+            "staging",
+            "--evidence-json",
+            "evidence.json",
+        ]));
+        assert!(matches!(
+            invocation,
+            Ok(Invocation::Release {
+                root: Some(policy),
+                source_root: Some(source),
+                ..
+            }) if policy == PathBuf::from("/policy") && source == PathBuf::from("/historical-source")
+        ));
     }
 
     #[test]
