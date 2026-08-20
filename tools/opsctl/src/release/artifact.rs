@@ -435,11 +435,13 @@ mod tests {
     fn rejects_component_manifest_identity_mismatch() -> Result<(), Box<dyn std::error::Error>> {
         let root = temp_dir("manifest-identity")?;
         let mut value = manifest_value(&root)?;
-        value["components"]["runtime_bundle"]["component_manifest_sha256"] =
-            Value::String("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned());
+        value["components"]["runtime_bundle"]["component_manifest_sha256"] = Value::String(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        );
         refresh_release_set_id(&mut value)?;
         let manifest = ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?;
-        let error = verify_artifacts(&manifest, &root).expect_err("manifest identity mismatch must fail");
+        let error =
+            verify_artifacts(&manifest, &root).expect_err("manifest identity mismatch must fail");
         assert!(error.to_string().contains("COMPONENT_MANIFEST_MISMATCH"));
         fs::remove_dir_all(root)?;
         Ok(())
@@ -456,7 +458,8 @@ mod tests {
         refresh_release_set_id(&mut value)?;
         fs::remove_file(root.join("manifests/runtime-bundle-manifest.json"))?;
         let manifest = ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?;
-        let error = verify_artifacts(&manifest, &root).expect_err("partial durable manifest set must fail");
+        let error =
+            verify_artifacts(&manifest, &root).expect_err("partial durable manifest set must fail");
         assert!(error.to_string().contains("COMPONENT_MANIFEST_MISMATCH"));
         fs::remove_dir_all(root)?;
         Ok(())
