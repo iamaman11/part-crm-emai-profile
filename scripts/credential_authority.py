@@ -2,22 +2,20 @@
 """Validate current credential authority without owning lifecycle state.
 
 The current composition root is architecture/credential-authority.json. The
-accepted AR-8B registry remains immutable provenance data. During pre-AR12
-hardening this validator also proves exact semantic/input parity with the still-
-current historical inventory engine before any caller cutover is attempted.
+accepted AR-8B registry remains immutable provenance data. This validator owns
+current credential/security checks, including accepted AR-8D secret-transport
+successor semantics, without importing or executing historical inventory code.
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
-import importlib.util
 import json
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +24,7 @@ EXPECTED_REGISTRY = "architecture/credential-authority-ar8b.json"
 EXPECTED_LIFECYCLE = "architecture/credential-lifecycle.json"
 EXPECTED_PROFILE_SECURITY = "architecture/profile-security.json"
 EXPECTED_OPERATOR_CONTRACT = "architecture/operator-contract.json"
-LEGACY_ENGINE = "scripts/generate-architecture-inventory-engine.py"
+EXPECTED_SECRET_TRANSPORT_SUCCESSOR = "architecture/ar8-d-secret-transport-successor.json"
 
 CANONICAL_ENVIRONMENTS = {"rehearsal", "staging", "production"}
 REQUIRED_FIELDS = {
@@ -70,6 +68,7 @@ class State:
     composition: dict[str, Any]
     registry: dict[str, Any]
     lifecycle: dict[str, Any]
+    successor: dict[str, Any]
     detected: dict[str, set[str]]
 
 
@@ -160,6 +159,18 @@ def validate_lifecycle(value: dict[str, Any]) -> None:
         raise ValueError("credential lifecycle legacy bundle set drifted")
 
 
+def validate_secret_transport_successor(value: dict[str, Any]) -> None:
+    if value.get("schema_version") != 1 or value.get("kind") != "POLICY_TRANSITION" or value.get("status") != "candidate" or value.get("tracking_issue") != 361 or value.get("parent_issue") != 308 or value.get("canonical_inventory") != "architecture/inventory.json":
+        raise ValueError("AR-8D secret-transport successor provenance drifted")
+    successor = value.get("successor")
+    if not isinstance(successor, dict):
+        raise ValueError("AR-8D secret-transport successor metadata is missing")
+    if successor.get("superseded_routine_deploy_bindings") != sorted(LEGACY_BUNDLE_OWNERS):
+        raise ValueError("AR-8D successor legacy bundle set drifted")
+    if successor.get("routine_deploy_secret_value_transport") is not False or successor.get("routine_deploy_secret_mutation") is not False or successor.get("rotation_lifecycle") != "separate_explicit_rotation_authority":
+        raise ValueError("AR-8D successor no longer separates deployment from credential rotation")
+
+
 def tracked_files(root: Path) -> list[Path]:
     result = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=False)
     if result.returncode != 0:
@@ -225,7 +236,7 @@ def entries(value: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def validate_registry(value: dict[str, Any], detected: dict[str, set[str]], lifecycle: dict[str, Any]) -> None:
+def validate_registry(value: dict[str, Any], detected: dict[str, set[str]], lifecycle: dict[str, Any], successor: dict[str, Any] | None = None) -> None:
     if value.get("schema_version") != 1 or value.get("status") != "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY":
         raise ValueError("accepted credential registry identity/version drifted")
     if value.get("parent_issue") != 308 or value.get("implementation_issue") != 309 or value.get("canonical_inventory") != "architecture/inventory.json" or value.get("metadata_only") is not True:
@@ -289,6 +300,7 @@ def validate_registry(value: dict[str, Any], detected: dict[str, set[str]], life
             owners[name] = logical_id
             if binding.get("declaration_only") is True: declaration_only.add(name)
     validate_lifecycle(lifecycle)
+    if successor is not None: validate_secret_transport_successor(successor)
     for name, owner in LEGACY_BUNDLE_OWNERS.items():
         if owners.get(name) != owner: raise ValueError(f"legacy bundle binding {name} lost canonical owner {owner}")
     missing = sorted(set(detected) - set(owners))
@@ -305,50 +317,37 @@ def validate_repository(root: Path = ROOT) -> State:
     registry_path, lifecycle_path = validate_composition(root, composition)
     lifecycle = read_json(root, lifecycle_path)
     validate_lifecycle(lifecycle)
+    successor = read_json(root, EXPECTED_SECRET_TRANSPORT_SUCCESSOR)
+    validate_secret_transport_successor(successor)
     registry = read_json(root, registry_path)
     files = tracked_files(root)
     scan_material(root, files)
     detected = discover(root, files)
-    validate_registry(registry, detected, lifecycle)
-    return State(composition, registry, lifecycle, detected)
+    validate_registry(registry, detected, lifecycle, successor)
+    return State(composition, registry, lifecycle, successor, detected)
 
 
-def load_legacy(root: Path) -> ModuleType:
-    path = root / LEGACY_ENGINE
-    spec = importlib.util.spec_from_file_location("credential_parity_legacy_inventory_engine", path)
-    if spec is None or spec.loader is None: raise ValueError("cannot load historical inventory engine")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def normalized(value: dict[str, set[str]]) -> dict[str, tuple[str, ...]]:
-    return {name: tuple(sorted(paths)) for name, paths in sorted(value.items())}
-
-
-def prove_legacy_parity(root: Path, state: State) -> ModuleType:
-    legacy = load_legacy(root)
-    legacy_registry, legacy_detected = legacy.validate_credential_authority_source()
-    if legacy_registry != state.registry:
-        raise ValueError("neutral validator and historical engine resolve different registry payloads")
-    if normalized(legacy_detected) != normalized(state.detected):
-        raise ValueError("neutral validator and historical engine discover different static bindings")
-    return legacy
-
-
-def negative_self_test(state: State) -> None:
-    def reject(label: str, registry: dict[str, Any], detected: dict[str, set[str]] | None = None, lifecycle: dict[str, Any] | None = None) -> None:
-        try: validate_registry(registry, state.detected if detected is None else detected, state.lifecycle if lifecycle is None else lifecycle)
+def negative_self_test(state: State, root: Path = ROOT) -> None:
+    def reject(label: str, registry: dict[str, Any], detected: dict[str, set[str]] | None = None, lifecycle: dict[str, Any] | None = None, successor: dict[str, Any] | None = None) -> None:
+        try: validate_registry(registry, state.detected if detected is None else detected, state.lifecycle if lifecycle is None else lifecycle, state.successor if successor is None else successor)
         except ValueError: return
         raise AssertionError(f"negative fixture unexpectedly passed: {label}")
     bad_root = copy.deepcopy(state.composition); bad_root["status"] = "historical"
-    try: validate_composition(ROOT, bad_root)
+    try: validate_composition(root, bad_root)
     except ValueError: pass
     else: raise AssertionError("current-authority status fixture unexpectedly passed")
     bad_lifecycle = copy.deepcopy(state.lifecycle); bad_lifecycle["routine_release_secret_transport"] = True
     try: validate_lifecycle(bad_lifecycle)
     except ValueError: pass
     else: raise AssertionError("routine-release secret transport fixture unexpectedly passed")
+    bad_successor = copy.deepcopy(state.successor); bad_successor["successor"]["routine_deploy_secret_mutation"] = True
+    try: validate_secret_transport_successor(bad_successor)
+    except ValueError: pass
+    else: raise AssertionError("routine-deploy secret mutation successor fixture unexpectedly passed")
+    wrong_successor_issue = copy.deepcopy(state.successor); wrong_successor_issue["tracking_issue"] = 999
+    try: validate_secret_transport_successor(wrong_successor_issue)
+    except ValueError: pass
+    else: raise AssertionError("AR-8D successor provenance fixture unexpectedly passed")
     plaintext = copy.deepcopy(state.registry); plaintext["credentials"][0]["value"] = "forbidden"; reject("value field", plaintext)
     material = copy.deepcopy(state.registry); material["credentials"][0]["rotation_recovery_policy"] = "github_pat_" + "A" * 20; reject("secret material", material)
     env_index = next((i for i, item in enumerate(state.registry["credentials"]) if item.get("environment_scope", {}).get("kind") == "environment"), None)
@@ -367,6 +366,7 @@ def negative_self_test(state: State) -> None:
     if live is None: raise AssertionError("self-test requires non-legacy binding")
     stale = copy.deepcopy(state.detected); stale.pop(live); reject("stale registry binding", state.registry, stale)
     legacy = copy.deepcopy(state.lifecycle); legacy["global_invariants"]["legacy_bundle_bindings"] = []; reject("legacy bundle lifecycle", state.registry, lifecycle=legacy)
+    successor_bindings = copy.deepcopy(state.successor); successor_bindings["successor"]["superseded_routine_deploy_bindings"] = []; reject("legacy bundle successor set", state.registry, successor=successor_bindings)
 
 
 def main() -> int:
@@ -375,14 +375,11 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
-    if root != ROOT.resolve(): raise ValueError("legacy parity proof requires repository root")
     state = validate_repository(root)
-    legacy = prove_legacy_parity(root, state)
     if args.self_test:
-        negative_self_test(state)
-        legacy.credential_negative_self_test(state.registry, state.detected)
+        negative_self_test(state, root)
     suffix = " and fail-closed negative fixtures" if args.self_test else ""
-    print(f"Current credential authority validates {len(state.detected)} tracked static bindings{suffix}; legacy parity proven; no lifecycle ownership or mutation authority added.")
+    print(f"Current credential authority validates {len(state.detected)} tracked static bindings{suffix}; AR-8D successor semantics preserved; historical engine execution not required.")
     return 0
 
 
