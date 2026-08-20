@@ -3,6 +3,9 @@ name: Architecture Acceptance Recorder
 on:
   pull_request:
     types: [closed]
+  workflow_run:
+    workflows: [Release Set Build]
+    types: [completed]
 
 permissions:
   actions: read
@@ -286,3 +289,117 @@ jobs:
           git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
           test "$(git rev-list -n 1 "$TAG")" = "$MERGE_SHA"
           node .github/scripts/architecture-acceptance.mjs contract
+
+  record-release-set-evidence:
+    name: Record Release Set Build Evidence
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact successful accepted-main source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify accepted-main lineage
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$SOURCE_SHA" origin/main
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Build and validate immutable Release Set success evidence
+        id: evidence
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          SOURCE_EVENT: ${{ github.event.workflow_run.event }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/post-merge-evidence.mjs contract
+          node .github/scripts/post-merge-evidence.mjs self-test
+          TAG="$(node .github/scripts/post-merge-evidence.mjs record \
+            --source-sha "$SOURCE_SHA" \
+            --workflow-name "$WORKFLOW_NAME" \
+            --event "$SOURCE_EVENT" \
+            --head-branch "$HEAD_BRANCH" \
+            --conclusion "$CONCLUSION" \
+            --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --output release-set-build-evidence.json)"
+          node .github/scripts/post-merge-evidence.mjs validate \
+            --file release-set-build-evidence.json \
+            --source-sha "$SOURCE_SHA" >/dev/null
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve existing evidence tag
+        id: existing
+        env:
+          TAG: ${{ steps.evidence.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+            git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify idempotent existing evidence tag
+        if: steps.existing.outputs.value == 'true'
+        env:
+          TAG: ${{ steps.evidence.outputs.tag }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-list -n 1 "$TAG")" = "$SOURCE_SHA"
+          git for-each-ref "refs/tags/$TAG" --format='%(contents)' > existing-release-set-build-evidence.json
+          node .github/scripts/post-merge-evidence.mjs validate \
+            --file existing-release-set-build-evidence.json \
+            --source-sha "$SOURCE_SHA" >/dev/null
+
+      - name: Create append-only annotated Release Set build evidence tag
+        if: steps.existing.outputs.value != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.evidence.outputs.tag }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('evidence-tag-object.json').write_text(json.dumps({
+              'tag': os.environ['TAG'],
+              'message': Path('release-set-build-evidence.json').read_text(encoding='utf-8').strip(),
+              'object': os.environ['SOURCE_SHA'],
+              'type': 'commit',
+          }), encoding='utf-8')
+          PY
+          export TAG_OBJECT_SHA="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" --input evidence-tag-object.json --jq .sha)"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('evidence-tag-ref.json').write_text(json.dumps({
+              'ref': f"refs/tags/{os.environ['TAG']}",
+              'sha': os.environ['TAG_OBJECT_SHA'],
+          }), encoding='utf-8')
+          PY
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" --input evidence-tag-ref.json >/dev/null
