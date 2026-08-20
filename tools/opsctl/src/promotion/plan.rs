@@ -9,6 +9,7 @@ use std::path::Path;
 
 pub struct PlanRequest<'a> {
     pub root: &'a Path,
+    pub source_root: &'a Path,
     pub target: &'a ReleaseSetManifest,
     pub target_profile_id: &'a str,
     pub environment: &'a str,
@@ -73,6 +74,7 @@ pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelErro
     validate_release_components(request.target, &closure)?;
     let compatibility = evaluate(
         request.root,
+        request.source_root,
         request.target,
         request.compatibility_evidence,
         request.target_profile_id,
