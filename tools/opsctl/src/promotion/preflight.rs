@@ -1,7 +1,7 @@
 use crate::promotion::plan::{PlanRequest, PromotionPlan, build};
 use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::release::compatibility::CompatibilityEvidence;
-use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
+use crate::release::model::{CompatibilityDecision, ReleaseModelError, ReleaseSetManifest};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -87,7 +87,10 @@ fn preflight_from_plan(
     let mut warnings = plan.warnings.clone();
     let mut required_steps = plan.compatibility.required_steps.clone();
 
-    let missing_resources = difference(&plan.closure.required_resources, &request.snapshot.logical_resources);
+    let missing_resources = difference(
+        &plan.closure.required_resources,
+        &request.snapshot.logical_resources,
+    );
     let missing_external_resources = missing_resources
         .iter()
         .filter(|resource| !DEPLOY_OWNED_RESOURCES.contains(&resource.as_str()))
@@ -98,8 +101,14 @@ fn preflight_from_plan(
         .filter(|resource| DEPLOY_OWNED_RESOURCES.contains(&resource.as_str()))
         .cloned()
         .collect::<Vec<_>>();
-    let missing_bindings = difference(&plan.closure.required_bindings, &request.snapshot.logical_bindings);
-    let missing_credentials = difference(&plan.closure.required_credentials, &request.snapshot.logical_credentials);
+    let missing_bindings = difference(
+        &plan.closure.required_bindings,
+        &request.snapshot.logical_bindings,
+    );
+    let missing_credentials = difference(
+        &plan.closure.required_credentials,
+        &request.snapshot.logical_credentials,
+    );
     if !missing_external_resources.is_empty() {
         blockers.push("REQUIRED_RESOURCES_NOT_READY".to_owned());
         required_steps.push(format!(
@@ -115,7 +124,10 @@ fn preflight_from_plan(
     }
     if !missing_bindings.is_empty() {
         blockers.push("REQUIRED_BINDINGS_NOT_READY".to_owned());
-        required_steps.push(format!("prepare required bindings: {}", missing_bindings.join(",")));
+        required_steps.push(format!(
+            "prepare required bindings: {}",
+            missing_bindings.join(",")
+        ));
     }
     if !missing_credentials.is_empty() {
         blockers.push("REQUIRED_CREDENTIAL_METADATA_NOT_READY".to_owned());
@@ -127,21 +139,25 @@ fn preflight_from_plan(
 
     let rollback_compatibility = if request.snapshot.release_set_id.is_some() {
         match (request.current_release, request.known_good_release) {
-            (Some(current), Some(known_good)) => {
+            (Some(_), Some(known_good)) => {
                 let result = evaluate_rollback_candidate(
                     known_good,
-                    current,
                     request.snapshot,
                     request.target_profile_id,
                     plan.closure.required_resources.contains("resolver_d1"),
                     request.environment == "production",
                 );
-                match result.as_str() {
-                    "COMPATIBLE" => {}
-                    "INCOMPATIBLE" => blockers.push("ROLLBACK_INCOMPATIBLE".to_owned()),
-                    _ => blockers.push("ROLLBACK_COMPATIBILITY_UNKNOWN".to_owned()),
+                match result {
+                    CompatibilityDecision::Compatible => "COMPATIBLE".to_owned(),
+                    CompatibilityDecision::Incompatible => {
+                        blockers.push("ROLLBACK_INCOMPATIBLE".to_owned());
+                        "INCOMPATIBLE".to_owned()
+                    }
+                    CompatibilityDecision::Unknown => {
+                        blockers.push("ROLLBACK_COMPATIBILITY_UNKNOWN".to_owned());
+                        "UNKNOWN".to_owned()
+                    }
                 }
-                result
             }
             (None, _) => {
                 blockers.push("PROVIDER_STATE_UNKNOWN".to_owned());
@@ -160,12 +176,15 @@ fn preflight_from_plan(
         "NOT_APPLICABLE".to_owned()
     };
 
-    if request.snapshot.catalog_ledger_sha256.is_none() || request.snapshot.catalog_schema_revision.is_none() {
+    if request.snapshot.catalog_ledger_sha256.is_none()
+        || request.snapshot.catalog_schema_revision.is_none()
+    {
         blockers.push("PROVIDER_STATE_UNKNOWN".to_owned());
         required_steps.push("collect Catalog D1 ledger + schema revision evidence".to_owned());
     }
     if plan.closure.required_resources.contains("resolver_d1")
-        && (request.snapshot.resolver_ledger_sha256.is_none() || request.snapshot.resolver_schema_revision.is_none())
+        && (request.snapshot.resolver_ledger_sha256.is_none()
+            || request.snapshot.resolver_schema_revision.is_none())
     {
         blockers.push("PROVIDER_STATE_UNKNOWN".to_owned());
         required_steps.push("collect Resolver D1 ledger + schema revision evidence".to_owned());
@@ -173,7 +192,8 @@ fn preflight_from_plan(
 
     if request.environment == "production" {
         blockers.push("PRODUCTION_EXECUTION_BLOCKED_DURING_AR11".to_owned());
-        required_steps.push("AR-17 authorization and PC-1 workflow authority are required".to_owned());
+        required_steps
+            .push("AR-17 authorization and PC-1 workflow authority are required".to_owned());
     }
     if plan.decision == "NO_CHANGE" {
         warnings.push("target already converged; provider mutation is unnecessary".to_owned());
@@ -196,54 +216,81 @@ fn preflight_from_plan(
 }
 
 /// Evaluate whether an immutable previously verified Release Set can run against the
-/// *currently observed* deployed state. Equality is intentionally strict for protocol/
-/// runtime identities until an explicit compatibility window exists; UNKNOWN blocks.
+/// actually observed current deployment state. Missing required observation is UNKNOWN
+/// and therefore blocks mutation. Exact equality is intentionally strict for protocol and
+/// runtime dimensions until an explicit compatibility window is owned by a later authority.
 fn evaluate_rollback_candidate(
     known_good: &ReleaseSetManifest,
-    current: &ReleaseSetManifest,
     snapshot: &DeploymentSnapshot,
     profile_id: &str,
     resolver_required: bool,
     windows_delivery_required: bool,
-) -> String {
-    if !known_good.capability_profile_compatibility.iter().any(|value| value == profile_id) {
-        return "INCOMPATIBLE".to_owned();
+) -> CompatibilityDecision {
+    if !known_good
+        .capability_profile_compatibility
+        .iter()
+        .any(|value| value == profile_id)
+    {
+        return CompatibilityDecision::Incompatible;
     }
 
     let Some(catalog_revision) = snapshot.catalog_schema_revision.as_deref() else {
-        return "UNKNOWN".to_owned();
+        return CompatibilityDecision::Unknown;
     };
     if !known_good.schemas.catalog.supports(catalog_revision) {
-        return "INCOMPATIBLE".to_owned();
+        return CompatibilityDecision::Incompatible;
     }
+
     if resolver_required {
         let Some(resolver_revision) = snapshot.resolver_schema_revision.as_deref() else {
-            return "UNKNOWN".to_owned();
+            return CompatibilityDecision::Unknown;
         };
         if !known_good.schemas.resolver.supports(resolver_revision) {
-            return "INCOMPATIBLE".to_owned();
+            return CompatibilityDecision::Incompatible;
         }
-        if known_good.protocols.resolver_protocol != current.protocols.resolver_protocol {
-            return "INCOMPATIBLE".to_owned();
+        let Some(resolver_protocol) = snapshot.resolver_protocol.as_deref() else {
+            return CompatibilityDecision::Unknown;
+        };
+        if known_good.protocols.resolver_protocol != resolver_protocol {
+            return CompatibilityDecision::Incompatible;
         }
     }
 
-    if known_good.contracts.sha256 != current.contracts.sha256
-        || known_good.protocols.camouhost_ipc_version != current.protocols.camouhost_ipc_version
-        || known_good.protocols.profile_bridge_protocol_version != current.protocols.profile_bridge_protocol_version
-        || known_good.runtime_compatibility.runtime_role != current.runtime_compatibility.runtime_role
-        || known_good.runtime_compatibility.profile_format != current.runtime_compatibility.profile_format
-        || known_good.runtime_compatibility.browser_identity_policy != current.runtime_compatibility.browser_identity_policy
+    let (
+        Some(contracts_sha256),
+        Some(camouhost_ipc_version),
+        Some(profile_bridge_protocol_version),
+        Some(runtime_role),
+        Some(profile_format),
+        Some(browser_identity_policy),
+    ) = (
+        snapshot.contracts_sha256.as_deref(),
+        snapshot.camouhost_ipc_version,
+        snapshot.profile_bridge_protocol_version,
+        snapshot.runtime_role.as_deref(),
+        snapshot.profile_format.as_deref(),
+        snapshot.browser_identity_policy.as_deref(),
+    )
+    else {
+        return CompatibilityDecision::Unknown;
+    };
+
+    if known_good.contracts.sha256 != contracts_sha256
+        || known_good.protocols.camouhost_ipc_version != camouhost_ipc_version
+        || known_good.protocols.profile_bridge_protocol_version != profile_bridge_protocol_version
+        || known_good.runtime_compatibility.runtime_role != runtime_role
+        || known_good.runtime_compatibility.profile_format != profile_format
+        || known_good.runtime_compatibility.browser_identity_policy != browser_identity_policy
     {
-        return "INCOMPATIBLE".to_owned();
+        return CompatibilityDecision::Incompatible;
     }
 
     if windows_delivery_required {
         // AR-15 owns signed Windows delivery compatibility. AR-11 must never invent it.
-        return "UNKNOWN".to_owned();
+        return CompatibilityDecision::Unknown;
     }
 
-    "COMPATIBLE".to_owned()
+    CompatibilityDecision::Compatible
 }
 
 fn difference(left: &BTreeSet<String>, right: &BTreeSet<String>) -> Vec<String> {
@@ -255,7 +302,9 @@ mod tests {
     use super::evaluate_rollback_candidate;
     use crate::promotion::snapshot::DeploymentSnapshot;
     use crate::release::digest::{canonical_json, sha256_hex};
-    use crate::release::model::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
+    use crate::release::model::{
+        CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseSetManifest,
+    };
     use serde_json::{Value, json};
     use std::collections::BTreeSet;
 
@@ -264,13 +313,23 @@ mod tests {
     const REPO: &str = "iamaman11/part-crm-emai-profile";
 
     fn release() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
-        let accepted = sha256_hex(canonical_json(&json!({"authority":"accepted-main","commit_sha":GIT,"repository":REPO}))?.as_bytes());
+        let accepted = sha256_hex(
+            canonical_json(
+                &json!({"authority":"accepted-main","commit_sha":GIT,"repository":REPO}),
+            )?
+            .as_bytes(),
+        );
         let schema = |component: &str| json!({"database_component":component,"target_schema_revision":"0001_initial.sql","supported_schema_min":"0001_initial.sql","supported_schema_max":"0001_initial.sql","migration_history_digest":SHA,"compatibility_policy_digest":SHA});
-        let component = |id: &str, path: &str, manifest: &str| json!({"release_id":id,"source_commit_sha":GIT,"artifact_path":path,"artifact_sha256":SHA,"artifact_size_bytes":1,"component_manifest_path":manifest,"component_manifest_sha256":SHA});
+        let component = |id: &str, path: &str| json!({"release_id":id,"source_commit_sha":GIT,"artifact_path":path,"artifact_sha256":SHA,"artifact_size_bytes":1,"component_manifest_sha256":SHA});
         let mut value = json!({
-            "schema_version":2,"release_set_id":format!("{RELEASE_SET_ID_PREFIX}{SHA}"),
+            "schema_version":2,
+            "release_set_id":format!("{RELEASE_SET_ID_PREFIX}{SHA}"),
             "source":{"repository":REPO,"commit_sha":GIT,"accepted_main":true,"accepted_main_evidence_sha256":accepted},
-            "components":{"control_plane":component("cp","components/cp.tar","cp.json"),"secret_resolver":component("rs","components/rs.tar","rs.json"),"runtime_bundle":component("rt","components/rt.tar","rt.json")},
+            "components":{
+                "control_plane":component("cp","components/control-plane.tar"),
+                "secret_resolver":component("rs","components/secret-resolver.tar"),
+                "runtime_bundle":component("rt","components/runtime-bundle.tar")
+            },
             "contracts":{"files":[{"path":"openapi/v1/openapi.json","sha256":SHA,"size_bytes":1}],"sha256":SHA},
             "protocols":{"public_api_contract_sha256":SHA,"camouhost_ipc_version":1,"profile_bridge_protocol_version":1,"resolver_protocol":"mailbox-secret-resolver-v1"},
             "schemas":{"d1_evolution_authority_sha256":SHA,"catalog":schema("catalog"),"resolver":schema("resolver")},
@@ -278,14 +337,23 @@ mod tests {
             "capability_profile_compatibility":["rehearsal-core-v1"],
             "build_provenance":{"cargo_lock_sha256":SHA,"rust_toolchain_sha256":SHA,"frontend_lock_sha256":SHA,"release_architecture_sha256":SHA},
             "artifact_inventory":[
-                {"path":"components/cp.tar","sha256":SHA,"size_bytes":1,"kind":"component"},{"path":"components/rs.tar","sha256":SHA,"size_bytes":1,"kind":"component"},{"path":"components/rt.tar","sha256":SHA,"size_bytes":1,"kind":"component"},
-                {"path":"cp.json","sha256":SHA,"size_bytes":1,"kind":"manifest"},{"path":"rs.json","sha256":SHA,"size_bytes":1,"kind":"manifest"},{"path":"rt.json","sha256":SHA,"size_bytes":1,"kind":"manifest"}
+                {"path":"components/control-plane.tar","sha256":SHA,"size_bytes":1,"kind":"component"},
+                {"path":"components/secret-resolver.tar","sha256":SHA,"size_bytes":1,"kind":"component"},
+                {"path":"components/runtime-bundle.tar","sha256":SHA,"size_bytes":1,"kind":"component"}
             ]
         });
         let mut identity = value.clone();
-        identity.as_object_mut().unwrap().remove("release_set_id");
-        value["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{}", sha256_hex(canonical_json(&identity)?.as_bytes())));
-        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?)
+        identity
+            .as_object_mut()
+            .expect("release fixture root")
+            .remove("release_set_id");
+        value["release_set_id"] = Value::String(format!(
+            "{RELEASE_SET_ID_PREFIX}{}",
+            sha256_hex(canonical_json(&identity)?.as_bytes())
+        ));
+        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(
+            &value,
+        )?)?)
     }
 
     fn snapshot() -> DeploymentSnapshot {
@@ -300,26 +368,147 @@ mod tests {
             logical_credentials: BTreeSet::new(),
             catalog_ledger_sha256: Some(SHA.to_owned()),
             catalog_schema_revision: Some("0001_initial.sql".to_owned()),
-            resolver_ledger_sha256: None,
-            resolver_schema_revision: None,
+            resolver_ledger_sha256: Some(SHA.to_owned()),
+            resolver_schema_revision: Some("0001_initial.sql".to_owned()),
+            contracts_sha256: Some(SHA.to_owned()),
+            resolver_protocol: Some("mailbox-secret-resolver-v1".to_owned()),
+            camouhost_ipc_version: Some(1),
+            profile_bridge_protocol_version: Some(1),
+            runtime_role: Some("real_camoufox".to_owned()),
+            profile_format: Some("v1".to_owned()),
+            browser_identity_policy: Some("v1".to_owned()),
         }
     }
 
     #[test]
     fn compatible_known_good_is_compatible() -> Result<(), Box<dyn std::error::Error>> {
         let known_good = release()?;
-        let current = release()?;
-        assert_eq!(evaluate_rollback_candidate(&known_good, &current, &snapshot(), "rehearsal-core-v1", false, false), "COMPATIBLE");
+        assert_eq!(
+            evaluate_rollback_candidate(
+                &known_good,
+                &snapshot(),
+                "rehearsal-core-v1",
+                true,
+                false
+            ),
+            CompatibilityDecision::Compatible
+        );
         Ok(())
     }
 
     #[test]
-    fn unknown_schema_revision_blocks_rollback() -> Result<(), Box<dyn std::error::Error>> {
+    fn unsupported_catalog_schema_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
         let known_good = release()?;
-        let current = release()?;
         let mut state = snapshot();
-        state.catalog_schema_revision = None;
-        assert_eq!(evaluate_rollback_candidate(&known_good, &current, &state, "rehearsal-core-v1", false, false), "UNKNOWN");
+        state.catalog_schema_revision = Some("9999_future.sql".to_owned());
+        assert_eq!(
+            evaluate_rollback_candidate(
+                &known_good,
+                &state,
+                "rehearsal-core-v1",
+                false,
+                false
+            ),
+            CompatibilityDecision::Incompatible
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_drift_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let mut state = snapshot();
+        state.camouhost_ipc_version = Some(2);
+        assert_eq!(
+            evaluate_rollback_candidate(
+                &known_good,
+                &state,
+                "rehearsal-core-v1",
+                false,
+                false
+            ),
+            CompatibilityDecision::Incompatible
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_drift_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let mut state = snapshot();
+        state.runtime_role = Some("fixture_runtime".to_owned());
+        assert_eq!(
+            evaluate_rollback_candidate(
+                &known_good,
+                &state,
+                "rehearsal-core-v1",
+                false,
+                false
+            ),
+            CompatibilityDecision::Incompatible
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_observation_is_unknown() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let mut state = snapshot();
+        state.contracts_sha256 = None;
+        assert_eq!(
+            evaluate_rollback_candidate(
+                &known_good,
+                &state,
+                "rehearsal-core-v1",
+                false,
+                false
+            ),
+            CompatibilityDecision::Unknown
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn wrong_profile_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        assert_eq!(
+            evaluate_rollback_candidate(&known_good, &snapshot(), "unknown-profile", false, false),
+            CompatibilityDecision::Incompatible
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resolver_mismatch_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let mut state = snapshot();
+        state.resolver_protocol = Some("resolver-v2".to_owned());
+        assert_eq!(
+            evaluate_rollback_candidate(
+                &known_good,
+                &state,
+                "rehearsal-core-v1",
+                true,
+                false
+            ),
+            CompatibilityDecision::Incompatible
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_windows_delivery_blocks() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        assert_eq!(
+            evaluate_rollback_candidate(
+                &known_good,
+                &snapshot(),
+                "rehearsal-core-v1",
+                false,
+                true
+            ),
+            CompatibilityDecision::Unknown
+        );
         Ok(())
     }
 }
