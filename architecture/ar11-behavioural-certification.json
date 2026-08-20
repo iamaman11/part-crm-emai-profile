@@ -1,0 +1,319 @@
+{
+  "schema_version": 1,
+  "kind": "AR11_BEHAVIOURAL_CERTIFICATION_MATRIX",
+  "cases": [
+    {
+      "number": 1,
+      "case_id": "AR11-N-01",
+      "requirement": "Artifact/component from another source SHA is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/tests/ar11_release_negative.rs","identifier":"artifact_from_another_sha_is_rejected"}
+      ]
+    },
+    {
+      "number": 2,
+      "case_id": "AR11-N-02",
+      "requirement": "Changed component digest is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/tests/ar11_release_negative.rs","identifier":"changed_component_digest_is_rejected"}
+      ]
+    },
+    {
+      "number": 3,
+      "case_id": "AR11-N-03",
+      "requirement": "Release Set content-address digest mismatch is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/tests/ar11_release_negative.rs","identifier":"release_set_digest_mismatch_is_rejected"}
+      ]
+    },
+    {
+      "number": 4,
+      "case_id": "AR11-N-04",
+      "requirement": "Missing artifact is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/tests/ar11_release_negative.rs","identifier":"missing_artifact_is_rejected"}
+      ]
+    },
+    {
+      "number": 5,
+      "case_id": "AR11-N-05",
+      "requirement": "Duplicate artifact/component manifest is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/tests/ar11_release_negative.rs","identifier":"duplicate_artifact_is_rejected"},
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/release/component_manifest.rs","identifier":"duplicate_tar_manifest_is_rejected"}
+      ]
+    },
+    {
+      "number": 6,
+      "case_id": "AR11-N-06",
+      "requirement": "Unknown component/archive member is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/tests/ar11_release_negative.rs","identifier":"unknown_component_is_rejected"},
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/release/component_manifest.rs","identifier":"unknown_zip_member_is_rejected"}
+      ]
+    },
+    {
+      "number": 7,
+      "case_id": "AR11-N-07",
+      "requirement": "Contract digest mismatch is rejected by canonical static compatibility.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/tests/ar11_release_negative.rs","identifier":"contract_digest_mismatch_is_rejected_by_static_compatibility"}
+      ]
+    },
+    {
+      "number": 8,
+      "case_id": "AR11-N-08",
+      "requirement": "Catalog schema incompatibility is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"unsupported_catalog_schema_is_incompatible"}
+      ]
+    },
+    {
+      "number": 9,
+      "case_id": "AR11-N-09",
+      "requirement": "Resolver schema incompatibility is rejected when resolver state is required.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"unsupported_resolver_schema_is_incompatible"}
+      ]
+    },
+    {
+      "number": 10,
+      "case_id": "AR11-N-10",
+      "requirement": "Profile Bridge protocol incompatibility is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"profile_bridge_protocol_drift_is_incompatible"}
+      ]
+    },
+    {
+      "number": 11,
+      "case_id": "AR11-N-11",
+      "requirement": "Runtime bundle/runtime role incompatibility is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"runtime_role_drift_is_incompatible"}
+      ]
+    },
+    {
+      "number": 12,
+      "case_id": "AR11-N-12",
+      "requirement": "Capability dependency missing is rejected.",
+      "proofs": [
+        {"proof_kind":"node_negative_fixture","path":".github/scripts/release-architecture-ar11.mjs","identifier":"unknown dependency negative fixture was accepted"}
+      ]
+    },
+    {
+      "number": 13,
+      "case_id": "AR11-N-13",
+      "requirement": "Disabled HTTP capability is not exposed by the active staging profile.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"apps/control-plane-worker/src/capability_gate.rs","identifier":"staging_core_excludes_mail"},
+        {"proof_kind":"rust_test","path":"apps/control-plane-worker/src/capability_gate.rs","identifier":"route_activation_is_finer_than_application_owner"}
+      ]
+    },
+    {
+      "number": 14,
+      "case_id": "AR11-N-14",
+      "requirement": "Disabled mailbox-job capability cannot bypass backend enqueue/dispatch gating.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"apps/control-plane-worker/src/capability_gate.rs","identifier":"staging_core_excludes_mail"},
+        {"proof_kind":"node_gate","path":".github/scripts/release-architecture-ar11.mjs","identifier":"ActivationUnit::MailboxJobs"}
+      ]
+    },
+    {
+      "number": 15,
+      "case_id": "AR11-N-15",
+      "requirement": "Disabled scheduled mailbox side effects remain behind the canonical activation surface.",
+      "proofs": [
+        {"proof_kind":"node_gate","path":".github/scripts/release-architecture-ar11.mjs","identifier":"schedule.mailbox_jobs.dispatcher"},
+        {"proof_kind":"rust_test","path":"apps/control-plane-worker/src/capability_gate.rs","identifier":"staging_core_excludes_mail"}
+      ]
+    },
+    {
+      "number": 16,
+      "case_id": "AR11-N-16",
+      "requirement": "Disabled outbound mail cannot send/replay through the active core profile.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"apps/control-plane-worker/src/capability_gate.rs","identifier":"route_activation_is_finer_than_application_owner"},
+        {"proof_kind":"rust_test","path":"apps/control-plane-worker/src/capability_gate.rs","identifier":"staging_core_excludes_mail"},
+        {"proof_kind":"node_gate","path":".github/scripts/frontend-capability-ar11.mjs","identifier":"Client Mail send isolation marker missing"}
+      ]
+    },
+    {
+      "number": 17,
+      "case_id": "AR11-N-17",
+      "requirement": "Manipulated frontend state cannot bypass backend capability enforcement.",
+      "proofs": [
+        {"proof_kind":"node_gate","path":".github/scripts/frontend-capability-ar11.mjs","identifier":"backend session projection or pre-dispatch security gate is missing"}
+      ]
+    },
+    {
+      "number": 18,
+      "case_id": "AR11-N-18",
+      "requirement": "Unknown Capability Profile is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/tests/ar11_release_negative.rs","identifier":"unknown_capability_profile_is_rejected_by_static_compatibility"}
+      ]
+    },
+    {
+      "number": 19,
+      "case_id": "AR11-N-19",
+      "requirement": "Capability Profile digest mismatch fails closed.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"apps/control-plane-worker/src/capability_gate.rs","identifier":"wrong_digest_fails_closed"}
+      ]
+    },
+    {
+      "number": 20,
+      "case_id": "AR11-N-20",
+      "requirement": "Capability Profile not allowed in an environment is rejected.",
+      "proofs": [
+        {"proof_kind":"node_gate","path":".github/scripts/release-architecture-ar11.mjs","identifier":"not allowed in ${environment}"}
+      ]
+    },
+    {
+      "number": 21,
+      "case_id": "AR11-N-21",
+      "requirement": "Production promotion before authorization is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/tests/promotion_ar11.rs","identifier":"production_remains_blocked_even_with_compatible_saved_evidence"},
+        {"proof_kind":"rust_test","path":"apps/control-plane-worker/src/capability_gate.rs","identifier":"production_profile_is_blocked_before_ar17_pc1_authorization"}
+      ]
+    },
+    {
+      "number": 22,
+      "case_id": "AR11-N-22",
+      "requirement": "Release from non-accepted protected-main source is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/release/source.rs","identifier":"non_ancestor_merge_base_is_rejected"},
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/release/source.rs","identifier":"publication_repository_and_protection_bindings_fail_closed"}
+      ]
+    },
+    {
+      "number": 23,
+      "case_id": "AR11-N-23",
+      "requirement": "Any rebuild-on-promotion path is rejected by CI policy.",
+      "proofs": [
+        {"proof_kind":"node_negative_fixture","path":".github/scripts/release-operational-ar11.mjs","identifier":"promotion rebuild fixture unexpectedly passed"}
+      ]
+    },
+    {
+      "number": 24,
+      "case_id": "AR11-N-24",
+      "requirement": "Candidate/preflight Release Set bytes must equal the exact mutation download.",
+      "proofs": [
+        {"proof_kind":"node_gate","path":".github/scripts/release-operational-ar11.mjs","identifier":"cmp --silent \"$asset_root/release-set.json\" \"$preflight_root/release-set.json\""}
+      ]
+    },
+    {
+      "number": 25,
+      "case_id": "AR11-N-25",
+      "requirement": "Stale promotion plan/current-state expectation is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/tests/promotion_ar11.rs","identifier":"stale_expected_current_is_rejected_before_plan_creation"}
+      ]
+    },
+    {
+      "number": 26,
+      "case_id": "AR11-N-26",
+      "requirement": "Parallel same-environment promotion is serialized by one canonical concurrency group.",
+      "proofs": [
+        {"proof_kind":"workflow_gate","path":".github/workflows/release-set-promotion.yml","identifier":"group: release-set-promotion-staging"},
+        {"proof_kind":"workflow_gate","path":".github/workflows/release-set-promotion.yml","identifier":"cancel-in-progress: false"}
+      ]
+    },
+    {
+      "number": 27,
+      "case_id": "AR11-N-27",
+      "requirement": "Unknown required D1 state fails closed.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"missing_catalog_schema_is_unknown"},
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"missing_resolver_schema_is_unknown_when_required"}
+      ]
+    },
+    {
+      "number": 28,
+      "case_id": "AR11-N-28",
+      "requirement": "Missing or incompatible rollback known-good is a pre-mutation blocker.",
+      "proofs": [
+        {"proof_kind":"typed_invariant","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"ROLLBACK_CANDIDATE_UNAVAILABLE"},
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"unsupported_catalog_schema_is_incompatible"},
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"missing_observation_is_unknown"}
+      ]
+    },
+    {
+      "number": 29,
+      "case_id": "AR11-N-29",
+      "requirement": "Retired Python D3 operational authority becoming callable fails CI.",
+      "proofs": [
+        {"proof_kind":"absent_paths_gate","path":".github/scripts/release-operational-ar11.mjs","identifier":"legacy D3 operational authority must be retired after Rust cutover"}
+      ]
+    },
+    {
+      "number": 30,
+      "case_id": "AR11-N-30",
+      "requirement": "opsctl remains offline/local and cannot gain network/provider/secret/process mutation authority.",
+      "proofs": [
+        {"proof_kind":"opsctl_offline_scan","path":"tools/opsctl/Cargo.toml","identifier":"opsctl_offline_boundary_scan"}
+      ]
+    },
+    {
+      "number": 31,
+      "case_id": "AR11-N-31",
+      "requirement": "Older accepted Release Set remains allowed after protected main advances when ancestry is valid.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/release/source.rs","identifier":"historical_ancestor_remains_accepted_after_main_advances"}
+      ]
+    },
+    {
+      "number": 32,
+      "case_id": "AR11-N-32",
+      "requirement": "Old Release Set outside protected-main ancestry is rejected.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/release/source.rs","identifier":"non_ancestor_merge_base_is_rejected"}
+      ]
+    },
+    {
+      "number": 33,
+      "case_id": "AR11-N-33",
+      "requirement": "Component manifest archive ambiguity/tampering fails closed.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/release/component_manifest.rs","identifier":"duplicate_tar_manifest_is_rejected"},
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/release/component_manifest.rs","identifier":"unsafe_tar_member_is_rejected"},
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/release/component_manifest.rs","identifier":"empty_zip_cannot_fake_manifest"}
+      ]
+    },
+    {
+      "number": 34,
+      "case_id": "AR11-N-34",
+      "requirement": "Known-good profile membership cannot override runtime/protocol incompatibility.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"runtime_role_drift_is_incompatible"},
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"camouhost_protocol_drift_is_incompatible"}
+      ]
+    },
+    {
+      "number": 35,
+      "case_id": "AR11-N-35",
+      "requirement": "Unknown required rollback evidence blocks rather than guessing compatibility.",
+      "proofs": [
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"missing_observation_is_unknown"},
+        {"proof_kind":"rust_test","path":"tools/opsctl/src/promotion/preflight.rs","identifier":"unknown_windows_delivery_blocks"}
+      ]
+    },
+    {
+      "number": 36,
+      "case_id": "AR11-N-36",
+      "requirement": "Provider state change after preflight is rejected by immediate pre-mutation expected-current fence.",
+      "proofs": [
+        {"proof_kind":"node_negative_fixture","path":".github/scripts/release-operational-ar11.mjs","identifier":"mutation stale-fence bypass fixture unexpectedly passed"}
+      ]
+    },
+    {
+      "number": 37,
+      "case_id": "AR11-N-37",
+      "requirement": "Deploy-capable credential referenced before the executor proof boundary fails CI.",
+      "proofs": [
+        {"proof_kind":"node_negative_fixture","path":".github/scripts/release-operational-ar11.mjs","identifier":"early deploy credential fixture unexpectedly passed"}
+      ]
+    }
+  ]
+}
