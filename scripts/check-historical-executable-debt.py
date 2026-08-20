@@ -203,8 +203,8 @@ def validate_entries(payload: dict[str, Any], paths: list[str]) -> list[dict[str
             fail(f"required recovery/rollback authority is missing: {target}")
 
         callers, absence = discover_references(target, executable)
-        if classification == "TRANSITION_PROVENANCE_ONLY" and callers:
-            fail(f"provenance-only path has current executable callers: {target}: {callers}")
+        if classification in {"TRANSITION_PROVENANCE_ONLY", "DEAD"} and callers:
+            fail(f"retired path has current executable callers: {target}: {callers}")
         if classification in {"CURRENT_INVARIANT", "UPGRADE_ROLLBACK_REQUIRED"}:
             if not callers and not raw["standalone_entrypoint"]:
                 fail(f"current/recovery path has no executable caller and is not standalone: {target}")
