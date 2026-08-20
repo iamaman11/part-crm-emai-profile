@@ -279,7 +279,9 @@ mod tests {
 
     fn manifest(root: &Path) -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
         let value = manifest_value(root)?;
-        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?)
+        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(
+            &value,
+        )?)?)
     }
 
     #[test]
@@ -308,8 +310,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_mismatched_colocated_release_set_control_document(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_mismatched_colocated_release_set_control_document()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = temp_dir("control-mismatch")?;
         let manifest = manifest(&root)?;
         fs::write(root.join("release-set.json"), "{}\n")?;
