@@ -1,14 +1,27 @@
+use crate::release::authority::ReleaseArchitecture;
 use crate::release::digest::{canonical_json, sha256_hex};
 use crate::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
 use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-/// Evaluate compatibility dimensions that are completely determined by the immutable
-/// Release Set and the exact source checkout. Release-critical repository paths are
-/// resolved exclusively from the canonical AR-11 release input topology.
+pub const VERIFIED_PROVENANCE_DIMENSIONS: [&str; 8] = [
+    "contracts",
+    "protocols",
+    "schemas",
+    "runtime_compatibility",
+    "cargo_lock",
+    "rust_toolchain",
+    "frontend_lock",
+    "release_architecture",
+];
+
+/// Evaluate release-critical identities that are fully determined by the immutable
+/// Release Set and the exact source checkout. Every field accepted by the v2 Release
+/// Set model is either verified here/artifact verification or is explicit external
+/// provider evidence handled by release compatibility.
 pub fn evaluate(
     root: &Path,
     manifest: &ReleaseSetManifest,
@@ -16,22 +29,27 @@ pub fn evaluate(
 ) -> Result<Vec<String>, ReleaseModelError> {
     let topology = ReleaseInputTopology::load(root)?;
     let resolved = topology.resolve(root)?;
-
     let mut blockers = Vec::new();
-    if !contracts_match(&resolved, &manifest.contracts)? {
+
+    if !contracts_match(&resolved, manifest)? {
         blockers.push("PROTOCOL_INCOMPATIBLE:contracts".to_owned());
     }
-    if !protocols_match(
-        &resolved,
-        &manifest.contracts,
-        &manifest.protocols,
-        mailbox_admin,
-    )? {
+    if !protocols_match(&resolved, manifest, mailbox_admin)? {
         blockers.push("PROTOCOL_INCOMPATIBLE:runtime_protocols".to_owned());
     }
-    if !runtime_matches(&resolved, &manifest.runtime_compatibility)? {
+    if !schemas_match(&resolved, manifest)? {
+        blockers.push("SCHEMA_IDENTITY_MISMATCH".to_owned());
+    }
+    if !runtime_matches(&resolved, manifest)? {
         blockers.push("RUNTIME_INCOMPATIBLE:runtime_identity".to_owned());
     }
+    if !build_provenance_matches(&resolved, manifest)? {
+        blockers.push("PROVENANCE_IDENTITY_MISMATCH".to_owned());
+    }
+    if !profiles_match(root, manifest)? {
+        blockers.push("PROFILE_NOT_AUTHORIZED".to_owned());
+    }
+
     blockers.sort();
     blockers.dedup();
     Ok(blockers)
@@ -39,7 +57,7 @@ pub fn evaluate(
 
 fn contracts_match(
     resolved: &[ResolvedReleaseInput],
-    value: &Value,
+    manifest: &ReleaseSetManifest,
 ) -> Result<bool, ReleaseModelError> {
     let expected = resolved
         .iter()
@@ -51,26 +69,17 @@ fn contracts_match(
             "canonical release input topology has no release_set.contracts inputs",
         ));
     }
-
-    let contracts = object(value, "contracts")?;
-    let files = array(required(contracts, "files")?, "contracts.files")?;
-    if files.len() != expected.len() {
+    if manifest.contracts.files.len() != expected.len() {
         return Ok(false);
     }
-
-    for value in files {
-        let entry = object(value, "contracts.files entry")?;
-        let path = required_string(entry, "path")?;
-        let Some(expected_entry) = expected.get(path.as_str()) else {
+    for entry in &manifest.contracts.files {
+        let Some(expected_entry) = expected.get(entry.path.as_str()) else {
             return Ok(false);
         };
-        if required_string(entry, "sha256")? != expected_entry.sha256
-            || required_u64(entry, "size_bytes")? != expected_entry.size_bytes
-        {
+        if entry.sha256 != expected_entry.sha256 || entry.size_bytes != expected_entry.size_bytes {
             return Ok(false);
         }
     }
-
     let canonical_entries = expected
         .values()
         .map(|entry| {
@@ -81,60 +90,135 @@ fn contracts_match(
             })
         })
         .collect::<Vec<_>>();
-    let canonical =
-        canonical_json(&Value::Array(canonical_entries)).map_err(ReleaseModelError::new)?;
-    let expected_digest = sha256_hex(canonical.as_bytes());
-    Ok(required_string(contracts, "sha256")? == expected_digest)
+    let canonical = canonical_json(&Value::Array(canonical_entries)).map_err(ReleaseModelError::new)?;
+    Ok(manifest.contracts.sha256 == sha256_hex(canonical.as_bytes()))
 }
 
 fn protocols_match(
     resolved: &[ResolvedReleaseInput],
-    contracts: &Value,
-    value: &Value,
+    manifest: &ReleaseSetManifest,
     mailbox_admin: bool,
 ) -> Result<bool, ReleaseModelError> {
-    let protocols = object(value, "protocols")?;
-    let contract_object = object(contracts, "contracts")?;
-    if required_string(protocols, "public_api_contract_sha256")?
-        != required_string(contract_object, "sha256")?
-    {
+    if manifest.protocols.public_api_contract_sha256 != manifest.contracts.sha256 {
         return Ok(false);
     }
-
     let runtime_lock = resolved_input(resolved, "camouhost_runtime_lock")?;
-    let runtime_lock = load_json_object(&runtime_lock.absolute_path, "runtime lock")?;
-    let expected_ipc = required_u64(&runtime_lock, "camouhost_ipc_version")?;
-    if required_u64(protocols, "camouhost_ipc_version")? != expected_ipc {
-        return Ok(false);
-    }
-    if mailbox_admin
-        && required_string(protocols, "resolver_protocol")? != "mailbox-secret-resolver-v1"
+    let lock: Value = serde_json::from_slice(&fs::read(&runtime_lock.absolute_path).map_err(|error| {
+        ReleaseModelError::new(format!("cannot read runtime lock: {error}"))
+    })?)
+    .map_err(|error| ReleaseModelError::new(format!("invalid runtime lock JSON: {error}")))?;
+    let expected_ipc = lock["camouhost_ipc_version"].as_u64().ok_or_else(|| {
+        ReleaseModelError::new("runtime lock camouhost_ipc_version must be unsigned")
+    })?;
+    if manifest.protocols.camouhost_ipc_version != expected_ipc
+        || manifest.protocols.profile_bridge_protocol_version != expected_ipc
     {
         return Ok(false);
+    }
+    if mailbox_admin && manifest.protocols.resolver_protocol != "mailbox-secret-resolver-v1" {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn schemas_match(
+    resolved: &[ResolvedReleaseInput],
+    manifest: &ReleaseSetManifest,
+) -> Result<bool, ReleaseModelError> {
+    let authority = resolved_input(resolved, "d1_evolution_authority")?;
+    if manifest.schemas.d1_evolution_authority_sha256 != authority.sha256 {
+        return Ok(false);
+    }
+    let value: Value = serde_json::from_slice(&fs::read(&authority.absolute_path).map_err(|error| {
+        ReleaseModelError::new(format!("cannot read D1 evolution authority: {error}"))
+    })?)
+    .map_err(|error| ReleaseModelError::new(format!("invalid D1 evolution authority JSON: {error}")))?;
+    let components = value["components"].as_array().ok_or_else(|| {
+        ReleaseModelError::new("D1 evolution authority components must be an array")
+    })?;
+    for (id, window) in [
+        ("catalog", &manifest.schemas.catalog),
+        ("resolver", &manifest.schemas.resolver),
+    ] {
+        let component = components
+            .iter()
+            .find(|entry| entry["component_id"].as_str() == Some(id))
+            .ok_or_else(|| ReleaseModelError::new(format!("D1 authority missing {id}")))?;
+        if component["current_repository_revision"].as_str() != Some(window.target_schema_revision.as_str()) {
+            return Ok(false);
+        }
+        let policy = component["compatibility_policy"].clone();
+        let policy_digest = sha256_hex(canonical_json(&policy).map_err(ReleaseModelError::new)?.as_bytes());
+        if policy_digest != window.compatibility_policy_digest {
+            return Ok(false);
+        }
+        let history = component["historical_epoch"]["ordered_history"]
+            .as_array()
+            .ok_or_else(|| ReleaseModelError::new(format!("D1 {id} ordered history missing")))?;
+        let identity = Value::Array(
+            history
+                .iter()
+                .map(|entry| json!({"name":entry["name"],"sha256":entry["sha256"]}))
+                .collect(),
+        );
+        let history_digest = sha256_hex(canonical_json(&identity).map_err(ReleaseModelError::new)?.as_bytes());
+        if history_digest != window.migration_history_digest {
+            return Ok(false);
+        }
     }
     Ok(true)
 }
 
 fn runtime_matches(
     resolved: &[ResolvedReleaseInput],
-    value: &Value,
+    manifest: &ReleaseSetManifest,
 ) -> Result<bool, ReleaseModelError> {
-    let runtime = object(value, "runtime_compatibility")?;
     let runtime_lock = resolved_input(resolved, "camouhost_runtime_lock")?;
-    if required_string(runtime, "runtime_lock_sha256")? != runtime_lock.sha256 {
+    if manifest.runtime_compatibility.runtime_lock_sha256 != runtime_lock.sha256 {
         return Ok(false);
     }
-    let lock = load_json_object(&runtime_lock.absolute_path, "runtime lock")?;
-    for (manifest_field, lock_field) in [
-        ("runtime_role", "runtime_role"),
-        ("profile_format", "fingerprint_config_schema"),
-        ("browser_identity_policy", "fingerprint_policy_version"),
-    ] {
-        if required_string(runtime, manifest_field)? != required_string(&lock, lock_field)? {
+    let lock: Value = serde_json::from_slice(&fs::read(&runtime_lock.absolute_path).map_err(|error| {
+        ReleaseModelError::new(format!("cannot read runtime lock: {error}"))
+    })?)
+    .map_err(|error| ReleaseModelError::new(format!("invalid runtime lock JSON: {error}")))?;
+    Ok(
+        manifest.runtime_compatibility.runtime_role == lock["runtime_role"].as_str().unwrap_or_default()
+            && manifest.runtime_compatibility.profile_format
+                == lock["fingerprint_config_schema"].as_str().unwrap_or_default()
+            && manifest.runtime_compatibility.browser_identity_policy
+                == lock["fingerprint_policy_version"].as_str().unwrap_or_default()
+            && manifest.runtime_compatibility.runtime_role == "real_camoufox",
+    )
+}
+
+fn build_provenance_matches(
+    resolved: &[ResolvedReleaseInput],
+    manifest: &ReleaseSetManifest,
+) -> Result<bool, ReleaseModelError> {
+    let expected = [
+        ("cargo_lock", &manifest.build_provenance.cargo_lock_sha256),
+        ("rust_toolchain", &manifest.build_provenance.rust_toolchain_sha256),
+        ("frontend_lock", &manifest.build_provenance.frontend_lock_sha256),
+        (
+            "release_architecture_authority",
+            &manifest.build_provenance.release_architecture_sha256,
+        ),
+    ];
+    for (input_id, observed) in expected {
+        if resolved_input(resolved, input_id)?.sha256 != *observed {
             return Ok(false);
         }
     }
-    Ok(required_string(runtime, "runtime_role")? == "real_camoufox")
+    Ok(true)
+}
+
+fn profiles_match(root: &Path, manifest: &ReleaseSetManifest) -> Result<bool, ReleaseModelError> {
+    let authority = ReleaseArchitecture::load(root)
+        .map_err(|error| ReleaseModelError::new(format!("release authority invalid: {error}")))?;
+    Ok(manifest
+        .capability_profile_compatibility
+        .iter()
+        .all(|profile| authority.profiles.contains_key(profile)))
 }
 
 fn resolved_input<'a>(
@@ -151,49 +235,6 @@ fn resolved_input<'a>(
         })
 }
 
-fn load_json_object(path: &Path, label: &str) -> Result<Map<String, Value>, ReleaseModelError> {
-    let text = fs::read_to_string(path).map_err(|error| {
-        ReleaseModelError::new(format!("cannot read {label} {}: {error}", path.display()))
-    })?;
-    let value: Value = serde_json::from_str(&text)
-        .map_err(|error| ReleaseModelError::new(format!("invalid {label} JSON: {error}")))?;
-    value
-        .as_object()
-        .cloned()
-        .ok_or_else(|| ReleaseModelError::new(format!("{label} must be a JSON object")))
-}
-
-fn required<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a Value, ReleaseModelError> {
-    object
-        .get(key)
-        .ok_or_else(|| ReleaseModelError::new(format!("missing static compatibility field: {key}")))
-}
-
-fn required_string(object: &Map<String, Value>, key: &str) -> Result<String, ReleaseModelError> {
-    required(object, key)?
-        .as_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| ReleaseModelError::new(format!("field {key} must be a string")))
-}
-
-fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, ReleaseModelError> {
-    required(object, key)?
-        .as_u64()
-        .ok_or_else(|| ReleaseModelError::new(format!("field {key} must be an unsigned integer")))
-}
-
-fn object<'a>(value: &'a Value, label: &str) -> Result<&'a Map<String, Value>, ReleaseModelError> {
-    value
-        .as_object()
-        .ok_or_else(|| ReleaseModelError::new(format!("{label} must be a JSON object")))
-}
-
-fn array<'a>(value: &'a Value, label: &str) -> Result<&'a Vec<Value>, ReleaseModelError> {
-    value
-        .as_array()
-        .ok_or_else(|| ReleaseModelError::new(format!("{label} must be a JSON array")))
-}
-
 #[cfg(test)]
 mod tests {
     use crate::release::input_topology::ReleaseInputTopology;
@@ -204,21 +245,12 @@ mod tests {
     }
 
     #[test]
-    fn contract_inventory_is_owned_by_canonical_topology() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn contract_inventory_is_owned_by_canonical_topology() -> Result<(), Box<dyn std::error::Error>> {
         let topology = ReleaseInputTopology::load(&root())?;
         let contracts = topology.inputs_for_consumer("release_set.contracts");
         assert_eq!(contracts.len(), 10);
-        assert!(
-            contracts
-                .iter()
-                .any(|input| input.release_identity_source == "openapi/v1/openapi.json")
-        );
-        assert!(
-            contracts
-                .iter()
-                .all(|input| { input.release_identity_source != "openapi/v1/control-plane.yaml" })
-        );
+        assert!(contracts.iter().any(|input| input.release_identity_source == "openapi/v1/openapi.json"));
+        assert!(contracts.iter().all(|input| input.release_identity_source != "openapi/v1/control-plane.yaml"));
         Ok(())
     }
 }

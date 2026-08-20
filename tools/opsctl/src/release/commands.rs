@@ -4,7 +4,7 @@ use crate::release::compatibility::{CompatibilityEvidence, evaluate};
 use crate::release::input_topology::ReleaseInputTopology;
 use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
 use crate::release::source::{AcceptedSourceVerification, verify_release_source};
-use crate::release::static_compatibility;
+use crate::release::static_compatibility::{self, VERIFIED_PROVENANCE_DIMENSIONS};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -34,8 +34,7 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
                 .artifact_root
                 .ok_or_else(|| ReleaseModelError::new("release verify requires --artifact-root"))?;
             let (_, source_verification) = verify_release_source(request.release_set, &manifest)?;
-            let static_blockers =
-                static_compatibility::evaluate(request.source_root, &manifest, false)?;
+            let static_blockers = static_compatibility::evaluate(request.source_root, &manifest, false)?;
             if !static_blockers.is_empty() {
                 return Err(ReleaseModelError::new(format!(
                     "RELEASE_STATIC_IDENTITY_MISMATCH: {}",
@@ -66,17 +65,12 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
     };
     serde_json::to_string_pretty(&value)
         .map(|output| format!("{output}\n"))
-        .map_err(|error| {
-            ReleaseModelError::new(format!("cannot serialize release output: {error}"))
-        })
+        .map_err(|error| ReleaseModelError::new(format!("cannot serialize release output: {error}")))
 }
 
 fn load_manifest(path: &Path) -> Result<ReleaseSetManifest, ReleaseModelError> {
     let input = fs::read_to_string(path).map_err(|error| {
-        ReleaseModelError::new(format!(
-            "RELEASE_SET_UNAVAILABLE: {}: {error}",
-            path.display()
-        ))
+        ReleaseModelError::new(format!("RELEASE_SET_UNAVAILABLE: {}: {error}", path.display()))
     })?;
     ReleaseSetManifest::parse_json(&input)
 }
@@ -91,6 +85,7 @@ fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_j
                 "release_id": component.release_id,
                 "artifact_sha256": component.artifact_sha256,
                 "artifact_size_bytes": component.artifact_size_bytes,
+                "component_manifest_path": component.component_manifest_path,
                 "component_manifest_sha256": component.component_manifest_sha256,
             })
         })
@@ -99,6 +94,7 @@ fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_j
         "schema_version": 1,
         "command": "release.inspect",
         "decision": "VALID",
+        "release_set_schema_version": manifest.schema_version,
         "release_set_id": manifest.release_set_id,
         "display_version": manifest.display_version,
         "source": {
@@ -106,7 +102,7 @@ fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_j
             "commit_sha": manifest.source.commit_sha,
             "accepted_main": manifest.source.accepted_main,
             "accepted_main_evidence_sha256": manifest.source.accepted_main_evidence_sha256,
-            "accepted_main_evidence_role": "LEGACY_IDENTITY_BINDING_ONLY"
+            "accepted_main_evidence_role": "IDENTITY_BINDING; AcceptedSourceEvidence is acceptance authority"
         },
         "components": components,
         "capability_profile_compatibility": manifest.capability_profile_compatibility,
@@ -126,12 +122,15 @@ fn verify(
         "schema_version": 1,
         "command": "release.verify",
         "decision": "VALID",
+        "release_set_schema_version": manifest.schema_version,
         "release_set_id": manifest.release_set_id,
         "source_commit_sha": manifest.source.commit_sha,
         "source_accepted": true,
         "accepted_source_evidence_sha256": source.evidence_sha256,
         "observed_protected_main_sha": source.observed_protected_main_sha,
         "source_lineage_status": source.lineage_status,
+        "verified_components": artifacts.verified_components,
+        "verified_provenance_dimensions": VERIFIED_PROVENANCE_DIMENSIONS,
         "verified_files": artifacts.verified_files,
         "verified_bytes": artifacts.verified_bytes,
         "mutation_executed": false
