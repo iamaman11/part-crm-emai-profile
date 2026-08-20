@@ -68,6 +68,14 @@
       "rationale": "fail-fast negative proof that stale or missing deterministic generated release-input projections are rejected; no provider network, credentials, release decision or mutation"
     },
     {
+      "path": "scripts/check-ar11-behavioural-certification.py",
+      "classification": "KEEP_PYTHON",
+      "role": "behavioural_certification_validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_POST_AR11_FUNCTIONAL_CLOSURE",
+      "rationale": "fail-closed 37/37 AR-11 traceability and offline-authority validator; reads repository sources only and has no provider, network, credential or production mutation authority"
+    },
+    {
       "path": "scripts/check-historical-executable-debt.py",
       "classification": "KEEP_PYTHON",
       "role": "post_ar11_cleanup_validator",
@@ -114,9 +122,9 @@
     ]
   },
   "current_summary": {
-    "tracked_python_files": 124,
+    "tracked_python_files": 125,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 124,
+    "KEEP_PYTHON": 125,
     "MIGRATE_TO_RUST": 0,
     "WRAP_WITH_RUST": 0
   }
