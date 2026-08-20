@@ -229,6 +229,34 @@
       "runtime_mutation_authority": false,
       "remote_mutation_authority": false,
       "disposition": "REMOVED_IN_PR_380_AND_MUST_STAY_ABSENT"
+    },
+    {
+      "path": ".github/scripts/ar8c-credential-recovery-assessment.mjs",
+      "classification": "DEAD",
+      "expected_present": false,
+      "standalone_entrypoint": false,
+      "proves": "retired AR-8C staging-only aggregate D1 credential recovery classification diagnostic",
+      "duplicate_or_successor": "its protected workflow_dispatch surface is absent; current concern-specific recovery semantics live in architecture/credential-lifecycle.json and provider-owned OAuth secret boundaries remain current authority",
+      "reads_git_history": false,
+      "executes_historical_code": false,
+      "materializes_retired_code": false,
+      "runtime_mutation_authority": false,
+      "remote_mutation_authority": false,
+      "disposition": "REMOVED_IN_PR_380_AND_MUST_STAY_ABSENT"
+    },
+    {
+      "path": ".github/scripts/ar8c-credential-recovery-assessment-contract.mjs",
+      "classification": "DEAD",
+      "expected_present": false,
+      "standalone_entrypoint": false,
+      "proves": "retired AR-8C staging credential recovery assessment workflow/executor contract",
+      "duplicate_or_successor": "the contract required absent .github/workflows/ar8c-credential-recovery-assessment.yml; no governed current execution surface remains and architecture/credential-lifecycle.json owns durable recovery semantics",
+      "reads_git_history": false,
+      "executes_historical_code": false,
+      "materializes_retired_code": false,
+      "runtime_mutation_authority": false,
+      "remote_mutation_authority": false,
+      "disposition": "REMOVED_IN_PR_380_AND_MUST_STAY_ABSENT"
     }
   ]
 }
