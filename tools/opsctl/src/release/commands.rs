@@ -145,9 +145,7 @@ fn verify(
 fn required_text<'a>(value: Option<&'a str>, flag: &str) -> Result<&'a str, ReleaseModelError> {
     let value = value.ok_or_else(|| ReleaseModelError::new(format!("missing required {flag}")))?;
     if value.trim().is_empty() {
-        return Err(ReleaseModelError::new(format!(
-            "{flag} must not be empty"
-        )));
+        return Err(ReleaseModelError::new(format!("{flag} must not be empty")));
     }
     Ok(value)
 }

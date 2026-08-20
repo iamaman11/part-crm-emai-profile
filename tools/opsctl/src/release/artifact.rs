@@ -35,10 +35,7 @@ pub fn verify_artifacts(
     let mut observed = collect_files(artifact_root)?;
     remove_verified_control_manifest(manifest, &mut observed)?;
     let expected_paths = expected.keys().copied().collect::<BTreeSet<_>>();
-    let observed_paths = observed
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
+    let observed_paths = observed.keys().map(String::as_str).collect::<BTreeSet<_>>();
     if expected_paths != observed_paths {
         let missing = expected_paths
             .difference(&observed_paths)
