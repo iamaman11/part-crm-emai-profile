@@ -196,7 +196,7 @@ def d1_evolution_projection() -> dict[str, object]:
     if authority.get("canonical_projection") != "architecture/inventory.json::d1_evolution":
         raise ValueError("AR-9 D1 evolution authority canonical projection drifted")
     if authority.get("production_mutation") is not False:
-        raise ValueError("AR-9 D1 evolution authority may not mutate production")
+        raise ValueError("AR-9 D1 evolution authority must remain non-production-mutating")
     policy = authority.get("global_policy")
     components = authority.get("components")
     if not isinstance(policy, dict) or not isinstance(components, list) or len(components) != 2:
@@ -278,7 +278,7 @@ def runtime_cutover_projection() -> dict[str, object]:
     if authority.get("production_mutation") is not False:
         raise ValueError("AR-10 runtime cutover must remain non-production-mutating")
     if authority.get("architecture_complete") is not False or authority.get("production_ready") is not False:
-        raise ValueError("AR-10 runtime cutover may not advance production state")
+        raise ValueError("AR-10 runtime cutover may not advance production architecture state")
     if authority.get("production_core_gate") != "BLOCKED":
         raise ValueError("AR-10 runtime cutover must keep Production Core blocked")
     real_runtime = authority.get("real_runtime")
