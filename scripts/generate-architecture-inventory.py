@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import credential_authority as credentials
+
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE_PATH = ROOT / "scripts/generate-architecture-inventory-engine.py"
 INVENTORY_PATH = ROOT / "architecture/inventory.json"
@@ -46,6 +48,22 @@ engine.AR8_IMPLEMENTATION_ENTRY_GATE = "AR8_ACCEPTED_MAIN_AR9_CURRENT"
 for accepted in ("AR-8", "AR-9", "AR-10"):
     if accepted not in engine.ACCEPTED_SLICES:
         engine.ACCEPTED_SLICES = [*engine.ACCEPTED_SLICES, accepted]
+
+
+def current_credential_authority_source() -> tuple[dict[str, Any], dict[str, set[str]]]:
+    state = credentials.validate_repository(ROOT)
+    return state.registry, state.detected
+
+
+def validate_current_credential_registry(
+    payload: dict[str, Any], detected: dict[str, set[str]]
+) -> None:
+    lifecycle = credentials.read_json(ROOT, credentials.EXPECTED_LIFECYCLE)
+    credentials.validate_registry(payload, detected, lifecycle)
+
+
+engine.validate_credential_authority_source = current_credential_authority_source
+engine.validate_credential_authority = validate_current_credential_registry
 
 
 def completion_delivery_map() -> dict[str, object]:
@@ -442,9 +460,10 @@ def main() -> int:
     mode.add_argument("--credential-self-test", action="store_true")
     args = parser.parse_args()
     if args.credential_self_test:
-        payload, detected = engine.validate_credential_authority_source()
-        engine.credential_negative_self_test(payload, detected)
-        engine.print_credential_check_summary(detected, self_tested=True)
+        state = credentials.validate_repository(ROOT)
+        credentials.negative_self_test(state)
+        engine.credential_negative_self_test(state.registry, state.detected)
+        engine.print_credential_check_summary(state.detected, self_tested=True)
         return 0
     expected = build_inventory()
     if args.write:
@@ -460,6 +479,10 @@ def main() -> int:
             "Architecture inventory projects accepted AR-10 and current AR-11 release architecture while production remains blocked."
         )
     else:
+        if engine.validate_credential_authority_source is not current_credential_authority_source:
+            raise ValueError("current inventory credential source did not cut over to neutral authority")
+        if engine.validate_credential_authority is not validate_current_credential_registry:
+            raise ValueError("current inventory credential validation did not cut over to neutral authority")
         engine.self_test(expected)
         run([sys.executable, "scripts/credential_authority.py", "--self-test"])
         mutated = json.loads(serialized(expected))
