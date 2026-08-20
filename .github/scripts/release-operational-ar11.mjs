@@ -310,7 +310,7 @@ function selfTest() {
     'test -n "$current_id"',
   );
   const staleFenceBypass = promotion.replace(mutate, staleMutate);
-  if (!promotionErrors(staleFenceBypass).some((error) => error.includes('test "$current_id" = "$EXPECTED_CURRENT"'))) {
+  if (!promotionErrors(staleFenceBypass).some((error) => error.includes('credential/fence ordering'))) {
     throw new Error('mutation stale-fence bypass fixture unexpectedly passed');
   }
 
