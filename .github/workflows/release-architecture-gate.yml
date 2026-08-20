@@ -50,6 +50,9 @@ jobs:
           python scripts/check-ar11-behavioural-certification.py
           python scripts/check-ar11-behavioural-certification.py --self-test
 
+      - name: Prove FC-6 rehearsal evidence verifier fails closed
+        run: python scripts/check-ar11-staging-rehearsal.py --self-test
+
       - name: Verify deterministic canonical projection
         run: |
           python - <<'PY'
