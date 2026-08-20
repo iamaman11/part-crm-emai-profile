@@ -117,6 +117,9 @@
   "projection_policy": {
     "authoritative": false,
     "generated_or_human_projection_only": true,
+    "lifecycle_policy": "architecture/lifecycle-projection-policy.json",
+    "tracked_mutable_lifecycle_state_forbidden_as_authority": true,
+    "future_acceptance_requires_source_projection_commit": false,
     "paths": [
       "docs/status.json",
       "architecture/inventory.json",
