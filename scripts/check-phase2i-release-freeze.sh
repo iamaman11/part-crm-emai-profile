@@ -46,10 +46,9 @@ if [[ -f architecture/pre2j-d3-resolver-bootstrap-implementation.json ]]; then
     node .github/scripts/ar8-d-secret-transport-successor.mjs --self-test
   fi
 
-  # The governed D3 dispatcher owns historical materialization. In AR-11 the
-  # legacy promotion workflow may be intentionally absent from the current tree;
-  # replay must come from the predecessor Git object instead of restoring a
-  # retired executable authority into current source.
+  # Current D3 validation is read-only with respect to historical Git objects.
+  # Retired implementation may be inspected as immutable provenance, but it must
+  # never be restored, imported or executed in the current working tree.
   python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py \
     --base-ref "origin/${base_ref}"
   python scripts/check-pre2j-d3-resolver-bootstrap-implementation.py --self-test
@@ -145,39 +144,13 @@ print(
 PY
 fi
 
-# AR-8 completion lifecycle is accepted history and still checks the exact D3-era
-# routine-promotion surface. AR-11 deliberately retires that executable from the
-# current tree, so materialize the predecessor bytes only inside this bounded
-# historical replay and remove them again before returning to current-source checks.
-(
-  routine_promotion=".github/workflows/mailbox-secret-resolver-promotion.yml"
-  if [[ ! -f "$routine_promotion" ]]; then
-    readarray -t predecessor < <(python - <<'PY'
-import json
-from pathlib import Path
-
-authority = json.loads(
-    Path("architecture/ar8-d-secret-transport-successor.json").read_text(encoding="utf-8")
-)
-predecessor = authority["predecessor"]
-print(predecessor["transition_base_main"])
-print(predecessor["promotion_workflow"])
-PY
-)
-    predecessor_ref="${predecessor[0]}"
-    predecessor_workflow="${predecessor[1]}"
-    cleanup_historical_promotion() {
-      rm -f "$routine_promotion"
-    }
-    trap cleanup_historical_promotion EXIT
-    git show "${predecessor_ref}:${predecessor_workflow}" > "$routine_promotion"
-  fi
-  node .github/scripts/ar8-completion-lifecycle.mjs
-  node .github/scripts/ar8-completion-lifecycle.mjs --self-test
-)
-
+# AR-8 completion is immutable provenance only. Its durable credential lifecycle
+# rules are owned by current subject-domain authorities; this gate must never
+# reconstruct or execute retired AR-8 workflow/script bytes to prove history.
 test ! -e .github/workflows/mailbox-secret-resolver-promotion.yml
+test ! -e .github/scripts/ar8-completion-lifecycle.mjs
+
 python scripts/check-contract-compatibility.py
 python scripts/test-d1-schema.py
 
-echo "Phase 2I public contract freeze, immutable consumed B4/C2/C3 authorities, governed Pre-2J D3-to-AR-8D transition, AR-8D/E completion lifecycle overlay, pending C3G governed provider migration authority, and immutable-prefix D1 migration policy are valid."
+echo "Phase 2I public contract freeze, immutable consumed B4/C2/C3 authorities, static Pre-2J D3 provenance/current successor validation, current AR-8-derived lifecycle authorities, pending C3G governed provider migration authority, and immutable-prefix D1 migration policy are valid."
