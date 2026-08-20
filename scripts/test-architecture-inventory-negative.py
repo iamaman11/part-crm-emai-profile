@@ -108,6 +108,26 @@ def assert_lifecycle_projection_boundaries(module: ModuleType, expected: dict[st
     if status_current.get("current_delivery_map") != tracked_delivery:
         raise AssertionError("docs/status.json current_delivery_map diverged from tracked inventory")
 
+    current_next = status_current.get("next_repository_step")
+    if (
+        not isinstance(current_next, dict)
+        or current_next.get("previous_acceptance_checkpoint") != snapshot_accepted
+        or current_next.get("projection_role") != "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT"
+    ):
+        raise AssertionError("docs/status.json current next_repository_step lost lifecycle projection semantics")
+
+    historical_next = status.get("next_repository_step")
+    historical_note = status.get("historical_status_note")
+    if (
+        not isinstance(historical_next, dict)
+        or historical_next.get("historical") is not True
+        or historical_next.get("scope") != "historical_repository_steps_0_10"
+        or historical_next.get("forward_execution_authority") is not False
+        or not isinstance(historical_note, str)
+        or "next_repository_step" not in historical_note
+    ):
+        raise AssertionError("legacy root next_repository_step is ambiguous with current lifecycle projection")
+
     transition = json.loads(TRANSITION.read_text(encoding="utf-8"))
     transition_slices = transition.get("accepted_slices")
     if (
