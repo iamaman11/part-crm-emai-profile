@@ -14,13 +14,6 @@ const LEGACY_FILES = [
   'scripts/mailbox-secret-resolver-promotion.py',
   'scripts/_mailbox_secret_resolver_promotion_core.py',
 ];
-const DURABLE_ASSETS = [
-  'release-set.json',
-  'control-plane.tar',
-  'secret-resolver.tar',
-  'runtime-bundle.tar',
-  'profile-bridge.zip',
-];
 
 function read(relative) {
   return readFileSync(path.join(ROOT, relative), 'utf8').replace(/\r\n?/g, '\n');
@@ -74,12 +67,10 @@ function buildErrors(build) {
     'gh release download',
     'cmp --silent',
     'Publish once or prove byte-identical replay',
+    'cp "$RELEASE_DIR/components/"* "$asset_dir/"',
     'test "$(find "$asset_dir" -maxdepth 1 -type f | wc -l)" -eq 5',
     'test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 5',
   ], 'Release Set build'));
-  for (const asset of DURABLE_ASSETS) {
-    if (!build.includes(asset)) errors.push(`Release Set build does not bind durable asset ${asset}`);
-  }
   errors.push(...forbidMarkers(build, [
     'CLOUDFLARE_API_TOKEN',
     'CLOUDFLARE_DEPLOY_MANIFEST_JSON',
@@ -124,6 +115,7 @@ function promotionErrors(promotion) {
     'path: target-source',
     'accepted-source-evidence-ar11.py',
     'gh release download "$RELEASE_SET_ID"',
+    'for name in release-set.json control-plane.tar secret-resolver.tar runtime-bundle.tar profile-bridge.zip',
     'release verify',
     '--source-root "$GITHUB_WORKSPACE/target-source"',
     'test "$(find "$asset_root" -maxdepth 1 -type f | wc -l)" -eq 5',
