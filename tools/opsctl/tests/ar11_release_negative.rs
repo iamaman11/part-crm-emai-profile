@@ -224,7 +224,10 @@ fn artifact_from_another_sha_is_rejected() -> Result<(), Box<dyn std::error::Err
     value["components"]["control_plane"]["source_commit_sha"] =
         Value::String(OTHER_GIT_SHA.to_owned());
     resign(&mut value)?;
-    let error = require_error(parse(&value), "foreign-source component unexpectedly accepted")?;
+    let error = require_error(
+        parse(&value),
+        "foreign-source component unexpectedly accepted",
+    )?;
     assert!(error.contains("SOURCE_IDENTITY_MISMATCH"));
     Ok(())
 }
@@ -262,7 +265,10 @@ fn missing_artifact_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or_else(|| io::Error::other("artifact inventory must be array"))?
         .retain(|row| row["path"] != "components/control-plane.tar");
     resign(&mut value)?;
-    let error = require_error(parse(&value), "missing component artifact unexpectedly accepted")?;
+    let error = require_error(
+        parse(&value),
+        "missing component artifact unexpectedly accepted",
+    )?;
     assert!(error.contains("artifact is absent from artifact_inventory"));
     Ok(())
 }
