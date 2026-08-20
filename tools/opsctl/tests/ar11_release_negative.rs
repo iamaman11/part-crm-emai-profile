@@ -12,6 +12,8 @@ const OTHER_GIT_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+type CanonicalIdentityFields = (Value, Value, Value, Value, Value);
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -61,7 +63,7 @@ fn schema_window(
 
 fn canonical_identity_fields(
     root: &Path,
-) -> Result<(Value, Value, Value, Value, Value), Box<dyn std::error::Error>> {
+) -> Result<CanonicalIdentityFields, Box<dyn std::error::Error>> {
     let topology = ReleaseInputTopology::load(root)?;
     let resolved = topology.resolve(root)?;
 
@@ -195,13 +197,17 @@ fn parse(value: &Value) -> Result<ReleaseSetManifest, String> {
     .map_err(|error| error.to_string())
 }
 
+fn require_error(result: Result<ReleaseSetManifest, String>, context: &str) -> Result<String, io::Error> {
+    result.err().ok_or_else(|| io::Error::other(context.to_owned()))
+}
+
 #[test]
 fn artifact_from_another_sha_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
     let mut value = fixture_value()?;
     value["components"]["control_plane"]["source_commit_sha"] =
         Value::String(OTHER_GIT_SHA.to_owned());
     resign(&mut value)?;
-    let error = parse(&value).expect_err("foreign-source component unexpectedly accepted");
+    let error = require_error(parse(&value), "foreign-source component unexpectedly accepted")?;
     assert!(error.contains("SOURCE_IDENTITY_MISMATCH"));
     Ok(())
 }
@@ -211,8 +217,10 @@ fn changed_component_digest_is_rejected() -> Result<(), Box<dyn std::error::Erro
     let mut value = fixture_value()?;
     value["components"]["control_plane"]["artifact_sha256"] = Value::String(SHA_B.to_owned());
     resign(&mut value)?;
-    let error =
-        parse(&value).expect_err("component/inventory digest disagreement unexpectedly accepted");
+    let error = require_error(
+        parse(&value),
+        "component/inventory digest disagreement unexpectedly accepted",
+    )?;
     assert!(error.contains("artifact identity disagrees with artifact_inventory"));
     Ok(())
 }
@@ -221,7 +229,10 @@ fn changed_component_digest_is_rejected() -> Result<(), Box<dyn std::error::Erro
 fn release_set_digest_mismatch_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
     let mut value = fixture_value()?;
     value["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{SHA_B}"));
-    let error = parse(&value).expect_err("wrong Release Set content address unexpectedly accepted");
+    let error = require_error(
+        parse(&value),
+        "wrong Release Set content address unexpectedly accepted",
+    )?;
     assert!(error.contains("RELEASE_IDENTITY_MISMATCH"));
     Ok(())
 }
@@ -234,7 +245,7 @@ fn missing_artifact_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or_else(|| io::Error::other("artifact inventory must be array"))?
         .retain(|row| row["path"] != "components/control-plane.tar");
     resign(&mut value)?;
-    let error = parse(&value).expect_err("missing component artifact unexpectedly accepted");
+    let error = require_error(parse(&value), "missing component artifact unexpectedly accepted")?;
     assert!(error.contains("artifact is absent from artifact_inventory"));
     Ok(())
 }
@@ -248,7 +259,7 @@ fn duplicate_artifact_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or_else(|| io::Error::other("artifact inventory must be array"))?
         .push(duplicate);
     resign(&mut value)?;
-    let error = parse(&value).expect_err("duplicate artifact unexpectedly accepted");
+    let error = require_error(parse(&value), "duplicate artifact unexpectedly accepted")?;
     assert!(error.contains("duplicate artifact path"));
     Ok(())
 }
@@ -258,7 +269,7 @@ fn unknown_component_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
     let mut value = fixture_value()?;
     value["components"]["rogue_component"] = value["components"]["runtime_bundle"].clone();
     resign(&mut value)?;
-    let error = parse(&value).expect_err("unknown component unexpectedly accepted");
+    let error = require_error(parse(&value), "unknown component unexpectedly accepted")?;
     assert!(error.contains("unknown component"));
     Ok(())
 }
