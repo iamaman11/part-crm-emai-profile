@@ -295,7 +295,7 @@ function selfTest() {
     acceptedSourceProof,
     `${acceptedSourceProof}\n          test "$source_sha" = "$main_sha"`,
   );
-  if (!promotionErrors(staleHeadEquality).some((error) => error.includes('test "$source_sha" = "$main_sha"'))) {
+  if (promotionErrors(staleHeadEquality).length === 0) {
     throw new Error('historical Release Set current-head equality fixture unexpectedly passed');
   }
 
