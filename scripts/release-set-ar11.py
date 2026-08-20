@@ -23,6 +23,7 @@ REPOSITORY = "iamaman11/part-crm-emai-profile"
 SCHEMA_VERSION = 1
 PREFIX = "release-set-v1-sha256-"
 COMPONENT_DIR = "components"
+MANIFEST_DIR = "manifests"
 AUTHORITY_PATH = Path("architecture/release-architecture-ar11.json")
 
 
@@ -186,7 +187,7 @@ def source_file_set_identity(paths: list[Path]) -> dict[str, Any]:
 
 def deterministic_runtime_archive(
     source_sha: str, destination: Path, runtime_files: list[Path]
-) -> tuple[str, str]:
+) -> tuple[str, bytes]:
     if destination.exists():
         fail(f"runtime component destination already exists: {destination}")
     manifest = {
@@ -196,9 +197,10 @@ def deterministic_runtime_archive(
         "files": source_file_set_identity(runtime_files),
     }
     manifest["release_id"] = "runtime-bundle-v1-sha256-" + sha256_bytes(canonical(manifest))
+    manifest_bytes = document(manifest)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(destination, "w", format=tarfile.PAX_FORMAT) as archive:
-        members: list[tuple[str, bytes]] = [("runtime-manifest.json", document(manifest))]
+        members: list[tuple[str, bytes]] = [("runtime-manifest.json", manifest_bytes)]
         members.extend((relative.as_posix(), (ROOT / relative).read_bytes()) for relative in runtime_files)
         for name, data in sorted(members):
             pure = PurePosixPath(name)
@@ -211,15 +213,18 @@ def deterministic_runtime_archive(
             info.uname = info.gname = ""
             info.mtime = 0
             archive.addfile(info, fileobj=__import__("io").BytesIO(data))
-    return str(manifest["release_id"]), sha256_bytes(document(manifest))
+    return str(manifest["release_id"]), manifest_bytes
 
 
-def load_component_manifest(path: Path, *, source_sha: str, release_key: str = "release_id") -> tuple[str, str]:
+def load_component_manifest(
+    path: Path, *, source_sha: str, release_key: str = "release_id"
+) -> tuple[str, bytes]:
     regular(path, "component manifest")
+    manifest_bytes = path.read_bytes()
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise ReleaseSetError(f"component manifest is invalid JSON: {path}: {error}") from error
+        value = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ReleaseSetError(f"component manifest is invalid UTF-8 JSON: {path}: {error}") from error
     if not isinstance(value, dict):
         fail(f"component manifest must be an object: {path}")
     release_id = value.get(release_key)
@@ -229,7 +234,7 @@ def load_component_manifest(path: Path, *, source_sha: str, release_key: str = "
     observed_sha = source.get("commit_sha") if isinstance(source, dict) else value.get("source_commit_sha")
     if observed_sha != source_sha:
         fail(f"component manifest source SHA differs from Release Set source: {path}")
-    return release_id, sha256_file(path)
+    return release_id, manifest_bytes
 
 
 def build(
@@ -275,69 +280,84 @@ def build(
     if not profiles:
         fail("release architecture has no capability profiles")
 
-    control_release_id, control_manifest_sha = load_component_manifest(
+    control_release_id, control_manifest_bytes = load_component_manifest(
         control_manifest, source_sha=source_sha
     )
-    resolver_release_id, resolver_manifest_sha = load_component_manifest(
+    resolver_release_id, resolver_manifest_bytes = load_component_manifest(
         resolver_manifest, source_sha=source_sha
     )
-    bridge_release_id, bridge_manifest_sha = load_component_manifest(
+    bridge_release_id, bridge_manifest_bytes = load_component_manifest(
         profile_bridge_manifest, source_sha=source_sha
     )
 
     staging = Path(tempfile.mkdtemp(prefix="ar11-release-set-"))
     try:
         component_root = staging / COMPONENT_DIR
+        manifest_root = staging / MANIFEST_DIR
         component_root.mkdir(parents=True)
+        manifest_root.mkdir(parents=True)
         destinations = {
             "control": component_root / "control-plane.tar",
             "resolver": component_root / "secret-resolver.tar",
             "runtime": component_root / "runtime-bundle.tar",
             "bridge": component_root / "profile-bridge.zip",
         }
+        manifest_destinations = {
+            "control": manifest_root / "control-plane-manifest.json",
+            "resolver": manifest_root / "secret-resolver-manifest.json",
+            "runtime": manifest_root / "runtime-bundle-manifest.json",
+            "bridge": manifest_root / "profile-bridge-manifest.json",
+        }
         shutil.copyfile(control_archive, destinations["control"], follow_symlinks=False)
         shutil.copyfile(resolver_archive, destinations["resolver"], follow_symlinks=False)
         shutil.copyfile(profile_bridge_archive, destinations["bridge"], follow_symlinks=False)
-        runtime_release_id, runtime_manifest_sha = deterministic_runtime_archive(
+        manifest_destinations["control"].write_bytes(control_manifest_bytes)
+        manifest_destinations["resolver"].write_bytes(resolver_manifest_bytes)
+        manifest_destinations["bridge"].write_bytes(bridge_manifest_bytes)
+        runtime_release_id, runtime_manifest_bytes = deterministic_runtime_archive(
             source_sha, destinations["runtime"], runtime_files
         )
+        manifest_destinations["runtime"].write_bytes(runtime_manifest_bytes)
 
         identities = {name: file_identity(path) for name, path in destinations.items()}
+        manifest_identities = {
+            name: file_identity(path) for name, path in manifest_destinations.items()
+        }
         component_rows = {
             "control_plane": component_row(
                 control_release_id,
                 source_sha,
                 "components/control-plane.tar",
                 identities["control"],
-                control_manifest_sha,
+                manifest_identities["control"]["sha256"],
             ),
             "frontend": component_row(
                 f"{control_release_id}:frontend",
                 source_sha,
                 "components/control-plane.tar",
                 identities["control"],
-                control_manifest_sha,
+                manifest_identities["control"]["sha256"],
             ),
             "secret_resolver": component_row(
                 resolver_release_id,
                 source_sha,
                 "components/secret-resolver.tar",
                 identities["resolver"],
-                resolver_manifest_sha,
+                manifest_identities["resolver"]["sha256"],
             ),
             "runtime_bundle": component_row(
                 runtime_release_id,
                 source_sha,
                 "components/runtime-bundle.tar",
                 identities["runtime"],
-                runtime_manifest_sha,
+                manifest_identities["runtime"]["sha256"],
             ),
             "profile_bridge": component_row(
                 bridge_release_id,
                 source_sha,
                 "components/profile-bridge.zip",
                 identities["bridge"],
-                bridge_manifest_sha,
+                manifest_identities["bridge"]["sha256"],
             ),
         }
 
@@ -373,10 +393,30 @@ def build(
                 "release_architecture_sha256": sha256_file(ROOT / release_architecture_relative),
             },
             "artifact_inventory": [
-                inventory("components/control-plane.tar", identities["control"]),
-                inventory("components/profile-bridge.zip", identities["bridge"]),
-                inventory("components/runtime-bundle.tar", identities["runtime"]),
-                inventory("components/secret-resolver.tar", identities["resolver"]),
+                inventory("components/control-plane.tar", identities["control"], "component"),
+                inventory("components/profile-bridge.zip", identities["bridge"], "component"),
+                inventory("components/runtime-bundle.tar", identities["runtime"], "component"),
+                inventory("components/secret-resolver.tar", identities["resolver"], "component"),
+                inventory(
+                    "manifests/control-plane-manifest.json",
+                    manifest_identities["control"],
+                    "manifest",
+                ),
+                inventory(
+                    "manifests/profile-bridge-manifest.json",
+                    manifest_identities["bridge"],
+                    "manifest",
+                ),
+                inventory(
+                    "manifests/runtime-bundle-manifest.json",
+                    manifest_identities["runtime"],
+                    "manifest",
+                ),
+                inventory(
+                    "manifests/secret-resolver-manifest.json",
+                    manifest_identities["resolver"],
+                    "manifest",
+                ),
             ],
         }
         release_set_id = PREFIX + sha256_bytes(canonical(manifest))
@@ -411,12 +451,14 @@ def component_row(
     }
 
 
-def inventory(path: str, identity: dict[str, Any]) -> dict[str, Any]:
+def inventory(path: str, identity: dict[str, Any], kind: str) -> dict[str, Any]:
+    if kind not in {"component", "manifest"}:
+        fail(f"unsupported Release Set artifact kind: {kind}")
     return {
         "path": path,
         "sha256": identity["sha256"],
         "size_bytes": identity["size_bytes"],
-        "kind": "component",
+        "kind": kind,
     }
 
 
