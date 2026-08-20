@@ -11,6 +11,7 @@ use std::path::Path;
 
 pub struct ReleaseRunRequest<'a> {
     pub root: &'a Path,
+    pub source_root: &'a Path,
     pub action: ReleaseAction,
     pub release_set: &'a Path,
     pub artifact_root: Option<&'a Path>,
@@ -33,7 +34,8 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
                 .artifact_root
                 .ok_or_else(|| ReleaseModelError::new("release verify requires --artifact-root"))?;
             let (_, source_verification) = verify_release_source(request.release_set, &manifest)?;
-            let static_blockers = static_compatibility::evaluate(request.root, &manifest, false)?;
+            let static_blockers =
+                static_compatibility::evaluate(request.source_root, &manifest, false)?;
             if !static_blockers.is_empty() {
                 return Err(ReleaseModelError::new(format!(
                     "RELEASE_STATIC_IDENTITY_MISMATCH: {}",
@@ -52,6 +54,7 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
             let current = request.current_release_set.map(load_manifest).transpose()?;
             evaluate(
                 request.root,
+                request.source_root,
                 &manifest,
                 &evidence,
                 profile_id,
