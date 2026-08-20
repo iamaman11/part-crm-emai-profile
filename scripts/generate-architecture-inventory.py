@@ -461,6 +461,7 @@ def main() -> int:
         )
     else:
         engine.self_test(expected)
+        run([sys.executable, "scripts/credential_authority.py", "--self-test"])
         mutated = json.loads(serialized(expected))
         mutated.pop("runtime_cutover", None)
         if mutated == expected:
