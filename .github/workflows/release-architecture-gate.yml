@@ -55,6 +55,22 @@ jobs:
           PY
           python scripts/generate-architecture-inventory.py --check
 
+      - name: Render A3b lifecycle projection candidate
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 394
+        run: python scripts/generate-ar8-completion-status.py --write
+
+      - name: Upload A3b lifecycle projection candidate
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 394
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: a3b-lifecycle-projections-${{ github.event.pull_request.head.sha }}
+          path: |
+            architecture/inventory.json
+            docs/status.json
+            architecture/architecture-rebaseline-v3-transition.json
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Verify native opsctl release policy foundation
         run: |
           cargo fmt --manifest-path tools/opsctl/Cargo.toml -- --check
