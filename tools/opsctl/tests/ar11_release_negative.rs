@@ -26,7 +26,10 @@ fn resolved_input<'a>(
         .ok_or_else(|| io::Error::other(format!("canonical release input missing: {input_id}")))
 }
 
-fn schema_window(authority: &Value, component_id: &str) -> Result<Value, Box<dyn std::error::Error>> {
+fn schema_window(
+    authority: &Value,
+    component_id: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
     let component = authority["components"]
         .as_array()
         .ok_or_else(|| io::Error::other("D1 authority components must be an array"))?
@@ -56,7 +59,9 @@ fn schema_window(authority: &Value, component_id: &str) -> Result<Value, Box<dyn
     }))
 }
 
-fn canonical_identity_fields(root: &Path) -> Result<(Value, Value, Value, Value, Value), Box<dyn std::error::Error>> {
+fn canonical_identity_fields(
+    root: &Path,
+) -> Result<(Value, Value, Value, Value, Value), Box<dyn std::error::Error>> {
     let topology = ReleaseInputTopology::load(root)?;
     let resolved = topology.resolve(root)?;
 
@@ -77,11 +82,13 @@ fn canonical_identity_fields(root: &Path) -> Result<(Value, Value, Value, Value,
             .unwrap_or_default()
             .cmp(right["path"].as_str().unwrap_or_default())
     });
-    let contract_sha = sha256_hex(canonical_json(&Value::Array(contract_files.clone()))?.as_bytes());
+    let contract_sha =
+        sha256_hex(canonical_json(&Value::Array(contract_files.clone()))?.as_bytes());
     let contracts = json!({"files": contract_files, "sha256": contract_sha});
 
     let runtime_input = resolved_input(&resolved, "camouhost_runtime_lock")?;
-    let runtime_lock: Value = serde_json::from_slice(&std::fs::read(&runtime_input.absolute_path)?)?;
+    let runtime_lock: Value =
+        serde_json::from_slice(&std::fs::read(&runtime_input.absolute_path)?)?;
     let protocols = json!({
         "public_api_contract_sha256": contract_sha,
         "camouhost_ipc_version": runtime_lock["camouhost_ipc_version"],
@@ -182,14 +189,17 @@ fn resign(value: &mut Value) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn parse(value: &Value) -> Result<ReleaseSetManifest, String> {
-    ReleaseSetManifest::parse_json(&serde_json::to_string(value).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())
+    ReleaseSetManifest::parse_json(
+        &serde_json::to_string(value).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[test]
 fn artifact_from_another_sha_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
     let mut value = fixture_value()?;
-    value["components"]["control_plane"]["source_commit_sha"] = Value::String(OTHER_GIT_SHA.to_owned());
+    value["components"]["control_plane"]["source_commit_sha"] =
+        Value::String(OTHER_GIT_SHA.to_owned());
     resign(&mut value)?;
     let error = parse(&value).expect_err("foreign-source component unexpectedly accepted");
     assert!(error.contains("SOURCE_IDENTITY_MISMATCH"));
@@ -201,7 +211,8 @@ fn changed_component_digest_is_rejected() -> Result<(), Box<dyn std::error::Erro
     let mut value = fixture_value()?;
     value["components"]["control_plane"]["artifact_sha256"] = Value::String(SHA_B.to_owned());
     resign(&mut value)?;
-    let error = parse(&value).expect_err("component/inventory digest disagreement unexpectedly accepted");
+    let error =
+        parse(&value).expect_err("component/inventory digest disagreement unexpectedly accepted");
     assert!(error.contains("artifact identity disagrees with artifact_inventory"));
     Ok(())
 }
@@ -253,24 +264,34 @@ fn unknown_component_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn contract_digest_mismatch_is_rejected_by_static_compatibility() -> Result<(), Box<dyn std::error::Error>> {
+fn contract_digest_mismatch_is_rejected_by_static_compatibility()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut value = fixture_value()?;
     value["contracts"]["sha256"] = Value::String(SHA_B.to_owned());
     value["protocols"]["public_api_contract_sha256"] = Value::String(SHA_B.to_owned());
     resign(&mut value)?;
     let release = parse(&value).map_err(io::Error::other)?;
     let blockers = static_compatibility::evaluate(&repo_root(), &release, false)?;
-    assert!(blockers.iter().any(|value| value == "PROTOCOL_INCOMPATIBLE:contracts"));
+    assert!(
+        blockers
+            .iter()
+            .any(|value| value == "PROTOCOL_INCOMPATIBLE:contracts")
+    );
     Ok(())
 }
 
 #[test]
-fn unknown_capability_profile_is_rejected_by_static_compatibility() -> Result<(), Box<dyn std::error::Error>> {
+fn unknown_capability_profile_is_rejected_by_static_compatibility()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut value = fixture_value()?;
     value["capability_profile_compatibility"] = json!(["unknown-profile-v1"]);
     resign(&mut value)?;
     let release = parse(&value).map_err(io::Error::other)?;
     let blockers = static_compatibility::evaluate(&repo_root(), &release, false)?;
-    assert!(blockers.iter().any(|value| value == "PROFILE_NOT_AUTHORIZED"));
+    assert!(
+        blockers
+            .iter()
+            .any(|value| value == "PROFILE_NOT_AUTHORIZED")
+    );
     Ok(())
 }
