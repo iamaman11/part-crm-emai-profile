@@ -5,6 +5,7 @@ use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::promotion::verify::{VerifyRequest, verify};
 use crate::release::compatibility::CompatibilityEvidence;
 use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
+use crate::release::source::verify_release_source;
 use std::fs;
 use std::path::Path;
 
@@ -23,6 +24,7 @@ pub struct PromotionRunRequest<'a> {
 
 pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError> {
     let target = load_manifest(request.release_set)?;
+    verify_release_source(request.release_set, &target)?;
     let snapshot = DeploymentSnapshot::load(request.snapshot)?;
     let evidence = CompatibilityEvidence::load(request.evidence_json)?;
     let current = request.current_release_set.map(load_manifest).transpose()?;
