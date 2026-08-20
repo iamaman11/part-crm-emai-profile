@@ -264,6 +264,7 @@ fn read_unique_tar_member_by_basename(
             continue;
         }
         let effective_path = pending_path.take().unwrap_or(raw_path);
+        validate_archive_member_path(&effective_path)?;
         if matches!(typeflag, 0 | b'0') && basename(&effective_path) == target_basename {
             if found.is_some() {
                 return Err(mismatch(format!(
@@ -705,6 +706,18 @@ fn parse_pax_path(payload: &[u8]) -> Result<Option<String>, ReleaseModelError> {
     Ok(path)
 }
 
+fn validate_archive_member_path(path: &str) -> Result<(), ReleaseModelError> {
+    if path.starts_with('/')
+        || path.contains('\\')
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(mismatch(format!("unsafe tar member path: {path}")));
+    }
+    Ok(())
+}
+
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
@@ -732,6 +745,36 @@ mod tests {
         fs::write(&path, b"not an archive")?;
         assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json").is_err());
         assert!(read_profile_bridge_zip(&path).is_err());
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn unsafe_tar_member_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::env::temp_dir().join(format!(
+            "opsctl-component-manifest-unsafe-tar-{}.tar",
+            std::process::id()
+        ));
+        write_tar_members(&path, &[("../release-manifest.json", b"{}")])?;
+        assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json").is_err());
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_tar_manifest_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::env::temp_dir().join(format!(
+            "opsctl-component-manifest-duplicate-tar-{}.tar",
+            std::process::id()
+        ));
+        write_tar_members(
+            &path,
+            &[
+                ("one/release-manifest.json", b"{}"),
+                ("two/release-manifest.json", b"{}"),
+            ],
+        )?;
+        assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json").is_err());
         fs::remove_file(path)?;
         Ok(())
     }
@@ -771,6 +814,29 @@ mod tests {
         write_local_member(&path, "unexpected.txt", b"x")?;
         assert!(read_profile_bridge_zip(&path).is_err());
         fs::remove_file(path)?;
+        Ok(())
+    }
+
+    fn write_tar_members(
+        path: &Path,
+        members: &[(&str, &[u8])],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut file = fs::File::create(path)?;
+        for (name, payload) in members {
+            if name.len() > 100 {
+                return Err("test TAR member name too long".into());
+            }
+            let mut header = [0_u8; 512];
+            header[..name.len()].copy_from_slice(name.as_bytes());
+            let size = format!("{:011o}\0", payload.len());
+            header[124..136].copy_from_slice(size.as_bytes());
+            header[156] = b'0';
+            file.write_all(&header)?;
+            file.write_all(payload)?;
+            let padding = (512 - (payload.len() % 512)) % 512;
+            file.write_all(&vec![0_u8; padding])?;
+        }
+        file.write_all(&[0_u8; 1024])?;
         Ok(())
     }
 
