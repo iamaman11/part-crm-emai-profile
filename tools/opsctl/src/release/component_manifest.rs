@@ -1,8 +1,8 @@
 use crate::release::digest::{canonical_json, sha256_hex};
 use crate::release::model::{ReleaseComponentIdentity, ReleaseModelError, ReleaseSetManifest};
 use std::fs::{self, File};
-use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::io::{ErrorKind, Read, Seek, SeekFrom};
+use std::path::Path;
 
 const TAR_BLOCK: usize = 512;
 const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
@@ -12,7 +12,7 @@ const PROFILE_BRIDGE_MANIFEST_PATH: &str = "components/profile-bridge-manifest.j
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentManifestVerification {
     pub verified_components: usize,
-    pub durable_manifest_files: usize,
+    pub durable_manifest_bindings: usize,
     pub legacy_reconstructed_manifests: usize,
 }
 
@@ -21,7 +21,7 @@ pub fn verify_component_manifests(
     artifact_root: &Path,
 ) -> Result<ComponentManifestVerification, ReleaseModelError> {
     let mut verified_components = 0_usize;
-    let mut durable_manifest_files = 0_usize;
+    let mut durable_manifest_bindings = 0_usize;
     let mut legacy_reconstructed_manifests = 0_usize;
 
     for component in manifest.components.values() {
@@ -32,7 +32,7 @@ pub fn verify_component_manifests(
                     "release-manifest.json",
                 )?;
                 verify_manifest_digest(component, &bytes)?;
-                durable_manifest_files += 1;
+                durable_manifest_bindings += 1;
             }
             "secret_resolver" => {
                 let bytes = read_unique_tar_member_by_basename(
@@ -40,7 +40,7 @@ pub fn verify_component_manifests(
                     "release-manifest.json",
                 )?;
                 verify_manifest_digest(component, &bytes)?;
-                durable_manifest_files += 1;
+                durable_manifest_bindings += 1;
             }
             "runtime_bundle" => {
                 let bytes = read_unique_tar_member_by_basename(
@@ -48,7 +48,7 @@ pub fn verify_component_manifests(
                     "runtime-manifest.json",
                 )?;
                 verify_manifest_digest(component, &bytes)?;
-                durable_manifest_files += 1;
+                durable_manifest_bindings += 1;
             }
             "profile_bridge" => {
                 if let Some(sidecar) = manifest
@@ -59,14 +59,14 @@ pub fn verify_component_manifests(
                     if sidecar.kind != "manifest"
                         || sidecar.sha256 != component.component_manifest_sha256
                     {
-                        return Err(mismatch(format!(
-                            "profile_bridge sidecar inventory does not bind component_manifest_sha256"
-                        )));
+                        return Err(mismatch(
+                            "profile_bridge sidecar inventory does not bind component_manifest_sha256",
+                        ));
                     }
                     let path = artifact_root.join(PROFILE_BRIDGE_MANIFEST_PATH);
                     let bytes = read_regular_bounded(&path, MAX_MANIFEST_BYTES)?;
                     verify_manifest_digest(component, &bytes)?;
-                    durable_manifest_files += 1;
+                    durable_manifest_bindings += 1;
                 } else {
                     let bytes = legacy_profile_bridge_manifest(component)?;
                     verify_manifest_digest(component, &bytes)?;
@@ -84,7 +84,7 @@ pub fn verify_component_manifests(
 
     Ok(ComponentManifestVerification {
         verified_components,
-        durable_manifest_files,
+        durable_manifest_bindings,
         legacy_reconstructed_manifests,
     })
 }
@@ -203,7 +203,7 @@ fn read_unique_tar_member_by_basename(
             let payload = read_tar_payload(&mut file, size, MAX_PAX_BYTES, archive_path)?;
             let text = std::str::from_utf8(&payload)
                 .map_err(|error| mismatch(format!("GNU tar long path is not UTF-8: {error}")))?;
-            let value = text.trim_end_matches(['\0', '\n']);
+            let value = text.trim_end_matches(|character| character == '\0' || character == '\n');
             if value.is_empty() {
                 return Err(mismatch("GNU tar long path is empty"));
             }
@@ -260,14 +260,14 @@ fn tar_text(field: &[u8], label: &str) -> Result<String, ReleaseModelError> {
 }
 
 fn tar_octal(field: &[u8], label: &str) -> Result<u64, ReleaseModelError> {
-    if field.first().is_some_and(|byte| byte & 0x80 != 0) {
+    if field.first().is_some_and(|byte| *byte & 0x80 != 0) {
         return Err(mismatch(format!(
             "base-256 tar {label} is not allowed in component manifests"
         )));
     }
     let text = std::str::from_utf8(field)
         .map_err(|error| mismatch(format!("tar {label} is not UTF-8: {error}")))?;
-    let trimmed = text.trim_matches(['\0', ' ']);
+    let trimmed = text.trim_matches(|character| character == '\0' || character == ' ');
     if trimmed.is_empty() {
         return Ok(0);
     }
@@ -490,8 +490,7 @@ mod tests {
             artifact_size_bytes: archive.len() as u64,
             component_manifest_sha256: String::new(),
         };
-        let bytes = legacy_profile_bridge_manifest(&temporary)
-            .map_err(|error| error.to_string())?;
+        let bytes = legacy_profile_bridge_manifest(&temporary).map_err(|error| error.to_string())?;
         let component = ReleaseComponentIdentity {
             component_manifest_sha256: sha256_hex(&bytes),
             ..temporary
@@ -617,7 +616,7 @@ mod tests {
         let manifest = fixture(&root, true)?;
         let result = verify_component_manifests(&manifest, &root)?;
         assert_eq!(result.verified_components, 5);
-        assert_eq!(result.durable_manifest_files, 5);
+        assert_eq!(result.durable_manifest_bindings, 5);
         assert_eq!(result.legacy_reconstructed_manifests, 0);
         fs::remove_dir_all(root)?;
         Ok(())
@@ -630,6 +629,7 @@ mod tests {
         let manifest = fixture(&root, false)?;
         let result = verify_component_manifests(&manifest, &root)?;
         assert_eq!(result.verified_components, 5);
+        assert_eq!(result.durable_manifest_bindings, 4);
         assert_eq!(result.legacy_reconstructed_manifests, 1);
         fs::remove_dir_all(root)?;
         Ok(())
@@ -656,23 +656,14 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let root = temp_dir("legacy-mismatch")?;
         let manifest = fixture(&root, false)?;
-        let mut value = serde_json::to_value(&json!({
-            "schema_version": manifest.schema_version,
-        }))?;
-        assert!(value.is_object());
         let mut component = manifest
             .components
             .get("profile_bridge")
             .ok_or("profile_bridge missing")?
             .clone();
         component.component_manifest_sha256 = "f".repeat(64);
-        assert!(
-            super::verify_manifest_digest(
-                &component,
-                &legacy_profile_bridge_manifest(&component)?,
-            )
-            .is_err()
-        );
+        let bytes = legacy_profile_bridge_manifest(&component)?;
+        assert!(super::verify_manifest_digest(&component, &bytes).is_err());
         fs::remove_dir_all(root)?;
         Ok(())
     }
