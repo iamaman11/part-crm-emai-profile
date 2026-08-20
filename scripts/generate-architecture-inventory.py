@@ -23,6 +23,9 @@ RELEASE_ARCHITECTURE_SOURCE = "architecture/release-architecture-ar11.json"
 AR9_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-19-ar9-final-acceptance.json"
 AR10_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-19-ar10-final-acceptance.json"
 AR11_ISSUE = 372
+ACCEPTANCE_DERIVER = ".github/scripts/architecture-acceptance.mjs"
+PROGRAM_SEQUENCE = "architecture/architecture-program-sequence.json"
+LIFECYCLE_PROJECTION_POLICY = "architecture/lifecycle-projection-policy.json"
 SUBJECTS = {
     "credential_authority": "architecture/credential-authority.json",
     "credential_lifecycle": "architecture/credential-lifecycle.json",
@@ -173,6 +176,109 @@ def load_json(relative: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"{relative} must contain one JSON object")
     return payload
+
+
+def validate_derived_lifecycle_state(value: dict[str, Any]) -> dict[str, Any]:
+    if value.get("schema_version") != 1:
+        raise ValueError("Git-derived lifecycle state schema_version must be 1")
+    accepted = value.get("accepted_checkpoint")
+    current = value.get("current_slice")
+    if not isinstance(accepted, str) or not accepted:
+        raise ValueError("Git-derived lifecycle state is missing accepted_checkpoint")
+    for field in ("architecture_complete", "production_ready", "production_mutation"):
+        if not isinstance(value.get(field), bool):
+            raise ValueError(f"Git-derived lifecycle state field {field} must be boolean")
+    if value.get("production_core_gate") not in {"BLOCKED", "AUTHORIZED"}:
+        raise ValueError("Git-derived lifecycle state has invalid production_core_gate")
+
+    sequence = load_json(PROGRAM_SEQUENCE)
+    if (
+        sequence.get("schema_version") != 1
+        or sequence.get("kind") != "ARCHITECTURE_PROGRAM_SEQUENCE"
+        or sequence.get("state_model") != "STATIC_ORDER_ONLY"
+        or sequence.get("mutable_lifecycle_state_forbidden") is not True
+    ):
+        raise ValueError("static architecture program sequence boundary drifted")
+    slices = sequence.get("slices")
+    if not isinstance(slices, list) or any(not isinstance(item, dict) for item in slices):
+        raise ValueError("static architecture program sequence is malformed")
+    accepted_entry = next((item for item in slices if item.get("id") == accepted), None)
+    if accepted_entry is None:
+        raise ValueError(f"Git-derived accepted checkpoint is absent from static sequence: {accepted}")
+    expected_current = accepted_entry.get("successor")
+    if current != expected_current:
+        raise ValueError(
+            f"Git-derived current slice does not match static successor: {current!r} != {expected_current!r}"
+        )
+
+    policy = load_json(LIFECYCLE_PROJECTION_POLICY)
+    authority = policy.get("live_state_authority")
+    consumers = policy.get("consumer_policy")
+    if (
+        policy.get("schema_version") != 1
+        or policy.get("kind") != "LIFECYCLE_PROJECTION_POLICY"
+        or policy.get("status") != "current"
+        or not isinstance(authority, dict)
+        or authority.get("deriver") != f"{ACCEPTANCE_DERIVER} derive"
+        or authority.get("tracked_mutable_lifecycle_state") is not False
+        or authority.get("manual_current_slice_authority") is not False
+        or authority.get("manual_accepted_checkpoint_authority") is not False
+        or not isinstance(consumers, dict)
+        or consumers.get("tracked_snapshot_may_decide_accepted_or_current_slice") is not False
+        or consumers.get("duplicate_lifecycle_derivation_algorithm_forbidden") is not True
+    ):
+        raise ValueError("lifecycle projection read-side authority policy drifted")
+    return value
+
+
+def derive_lifecycle_state() -> dict[str, Any]:
+    result = subprocess.run(
+        ["node", ACCEPTANCE_DERIVER, "derive"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        details = "\n".join(
+            part.strip() for part in (result.stdout, result.stderr) if part.strip()
+        )
+        raise ValueError(details or "canonical Git-derived lifecycle command failed")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError("canonical Git-derived lifecycle command returned malformed JSON") from error
+    if not isinstance(payload, dict):
+        raise ValueError("canonical Git-derived lifecycle command must return one JSON object")
+    return validate_derived_lifecycle_state(payload)
+
+
+def validate_current_source_documents() -> None:
+    for item in engine.DOCUMENT_STATUS:
+        path = item.get("path") if isinstance(item, dict) else None
+        if not isinstance(path, str) or not (ROOT / path).is_file():
+            raise ValueError(f"document-status inventory path missing: {path!r}")
+
+    # Lifecycle state is read only from the generic Git-derived acceptance authority.
+    # Tracked status/inventory/transition fields remain compatibility projections and
+    # are deliberately not consumed here to decide accepted/current architecture state.
+    derive_lifecycle_state()
+
+    runtime_gate = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-cloudflare-runtime-bindings.py")],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if runtime_gate.returncode != 0:
+        details = "\n".join(
+            part.strip() for part in (runtime_gate.stdout, runtime_gate.stderr) if part.strip()
+        )
+        raise ValueError(f"runtime authority gate failed:\n{details}")
+
+
+engine.validate_source_documents = validate_current_source_documents
 
 
 def file_sha256(relative: str) -> str:
@@ -516,6 +622,17 @@ def main() -> int:
             raise ValueError("current inventory credential negative fixtures did not cut over to neutral authority")
         if engine.print_credential_check_summary is not print_current_credential_check_summary:
             raise ValueError("current inventory credential summary did not cut over to neutral authority")
+        if engine.validate_source_documents is not validate_current_source_documents:
+            raise ValueError("current inventory lifecycle reads did not cut over to Git-derived authority")
+        derived = derive_lifecycle_state()
+        malformed = json.loads(serialized(derived))
+        malformed["current_slice"] = malformed["accepted_checkpoint"]
+        try:
+            validate_derived_lifecycle_state(malformed)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("Git-derived lifecycle successor mismatch negative fixture unexpectedly passed")
         engine.self_test(expected)
         run([sys.executable, "scripts/credential_authority.py", "--self-test"])
         mutated = json.loads(serialized(expected))
@@ -533,6 +650,7 @@ def main() -> int:
                 "missing AR-11 release architecture projection negative fixture unexpectedly matched"
             )
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--self-test"])
+        run(["node", ACCEPTANCE_DERIVER, "self-test"])
         run(["node", ".github/scripts/architecture-authority-check.mjs", "--self-test"])
         run(["node", ".github/scripts/profile-security-authority-check.mjs", "--self-test"])
     return 0
