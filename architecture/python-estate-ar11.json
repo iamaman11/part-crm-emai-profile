@@ -20,6 +20,14 @@
       "rationale": "deterministic Release Set packaging adapter; no provider network, credentials, promotion decision or provider mutation"
     },
     {
+      "path": "scripts/accepted-source-evidence-ar11.py",
+      "classification": "KEEP_PYTHON",
+      "role": "accepted_source_evidence_adapter",
+      "side_effect_class": "saved_github_metadata_projection_only",
+      "authority": "PYTHON_ALLOWED_BY_POST_AR11_FUNCTIONAL_CLOSURE",
+      "rationale": "deterministically projects already-saved GitHub release, protected-main and compare metadata into AcceptedSourceEvidence; no network client, credentials, acceptance decision, provider access or mutation authority"
+    },
+    {
       "path": "scripts/release-compat-evidence-ar11.py",
       "classification": "KEEP_PYTHON",
       "role": "compatibility_evidence_adapter",
@@ -106,9 +114,9 @@
     ]
   },
   "current_summary": {
-    "tracked_python_files": 123,
+    "tracked_python_files": 124,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 123,
+    "KEEP_PYTHON": 124,
     "MIGRATE_TO_RUST": 0,
     "WRAP_WITH_RUST": 0
   }

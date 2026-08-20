@@ -71,6 +71,7 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             root,
             action,
             release_set,
+            source_root,
             artifact_root,
             profile_id,
             environment,
@@ -78,8 +79,10 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             current_release_set,
         } => {
             let repo_root = resolve_repo_root(root.as_deref(), "release")?;
+            let release_source_root = source_root.as_deref().unwrap_or(&repo_root);
             release::commands::run(release::commands::ReleaseRunRequest {
                 root: &repo_root,
+                source_root: release_source_root,
                 action,
                 release_set: &release_set,
                 artifact_root: artifact_root.as_deref(),
@@ -95,6 +98,7 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             root,
             action,
             release_set,
+            source_root,
             profile_id,
             environment,
             snapshot,
@@ -104,8 +108,10 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             expected_current_release_set_id,
         } => {
             let repo_root = resolve_repo_root(root.as_deref(), "promotion")?;
+            let release_source_root = source_root.as_deref().unwrap_or(&repo_root);
             promotion::commands::run(promotion::commands::PromotionRunRequest {
                 root: &repo_root,
+                source_root: release_source_root,
                 action,
                 release_set: &release_set,
                 profile_id: &profile_id,

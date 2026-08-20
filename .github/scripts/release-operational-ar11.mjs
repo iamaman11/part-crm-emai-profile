@@ -38,6 +38,10 @@ function operationalErrors({ requireCutover = true } = {}) {
     'Build immutable cloud components once',
     'Build immutable Windows Profile Bridge component',
     'release-set-ar11.py build',
+    'accepted-source-evidence-ar11.py',
+    'repos/$GITHUB_REPOSITORY/branches/main',
+    'compare/$SOURCE_SHA...$main_sha',
+    '.source_accepted == true',
     'release verify',
     'gh release create',
     'gh release upload',
@@ -58,8 +62,19 @@ function operationalErrors({ requireCutover = true } = {}) {
     'confirmation:',
     'environment: staging',
     'TARGET_PROFILE: rehearsal-core-v1',
+    'Prove Release Set source was accepted protected main',
+    'test "$(jq -r \' .protected\' "$branch_json")" = true'.replace("' .", "'."),
+    'compare/$source_sha...$main_sha',
+    'Checkout current protected-main policy authority',
+    'Checkout exact historical Release Set source as read-only verification input',
+    'path: target-source',
+    'accepted-source-evidence-ar11.py',
+    '.source_accepted == true',
     'gh release download "$RELEASE_SET_ID"',
     'release verify',
+    '--root . release verify',
+    '--source-root "$GITHUB_WORKSPACE/target-source"',
+    '--source-root "$TARGET_SOURCE_ROOT"',
     'd1 compatibility',
     'release compatibility',
     'promotion plan',
@@ -71,6 +86,8 @@ function operationalErrors({ requireCutover = true } = {}) {
     '.verified == true',
   ], 'Release Set promotion'));
   errors.push(...forbidMarkers(promotion, [
+    'test "$source_sha" = "$main_sha"',
+    '--root "$GITHUB_WORKSPACE/target-source" release verify',
     'environment: production',
     'TARGET_PROFILE: production-',
     'mailbox-secret-resolver-promotion.py',
@@ -130,6 +147,10 @@ function selfTest() {
   const promotion = read(PROMOTION);
   const negative = forbidMarkers(`${promotion}\n  environment: production\n  run: cargo build --release\n`, ['environment: production', 'cargo build'], 'negative fixture');
   if (negative.length !== 2) throw new Error('AR-11 operational negative fixture unexpectedly passed');
+  const staleHeadEquality = forbidMarkers(`${promotion}\n  test "$source_sha" = "$main_sha"\n`, ['test "$source_sha" = "$main_sha"'], 'historical-source negative fixture');
+  if (staleHeadEquality.length !== 1) throw new Error('historical Release Set current-head equality fixture unexpectedly passed');
+  const stalePolicyRoot = forbidMarkers(`${promotion}\n  --root "$GITHUB_WORKSPACE/target-source" release verify\n`, ['--root "$GITHUB_WORKSPACE/target-source" release verify'], 'historical-policy-root negative fixture');
+  if (stalePolicyRoot.length !== 1) throw new Error('historical source unexpectedly regained policy-root authority');
   console.log('AR-11 operational release/promotion negative self-test passed.');
 }
 if (process.argv.includes('--self-test')) {

@@ -220,6 +220,7 @@ fn converged_staging_plan_is_no_change_and_preflight_ready()
 
     let plan = build(PlanRequest {
         root: &root,
+        source_root: &root,
         target: &target,
         target_profile_id: "rehearsal-core-v1",
         environment: "staging",
@@ -233,6 +234,7 @@ fn converged_staging_plan_is_no_change_and_preflight_ready()
 
     let result = preflight(PreflightRequest {
         root: &root,
+        source_root: &root,
         target: &target,
         target_profile_id: "rehearsal-core-v1",
         environment: "staging",
@@ -255,6 +257,7 @@ fn production_remains_blocked_even_with_compatible_saved_evidence()
     let compatibility = evidence(&target.release_set_id, "COMPATIBLE")?;
     let plan = build(PlanRequest {
         root: &root,
+        source_root: &root,
         target: &target,
         target_profile_id: "production-core-v1",
         environment: "production",
@@ -286,6 +289,7 @@ fn stale_expected_current_is_rejected_before_plan_creation()
     let compatibility = evidence(&target.release_set_id, "UNKNOWN")?;
     let result = build(PlanRequest {
         root: &root,
+        source_root: &root,
         target: &target,
         target_profile_id: "rehearsal-core-v1",
         environment: "staging",

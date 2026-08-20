@@ -10,6 +10,7 @@ pub mod compatibility;
 pub mod digest;
 pub mod input_topology;
 pub mod model;
+pub mod source;
 pub mod static_compatibility;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

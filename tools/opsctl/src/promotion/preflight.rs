@@ -15,6 +15,7 @@ const DEPLOY_OWNED_RESOURCES: [&str; 4] = [
 
 pub struct PreflightRequest<'a> {
     pub root: &'a Path,
+    pub source_root: &'a Path,
     pub target: &'a ReleaseSetManifest,
     pub target_profile_id: &'a str,
     pub environment: &'a str,
@@ -64,6 +65,7 @@ impl PreflightResult {
 pub fn evaluate(request: PreflightRequest<'_>) -> Result<PreflightResult, ReleaseModelError> {
     let plan = build(PlanRequest {
         root: request.root,
+        source_root: request.source_root,
         target: request.target,
         target_profile_id: request.target_profile_id,
         environment: request.environment,
