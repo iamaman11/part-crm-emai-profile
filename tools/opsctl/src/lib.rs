@@ -123,14 +123,47 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CredentialsAction, Invocation, OpsctlError, execute};
+    use super::{CredentialsAction, Invocation, OpsctlError, execute, parse_invocation};
+    use serde_json::Value;
+    use std::collections::BTreeSet;
+    use std::ffi::OsString;
+    use std::fs;
     use std::path::PathBuf;
+
+    fn repository_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn parser_args(values: &[Value]) -> Result<Vec<OsString>, String> {
+        let mut args = vec![OsString::from("opsctl")];
+        for value in values {
+            let argument = value
+                .as_str()
+                .ok_or_else(|| "operator parser probe arguments must be strings".to_owned())?;
+            args.push(OsString::from(argument));
+        }
+        Ok(args)
+    }
+
+    fn invocation_command(invocation: &Invocation) -> Option<String> {
+        match invocation {
+            Invocation::Help | Invocation::Version => None,
+            Invocation::Run { command, .. } => Some(format!("opsctl {}", command.name())),
+            Invocation::Credentials { action, .. } => {
+                Some(format!("opsctl credentials {}", action.name()))
+            }
+            Invocation::D1 { action, .. } => Some(format!("opsctl d1 {}", action.name())),
+            Invocation::Release { action, .. } => Some(format!("opsctl release {}", action.name())),
+            Invocation::Promotion { action, .. } => {
+                Some(format!("opsctl promotion {}", action.name()))
+            }
+        }
+    }
 
     #[test]
     fn credentials_status_preserves_lifecycle_metadata_contract() -> Result<(), OpsctlError> {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let output = execute(Invocation::Credentials {
-            root: Some(root),
+            root: Some(repository_root()),
             action: CredentialsAction::Status,
         })?;
         assert!(output.contains("\"kind\": \"CREDENTIAL_LIFECYCLE_AUTHORITY\""));
@@ -142,15 +175,98 @@ mod tests {
     #[test]
     fn credentials_rotation_plan_preserves_metadata_only_operator_contract()
     -> Result<(), OpsctlError> {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let output = execute(Invocation::Credentials {
-            root: Some(root),
+            root: Some(repository_root()),
             action: CredentialsAction::RotationPlan,
         })?;
         assert!(output.contains("\"kind\": \"OPERATOR_CONTRACT_AUTHORITY\""));
         assert!(output.contains("\"mode\": \"READ_ONLY_METADATA_ONLY\""));
         assert!(output.contains("\"production_mutation\": false"));
         assert!(!output.contains("\"secret_value\":"));
+        Ok(())
+    }
+
+    #[test]
+    fn operator_registry_active_probes_match_parser_and_reserved_probes_fail_closed()
+    -> Result<(), String> {
+        let text =
+            fs::read_to_string(repository_root().join("architecture/operator-contract.json"))
+                .map_err(|error| format!("operator contract must be readable: {error}"))?;
+        let authority: Value = serde_json::from_str(&text)
+            .map_err(|error| format!("operator contract must be JSON: {error}"))?;
+        let surfaces = authority["operator_surfaces"]
+            .as_object()
+            .ok_or_else(|| "operator_surfaces must be an object".to_owned())?;
+        let mut active = BTreeSet::new();
+
+        for (id, entry) in surfaces {
+            assert_eq!(entry["status"].as_str(), Some("ACTIVE"), "{id}");
+            assert_eq!(
+                entry["mode"].as_str(),
+                Some("READ_ONLY_METADATA_ONLY"),
+                "{id}"
+            );
+            assert_eq!(entry["side_effects"].as_str(), Some("NONE"), "{id}");
+            assert_eq!(entry["network_authority"].as_bool(), Some(false), "{id}");
+            assert_eq!(
+                entry["provider_mutation_authority"].as_bool(),
+                Some(false),
+                "{id}"
+            );
+            assert_eq!(entry["secret_readback"].as_bool(), Some(false), "{id}");
+
+            let command = entry["command"]
+                .as_str()
+                .ok_or_else(|| format!("{id} active operator command must be a string"))?;
+            assert!(
+                active.insert(command.to_owned()),
+                "duplicate command: {command}"
+            );
+            let probe = entry["parser_probe_args"]
+                .as_array()
+                .ok_or_else(|| format!("{id} active operator parser probe must be an array"))?;
+            let invocation = parse_invocation(parser_args(probe)?)
+                .map_err(|error| format!("{id} registry probe did not parse: {error}"))?;
+            assert_eq!(
+                invocation_command(&invocation).as_deref(),
+                Some(command),
+                "{id}"
+            );
+        }
+        assert_eq!(active.len(), 15, "Unit B active command count drifted");
+
+        let reserved = authority["reserved_namespaces"]
+            .as_array()
+            .ok_or_else(|| "reserved_namespaces must be an array".to_owned())?;
+        assert_eq!(reserved.len(), 3, "Unit B reserved namespace count drifted");
+        for entry in reserved {
+            assert_eq!(entry["status"].as_str(), Some("RESERVED"));
+            assert_eq!(entry["provider_mutation_authority"].as_bool(), Some(false));
+            assert_eq!(entry["network_authority"].as_bool(), Some(false));
+            assert_eq!(
+                entry["production_authorization_authority"].as_bool(),
+                Some(false)
+            );
+            let probes = entry["parser_probe_args"]
+                .as_array()
+                .ok_or_else(|| "reserved parser probes must be an array".to_owned())?;
+            for probe in probes {
+                let values = probe
+                    .as_array()
+                    .ok_or_else(|| "each reserved parser probe must be an array".to_owned())?;
+                assert!(
+                    parse_invocation(parser_args(values)?).is_err(),
+                    "reserved parser probe unexpectedly became active: {values:?}"
+                );
+            }
+        }
+
+        for unknown in ["provision", "deploy", "mutate", "recovery", "readiness"] {
+            assert!(
+                parse_invocation(vec![OsString::from("opsctl"), OsString::from(unknown)]).is_err(),
+                "unknown/reserved command unexpectedly parsed: {unknown}"
+            );
+        }
         Ok(())
     }
 }
