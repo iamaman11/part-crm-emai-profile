@@ -76,6 +76,14 @@
       "rationale": "fail-closed 37/37 AR-11 traceability and offline-authority validator; reads repository sources only and has no provider, network, credential or production mutation authority"
     },
     {
+      "path": "scripts/check-ar11-staging-rehearsal.py",
+      "classification": "KEEP_PYTHON",
+      "role": "staging_rehearsal_evidence_validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_POST_AR11_FUNCTIONAL_CLOSURE",
+      "rationale": "fail-closed validator for saved FC-6 staging same-bits and rollback evidence; parses repository/local evidence only and has no provider, network, credential or production mutation authority"
+    },
+    {
       "path": "scripts/check-historical-executable-debt.py",
       "classification": "KEEP_PYTHON",
       "role": "post_ar11_cleanup_validator",
@@ -122,9 +130,9 @@
     ]
   },
   "current_summary": {
-    "tracked_python_files": 125,
+    "tracked_python_files": 126,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 125,
+    "KEEP_PYTHON": 126,
     "MIGRATE_TO_RUST": 0,
     "WRAP_WITH_RUST": 0
   }
