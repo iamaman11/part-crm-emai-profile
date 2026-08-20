@@ -1,0 +1,67 @@
+name: AR-11 FC-2 TAR Hardening Helper
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout working branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: codex/ar11-functional-closure-v2
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Patch fail-closed TAR member validation and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tools/opsctl/src/release/component_manifest.rs')
+          text = path.read_text()
+
+          old = '''        let effective_path = pending_path.take().unwrap_or(raw_path);\n        if matches!(typeflag, 0 | b'0') && basename(&effective_path) == target_basename {'''
+          new = '''        let effective_path = pending_path.take().unwrap_or(raw_path);\n        validate_archive_member_path(&effective_path)?;\n        if matches!(typeflag, 0 | b'0') && basename(&effective_path) == target_basename {'''
+          if old not in text:
+              raise SystemExit('effective TAR path anchor missing')
+          text = text.replace(old, new, 1)
+
+          old = '''fn basename(path: &str) -> &str {\n    path.rsplit('/').next().unwrap_or(path)\n}\n'''
+          new = '''fn validate_archive_member_path(path: &str) -> Result<(), ReleaseModelError> {\n    if path.starts_with('/')\n        || path.contains('\\\\')\n        || path\n            .split('/')\n            .any(|part| part.is_empty() || part == "." || part == "..")\n    {\n        return Err(mismatch(format!("unsafe tar member path: {path}")));\n    }\n    Ok(())\n}\n\nfn basename(path: &str) -> &str {\n    path.rsplit('/').next().unwrap_or(path)\n}\n'''
+          if old not in text:
+              raise SystemExit('basename anchor missing')
+          text = text.replace(old, new, 1)
+
+          old = '''    #[test]\n    fn empty_zip_cannot_fake_manifest() -> Result<(), Box<dyn std::error::Error>> {'''
+          new = '''    #[test]\n    fn unsafe_tar_member_is_rejected() -> Result<(), Box<dyn std::error::Error>> {\n        let path = std::env::temp_dir().join(format!(\n            "opsctl-component-manifest-unsafe-tar-{}.tar",\n            std::process::id()\n        ));\n        write_tar_members(&path, &[("../release-manifest.json", b"{}")])?;\n        assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json").is_err());\n        fs::remove_file(path)?;\n        Ok(())\n    }\n\n    #[test]\n    fn duplicate_tar_manifest_is_rejected() -> Result<(), Box<dyn std::error::Error>> {\n        let path = std::env::temp_dir().join(format!(\n            "opsctl-component-manifest-duplicate-tar-{}.tar",\n            std::process::id()\n        ));\n        write_tar_members(\n            &path,\n            &[\n                ("one/release-manifest.json", b"{}"),\n                ("two/release-manifest.json", b"{}"),\n            ],\n        )?;\n        assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json").is_err());\n        fs::remove_file(path)?;\n        Ok(())\n    }\n\n    #[test]\n    fn empty_zip_cannot_fake_manifest() -> Result<(), Box<dyn std::error::Error>> {'''
+          if old not in text:
+              raise SystemExit('test insertion anchor missing')
+          text = text.replace(old, new, 1)
+
+          old = '''    fn write_local_member(\n        path: &Path,\n        name: &str,\n        payload: &[u8],\n    ) -> Result<(), Box<dyn std::error::Error>> {'''
+          new = '''    fn write_tar_members(\n        path: &Path,\n        members: &[(&str, &[u8])],\n    ) -> Result<(), Box<dyn std::error::Error>> {\n        let mut file = fs::File::create(path)?;\n        for (name, payload) in members {\n            if name.len() > 100 {\n                return Err("test TAR member name too long".into());\n            }\n            let mut header = [0_u8; 512];\n            header[..name.len()].copy_from_slice(name.as_bytes());\n            let size = format!("{:011o}\\0", payload.len());\n            header[124..136].copy_from_slice(size.as_bytes());\n            header[156] = b'0';\n            file.write_all(&header)?;\n            file.write_all(payload)?;\n            let padding = (512 - (payload.len() % 512)) % 512;\n            file.write_all(&vec![0_u8; padding])?;\n        }\n        file.write_all(&[0_u8; 1024])?;\n        Ok(())\n    }\n\n    fn write_local_member(\n        path: &Path,\n        name: &str,\n        payload: &[u8],\n    ) -> Result<(), Box<dyn std::error::Error>> {'''
+          if old not in text:
+              raise SystemExit('helper insertion anchor missing')
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml -- tools/opsctl/src/release/component_manifest.rs
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml release::component_manifest::tests
+          git diff --check
+          git rm .github/workflows/ar11-fc2-tar-hardening-helper.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/opsctl/src/release/component_manifest.rs
+          git commit -m "AR-11 FC-2: reject unsafe TAR manifest paths"
+          git push origin HEAD:codex/ar11-functional-closure-v2
