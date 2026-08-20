@@ -176,31 +176,31 @@
     },
     {
       "path": ".github/scripts/ar8c-credential-bundle-recovery.mjs",
-      "classification": "UPGRADE_ROLLBACK_REQUIRED",
-      "expected_present": true,
+      "classification": "DEAD",
+      "expected_present": false,
       "standalone_entrypoint": false,
-      "proves": "explicit protected recovery path can reconstruct credential bundles only under recovery authority",
-      "duplicate_or_successor": "not routine deployment authority; retained specifically for recovery/rollback semantics",
-      "reads_git_history": false,
-      "executes_historical_code": false,
-      "materializes_retired_code": false,
-      "runtime_mutation_authority": true,
-      "remote_mutation_authority": true,
-      "disposition": "KEEP_AS_PROTECTED_RECOVERY_AUTHORITY"
-    },
-    {
-      "path": ".github/scripts/ar8c-credential-bundle-recovery-contract.mjs",
-      "classification": "CURRENT_INVARIANT",
-      "expected_present": true,
-      "standalone_entrypoint": false,
-      "proves": "recovery mutation surface remains bounded by the accepted recovery contract",
-      "duplicate_or_successor": "current guard for the required recovery authority",
+      "proves": "retired AR-8C fresh-project staging credential bundle bootstrap/recovery ceremony",
+      "duplicate_or_successor": "no active registered workflow calls this executor; current recovery semantics are concern-specific in architecture/credential-lifecycle.json and use explicit governed mutators rather than fresh-project bundle reconstruction",
       "reads_git_history": false,
       "executes_historical_code": false,
       "materializes_retired_code": false,
       "runtime_mutation_authority": false,
       "remote_mutation_authority": false,
-      "disposition": "KEEP"
+      "disposition": "REMOVED_IN_PR_380_AND_MUST_STAY_ABSENT"
+    },
+    {
+      "path": ".github/scripts/ar8c-credential-bundle-recovery-contract.mjs",
+      "classification": "DEAD",
+      "expected_present": false,
+      "standalone_entrypoint": false,
+      "proves": "retired AR-8C staging recovery workflow/executor contract",
+      "duplicate_or_successor": "the contract referenced absent .github/workflows/ar8c-credential-bundle-recovery.yml and had zero current executable callers; durable recovery invariants remain in architecture/credential-lifecycle.json",
+      "reads_git_history": false,
+      "executes_historical_code": false,
+      "materializes_retired_code": false,
+      "runtime_mutation_authority": false,
+      "remote_mutation_authority": false,
+      "disposition": "REMOVED_IN_PR_380_AND_MUST_STAY_ABSENT"
     }
   ]
 }
