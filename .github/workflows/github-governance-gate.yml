@@ -85,6 +85,12 @@ jobs:
       - name: Prove Actions registry drift fails closed
         run: node .github/scripts/github-actions-registry.mjs self-test
 
+      - name: Validate bounded stale Actions remediation contract
+        run: node .github/scripts/github-actions-registry-remediation.mjs contract
+
+      - name: Prove stale Actions remediation fails closed
+        run: node .github/scripts/github-actions-registry-remediation.mjs self-test
+
       - name: Validate accepted AR-8C operational credential lifecycle provenance
         run: node .github/scripts/credential-lifecycle.mjs contract
 
@@ -109,10 +115,53 @@ jobs:
       - name: Prove Profile/Camoufox security and proxy-handle leakage fail closed
         run: node .github/scripts/profile-security-authority-check.mjs --self-test
 
+  stale-actions-registry-remediation:
+    name: Disable allowlisted stale Actions registrations
+    if: github.event_name == 'push'
+    needs: contract
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout exact accepted source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
+
+      - name: Set up Node 24 LTS
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Enforce Node version
+        run: test "$(node --version)" = "v24.19.0"
+
+      - name: Re-prove bounded remediation before mutation
+        run: |
+          node .github/scripts/github-actions-registry-remediation.mjs contract
+          node .github/scripts/github-actions-registry-remediation.mjs self-test
+
+      - name: Disable only allowlisted stale workflow registrations and prove convergence
+        env:
+          GITHUB_ACTIONS_WRITE_AUTH: ${{ github.token }}
+        run: printf '%s' "$GITHUB_ACTIONS_WRITE_AUTH" | node .github/scripts/github-actions-registry-remediation.mjs apply
+
   hosted-state:
     name: GitHub Governance Hosted State
-    if: github.event_name != 'pull_request'
-    needs: contract
+    if: >-
+      always() &&
+      github.event_name != 'pull_request' &&
+      needs.contract.result == 'success' &&
+      (github.event_name != 'push' || needs.stale-actions-registry-remediation.result == 'success')
+    needs: [contract, stale-actions-registry-remediation]
     runs-on: ubuntu-24.04
     env:
       GOVERNANCE_AUDIT_TOKEN: ${{ secrets.GOVERNANCE_AUDIT_TOKEN }}
