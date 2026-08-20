@@ -3,6 +3,7 @@ use crate::release::artifact::verify_artifacts;
 use crate::release::compatibility::{CompatibilityEvidence, evaluate};
 use crate::release::input_topology::ReleaseInputTopology;
 use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
+use crate::release::source::{AcceptedSourceVerification, verify_release_source};
 use crate::release::static_compatibility;
 use serde_json::json;
 use std::fs;
@@ -31,6 +32,7 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
             let artifact_root = request
                 .artifact_root
                 .ok_or_else(|| ReleaseModelError::new("release verify requires --artifact-root"))?;
+            let (_, source_verification) = verify_release_source(request.release_set, &manifest)?;
             let static_blockers = static_compatibility::evaluate(request.root, &manifest, false)?;
             if !static_blockers.is_empty() {
                 return Err(ReleaseModelError::new(format!(
@@ -38,7 +40,7 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
                     static_blockers.join(",")
                 )));
             }
-            verify(&manifest, artifact_root)?
+            verify(&manifest, artifact_root, &source_verification)?
         }
         ReleaseAction::Compatibility => {
             let profile_id = required_text(request.profile_id, "--profile")?;
@@ -101,6 +103,7 @@ fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_j
             "commit_sha": manifest.source.commit_sha,
             "accepted_main": manifest.source.accepted_main,
             "accepted_main_evidence_sha256": manifest.source.accepted_main_evidence_sha256,
+            "accepted_main_evidence_role": "LEGACY_IDENTITY_BINDING_ONLY"
         },
         "components": components,
         "capability_profile_compatibility": manifest.capability_profile_compatibility,
@@ -113,6 +116,7 @@ fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_j
 fn verify(
     manifest: &ReleaseSetManifest,
     artifact_root: &Path,
+    source: &AcceptedSourceVerification,
 ) -> Result<serde_json::Value, ReleaseModelError> {
     let artifacts = verify_artifacts(manifest, artifact_root)?;
     Ok(json!({
@@ -121,6 +125,10 @@ fn verify(
         "decision": "VALID",
         "release_set_id": manifest.release_set_id,
         "source_commit_sha": manifest.source.commit_sha,
+        "source_accepted": true,
+        "accepted_source_evidence_sha256": source.evidence_sha256,
+        "observed_protected_main_sha": source.observed_protected_main_sha,
+        "source_lineage_status": source.lineage_status,
         "verified_files": artifacts.verified_files,
         "verified_bytes": artifacts.verified_bytes,
         "mutation_executed": false
