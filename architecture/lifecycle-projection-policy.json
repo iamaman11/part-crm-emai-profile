@@ -81,7 +81,12 @@
     "projection_updates_may_improve_human_or_compatibility_accuracy": true,
     "projection_updates_are_not_acceptance_events": true,
     "projection_staleness_must_not_revoke_or_create_acceptance": true,
-    "projection_generation_must_be_deterministic": true
+    "projection_generation_must_be_deterministic": true,
+    "explicit_sync_source": ".github/scripts/architecture-acceptance.mjs derive",
+    "explicit_projection_write_may_snapshot_canonical_derived_state": true,
+    "explicit_projection_write_is_acceptance_event": false,
+    "ordinary_checks_must_not_require_snapshot_equal_live_state": true,
+    "post_acceptance_projection_source_commit_required": false
   },
   "fail_closed_invariants": {
     "architecture_complete": false,
