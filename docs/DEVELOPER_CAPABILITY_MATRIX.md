@@ -1,7 +1,7 @@
 # Developer Capability and Module Matrix
 
 **Status:** normative accepted implementation/evidence orientation  
-**Date:** 2026-08-19
+**Date:** 2026-08-20
 **Execution authority:** [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](./ARCHITECTURE_REBASELINE_V3_PLAN.md)
 **Generated projection:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
 
@@ -31,13 +31,13 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
-| Source implemented | **ACCEPTED** | AR-10 source is accepted on `main`; AR-11 is the current architecture slice. |
-| Accepted on main | **COMPLETE THROUGH AR-10** | AR-8 and AR-9 are accepted; AR-9 evidence is `docs/evidence/2026-08-19-ar9-final-acceptance.json`. |
+| Source implemented | **ACCEPTED THROUGH AR-11** | AR-11 source is accepted on `main`; AR-12 is current and NOT STARTED. |
+| Accepted on main | **COMPLETE THROUGH AR-11** | AR-8, AR-9, AR-10 and AR-11 are accepted; AR-11 is the generic acceptance migration anchor. |
 | Staging live | **PARTIAL** | AR-8C staging provider/credential foundation remains the bounded live staging evidence; later architecture acceptance does not imply broader staging or production deployment. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
-| Current blocker | **NONE** | AR-9 is accepted; no predecessor blocker remains. |
-| Next gate | **AR-11 acceptance** | AR-10 — Runtime and Historical Executable Simplification is the current slice. |
+| Current implementation blocker | **ISSUE #375 OPEN** | Pre-AR12 hardening must close before AR-12 implementation begins. |
+| Next gate | **AR-12 implementation entry** | AR-12 remains NOT STARTED; this projection does not create AR-12 acceptance. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
@@ -70,7 +70,7 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 | Complete standalone UI | Composed / Synthetic | Phase 2H implementation PR #164 was accepted from exact source head `9add9b94d0de255b93e5a7c24584fcf6756462a7` and guarded squash merge `a32768feddb3da69b872e701bc529aad3521e1b0`, with exactly 12/12 permanent workflows success, `behind_by=0`, reviews=0 and unresolved review threads=0. | Phase 2I integrated E2E/security/recovery/operations hardening is accepted; Phase 2J closes real rollout evidence. |
 | Integrated release-candidate hardening | Composed / Synthetic | Phase 2I implementation PR #168 was accepted from exact source head `c1075337cfc582d0f4c00ec34b1aa7cda9ac1101` and guarded squash merge `800c634147d6300ea3989ff0cf87ade6e2387ee9`, with exactly 12/12 permanent workflows success, `behind_by=0`, reviews=0 and unresolved review threads=0. Repository-owned scope includes executable security/failure/recovery/DR, metadata-safe operations/capacity, dependency/license/threat-model, support-bundle and release-freeze evidence. | Real Cloudflare/provider/Camoufox/physical-device/signing/key/independent-review evidence remains Phase 2J External; `production_ready=false` remains unchanged. |
 | External CRM integration | Target / Future | Future-only contract-isolated Party/adapter direction is documented separately. | No active CRM implementation; it may be considered only after standalone Phase 2J. |
-| Production readiness | External | Repository/source evidence includes accepted AR-9 plus the bounded AR-8C staging foundation; both remain independent from production state. | `production_core_gate=BLOCKED` and `production_ready=false`; only AR-17 may authorize the Core gate and only successful PC-1 may enable accepted `production-core-v1` scope. |
+| Production readiness | External | Repository/source evidence includes accepted AR-11 plus the bounded AR-8C staging foundation; both remain independent from production state. | `production_core_gate=BLOCKED` and `production_ready=false`; only AR-17 may authorize the Core gate and only successful PC-1 may enable accepted `production-core-v1` scope. |
 
 ## 4. Architecture Obligation Status
 

@@ -29,11 +29,19 @@
         "current_delivery_map",
         "documentation_authority.current_slice",
         "documentation_authority.current_delivery_map",
+        "documentation_authority.lifecycle_projection_role",
+        "documentation_authority.lifecycle_authority",
         "program_state.accepted_architecture_slices",
         "program_state.current_architecture_slice",
         "program_state.next_architecture_slice_after_acceptance",
         "program_state.ar8_progress",
-        "program_state.current_delivery_map"
+        "program_state.current_delivery_map",
+        "program_state.architecture_complete",
+        "program_state.production_core_gate",
+        "program_state.production_ready",
+        "program_state.production_mutation_allowed_during_ar0_ar17",
+        "program_state.lifecycle_projection_role",
+        "program_state.lifecycle_authority"
       ]
     },
     {
@@ -43,7 +51,10 @@
         "current.architecture_program.accepted_slices",
         "current.architecture_program.current_slice",
         "current.architecture_program.next_slice_after_acceptance",
-        "current.current_delivery_map"
+        "current.architecture_program.current_slice_projection",
+        "current.current_delivery_map",
+        "current.next_repository_step",
+        "implementation.architecture_rebaseline_v3"
       ]
     },
     {
@@ -54,7 +65,10 @@
         "accepted_slices",
         "current_slice",
         "next_slice_after_acceptance",
-        "current_delivery_map"
+        "current_delivery_map",
+        "current_slice_projection",
+        "application_architecture.program_handoff_status",
+        "application_architecture.program_next_required_subslice"
       ]
     }
   ],
@@ -81,7 +95,12 @@
     "projection_updates_may_improve_human_or_compatibility_accuracy": true,
     "projection_updates_are_not_acceptance_events": true,
     "projection_staleness_must_not_revoke_or_create_acceptance": true,
-    "projection_generation_must_be_deterministic": true
+    "projection_generation_must_be_deterministic": true,
+    "explicit_sync_source": ".github/scripts/architecture-acceptance.mjs derive",
+    "explicit_projection_write_may_snapshot_canonical_derived_state": true,
+    "explicit_projection_write_is_acceptance_event": false,
+    "ordinary_checks_must_not_require_snapshot_equal_live_state": true,
+    "post_acceptance_projection_source_commit_required": false
   },
   "fail_closed_invariants": {
     "architecture_complete": false,

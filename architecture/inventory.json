@@ -1459,24 +1459,40 @@
     }
   },
   "current_delivery_map": {
-    "schema_version": 1,
-    "canonical_authority": "architecture/inventory.json::current_delivery_map",
+    "schema_version": 2,
+    "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT",
+    "lifecycle_authority": ".github/scripts/architecture-acceptance.mjs derive",
+    "projection_policy": "architecture/lifecycle-projection-policy.json",
     "program": "Architecture Re-baseline v3",
-    "accepted_checkpoint": "AR-10",
-    "current_work": "AR-11",
+    "accepted_checkpoint": "AR-11",
+    "current_work": "AR-12",
     "source_implemented": {
-      "status": "ACCEPTED",
-      "through": "AR-10",
-      "current_subslice": "AR-11",
-      "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR10_CLOSEOUT"
+      "status": "ACCEPTED_THROUGH_CHECKPOINT",
+      "through": "AR-11",
+      "current_slice": "AR-12",
+      "current_slice_status": "NOT_STARTED_OR_NOT_ACCEPTED",
+      "current_slice_source": "GIT_DERIVED_SUCCESSOR"
     },
     "accepted_on_main": {
-      "status": "COMPLETE",
-      "through": "AR-10",
-      "full_ar8_accepted": true,
-      "ar9_accepted": true,
-      "ar10_accepted": true,
-      "acceptance_evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json"
+      "status": "COMPLETE_THROUGH_CHECKPOINT",
+      "through": "AR-11",
+      "accepted_slices": [
+        "AR-0",
+        "AR-1",
+        "AR-2",
+        "AR-3",
+        "AR-4A",
+        "AR-4B",
+        "AR-4C",
+        "AR-5",
+        "AR-6",
+        "AR-7",
+        "AR-8",
+        "AR-9",
+        "AR-10",
+        "AR-11"
+      ],
+      "acceptance_authority": ".github/scripts/architecture-acceptance.mjs derive"
     },
     "staging_live": {
       "status": "PARTIAL",
@@ -1504,28 +1520,25 @@
       "blocks": "NONE"
     },
     "next_gate": {
-      "id": "AR-11_ACCEPTANCE",
-      "issue": 372,
-      "on_success": "AR-12_BECOMES_CURRENT"
+      "id": "AR-12_ACCEPTANCE",
+      "issue": null,
+      "on_success": "AR-13_BECOMES_CURRENT"
     },
     "invariants": {
       "source_present_not_equal_production_enabled": true,
       "full_ar8_accepted": true,
-      "ar9_blocked": false,
       "architecture_complete": false,
       "production_core_gate": "BLOCKED",
       "production_ready": false,
       "production_mutation": false,
-      "ar9_accepted": true,
-      "ar10_accepted": true,
-      "ar10_blocked": false,
-      "ar11_blocked": false
+      "tracked_projection_authoritative": false,
+      "future_acceptance_requires_source_projection_commit": false
     }
   },
   "documentation_authority": {
     "current_program": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
     "tracking_issue": 266,
-    "current_slice": "AR-11",
+    "current_slice": "AR-12",
     "transition": "architecture/architecture-rebaseline-v3-transition.json",
     "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
@@ -1553,6 +1566,8 @@
     "accepted_phase_ledger": "architecture/accepted-phases.json",
     "historical_pre2j_product_readiness": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
     "historical_pre2j_architecture_closeout": "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md",
+    "lifecycle_projection_role": "NON_AUTHORITATIVE_SNAPSHOT",
+    "lifecycle_authority": ".github/scripts/architecture-acceptance.mjs derive",
     "current_credential_authority": "architecture/credential-authority.json",
     "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
     "credential_lifecycle": "architecture/credential-lifecycle.json",
@@ -1752,10 +1767,11 @@
       "AR-7",
       "AR-8",
       "AR-9",
-      "AR-10"
+      "AR-10",
+      "AR-11"
     ],
-    "current_architecture_slice": "AR-11",
-    "next_architecture_slice_after_acceptance": "AR-12",
+    "current_architecture_slice": "AR-12",
+    "next_architecture_slice_after_acceptance": "AR-13",
     "ar8_progress": {
       "umbrella_issue": 308,
       "accepted_subslices": [
@@ -1769,10 +1785,10 @@
       "current_subslice": null,
       "current_implementation_issue": null,
       "mandatory_remaining": [],
-      "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
       "full_ar8_accepted": true,
       "ar9_blocked": false,
       "production_mutation": false,
+      "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
       "source_complete_candidate": false,
       "completion_pr": 362,
       "implemented_through": "AR-8F",
@@ -1850,7 +1866,9 @@
     "production_core_gate": "BLOCKED",
     "production_ready": false,
     "production_mutation_allowed_during_ar0_ar17": false,
-    "production_ready_authority": "PC-1_AFTER_AR-17_AUTHORIZATION"
+    "production_ready_authority": "PC-1_AFTER_AR-17_AUTHORIZATION",
+    "lifecycle_projection_role": "NON_AUTHORITATIVE_SNAPSHOT",
+    "lifecycle_authority": ".github/scripts/architecture-acceptance.mjs derive"
   },
   "subject_domain_authorities": {
     "schema_version": 1,

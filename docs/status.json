@@ -53,10 +53,11 @@
         "AR-7",
         "AR-8",
         "AR-9",
-        "AR-10"
+        "AR-10",
+        "AR-11"
       ],
-      "current_slice": "AR-11",
-      "next_slice_after_acceptance": "AR-12",
+      "current_slice": "AR-12",
+      "next_slice_after_acceptance": "AR-13",
       "ar8_progress": {
         "umbrella_issue": 308,
         "accepted_subslices": [
@@ -254,16 +255,6 @@
         "metadata_only": true,
         "production_mutation": false
       },
-      "ar11_current": {
-        "tracking_issue": 372,
-        "name": "AR-11 — Release-set / Promotion Architecture",
-        "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
-        "status": "current",
-        "production_mutation": false,
-        "architecture_complete": false,
-        "production_core_gate": "BLOCKED",
-        "production_ready": false
-      },
       "subject_domain_authorities": {
         "credential_authority": "architecture/credential-authority.json",
         "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
@@ -271,6 +262,17 @@
         "operator_contract": "architecture/operator-contract.json",
         "profile_security": "architecture/profile-security.json",
         "architecture_map": "architecture/README.md"
+      },
+      "current_slice_projection": {
+        "slice": "AR-12",
+        "name": "Fresh Rehearsal Environment",
+        "status": "NOT_STARTED",
+        "lifecycle_authority": ".github/scripts/architecture-acceptance.mjs derive",
+        "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT",
+        "production_mutation": false,
+        "architecture_complete": false,
+        "production_core_gate": "BLOCKED",
+        "production_ready": false
       }
     },
     "architecture_complete": false,
@@ -299,24 +301,40 @@
       "certification_domain_authority": "forbidden"
     },
     "current_delivery_map": {
-      "schema_version": 1,
-      "canonical_authority": "architecture/inventory.json::current_delivery_map",
+      "schema_version": 2,
+      "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT",
+      "lifecycle_authority": ".github/scripts/architecture-acceptance.mjs derive",
+      "projection_policy": "architecture/lifecycle-projection-policy.json",
       "program": "Architecture Re-baseline v3",
-      "accepted_checkpoint": "AR-10",
-      "current_work": "AR-11",
+      "accepted_checkpoint": "AR-11",
+      "current_work": "AR-12",
       "source_implemented": {
-        "status": "ACCEPTED",
-        "through": "AR-10",
-        "current_subslice": "AR-11",
-        "current_subslice_source": "ACCEPTED_MAIN_AFTER_AR10_CLOSEOUT"
+        "status": "ACCEPTED_THROUGH_CHECKPOINT",
+        "through": "AR-11",
+        "current_slice": "AR-12",
+        "current_slice_status": "NOT_STARTED_OR_NOT_ACCEPTED",
+        "current_slice_source": "GIT_DERIVED_SUCCESSOR"
       },
       "accepted_on_main": {
-        "status": "COMPLETE",
-        "through": "AR-10",
-        "full_ar8_accepted": true,
-        "ar9_accepted": true,
-        "ar10_accepted": true,
-        "acceptance_evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json"
+        "status": "COMPLETE_THROUGH_CHECKPOINT",
+        "through": "AR-11",
+        "accepted_slices": [
+          "AR-0",
+          "AR-1",
+          "AR-2",
+          "AR-3",
+          "AR-4A",
+          "AR-4B",
+          "AR-4C",
+          "AR-5",
+          "AR-6",
+          "AR-7",
+          "AR-8",
+          "AR-9",
+          "AR-10",
+          "AR-11"
+        ],
+        "acceptance_authority": ".github/scripts/architecture-acceptance.mjs derive"
       },
       "staging_live": {
         "status": "PARTIAL",
@@ -344,31 +362,30 @@
         "blocks": "NONE"
       },
       "next_gate": {
-        "id": "AR-11_ACCEPTANCE",
-        "issue": 372,
-        "on_success": "AR-12_BECOMES_CURRENT"
+        "id": "AR-12_ACCEPTANCE",
+        "issue": null,
+        "on_success": "AR-13_BECOMES_CURRENT"
       },
       "invariants": {
         "source_present_not_equal_production_enabled": true,
         "full_ar8_accepted": true,
-        "ar9_blocked": false,
         "architecture_complete": false,
         "production_core_gate": "BLOCKED",
         "production_ready": false,
         "production_mutation": false,
-        "ar9_accepted": true,
-        "ar10_accepted": true,
-        "ar10_blocked": false,
-        "ar11_blocked": false
+        "tracked_projection_authoritative": false,
+        "future_acceptance_requires_source_projection_commit": false
       }
     },
     "next_repository_step": {
-      "name": "AR-11 — Release-set / Promotion Architecture",
-      "status": "current",
-      "tracking_issue": 372,
+      "name": "AR-12 — Fresh Rehearsal Environment",
+      "status": "not_started",
+      "tracking_issue": null,
       "program_tracking_issue": 266,
       "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
-      "previous_acceptance_evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json"
+      "previous_acceptance_checkpoint": "AR-11",
+      "lifecycle_authority": ".github/scripts/architecture-acceptance.mjs derive",
+      "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT"
     }
   },
   "repository_step": {
@@ -396,7 +413,10 @@
     "tracking_issue": 266,
     "umbrella_issue": 308,
     "implementation_issue": null,
-    "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
+    "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+    "historical": true,
+    "scope": "historical_repository_steps_0_10",
+    "forward_execution_authority": false
   },
   "accepted_steps": [
     {
@@ -490,7 +510,7 @@
       "squash_merge": "3ddde2f48ddf82decf66c933ae5326a4455263e5"
     }
   ],
-  "historical_status_note": "repository_step, accepted_steps and legacy evidence fields preserve historical Repository Steps 0-10 and earlier repository-local evidence; current program authority is current.architecture_program + architecture/inventory.json + architecture/accepted-phases.json",
+  "historical_status_note": "repository_step, next_repository_step, accepted_steps and legacy evidence fields preserve historical Repository Steps 0-10 and earlier repository-local evidence; current program authority is current.architecture_program + architecture/inventory.json + architecture/accepted-phases.json",
   "historical_device_authority_note": "synthetic_device_authorization, synthetic_device_grant_journal and synthetic_two_device_contract are historical Repository Step 10 evidence labels for the removed certification-local model; they are not current production authority. Current ownership is current.device_authorization_ownership.",
   "historical_pre_ar_v3_projection": "history/status_pre_ar_v3_2026-08-15.json",
   "product": {
@@ -518,7 +538,7 @@
     "repository_local_product_phase": "accepted_phase_2i",
     "pre2j_architecture_remediation": "closed_r1_r9",
     "pre2j_product_readiness_remediation": "historical_issue_203_superseded_by_ar_v3",
-    "architecture_rebaseline_v3": "active_issue_266_ar10_accepted_ar11_current",
+    "architecture_rebaseline_v3": "active_issue_266_ar11_accepted_ar12_current",
     "application_ownership": "r5_accepted_capability_owners_without_compatibility_facades",
     "frontend_api_ownership": "r6_accepted_feature_owned_capability_api"
   },
