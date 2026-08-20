@@ -73,6 +73,20 @@ fn verify_component_manifests(
     manifest: &ReleaseSetManifest,
     inventory: &BTreeMap<&str, &ArtifactIdentity>,
 ) -> Result<(), ReleaseModelError> {
+    let manifest_artifacts = manifest
+        .artifact_inventory
+        .iter()
+        .filter(|artifact| artifact.kind == "manifest")
+        .count();
+
+    // Release Set v1 existed before durable manifest sidecars were introduced.
+    // Keep those immutable historical sets verifiable so FC-1 historical-source
+    // eligibility is not revoked retroactively. Any set that declares even one
+    // durable manifest enters the stronger all-components fail-closed contract.
+    if manifest_artifacts == 0 {
+        return Ok(());
+    }
+
     for component in manifest.components.values() {
         let manifest_path = component_manifest_path(&component.component_id)?;
         let artifact = inventory.get(manifest_path).ok_or_else(|| {
@@ -368,6 +382,25 @@ mod tests {
     }
 
     #[test]
+    fn preserves_legacy_release_set_without_manifest_sidecars()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_dir("legacy")?;
+        let mut value = manifest_value(&root)?;
+        value["artifact_inventory"]
+            .as_array_mut()
+            .ok_or("artifact inventory must be an array")?
+            .retain(|item| item["kind"] != "manifest");
+        refresh_release_set_id(&mut value)?;
+        fs::remove_dir_all(root.join("manifests"))?;
+        let manifest = ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?;
+        let result = verify_artifacts(&manifest, &root)?;
+        assert_eq!(result.verified_files, 3);
+        assert_eq!(result.verified_bytes, 22);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn rejects_mismatched_colocated_release_set_control_document()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = temp_dir("control-mismatch")?;
@@ -413,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_durable_component_manifest() -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_partial_durable_component_manifests() -> Result<(), Box<dyn std::error::Error>> {
         let root = temp_dir("manifest-missing")?;
         let mut value = manifest_value(&root)?;
         value["artifact_inventory"]
@@ -421,9 +454,9 @@ mod tests {
             .ok_or("artifact inventory must be an array")?
             .retain(|item| item["path"] != "manifests/runtime-bundle-manifest.json");
         refresh_release_set_id(&mut value)?;
-        let manifest = ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?;
         fs::remove_file(root.join("manifests/runtime-bundle-manifest.json"))?;
-        let error = verify_artifacts(&manifest, &root).expect_err("missing manifest must fail");
+        let manifest = ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?;
+        let error = verify_artifacts(&manifest, &root).expect_err("partial durable manifest set must fail");
         assert!(error.to_string().contains("COMPONENT_MANIFEST_MISMATCH"));
         fs::remove_dir_all(root)?;
         Ok(())
