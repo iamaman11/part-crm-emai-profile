@@ -238,14 +238,18 @@ fn fixture(root: &Path) -> TestResult<ReleaseSetManifest> {
     )?)?)
 }
 
-fn assert_manifest_mismatch(result: Result<impl Sized, impl std::fmt::Display>) {
-    match result {
-        Ok(_) => assert!(false, "malformed component manifest storage unexpectedly passed"),
-        Err(error) => assert!(
-            error.to_string().contains("COMPONENT_MANIFEST_MISMATCH"),
-            "unexpected error: {error}"
-        ),
+fn assert_manifest_mismatch<T, E>(result: Result<T, E>) -> TestResult
+where
+    E: std::fmt::Display,
+{
+    let error = match result {
+        Ok(_) => return Err("malformed component manifest storage unexpectedly passed".into()),
+        Err(error) => error.to_string(),
+    };
+    if !error.contains("COMPONENT_MANIFEST_MISMATCH") {
+        return Err(format!("unexpected error: {error}").into());
     }
+    Ok(())
 }
 
 #[test]
@@ -286,7 +290,7 @@ fn rejects_duplicate_embedded_manifest_basename() -> TestResult {
     let root = temp_dir("duplicate")?;
     write_duplicate_manifest_tar(&root.join("components/control-plane.tar"), CONTROL_MANIFEST)?;
     let manifest = fixture(&root)?;
-    assert_manifest_mismatch(verify_component_manifests(&manifest, &root));
+    assert_manifest_mismatch(verify_component_manifests(&manifest, &root))?;
     fs::remove_dir_all(root)?;
     Ok(())
 }
@@ -296,7 +300,7 @@ fn rejects_oversized_manifest_before_allocation() -> TestResult {
     let root = temp_dir("oversized")?;
     write_oversized_manifest_header(&root.join("components/control-plane.tar"))?;
     let manifest = fixture(&root)?;
-    assert_manifest_mismatch(verify_component_manifests(&manifest, &root));
+    assert_manifest_mismatch(verify_component_manifests(&manifest, &root))?;
     fs::remove_dir_all(root)?;
     Ok(())
 }
@@ -306,7 +310,7 @@ fn rejects_malformed_pax_record() -> TestResult {
     let root = temp_dir("malformed-pax")?;
     write_malformed_pax_tar(&root.join("components/control-plane.tar"))?;
     let manifest = fixture(&root)?;
-    assert_manifest_mismatch(verify_component_manifests(&manifest, &root));
+    assert_manifest_mismatch(verify_component_manifests(&manifest, &root))?;
     fs::remove_dir_all(root)?;
     Ok(())
 }
