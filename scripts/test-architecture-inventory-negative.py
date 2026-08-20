@@ -12,6 +12,8 @@ from types import ModuleType
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATOR = ROOT / "scripts" / "generate-architecture-inventory.py"
+STATUS = ROOT / "docs" / "status.json"
+TRANSITION = ROOT / "architecture" / "architecture-rebaseline-v3-transition.json"
 
 
 def load_generator() -> ModuleType:
@@ -39,9 +41,61 @@ def expect_rejected(module: ModuleType, expected: dict[str, object], tampered: d
             module.INVENTORY_PATH = original_path
 
 
+def assert_lifecycle_projection_sync(module: ModuleType, expected: dict[str, object]) -> None:
+    derived = module.derive_lifecycle_state()
+    accepted = derived["accepted_checkpoint"]
+    current = derived["current_slice"]
+
+    delivery = expected.get("current_delivery_map")
+    if not isinstance(delivery, dict):
+        raise AssertionError("inventory lost current_delivery_map projection")
+    if delivery.get("accepted_checkpoint") != accepted:
+        raise AssertionError("inventory accepted_checkpoint diverged from canonical Git-derived state")
+    if delivery.get("current_work") != current:
+        raise AssertionError("inventory current_work diverged from canonical Git-derived state")
+    accepted_on_main = delivery.get("accepted_on_main")
+    if not isinstance(accepted_on_main, dict) or accepted_on_main.get("through") != accepted:
+        raise AssertionError("inventory accepted_on_main projection diverged from canonical Git-derived state")
+
+    status = json.loads(STATUS.read_text(encoding="utf-8"))
+    status_current = status.get("current")
+    status_program = status_current.get("architecture_program") if isinstance(status_current, dict) else None
+    if not isinstance(status_program, dict):
+        raise AssertionError("docs/status.json lost architecture_program projection")
+    accepted_slices = status_program.get("accepted_slices")
+    if not isinstance(accepted_slices, list) or not accepted_slices or accepted_slices[-1] != accepted:
+        raise AssertionError("docs/status.json accepted_slices diverged from canonical Git-derived state")
+    if status_program.get("current_slice") != current:
+        raise AssertionError("docs/status.json current_slice diverged from canonical Git-derived state")
+    if status_current.get("current_delivery_map") != delivery:
+        raise AssertionError("docs/status.json current_delivery_map diverged from generated inventory")
+
+    transition = json.loads(TRANSITION.read_text(encoding="utf-8"))
+    transition_slices = transition.get("accepted_slices")
+    if not isinstance(transition_slices, list) or not transition_slices or transition_slices[-1] != accepted:
+        raise AssertionError("transition accepted_slices diverged from canonical Git-derived state")
+    if transition.get("current_slice") != current:
+        raise AssertionError("transition current_slice diverged from canonical Git-derived state")
+    if transition.get("current_delivery_map") != delivery:
+        raise AssertionError("transition current_delivery_map diverged from generated inventory")
+
+    source = GENERATOR.read_text(encoding="utf-8")
+    forbidden_current_overlays = (
+        "engine.CURRENT_SLICE =",
+        "engine.NEXT_SLICE =",
+        "engine.CURRENT_DELIVERY_CHECKPOINT =",
+        "engine.ACCEPTED_SLICES =",
+    )
+    for forbidden in forbidden_current_overlays:
+        if forbidden in source:
+            raise AssertionError(f"current inventory path retains lifecycle monkey-patching: {forbidden}")
+
+
 def main() -> int:
     module = load_generator()
     expected = module.build_inventory()
+    assert_lifecycle_projection_sync(module, expected)
+
     d1_evolution = expected.get("d1_evolution")
     if not isinstance(d1_evolution, dict):
         raise AssertionError("AR-9 generator lost architecture/inventory.json::d1_evolution")
@@ -81,7 +135,10 @@ def main() -> int:
     finally:
         module.INVENTORY_PATH = original_path
 
-    print("Architecture inventory checker rejects stale, tampered, missing and D1-projection drift.")
+    print(
+        "Architecture inventory checker rejects stale, tampered, missing and D1-projection drift; "
+        "lifecycle projections match canonical Git-derived state without monkey-patching."
+    )
     return 0
 
 
