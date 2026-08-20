@@ -66,6 +66,14 @@
       "side_effect_class": "repository_validation_only",
       "authority": "PYTHON_ALLOWED_BY_POST_AR11_CLEANUP",
       "rationale": "issue #375 fail-closed historical executable debt classifier; reads repository sources and machine-readable debt inventory without provider, credential, runtime or production mutation authority"
+    },
+    {
+      "path": "scripts/credential_authority.py",
+      "classification": "KEEP_PYTHON",
+      "role": "credential_authority_validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_POST_AR11_CLEANUP",
+      "rationale": "neutral current credential/security invariant validator and bounded parity proof against the still-current historical inventory engine; no lifecycle, provider, network, secret-readback or production mutation authority"
     }
   ],
   "retirements": [
@@ -98,9 +106,9 @@
     ]
   },
   "current_summary": {
-    "tracked_python_files": 122,
+    "tracked_python_files": 123,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 122,
+    "KEEP_PYTHON": 123,
     "MIGRATE_TO_RUST": 0,
     "WRAP_WITH_RUST": 0
   }
