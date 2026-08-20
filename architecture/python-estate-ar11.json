@@ -58,6 +58,14 @@
       "side_effect_class": "ephemeral_local_fixture_only",
       "authority": "PYTHON_ALLOWED_BY_AR11",
       "rationale": "fail-fast negative proof that stale or missing deterministic generated release-input projections are rejected; no provider network, credentials, release decision or mutation"
+    },
+    {
+      "path": "scripts/check-historical-executable-debt.py",
+      "classification": "KEEP_PYTHON",
+      "role": "post_ar11_cleanup_validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_POST_AR11_CLEANUP",
+      "rationale": "issue #375 fail-closed historical executable debt classifier; reads repository sources and machine-readable debt inventory without provider, credential, runtime or production mutation authority"
     }
   ],
   "retirements": [
@@ -90,9 +98,9 @@
     ]
   },
   "current_summary": {
-    "tracked_python_files": 121,
+    "tracked_python_files": 122,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 121,
+    "KEEP_PYTHON": 122,
     "MIGRATE_TO_RUST": 0,
     "WRAP_WITH_RUST": 0
   }
