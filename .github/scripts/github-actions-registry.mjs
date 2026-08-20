@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawnSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -9,6 +10,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(SCRIPT_DIR, '..', '..');
 const POLICY_RELATIVE = 'architecture/github-actions-registry.json';
 const WORKFLOWS_RELATIVE = '.github/workflows';
+const POST_MERGE_EVIDENCE_RELATIVE = '.github/scripts/post-merge-evidence.mjs';
 const ALLOWED_CATEGORIES = new Set(['PERMANENT_REQUIRED', 'CURRENT_MANUAL_OPERATION', 'POST_MERGE_METADATA']);
 
 function sameStringSet(actual, expected) {
@@ -137,6 +139,22 @@ async function readEphemeralGitHubTokenFromStdin() {
 function report(errors) { for (const error of errors) console.error(error); return errors.length === 0; }
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
+function runEvidenceCheck(root, command) {
+  const script = path.join(root, POST_MERGE_EVIDENCE_RELATIVE);
+  const result = spawnSync(process.execPath, [script, command, '--root', root], { encoding: 'utf8' });
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.error) {
+    console.error(`post-merge evidence ${command} invocation failed: ${result.error.message}`);
+    return false;
+  }
+  if (result.status !== 0) {
+    console.error(`post-merge evidence ${command} failed with status ${result.status}`);
+    return false;
+  }
+  return true;
+}
+
 function selfTest(policy) {
   const paths = policy.active_registrations.map((entry) => entry.path);
   const baseline = paths.map((workflowPath, index) => ({ id: 1000 + index, path: workflowPath, state: 'active' }));
@@ -190,8 +208,12 @@ async function main() {
   const trackedPaths = await trackedWorkflowPaths(root);
   const contractErrors = validatePolicy(policy, trackedPaths);
   if (!report(contractErrors)) return 1;
+  if (!runEvidenceCheck(root, 'contract')) return 1;
   if (command === 'contract') { console.log('GitHub Actions registry policy matches the tracked workflow surface.'); return 0; }
-  if (command === 'self-test') return selfTest(policy) ? 0 : 1;
+  if (command === 'self-test') {
+    if (!selfTest(policy)) return 1;
+    return runEvidenceCheck(root, 'self-test') ? 0 : 1;
+  }
   if (command === 'live') {
     const token = await readEphemeralGitHubTokenFromStdin();
     const repository = process.env.GITHUB_REPOSITORY || policy.repository;
