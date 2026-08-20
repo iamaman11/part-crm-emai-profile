@@ -175,7 +175,9 @@ impl AcceptedSourceEvidence {
             ],
         )?;
         if required_u64(root, "schema_version")? != EVIDENCE_SCHEMA_VERSION {
-            return Err(source_error("unknown accepted-source evidence schema version"));
+            return Err(source_error(
+                "unknown accepted-source evidence schema version",
+            ));
         }
         if required_string(root, "kind")? != EVIDENCE_KIND {
             return Err(source_error("accepted-source evidence kind mismatch"));
@@ -188,7 +190,9 @@ impl AcceptedSourceEvidence {
             ));
         }
         if required_string(root, "collection_authority")? != COLLECTION_AUTHORITY {
-            return Err(source_error("unsupported accepted-source collection authority"));
+            return Err(source_error(
+                "unsupported accepted-source collection authority",
+            ));
         }
 
         let repository = required_string(root, "repository")?;
@@ -212,7 +216,9 @@ impl AcceptedSourceEvidence {
             ],
         )?;
         if required_string(proof_object, "method")? != PROOF_METHOD {
-            return Err(source_error("unsupported accepted-source lineage proof method"));
+            return Err(source_error(
+                "unsupported accepted-source lineage proof method",
+            ));
         }
         let proof = LineageProof {
             base_sha: required_git_sha(proof_object, "base_sha")?,
@@ -296,19 +302,13 @@ fn exact_object<'a>(
     Ok(object)
 }
 
-fn required<'a>(
-    object: &'a Map<String, Value>,
-    key: &str,
-) -> Result<&'a Value, ReleaseModelError> {
+fn required<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a Value, ReleaseModelError> {
     object
         .get(key)
         .ok_or_else(|| source_error(format!("missing accepted-source field: {key}")))
 }
 
-fn required_string(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<String, ReleaseModelError> {
+fn required_string(object: &Map<String, Value>, key: &str) -> Result<String, ReleaseModelError> {
     required(object, key)?
         .as_str()
         .map(ToOwned::to_owned)
@@ -322,15 +322,14 @@ fn required_bool(object: &Map<String, Value>, key: &str) -> Result<bool, Release
 }
 
 fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, ReleaseModelError> {
-    required(object, key)?
-        .as_u64()
-        .ok_or_else(|| source_error(format!("accepted-source field {key} must be unsigned integer")))
+    required(object, key)?.as_u64().ok_or_else(|| {
+        source_error(format!(
+            "accepted-source field {key} must be unsigned integer"
+        ))
+    })
 }
 
-fn required_git_sha(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<String, ReleaseModelError> {
+fn required_git_sha(object: &Map<String, Value>, key: &str) -> Result<String, ReleaseModelError> {
     let value = required_string(object, key)?;
     if value.len() != 40
         || !value
@@ -344,10 +343,7 @@ fn required_git_sha(
     Ok(value)
 }
 
-fn required_sha256(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<String, ReleaseModelError> {
+fn required_sha256(object: &Map<String, Value>, key: &str) -> Result<String, ReleaseModelError> {
     let value = required_string(object, key)?;
     if value.len() != 64
         || !value
@@ -367,7 +363,8 @@ mod tests {
     use crate::release::digest::{canonical_json, sha256_hex};
     use serde_json::{Value, json};
 
-    const RELEASE_ID: &str = "release-set-v1-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const RELEASE_ID: &str =
+        "release-set-v1-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
     const SOURCE: &str = "1111111111111111111111111111111111111111";
     const NEWER_MAIN: &str = "2222222222222222222222222222222222222222";
@@ -403,8 +400,7 @@ mod tests {
             .as_object_mut()
             .ok_or("fixture must be object")?
             .remove("evidence_sha256");
-        value["evidence_sha256"] =
-            Value::String(sha256_hex(canonical_json(&payload)?.as_bytes()));
+        value["evidence_sha256"] = Value::String(sha256_hex(canonical_json(&payload)?.as_bytes()));
         Ok(())
     }
 
