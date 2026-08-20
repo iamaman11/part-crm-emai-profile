@@ -253,7 +253,10 @@ fn tar_header_path(header: &[u8; TAR_BLOCK]) -> Result<String, ReleaseModelError
 }
 
 fn tar_text(field: &[u8], label: &str) -> Result<String, ReleaseModelError> {
-    let end = field.iter().position(|byte| *byte == 0).unwrap_or(field.len());
+    let end = field
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(field.len());
     std::str::from_utf8(&field[..end])
         .map(str::to_owned)
         .map_err(|error| mismatch(format!("tar {label} is not UTF-8: {error}")))
@@ -318,11 +321,7 @@ fn skip_tar_payload(
     Ok(())
 }
 
-fn skip_padding(
-    file: &mut File,
-    size: u64,
-    archive_path: &Path,
-) -> Result<(), ReleaseModelError> {
+fn skip_padding(file: &mut File, size: u64, archive_path: &Path) -> Result<(), ReleaseModelError> {
     let padding = tar_padding(size);
     if padding == 0 {
         return Ok(());
@@ -390,7 +389,10 @@ fn basename(path: &str) -> &str {
 
 fn read_regular_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, ReleaseModelError> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
-        mismatch(format!("component manifest unavailable {}: {error}", path.display()))
+        mismatch(format!(
+            "component manifest unavailable {}: {error}",
+            path.display()
+        ))
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > limit {
         return Err(mismatch(format!(
@@ -398,8 +400,12 @@ fn read_regular_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, ReleaseModel
             path.display()
         )));
     }
-    fs::read(path)
-        .map_err(|error| mismatch(format!("cannot read component manifest {}: {error}", path.display())))
+    fs::read(path).map_err(|error| {
+        mismatch(format!(
+            "cannot read component manifest {}: {error}",
+            path.display()
+        ))
+    })
 }
 
 fn mismatch(message: impl Into<String>) -> ReleaseModelError {
@@ -410,7 +416,9 @@ fn mismatch(message: impl Into<String>) -> ReleaseModelError {
 mod tests {
     use super::{legacy_profile_bridge_manifest, verify_component_manifests};
     use crate::release::digest::{canonical_json, sha256_hex};
-    use crate::release::model::{RELEASE_SET_ID_PREFIX, ReleaseComponentIdentity, ReleaseSetManifest};
+    use crate::release::model::{
+        RELEASE_SET_ID_PREFIX, ReleaseComponentIdentity, ReleaseSetManifest,
+    };
     use serde_json::{Value, json};
     use std::fs::{self, File};
     use std::io::Write;
@@ -490,7 +498,8 @@ mod tests {
             artifact_size_bytes: archive.len() as u64,
             component_manifest_sha256: String::new(),
         };
-        let bytes = legacy_profile_bridge_manifest(&temporary).map_err(|error| error.to_string())?;
+        let bytes =
+            legacy_profile_bridge_manifest(&temporary).map_err(|error| error.to_string())?;
         let component = ReleaseComponentIdentity {
             component_manifest_sha256: sha256_hex(&bytes),
             ..temporary
@@ -606,7 +615,9 @@ mod tests {
             .remove("release_set_id");
         let digest = sha256_hex(canonical_json(&identity)?.as_bytes());
         value["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{digest}"));
-        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?)
+        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(
+            &value,
+        )?)?)
     }
 
     #[test]
@@ -636,8 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_mismatched_embedded_manifest_digest()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_mismatched_embedded_manifest_digest() -> Result<(), Box<dyn std::error::Error>> {
         let root = temp_dir("embedded-mismatch")?;
         let manifest = fixture(&root, false)?;
         write_tar(
