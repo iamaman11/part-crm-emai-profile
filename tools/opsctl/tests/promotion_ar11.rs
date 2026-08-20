@@ -87,8 +87,7 @@ fn schema_window(
     }))
 }
 
-fn static_compatibility_fields()
--> Result<StaticCompatibilityFields, Box<dyn std::error::Error>> {
+fn static_compatibility_fields() -> Result<StaticCompatibilityFields, Box<dyn std::error::Error>> {
     let root = repo_root();
     let topology = ReleaseInputTopology::load(&root)?;
     let resolved = topology.resolve(&root)?;
