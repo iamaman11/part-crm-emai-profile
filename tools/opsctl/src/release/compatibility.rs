@@ -127,7 +127,8 @@ impl CompatibilityEvidence {
 }
 
 pub fn evaluate(
-    root: &Path,
+    policy_root: &Path,
+    source_root: &Path,
     manifest: &ReleaseSetManifest,
     evidence: &CompatibilityEvidence,
     profile_id: &str,
@@ -147,7 +148,7 @@ pub fn evaluate(
         return Ok(blocked("PROFILE_NOT_AUTHORIZED"));
     }
 
-    let authority = ReleaseArchitecture::load(root)
+    let authority = ReleaseArchitecture::load(policy_root)
         .map_err(|error| ReleaseModelError::new(format!("release authority invalid: {error}")))?;
     let effective = authority
         .effective_profile(profile_id, environment)
@@ -169,10 +170,10 @@ pub fn evaluate(
     }
 
     let mailbox_admin = effective.is_enabled("mailbox_admin");
-    // Static compatibility is Rust-authoritative. Caller-supplied decisions for API,
-    // protocol, Camouhost, runtime/profile format, and browser identity cannot override it.
+    // Current policy authority and immutable release-source provenance are separate roots.
+    // Caller-supplied compatibility decisions cannot override either one.
     blockers.extend(static_compatibility::evaluate(
-        root,
+        source_root,
         manifest,
         mailbox_admin,
     )?);
