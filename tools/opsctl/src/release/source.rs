@@ -458,14 +458,14 @@ mod tests {
             )
             .err()
             .ok_or("wrong publication identity unexpectedly verified")?;
-        assert!(error.contains("RELEASE_IDENTITY_MISMATCH"));
+        assert!(error.to_string().contains("RELEASE_IDENTITY_MISMATCH"));
 
         let repository = parse(evidence(SOURCE, "identical", 0)?)?;
         let error = repository
             .verify_bindings(RELEASE_ID, "other/repository", SOURCE)
             .err()
             .ok_or("wrong repository unexpectedly verified")?;
-        assert!(error.contains("SOURCE_NOT_ACCEPTED"));
+        assert!(error.to_string().contains("SOURCE_NOT_ACCEPTED"));
 
         let mut protection = evidence(SOURCE, "identical", 0)?;
         protection["protected_ref_verified"] = Value::Bool(false);
