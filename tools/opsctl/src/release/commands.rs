@@ -123,7 +123,7 @@ fn verify(
     source: &AcceptedSourceVerification,
 ) -> Result<serde_json::Value, ReleaseModelError> {
     let artifacts = verify_artifacts(manifest, artifact_root)?;
-    let component_manifests = verify_component_manifests(manifest, artifact_root)?;
+    verify_component_manifests(manifest, artifact_root)?;
     Ok(json!({
         "schema_version": 1,
         "command": "release.verify",
@@ -134,9 +134,6 @@ fn verify(
         "accepted_source_evidence_sha256": source.evidence_sha256,
         "observed_protected_main_sha": source.observed_protected_main_sha,
         "source_lineage_status": source.lineage_status,
-        "verified_component_manifests": component_manifests.verified_components,
-        "durable_component_manifest_bindings": component_manifests.durable_manifest_files,
-        "legacy_reconstructed_component_manifests": component_manifests.legacy_reconstructed_manifests,
         "verified_files": artifacts.verified_files,
         "verified_bytes": artifacts.verified_bytes,
         "mutation_executed": false
