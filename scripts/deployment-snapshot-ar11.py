@@ -18,6 +18,7 @@ from typing import Any, Iterable
 
 RELEASE_RE = re.compile(r"release_set=(release-set-v2-sha256-[0-9a-f]{64})\s+profile=([a-z0-9-]+)")
 MIGRATION_RE = re.compile(r"^[0-9]{4}_[a-z0-9_]+\.sql$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CORE_BINDINGS = {
     "ASSETS",
     "CATALOG_DB",
@@ -99,6 +100,27 @@ def object_value(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
+def required_string(value: dict[str, Any], field: str, label: str) -> str:
+    observed = value.get(field)
+    if not isinstance(observed, str) or not observed:
+        fail(f"{label}.{field} must be a non-empty string")
+    return observed
+
+
+def required_sha256(value: dict[str, Any], field: str, label: str) -> str:
+    observed = required_string(value, field, label)
+    if not SHA256_RE.fullmatch(observed):
+        fail(f"{label}.{field} must be a lowercase SHA-256 digest")
+    return observed
+
+
+def required_uint(value: dict[str, Any], field: str, label: str) -> int:
+    observed = value.get(field)
+    if not isinstance(observed, int) or isinstance(observed, bool) or observed < 0:
+        fail(f"{label}.{field} must be an unsigned integer")
+    return observed
+
+
 def rendered_core(config: dict[str, Any], environment: str) -> dict[str, Any]:
     if "build" in config:
         fail("rendered promotion config unexpectedly contains build authority")
@@ -152,11 +174,26 @@ def secret_names(secret_list: Any) -> set[str]:
     return observed
 
 
-def current_components(path: Path | None, release_set_id: str | None) -> dict[str, str]:
+def empty_compatibility() -> dict[str, Any]:
+    return {
+        "contracts_sha256": None,
+        "resolver_protocol": None,
+        "camouhost_ipc_version": None,
+        "profile_bridge_protocol_version": None,
+        "runtime_role": None,
+        "profile_format": None,
+        "browser_identity_policy": None,
+    }
+
+
+def current_release_observation(
+    path: Path | None,
+    release_set_id: str | None,
+) -> tuple[dict[str, str], dict[str, Any]]:
     if release_set_id is None:
         if path is not None:
             fail("current Release Set manifest supplied while provider reports no current Release Set")
-        return {}
+        return {}, empty_compatibility()
     if path is None:
         fail("provider reports a current Release Set but its immutable manifest was not supplied")
     value = object_value(load(path, "current Release Set manifest"), "current Release Set manifest")
@@ -164,15 +201,34 @@ def current_components(path: Path | None, release_set_id: str | None) -> dict[st
         fail("current provider Release Set is not schema v2")
     if value.get("release_set_id") != release_set_id:
         fail("current Release Set manifest does not match provider deployment annotation")
+
     components = object_value(value.get("components"), "current Release Set components")
-    result: dict[str, str] = {}
+    component_ids: dict[str, str] = {}
     for name, row in components.items():
         entry = object_value(row, f"current component {name}")
-        release_id = entry.get("release_id")
-        if not isinstance(release_id, str) or not release_id:
-            fail(f"current component {name} has no release_id")
-        result[name] = release_id
-    return result
+        component_ids[name] = required_string(entry, "release_id", f"current component {name}")
+
+    contracts = object_value(value.get("contracts"), "current Release Set contracts")
+    protocols = object_value(value.get("protocols"), "current Release Set protocols")
+    runtime = object_value(value.get("runtime_compatibility"), "current Release Set runtime_compatibility")
+    compatibility = {
+        "contracts_sha256": required_sha256(contracts, "sha256", "current Release Set contracts"),
+        "resolver_protocol": required_string(protocols, "resolver_protocol", "current Release Set protocols"),
+        "camouhost_ipc_version": required_uint(protocols, "camouhost_ipc_version", "current Release Set protocols"),
+        "profile_bridge_protocol_version": required_uint(
+            protocols,
+            "profile_bridge_protocol_version",
+            "current Release Set protocols",
+        ),
+        "runtime_role": required_string(runtime, "runtime_role", "current Release Set runtime_compatibility"),
+        "profile_format": required_string(runtime, "profile_format", "current Release Set runtime_compatibility"),
+        "browser_identity_policy": required_string(
+            runtime,
+            "browser_identity_policy",
+            "current Release Set runtime_compatibility",
+        ),
+    }
+    return component_ids, compatibility
 
 
 def build(args: argparse.Namespace) -> dict[str, Any]:
@@ -189,7 +245,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     selected = rendered_core(config, "staging")
 
     release_set_id, profile_id = current_identity(deployment_status)
-    components = current_components(args.current_release_set, release_set_id)
+    components, compatibility = current_release_observation(args.current_release_set, release_set_id)
     logical_resources: set[str] = set()
     if deployment_status not in ({}, [], None):
         logical_resources.update({"control_plane_worker", "profile_coordinator", "notification_hub", "control_plane_schedule"})
@@ -250,6 +306,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "observed_logical_resources": sorted(logical_resources),
         "observed_logical_bindings": sorted(bindings),
         "observed_logical_credentials": sorted(credentials),
+        "observed_compatibility": compatibility,
     }
 
 
@@ -260,6 +317,8 @@ def self_test() -> None:
         fail("current Release Set v2 marker fixture was not detected")
     if current_identity({"message": "release_set=release-set-v1-sha256-" + "a" * 64 + " profile=rehearsal-core-v1"})[0] is not None:
         fail("legacy Release Set v1 marker unexpectedly retained executable compatibility")
+    if any(value is not None for value in empty_compatibility().values()):
+        fail("fresh-environment compatibility observation must be UNKNOWN/null")
     try:
         current_identity([first, second])
     except SnapshotError:
