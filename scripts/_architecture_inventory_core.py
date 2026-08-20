@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import inspect
 import json
 import re
 import subprocess
@@ -149,6 +150,16 @@ REQUIRED_INDEX_LINKS = [
     "THREAT_MODEL.md",
 ]
 
+LEGACY_LIFECYCLE_ASSERTION_MARKERS = (
+    "issue #203",
+    "blocked_phase2j",
+    'current.get("pre2j_product_readiness_remediation"',
+    'current.get("phase_2j"',
+    "blocked_pending_repository_remediation",
+    "Do not begin Phase 2J",
+    "Phase 2J is the unique",
+)
+
 
 def workspace_members() -> list[str]:
     with (ROOT / "Cargo.toml").open("rb") as handle:
@@ -209,7 +220,18 @@ def validate_route_ownership() -> None:
             )
 
 
+def validate_lifecycle_neutrality(source: str) -> None:
+    offenders = [marker for marker in LEGACY_LIFECYCLE_ASSERTION_MARKERS if marker in source]
+    if offenders:
+        raise ValueError(
+            "generic architecture inventory documentation validation may not own historical "
+            f"product lifecycle assertions: {offenders}"
+        )
+
+
 def validate_docs() -> None:
+    validate_lifecycle_neutrality(inspect.getsource(validate_docs))
+
     authority = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "check-documentation-authority.py"), "--root", str(ROOT)],
         cwd=ROOT,
@@ -226,42 +248,9 @@ def validate_docs() -> None:
     if missing_links:
         raise SystemExit(f"docs/INDEX.md is missing authority links: {missing_links}")
 
-    plan = (ROOT / "docs" / "DEVELOPMENT_PLAN.md").read_text(encoding="utf-8")
     architecture = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     matrix = (ROOT / "docs" / "DEVELOPER_CAPABILITY_MATRIX.md").read_text(encoding="utf-8")
-    next_sections = re.findall(r"^### (Phase [^\n]+?) — NEXT\s*$", plan, re.MULTILINE)
-    if next_sections:
-        raise SystemExit(f"no bare product Phase ... — NEXT section is allowed; use an explicit accepted/blocked status: {next_sections}")
 
-    blocked_phase2j = "Phase 2J — Production-readiness evidence and controlled rollout — BLOCKED / PENDING REPOSITORY REMEDIATION"
-    if blocked_phase2j not in plan:
-        raise SystemExit("DEVELOPMENT_PLAN.md must keep Phase 2J blocked while issue #203 remediation is active")
-    immediate = plan.split("## 13. Immediate Next Action", 1)
-    if (
-        len(immediate) != 2
-        or "issue #203" not in immediate[1]
-        or "Batch 0" not in immediate[1]
-        or "Do not begin Batch A" not in immediate[1]
-        or "Do not begin Phase 2J" not in immediate[1]
-        or "`production_ready=false`" not in immediate[1]
-    ):
-        raise SystemExit("Immediate Next Action must preserve #203, Batch 0 and Phase 2J blocking boundaries")
-
-    required_plan_markers = (
-        "Phase 2I remains the last accepted repository-local product phase",
-        "pre-2J product-readiness remediation #203                     ACTIVE / BLOCKING",
-        "Phase 2J real production evidence + controlled rollout        BLOCKED / PENDING REPOSITORY REMEDIATION",
-        "`PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`",
-        "`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`",
-        "P0=0, P1=5, P2=1",
-        "A1 — Client ACTIVE Member create + atomic creator grant",
-        "A2 — Profile ACTIVE Member create + atomic creator grant",
-        "Workers Static Assets",
-        "compose/reply/reply-all/forward/send",
-        "protected production promotion",
-        "last-known-good rollback",
-        "`production_ready=false`",
-    )
     required_architecture_markers = (
         "### 11.1 Browser Runtime Identity, Network Policy And Writer Recovery",
         "`use-cases-devices`",
@@ -272,14 +261,6 @@ def validate_docs() -> None:
         "`NetworkIdentityPolicy`",
         "PID alone is not ownership proof",
         "blanket Firefox SQLite `PRAGMA integrity_check` is not canonical profile-health authority",
-    )
-    stale_plan_markers = (
-        "Phase 2J — Production-readiness evidence and controlled rollout — NEXT",
-        "Phase 2J — Production-readiness evidence and controlled rollout — UNBLOCKED / NOT STARTED",
-        "Phase 2J is the unique NEXT",
-        "Phase 2J is the unique next product phase",
-        "Phase 2J is unblocked but not started",
-        "Phase 2J is the next product phase but is unblocked/not started",
     )
     required_matrix_markers = (
         "| Client contact protection | Composed |",
@@ -339,12 +320,6 @@ def validate_docs() -> None:
         "realtime UserNotificationHub remains Phase 2G",
         "The remaining fixed extraction point in active Phase 2 is devices in Phase 2F.",
     )
-    for marker in required_plan_markers:
-        if marker not in plan:
-            raise SystemExit(f"DEVELOPMENT_PLAN.md is missing current/remediation semantic marker: {marker}")
-    for marker in stale_plan_markers:
-        if marker in plan:
-            raise SystemExit(f"DEVELOPMENT_PLAN.md contains stale Phase 2J marker: {marker}")
     for marker in required_architecture_markers:
         if marker not in architecture:
             raise SystemExit(f"ARCHITECTURE.md is missing Phase 2F accepted architecture marker: {marker}")
@@ -360,19 +335,6 @@ def validate_docs() -> None:
             relative_path = contract[key]
             if not (ROOT / relative_path).is_file():
                 raise SystemExit(f"generated contract {contract['name']} references missing {key}: {relative_path}")
-
-    status = json.loads((ROOT / "docs" / "status.json").read_text(encoding="utf-8"))
-    current = status.get("current", {})
-    followup = current.get("pre2j_product_readiness_remediation", {})
-    phase2j = current.get("phase_2j", {})
-    if status.get("production_ready") is not False:
-        raise SystemExit("docs/status.json must remain production_ready=false until external gates pass")
-    if followup.get("status") != "active_blocking" or followup.get("tracking_issue") != 203:
-        raise SystemExit("docs/status.json must retain active issue #203 product-readiness remediation")
-    if phase2j.get("status") != "blocked_pending_repository_remediation" or phase2j.get("blocked_by_issue") != 203:
-        raise SystemExit("docs/status.json must retain Phase 2J blocked by issue #203")
-    if "`production_ready=false`" not in plan:
-        raise SystemExit("DEVELOPMENT_PLAN.md must preserve the production_ready=false claim")
 
 
 def build_inventory() -> dict[str, object]:
@@ -458,6 +420,15 @@ def self_test(expected: dict[str, object]) -> None:
     authority["documentation_authority"]["pre2j_current_product_readiness"] = "docs/PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md"
     if serialized(authority) == serialized(expected):
         raise SystemExit("inventory self-test failed to distinguish current and historical pre-2J authority")
+
+    validate_lifecycle_neutrality(inspect.getsource(validate_docs))
+    legacy_validator = inspect.getsource(validate_docs) + "\n# issue #203\n"
+    try:
+        validate_lifecycle_neutrality(legacy_validator)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("inventory lifecycle-neutrality negative fixture unexpectedly passed")
 
     documentation = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "check-documentation-authority.py"), "--root", str(ROOT), "--self-test"],
