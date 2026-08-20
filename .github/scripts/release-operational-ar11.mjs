@@ -287,7 +287,14 @@ function selfTest() {
     throw new Error('promotion rebuild fixture unexpectedly passed');
   }
 
-  const staleHeadEquality = `${promotion}\n# test "$source_sha" = "$main_sha"\n`;
+  const acceptedSourceProof = 'test "$GITHUB_SHA" = "$main_sha"';
+  if (!promotion.includes(acceptedSourceProof)) {
+    throw new Error('historical Release Set fixture anchor is missing from canonical workflow');
+  }
+  const staleHeadEquality = promotion.replace(
+    acceptedSourceProof,
+    `${acceptedSourceProof}\n          test "$source_sha" = "$main_sha"`,
+  );
   if (!promotionErrors(staleHeadEquality).some((error) => error.includes('test "$source_sha" = "$main_sha"'))) {
     throw new Error('historical Release Set current-head equality fixture unexpectedly passed');
   }
