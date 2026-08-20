@@ -10,9 +10,9 @@ privacy boundaries.
 - **Accepted repository-local product phase:** Phase 2I. Immutable provenance is
   [`architecture/accepted-phases.json`](architecture/accepted-phases.json).
 - **Architecture Re-baseline v3:** active program, tracked by issue #266.
-- **Accepted top-level architecture slices:** AR-0 through AR-9; AR-8A…AR-8F are accepted subslices and **AR-10 is current**.
-- **Current accepted checkpoint:** AR-10 — D1 Evolution / Schema Compatibility.
-- **Current implementation:** AR-11 — Runtime and Historical Executable Simplification.
+- **Accepted top-level architecture slices:** AR-0 through AR-11; AR-8A…AR-8F are accepted subslices.
+- **Current accepted checkpoint:** AR-11 — Release-set / Promotion Architecture.
+- **Current architecture slice:** AR-12 — Fresh Rehearsal Environment; implementation is **NOT STARTED** while pre-AR12 hardening issue #375 remains open.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
@@ -25,19 +25,19 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
-| Source implemented | **ACCEPTED** | AR-9 source is accepted on `main`; AR-10 is the current architecture slice. |
-| Accepted on main | **COMPLETE THROUGH AR-10** | AR-8 and AR-9 are accepted; AR-9 evidence is `docs/evidence/2026-08-19-ar9-final-acceptance.json`. |
+| Source implemented | **ACCEPTED THROUGH AR-11** | AR-11 source is accepted on `main`; AR-12 is the derived current architecture slice and its implementation is NOT STARTED. |
+| Accepted on main | **COMPLETE THROUGH AR-11** | AR-8, AR-9, AR-10 and AR-11 are accepted; AR-11 is the generic acceptance migration anchor recorded by the canonical Git-derived lifecycle mechanism. |
 | Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; later architecture acceptance does not imply a broader staging or production deployment. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
-| Current blocker | **NONE** | AR-9 is accepted; no predecessor blocker remains. |
-| Next gate | **AR-11 acceptance** | AR-10 — Runtime and Historical Executable Simplification is the current slice. |
+| Current implementation blocker | **ISSUE #375 OPEN** | Pre-AR12 hardening must close from proved evidence before AR-12 implementation begins. |
+| Next gate | **AR-12 implementation entry** | AR-12 remains NOT STARTED until #375 is closed; no AR-12 acceptance tag exists or is implied by this projection. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
 The single current architecture/program execution authority is
 [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md), tracked by issue
-#266. AR-9 is accepted on `main`; AR-10 is the current implementation slice. AR-7 remains the accepted GitHub governance/Environment operational boundary while AR-6 remains the accepted full Python estate and read-only Rust `opsctl` foundation and AR-5 remains the accepted runtime-authority cleanup and the AR-4C-remediated application/runtime ownership contract remains in
+#266. AR-11 is accepted on `main`; AR-12 is the current architecture slice but is not yet being implemented. AR-7 remains the accepted GitHub governance/Environment operational boundary while AR-6 remains the accepted full Python estate and read-only Rust `opsctl` foundation and AR-5 remains the accepted runtime-authority cleanup and the AR-4C-remediated application/runtime ownership contract remains in
 [`architecture/inventory.json`](architecture/inventory.json), with AR-4C acceptance evidence in
 [`docs/ARCHITECTURE_REBASELINE_V3_AR4C.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4C.md), AR-4B evidence preserved in
 [`docs/ARCHITECTURE_REBASELINE_V3_AR4B.md`](docs/ARCHITECTURE_REBASELINE_V3_AR4B.md), AR-4A evidence preserved in
@@ -67,8 +67,9 @@ Start with [`docs/INDEX.md`](docs/INDEX.md). The main current sources are:
 
 - [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md) — single current
   architecture/program execution authority, issue #266;
-- [`docs/ARCHITECTURE_REBASELINE_V3_AR10.md`](docs/ARCHITECTURE_REBASELINE_V3_AR10.md) — current AR-10 runtime/executable-cutover evidence;
-- [`architecture/runtime-cutover-ar10.json`](architecture/runtime-cutover-ar10.json) — current AR-10 machine authority;
+- [`architecture/release-architecture-ar11.json`](architecture/release-architecture-ar11.json) — accepted AR-11 release/capability/promotion source authority;
+- [`docs/ARCHITECTURE_REBASELINE_V3_AR10.md`](docs/ARCHITECTURE_REBASELINE_V3_AR10.md) — accepted AR-10 runtime/executable-cutover evidence;
+- [`architecture/runtime-cutover-ar10.json`](architecture/runtime-cutover-ar10.json) — accepted AR-10 machine authority;
 - [`docs/evidence/2026-08-19-ar9-final-acceptance.json`](docs/evidence/2026-08-19-ar9-final-acceptance.json) — accepted AR-9 provenance;
 - [`architecture/d1-evolution-ar9.json`](architecture/d1-evolution-ar9.json) — accepted AR-9 D1 evolution authority;
 - [`docs/ARCHITECTURE_REBASELINE_V3_AR8.md`](docs/ARCHITECTURE_REBASELINE_V3_AR8.md) — accepted AR-8 secrets/keys/credentials hardening evidence;
