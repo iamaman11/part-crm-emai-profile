@@ -31,7 +31,8 @@ pub fn verify_artifacts(
         .iter()
         .map(|artifact| (artifact.path.as_str(), artifact))
         .collect::<BTreeMap<_, _>>();
-    let observed = collect_files(artifact_root)?;
+    let mut observed = collect_files(artifact_root)?;
+    remove_verified_control_manifest(manifest, &mut observed)?;
     let expected_paths = expected.keys().copied().collect::<BTreeSet<_>>();
     let observed_paths = observed.keys().map(String::as_str).collect::<BTreeSet<_>>();
     if expected_paths != observed_paths {
@@ -65,6 +66,34 @@ pub fn verify_artifacts(
         verified_files: manifest.artifact_inventory.len(),
         verified_bytes,
     })
+}
+
+fn remove_verified_control_manifest(
+    manifest: &ReleaseSetManifest,
+    observed: &mut BTreeMap<String, PathBuf>,
+) -> Result<(), ReleaseModelError> {
+    let Some(path) = observed.get("release-set.json").cloned() else {
+        return Ok(());
+    };
+    let input = fs::read_to_string(&path).map_err(|error| {
+        ReleaseModelError::new(format!(
+            "RELEASE_SET_CONTROL_DOCUMENT_READ_FAILED: {}: {error}",
+            path.display()
+        ))
+    })?;
+    let control = ReleaseSetManifest::parse_json(&input).map_err(|error| {
+        ReleaseModelError::new(format!(
+            "RELEASE_SET_CONTROL_DOCUMENT_INVALID: {}: {error}",
+            path.display()
+        ))
+    })?;
+    if control != *manifest {
+        return Err(ReleaseModelError::new(
+            "RELEASE_SET_CONTROL_DOCUMENT_MISMATCH: artifact root release-set.json differs from verified manifest",
+        ));
+    }
+    observed.remove("release-set.json");
+    Ok(())
 }
 
 fn verify_one(path: &Path, artifact: &ArtifactIdentity) -> Result<(), ReleaseModelError> {
@@ -201,7 +230,7 @@ mod tests {
         Ok(sha256_hex(canonical_json(&identity)?.as_bytes()))
     }
 
-    fn manifest(root: &Path) -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
+    fn manifest_value(root: &Path) -> Result<Value, Box<dyn std::error::Error>> {
         let files = [
             ("control-plane.tar", b"control".as_slice()),
             ("resolver.tar", b"resolver".as_slice()),
@@ -245,9 +274,12 @@ mod tests {
             .remove("release_set_id");
         let digest = sha256_hex(canonical_json(&identity)?.as_bytes());
         value["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{digest}"));
-        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(
-            &value,
-        )?)?)
+        Ok(value)
+    }
+
+    fn manifest(root: &Path) -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
+        let value = manifest_value(root)?;
+        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(&value)?)?)
     }
 
     #[test]
@@ -257,6 +289,31 @@ mod tests {
         let result = verify_artifacts(&manifest, &root)?;
         assert_eq!(result.verified_files, 3);
         assert_eq!(result.verified_bytes, 22);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn verifies_colocated_release_set_control_document() -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_dir("control-document")?;
+        let value = manifest_value(&root)?;
+        let input = serde_json::to_string_pretty(&value)? + "\n";
+        let manifest = ReleaseSetManifest::parse_json(&input)?;
+        fs::write(root.join("release-set.json"), input)?;
+        let result = verify_artifacts(&manifest, &root)?;
+        assert_eq!(result.verified_files, 3);
+        assert_eq!(result.verified_bytes, 22);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_mismatched_colocated_release_set_control_document(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_dir("control-mismatch")?;
+        let manifest = manifest(&root)?;
+        fs::write(root.join("release-set.json"), "{}\n")?;
+        assert!(verify_artifacts(&manifest, &root).is_err());
         fs::remove_dir_all(root)?;
         Ok(())
     }
