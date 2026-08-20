@@ -27,6 +27,7 @@ INVENTORY = ROOT / "architecture/inventory.json"
 DERIVER = ROOT / ".github/scripts/architecture-acceptance.mjs"
 INVENTORY_GENERATOR = ROOT / "scripts/generate-architecture-inventory.py"
 DERIVER_ID = ".github/scripts/architecture-acceptance.mjs derive"
+PROJECTION_ROLE = "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT"
 
 HISTORICAL_ACCEPTANCE = {
     "ar8_acceptance": {
@@ -222,6 +223,20 @@ def validate_all(
     validate_fail_closed(status, transition)
 
 
+def current_projection(current_slice: str | None, current_name: str | None) -> dict[str, Any]:
+    return {
+        "slice": current_slice,
+        "name": current_name,
+        "status": "NOT_STARTED",
+        "lifecycle_authority": DERIVER_ID,
+        "projection_role": PROJECTION_ROLE,
+        "production_mutation": False,
+        "architecture_complete": False,
+        "production_core_gate": "BLOCKED",
+        "production_ready": False,
+    }
+
+
 def explicit_sync() -> None:
     acceptance = load_json(ACCEPTANCE_POLICY)
     lifecycle = load_json(LIFECYCLE_POLICY)
@@ -261,21 +276,13 @@ def explicit_sync() -> None:
 
     current_slice = derived.get("current_slice")
     current_name = current_entry.get("name") if current_entry is not None else None
+    projection = current_projection(current_slice, current_name)
+
     program["accepted_slices"] = accepted_slices
     program["current_slice"] = current_slice
     program["next_slice_after_acceptance"] = next_slice
     program.pop("ar11_current", None)
-    program["current_slice_projection"] = {
-        "slice": current_slice,
-        "name": current_name,
-        "status": "NOT_STARTED",
-        "lifecycle_authority": DERIVER_ID,
-        "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT",
-        "production_mutation": False,
-        "architecture_complete": False,
-        "production_core_gate": "BLOCKED",
-        "production_ready": False,
-    }
+    program["current_slice_projection"] = copy.deepcopy(projection)
     current["current_delivery_map"] = copy.deepcopy(delivery)
     current["architecture_complete"] = False
     current["production_core_gate"] = "BLOCKED"
@@ -287,7 +294,7 @@ def explicit_sync() -> None:
         "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
         "previous_acceptance_checkpoint": derived["accepted_checkpoint"],
         "lifecycle_authority": DERIVER_ID,
-        "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT",
+        "projection_role": PROJECTION_ROLE,
     }
     implementation = status.get("implementation")
     if isinstance(implementation, dict):
@@ -301,12 +308,20 @@ def explicit_sync() -> None:
     transition["current_slice"] = current_slice
     transition["next_slice_after_acceptance"] = next_slice
     transition["current_delivery_map"] = copy.deepcopy(delivery)
+    transition.pop("ar11_current", None)
+    transition["current_slice_projection"] = copy.deepcopy(projection)
     transition_state = transition.get("state_model")
     if not isinstance(transition_state, dict):
         fail("transition state_model is missing")
     transition_state["architecture_complete"] = False
     transition_state["production_core_gate"] = "BLOCKED"
     transition_state["production_ready"] = False
+    application = transition.get("application_architecture")
+    if isinstance(application, dict):
+        accepted_id = derived["accepted_checkpoint"].replace("-", "")
+        current_id = str(current_slice).replace("-", "") if current_slice else "COMPLETE"
+        application["program_handoff_status"] = f"{accepted_id}_ACCEPTED_{current_id}_NOT_STARTED"
+        application["program_next_required_subslice"] = current_slice
 
     write_json(STATUS, status)
     write_json(TRANSITION, transition)
