@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove the real architecture inventory checker rejects deterministic drift."""
+"""Prove architecture inventory drift and lifecycle projection boundaries."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from types import ModuleType
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATOR = ROOT / "scripts" / "generate-architecture-inventory.py"
+INVENTORY = ROOT / "architecture" / "inventory.json"
 STATUS = ROOT / "docs" / "status.json"
 TRANSITION = ROOT / "architecture" / "architecture-rebaseline-v3-transition.json"
 
@@ -41,21 +42,55 @@ def expect_rejected(module: ModuleType, expected: dict[str, object], tampered: d
             module.INVENTORY_PATH = original_path
 
 
-def assert_lifecycle_projection_sync(module: ModuleType, expected: dict[str, object]) -> None:
+def expect_lifecycle_snapshot_staleness_tolerated(
+    module: ModuleType, expected: dict[str, object], actual: dict[str, object]
+) -> None:
+    stale = copy.deepcopy(actual)
+    delivery = stale.get("current_delivery_map")
+    if not isinstance(delivery, dict):
+        raise AssertionError("tracked inventory lost current_delivery_map")
+    delivery["accepted_checkpoint"] = "STALE_NON_AUTHORITATIVE_FIXTURE"
+    delivery["current_work"] = "STALE_NON_AUTHORITATIVE_FIXTURE"
+    original_path = module.INVENTORY_PATH
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        path = Path(temporary_directory) / "inventory.json"
+        path.write_text(json.dumps(stale, indent=2) + "\n", encoding="utf-8", newline="\n")
+        module.INVENTORY_PATH = path
+        try:
+            module.check_current(expected)
+        finally:
+            module.INVENTORY_PATH = original_path
+
+
+def assert_lifecycle_projection_boundaries(module: ModuleType, expected: dict[str, object]) -> None:
     derived = module.derive_lifecycle_state()
     accepted = derived["accepted_checkpoint"]
     current = derived["current_slice"]
 
-    delivery = expected.get("current_delivery_map")
-    if not isinstance(delivery, dict):
-        raise AssertionError("inventory lost current_delivery_map projection")
-    if delivery.get("accepted_checkpoint") != accepted:
-        raise AssertionError("inventory accepted_checkpoint diverged from canonical Git-derived state")
-    if delivery.get("current_work") != current:
-        raise AssertionError("inventory current_work diverged from canonical Git-derived state")
-    accepted_on_main = delivery.get("accepted_on_main")
-    if not isinstance(accepted_on_main, dict) or accepted_on_main.get("through") != accepted:
-        raise AssertionError("inventory accepted_on_main projection diverged from canonical Git-derived state")
+    generated_delivery = expected.get("current_delivery_map")
+    if not isinstance(generated_delivery, dict):
+        raise AssertionError("generated inventory lost current_delivery_map projection")
+    if generated_delivery.get("accepted_checkpoint") != accepted:
+        raise AssertionError("generated accepted_checkpoint diverged from canonical Git-derived state")
+    if generated_delivery.get("current_work") != current:
+        raise AssertionError("generated current_work diverged from canonical Git-derived state")
+    if generated_delivery.get("projection_role") != "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT":
+        raise AssertionError("generated lifecycle projection lost explicit non-authoritative role")
+    if generated_delivery.get("lifecycle_authority") != f"{module.ACCEPTANCE_DERIVER} derive":
+        raise AssertionError("generated lifecycle projection lost canonical lifecycle authority")
+
+    tracked_inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
+    tracked_delivery = tracked_inventory.get("current_delivery_map")
+    if not isinstance(tracked_delivery, dict):
+        raise AssertionError("tracked inventory lost current_delivery_map projection")
+    module.validate_tracked_snapshot_boundary(tracked_inventory)
+
+    snapshot_accepted = tracked_delivery.get("accepted_checkpoint")
+    snapshot_current = tracked_delivery.get("current_work")
+    if not isinstance(snapshot_accepted, str) or not snapshot_accepted:
+        raise AssertionError("tracked inventory snapshot lost accepted checkpoint")
+    if not isinstance(snapshot_current, str) or not snapshot_current:
+        raise AssertionError("tracked inventory snapshot lost current slice")
 
     status = json.loads(STATUS.read_text(encoding="utf-8"))
     status_current = status.get("current")
@@ -63,21 +98,53 @@ def assert_lifecycle_projection_sync(module: ModuleType, expected: dict[str, obj
     if not isinstance(status_program, dict):
         raise AssertionError("docs/status.json lost architecture_program projection")
     accepted_slices = status_program.get("accepted_slices")
-    if not isinstance(accepted_slices, list) or not accepted_slices or accepted_slices[-1] != accepted:
-        raise AssertionError("docs/status.json accepted_slices diverged from canonical Git-derived state")
-    if status_program.get("current_slice") != current:
-        raise AssertionError("docs/status.json current_slice diverged from canonical Git-derived state")
-    if status_current.get("current_delivery_map") != delivery:
-        raise AssertionError("docs/status.json current_delivery_map diverged from generated inventory")
+    if (
+        not isinstance(accepted_slices, list)
+        or not accepted_slices
+        or accepted_slices[-1] != snapshot_accepted
+        or status_program.get("current_slice") != snapshot_current
+    ):
+        raise AssertionError("docs/status.json lifecycle snapshot diverged from tracked inventory")
+    if status_current.get("current_delivery_map") != tracked_delivery:
+        raise AssertionError("docs/status.json current_delivery_map diverged from tracked inventory")
 
     transition = json.loads(TRANSITION.read_text(encoding="utf-8"))
     transition_slices = transition.get("accepted_slices")
-    if not isinstance(transition_slices, list) or not transition_slices or transition_slices[-1] != accepted:
-        raise AssertionError("transition accepted_slices diverged from canonical Git-derived state")
-    if transition.get("current_slice") != current:
-        raise AssertionError("transition current_slice diverged from canonical Git-derived state")
-    if transition.get("current_delivery_map") != delivery:
-        raise AssertionError("transition current_delivery_map diverged from generated inventory")
+    if (
+        not isinstance(transition_slices, list)
+        or not transition_slices
+        or transition_slices[-1] != snapshot_accepted
+        or transition.get("current_slice") != snapshot_current
+    ):
+        raise AssertionError("transition lifecycle snapshot diverged from tracked inventory")
+    if transition.get("current_delivery_map") != tracked_delivery:
+        raise AssertionError("transition current_delivery_map diverged from tracked inventory")
+
+    policy = module.load_json(module.LIFECYCLE_PROJECTION_POLICY)
+    snapshots = policy.get("tracked_compatibility_snapshots")
+    registered = {
+        item.get("path")
+        for item in snapshots
+        if isinstance(item, dict)
+        and item.get("classification") == "TRANSITION_PROVENANCE_ONLY_FOR_LIFECYCLE_STATE"
+    } if isinstance(snapshots, list) else set()
+    if registered != {
+        "architecture/inventory.json",
+        "docs/status.json",
+        "architecture/architecture-rebaseline-v3-transition.json",
+    }:
+        raise AssertionError("tracked lifecycle snapshot classification registry drifted")
+    consumers = policy.get("consumer_policy")
+    updates = policy.get("projection_update_rule")
+    if (
+        not isinstance(consumers, dict)
+        or consumers.get("tracked_snapshot_may_decide_accepted_or_current_slice") is not False
+        or consumers.get("future_acceptance_requires_source_projection_commit") is not False
+        or not isinstance(updates, dict)
+        or updates.get("ordinary_checks_must_not_require_snapshot_equal_live_state") is not True
+        or updates.get("post_acceptance_projection_source_commit_required") is not False
+    ):
+        raise AssertionError("lifecycle projection non-authority/update policy drifted")
 
     source = GENERATOR.read_text(encoding="utf-8")
     forbidden_current_overlays = (
@@ -90,11 +157,13 @@ def assert_lifecycle_projection_sync(module: ModuleType, expected: dict[str, obj
         if forbidden in source:
             raise AssertionError(f"current inventory path retains lifecycle monkey-patching: {forbidden}")
 
+    expect_lifecycle_snapshot_staleness_tolerated(module, expected, tracked_inventory)
+
 
 def main() -> int:
     module = load_generator()
     expected = module.build_inventory()
-    assert_lifecycle_projection_sync(module, expected)
+    assert_lifecycle_projection_boundaries(module, expected)
 
     d1_evolution = expected.get("d1_evolution")
     if not isinstance(d1_evolution, dict):
@@ -136,8 +205,8 @@ def main() -> int:
         module.INVENTORY_PATH = original_path
 
     print(
-        "Architecture inventory checker rejects stale, tampered, missing and D1-projection drift; "
-        "lifecycle projections match canonical Git-derived state without monkey-patching."
+        "Architecture inventory rejects stable/domain drift, derives live lifecycle state only from "
+        "canonical Git authority, and tolerates non-authoritative snapshot staleness without a second source merge."
     )
     return 0
 
