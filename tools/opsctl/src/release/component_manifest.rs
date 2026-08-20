@@ -721,11 +721,11 @@ mod tests {
     };
     use std::fs;
     use std::io::Write;
-    use std::path::PathBuf;
+    use std::path::Path;
 
     #[test]
     fn rejects_non_archive() -> Result<(), Box<dyn std::error::Error>> {
-        let path = PathBuf::from(std::env::temp_dir()).join(format!(
+        let path = std::env::temp_dir().join(format!(
             "opsctl-component-manifest-invalid-{}",
             std::process::id()
         ));
@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn empty_zip_cannot_fake_manifest() -> Result<(), Box<dyn std::error::Error>> {
-        let path = PathBuf::from(std::env::temp_dir()).join(format!(
+        let path = std::env::temp_dir().join(format!(
             "opsctl-component-manifest-empty-{}.zip",
             std::process::id()
         ));
@@ -752,7 +752,7 @@ mod tests {
 
     #[test]
     fn unsafe_zip_member_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
-        let path = PathBuf::from(std::env::temp_dir()).join(format!(
+        let path = std::env::temp_dir().join(format!(
             "opsctl-component-manifest-unsafe-{}.zip",
             std::process::id()
         ));
@@ -764,7 +764,7 @@ mod tests {
 
     #[test]
     fn unknown_zip_member_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
-        let path = PathBuf::from(std::env::temp_dir()).join(format!(
+        let path = std::env::temp_dir().join(format!(
             "opsctl-component-manifest-unknown-{}.zip",
             std::process::id()
         ));
@@ -775,7 +775,7 @@ mod tests {
     }
 
     fn write_local_member(
-        path: &PathBuf,
+        path: &Path,
         name: &str,
         payload: &[u8],
     ) -> Result<(), Box<dyn std::error::Error>> {

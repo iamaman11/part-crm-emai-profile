@@ -18,6 +18,7 @@ const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const SHA_C: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 const SHA_D: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+type StaticCompatibilityFields = (Value, Value, Value, Value, Value);
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -87,7 +88,7 @@ fn schema_window(
 }
 
 fn static_compatibility_fields()
--> Result<(Value, Value, Value, Value, Value), Box<dyn std::error::Error>> {
+-> Result<StaticCompatibilityFields, Box<dyn std::error::Error>> {
     let root = repo_root();
     let topology = ReleaseInputTopology::load(&root)?;
     let resolved = topology.resolve(&root)?;
