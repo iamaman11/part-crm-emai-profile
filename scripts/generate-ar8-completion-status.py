@@ -28,6 +28,7 @@ DERIVER = ROOT / ".github/scripts/architecture-acceptance.mjs"
 INVENTORY_GENERATOR = ROOT / "scripts/generate-architecture-inventory.py"
 DERIVER_ID = ".github/scripts/architecture-acceptance.mjs derive"
 PROJECTION_ROLE = "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT"
+HISTORICAL_REPOSITORY_STEP_SCOPE = "historical_repository_steps_0_10"
 
 HISTORICAL_ACCEPTANCE = {
     "ar8_acceptance": {
@@ -180,6 +181,18 @@ def validate_history(status: dict[str, Any], transition: dict[str, Any]) -> None
         if left.get("metadata_only") is not True or left.get("production_mutation") is not False:
             fail(f"historical acceptance lost metadata-only boundary: {key}")
 
+    legacy_next = status.get("next_repository_step")
+    if (
+        not isinstance(legacy_next, dict)
+        or legacy_next.get("historical") is not True
+        or legacy_next.get("scope") != HISTORICAL_REPOSITORY_STEP_SCOPE
+        or legacy_next.get("forward_execution_authority") is not False
+    ):
+        fail("legacy root next_repository_step is not explicitly historical/non-authoritative")
+    historical_note = status.get("historical_status_note")
+    if not isinstance(historical_note, str) or "next_repository_step" not in historical_note:
+        fail("docs/status.json historical note does not classify root next_repository_step")
+
 
 def validate_fail_closed(status: dict[str, Any], transition: dict[str, Any]) -> None:
     current = status.get("current")
@@ -273,6 +286,18 @@ def explicit_sync() -> None:
     program = current.get("architecture_program") if isinstance(current, dict) else None
     if not isinstance(current, dict) or not isinstance(program, dict):
         fail("docs/status.json current architecture projection is missing")
+
+    legacy_next = status.get("next_repository_step")
+    if not isinstance(legacy_next, dict):
+        fail("docs/status.json legacy root next_repository_step is missing")
+    legacy_next["historical"] = True
+    legacy_next["scope"] = HISTORICAL_REPOSITORY_STEP_SCOPE
+    legacy_next["forward_execution_authority"] = False
+    status["historical_status_note"] = (
+        "repository_step, next_repository_step, accepted_steps and legacy evidence fields preserve "
+        "historical Repository Steps 0-10 and earlier repository-local evidence; current program authority "
+        "is current.architecture_program + architecture/inventory.json + architecture/accepted-phases.json"
+    )
 
     current_slice = derived.get("current_slice")
     current_name = current_entry.get("name") if current_entry is not None else None
@@ -370,6 +395,15 @@ def self_test(
         pass
     else:
         fail("historical acceptance mutation negative fixture unexpectedly passed")
+
+    bad = copy.deepcopy(status)
+    bad["next_repository_step"]["forward_execution_authority"] = True
+    try:
+        validate_all(bad, transition, acceptance, lifecycle, sequence)
+    except ProjectionError:
+        pass
+    else:
+        fail("legacy root next_repository_step unexpectedly regained forward authority")
 
     bad_lifecycle = copy.deepcopy(lifecycle)
     bad_lifecycle["projection_update_rule"]["post_acceptance_projection_source_commit_required"] = True
