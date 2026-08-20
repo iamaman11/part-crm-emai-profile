@@ -142,8 +142,10 @@ jobs:
             --output "$policy_dir/accepted-source-evidence.json"
 
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root "$GITHUB_WORKSPACE/target-source" release verify \
-            --release-set "$policy_dir/release-set.json" --artifact-root "$release_root" \
+            --root . release verify \
+            --release-set "$policy_dir/release-set.json" \
+            --source-root "$GITHUB_WORKSPACE/target-source" \
+            --artifact-root "$release_root" \
             | tee "$RUNNER_TEMP/release-verify.json" \
             | jq -e '.decision == "VALID" and .source_accepted == true and .mutation_executed == false' >/dev/null
           echo "TARGET_RELEASE_ROOT=$release_root" >> "$GITHUB_ENV"
@@ -260,6 +262,7 @@ jobs:
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release compatibility \
             --release-set "$TARGET_RELEASE_MANIFEST" \
+            --source-root "$TARGET_SOURCE_ROOT" \
             --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
             "${current_args[@]}" \
@@ -279,6 +282,7 @@ jobs:
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion plan \
             --release-set "$TARGET_RELEASE_MANIFEST" \
+            --source-root "$TARGET_SOURCE_ROOT" \
             --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
@@ -287,6 +291,7 @@ jobs:
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion preflight \
             --release-set "$TARGET_RELEASE_MANIFEST" \
+            --source-root "$TARGET_SOURCE_ROOT" \
             --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
@@ -353,6 +358,7 @@ jobs:
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion verify \
             --release-set "$TARGET_RELEASE_MANIFEST" \
+            --source-root "$TARGET_SOURCE_ROOT" \
             --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --snapshot "$RUNNER_TEMP/post-snapshot.json" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
