@@ -44,17 +44,6 @@ jobs:
           python scripts/deployment-snapshot-ar11.py --self-test
           python scripts/check-release-input-generated-drift-ar11.py
 
-      - name: Verify deterministic canonical projection
-        run: |
-          python - <<'PY'
-          import hashlib
-          from pathlib import Path
-          path = Path('architecture/release-architecture-ar11.json')
-          text = path.read_text(encoding='utf-8').replace('\r\n', '\n').replace('\r', '\n')
-          print(f'AR-11 release architecture sha256={hashlib.sha256(text.encode("utf-8")).hexdigest()}')
-          PY
-          python scripts/generate-architecture-inventory.py --check
-
       - name: Render A3b lifecycle projection candidate
         if: github.event_name == 'pull_request' && github.event.pull_request.number == 394
         run: python scripts/generate-ar8-completion-status.py --write
@@ -70,6 +59,17 @@ jobs:
             architecture/architecture-rebaseline-v3-transition.json
           if-no-files-found: error
           retention-days: 1
+
+      - name: Verify deterministic canonical projection
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          path = Path('architecture/release-architecture-ar11.json')
+          text = path.read_text(encoding='utf-8').replace('\r\n', '\n').replace('\r', '\n')
+          print(f'AR-11 release architecture sha256={hashlib.sha256(text.encode("utf-8")).hexdigest()}')
+          PY
+          python scripts/generate-architecture-inventory.py --check
 
       - name: Verify native opsctl release policy foundation
         run: |
