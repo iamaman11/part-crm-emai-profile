@@ -117,10 +117,15 @@
   "projection_policy": {
     "authoritative": false,
     "generated_or_human_projection_only": true,
+    "lifecycle_policy": "architecture/lifecycle-projection-policy.json",
+    "tracked_mutable_lifecycle_state_forbidden_as_authority": true,
+    "program_document_lifecycle_status_is_projection": true,
+    "future_acceptance_requires_source_projection_commit": false,
     "paths": [
       "docs/status.json",
       "architecture/inventory.json",
       "architecture/architecture-rebaseline-v3-transition.json",
+      "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
       "README.md",
       "docs/README.md",
       "docs/INDEX.md",
