@@ -7,6 +7,7 @@ pub mod artifact;
 pub mod authority;
 pub mod commands;
 pub mod compatibility;
+pub mod component_manifest;
 pub mod digest;
 pub mod input_topology;
 pub mod model;
