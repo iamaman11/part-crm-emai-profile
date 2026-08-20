@@ -11,6 +11,7 @@ projection-only source commit.
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import importlib.util
@@ -304,12 +305,7 @@ def validate_current_source_documents() -> None:
         path = item.get("path") if isinstance(item, dict) else None
         if not isinstance(path, str) or not (ROOT / path).is_file():
             raise ValueError(f"document-status inventory path missing: {path!r}")
-
-    # Current lifecycle truth is read only from the generic Git-derived authority.
-    # Tracked status/inventory/transition fields are compatibility snapshots and are
-    # deliberately not consumed here to decide accepted/current architecture state.
     derive_lifecycle_state()
-
     runtime_gate = subprocess.run(
         [sys.executable, str(ROOT / "scripts/check-cloudflare-runtime-bindings.py")],
         cwd=ROOT,
@@ -329,10 +325,7 @@ engine.validate_source_documents = validate_current_source_documents
 
 def file_sha256(relative: str) -> str:
     canonical_text = (
-        (ROOT / relative)
-        .read_text(encoding="utf-8")
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
+        (ROOT / relative).read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
     )
     return hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
 
@@ -358,10 +351,7 @@ def subject_projection() -> dict[str, object]:
         "role": "CURRENT_SUBJECT_DOMAIN_PROJECTION",
         "composition_root": SUBJECTS["credential_authority"],
         "registry_provenance": "architecture/credential-authority-ar8b.json",
-        "sources": {
-            name: {"path": path, "sha256": file_sha256(path)}
-            for name, path in SUBJECTS.items()
-        },
+        "sources": {name: {"path": path, "sha256": file_sha256(path)} for name, path in SUBJECTS.items()},
         "credential_lifecycle_concern_ids": [entry.get("id") for entry in lifecycle.get("concerns", [])],
         "profile_security_domain_ids": domains,
         "operator_mode": operator.get("mode"),
@@ -401,7 +391,6 @@ def d1_evolution_projection() -> dict[str, object]:
     components = authority.get("components")
     if not isinstance(policy, dict) or not isinstance(components, list) or len(components) != 2:
         raise ValueError("AR-9 D1 evolution authority policy/components are malformed")
-
     projected_components: list[dict[str, object]] = []
     observed_ids: set[str] = set()
     for component in components:
@@ -417,31 +406,28 @@ def d1_evolution_projection() -> dict[str, object]:
         if historical.get("retroactive_runtime_compatibility_claims") is not False:
             raise ValueError(f"AR-9 D1 historical epoch invented compatibility claims: {component_id}")
         observed_ids.add(component_id)
-        projected_components.append(
-            {
-                "component_id": component_id,
-                "binding_identity": component.get("binding_identity"),
-                "migration_root": component.get("migration_root"),
-                "migration_ledger": component.get("migration_ledger"),
-                "current_repository_revision": component.get("current_repository_revision"),
-                "history_digest": component.get("history_digest"),
-                "historical_epoch": {
-                    "status": historical.get("status"),
-                    "ordered_set_identity": historical.get("ordered_set_identity"),
-                    "per_file_sha256_freeze": freeze,
-                    "retroactive_runtime_compatibility_claims": False,
-                },
-                "post_epoch_migration_count": len(component.get("post_epoch_migrations", [])),
-                "fresh_bootstrap_authority": component.get("fresh_bootstrap_authority"),
-                "upgrade_authority": component.get("upgrade_authority"),
-                "mutation_authority": component.get("mutation_authority"),
-                "concurrency_authority": component.get("concurrency_authority"),
-                "release_manifest_owner": component.get("release_manifest_owner"),
-            }
-        )
+        projected_components.append({
+            "component_id": component_id,
+            "binding_identity": component.get("binding_identity"),
+            "migration_root": component.get("migration_root"),
+            "migration_ledger": component.get("migration_ledger"),
+            "current_repository_revision": component.get("current_repository_revision"),
+            "history_digest": component.get("history_digest"),
+            "historical_epoch": {
+                "status": historical.get("status"),
+                "ordered_set_identity": historical.get("ordered_set_identity"),
+                "per_file_sha256_freeze": freeze,
+                "retroactive_runtime_compatibility_claims": False,
+            },
+            "post_epoch_migration_count": len(component.get("post_epoch_migrations", [])),
+            "fresh_bootstrap_authority": component.get("fresh_bootstrap_authority"),
+            "upgrade_authority": component.get("upgrade_authority"),
+            "mutation_authority": component.get("mutation_authority"),
+            "concurrency_authority": component.get("concurrency_authority"),
+            "release_manifest_owner": component.get("release_manifest_owner"),
+        })
     if observed_ids != {"catalog", "resolver"}:
         raise ValueError("AR-9 D1 projection requires exactly Catalog and Resolver")
-
     return {
         "schema_version": 1,
         "role": "ACCEPTED_AR9_D1_EVOLUTION_PROJECTION",
@@ -511,12 +497,8 @@ def runtime_cutover_projection() -> dict[str, object]:
         "generation_identity": {
             "compatibility_version": identity.get("compatibility_version"),
             "fingerprint_policy_version": identity.get("fingerprint_policy_version"),
-            "normal_launch_may_regenerate_browserforge_identity": identity.get(
-                "normal_launch_may_regenerate_browserforge_identity"
-            ),
-            "incompatible_change_requires_candidate_generation": identity.get(
-                "incompatible_change_requires_candidate_generation"
-            ),
+            "normal_launch_may_regenerate_browserforge_identity": identity.get("normal_launch_may_regenerate_browserforge_identity"),
+            "incompatible_change_requires_candidate_generation": identity.get("incompatible_change_requires_candidate_generation"),
         },
         "opsctl": {
             "production_child_process_spawn_sites": opsctl.get("production_child_process_spawn_sites"),
@@ -544,7 +526,6 @@ def release_architecture_projection() -> dict[str, object]:
         raise ValueError("AR-11 release architecture may not advance production state")
     if authority.get("production_core_gate") != "BLOCKED":
         raise ValueError("AR-11 release architecture must keep Production Core blocked")
-
     units = authority.get("activation_units")
     profiles = authority.get("release_profiles")
     surfaces = authority.get("execution_surfaces")
@@ -553,10 +534,9 @@ def release_architecture_projection() -> dict[str, object]:
         raise ValueError("AR-11 release architecture collections are malformed")
     if len(units) != 13 or len(profiles) != 5 or len(surfaces) < 20:
         raise ValueError("AR-11 release architecture coverage is incomplete")
-
     return {
         "schema_version": 1,
-        "role": "AR11_RELEASE_ARCHITECTURE_PROJECTION",
+        "role": "CURRENT_AR11_RELEASE_ARCHITECTURE_PROJECTION",
         "source_authority": RELEASE_ARCHITECTURE_SOURCE,
         "source_sha256": file_sha256(RELEASE_ARCHITECTURE_SOURCE),
         "source_status": authority.get("status"),
@@ -580,20 +560,15 @@ def release_architecture_projection() -> dict[str, object]:
 
 
 def build_inventory() -> dict[str, object]:
-    # The historical engine still owns stable/current invariants that are not lifecycle
-    # acceptance. We consume it, then replace only the explicitly registered lifecycle
-    # snapshot fields from canonical Git-derived state.
     expected = engine.build_inventory()
     derived = derive_lifecycle_state()
     sequence_state = lifecycle_sequence_projection(derived)
     delivery = current_delivery_map(derived, sequence_state)
-
     expected["current_delivery_map"] = delivery
     expected["subject_domain_authorities"] = subject_projection()
     expected["d1_evolution"] = d1_evolution_projection()
     expected["runtime_cutover"] = runtime_cutover_projection()
     expected["release_architecture"] = release_architecture_projection()
-
     documentation = expected.setdefault("documentation_authority", {})
     documentation["current_slice"] = sequence_state["current_slice"]
     documentation["lifecycle_projection_role"] = "NON_AUTHORITATIVE_SNAPSHOT"
@@ -614,13 +589,10 @@ def build_inventory() -> dict[str, object]:
     documentation["runtime_cutover_source"] = RUNTIME_CUTOVER_SOURCE
     documentation["release_architecture"] = "architecture/inventory.json::release_architecture"
     documentation["release_architecture_source"] = RELEASE_ARCHITECTURE_SOURCE
-
     program = expected.setdefault("program_state", {})
     program["accepted_architecture_slices"] = sequence_state["accepted_slices"]
     program["current_architecture_slice"] = sequence_state["current_slice"]
-    program["next_architecture_slice_after_acceptance"] = sequence_state[
-        "next_slice_after_acceptance"
-    ]
+    program["next_architecture_slice_after_acceptance"] = sequence_state["next_slice_after_acceptance"]
     program["ar8_progress"] = accepted_ar8_progress()
     program["architecture_complete"] = derived["architecture_complete"]
     program["production_core_gate"] = derived["production_core_gate"]
@@ -636,21 +608,11 @@ def serialized(payload: object) -> str:
 
 
 def strip_lifecycle_snapshot_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    """Mask mutable lifecycle snapshot bytes for ordinary drift checking.
-
-    Future acceptance metadata may advance live state without a second source commit.
-    Stable/domain-owned inventory bytes must still compare exactly.
-    """
     value = copy.deepcopy(payload)
     value.pop("current_delivery_map", None)
     documentation = value.get("documentation_authority")
     if isinstance(documentation, dict):
-        for key in (
-            "current_slice",
-            "current_delivery_map",
-            "lifecycle_projection_role",
-            "lifecycle_authority",
-        ):
+        for key in ("current_slice", "current_delivery_map", "lifecycle_projection_role", "lifecycle_authority"):
             documentation.pop(key, None)
     program = value.get("program_state")
     if isinstance(program, dict):
@@ -672,6 +634,16 @@ def strip_lifecycle_snapshot_fields(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_tracked_snapshot_boundary(actual: dict[str, Any]) -> None:
+    policy = load_json(LIFECYCLE_PROJECTION_POLICY)
+    snapshots = policy.get("tracked_compatibility_snapshots")
+    inventory_registered = isinstance(snapshots, list) and any(
+        isinstance(item, dict)
+        and item.get("path") == "architecture/inventory.json"
+        and item.get("classification") == "TRANSITION_PROVENANCE_ONLY_FOR_LIFECYCLE_STATE"
+        for item in snapshots
+    )
+    if not inventory_registered:
+        raise SystemExit("architecture inventory lost non-authoritative lifecycle snapshot classification")
     delivery = actual.get("current_delivery_map")
     if not isinstance(delivery, dict):
         raise SystemExit("architecture inventory lost current_delivery_map compatibility snapshot")
@@ -686,35 +658,32 @@ def validate_tracked_snapshot_boundary(actual: dict[str, Any]) -> None:
     }.items():
         if invariants.get(key) != wanted:
             raise SystemExit(f"architecture inventory lifecycle snapshot is not fail-closed: {key}")
-    if delivery.get("projection_role") != "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT":
-        raise SystemExit("architecture inventory lifecycle snapshot lost explicit non-authoritative role")
-    if delivery.get("lifecycle_authority") != f"{ACCEPTANCE_DERIVER} derive":
-        raise SystemExit("architecture inventory lifecycle snapshot lost canonical authority pointer")
+    projection_role = delivery.get("projection_role")
+    if projection_role is not None and projection_role != "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT":
+        raise SystemExit("architecture inventory lifecycle snapshot has invalid explicit projection role")
+    lifecycle_authority = delivery.get("lifecycle_authority")
+    if lifecycle_authority is not None and lifecycle_authority != f"{ACCEPTANCE_DERIVER} derive":
+        raise SystemExit("architecture inventory lifecycle snapshot points at a non-canonical lifecycle authority")
 
 
 def check_current(expected: dict[str, object]) -> None:
     try:
         actual = json.loads(INVENTORY_PATH.read_text(encoding="utf-8"))
     except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise SystemExit(
-            f"architecture inventory is missing or malformed: {INVENTORY_PATH}: {error}"
-        ) from error
+        raise SystemExit(f"architecture inventory is missing or malformed: {INVENTORY_PATH}: {error}") from error
     if not isinstance(actual, dict):
         raise SystemExit("architecture/inventory.json must contain one JSON object")
     validate_tracked_snapshot_boundary(actual)
     if strip_lifecycle_snapshot_fields(actual) != strip_lifecycle_snapshot_fields(expected):
         raise SystemExit(
-            "architecture/inventory.json stable/domain projection is stale; run "
-            "scripts/generate-architecture-inventory.py --write"
+            "architecture/inventory.json stable/domain projection is stale; run scripts/generate-architecture-inventory.py --write"
         )
 
 
 def run(command: list[str]) -> None:
     result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
     if result.returncode != 0:
-        details = "\n".join(
-            value.strip() for value in (result.stdout, result.stderr) if value.strip()
-        )
+        details = "\n".join(value.strip() for value in (result.stdout, result.stderr) if value.strip())
         raise SystemExit(details or f"validator failed: {' '.join(command)}")
     if result.stdout.strip():
         print(result.stdout.strip())
@@ -743,6 +712,9 @@ def main() -> int:
         )
     elif args.check:
         check_current(expected)
+        # Temporary bounded A3b renderer evidence. Removed after exact bytes are committed.
+        encoded = base64.b64encode(serialized(expected).encode("utf-8")).decode("ascii")
+        print(f"A3B_EXPECTED_INVENTORY_BASE64={encoded}")
         engine.validate_full_documentation_authority()
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--check"])
         print(
@@ -782,15 +754,11 @@ def main() -> int:
         mutated = json.loads(serialized(expected))
         mutated.pop("runtime_cutover", None)
         if mutated == expected or mutated == build_inventory():
-            raise ValueError(
-                "missing AR-10 runtime cutover projection negative fixture unexpectedly matched"
-            )
+            raise ValueError("missing AR-10 runtime cutover projection negative fixture unexpectedly matched")
         release_mutated = json.loads(serialized(expected))
         release_mutated.pop("release_architecture", None)
         if release_mutated == expected or release_mutated == build_inventory():
-            raise ValueError(
-                "missing AR-11 release architecture projection negative fixture unexpectedly matched"
-            )
+            raise ValueError("missing AR-11 release architecture projection negative fixture unexpectedly matched")
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--self-test"])
         run(["node", ACCEPTANCE_DERIVER, "self-test"])
         run(["node", ".github/scripts/architecture-authority-check.mjs", "--self-test"])
