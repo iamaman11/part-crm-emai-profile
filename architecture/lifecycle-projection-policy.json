@@ -73,6 +73,7 @@
     "human_projection_may_decide_accepted_or_current_slice": false,
     "operator_surface_must_label_snapshot_non_authoritative": true,
     "stable_inventory_generation_must_not_advance_lifecycle_state": true,
+    "stable_inventory_generation_must_preserve_snapshot_without_advancing_it": true,
     "future_acceptance_requires_source_projection_commit": false,
     "duplicate_lifecycle_derivation_algorithm_forbidden": true
   },
