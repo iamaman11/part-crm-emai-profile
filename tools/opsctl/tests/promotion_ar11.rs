@@ -18,7 +18,14 @@ const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const SHA_C: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 const SHA_D: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-type StaticCompatibilityFields = (Value, Value, Value, Value, Value);
+
+struct StaticCompatibilityFields {
+    contracts: Value,
+    protocols: Value,
+    schemas: Value,
+    runtime_compatibility: Value,
+    build_provenance: Value,
+}
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -148,13 +155,13 @@ fn static_compatibility_fields() -> Result<StaticCompatibilityFields, Box<dyn st
         "frontend_lock_sha256": resolved_input(&resolved, "frontend_lock")?.sha256,
         "release_architecture_sha256": resolved_input(&resolved, "release_architecture_authority")?.sha256,
     });
-    Ok((
+    Ok(StaticCompatibilityFields {
         contracts,
         protocols,
         schemas,
         runtime_compatibility,
         build_provenance,
-    ))
+    })
 }
 
 fn component(release_id: &str, path: &str, digest: &str, size: u64) -> Value {
@@ -170,8 +177,13 @@ fn component(release_id: &str, path: &str, digest: &str, size: u64) -> Value {
 
 fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
     let evidence = accepted_main_evidence()?;
-    let (contracts, protocols, schemas, runtime_compatibility, build_provenance) =
-        static_compatibility_fields()?;
+    let StaticCompatibilityFields {
+        contracts,
+        protocols,
+        schemas,
+        runtime_compatibility,
+        build_provenance,
+    } = static_compatibility_fields()?;
     let mut value = json!({
         "schema_version": 2,
         "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{SHA_A}"),
