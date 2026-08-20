@@ -1,42 +1,27 @@
 name: AR-11 Projection Regeneration
 
 on:
-  push:
+  pull_request:
     branches:
-      - codex/ar11-functional-closure-v2
-    paths:
-      - architecture/release-architecture-ar11.json
-      - architecture/credential-authority.json
-      - architecture/credential-authority-ar11-observation.json
-      - .github/workflows/ar11-projection-regeneration.yml
+      - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   regenerate:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout exact branch
+      - name: Checkout exact candidate source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: codex/ar11-functional-closure-v2
-          fetch-depth: 1
-          persist-credentials: true
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Regenerate canonical architecture inventory
-        run: python scripts/generate-architecture-inventory.py --write
-
-      - name: Commit generated projection
+      - name: Regenerate canonical architecture inventory and print exact diff
         shell: bash
         run: |
-          if git diff --quiet -- architecture/inventory.json; then
-            echo "Projection already current."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add architecture/inventory.json
-          git commit -m "AR-11: regenerate canonical architecture inventory"
-          git push origin HEAD:codex/ar11-functional-closure-v2
+          set -euo pipefail
+          python scripts/generate-architecture-inventory.py --write
+          git diff -- architecture/inventory.json
