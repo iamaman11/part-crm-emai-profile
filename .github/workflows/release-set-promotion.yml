@@ -120,9 +120,13 @@ jobs:
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/target-release-set"
           policy_dir="$RUNNER_TEMP/release-policy-input"
-          mkdir -p "$asset_root" "$release_root/components" "$policy_dir"
+          mkdir -p "$asset_root" "$release_root/components" "$release_root/manifests" "$policy_dir"
           gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
-          for name in release-set.json control-plane.tar secret-resolver.tar runtime-bundle.tar profile-bridge.zip; do
+          for name in \
+            release-set.json \
+            control-plane.tar secret-resolver.tar runtime-bundle.tar profile-bridge.zip \
+            control-plane-manifest.json secret-resolver-manifest.json \
+            runtime-bundle-manifest.json profile-bridge-manifest.json; do
             test -f "$asset_root/$name"
           done
           cp "$asset_root/release-set.json" "$release_root/release-set.json"
@@ -131,6 +135,10 @@ jobs:
           cp "$asset_root/secret-resolver.tar" "$release_root/components/secret-resolver.tar"
           cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
           cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
+          cp "$asset_root/control-plane-manifest.json" "$release_root/manifests/control-plane-manifest.json"
+          cp "$asset_root/secret-resolver-manifest.json" "$release_root/manifests/secret-resolver-manifest.json"
+          cp "$asset_root/runtime-bundle-manifest.json" "$release_root/manifests/runtime-bundle-manifest.json"
+          cp "$asset_root/profile-bridge-manifest.json" "$release_root/manifests/profile-bridge-manifest.json"
           test "$(jq -r '.release_set_id' "$policy_dir/release-set.json")" = "$RELEASE_SET_ID"
 
           python scripts/accepted-source-evidence-ar11.py \
