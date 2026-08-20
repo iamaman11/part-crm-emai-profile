@@ -203,7 +203,7 @@ fn read_unique_tar_member_by_basename(
             let payload = read_tar_payload(&mut file, size, MAX_PAX_BYTES, archive_path)?;
             let text = std::str::from_utf8(&payload)
                 .map_err(|error| mismatch(format!("GNU tar long path is not UTF-8: {error}")))?;
-            let value = text.trim_end_matches(|character| character == '\0' || character == '\n');
+            let value = text.trim_end_matches(['\0', '\n']);
             if value.is_empty() {
                 return Err(mismatch("GNU tar long path is empty"));
             }
@@ -655,7 +655,9 @@ mod tests {
             "release-manifest.json",
             b"tampered\n",
         )?;
-        let error = verify_component_manifests(&manifest, &root).expect_err("tamper must fail");
+        let result = verify_component_manifests(&manifest, &root);
+        assert!(result.is_err());
+        let error = result.err().ok_or("tamper unexpectedly passed")?;
         assert!(error.to_string().contains("COMPONENT_MANIFEST_MISMATCH"));
         fs::remove_dir_all(root)?;
         Ok(())
