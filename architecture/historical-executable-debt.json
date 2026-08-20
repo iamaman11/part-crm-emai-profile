@@ -105,6 +105,34 @@
       "disposition": "REMOVED_IN_PR_379_AND_MUST_STAY_ABSENT"
     },
     {
+      "path": ".github/scripts/ar8-profile-security.mjs",
+      "classification": "DEAD",
+      "expected_present": false,
+      "standalone_entrypoint": false,
+      "proves": "retired AR-8 profile-security candidate overlay",
+      "duplicate_or_successor": ".github/scripts/profile-security-authority-check.mjs is the permanent subject-domain validator; architecture-authority-check.mjs explicitly forbids governance execution of this AR-specific candidate validator",
+      "reads_git_history": false,
+      "executes_historical_code": false,
+      "materializes_retired_code": false,
+      "runtime_mutation_authority": false,
+      "remote_mutation_authority": false,
+      "disposition": "REMOVED_IN_PR_380_AND_MUST_STAY_ABSENT"
+    },
+    {
+      "path": ".github/scripts/ar8-f-operator-rehearsal.mjs",
+      "classification": "DEAD",
+      "expected_present": false,
+      "standalone_entrypoint": false,
+      "proves": "retired AR-8F operator rehearsal candidate overlay",
+      "duplicate_or_successor": "architecture/operator-contract.json plus .github/scripts/architecture-authority-check.mjs own the permanent operator invariants; governance execution of this candidate validator is explicitly forbidden",
+      "reads_git_history": false,
+      "executes_historical_code": false,
+      "materializes_retired_code": false,
+      "runtime_mutation_authority": false,
+      "remote_mutation_authority": false,
+      "disposition": "REMOVED_IN_PR_380_AND_MUST_STAY_ABSENT"
+    },
+    {
       "path": ".github/workflows/mailbox-secret-resolver-promotion.yml",
       "classification": "DEAD",
       "expected_present": false,
