@@ -159,7 +159,6 @@ function validateProfileProjection(profiles) {
     }
   }
   if (!rust.includes('ProfileAuthorization::ProductionBlocked') || !rust.includes('ProfileAuthorization::ProductionNotAuthorized')) {
-    // The enum error is rendered without the namespace in source; require both concepts separately.
     if (!rust.includes('ProductionBlocked') || !rust.includes('ProductionNotAuthorized')) fail('production runtime fail-closed authorization proof missing');
   }
 }
@@ -229,7 +228,10 @@ function validateDeploymentClosures(authority) {
 }
 
 function validateReleasePromotion(authority) {
-  if (authority.release_set?.schema_version !== 1 || authority.release_set?.dependency_graph !== 'ACYCLIC_REQUIRED' || authority.release_set?.unknown_result !== 'FAIL_CLOSED') fail('release-set invariants incomplete');
+  if (authority.release_set?.schema_version !== 2
+      || authority.release_set?.id_scheme !== 'release-set-v2-sha256-SHA256(canonical_identity_payload)'
+      || authority.release_set?.dependency_graph !== 'ACYCLIC_REQUIRED'
+      || authority.release_set?.unknown_result !== 'FAIL_CLOSED') fail('release-set v2 invariants incomplete');
   const policy = authority.promotion_policy;
   if (policy?.build_once !== true || policy?.promotion_rebuild !== false || policy?.opsctl_network !== false || policy?.opsctl_credentials !== false || policy?.opsctl_provider_mutation !== false || policy?.production_execution_before_ar17 !== false) fail('promotion authority boundary drifted');
   if (authority.artifact_authority?.canonical_durable_publication !== 'GITHUB_RELEASE_ASSETS' || authority.artifact_authority?.overwrite_existing_release_id !== false) fail('durable artifact authority incomplete');
@@ -249,6 +251,13 @@ function selfTest(authority) {
   rejected = false;
   try { validateProfiles(copy2, validateActivationUnits(copy2)); } catch { rejected = true; }
   if (!rejected) fail('production Core outbound-mail negative fixture was accepted');
+
+  const copy3 = structuredClone(authority);
+  copy3.release_set.schema_version = 1;
+  copy3.release_set.id_scheme = 'release-set-v1-sha256-SHA256(canonical_identity_payload)';
+  rejected = false;
+  try { validateReleasePromotion(copy3); } catch { rejected = true; }
+  if (!rejected) fail('Release Set v1 regression fixture was accepted');
 }
 
 const authority = loadAuthority();
