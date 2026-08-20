@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "kind": "LIFECYCLE_PROJECTION_POLICY",
+  "status": "current",
+  "tracking_issue": 375,
+  "purpose": "Separate Git-derived accepted/current architecture lifecycle state from tracked compatibility and human-readable projections without creating a second acceptance authority.",
+  "live_state_authority": {
+    "acceptance_policy": "architecture/architecture-acceptance-policy.json",
+    "program_sequence": "architecture/architecture-program-sequence.json",
+    "deriver": ".github/scripts/architecture-acceptance.mjs derive",
+    "source_branch": "main",
+    "acceptance_metadata": "immutable Git acceptance metadata defined by architecture/architecture-acceptance-policy.json",
+    "tracked_mutable_lifecycle_state": false,
+    "manual_current_slice_authority": false,
+    "manual_accepted_checkpoint_authority": false
+  },
+  "program_intent_boundary": {
+    "program_document": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+    "may_define_scope_sequence_and_invariants": true,
+    "may_independently_decide_accepted_checkpoint": false,
+    "may_independently_decide_current_slice": false,
+    "lifecycle_status_text_is_projection": true
+  },
+  "tracked_compatibility_snapshots": [
+    {
+      "path": "architecture/inventory.json",
+      "classification": "TRANSITION_PROVENANCE_ONLY_FOR_LIFECYCLE_STATE",
+      "lifecycle_projection_fields": [
+        "current_delivery_map",
+        "documentation_authority.current_slice",
+        "documentation_authority.current_delivery_map",
+        "program_state.accepted_architecture_slices",
+        "program_state.current_architecture_slice",
+        "program_state.next_architecture_slice_after_acceptance",
+        "program_state.ar8_progress",
+        "program_state.current_delivery_map"
+      ]
+    },
+    {
+      "path": "docs/status.json",
+      "classification": "TRANSITION_PROVENANCE_ONLY_FOR_LIFECYCLE_STATE",
+      "lifecycle_projection_fields": [
+        "current.architecture_program.accepted_slices",
+        "current.architecture_program.current_slice",
+        "current.architecture_program.next_slice_after_acceptance",
+        "current.current_delivery_map"
+      ]
+    },
+    {
+      "path": "architecture/architecture-rebaseline-v3-transition.json",
+      "classification": "TRANSITION_PROVENANCE_ONLY_FOR_LIFECYCLE_STATE",
+      "lifecycle_projection_fields": [
+        "status",
+        "accepted_slices",
+        "current_slice",
+        "next_slice_after_acceptance",
+        "current_delivery_map"
+      ]
+    }
+  ],
+  "human_projection_paths": [
+    "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+    "README.md",
+    "docs/README.md",
+    "docs/INDEX.md",
+    "docs/DEVELOPMENT_PLAN.md",
+    "docs/DEVELOPER_CAPABILITY_MATRIX.md"
+  ],
+  "consumer_policy": {
+    "tracked_snapshot_may_decide_accepted_or_current_slice": false,
+    "tracked_snapshot_may_authorize_production": false,
+    "tracked_snapshot_may_drive_ar12_through_ar17_closeout": false,
+    "human_projection_may_decide_accepted_or_current_slice": false,
+    "operator_surface_must_label_snapshot_non_authoritative": true,
+    "stable_inventory_generation_must_not_advance_lifecycle_state": true,
+    "future_acceptance_requires_source_projection_commit": false,
+    "duplicate_lifecycle_derivation_algorithm_forbidden": true
+  },
+  "projection_update_rule": {
+    "projection_updates_may_improve_human_or_compatibility_accuracy": true,
+    "projection_updates_are_not_acceptance_events": true,
+    "projection_staleness_must_not_revoke_or_create_acceptance": true,
+    "projection_generation_must_be_deterministic": true
+  },
+  "fail_closed_invariants": {
+    "architecture_complete": false,
+    "production_core_gate": "BLOCKED",
+    "production_ready": false,
+    "production_mutation": false,
+    "source_present_not_equal_production_enabled": true
+  },
+  "forbidden_patterns": {
+    "tracked_current_slice_as_authority": true,
+    "tracked_accepted_checkpoint_as_authority": true,
+    "per_ar_closeout_writer": true,
+    "self_writing_ci": true,
+    "second_source_merge_for_acceptance_projection": true,
+    "retired_executable_materialization_for_execution": true
+  },
+  "production_mutation": false
+}
