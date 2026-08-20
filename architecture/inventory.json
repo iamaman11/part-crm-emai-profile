@@ -1886,7 +1886,7 @@
       },
       "operator_contract": {
         "path": "architecture/operator-contract.json",
-        "sha256": "1d9aa17ff767685222cff8422b7c3a534366618abccecf9836a93321c9c9cd65"
+        "sha256": "d7d5af813fa31bef6b63c48b077dc41ca0418bc201e3502f92b2d00e8f586f7c"
       },
       "profile_security": {
         "path": "architecture/profile-security.json",
