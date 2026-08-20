@@ -304,10 +304,12 @@ function selfTest() {
     throw new Error('promotion rebuild fixture unexpectedly passed');
   }
 
-  const staleFenceBypass = promotion.replace(
+  const mutate = jobBlock(promotion, 'mutate');
+  const staleMutate = mutate.replace(
     'test "$current_id" = "$EXPECTED_CURRENT"',
     'test -n "$current_id"',
   );
+  const staleFenceBypass = promotion.replace(mutate, staleMutate);
   if (!promotionErrors(staleFenceBypass).some((error) => error.includes('test "$current_id" = "$EXPECTED_CURRENT"'))) {
     throw new Error('mutation stale-fence bypass fixture unexpectedly passed');
   }
