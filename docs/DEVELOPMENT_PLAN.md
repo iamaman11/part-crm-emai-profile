@@ -4,8 +4,8 @@
 **Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Tracking:** issue #266  
 **Accepted product phase:** Phase 2I  
-**Current accepted architecture checkpoint:** AR-10 — Runtime and Historical Executable Simplification
-**Current implementation:** AR-11 — Release-set / Promotion Architecture
+**Current accepted architecture checkpoint:** AR-11 — Release-set / Promotion Architecture
+**Current architecture slice:** AR-12 — Fresh Rehearsal Environment — **NOT STARTED** pending pre-AR12 hardening issue #375
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `production_ready=false`
@@ -45,8 +45,9 @@ advance during Architecture Re-baseline v3.
 - Post-AR-8C cleanup / DX issue #352: **DONE / ACCEPTED**.
 - AR-9 — D1 Evolution / Schema Compatibility: **DONE / ACCEPTED**; accepted provenance is `docs/evidence/2026-08-19-ar9-final-acceptance.json`.
 - AR-10 — Runtime and Historical Executable Simplification: **DONE / ACCEPTED**; accepted provenance is `docs/evidence/2026-08-19-ar10-final-acceptance.json`.
-- AR-11 — Release-set / Promotion Architecture: **CURRENT**, issue #372 / Draft PR #374.
-- AR-12…AR-17: ordered future architecture slices.
+- AR-11 — Release-set / Promotion Architecture: **DONE / ACCEPTED** through the generic Git-derived acceptance mechanism.
+- AR-12 — Fresh Rehearsal Environment: **CURRENT / NOT STARTED**; implementation entry is blocked until issue #375 and the full pre-AR12 DoD are closed from evidence.
+- AR-13…AR-17: ordered future architecture slices.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
@@ -55,7 +56,7 @@ advance during Architecture Re-baseline v3.
 - `GENERATION_VERIFICATION=DELETE`; AR-5 accepted source/Wrangler/deployment authority cleanup while preserving synchronous verification semantics.
 - Historical D3/#251 repository-side machinery is preserved; its old production lane is disabled for forward execution.
 - AR-6 accepted `architecture/python-estate-ar6.json` and the capability-bounded read-only `tools/opsctl` foundation; Draft PR #269 remains feasibility history only.
-- AR-7 accepted classic `main` protection and Environment boundaries; AR-8, AR-9 and AR-10 are fully accepted. Issue #352 remains accepted history; AR-11 is current.
+- AR-7 accepted classic `main` protection and Environment boundaries; AR-8, AR-9, AR-10 and AR-11 are accepted. Issue #352 remains accepted history; AR-12 is current but NOT STARTED pending #375 closeout.
 
 ## 2A. CURRENT_DELIVERY_MAP
 
@@ -63,13 +64,13 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
-| Source implemented | **ACCEPTED** | AR-10 source is accepted on `main`; AR-11 is the current architecture slice. |
-| Accepted on main | **COMPLETE THROUGH AR-10** | AR-8, AR-9 and AR-10 are accepted; latest evidence is `docs/evidence/2026-08-19-ar10-final-acceptance.json`. |
+| Source implemented | **ACCEPTED THROUGH AR-11** | AR-11 source is accepted on `main`; AR-12 is current and NOT STARTED. |
+| Accepted on main | **COMPLETE THROUGH AR-11** | AR-8, AR-9, AR-10 and AR-11 are accepted; AR-11 is the generic acceptance migration anchor. |
 | Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; later architecture acceptance does not imply a broader staging or production deployment. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
-| Current blocker | **NONE** | AR-10 is accepted; no predecessor blocker remains. |
-| Next gate | **AR-11 acceptance** | AR-11 — Release-set / Promotion Architecture is current under issue #372. |
+| Current implementation blocker | **ISSUE #375 OPEN** | Pre-AR12 hardening blocks AR-12 implementation entry; it does not create a second lifecycle authority. |
+| Next gate | **AR-12 implementation entry** | AR-12 remains NOT STARTED until #375 is closed; AR-12 acceptance remains a later event. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
@@ -110,8 +111,8 @@ AR-7   Environments + GitHub Governance + Operational Boundaries DONE / ACCEPTED
 AR-8   Secrets / Keys / OAuth Refresh Concurrency                DONE / ACCEPTED
 AR-9   D1 Evolution / Schema Compatibility                       DONE / ACCEPTED
 AR-10  Runtime and Historical Executable Simplification          DONE / ACCEPTED
-AR-11  Release-set / Promotion Architecture                      CURRENT
-AR-12  Fresh Rehearsal Environment
+AR-11  Release-set / Promotion Architecture                      DONE / ACCEPTED
+AR-12  Fresh Rehearsal Environment                               CURRENT / NOT STARTED
 AR-13  Rotation Rehearsal
 AR-14  Remote Recovery Rehearsal
 AR-15  Windows Delivery Program — inherited Batch E
@@ -121,6 +122,7 @@ AR-17  Architecture Closeout + Production Core Gate
 
 No production provisioning or promotion belongs to an AR slice.
 
+AR-12 implementation remains forbidden until issue #375 and the full pre-AR12 hardening DoD are closed from proved evidence.
 AR-16 requires final whole-project repository-owned `P0=0` and `P1=0` with no production mutation.
 AR-17 may close the architecture program and authorize the Production Core gate while still keeping
 `production_ready=false`.
@@ -229,11 +231,7 @@ Every bounded AR candidate follows one immutable-head protocol:
 
 ## 11. Immediate next action
 
-AR-10 — Runtime and Historical Executable Simplification is **DONE / ACCEPTED** through issue #368 / PR #371;
-exact-green candidate `c7f8ac9704433d3e52d3b79f985c9ac60aa068db` was accepted on protected `main` as
-`7ab5edf583f541d08ff732624af25881d430d427`, with repository evidence in
-`docs/evidence/2026-08-19-ar10-final-acceptance.json`. The current sequential slice is
-**AR-11 — Release-set / Promotion Architecture**, issue #372 / Draft PR #374.
+AR-11 — Release-set / Promotion Architecture is **DONE / ACCEPTED** through the canonical generic Git-derived acceptance mechanism. The derived current slice is **AR-12 — Fresh Rehearsal Environment**, but AR-12 implementation is **NOT STARTED** and must not begin while issue #375 or any pre-AR12 hardening DoD item remains open. The immediate work is therefore completion and evidence-backed closeout of issue #375, not AR-12 implementation.
 
 Throughout AR-0…AR-17:
 
