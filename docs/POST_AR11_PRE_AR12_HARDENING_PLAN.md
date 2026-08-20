@@ -5,7 +5,7 @@
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Lifecycle authority:** `architecture/architecture-acceptance-policy.json` + `architecture/architecture-program-sequence.json` + `architecture/lifecycle-projection-policy.json` + `.github/scripts/architecture-acceptance.mjs` + immutable acceptance Git metadata  
 **Scope:** post-AR-11 cleanup and architectural hardening only  
-**AR-12 implementation:** FORBIDDEN until this plan's Definition of Done is satisfied  
+**AR-12 implementation:** FORBIDDEN until this plan's Definition of Done is satisfied and #375 is closed from proved evidence  
 **Production mutation:** FORBIDDEN
 
 This document is the canonical execution checklist for issue #375. It is a subordinate plan and handoff target, not a second lifecycle authority. It does not record acceptance and must never be used to decide the accepted/current AR slice independently of the generic Git-derived acceptance mechanism.
@@ -50,7 +50,7 @@ AR-17 is a future architectural authorization stage. Even accepted AR-17 does no
 Before modifying source or accepting any bounded unit, re-read live GitHub state rather than trusting a snapshot. At minimum inspect:
 
 - protected `main` exact SHA;
-- `docs/POST_AR11_PRE_AR12_HARDENING_PLAN.md`;
+- this plan;
 - issue #375 and latest evidence comments;
 - open PRs and relevant unmerged branches;
 - branch protection and required contexts;
@@ -58,24 +58,32 @@ Before modifying source or accepting any bounded unit, re-read live GitHub state
 - `architecture/architecture-acceptance-policy.json`;
 - `architecture/architecture-program-sequence.json`;
 - `architecture/lifecycle-projection-policy.json`;
-- `.github/scripts/architecture-acceptance.mjs` behavior and self-test.
+- `.github/scripts/architecture-acceptance.mjs` behavior and self-test;
+- the exact current call sites for the bounded concern being changed.
 
-Do not begin by writing new code from a stale handoff.
+Do not begin by writing new code from a stale handoff. A stale unmerged branch is evidence/archaeology only until rebased or reimplemented from current accepted `main`; it has no execution or lifecycle authority.
 
 ### Last synchronized execution snapshot — informational only
 
 At this plan synchronization on 2026-08-20:
 
-- protected `main`: `14b4a145bb12b7a84f3da8c9fa6a376c39a748f8` (#390);
-- AR-11: mechanically accepted through the generic migration bootstrap;
+- protected `main`: `b20d3d23e022933e51ffd827624f1b02685c9d9e` (#392);
+- accepted merge tree: `3c6a01b82f8c58e32405c7206374b30de2950511`;
+- AR-11: mechanically accepted through the generic Git-derived mechanism;
 - Git-derived current slice: AR-12;
 - AR-12 implementation: NOT STARTED;
 - tracking issue #375: OPEN;
-- observed protected required contexts: 23;
-- historically observed applicable permanent PR workflows: 17, but this is not a timeless constant;
-- `agent/post-ar11-lifecycle-read-cutover` is an unaccepted candidate branch and has no lifecycle authority until exact-head PR acceptance and merge proof.
+- latest accepted hardening unit: **A3a / #392**;
+- #392 exact green candidate: `d045a48f354ea1292374689e00a784a2b4a3e4d5`;
+- #392 candidate tree == merge tree: `3c6a01b82f8c58e32405c7206374b30de2950511`;
+- #392 observed applicable permanent PR workflows: 17/17 SUCCESS;
+- #392 observed protected required contexts: 23/23 SUCCESS;
+- #392 pre-merge behind/reviews/threads: 0/0/0;
+- `architecture/inventory.json`, `docs/status.json` and `architecture/architecture-rebaseline-v3-transition.json` still intentionally project the pre-A3b AR-10/AR-11 state and are migration debt, not lifecycle authority;
+- stale `agent/post-ar11-*` branches discovered during the live audit are not continuation bases and must not be merged merely because their names match remaining work;
+- the post-merge evidence visibility gap for required `push: main` / accepted-main-only workflows remains unresolved for final #375 certification; unobservable required evidence remains `UNPROVEN`, never implicit `SUCCESS`.
 
-Every future agent must replace this snapshot with a live reread before acting.
+Observed workflow/context counts are evidence for this snapshot only, not timeless constants. Every future bounded unit must rediscover applicable workflows and required contexts from live registry/protection.
 
 ## 3. Historical executable safety model
 
@@ -92,12 +100,12 @@ Only `DEAD` is removable.
 
 Historical naming is not classification evidence. Names containing `AR8`, `AR10`, `pre2j`, `phase2i`, `legacy` or `old` can still protect permanent current invariants.
 
-For any candidate retirement use exactly this safety sequence:
+For any candidate retirement use this safety sequence:
 
 ```text
 map invariant
 -> identify current required semantics
--> port invariant to neutral/current authority
+-> port invariant to neutral/current authority only if needed
 -> add fail-closed negative tests
 -> prove parity
 -> switch current callers
@@ -118,107 +126,192 @@ history != executable authority
 
 Continue to enforce `architecture/historical-executable-debt.json` and `scripts/check-historical-executable-debt.py`. Unknown Python executables must fail closed under the canonical Python estate.
 
-## 4. Accepted execution progress and remaining bounded sequence
+## 4. Critical reclassification after accepted A3a
 
-The default remaining sequence is Unit A through Unit F. Boundaries may be refined only when live evidence proves a cleaner split. Do not combine unrelated lifecycle, `opsctl`, inventory, runtime, workflow and naming changes in one large PR.
+The old A-F structure remains useful only as an audit map. It is **not** a requirement to create one PR per Unit or one PR per checklist bullet.
 
-### 4.1 Accepted progress — do not repeat without new defect evidence
+The 2026-08-20 live audit reclassifies the remaining work as follows:
 
-The following post-AR-11 work is already accepted and should be treated as prerequisite history, not reimplemented:
+| Concern | Status | Required disposition before AR-12 |
+| --- | --- | --- |
+| A1 projection policy | ALREADY_DONE | Accepted in #381; do not redesign without a defect. |
+| A2 prerequisite extraction | ALREADY_DONE | Accepted through #385–#390. |
+| A3a read-side lifecycle cutover | ALREADY_DONE | Accepted in #392. |
+| A3b lifecycle projection synchronization | REQUIRED / NEXT | Remove stale lifecycle monkey-patching and generate supported projections from canonical derived state. |
+| A4 compatibility neutralization | REPHRASE / CONDITIONAL | After A3b, run a semantic caller/invariant scan. Create a separate unit only for residual independently provable debt. No mandatory A4 PR. |
+| Unit B `opsctl` authority/command registry | REQUIRED | `architecture/operator-contract.json` does not currently describe the full actual namespaced Rust CLI surface. Close authority↔implementation parity without adding a second registry. |
+| Unit C `opsctl` modularity | PARTIALLY_DONE / MERGE_WITH_B_WHERE_COHERENT | Rust already has subsystem modules and `lib.rs` is a composition root. Refactor only parser/presentation coupling that is needed for B or demonstrably harms maintainability. No micro-module quota. |
+| Unit D inventory modularization | PARTIALLY_DONE / REPHRASE | Core/wrapper/engine separation already exists. A3b removes lifecycle ownership debt. Afterward extract only clearly mixed domain responsibilities that materially reduce coupling while preserving deterministic bytes. No giant rewrite requirement. |
+| Unit E historical executable audit | PARTIALLY_DONE / REPHRASE | `architecture/historical-executable-debt.json` already classifies many current/dead/provenance paths. Complete residual caller/invariant gaps and remove only newly proved `DEAD`; no deletion quota. |
+| Unit F final audit / #375 closeout | REQUIRED | Re-prove final DoD on live `main`, including post-merge evidence observability. |
+| Post-merge evidence observability | REQUIRED FOR FINAL CLOSEOUT | Required main-only evidence must have a direct, reproducible observation path. Agent/tool visibility limitations may not be converted into success. |
 
-- **#381 / A1 — ACCEPTED:** introduced and bound `architecture/lifecycle-projection-policy.json`, strengthened documentation authority, classified tracked lifecycle artifacts as projections and preserved this canonical plan.
-- **#382 — ACCEPTED prerequisite:** fixed deterministic Release Set verification so colocated root `release-set.json` is accepted only when it parses to the exact verified manifest; all other unexpected artifacts still fail closed. Also moved the affected download action to an immutable Node-24-capable pin.
-- **#383/#384 — ACCEPTED prerequisite:** one-shot allowlisted cleanup of stale hosted Actions registrations, direct live read-only proof of canonical active registry, then removal of temporary mutation authority; permanent governance returned to read-only.
-- **#385 / A2a — ACCEPTED:** removed obsolete pre-2J/#203 lifecycle ownership from generic inventory-core documentation validation without changing generated inventory lifecycle projection.
+### 4.1 Granularity rule
+
+A merge boundary is an independently provable architectural concern, not a line/file/checklist boundary:
+
+```text
+semantic cohesion
++ one proof obligation
++ safe intermediate main state
++ independent rollback value
+= one bounded PR / one merge
+```
+
+Therefore:
+
+- multiple tightly related edits, tests, generated projections and CI fixes required for one invariant stay in one PR;
+- a defect caused by the current bounded unit should normally be fixed in that same PR; changing the head invalidates all previous exact-head evidence;
+- independent authorities or independently reviewable/rollbackable architecture concerns must not be bundled merely to save CI time;
+- `ALREADY_DONE`, `OBSOLETE`, `NOT_WORTH_THE_COMPLEXITY` and evidence-proven unnecessary checklist items create no PR;
+- PR size is determined by semantic cohesion and proof boundary, not line/file count.
+
+## 5. Accepted execution progress — do not repeat without new defect evidence
+
+The following post-AR-11 work is accepted prerequisite history:
+
+- **#381 / A1 — ACCEPTED:** introduced and bound `architecture/lifecycle-projection-policy.json`, strengthened documentation authority, classified tracked lifecycle artifacts as projections and established this subordinate execution plan.
+- **#382 — ACCEPTED prerequisite:** fixed deterministic Release Set verification and moved the affected download action to an immutable Node-24-capable pin.
+- **#383/#384 — ACCEPTED prerequisite:** one-shot allowlisted cleanup of stale hosted Actions registrations, live read-only registry proof, then removal of temporary mutation authority; permanent governance returned to read-only.
+- **#385 / A2a — ACCEPTED:** removed obsolete pre-2J/#203 lifecycle ownership from generic inventory-core documentation validation without changing generated lifecycle projection.
 - **#386 / A2b — ACCEPTED:** extracted neutral credential/security invariant authority and parity/negative tests.
-- **#387 / A2c — ACCEPTED:** cut the current inventory credential source/validation caller over to the neutral credential owner.
+- **#387 / A2c — ACCEPTED:** cut current inventory credential source/validation caller over to the neutral credential owner.
 - **#388 / A2d — ACCEPTED:** decoupled neutral credential validation from the historical inventory engine and closed AR-8D successor/security parity gaps.
-- **#389 / A2e — ACCEPTED:** cut the remaining current credential negative-fixture and summary hooks over to neutral wrappers, establishing zero current credential-validator callers in the historical engine.
-- **#390 / A2f — ACCEPTED:** removed duplicate credential implementation from the historical engine and retained only thin compatibility delegation. The engine itself remains `KEEP_PYTHON` / `CURRENT_INVARIANT`; it was not proven `DEAD`.
+- **#389 / A2e — ACCEPTED:** cut remaining current credential negative-fixture and summary hooks over to neutral wrappers.
+- **#390 / A2f — ACCEPTED:** removed duplicate credential implementation from the historical engine and retained only thin compatibility delegation. The engine itself remains `KEEP_PYTHON` / `CURRENT_INVARIANT`.
+- **#391 — ACCEPTED plan synchronization:** synchronized this plan after A2f; merge `df41607c6b8483a66cbd0f043acf37113c92461e`.
+- **#392 / A3a — ACCEPTED:** cut current lifecycle reads over to canonical Git authority through `.github/scripts/architecture-acceptance.mjs derive`; Python validates returned shape but does not parse acceptance tags; jobs that actually derive lifecycle state received sufficient Git metadata (`fetch-depth: 0`) without globally deepening all workflows. Projection bytes were intentionally left unchanged for A3b. Accepted merge `b20d3d23e022933e51ffd827624f1b02685c9d9e`.
 
 Do not restore removed one-shot workflow mutation machinery, historical credential implementation or old lifecycle closeout code without new concrete defect evidence.
 
-### Unit A — Lifecycle projection authority finalization
+## 6. Unit A — Lifecycle projection authority finalization
 
-Goal: make Git-derived lifecycle semantics singular and unambiguous, remove tracked snapshot ownership of accepted/current AR state, and finish neutralization without introducing a second derivation algorithm.
+Goal: make Git-derived lifecycle semantics singular and unambiguous and ensure tracked projections reflect, but never own, accepted/current state.
 
-#### A1 — Projection policy and authority binding — ACCEPTED
+### A1 — Projection policy and authority binding — ACCEPTED
 
-Already completed by #381. Do not redesign without a proven defect.
+Completed by #381.
 
-#### A2 — Historical lifecycle assertion and credential/security prerequisite extraction — ACCEPTED
+### A2 — Historical lifecycle assertion and credential/security prerequisite extraction — ACCEPTED
 
-A2a through A2f are accepted through #385–#390. Neutral credential authority now owns current credential/security validation. Historical lifecycle compatibility still remains and must be removed only with parity evidence.
+Completed through #385–#390.
 
-#### A3a — Lifecycle read-side authority cutover — NEXT BOUNDED UNIT
+### A3a — Lifecycle read-side authority cutover — ACCEPTED
 
-This step must change read-side authority before changing projection bytes.
+Completed by #392.
+
+Accepted invariant:
+
+```text
+Git acceptance metadata
++ architecture-acceptance-policy.json
++ architecture-program-sequence.json
+-> architecture-acceptance.mjs derive
+-> validated consumers
+```
+
+Current Python consumers may validate shape/static successor relationships but must not independently enumerate, parse or interpret acceptance tags. Tracked status/inventory/transition fields cannot decide accepted/current lifecycle state.
+
+### A3b — Lifecycle projection synchronization — REQUIRED / NEXT BOUNDED UNIT
+
+The live audit proves this is real debt, not a checklist artifact.
+
+Current `scripts/generate-architecture-inventory.py` still contains compatibility monkey-patching equivalent to:
+
+```text
+CURRENT_SLICE = AR-11
+NEXT_SLICE = AR-12
+CURRENT_DELIVERY_CHECKPOINT = AR-10
+AR-specific accepted-slice append
+stale current_delivery_map overlay
+```
+
+Current tracked projections correspondingly still report AR-10 accepted / AR-11 current in places such as `architecture/inventory.json`, `docs/status.json` and `architecture/architecture-rebaseline-v3-transition.json`.
+
+A3b proof boundary is one statement:
+
+```text
+all supported current lifecycle projections are deterministically built from
+canonical Git-derived lifecycle state and cannot become lifecycle authority
+```
 
 Required implementation:
 
-1. Current inventory generation consumes the existing canonical `.github/scripts/architecture-acceptance.mjs derive` result.
-2. Python/Rust consumers may validate the returned shape and static successor relationship, but must not independently enumerate, parse or interpret architecture acceptance tags.
-3. `docs/status.json`, `architecture/inventory.json`, `architecture/architecture-rebaseline-v3-transition.json` and human documentation must not be read to decide `accepted_checkpoint`, `current_slice` or acceptance.
-4. Bind consumption to `architecture/lifecycle-projection-policy.json` and fail closed if that policy drifts to permit tracked snapshot authority or duplicate derivation.
-5. Add negative proof for malformed/contradictory canonical deriver output and run the canonical acceptance negative self-test.
-6. Preserve current projection output bytes/semantics intentionally in A3a. This is a read-authority cutover, not projection synchronization.
+1. Remove current-lifecycle ownership constants, AR-specific append logic and lifecycle monkey-patching from the current inventory path wherever canonical derived state can directly supply the value.
+2. Do not move acceptance-tag parsing into Python/Rust. Consume only validated canonical derivation output.
+3. Project the accepted/current values as:
 
-A3a must not:
+```text
+accepted checkpoint = AR-11
+current architecture slice = AR-12
+AR-12 implementation = NOT STARTED
+architecture_complete = false
+production_core_gate = BLOCKED
+production_ready = false
+production_mutation = false
+```
 
-- update stale AR-10/AR-11 projection values yet;
-- implement AR-12;
-- create a Python/Rust acceptance-tag parser;
-- change capability activation;
+4. Synchronize supported tracked projections, including at minimum:
+   - `architecture/inventory.json`;
+   - `docs/status.json`;
+   - `architecture/architecture-rebaseline-v3-transition.json`;
+   - human-readable current-status documentation only where current semantic state is projected.
+5. Make projection/non-authority role explicit in generated fields or owning policy where it is not already mechanically clear.
+6. Preserve stable historical acceptance/evidence records; do not rewrite historical provenance merely to make old documents look current.
+7. Preserve deterministic/idempotent generation and all existing domain-owned inventory data.
+8. Add/retain negative proof that changing tracked projection values cannot change canonical derived lifecycle state.
+9. Keep `generate-architecture-inventory-engine.py` as `CURRENT_INVARIANT` unless a separate later proof establishes otherwise.
+
+A3b must not:
+
+- implement AR-12 functionality;
+- create a second lifecycle derivation algorithm;
+- treat `docs/status.json`, inventory or transition JSON as authority;
+- delete historical executable functionality merely because names are old;
+- broaden `fetch-depth: 0` to unrelated jobs;
 - mutate production/provider state.
 
 Required proof:
 
-- canonical derive still reports AR-11 accepted and AR-12 current;
-- current inventory path calls the canonical derivation authority;
-- mutation of tracked lifecycle snapshot fields cannot change derived lifecycle state;
+- canonical derive reports AR-11 accepted / AR-12 current;
+- generated projection reports the same values;
+- repeated generation is byte-stable/idempotent;
+- tracked projection mutation cannot create/revoke acceptance;
 - malformed canonical output fails closed;
-- inventory remains deterministic and projection-compatible;
-- full applicable repository/Python estate/Runtime/Camoufox/Windows gates remain green on the exact candidate.
+- no Python/Rust acceptance-tag parser exists;
+- all change-applicable repository/Python/Runtime/Camoufox/Windows gates are green on one exact candidate;
+- candidate tree identity is preserved through guarded squash acceptance.
 
-#### A3b — Lifecycle projection synchronization — PENDING A3a ACCEPTANCE
+### A4 — Residual lifecycle compatibility audit — CONDITIONAL
 
-Only after A3a is accepted:
+After A3b, run semantic scans/caller mapping for remaining AR-8/AR-10/AR-11 lifecycle compatibility globals/executables.
 
-1. Remove hardcoded current-lifecycle ownership such as `CURRENT_SLICE = "AR-11"`, `CURRENT_DELIVERY_CHECKPOINT = "AR-10"`, AR-specific accepted-slice append logic and lifecycle monkey-patching from the current inventory path.
-2. Build lifecycle projection fields from the canonical derived state, not from tracked mutable snapshots.
-3. Update `architecture/inventory.json`, `docs/status.json`, `architecture/architecture-rebaseline-v3-transition.json` and relevant human docs to project:
+Possible outcomes for each finding:
 
 ```text
-accepted checkpoint = AR-11
-current architecture slice = AR-12 (Git-derived)
-AR-12 implementation = NOT STARTED
-production = BLOCKED
+ALREADY_DONE
+CURRENT_INVARIANT
+TRANSITION_PROVENANCE_ONLY
+DEAD
+REQUIRED_BOUNDED_FIX
+NOT_WORTH_THE_COMPLEXITY
 ```
 
-4. Mark these files explicitly as non-authoritative compatibility/human projections.
-5. Preserve all fail-closed production invariants.
-6. Prove that projection staleness cannot create or revoke acceptance.
+Do not create an A4 PR merely because the plan contains an A4 heading. A separate A4 unit exists only if the audit finds a distinct independently provable lifecycle compatibility concern. Naming cleanup alone is not enough justification.
 
-Stale tracked projection during the A3a/A3b transition is tolerated only as explicit migration debt. It is not lifecycle authority and must be synchronized before Unit A closure.
-
-#### A4 — Remaining lifecycle compatibility neutralization / Unit A closeout
-
-After A3b, map any remaining AR-8/AR-10/AR-11 lifecycle compatibility executable or global. Replace/rename only when exact invariant mapping and parity prove a neutral current successor. Do not remove a compatibility executable merely to improve naming.
-
-Unit A required final checks:
+Unit A closes when:
 
 - exactly one acceptance derivation implementation exists;
 - missing/conflicting/non-contiguous acceptance evidence fails closed;
-- no second source commit is required to project future acceptance;
 - no tracked projection can decide accepted/current state;
 - no inventory generator can advance lifecycle state;
-- `architecture_complete=false`, `production_core_gate=BLOCKED`, `production_ready=false`, `production_mutation=false` remain unchanged;
-- documentation checker rejects any projection attempting to become lifecycle authority;
-- full repository/Python estate gates remain green.
+- no second source commit is required to record future acceptance;
+- documentation checker rejects projection attempts to become authority;
+- production fail-closed invariants remain unchanged.
 
-### Unit B — Canonical `opsctl` role and exact command registry
+## 7. Unit B — Canonical `opsctl` role and exact command registry — REQUIRED
 
-Goal: define `opsctl` as the repository-local Operational Policy & Decision Control Plane and mechanically register the implementation surface.
+Goal: make `opsctl` the repository-local Operational Policy & Decision Control Plane with exact authority↔implementation parity.
 
 Target role:
 
@@ -232,7 +325,7 @@ Never:
 provision -> deploy -> provider mutate -> secret readback -> database mutate -> customer-state mutate
 ```
 
-Provider execution boundary must remain:
+Provider execution boundary remains:
 
 ```text
 opsctl
@@ -244,16 +337,36 @@ policy / compatibility / plan / verify
     -> opsctl verify
 ```
 
-Do not move Cloudflare/provider mutation into Rust merely for aesthetic consistency. Rust owns semantics, policy, compatibility, planning and verification; provider executors own mutation behind approval boundaries.
+Live audit finding: `architecture/operator-contract.json` currently registers only a small/older operator surface, while the Rust CLI already exposes namespaced families including:
 
-Tasks:
+```text
+doctor
+status
+inventory
+credentials status
+credentials rotation-plan
+d1 status
+d1 plan
+d1 compatibility
+d1 verify
+release inspect
+release verify
+release compatibility
+promotion plan
+promotion preflight
+promotion verify
+```
 
-1. Evolve `architecture/operator-contract.json` rather than creating a competing registry unless a separate implementation contract is demonstrably necessary.
-2. Register every command family with namespace, actions, mode, authority/source, inputs, output type/schema, side effects, network authority, provider mutation authority, secret authority, activation owner and ACTIVE/RESERVED status.
-3. Re-read and register the actual active surface; expected families include `doctor`, `status`, `inventory`, `credentials status`, `credentials rotation-plan`, D1 status/plan/compatibility/verify, release inspect/verify/compatibility and promotion plan/preflight/verify.
-4. Mark recovery RESERVED for AR-14 and readiness RESERVED for AR-16. They must have no executable surface before their owning slice.
-5. Remove obsolete flat spellings from current authority; historical names may remain only as explicit historical provenance.
-6. Add a permanent fail-closed gate enforcing actual Rust CLI surface == canonical registered active surface and rejecting premature reserved commands.
+Therefore Unit B is not optional cleanup: authority↔implementation parity is currently incomplete.
+
+Required implementation:
+
+1. Evolve `architecture/operator-contract.json`; do not create a competing command registry unless a separately versioned implementation contract is objectively required and can be proven not to duplicate authority.
+2. Register every active command family with namespace/action, mode, authority/source, inputs, output semantics, side effects, network authority, provider mutation authority, secret authority, activation owner and ACTIVE/RESERVED status.
+3. Bind the registry to the actual Rust CLI surface with a permanent fail-closed parity gate in both directions.
+4. Keep recovery RESERVED for AR-14 and readiness RESERVED for AR-16 unless the program authority says otherwise; reserved namespaces must not accidentally become executable current commands.
+5. Retire obsolete flat current-authority spellings only where real callers are absent; historical names may remain as provenance.
+6. Preserve current command behavior unless a concrete defect requires a separate change.
 
 Permanent safety assertions:
 
@@ -268,122 +381,98 @@ deployment_mutation = false
 production_child_process_spawn_sites = 0
 ```
 
-Explicitly reject production `Command::new("wrangler")`, `Command::new("node")`, `Command::new("npx")`, provider HTTP clients, GitHub mutation clients, D1 mutation clients and secret retrieval.
+Explicitly reject production `Command::new("wrangler")`, `Command::new("node")`, `Command::new("npx")`, provider HTTP clients, GitHub mutation clients, D1 mutation clients and secret retrieval within `opsctl` authority.
 
 Required checks:
 
-- authority -> implementation and implementation -> authority exact-surface parity;
+- authority -> implementation exact-surface parity;
+- implementation -> authority exact-surface parity;
 - negative tests for unknown/unowned commands and premature reserved namespaces;
 - source scan for child-process/network/provider mutation authority;
-- operator contract contains current canonical namespaced spellings only;
-- existing command semantics remain behaviorally unchanged.
+- existing command semantics remain behaviorally unchanged unless separately justified.
 
-### Unit C — `opsctl` internal modularity and operator semantics
+## 8. Unit C — `opsctl` internal modularity — PARTIALLY_DONE / CONDITIONAL
 
-Goal: make the operator tool understandable to a new developer in minutes and scalable through AR-16 without a central god-parser or mixed-responsibility modules.
+The live Rust structure already contains subsystem modules for credentials, D1, release, promotion, repository access, recovery/readiness reservations, status/inventory and a small composition `lib.rs`. Therefore a broad modularity rewrite is **not** a pre-AR12 requirement by default.
 
-Tasks:
+Current concern worth reviewing: `tools/opsctl/src/cli.rs` remains a large centralized parser. That alone is not proof of bad architecture.
 
-1. Separate repository IO, lifecycle-policy consumption, subsystem semantics and operator presentation.
-2. Keep `lib.rs` as composition/dispatch root, not a business/policy implementation warehouse.
-3. Do not let `cli.rs` become a god-parser; move subsystem-specific parser details next to owning modules where this reduces coupling.
-4. Preserve clear vertical modules for credentials, D1, release, promotion, future recovery and readiness.
-5. Define a coherent machine-readable output envelope with stable fields such as `schema_version`, `command`, `status`, `mode`, `mutation_executed`, `decision` and `evidence`, while allowing typed command-specific payloads.
-6. `opsctl status` may display live lifecycle state and compatibility projections, but must clearly distinguish them and must not implement a divergent lifecycle parser.
-7. Keep runtime/application crates independent from `opsctl`.
-8. Document the mechanical extension procedure: owning AR authorization -> operator contract -> typed command -> side-effect registration -> tests -> exact-surface gate -> full CI.
+During Unit B:
 
-Required checks:
+1. Keep `lib.rs` as composition/dispatch root, not a policy implementation warehouse.
+2. If exact command-registry parity is substantially simpler and clearer by extracting subsystem parser definitions next to owning modules, perform only those cohesive extractions in the same B proof boundary.
+3. If Unit B closes cleanly without parser extraction and the CLI remains developer-comprehensible, classify the remaining C refactor `NOT_WORTH_THE_COMPLEXITY` for pre-AR12.
+4. Create a separate Unit C PR only if a post-B audit proves a distinct coupling/maintainability defect with its own tests and rollback value.
+5. Do not split the parser into micro-files solely to reduce line count.
+6. Keep runtime/application crates independent from `tools/opsctl`.
 
-- no runtime/application dependency on `tools/opsctl`;
-- no semantic behavior expansion beyond registered authority;
-- parser golden/negative tests;
-- Rust fmt, clippy and tests on Linux/Windows-supported paths;
-- output compatibility tests for active families;
-- a new developer can identify repository IO, policy/domain semantics, provider execution and presentation ownership without historical AR archaeology.
+A future stable machine-readable output envelope may be desirable, but it is not a mandatory pre-AR12 rewrite unless current commands already have contradictory/unusable machine semantics that block the next architecture slices.
 
-### Unit D — Inventory modularization and deterministic aggregation
+## 9. Unit D — Inventory architecture — PARTIALLY_DONE / REPHRASED
 
-Goal: make `architecture/inventory.json` a deterministic compatibility/operator projection assembled from domain-owned authorities, not a giant source of everything and not lifecycle authority.
+Goal: retain `architecture/inventory.json` as deterministic compatibility/operator projection assembled from explicit owners, without making inventory lifecycle authority.
 
-Target shape:
+Current structure already separates significant concerns across:
 
 ```text
-domain-owned architecture authorities
-    -> typed/strict validation
-    -> deterministic builders
-    -> stable aggregation
-    -> architecture/inventory.json
+scripts/_architecture_inventory_core.py
+scripts/generate-architecture-inventory.py
+scripts/generate-architecture-inventory-engine.py
+subject-domain validators/builders
 ```
 
-Tasks:
+Therefore pre-AR12 does not require a wholesale collectors/validators/serializer rewrite.
 
-1. Map each inventory section to an existing domain authority where one already exists: D1, runtime, release, credentials, operator contract and other established authorities.
-2. Do not create parallel registries merely to split files.
-3. For every section make ownership explicit: domain owner, source authority, schema/version, validation, builder/generator, stable/live/historical class and authoritative/projection class.
-4. Use typed builders/models with explicit `schema_version` and strict validation at trust boundaries.
-5. Consider JSON Schema only where it materially improves repository/IDE validation without creating manually duplicated schema drift.
-6. Do not mechanically convert Git-reviewed architecture metadata to protobuf. Protobuf remains appropriate for wire/IPC concerns such as Profile Bridge <-> Camouhost, not for repository metadata merely to feel typed.
-7. Use fail-closed unknown-field rejection where correct, but do not apply it mechanically when compatibility requires controlled unknown fields.
-8. Remove lifecycle constants, AR-specific mutation overlays and global monkey-patching from generation.
-9. Preserve stable architecture information intentionally; unknown giant chunks must not survive through accidental pass-through.
-10. Make repeated generation byte-stable/idempotent.
+Required sequence:
 
-Required checks:
+1. Let A3b remove the known lifecycle monkey-patch/overlay debt first.
+2. Re-audit remaining collection / validation / aggregation / serialization mixing after A3b, not before.
+3. Extract only responsibilities that have a clear domain owner and whose extraction materially reduces coupling or duplicate authority.
+4. Do not create parallel registries solely to make the generator look modular.
+5. Preserve stable architecture information explicitly; do not pass giant unknown chunks through accidentally.
+6. Preserve deterministic byte-for-byte/idempotent generation.
+7. Use strict validation/typed models at trust boundaries where it adds real protection; do not mechanically add JSON Schema/protobuf to reviewed repository metadata.
+8. A large-file reduction target is not a DoD metric. Developer comprehensibility and ownership clarity are.
 
-- every generated section has an explainable owner/source;
-- repeated generation produces identical bytes;
-- generator cannot advance accepted/current/next AR state;
-- malformed/unknown authority input fails closed;
-- stable architecture information is retained by explicit ownership;
-- authority vs projection and stable vs live vs historical are mechanically clear;
-- giant-file rewrite risk is materially reduced.
+Unit D may resolve as `ALREADY_SUFFICIENT_AFTER_A3B` if the post-A3b audit finds no material mixed-responsibility defect.
 
-### Unit E — Historical executable classification and evidence-proven retirement
+## 10. Unit E — Historical executable classification and evidence-proven retirement — PARTIALLY_DONE / REPHRASED
 
-Goal: retire only evidence-proven zombie executable machinery after successor parity exists. This unit is a classification-and-retirement audit, not a deletion quota.
+`architecture/historical-executable-debt.json` is already the current debt inventory and contains both retained current invariants and proved dead/absent paths. Unit E is therefore a residual audit, not a new classification project.
 
-Priority review set includes:
+Important current classifications include:
 
-- `scripts/generate-architecture-inventory-engine.py`;
-- `scripts/generate-ar8-completion-status.py`;
-- `scripts/check-documentation-authority-legacy.py`;
-- historically named pre2j / phase / AR checkers;
-- D3 successor/bootstrap checks that may still contain permanent current invariants.
+- `scripts/generate-architecture-inventory.py` — `CURRENT_INVARIANT`;
+- `scripts/generate-architecture-inventory-engine.py` — `CURRENT_INVARIANT`;
+- `scripts/generate-ar8-completion-status.py` — `CURRENT_INVARIANT` read-only compatibility validator;
+- `scripts/check-documentation-authority.py` — `CURRENT_INVARIANT`;
+- `scripts/check-documentation-authority-legacy.py` — `TRANSITION_PROVENANCE_ONLY`, zero current executable callers required;
+- several D3/pre2j checks remain `CURRENT_INVARIANT` despite historical names;
+- multiple retired AR-8 overlays/workflows are already `DEAD` and required absent.
 
-Important current constraint:
+Required residual work:
 
-`generate-architecture-inventory-engine.py` remains `KEEP_PYTHON` / `CURRENT_INVARIANT` after #390. It must remain while it still owns required compatibility/invariants. Historical naming cleanliness is not evidence for `DEAD`. Only after all remaining current semantics have neutral successors, parity is proven and current callers are zero may it be reclassified and removed.
+1. Re-run caller graph/invariant mapping after Unit A and any opsctl/inventory changes.
+2. Validate every tracked debt entry against current call sites and Python estate.
+3. Add newly discovered suspicious executables fail-closed rather than silently ignoring them.
+4. Preserve `CURRENT_INVARIANT` and `UPGRADE_ROLLBACK_REQUIRED` functionality.
+5. Prove `TRANSITION_PROVENANCE_ONLY` paths have no accidental current execution authority.
+6. Remove only newly proved `DEAD` items; zero removals is a valid result if nothing else is proved dead.
+7. Do not restore/materialize retired executables from Git history for tests.
+8. Prefer renaming historical current-invariant files only when it materially improves ownership clarity and parity/callers are mechanically controlled; naming aesthetics alone are insufficient.
 
-Tasks:
-
-1. Build caller graph and invariant map for each candidate.
-2. Preserve `CURRENT_INVARIANT` and `UPGRADE_ROLLBACK_REQUIRED` functionality.
-3. Ensure `TRANSITION_PROVENANCE_ONLY` executables have zero accidental current execution authority/callers.
-4. Remove only `DEAD` executables after parity proof.
-5. Update historical executable debt taxonomy and canonical Python estate after every addition/removal.
-6. Perform semantic scans, not only filename grep, for closeout writers, `current_slice`/`accepted_checkpoint` writers, historical materialization, self-writing CI, temporary workflow restoration, legacy promotion executors, obsolete bootstrap mutation and orphan staging mutation.
-7. Preserve static historical documents/evidence where provenance remains useful.
-
-Required checks:
-
-- unknown Python fails closed;
-- no retired executable materialization/execution path remains;
-- no unique invariant is lost;
-- rollback-required tools remain available;
-- provenance-only executables cannot accidentally become current authority.
-
-### Unit F — Final pre-AR-12 audit and closure of #375
+## 11. Unit F — Final pre-AR12 audit and closure of #375 — REQUIRED
 
 Goal: prove the repository can begin AR-12 without historical lifecycle ownership and without weakening production/runtime gates.
 
 Audit dimensions:
 
 - lifecycle authority singularity;
+- projection freshness and non-authority;
 - production fail-closed state;
 - preservation of independently activatable application functionality;
 - historical executable debt;
-- inventory ownership/aggregation;
+- inventory ownership/determinism;
 - `opsctl` role, registry, modularity and safety;
 - developer-facing architecture clarity;
 - Python estate completeness;
@@ -392,11 +481,11 @@ Audit dimensions:
 
 Repository-wide semantic scan must include `.github/scripts/**`, `.github/workflows/**`, `scripts/**`, `tools/**` and `architecture/**` and must analyze callers/authority, not only filenames.
 
-Do not close #375 until every final DoD item below is mechanically proven.
+Do not close #375 until every final DoD item is mechanically proven.
 
-## 5. PR proof vs accepted-main proof boundary
+## 12. PR proof vs accepted-main proof boundary
 
-A defect discovered after #381 demonstrated that PR-green and accepted-main-green are different evidence classes. Preserve this architecture principle:
+Preserve this architecture principle:
 
 ```text
 PR proves everything provable without mutation.
@@ -430,22 +519,26 @@ After every merge separately verify every change-relevant:
 - durable publication/build workflow;
 - other main-only operation.
 
-If the available evidence surface cannot observe a required post-merge workflow, classify it `UNPROVEN`, never implicitly `SUCCESS`. Final #375 closure requires direct hosted evidence for every required post-merge-only check or a canonical mechanism that makes the evidence mechanically observable.
+If the available evidence surface cannot observe a required post-merge workflow, classify it `UNPROVEN`, never implicitly `SUCCESS`.
+
+Final #375 closure requires a direct, reproducible observation path for every required post-merge-only check. This path should be repository/tooling independent of any particular agent UI where practical (for example a documented GitHub API/`gh` evidence command or repository-owned verifier). Do not add a new writer/authority merely to make evidence convenient.
 
 A deterministic contract defect first discovered only after merge is an architecture/test-coverage defect and must be fixed with a bounded follow-up; it is not the desired normal model.
 
-## 6. PR and exact-head discipline
+## 13. PR, exact-head and semantic-boundary discipline
 
-Every bounded unit must follow:
+Every independently provable bounded unit follows:
 
 ```text
 exact accepted main
 -> new bounded branch
--> Draft PR immediately
--> one concern
--> implementation
+-> implement one complete coherent concern
+-> local/deterministic proof
+-> Draft PR
+-> iterate inside that PR until the concern is complete
 -> freeze exact candidate SHA
--> full applicable CI
+-> all applicable permanent workflows
+-> all required protected contexts
 -> re-read main/reviews/threads/protection
 -> Ready
 -> guarded squash bound to expected exact head
@@ -454,7 +547,11 @@ exact accepted main
 -> relevant post-merge proof
 ```
 
-After final CI begins on a chosen exact candidate, any source change invalidates the old CI evidence. Re-run the complete applicable evidence set on the new exact SHA.
+Do **not** interpret this as one line/file/edit = one PR.
+
+Several edits required for the same invariant belong together. Examples include implementation + tests + generated projection update + a directly caused CI fix. Conversely, do not bundle lifecycle authority, opsctl authority, unrelated inventory refactors and historical retirement merely to reduce CI runs.
+
+After final CI begins on a chosen exact candidate, any source change invalidates old exact-head evidence. Re-run the complete applicable evidence set on the new exact SHA.
 
 Before merge prove:
 
@@ -485,7 +582,7 @@ native Rust Profile Bridge
 
 Do not replace the real runtime production path with a fake fixture.
 
-## 7. GitHub Actions supply-chain hygiene
+## 14. GitHub Actions supply-chain hygiene
 
 Whenever `.github/workflows/**` or action dependencies change:
 
@@ -499,7 +596,9 @@ Whenever `.github/workflows/**` or action dependencies change:
 
 Temporary mutation/evidence workflows must have an explicit bounded lifetime and must be removed after their purpose is proven. Permanent governance should remain read-only unless an owning architecture explicitly grants a narrowly scoped mutation boundary.
 
-## 8. Merge and architecture-acceptance boundaries
+Deep Git history is capability-specific. Use `fetch-depth: 0` only in jobs whose actual canonical derivation/static-history proof requires it; do not spread full history to every job by convention.
+
+## 15. Merge and architecture-acceptance boundaries
 
 Use squash merge with expected exact head SHA for bounded cleanup PRs unless live governance requires a more specific accepted path. After merge, prove candidate tree == accepted merge tree and reread protected `main`.
 
@@ -513,7 +612,11 @@ AR-12+ architecture acceptance remains one guarded source merge plus immutable a
 - manual `current_slice` / `accepted_checkpoint` state as lifecycle authority;
 - second independent lifecycle derivation algorithm.
 
-## 9. Definition of Done before AR-12 implementation
+The phrase `one-merge architecture acceptance` describes acceptance of an architecture slice without a second source closeout merge. It does **not** mean every tiny hardening edit requires its own merge and does **not** mean all independent pre-AR12 concerns belong in one giant PR.
+
+## 16. Definition of Done before AR-12 implementation
+
+The following checklist is intentionally re-proved in the final Unit F audit even where accepted historical evidence already exists.
 
 ### Lifecycle
 
@@ -527,7 +630,7 @@ AR-12+ architecture acceptance remains one guarded source merge plus immutable a
 - [ ] No per-AR closeout machinery or self-writing CI is required.
 - [ ] No second acceptance source merge is required.
 - [ ] Acceptance-tag protocol remains intact.
-- [ ] Human documentation projects AR-11 accepted / AR-12 current / AR-12 NOT STARTED and is explicitly non-authoritative.
+- [ ] Human/current projections show AR-11 accepted / AR-12 current / AR-12 NOT STARTED and are explicitly non-authoritative.
 
 ### Production and capabilities
 
@@ -541,47 +644,46 @@ AR-12+ architecture acceptance remains one guarded source merge plus immutable a
 
 ### Historical executable debt
 
-- [ ] Every suspicious executable is classified.
-- [ ] `DEAD` items are removed.
+- [ ] Every suspicious executable is classified or covered by a mechanically complete current inventory.
+- [ ] Every currently classified `DEAD` path is absent as required.
+- [ ] Newly proved `DEAD` items, if any, are removed.
 - [ ] Current invariants are retained or renamed only with parity proof.
 - [ ] Upgrade/rollback-required tools are retained.
 - [ ] Transition-provenance executables have no accidental current execution authority.
 - [ ] No retired executable materialization/execution path remains.
 - [ ] No file is removed merely because its name is historical.
-- [ ] `generate-architecture-inventory-engine.py` is retained unless and until live evidence proves it `DEAD`.
+- [ ] `generate-architecture-inventory-engine.py` is retained unless live evidence proves it `DEAD`.
 
 ### Inventory
 
 - [ ] Inventory has no live lifecycle ownership.
 - [ ] No AR-8/AR-10/AR-11 monkey-patch lifecycle model controls current state.
 - [ ] Current inventory generation consumes canonical lifecycle derivation rather than tracked lifecycle snapshots.
-- [ ] Aggregation is deterministic and domain ownership is clear.
+- [ ] Aggregation is deterministic and domain ownership is clear enough for a new developer to follow.
+- [ ] Repeated generation is byte-stable/idempotent.
 - [ ] Stable information has explicit ownership.
 - [ ] Historical snapshots are explicitly non-authoritative.
-- [ ] Stable/live/historical and authority/projection classes are developer-comprehensible.
-- [ ] Giant-file rewrite risk is materially reduced.
+- [ ] Any remaining large modules are justified by cohesion rather than retained accidentally or split merely by line-count targets.
 
 ### `opsctl`
 
 - [ ] Canonical role is explicit.
-- [ ] Actual CLI equals registered active CLI.
-- [ ] Old flat current-authority command names are removed.
-- [ ] D1, Release and Promotion are registered.
-- [ ] Recovery is RESERVED for AR-14.
-- [ ] Readiness is RESERVED for AR-16.
+- [ ] Actual active CLI equals registered active CLI in both directions.
+- [ ] Obsolete flat current-authority command names have no active authority/callers.
+- [ ] D1, Release and Promotion command families are registered exactly.
+- [ ] Recovery is RESERVED for AR-14 unless later authority changes it.
+- [ ] Readiness is RESERVED for AR-16 unless later authority changes it.
 - [ ] Provider mutation = false.
 - [ ] Network authority = false.
 - [ ] Secret readback = false.
 - [ ] Customer/database/deployment mutation = false.
 - [ ] Production child-process execution authority = 0.
-- [ ] Repository IO, policy and presentation concerns are separated.
-- [ ] CLI/module architecture is suitable for AR-12 through AR-16.
-- [ ] Output semantics are coherent and machine-readable.
-- [ ] Developer documentation clearly explains ownership, provider-execution boundary and extension rules.
+- [ ] Repository IO, policy/domain semantics, provider execution and presentation ownership are understandable.
+- [ ] No unnecessary parser/module rewrite was introduced.
 
 ### CI, merge and post-merge proof
 
-- [ ] All applicable permanent PR workflows are green on one exact final head.
+- [ ] All applicable permanent PR workflows are green on one exact final candidate head.
 - [ ] All protected required contexts are green on that same exact head.
 - [ ] Real Camoufox cold-launch proof is green.
 - [ ] Windows Profile Bridge regression is green.
@@ -591,6 +693,7 @@ AR-12+ architecture acceptance remains one guarded source merge plus immutable a
 - [ ] Candidate tree equals accepted merge tree.
 - [ ] Every relevant `push: main` / accepted-main-only / hosted-state / durable-publication workflow is directly verified after merge.
 - [ ] No required post-merge evidence is silently treated green when it is unobservable.
+- [ ] A reproducible evidence-observation mechanism exists for every required final main-only proof.
 - [ ] No deterministic contract defect is first discovered only after merge on the final certification path.
 - [ ] GitHub Actions dependencies touched by hardening remain immutable-pinned and runtime-supported.
 
@@ -598,18 +701,19 @@ AR-12+ architecture acceptance remains one guarded source merge plus immutable a
 
 - [ ] A new developer can locate application business logic, domain code, runtime adapters, operator policy, provider execution, GitHub orchestration, architecture authority and historical evidence without reading multiple obsolete AR implementations.
 - [ ] One concern has one clear owner; projections may be many, competing authorities may not.
-- [ ] No unnecessary full rewrite or registry proliferation was introduced.
+- [ ] No unnecessary full rewrite, registry proliferation or micro-module proliferation was introduced.
+- [ ] PR/merge history follows semantic proof boundaries rather than checklist or file-count boundaries.
 
 ### Tracking
 
 - [ ] #375 remains OPEN until every item above is proven.
-- [ ] #375 is closed only after final Unit F exact-head and post-merge evidence is complete.
+- [ ] #375 is closed only after final Unit F accepted-main and post-merge evidence is complete.
 
 Only after this checklist is complete may the project begin AR-12 implementation. At that point the intended platform is:
 
 ```text
 lifecycle = Git-derived
-inventory = typed/domain-owned deterministic projection
+inventory = deterministic/domain-owned projection
 opsctl = operational policy & decision plane
 GitHub = orchestration/approval
 Wrangler/provider executors = mutation boundary
@@ -617,12 +721,13 @@ application capabilities = independently activatable
 production = still BLOCKED
 ```
 
-The final engineering rule for all remaining work is:
+The final engineering rules for all remaining work are:
 
 ```text
 make ownership explicit
 preserve real invariants
 prove parity mechanically
 remove only proven debt
-keep execution bounded
+prefer the smallest complete proof boundary, not the smallest possible diff
+avoid complexity that has no independent safety/clarity payoff
 ```
