@@ -71,6 +71,8 @@ function operationalErrors({ requireCutover = true } = {}) {
     'accepted-source-evidence-ar11.py',
     '.source_accepted == true',
     'gh release download "$RELEASE_SET_ID"',
+    'components/profile-bridge-manifest.json',
+    '.artifact_inventory[] | select(.path == "components/profile-bridge-manifest.json" and .kind == "manifest")',
     'release verify',
     '--root . release verify',
     '--source-root "$GITHUB_WORKSPACE/target-source"',
