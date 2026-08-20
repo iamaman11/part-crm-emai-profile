@@ -276,7 +276,7 @@ where
             "--authority" => {
                 let value = iterator
                     .next()
-                    .ok_or_else(|| OpsctlError::new("d1", "--authority requires a value"))?;
+                    .ok_or_else(|| OpsctlError::new("d1", "--authority requires a path"))?;
                 set_once(&mut authority, PathBuf::from(value), "--authority")?;
             }
             other => {
@@ -925,7 +925,8 @@ mod tests {
                 root: Some(policy),
                 source_root: Some(source),
                 ..
-            }) if policy == PathBuf::from("/policy") && source == PathBuf::from("/historical-source")
+            }) if policy.as_path() == std::path::Path::new("/policy")
+                && source.as_path() == std::path::Path::new("/historical-source")
         ));
     }
 
