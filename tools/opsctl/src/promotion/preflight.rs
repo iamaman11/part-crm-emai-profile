@@ -303,6 +303,7 @@ mod tests {
     use crate::promotion::snapshot::DeploymentSnapshot;
     use crate::release::digest::{canonical_json, sha256_hex};
     use crate::release::model::{CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
+    use crate::release::model::ReleaseModelError;
     use serde_json::{Value, json};
     use std::collections::BTreeSet;
 
@@ -401,7 +402,55 @@ mod tests {
     }
 
     #[test]
-    fn protocol_drift_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
+    fn missing_catalog_schema_is_unknown() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let mut state = snapshot();
+        state.catalog_schema_revision = None;
+        assert_eq!(
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
+            CompatibilityDecision::Unknown
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_resolver_schema_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let mut state = snapshot();
+        state.resolver_schema_revision = Some("9999_future.sql".to_owned());
+        assert_eq!(
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", true, false),
+            CompatibilityDecision::Incompatible
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_resolver_schema_is_unknown_when_required() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let mut state = snapshot();
+        state.resolver_schema_revision = None;
+        assert_eq!(
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", true, false),
+            CompatibilityDecision::Unknown
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn contracts_mismatch_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let mut state = snapshot();
+        state.contracts_sha256 = Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned());
+        assert_eq!(
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
+            CompatibilityDecision::Incompatible
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn camouhost_protocol_drift_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
         let known_good = release()?;
         let mut state = snapshot();
         state.camouhost_ipc_version = Some(2);
@@ -413,10 +462,46 @@ mod tests {
     }
 
     #[test]
-    fn runtime_drift_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
+    fn profile_bridge_protocol_drift_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let mut state = snapshot();
+        state.profile_bridge_protocol_version = Some(2);
+        assert_eq!(
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
+            CompatibilityDecision::Incompatible
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_role_drift_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
         let known_good = release()?;
         let mut state = snapshot();
         state.runtime_role = Some("fixture_runtime".to_owned());
+        assert_eq!(
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
+            CompatibilityDecision::Incompatible
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn profile_format_drift_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let mut state = snapshot();
+        state.profile_format = Some("v2".to_owned());
+        assert_eq!(
+            evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
+            CompatibilityDecision::Incompatible
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn browser_identity_policy_drift_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
+        let known_good = release()?;
+        let mut state = snapshot();
+        state.browser_identity_policy = Some("v2".to_owned());
         assert_eq!(
             evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Incompatible

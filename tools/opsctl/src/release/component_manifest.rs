@@ -166,7 +166,8 @@ fn verify_profile_bridge_manifest(
             "profile_bridge manifest identity/protocol differs from Release Set",
         ));
     }
-    let bridge = profile_bridge.ok_or_else(|| mismatch("Profile Bridge ZIP identity is missing"))?;
+    let bridge =
+        profile_bridge.ok_or_else(|| mismatch("Profile Bridge ZIP identity is missing"))?;
     let executable = object
         .get("executable")
         .and_then(Value::as_object)
@@ -288,16 +289,6 @@ fn read_unique_tar_member_by_basename(
     })
 }
 
-fn read_unique_zip_member(
-    archive_path: &Path,
-    target_name: &str,
-) -> Result<Vec<u8>, ReleaseModelError> {
-    if target_name != PROFILE_BRIDGE_MANIFEST {
-        return Err(mismatch("unsupported Profile Bridge ZIP manifest name"));
-    }
-    read_profile_bridge_zip(archive_path).map(|identity| identity.manifest)
-}
-
 fn read_profile_bridge_zip(
     archive_path: &Path,
 ) -> Result<ProfileBridgeArchiveIdentity, ReleaseModelError> {
@@ -345,15 +336,16 @@ fn read_profile_bridge_zip(
         validate_zip_encoding(flags, compression, compressed_size, uncompressed_size)?;
         let name = read_zip_name(&mut file, name_len)?;
         validate_zip_member_name(&name)?;
-        if !matches!(name.as_str(), PROFILE_BRIDGE_MANIFEST | PROFILE_BRIDGE_EXECUTABLE) {
+        if !matches!(
+            name.as_str(),
+            PROFILE_BRIDGE_MANIFEST | PROFILE_BRIDGE_EXECUTABLE
+        ) {
             return Err(mismatch(format!(
                 "unknown member in Profile Bridge ZIP: {name}"
             )));
         }
         if local.contains_key(&name) {
-            return Err(mismatch(format!(
-                "duplicate {name} in Profile Bridge ZIP"
-            )));
+            return Err(mismatch(format!("duplicate {name} in Profile Bridge ZIP")));
         }
         seek_forward(&mut file, extra_len, "ZIP extra data")?;
         if name == PROFILE_BRIDGE_MANIFEST {
@@ -368,8 +360,9 @@ fn read_profile_bridge_zip(
             manifest = Some(bytes);
         } else {
             let mut payload = (&mut file).take(uncompressed_size);
-            let digest = sha256_reader_hex(&mut payload)
-                .map_err(|error| mismatch(format!("cannot hash Profile Bridge executable: {error}")))?;
+            let digest = sha256_reader_hex(&mut payload).map_err(|error| {
+                mismatch(format!("cannot hash Profile Bridge executable: {error}"))
+            })?;
             if payload.limit() != 0 {
                 return Err(mismatch("truncated Profile Bridge executable payload"));
             }
@@ -432,8 +425,7 @@ fn verify_zip_central_directory(
         let extra_len = u16::from_le_bytes([fixed[26], fixed[27]]) as u64;
         let comment_len = u16::from_le_bytes([fixed[28], fixed[29]]) as u64;
         let disk_start = u16::from_le_bytes([fixed[30], fixed[31]]);
-        let local_offset =
-            u32::from_le_bytes([fixed[38], fixed[39], fixed[40], fixed[41]]) as u64;
+        let local_offset = u32::from_le_bytes([fixed[38], fixed[39], fixed[40], fixed[41]]) as u64;
         if disk_start != 0 {
             return Err(mismatch("multi-disk Profile Bridge ZIP is forbidden"));
         }
@@ -444,9 +436,7 @@ fn verify_zip_central_directory(
             .get(&name)
             .ok_or_else(|| mismatch(format!("central ZIP entry has no local member: {name}")))?;
         if !central_names.insert(name.clone()) {
-            return Err(mismatch(format!(
-                "duplicate central ZIP entry: {name}"
-            )));
+            return Err(mismatch(format!("duplicate central ZIP entry: {name}")));
         }
         if observed.local_offset != local_offset
             || observed.flags != flags
@@ -489,7 +479,9 @@ fn verify_zip_central_directory(
     let mut trailing = [0_u8; 1];
     match file.read(&mut trailing) {
         Ok(0) => Ok(()),
-        Ok(_) => Err(mismatch("trailing bytes after Profile Bridge ZIP end record")),
+        Ok(_) => Err(mismatch(
+            "trailing bytes after Profile Bridge ZIP end record",
+        )),
         Err(error) => Err(mismatch(format!("cannot read ZIP trailer: {error}"))),
     }
 }
@@ -537,7 +529,9 @@ fn read_zip_name(file: &mut File, name_len: usize) -> Result<String, ReleaseMode
 fn validate_zip_member_name(name: &str) -> Result<(), ReleaseModelError> {
     if name.starts_with('/')
         || name.contains('\\')
-        || name.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+        || name
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
     {
         return Err(mismatch(format!("unsafe ZIP member path: {name}")));
     }
@@ -722,9 +716,8 @@ fn mismatch(message: impl Into<String>) -> ReleaseModelError {
 #[cfg(test)]
 mod tests {
     use super::{
-        PROFILE_BRIDGE_EXECUTABLE, PROFILE_BRIDGE_MANIFEST, ZIP_CENTRAL_HEADER_SIGNATURE,
-        ZIP_END_SIGNATURE, ZIP_LOCAL_HEADER_SIGNATURE, read_unique_tar_member_by_basename,
-        read_unique_zip_member,
+        PROFILE_BRIDGE_EXECUTABLE, ZIP_CENTRAL_HEADER_SIGNATURE, ZIP_END_SIGNATURE,
+        ZIP_LOCAL_HEADER_SIGNATURE, read_profile_bridge_zip, read_unique_tar_member_by_basename,
     };
     use std::fs;
     use std::io::Write;
@@ -738,7 +731,7 @@ mod tests {
         ));
         fs::write(&path, b"not an archive")?;
         assert!(read_unique_tar_member_by_basename(&path, "release-manifest.json").is_err());
-        assert!(read_unique_zip_member(&path, PROFILE_BRIDGE_MANIFEST).is_err());
+        assert!(read_profile_bridge_zip(&path).is_err());
         fs::remove_file(path)?;
         Ok(())
     }
@@ -752,7 +745,7 @@ mod tests {
         let mut file = fs::File::create(&path)?;
         file.write_all(&ZIP_END_SIGNATURE.to_le_bytes())?;
         file.write_all(&[0_u8; 18])?;
-        assert!(read_unique_zip_member(&path, PROFILE_BRIDGE_MANIFEST).is_err());
+        assert!(read_profile_bridge_zip(&path).is_err());
         fs::remove_file(path)?;
         Ok(())
     }
@@ -764,7 +757,7 @@ mod tests {
             std::process::id()
         ));
         write_local_member(&path, "../profile-bridge-manifest.json", b"{}")?;
-        assert!(read_unique_zip_member(&path, PROFILE_BRIDGE_MANIFEST).is_err());
+        assert!(read_profile_bridge_zip(&path).is_err());
         fs::remove_file(path)?;
         Ok(())
     }
@@ -776,7 +769,7 @@ mod tests {
             std::process::id()
         ));
         write_local_member(&path, "unexpected.txt", b"x")?;
-        assert!(read_unique_zip_member(&path, PROFILE_BRIDGE_MANIFEST).is_err());
+        assert!(read_profile_bridge_zip(&path).is_err());
         fs::remove_file(path)?;
         Ok(())
     }
