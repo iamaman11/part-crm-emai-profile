@@ -18,6 +18,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 ACCEPTANCE_POLICY = Path("architecture/architecture-acceptance-policy.json")
+LIFECYCLE_POLICY = Path("architecture/lifecycle-projection-policy.json")
 PROGRAM_SEQUENCE = Path("architecture/architecture-program-sequence.json")
 STATUS = Path("docs/status.json")
 TRANSITION = Path("architecture/architecture-rebaseline-v3-transition.json")
@@ -39,6 +40,11 @@ PROJECTION_PATHS = {
     "docs/INDEX.md",
     "docs/DEVELOPMENT_PLAN.md",
     "docs/DEVELOPER_CAPABILITY_MATRIX.md",
+}
+TRACKED_LIFECYCLE_SNAPSHOTS = {
+    "architecture/inventory.json",
+    "docs/status.json",
+    "architecture/architecture-rebaseline-v3-transition.json",
 }
 
 
@@ -126,9 +132,123 @@ def validate_projection_policy(policy: dict[str, Any]) -> None:
         fail("tracked lifecycle documents must remain projection-only")
     if projection.get("stale_projection_must_not_create_acceptance_authority") is not True:
         fail("stale projection fail-closed rule is missing")
+    if projection.get("lifecycle_policy") != LIFECYCLE_POLICY.as_posix():
+        fail("architecture acceptance policy lost lifecycle projection policy binding")
+    if projection.get("tracked_mutable_lifecycle_state_forbidden_as_authority") is not True:
+        fail("tracked mutable lifecycle state must remain forbidden as acceptance authority")
+    if projection.get("program_document_lifecycle_status_is_projection") is not True:
+        fail("program document lifecycle status must remain projection-only")
+    if projection.get("future_acceptance_requires_source_projection_commit") is not False:
+        fail("future acceptance must not require a second projection-only source commit")
     paths = projection.get("paths")
     if not isinstance(paths, list) or set(paths) != PROJECTION_PATHS or len(paths) != len(PROJECTION_PATHS):
         fail("architecture acceptance projection path set drifted")
+
+
+def validate_lifecycle_projection_policy(lifecycle: dict[str, Any], acceptance: dict[str, Any]) -> None:
+    if (
+        lifecycle.get("schema_version") != 1
+        or lifecycle.get("kind") != "LIFECYCLE_PROJECTION_POLICY"
+        or lifecycle.get("status") != "current"
+        or lifecycle.get("tracking_issue") != 375
+        or lifecycle.get("production_mutation") is not False
+    ):
+        fail("lifecycle projection policy identity/ownership boundary drifted")
+
+    live = lifecycle.get("live_state_authority")
+    if not isinstance(live, dict):
+        fail("lifecycle projection policy lost live_state_authority")
+    if (
+        live.get("acceptance_policy") != ACCEPTANCE_POLICY.as_posix()
+        or live.get("program_sequence") != PROGRAM_SEQUENCE.as_posix()
+        or live.get("deriver") != ".github/scripts/architecture-acceptance.mjs derive"
+        or live.get("source_branch") != "main"
+        or live.get("tracked_mutable_lifecycle_state") is not False
+        or live.get("manual_current_slice_authority") is not False
+        or live.get("manual_accepted_checkpoint_authority") is not False
+    ):
+        fail("lifecycle live-state authority boundary drifted")
+
+    program = lifecycle.get("program_intent_boundary")
+    if not isinstance(program, dict):
+        fail("lifecycle projection policy lost program_intent_boundary")
+    if (
+        program.get("program_document") != PLAN.as_posix()
+        or program.get("may_define_scope_sequence_and_invariants") is not True
+        or program.get("may_independently_decide_accepted_checkpoint") is not False
+        or program.get("may_independently_decide_current_slice") is not False
+        or program.get("lifecycle_status_text_is_projection") is not True
+    ):
+        fail("program document boundary drifted from intent/projection-only role")
+
+    snapshots = lifecycle.get("tracked_compatibility_snapshots")
+    if not isinstance(snapshots, list) or len(snapshots) != len(TRACKED_LIFECYCLE_SNAPSHOTS):
+        fail("tracked lifecycle compatibility snapshot registry drifted")
+    observed_paths: set[str] = set()
+    for item in snapshots:
+        if not isinstance(item, dict):
+            fail("tracked lifecycle snapshot entry must be an object")
+        path = item.get("path")
+        fields = item.get("lifecycle_projection_fields")
+        if not isinstance(path, str) or path in observed_paths:
+            fail("tracked lifecycle snapshot path is missing or duplicated")
+        observed_paths.add(path)
+        if item.get("classification") != "TRANSITION_PROVENANCE_ONLY_FOR_LIFECYCLE_STATE":
+            fail(f"tracked lifecycle snapshot is not explicitly provenance-only: {path}")
+        if not isinstance(fields, list) or not fields or any(not isinstance(field, str) or not field for field in fields):
+            fail(f"tracked lifecycle snapshot projection field registry is invalid: {path}")
+    if observed_paths != TRACKED_LIFECYCLE_SNAPSHOTS:
+        fail("tracked lifecycle snapshot path set drifted")
+
+    consumers = lifecycle.get("consumer_policy")
+    if not isinstance(consumers, dict):
+        fail("lifecycle projection policy lost consumer_policy")
+    required_consumer_booleans = {
+        "tracked_snapshot_may_decide_accepted_or_current_slice": False,
+        "tracked_snapshot_may_authorize_production": False,
+        "tracked_snapshot_may_drive_ar12_through_ar17_closeout": False,
+        "human_projection_may_decide_accepted_or_current_slice": False,
+        "operator_surface_must_label_snapshot_non_authoritative": True,
+        "stable_inventory_generation_must_not_advance_lifecycle_state": True,
+        "stable_inventory_generation_must_preserve_snapshot_without_advancing_it": True,
+        "future_acceptance_requires_source_projection_commit": False,
+        "duplicate_lifecycle_derivation_algorithm_forbidden": True,
+    }
+    for key, wanted in required_consumer_booleans.items():
+        if consumers.get(key) is not wanted:
+            fail(f"lifecycle projection consumer boundary drifted: {key}")
+
+    fail_closed = lifecycle.get("fail_closed_invariants")
+    if not isinstance(fail_closed, dict):
+        fail("lifecycle projection policy lost fail_closed_invariants")
+    expected_fail_closed = {
+        "architecture_complete": False,
+        "production_core_gate": "BLOCKED",
+        "production_ready": False,
+        "production_mutation": False,
+        "source_present_not_equal_production_enabled": True,
+    }
+    for key, wanted in expected_fail_closed.items():
+        if fail_closed.get(key) != wanted:
+            fail(f"lifecycle projection fail-closed invariant drifted: {key}")
+
+    forbidden = lifecycle.get("forbidden_patterns")
+    if not isinstance(forbidden, dict):
+        fail("lifecycle projection policy lost forbidden_patterns")
+    for key in (
+        "tracked_current_slice_as_authority",
+        "tracked_accepted_checkpoint_as_authority",
+        "per_ar_closeout_writer",
+        "self_writing_ci",
+        "second_source_merge_for_acceptance_projection",
+        "retired_executable_materialization_for_execution",
+    ):
+        if forbidden.get(key) is not True:
+            fail(f"lifecycle forbidden-pattern guard drifted: {key}")
+
+    projection = acceptance.get("projection_policy")
+    if not isinstance(projection, dict) or projection.get("lifecycle_policy") != LIFECYCLE_POLICY.as_posix():
+        fail("acceptance policy and lifecycle projection policy are no longer mutually bound")
 
 
 def validate_projection_fail_closed(status: dict[str, Any], transition: dict[str, Any], inventory: dict[str, Any]) -> None:
@@ -236,9 +356,11 @@ def validate_human_authority(root: Path) -> None:
 
 def validate(root: Path) -> None:
     policy = load_json(root, ACCEPTANCE_POLICY)
+    lifecycle = load_json(root, LIFECYCLE_POLICY)
     sequence = load_json(root, PROGRAM_SEQUENCE)
     validate_acceptance_policy(policy, sequence)
     validate_projection_policy(policy)
+    validate_lifecycle_projection_policy(lifecycle, policy)
     validate_projection_fail_closed(load_json(root, STATUS), load_json(root, TRANSITION), load_json(root, INVENTORY))
     validate_owned_authorities(root)
     validate_compatibility_entrypoints(root)
@@ -248,6 +370,7 @@ def validate(root: Path) -> None:
 def self_test(root: Path) -> None:
     validate(root)
     policy = load_json(root, ACCEPTANCE_POLICY)
+    lifecycle = load_json(root, LIFECYCLE_POLICY)
     negative = copy.deepcopy(policy)
     negative["projection_policy"]["authoritative"] = True
     try:
@@ -256,6 +379,24 @@ def self_test(root: Path) -> None:
         pass
     else:
         fail("authoritative tracked-projection negative fixture unexpectedly passed")
+
+    duplicate_deriver = copy.deepcopy(lifecycle)
+    duplicate_deriver["consumer_policy"]["duplicate_lifecycle_derivation_algorithm_forbidden"] = False
+    try:
+        validate_lifecycle_projection_policy(duplicate_deriver, policy)
+    except DocumentationAuthorityError:
+        pass
+    else:
+        fail("duplicate lifecycle derivation negative fixture unexpectedly passed")
+
+    mutable_snapshot = copy.deepcopy(lifecycle)
+    mutable_snapshot["live_state_authority"]["tracked_mutable_lifecycle_state"] = True
+    try:
+        validate_lifecycle_projection_policy(mutable_snapshot, policy)
+    except DocumentationAuthorityError:
+        pass
+    else:
+        fail("tracked mutable lifecycle authority negative fixture unexpectedly passed")
 
     status = load_json(root, STATUS)
     transition = load_json(root, TRANSITION)
