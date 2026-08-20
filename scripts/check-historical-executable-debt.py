@@ -31,6 +31,7 @@ FORWARD_CLOSEOUT = re.compile(
     r"(?:^|/)(?:ar|architecture-ar)[0-9]+[^/]*(?:acceptance-)?closeout[^/]*\.(?:py|mjs|js|yml|yaml)$",
     re.IGNORECASE,
 )
+STRING_ONLY_REFERENCE = re.compile(r"^[\"'][^\"']+[\"'],?$" )
 
 
 class DebtError(ValueError):
@@ -80,15 +81,18 @@ def text(relative: str) -> str:
 def reference_kind(line: str) -> str:
     stripped = line.strip()
     if not stripped or stripped.startswith(("#", "//", "/*", "*")):
-        return "non_executable_reference"
+        return "static_reference"
     if re.search(r"\btest\s+!\s+-[ef]\b", stripped) or "must stay absent" in stripped.lower():
         return "absence_assertion"
+    if STRING_ONLY_REFERENCE.fullmatch(stripped):
+        return "static_reference"
     return "caller"
 
 
-def discover_references(target: str, paths: list[str]) -> tuple[list[str], list[str]]:
+def discover_references(target: str, paths: list[str]) -> tuple[list[str], list[str], list[str]]:
     callers: set[str] = set()
     absence: set[str] = set()
+    static: set[str] = set()
     for relative in paths:
         if relative == target:
             continue
@@ -103,7 +107,9 @@ def discover_references(target: str, paths: list[str]) -> tuple[list[str], list[
                 callers.add(relative)
             elif kind == "absence_assertion":
                 absence.add(relative)
-    return sorted(callers), sorted(absence)
+            else:
+                static.add(relative)
+    return sorted(callers), sorted(absence), sorted(static)
 
 
 def validate_policy(payload: dict[str, Any]) -> None:
@@ -202,7 +208,7 @@ def validate_entries(payload: dict[str, Any], paths: list[str]) -> list[dict[str
         if classification == "UPGRADE_ROLLBACK_REQUIRED" and not present:
             fail(f"required recovery/rollback authority is missing: {target}")
 
-        callers, absence = discover_references(target, executable)
+        callers, absence, static = discover_references(target, executable)
         if classification in {"TRANSITION_PROVENANCE_ONLY", "DEAD"} and callers:
             fail(f"retired path has current executable callers: {target}: {callers}")
         if classification in {"CURRENT_INVARIANT", "UPGRADE_ROLLBACK_REQUIRED"}:
@@ -215,6 +221,7 @@ def validate_entries(payload: dict[str, Any], paths: list[str]) -> list[dict[str
                 "classification": classification,
                 "callers": callers,
                 "absence_assertions": absence,
+                "static_references": static,
             }
         )
     return report
