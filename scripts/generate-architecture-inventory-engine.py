@@ -15,10 +15,11 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import _architecture_inventory_core as core
 import _ar3_application_architecture as ar3
+import credential_authority as current_credentials
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_PATH = ROOT / "architecture" / "inventory.json"
@@ -35,11 +36,6 @@ AR7_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR7.md"
 GOVERNANCE_CONTRACT = "architecture/github-governance-ar7.json"
 PYTHON_ESTATE = "architecture/python-estate-ar6.json"
 CREDENTIAL_AUTHORITY = "architecture/credential-authority-ar8b.json"
-AR8D_SECRET_TRANSPORT_SUCCESSOR = "architecture/ar8-d-secret-transport-successor.json"
-AR8D_SUPERSEDED_ROUTINE_BINDING_OWNERS = {
-    "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON": "cloudflare.control-plane-secret-bundle-transport",
-    "CLOUDFLARE_RESOLVER_SECRETS_JSON": "cloudflare.resolver-secret-bundle-transport",
-}
 AR8C_PROVIDER_EXECUTION_AUTHORITY = "architecture/ar8-staging-provider-bootstrap-contract.json"
 AR8C_PROVIDER_EXECUTION_EVIDENCE = "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md"
 POST_AR8C_CLEANUP_EVIDENCE = "docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json"
@@ -58,55 +54,6 @@ AR8_MANDATORY_REMAINING = ["AR-8D", "AR-8E", "AR-8F"]
 POST_AR8C_CLEANUP_ISSUE = 352
 CURRENT_DELIVERY_CHECKPOINT = "AR-8C"
 AR8C_HOSTED_VERIFIED_MAIN = "29519fbf05f8e4c228a0907ee0dafd2c85e3749b"
-
-CANONICAL_ENVIRONMENTS = {"rehearsal", "staging", "production"}
-REQUIRED_CREDENTIAL_ENTRY_FIELDS = {
-    "id",
-    "class",
-    "provider_system",
-    "environment_scope",
-    "owner",
-    "consumers",
-    "bindings",
-    "protected_value_authority",
-    "legitimate_mutable_authority",
-    "version_state_source",
-    "automation_class",
-    "externally_issued",
-    "rotation_recovery_policy",
-    "future_cutover",
-}
-FORBIDDEN_CREDENTIAL_VALUE_FIELDS = {
-    "value",
-    "secret_value",
-    "plaintext",
-    "plaintext_value",
-    "private_key",
-    "password",
-    "token",
-    "token_value",
-    "credential_value",
-    "key_material",
-    "raw_secret",
-    "raw_token",
-}
-HIGH_CONFIDENCE_CREDENTIAL_VALUE_PATTERNS = (
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
-    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-)
-WORKFLOW_SECRET = re.compile(r"\bsecrets\.([A-Z][A-Z0-9_]*)\b")
-WRANGLER_REQUIRED = re.compile(r'"required"\s*:\s*\[(.*?)\]', re.DOTALL)
-QUOTED_IDENTIFIER = re.compile(r'"([A-Z][A-Z0-9_]*)"')
-RUST_WORKER_SECRET = re.compile(r'\.secret\(\s*"([A-Z][A-Z0-9_]*)"\s*\)')
-CREDENTIAL_NAME = r"([A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PRIVATE_KEY|API_KEY|AUTH_KEY|KEYRING)[A-Z0-9_]*)"
-PY_ENV_ITEM = re.compile(rf"os\.environ\[\s*[\"']{CREDENTIAL_NAME}[\"']\s*\]")
-PY_ENV_GET = re.compile(rf"os\.environ\.get\(\s*[\"']{CREDENTIAL_NAME}[\"']")
-PY_GETENV = re.compile(rf"os\.getenv\(\s*[\"']{CREDENTIAL_NAME}[\"']")
-JS_ENV_LOOKUP = re.compile(rf"(?:process\.env\.|env\.){CREDENTIAL_NAME}")
-ENVIRONMENT_BOUND_CREDENTIAL_SURFACES = {"github_environment_secret", "cloudflare_worker_secret"}
-PORTABLE_CREDENTIAL_SCAN_EXCLUSIONS = {"scripts/check-tracked-secrets.sh"}
 
 DOCUMENT_STATUS = [
     {"path": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md", "status": "CURRENT_AUTHORITY", "scope": "architecture_program_execution"},
@@ -293,251 +240,21 @@ def validate_full_documentation_authority() -> None:
         raise SystemExit(f"documentation authority check failed:\n{details}")
 
 
-def tracked_credential_files() -> list[Path]:
-    result = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=ROOT,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        details = result.stderr.decode("utf-8", errors="replace").strip()
-        raise ValueError(f"git ls-files failed while discovering credential surfaces: {details or result.returncode}")
-    files: list[Path] = []
-    for raw in result.stdout.split(b"\0"):
-        if not raw:
-            continue
-        relative = raw.decode("utf-8")
-        files.append(ROOT / Path(relative))
-    return files
-
-
-def credential_text(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
-        return ""
-
-
-def scan_tracked_credential_material(files: list[Path]) -> None:
-    for path in files:
-        relative = path.relative_to(ROOT).as_posix()
-        if relative in PORTABLE_CREDENTIAL_SCAN_EXCLUSIONS:
-            continue
-        source = credential_text(path)
-        if not source:
-            continue
-        if any(pattern.search(source) for pattern in HIGH_CONFIDENCE_CREDENTIAL_VALUE_PATTERNS):
-            raise ValueError(f"high-confidence credential material found in tracked file: {relative}")
-
-
-def discover_credential_bindings(files: list[Path]) -> dict[str, set[str]]:
-    detected: dict[str, set[str]] = {}
-
-    def add(name: str, path: Path) -> None:
-        detected.setdefault(name, set()).add(path.relative_to(ROOT).as_posix())
-
-    for path in files:
-        relative = path.relative_to(ROOT).as_posix()
-        source = credential_text(path)
-        if not source:
-            continue
-        if relative.startswith(".github/workflows/") and path.suffix in {".yml", ".yaml"}:
-            for name in WORKFLOW_SECRET.findall(source):
-                add(name, path)
-        if relative.startswith("deploy/cloudflare/") and path.suffix in {".json", ".jsonc"}:
-            for block in WRANGLER_REQUIRED.findall(source):
-                for name in QUOTED_IDENTIFIER.findall(block):
-                    add(name, path)
-        if relative.startswith(("apps/", "crates/")) and path.suffix == ".rs":
-            for name in RUST_WORKER_SECRET.findall(source):
-                add(name, path)
-        if relative.startswith(("scripts/", "tools/")) and path.suffix == ".py":
-            for pattern in (PY_ENV_ITEM, PY_ENV_GET, PY_GETENV):
-                for name in pattern.findall(source):
-                    add(name, path)
-        if relative.startswith(("scripts/", "tools/", ".github/")) and path.suffix in {".js", ".mjs", ".cjs", ".ts"}:
-            for name in JS_ENV_LOOKUP.findall(source):
-                add(name, path)
-    return detected
-
-
-def walk_credential_payload(value: Any, path: str = "$") -> Iterable[tuple[str, str, Any]]:
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            yield path, str(key), nested
-            yield from walk_credential_payload(nested, f"{path}.{key}")
-    elif isinstance(value, list):
-        for index, nested in enumerate(value):
-            yield from walk_credential_payload(nested, f"{path}[{index}]")
-
-
-def credential_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    for section in ("credentials", "dynamic_credential_domains", "future_trust_domains"):
-        raw = payload.get(section)
-        if not isinstance(raw, list):
-            raise ValueError(f"{section} must be a list")
-        if any(not isinstance(entry, dict) for entry in raw):
-            raise ValueError(f"{section} entries must be objects")
-        result.extend(raw)
-    return result
-
-
-def governed_superseded_credential_bindings(owners: dict[str, str]) -> set[str]:
-    path = ROOT / AR8D_SECRET_TRANSPORT_SUCCESSOR
-    if not path.is_file():
-        return set()
-    transition = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(transition, dict):
-        raise ValueError("AR-8D secret-transport successor must be one JSON object")
-    if (
-        transition.get("kind") != "POLICY_TRANSITION"
-        or transition.get("status") != "candidate"
-        or transition.get("tracking_issue") != 361
-        or transition.get("parent_issue") != AR8_UMBRELLA_ISSUE
-        or transition.get("canonical_inventory") != "architecture/inventory.json"
-    ):
-        raise ValueError("AR-8D secret-transport successor provenance drifted")
-    successor = transition.get("successor")
-    if not isinstance(successor, dict):
-        raise ValueError("AR-8D secret-transport successor metadata is missing")
-    names = successor.get("superseded_routine_deploy_bindings")
-    expected_names = sorted(AR8D_SUPERSEDED_ROUTINE_BINDING_OWNERS)
-    if names != expected_names:
-        raise ValueError("AR-8D successor must govern exactly the two historical D3 bundle bindings")
-    if (
-        successor.get("routine_deploy_secret_value_transport") is not False
-        or successor.get("routine_deploy_secret_mutation") is not False
-        or successor.get("rotation_lifecycle") != "separate_explicit_rotation_authority"
-    ):
-        raise ValueError("AR-8D successor no longer separates routine deployment from secret rotation")
-    for name, expected_owner in AR8D_SUPERSEDED_ROUTINE_BINDING_OWNERS.items():
-        if owners.get(name) != expected_owner:
-            raise ValueError(f"AR-8D superseded binding {name} is not owned by {expected_owner}")
-    return set(expected_names)
+def _normalized_detected(value: dict[str, set[str]]) -> dict[str, tuple[str, ...]]:
+    return {name: tuple(sorted(paths)) for name, paths in sorted(value.items())}
 
 
 def validate_credential_authority(payload: dict[str, Any], detected: dict[str, set[str]]) -> None:
-    if payload.get("schema_version") != 1:
-        raise ValueError("credential authority schema_version must be 1")
-    if payload.get("status") != "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY":
-        raise ValueError("credential authority must be accepted for AR-8B merge")
-    if payload.get("parent_issue") != AR8_UMBRELLA_ISSUE or payload.get("implementation_issue") != AR8B_IMPLEMENTATION_ISSUE:
-        raise ValueError("AR-8B credential authority issue provenance drifted")
-    if payload.get("canonical_inventory") != "architecture/inventory.json":
-        raise ValueError("AR-8B must extend the canonical inventory, not create a competing registry")
-    if payload.get("metadata_only") is not True:
-        raise ValueError("credential authority must be metadata_only=true")
-    if set(payload.get("canonical_environments", [])) != CANONICAL_ENVIRONMENTS:
-        raise ValueError("canonical_environments must be rehearsal/staging/production exactly")
-
-    invariants = payload.get("invariants")
-    if not isinstance(invariants, dict):
-        raise ValueError("invariants must be an object")
-    if invariants.get("plaintext_in_git") != "FORBIDDEN" or invariants.get("competing_registry") != "FORBIDDEN":
-        raise ValueError("plaintext and competing registries must remain forbidden")
-    if invariants.get("mutable_authorities_per_concern") != 1:
-        raise ValueError("one concern must have exactly one legitimate mutable authority")
-    if invariants.get("production_mutation") is not False or invariants.get("ar9_blocked") is not True:
-        raise ValueError("AR-8B must keep production mutation disabled and AR-9 blocked")
-
-    for location, key, nested in walk_credential_payload(payload):
-        if key.lower() in FORBIDDEN_CREDENTIAL_VALUE_FIELDS:
-            raise ValueError(f"forbidden value-bearing field {location}.{key}")
-        if isinstance(nested, str) and any(pattern.search(nested) for pattern in HIGH_CONFIDENCE_CREDENTIAL_VALUE_PATTERNS):
-            raise ValueError(f"high-confidence credential material found at {location}.{key}")
-
-    logical_entries = credential_entries(payload)
-    ids: set[str] = set()
-    owners: dict[str, str] = {}
-    declaration_only: set[str] = set()
-    for entry in logical_entries:
-        missing = REQUIRED_CREDENTIAL_ENTRY_FIELDS - set(entry)
-        logical_id = entry.get("id", "<missing-id>")
-        if missing:
-            raise ValueError(f"{logical_id}: missing required fields {sorted(missing)!r}")
-        if not isinstance(logical_id, str) or not logical_id or logical_id in ids:
-            raise ValueError(f"invalid or duplicate credential authority id: {logical_id!r}")
-        ids.add(logical_id)
-        if not isinstance(entry.get("externally_issued"), bool) or not isinstance(entry.get("consumers"), list):
-            raise ValueError(f"{logical_id}: malformed externally_issued/consumers")
-        scope = entry.get("environment_scope")
-        if not isinstance(scope, dict):
-            raise ValueError(f"{logical_id}: environment_scope must be an object")
-        kind = scope.get("kind")
-        environments = scope.get("environments", [])
-        if kind not in {"repository", "environment", "tenant_dynamic", "release"}:
-            raise ValueError(f"{logical_id}: unknown environment scope {kind!r}")
-        if kind == "environment":
-            if not isinstance(environments, list) or not environments or set(environments) - CANONICAL_ENVIRONMENTS:
-                raise ValueError(f"{logical_id}: invalid canonical environment scope")
-        elif environments:
-            raise ValueError(f"{logical_id}: environments allowed only for kind=environment")
-        for field in (
-            "class",
-            "provider_system",
-            "owner",
-            "protected_value_authority",
-            "legitimate_mutable_authority",
-            "version_state_source",
-            "automation_class",
-            "rotation_recovery_policy",
-            "future_cutover",
-        ):
-            if not isinstance(entry.get(field), str) or not entry[field].strip():
-                raise ValueError(f"{logical_id}: {field} must be non-empty")
-        bindings = entry.get("bindings")
-        if not isinstance(bindings, list):
-            raise ValueError(f"{logical_id}: bindings must be a list")
-        seen: set[tuple[str, str, str]] = set()
-        for binding in bindings:
-            if not isinstance(binding, dict):
-                raise ValueError(f"{logical_id}: binding must be an object")
-            name = binding.get("name")
-            surface = binding.get("surface")
-            consumer = str(binding.get("consumer", ""))
-            if not isinstance(name, str) or not name or not isinstance(surface, str) or not surface:
-                raise ValueError(f"{logical_id}: binding name/surface must be non-empty")
-            identity = (surface, name, consumer)
-            if identity in seen:
-                raise ValueError(f"{logical_id}: duplicate binding tuple {identity!r}")
-            seen.add(identity)
-            if surface in ENVIRONMENT_BOUND_CREDENTIAL_SURFACES:
-                binding_envs = binding.get("environments")
-                if kind != "environment" or not isinstance(binding_envs, list) or set(binding_envs) != set(environments):
-                    raise ValueError(f"{logical_id}/{name}: binding environments must exactly match logical environment scope")
-            elif binding.get("environments"):
-                raise ValueError(f"{logical_id}/{name}: repository/non-environment binding cannot declare environments")
-            previous = owners.get(name)
-            if previous is not None and previous != logical_id:
-                raise ValueError(f"binding {name} belongs to multiple authorities: {previous}, {logical_id}")
-            owners[name] = logical_id
-            if binding.get("declaration_only") is True:
-                declaration_only.add(name)
-
-    missing = sorted(set(detected) - set(owners))
-    if missing:
-        details = ", ".join(f"{name} ({sorted(detected[name])})" for name in missing)
-        raise ValueError(f"tracked credential bindings missing canonical authority: {details}")
-    governed_superseded = governed_superseded_credential_bindings(owners)
-    stale = sorted(set(owners) - set(detected) - declaration_only - governed_superseded)
-    if stale:
-        raise ValueError("authority has non-detected bindings without declaration_only=true: " + ", ".join(stale))
+    lifecycle = current_credentials.read_json(ROOT, current_credentials.EXPECTED_LIFECYCLE)
+    successor = current_credentials.read_json(
+        ROOT, current_credentials.EXPECTED_SECRET_TRANSPORT_SUCCESSOR
+    )
+    current_credentials.validate_registry(payload, detected, lifecycle, successor)
 
 
 def validate_credential_authority_source() -> tuple[dict[str, Any], dict[str, set[str]]]:
-    path = ROOT / CREDENTIAL_AUTHORITY
-    if not path.is_file():
-        raise SystemExit(f"AR-8B credential source authority missing: {CREDENTIAL_AUTHORITY}")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise SystemExit("AR-8B credential authority must be one JSON object")
-    files = tracked_credential_files()
-    scan_tracked_credential_material(files)
-    detected = discover_credential_bindings(files)
-    validate_credential_authority(payload, detected)
-    return payload, detected
+    state = current_credentials.validate_repository(ROOT)
+    return state.registry, state.detected
 
 
 def load_credential_authority() -> dict[str, Any]:
@@ -546,98 +263,22 @@ def load_credential_authority() -> dict[str, Any]:
 
 
 def credential_negative_self_test(payload: dict[str, Any], detected: dict[str, set[str]]) -> None:
-    def must_reject(label: str, candidate: dict[str, Any], detected_override: dict[str, set[str]] | None = None) -> None:
-        try:
-            validate_credential_authority(candidate, detected if detected_override is None else detected_override)
-        except ValueError:
-            return
-        raise SystemExit(f"AR-8B negative fixture unexpectedly passed: {label}")
-
-    plaintext = copy.deepcopy(payload)
-    plaintext["credentials"][0]["value"] = "forbidden"
-    must_reject("plaintext/value-bearing field", plaintext)
-
-    high_confidence = copy.deepcopy(payload)
-    high_confidence["credentials"][0]["rotation_recovery_policy"] = "github_pat_" + ("A" * 20)
-    must_reject("high-confidence credential material", high_confidence)
-
-    environment_index = next(
-        (
-            index
-            for index, entry in enumerate(payload.get("credentials", []))
-            if isinstance(entry, dict)
-            and isinstance(entry.get("environment_scope"), dict)
-            and entry["environment_scope"].get("kind") == "environment"
-        ),
-        None,
-    )
-    if environment_index is None:
-        raise SystemExit("AR-8B self-test requires at least one environment-scoped credential fixture")
-
-    unknown_environment = copy.deepcopy(payload)
-    unknown_environment["credentials"][environment_index]["environment_scope"]["environments"] = ["prod"]
-    must_reject("unknown environment", unknown_environment)
-
-    missing_lifecycle = copy.deepcopy(payload)
-    missing_lifecycle["credentials"][0].pop("rotation_recovery_policy")
-    must_reject("missing lifecycle metadata", missing_lifecycle)
-
-    duplicate_id = copy.deepcopy(payload)
-    duplicate_id["credentials"].append(copy.deepcopy(duplicate_id["credentials"][0]))
-    must_reject("duplicate logical authority", duplicate_id)
-
-    binding_sources = [
-        index
-        for index, entry in enumerate(payload.get("credentials", []))
-        if isinstance(entry, dict) and isinstance(entry.get("bindings"), list) and entry["bindings"]
-    ]
-    if len(binding_sources) < 2:
-        raise SystemExit("AR-8B self-test requires two credentials with bindings")
-    dual_authority = copy.deepcopy(payload)
-    source_index, target_index = binding_sources[0], binding_sources[1]
-    dual_authority["credentials"][target_index]["bindings"].append(
-        copy.deepcopy(dual_authority["credentials"][source_index]["bindings"][0])
-    )
-    must_reject("dual authority for one binding", dual_authority)
-
-    environment_binding_index = next(
-        (
-            index
-            for index, binding in enumerate(payload["credentials"][environment_index].get("bindings", []))
-            if isinstance(binding, dict) and binding.get("surface") in ENVIRONMENT_BOUND_CREDENTIAL_SURFACES
-        ),
-        None,
-    )
-    if environment_binding_index is None:
-        raise SystemExit("AR-8B self-test requires one environment-bound credential binding")
-    wrong_binding_environment = copy.deepcopy(payload)
-    wrong_binding_environment["credentials"][environment_index]["bindings"][environment_binding_index]["environments"] = ["production"]
-    must_reject("binding/environment scope mismatch", wrong_binding_environment)
-
-    synthetic = copy.deepcopy(detected)
-    synthetic["AR8B_UNKNOWN_TRACKED_SECRET"] = {"tests/synthetic-workflow.yml"}
-    must_reject("unknown tracked credential binding", payload, synthetic)
-
-    unrelated_live = next(
-        (
-            name
-            for name in sorted(detected)
-            if name not in AR8D_SUPERSEDED_ROUTINE_BINDING_OWNERS
-        ),
-        None,
-    )
-    if unrelated_live is None:
-        raise SystemExit("AR-8B self-test requires one non-AR-8D live binding")
-    unrelated_stale = copy.deepcopy(detected)
-    unrelated_stale.pop(unrelated_live)
-    must_reject("unrelated stale binding is not governed by AR-8D transition", payload, unrelated_stale)
+    state = current_credentials.validate_repository(ROOT)
+    if payload != state.registry:
+        raise ValueError("historical credential shim payload diverged from current authority")
+    if _normalized_detected(detected) != _normalized_detected(state.detected):
+        raise ValueError("historical credential shim bindings diverged from current authority")
+    current_credentials.negative_self_test(state, ROOT)
 
 
 def print_credential_check_summary(detected: dict[str, set[str]], *, self_tested: bool) -> None:
-    suffix = " and negative fixtures" if self_tested else ""
+    state = current_credentials.validate_repository(ROOT)
+    if _normalized_detected(detected) != _normalized_detected(state.detected):
+        raise ValueError("historical credential shim summary bindings diverged from current authority")
+    suffix = " and fail-closed negative fixtures" if self_tested else ""
     print(
-        f"AR-8B portable credential authority covers {len(detected)} tracked static bindings{suffix}; "
-        "plaintext and high-confidence credential material remain forbidden."
+        f"Current credential authority covers {len(detected)} tracked static bindings{suffix}; "
+        "historical inventory engine delegates credential validation to the neutral owner."
     )
 
 
