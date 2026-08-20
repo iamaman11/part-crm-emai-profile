@@ -62,8 +62,38 @@ def validate_current_credential_registry(
     credentials.validate_registry(payload, detected, lifecycle)
 
 
+def normalized_detected(value: dict[str, set[str]]) -> dict[str, tuple[str, ...]]:
+    return {name: tuple(sorted(paths)) for name, paths in sorted(value.items())}
+
+
+def current_credential_negative_self_test(
+    payload: dict[str, Any], detected: dict[str, set[str]]
+) -> None:
+    state = credentials.validate_repository(ROOT)
+    if payload != state.registry:
+        raise ValueError("credential negative-self-test payload diverged from current authority")
+    if normalized_detected(detected) != normalized_detected(state.detected):
+        raise ValueError("credential negative-self-test bindings diverged from current authority")
+    credentials.negative_self_test(state, ROOT)
+
+
+def print_current_credential_check_summary(
+    detected: dict[str, set[str]], *, self_tested: bool
+) -> None:
+    state = credentials.validate_repository(ROOT)
+    if normalized_detected(detected) != normalized_detected(state.detected):
+        raise ValueError("credential summary bindings diverged from current authority")
+    suffix = " and fail-closed negative fixtures" if self_tested else ""
+    print(
+        f"Current credential authority covers {len(detected)} tracked static bindings{suffix}; "
+        "historical credential validator execution is not required."
+    )
+
+
 engine.validate_credential_authority_source = current_credential_authority_source
 engine.validate_credential_authority = validate_current_credential_registry
+engine.credential_negative_self_test = current_credential_negative_self_test
+engine.print_credential_check_summary = print_current_credential_check_summary
 
 
 def completion_delivery_map() -> dict[str, object]:
@@ -461,9 +491,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.credential_self_test:
         state = credentials.validate_repository(ROOT)
-        credentials.negative_self_test(state)
-        engine.credential_negative_self_test(state.registry, state.detected)
-        engine.print_credential_check_summary(state.detected, self_tested=True)
+        current_credential_negative_self_test(state.registry, state.detected)
+        print_current_credential_check_summary(state.detected, self_tested=True)
         return 0
     expected = build_inventory()
     if args.write:
@@ -483,6 +512,10 @@ def main() -> int:
             raise ValueError("current inventory credential source did not cut over to neutral authority")
         if engine.validate_credential_authority is not validate_current_credential_registry:
             raise ValueError("current inventory credential validation did not cut over to neutral authority")
+        if engine.credential_negative_self_test is not current_credential_negative_self_test:
+            raise ValueError("current inventory credential negative fixtures did not cut over to neutral authority")
+        if engine.print_credential_check_summary is not print_current_credential_check_summary:
+            raise ValueError("current inventory credential summary did not cut over to neutral authority")
         engine.self_test(expected)
         run([sys.executable, "scripts/credential_authority.py", "--self-test"])
         mutated = json.loads(serialized(expected))
