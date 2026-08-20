@@ -31,7 +31,10 @@ FORWARD_CLOSEOUT = re.compile(
     r"(?:^|/)(?:ar|architecture-ar)[0-9]+[^/]*(?:acceptance-)?closeout[^/]*\.(?:py|mjs|js|yml|yaml)$",
     re.IGNORECASE,
 )
-STRING_ONLY_REFERENCE = re.compile(r"^[\"'][^\"']+[\"'],?$" )
+STRING_ONLY_REFERENCE = re.compile(r"^[\"'][^\"']+[\"'],?$")
+STRING_ASSIGNMENT_REFERENCE = re.compile(
+    r"^(?:(?:const|let|var)\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=\s*[\"'][^\"']+[\"'];?|[\"'][^\"']+[\"']\s*:\s*[\"'][^\"']+[\"'],?)$"
+)
 
 
 class DebtError(ValueError):
@@ -84,7 +87,7 @@ def reference_kind(line: str) -> str:
         return "static_reference"
     if re.search(r"\btest\s+!\s+-[ef]\b", stripped) or "must stay absent" in stripped.lower():
         return "absence_assertion"
-    if STRING_ONLY_REFERENCE.fullmatch(stripped):
+    if STRING_ONLY_REFERENCE.fullmatch(stripped) or STRING_ASSIGNMENT_REFERENCE.fullmatch(stripped):
         return "static_reference"
     return "caller"
 
