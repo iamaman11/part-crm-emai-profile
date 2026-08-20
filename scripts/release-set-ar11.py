@@ -295,14 +295,19 @@ def build(
             "runtime": component_root / "runtime-bundle.tar",
             "bridge": component_root / "profile-bridge.zip",
         }
+        bridge_manifest_destination = component_root / "profile-bridge-manifest.json"
         shutil.copyfile(control_archive, destinations["control"], follow_symlinks=False)
         shutil.copyfile(resolver_archive, destinations["resolver"], follow_symlinks=False)
         shutil.copyfile(profile_bridge_archive, destinations["bridge"], follow_symlinks=False)
+        shutil.copyfile(profile_bridge_manifest, bridge_manifest_destination, follow_symlinks=False)
         runtime_release_id, runtime_manifest_sha = deterministic_runtime_archive(
             source_sha, destinations["runtime"], runtime_files
         )
 
         identities = {name: file_identity(path) for name, path in destinations.items()}
+        bridge_manifest_identity = file_identity(bridge_manifest_destination)
+        if bridge_manifest_identity["sha256"] != bridge_manifest_sha:
+            fail("Profile Bridge manifest sidecar digest drifted during Release Set staging")
         component_rows = {
             "control_plane": component_row(
                 control_release_id,
@@ -374,6 +379,7 @@ def build(
             },
             "artifact_inventory": [
                 inventory("components/control-plane.tar", identities["control"]),
+                inventory("components/profile-bridge-manifest.json", bridge_manifest_identity, kind="manifest"),
                 inventory("components/profile-bridge.zip", identities["bridge"]),
                 inventory("components/runtime-bundle.tar", identities["runtime"]),
                 inventory("components/secret-resolver.tar", identities["resolver"]),
@@ -411,12 +417,12 @@ def component_row(
     }
 
 
-def inventory(path: str, identity: dict[str, Any]) -> dict[str, Any]:
+def inventory(path: str, identity: dict[str, Any], *, kind: str = "component") -> dict[str, Any]:
     return {
         "path": path,
         "sha256": identity["sha256"],
         "size_bytes": identity["size_bytes"],
-        "kind": "component",
+        "kind": kind,
     }
 
 
