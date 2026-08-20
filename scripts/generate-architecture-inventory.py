@@ -11,7 +11,6 @@ projection-only source commit.
 from __future__ import annotations
 
 import argparse
-import base64
 import copy
 import hashlib
 import importlib.util
@@ -712,9 +711,6 @@ def main() -> int:
         )
     elif args.check:
         check_current(expected)
-        # Temporary bounded A3b renderer evidence. Removed after exact bytes are committed.
-        encoded = base64.b64encode(serialized(expected).encode("utf-8")).decode("ascii")
-        print(f"A3B_EXPECTED_INVENTORY_BASE64={encoded}")
         engine.validate_full_documentation_authority()
         run([sys.executable, "scripts/generate-ar8-completion-status.py", "--check"])
         print(
