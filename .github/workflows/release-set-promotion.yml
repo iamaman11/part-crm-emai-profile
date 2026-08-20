@@ -131,6 +131,10 @@ jobs:
           cp "$asset_root/secret-resolver.tar" "$release_root/components/secret-resolver.tar"
           cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
           cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
+          if jq -e '.artifact_inventory[] | select(.path == "components/profile-bridge-manifest.json" and .kind == "manifest")' "$policy_dir/release-set.json" >/dev/null; then
+            test -f "$asset_root/profile-bridge-manifest.json"
+            cp "$asset_root/profile-bridge-manifest.json" "$release_root/components/profile-bridge-manifest.json"
+          fi
           test "$(jq -r '.release_set_id' "$policy_dir/release-set.json")" = "$RELEASE_SET_ID"
 
           python scripts/accepted-source-evidence-ar11.py \
