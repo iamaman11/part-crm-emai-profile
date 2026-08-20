@@ -302,8 +302,8 @@ mod tests {
     use super::evaluate_rollback_candidate;
     use crate::promotion::snapshot::DeploymentSnapshot;
     use crate::release::digest::{canonical_json, sha256_hex};
-    use crate::release::model::{CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
     use crate::release::model::ReleaseModelError;
+    use crate::release::model::{CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
     use serde_json::{Value, json};
     use std::collections::BTreeSet;
 
@@ -426,7 +426,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_resolver_schema_is_unknown_when_required() -> Result<(), Box<dyn std::error::Error>> {
+    fn missing_resolver_schema_is_unknown_when_required() -> Result<(), Box<dyn std::error::Error>>
+    {
         let known_good = release()?;
         let mut state = snapshot();
         state.resolver_schema_revision = None;
@@ -441,7 +442,8 @@ mod tests {
     fn contracts_mismatch_is_incompatible() -> Result<(), Box<dyn std::error::Error>> {
         let known_good = release()?;
         let mut state = snapshot();
-        state.contracts_sha256 = Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned());
+        state.contracts_sha256 =
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned());
         assert_eq!(
             evaluate_rollback_candidate(&known_good, &state, "rehearsal-core-v1", false, false),
             CompatibilityDecision::Incompatible

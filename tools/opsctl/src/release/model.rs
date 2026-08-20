@@ -863,8 +863,10 @@ mod tests {
 
     fn signed_fixture() -> Result<String, String> {
         let accepted = sha256_hex(
-            canonical_json(&json!({"authority":"accepted-main","commit_sha":GIT,"repository":REPO}))?
-                .as_bytes(),
+            canonical_json(
+                &json!({"authority":"accepted-main","commit_sha":GIT,"repository":REPO}),
+            )?
+            .as_bytes(),
         );
         let component = |id: &str, path: &str| {
             json!({

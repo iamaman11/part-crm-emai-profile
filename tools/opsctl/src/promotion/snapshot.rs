@@ -271,7 +271,10 @@ fn parse_observed_compatibility(
         ("resolver_protocol", resolver_protocol.as_deref()),
         ("runtime_role", runtime_role.as_deref()),
         ("profile_format", profile_format.as_deref()),
-        ("browser_identity_policy", browser_identity_policy.as_deref()),
+        (
+            "browser_identity_policy",
+            browser_identity_policy.as_deref(),
+        ),
     ] {
         if observed.is_some_and(str::is_empty) {
             return Err(ReleaseModelError::new(format!(
@@ -374,10 +377,7 @@ fn string_set(
     Ok(result)
 }
 
-fn required<'a>(
-    object: &'a Map<String, Value>,
-    key: &str,
-) -> Result<&'a Value, ReleaseModelError> {
+fn required<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a Value, ReleaseModelError> {
     object
         .get(key)
         .ok_or_else(|| ReleaseModelError::new(format!("missing snapshot field: {key}")))
@@ -405,10 +405,7 @@ fn optional_string(
     }
 }
 
-fn optional_u64(
-    object: &Map<String, Value>,
-    key: &str,
-) -> Result<Option<u64>, ReleaseModelError> {
+fn optional_u64(object: &Map<String, Value>, key: &str) -> Result<Option<u64>, ReleaseModelError> {
     match object.get(key) {
         Some(Value::Null) | None => Ok(None),
         Some(value) => value.as_u64().map(Some).ok_or_else(|| {
@@ -421,16 +418,11 @@ fn optional_u64(
 
 fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, ReleaseModelError> {
     required(object, key)?.as_u64().ok_or_else(|| {
-        ReleaseModelError::new(format!(
-            "snapshot field {key} must be unsigned integer"
-        ))
+        ReleaseModelError::new(format!("snapshot field {key} must be unsigned integer"))
     })
 }
 
-fn object<'a>(
-    value: &'a Value,
-    label: &str,
-) -> Result<&'a Map<String, Value>, ReleaseModelError> {
+fn object<'a>(value: &'a Value, label: &str) -> Result<&'a Map<String, Value>, ReleaseModelError> {
     value
         .as_object()
         .ok_or_else(|| ReleaseModelError::new(format!("{label} must be an object")))

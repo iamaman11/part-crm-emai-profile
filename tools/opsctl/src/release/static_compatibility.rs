@@ -90,7 +90,8 @@ fn contracts_match(
             })
         })
         .collect::<Vec<_>>();
-    let canonical = canonical_json(&Value::Array(canonical_entries)).map_err(ReleaseModelError::new)?;
+    let canonical =
+        canonical_json(&Value::Array(canonical_entries)).map_err(ReleaseModelError::new)?;
     Ok(manifest.contracts.sha256 == sha256_hex(canonical.as_bytes()))
 }
 
@@ -103,10 +104,11 @@ fn protocols_match(
         return Ok(false);
     }
     let runtime_lock = resolved_input(resolved, "camouhost_runtime_lock")?;
-    let lock: Value = serde_json::from_slice(&fs::read(&runtime_lock.absolute_path).map_err(|error| {
-        ReleaseModelError::new(format!("cannot read runtime lock: {error}"))
-    })?)
-    .map_err(|error| ReleaseModelError::new(format!("invalid runtime lock JSON: {error}")))?;
+    let lock: Value =
+        serde_json::from_slice(&fs::read(&runtime_lock.absolute_path).map_err(|error| {
+            ReleaseModelError::new(format!("cannot read runtime lock: {error}"))
+        })?)
+        .map_err(|error| ReleaseModelError::new(format!("invalid runtime lock JSON: {error}")))?;
     let expected_ipc = lock["camouhost_ipc_version"].as_u64().ok_or_else(|| {
         ReleaseModelError::new("runtime lock camouhost_ipc_version must be unsigned")
     })?;
@@ -129,10 +131,13 @@ fn schemas_match(
     if manifest.schemas.d1_evolution_authority_sha256 != authority.sha256 {
         return Ok(false);
     }
-    let value: Value = serde_json::from_slice(&fs::read(&authority.absolute_path).map_err(|error| {
-        ReleaseModelError::new(format!("cannot read D1 evolution authority: {error}"))
-    })?)
-    .map_err(|error| ReleaseModelError::new(format!("invalid D1 evolution authority JSON: {error}")))?;
+    let value: Value =
+        serde_json::from_slice(&fs::read(&authority.absolute_path).map_err(|error| {
+            ReleaseModelError::new(format!("cannot read D1 evolution authority: {error}"))
+        })?)
+        .map_err(|error| {
+            ReleaseModelError::new(format!("invalid D1 evolution authority JSON: {error}"))
+        })?;
     let components = value["components"].as_array().ok_or_else(|| {
         ReleaseModelError::new("D1 evolution authority components must be an array")
     })?;
@@ -144,11 +149,17 @@ fn schemas_match(
             .iter()
             .find(|entry| entry["component_id"].as_str() == Some(id))
             .ok_or_else(|| ReleaseModelError::new(format!("D1 authority missing {id}")))?;
-        if component["current_repository_revision"].as_str() != Some(window.target_schema_revision.as_str()) {
+        if component["current_repository_revision"].as_str()
+            != Some(window.target_schema_revision.as_str())
+        {
             return Ok(false);
         }
         let policy = component["compatibility_policy"].clone();
-        let policy_digest = sha256_hex(canonical_json(&policy).map_err(ReleaseModelError::new)?.as_bytes());
+        let policy_digest = sha256_hex(
+            canonical_json(&policy)
+                .map_err(ReleaseModelError::new)?
+                .as_bytes(),
+        );
         if policy_digest != window.compatibility_policy_digest {
             return Ok(false);
         }
@@ -161,7 +172,11 @@ fn schemas_match(
                 .map(|entry| json!({"name":entry["name"],"sha256":entry["sha256"]}))
                 .collect(),
         );
-        let history_digest = sha256_hex(canonical_json(&identity).map_err(ReleaseModelError::new)?.as_bytes());
+        let history_digest = sha256_hex(
+            canonical_json(&identity)
+                .map_err(ReleaseModelError::new)?
+                .as_bytes(),
+        );
         if history_digest != window.migration_history_digest {
             return Ok(false);
         }
@@ -177,18 +192,22 @@ fn runtime_matches(
     if manifest.runtime_compatibility.runtime_lock_sha256 != runtime_lock.sha256 {
         return Ok(false);
     }
-    let lock: Value = serde_json::from_slice(&fs::read(&runtime_lock.absolute_path).map_err(|error| {
-        ReleaseModelError::new(format!("cannot read runtime lock: {error}"))
-    })?)
-    .map_err(|error| ReleaseModelError::new(format!("invalid runtime lock JSON: {error}")))?;
-    Ok(
-        manifest.runtime_compatibility.runtime_role == lock["runtime_role"].as_str().unwrap_or_default()
-            && manifest.runtime_compatibility.profile_format
-                == lock["fingerprint_config_schema"].as_str().unwrap_or_default()
-            && manifest.runtime_compatibility.browser_identity_policy
-                == lock["fingerprint_policy_version"].as_str().unwrap_or_default()
-            && manifest.runtime_compatibility.runtime_role == "real_camoufox",
-    )
+    let lock: Value =
+        serde_json::from_slice(&fs::read(&runtime_lock.absolute_path).map_err(|error| {
+            ReleaseModelError::new(format!("cannot read runtime lock: {error}"))
+        })?)
+        .map_err(|error| ReleaseModelError::new(format!("invalid runtime lock JSON: {error}")))?;
+    Ok(manifest.runtime_compatibility.runtime_role
+        == lock["runtime_role"].as_str().unwrap_or_default()
+        && manifest.runtime_compatibility.profile_format
+            == lock["fingerprint_config_schema"]
+                .as_str()
+                .unwrap_or_default()
+        && manifest.runtime_compatibility.browser_identity_policy
+            == lock["fingerprint_policy_version"]
+                .as_str()
+                .unwrap_or_default()
+        && manifest.runtime_compatibility.runtime_role == "real_camoufox")
 }
 
 fn build_provenance_matches(
@@ -197,8 +216,14 @@ fn build_provenance_matches(
 ) -> Result<bool, ReleaseModelError> {
     let expected = [
         ("cargo_lock", &manifest.build_provenance.cargo_lock_sha256),
-        ("rust_toolchain", &manifest.build_provenance.rust_toolchain_sha256),
-        ("frontend_lock", &manifest.build_provenance.frontend_lock_sha256),
+        (
+            "rust_toolchain",
+            &manifest.build_provenance.rust_toolchain_sha256,
+        ),
+        (
+            "frontend_lock",
+            &manifest.build_provenance.frontend_lock_sha256,
+        ),
         (
             "release_architecture_authority",
             &manifest.build_provenance.release_architecture_sha256,
@@ -245,12 +270,21 @@ mod tests {
     }
 
     #[test]
-    fn contract_inventory_is_owned_by_canonical_topology() -> Result<(), Box<dyn std::error::Error>> {
+    fn contract_inventory_is_owned_by_canonical_topology() -> Result<(), Box<dyn std::error::Error>>
+    {
         let topology = ReleaseInputTopology::load(&root())?;
         let contracts = topology.inputs_for_consumer("release_set.contracts");
         assert_eq!(contracts.len(), 10);
-        assert!(contracts.iter().any(|input| input.release_identity_source == "openapi/v1/openapi.json"));
-        assert!(contracts.iter().all(|input| input.release_identity_source != "openapi/v1/control-plane.yaml"));
+        assert!(
+            contracts
+                .iter()
+                .any(|input| input.release_identity_source == "openapi/v1/openapi.json")
+        );
+        assert!(
+            contracts
+                .iter()
+                .all(|input| input.release_identity_source != "openapi/v1/control-plane.yaml")
+        );
         Ok(())
     }
 }

@@ -100,9 +100,7 @@ impl CompatibilityEvidence {
                     "{name} evidence must come from opsctl.d1.compatibility"
                 )));
             }
-            if name == "windows_profile_bridge"
-                && policy_source != "external.windows.delivery"
-            {
+            if name == "windows_profile_bridge" && policy_source != "external.windows.delivery" {
                 return Err(ReleaseModelError::new(
                     "windows_profile_bridge evidence must come from external.windows.delivery",
                 ));
@@ -234,12 +232,7 @@ pub fn evaluate(
 
 impl CompatibilityResult {
     #[must_use]
-    pub fn machine_json(
-        &self,
-        release_set_id: &str,
-        profile_id: &str,
-        environment: &str,
-    ) -> Value {
+    pub fn machine_json(&self, release_set_id: &str, profile_id: &str, environment: &str) -> Value {
         json!({
             "schema_version": 2,
             "command": "release.compatibility",

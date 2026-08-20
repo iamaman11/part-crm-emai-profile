@@ -42,7 +42,10 @@ fn resolved_input<'a>(
         .ok_or_else(|| io::Error::other(format!("canonical release input missing: {input_id}")))
 }
 
-fn schema_window(authority: &Value, component_id: &str) -> Result<Value, Box<dyn std::error::Error>> {
+fn schema_window(
+    authority: &Value,
+    component_id: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
     let components = authority["components"]
         .as_array()
         .ok_or_else(|| io::Error::other("D1 authority components must be an array"))?;
@@ -54,8 +57,11 @@ fn schema_window(authority: &Value, component_id: &str) -> Result<Value, Box<dyn
         .as_str()
         .ok_or_else(|| io::Error::other(format!("D1 {component_id} target revision missing")))?;
     let policy = component["compatibility_policy"].clone();
-    let compatibility_policy_digest =
-        sha256_hex(canonical_json(&policy).map_err(io::Error::other)?.as_bytes());
+    let compatibility_policy_digest = sha256_hex(
+        canonical_json(&policy)
+            .map_err(io::Error::other)?
+            .as_bytes(),
+    );
     let history = component["historical_epoch"]["ordered_history"]
         .as_array()
         .ok_or_else(|| io::Error::other(format!("D1 {component_id} history missing")))?;
@@ -270,7 +276,12 @@ fn converged_snapshot(
         profile_bridge_protocol_version: Some(release.protocols.profile_bridge_protocol_version),
         runtime_role: Some(release.runtime_compatibility.runtime_role.clone()),
         profile_format: Some(release.runtime_compatibility.profile_format.clone()),
-        browser_identity_policy: Some(release.runtime_compatibility.browser_identity_policy.clone()),
+        browser_identity_policy: Some(
+            release
+                .runtime_compatibility
+                .browser_identity_policy
+                .clone(),
+        ),
     })
 }
 
