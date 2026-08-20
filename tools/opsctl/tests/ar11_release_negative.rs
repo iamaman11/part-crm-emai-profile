@@ -12,7 +12,13 @@ const OTHER_GIT_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-type CanonicalIdentityFields = (Value, Value, Value, Value, Value);
+struct CanonicalIdentityFields {
+    contracts: Value,
+    protocols: Value,
+    schemas: Value,
+    runtime: Value,
+    build: Value,
+}
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -117,7 +123,13 @@ fn canonical_identity_fields(
         "frontend_lock_sha256": resolved_input(&resolved, "frontend_lock")?.sha256,
         "release_architecture_sha256": resolved_input(&resolved, "release_architecture_authority")?.sha256,
     });
-    Ok((contracts, protocols, schemas, runtime, build))
+    Ok(CanonicalIdentityFields {
+        contracts,
+        protocols,
+        schemas,
+        runtime,
+        build,
+    })
 }
 
 fn component(id: &str, path: &str, digest: &str, size: u64) -> Value {
@@ -133,7 +145,7 @@ fn component(id: &str, path: &str, digest: &str, size: u64) -> Value {
 
 fn fixture_value() -> Result<Value, Box<dyn std::error::Error>> {
     let root = repo_root();
-    let (contracts, protocols, schemas, runtime, build) = canonical_identity_fields(&root)?;
+    let identity = canonical_identity_fields(&root)?;
     let accepted = sha256_hex(
         canonical_json(&json!({
             "authority": "accepted-main",
@@ -157,12 +169,12 @@ fn fixture_value() -> Result<Value, Box<dyn std::error::Error>> {
             "secret_resolver": component("resolver-v2", "components/secret-resolver.tar", SHA_B, 11),
             "runtime_bundle": component("runtime-v2", "components/runtime-bundle.tar", SHA_A, 12),
         },
-        "contracts": contracts,
-        "protocols": protocols,
-        "schemas": schemas,
-        "runtime_compatibility": runtime,
+        "contracts": identity.contracts,
+        "protocols": identity.protocols,
+        "schemas": identity.schemas,
+        "runtime_compatibility": identity.runtime,
         "capability_profile_compatibility": ["rehearsal-core-v1"],
-        "build_provenance": build,
+        "build_provenance": identity.build,
         "artifact_inventory": [
             {"path":"components/control-plane.tar","sha256":SHA_A,"size_bytes":10,"kind":"component"},
             {"path":"components/runtime-bundle.tar","sha256":SHA_A,"size_bytes":12,"kind":"component"},
@@ -197,8 +209,13 @@ fn parse(value: &Value) -> Result<ReleaseSetManifest, String> {
     .map_err(|error| error.to_string())
 }
 
-fn require_error(result: Result<ReleaseSetManifest, String>, context: &str) -> Result<String, io::Error> {
-    result.err().ok_or_else(|| io::Error::other(context.to_owned()))
+fn require_error(
+    result: Result<ReleaseSetManifest, String>,
+    context: &str,
+) -> Result<String, io::Error> {
+    result
+        .err()
+        .ok_or_else(|| io::Error::other(context.to_owned()))
 }
 
 #[test]
