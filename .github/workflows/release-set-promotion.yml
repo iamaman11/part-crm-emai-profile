@@ -46,29 +46,67 @@ jobs:
       - name: Validate immutable operator intent before credentials are used
         run: |
           set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
           [[ "$RELEASE_SET_ID" =~ ^release-set-v1-sha256-[0-9a-f]{64}$ ]]
           [[ "$EXPECTED_CURRENT" == "NONE" || "$EXPECTED_CURRENT" =~ ^release-set-v1-sha256-[0-9a-f]{64}$ ]]
           test "${{ inputs.confirmation }}" = "$RELEASE_SET_ID:$EXPECTED_CURRENT"
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
 
-      - name: Resolve durable Release Set identity and exact accepted-main source
+      - name: Prove Release Set source was accepted protected main
         id: target
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_SET_ID" > "$RUNNER_TEMP/target-release.json"
           source_sha="$(jq -r '.target_commitish' "$RUNNER_TEMP/target-release.json")"
           [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
-          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-          test "$source_sha" = "$main_sha"
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout exact source bound by durable Release Set
+          branch_json="$RUNNER_TEMP/protected-main.json"
+          compare_json="$RUNNER_TEMP/accepted-source-compare.json"
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$branch_json"
+          test "$(jq -r '.protected' "$branch_json")" = true
+          main_sha="$(jq -r '.commit.sha' "$branch_json")"
+          [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$main_sha"
+
+          gh api "repos/$GITHUB_REPOSITORY/compare/$source_sha...$main_sha" > "$compare_json"
+          test "$(jq -r '.base_commit.sha' "$compare_json")" = "$source_sha"
+          test "$(jq -r '.head_commit.sha' "$compare_json")" = "$main_sha"
+          test "$(jq -r '.merge_base_commit.sha' "$compare_json")" = "$source_sha"
+          test "$(jq -r '.behind_by' "$compare_json")" = 0
+          status="$(jq -r '.status' "$compare_json")"
+          ahead_by="$(jq -r '.ahead_by' "$compare_json")"
+          if [ "$source_sha" = "$main_sha" ]; then
+            test "$status" = identical
+            test "$ahead_by" = 0
+          else
+            test "$status" = ahead
+            test "$ahead_by" -gt 0
+          fi
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout current protected-main policy authority
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ steps.target.outputs.main_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout exact historical Release Set source as read-only verification input
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ steps.target.outputs.source_sha }}
+          path: target-source
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify current policy and historical source checkout identities
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ steps.target.outputs.main_sha }}"
+          test "$(git -C target-source rev-parse HEAD)" = "${{ steps.target.outputs.source_sha }}"
 
       - name: Set up pinned Node runtime for provider executor only
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
@@ -76,26 +114,41 @@ jobs:
           node-version: '24.19.0'
           package-manager-cache: false
 
-      - name: Download exact durable Release Set assets and verify bytes in Rust
+      - name: Download exact durable Release Set assets and verify bytes in current Rust policy
         run: |
           set -euo pipefail
           asset_root="$RUNNER_TEMP/target-assets"
           release_root="$RUNNER_TEMP/target-release-set"
-          mkdir -p "$asset_root" "$release_root/components"
+          policy_dir="$RUNNER_TEMP/release-policy-input"
+          mkdir -p "$asset_root" "$release_root/components" "$policy_dir"
           gh release download "$RELEASE_SET_ID" --repo "$GITHUB_REPOSITORY" --dir "$asset_root"
           for name in release-set.json control-plane.tar secret-resolver.tar runtime-bundle.tar profile-bridge.zip; do
             test -f "$asset_root/$name"
           done
           cp "$asset_root/release-set.json" "$release_root/release-set.json"
+          cp "$asset_root/release-set.json" "$policy_dir/release-set.json"
           cp "$asset_root/control-plane.tar" "$release_root/components/control-plane.tar"
           cp "$asset_root/secret-resolver.tar" "$release_root/components/secret-resolver.tar"
           cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
           cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
-          test "$(jq -r '.release_set_id' "$release_root/release-set.json")" = "$RELEASE_SET_ID"
+          test "$(jq -r '.release_set_id' "$policy_dir/release-set.json")" = "$RELEASE_SET_ID"
+
+          python scripts/accepted-source-evidence-ar11.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-set-id "$RELEASE_SET_ID" \
+            --source-sha "${{ steps.target.outputs.source_sha }}" \
+            --branch-json "$RUNNER_TEMP/protected-main.json" \
+            --compare-json "$RUNNER_TEMP/accepted-source-compare.json" \
+            --output "$policy_dir/accepted-source-evidence.json"
+
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root . release verify --release-set "$release_root/release-set.json" --artifact-root "$release_root" \
-            | tee "$RUNNER_TEMP/release-verify.json" | jq -e '.decision == "VALID" and .mutation_executed == false' >/dev/null
+            --root "$GITHUB_WORKSPACE/target-source" release verify \
+            --release-set "$policy_dir/release-set.json" --artifact-root "$release_root" \
+            | tee "$RUNNER_TEMP/release-verify.json" \
+            | jq -e '.decision == "VALID" and .source_accepted == true and .mutation_executed == false' >/dev/null
           echo "TARGET_RELEASE_ROOT=$release_root" >> "$GITHUB_ENV"
+          echo "TARGET_RELEASE_MANIFEST=$policy_dir/release-set.json" >> "$GITHUB_ENV"
+          echo "TARGET_SOURCE_ROOT=$GITHUB_WORKSPACE/target-source" >> "$GITHUB_ENV"
 
       - name: Extract only immutable control-plane component and render no-rebuild Core overlay
         run: |
@@ -206,7 +259,7 @@ jobs:
           fi
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release compatibility \
-            --release-set "$TARGET_RELEASE_ROOT/release-set.json" \
+            --release-set "$TARGET_RELEASE_MANIFEST" \
             --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
             "${current_args[@]}" \
@@ -225,7 +278,7 @@ jobs:
           fi
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion plan \
-            --release-set "$TARGET_RELEASE_ROOT/release-set.json" \
+            --release-set "$TARGET_RELEASE_MANIFEST" \
             --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
@@ -233,7 +286,7 @@ jobs:
             "${current_args[@]}" > "$RUNNER_TEMP/promotion-plan.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion preflight \
-            --release-set "$TARGET_RELEASE_ROOT/release-set.json" \
+            --release-set "$TARGET_RELEASE_MANIFEST" \
             --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --snapshot "$RUNNER_TEMP/pre-snapshot.json" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
@@ -295,11 +348,11 @@ jobs:
             --secret-list "$RUNNER_TEMP/post-secret-list.json" \
             --rendered-config "$WRANGLER_CONFIG" \
             --deploy-manifest "$DEPLOY_MANIFEST" \
-            --current-release-set "$TARGET_RELEASE_ROOT/release-set.json" \
+            --current-release-set "$TARGET_RELEASE_MANIFEST" \
             --output "$RUNNER_TEMP/post-snapshot.json"
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . promotion verify \
-            --release-set "$TARGET_RELEASE_ROOT/release-set.json" \
+            --release-set "$TARGET_RELEASE_MANIFEST" \
             --profile "$TARGET_PROFILE" --environment "$TARGET_ENVIRONMENT" \
             --snapshot "$RUNNER_TEMP/post-snapshot.json" \
             --evidence-json "$RUNNER_TEMP/compatibility-evidence.json" \
@@ -324,6 +377,7 @@ jobs:
         with:
           name: release-set-promotion-staging-${{ inputs.release_set_id }}
           path: |
+            ${{ runner.temp }}/release-policy-input/accepted-source-evidence.json
             ${{ runner.temp }}/release-verify.json
             ${{ runner.temp }}/release-compatibility.json
             ${{ runner.temp }}/promotion-plan.json
