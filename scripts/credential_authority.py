@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""Validate current credential authority without owning lifecycle state.
+"""Validate the current credential authority without historical executable ownership.
 
-The current composition root is architecture/credential-authority.json. The
-accepted AR-8B registry remains immutable provenance data. During pre-AR12
-hardening this validator also proves exact semantic/input parity with the still-
-current historical inventory engine before any caller cutover is attempted.
+The current composition root is ``architecture/credential-authority.json``. The
+accepted AR-8B registry is immutable provenance data, while current lifecycle,
+profile-security and operator authorities own forward semantics. This validator
+is repository-read-only: it discovers static credential bindings, rejects
+credential material in Git, and preserves the accepted AR-8D secret-transport
+successor boundary without importing or executing historical inventory code.
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
-import importlib.util
 import json
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,19 +26,38 @@ EXPECTED_REGISTRY = "architecture/credential-authority-ar8b.json"
 EXPECTED_LIFECYCLE = "architecture/credential-lifecycle.json"
 EXPECTED_PROFILE_SECURITY = "architecture/profile-security.json"
 EXPECTED_OPERATOR_CONTRACT = "architecture/operator-contract.json"
-LEGACY_ENGINE = "scripts/generate-architecture-inventory-engine.py"
+EXPECTED_SECRET_TRANSPORT_SUCCESSOR = "architecture/ar8-d-secret-transport-successor.json"
 
 CANONICAL_ENVIRONMENTS = {"rehearsal", "staging", "production"}
 REQUIRED_FIELDS = {
-    "id", "class", "provider_system", "environment_scope", "owner", "consumers",
-    "bindings", "protected_value_authority", "legitimate_mutable_authority",
-    "version_state_source", "automation_class", "externally_issued",
-    "rotation_recovery_policy", "future_cutover",
+    "id",
+    "class",
+    "provider_system",
+    "environment_scope",
+    "owner",
+    "consumers",
+    "bindings",
+    "protected_value_authority",
+    "legitimate_mutable_authority",
+    "version_state_source",
+    "automation_class",
+    "externally_issued",
+    "rotation_recovery_policy",
+    "future_cutover",
 }
 FORBIDDEN_VALUE_FIELDS = {
-    "value", "secret_value", "plaintext", "plaintext_value", "private_key",
-    "password", "token", "token_value", "credential_value", "key_material",
-    "raw_secret", "raw_token",
+    "value",
+    "secret_value",
+    "plaintext",
+    "plaintext_value",
+    "private_key",
+    "password",
+    "token",
+    "token_value",
+    "credential_value",
+    "key_material",
+    "raw_secret",
+    "raw_token",
 }
 MATERIAL_PATTERNS = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
@@ -50,7 +69,10 @@ WORKFLOW_SECRET = re.compile(r"\bsecrets\.([A-Z][A-Z0-9_]*)\b")
 WRANGLER_REQUIRED = re.compile(r'"required"\s*:\s*\[(.*?)\]', re.DOTALL)
 QUOTED_IDENTIFIER = re.compile(r'"([A-Z][A-Z0-9_]*)"')
 RUST_WORKER_SECRET = re.compile(r'\.secret\(\s*"([A-Z][A-Z0-9_]*)"\s*\)')
-CREDENTIAL_NAME = r"([A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PRIVATE_KEY|API_KEY|AUTH_KEY|KEYRING)[A-Z0-9_]*)"
+CREDENTIAL_NAME = (
+    r"([A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PRIVATE_KEY|API_KEY|AUTH_KEY|KEYRING)"
+    r"[A-Z0-9_]*)"
+)
 PY_ENV_PATTERNS = (
     re.compile(rf"os\.environ\[\s*[\"']{CREDENTIAL_NAME}[\"']\s*\]"),
     re.compile(rf"os\.environ\.get\(\s*[\"']{CREDENTIAL_NAME}[\"']"),
@@ -70,6 +92,7 @@ class State:
     composition: dict[str, Any]
     registry: dict[str, Any]
     lifecycle: dict[str, Any]
+    successor: dict[str, Any]
     detected: dict[str, set[str]]
 
 
@@ -93,7 +116,11 @@ def repo_path(value: object, field: str) -> str:
 
 
 def validate_composition(root: Path, value: dict[str, Any]) -> tuple[str, str]:
-    if value.get("schema_version") != 1 or value.get("kind") != "CURRENT_CREDENTIAL_AUTHORITY" or value.get("status") != "current":
+    if (
+        value.get("schema_version") != 1
+        or value.get("kind") != "CURRENT_CREDENTIAL_AUTHORITY"
+        or value.get("status") != "current"
+    ):
         raise ValueError("current credential authority identity/version/status drifted")
     if value.get("canonical_inventory") != "architecture/inventory.json":
         raise ValueError("current credential authority must project through architecture/inventory.json")
@@ -109,7 +136,12 @@ def validate_composition(root: Path, value: dict[str, Any]) -> tuple[str, str]:
     if value.get("registry_source_role") != "IMMUTABLE_ACCEPTED_PROVENANCE_DATASET":
         raise ValueError("accepted credential registry provenance role drifted")
     provenance = value.get("historical_provenance")
-    if not isinstance(provenance, dict) or provenance.get("accepted_ar8b_authority") != EXPECTED_REGISTRY or provenance.get("accepted_ar8b_status") != "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY" or provenance.get("accepted_ar8b_must_not_be_rewritten") is not True:
+    if (
+        not isinstance(provenance, dict)
+        or provenance.get("accepted_ar8b_authority") != EXPECTED_REGISTRY
+        or provenance.get("accepted_ar8b_status") != "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY"
+        or provenance.get("accepted_ar8b_must_not_be_rewritten") is not True
+    ):
         raise ValueError("accepted AR-8B registry provenance contract drifted")
     invariants = value.get("invariants")
     expected_invariants = {
@@ -121,19 +153,28 @@ def validate_composition(root: Path, value: dict[str, Any]) -> tuple[str, str]:
         "production_mutation_from_architecture_tooling": False,
         "operator_secret_readback": False,
     }
-    if not isinstance(invariants, dict) or any(invariants.get(k) != v for k, v in expected_invariants.items()):
+    if not isinstance(invariants, dict) or any(
+        invariants.get(key) != expected for key, expected in expected_invariants.items()
+    ):
         raise ValueError("current credential authority fail-closed invariants drifted")
     profile = read_json(root, EXPECTED_PROFILE_SECURITY)
     operator = read_json(root, EXPECTED_OPERATOR_CONTRACT)
     if profile.get("kind") != "PROFILE_SECURITY_AUTHORITY" or profile.get("status") != "current":
         raise ValueError("current profile-security authority identity/status drifted")
-    if operator.get("kind") != "OPERATOR_CONTRACT_AUTHORITY" or operator.get("mode") != "READ_ONLY_METADATA_ONLY":
+    if (
+        operator.get("kind") != "OPERATOR_CONTRACT_AUTHORITY"
+        or operator.get("mode") != "READ_ONLY_METADATA_ONLY"
+    ):
         raise ValueError("current operator-contract authority identity/mode drifted")
     return EXPECTED_REGISTRY, EXPECTED_LIFECYCLE
 
 
 def validate_lifecycle(value: dict[str, Any]) -> None:
-    if value.get("schema_version") != 1 or value.get("kind") != "CREDENTIAL_LIFECYCLE_AUTHORITY" or value.get("status") != "current":
+    if (
+        value.get("schema_version") != 1
+        or value.get("kind") != "CREDENTIAL_LIFECYCLE_AUTHORITY"
+        or value.get("status") != "current"
+    ):
         raise ValueError("credential lifecycle identity/version/status drifted")
     if value.get("credential_authority") != CURRENT_AUTHORITY:
         raise ValueError("credential lifecycle must point to current credential authority")
@@ -154,14 +195,44 @@ def validate_lifecycle(value: dict[str, Any]) -> None:
         "routine_deployment_is_not_rotation_authority": True,
         "legacy_bundle_transport_is_steady_state_authority": False,
     }
-    if not isinstance(invariants, dict) or any(invariants.get(k) != v for k, v in required.items()):
+    if not isinstance(invariants, dict) or any(
+        invariants.get(key) != expected for key, expected in required.items()
+    ):
         raise ValueError("credential lifecycle global invariants drifted")
     if set(invariants.get("legacy_bundle_bindings", [])) != set(LEGACY_BUNDLE_OWNERS):
         raise ValueError("credential lifecycle legacy bundle set drifted")
 
 
+def validate_secret_transport_successor(value: dict[str, Any]) -> None:
+    if (
+        value.get("schema_version") != 1
+        or value.get("kind") != "POLICY_TRANSITION"
+        or value.get("status") != "candidate"
+        or value.get("tracking_issue") != 361
+        or value.get("parent_issue") != 308
+        or value.get("canonical_inventory") != "architecture/inventory.json"
+    ):
+        raise ValueError("AR-8D secret-transport successor provenance drifted")
+    successor = value.get("successor")
+    if not isinstance(successor, dict):
+        raise ValueError("AR-8D secret-transport successor metadata is missing")
+    if successor.get("superseded_routine_deploy_bindings") != sorted(LEGACY_BUNDLE_OWNERS):
+        raise ValueError("AR-8D successor legacy bundle set drifted")
+    if (
+        successor.get("routine_deploy_secret_value_transport") is not False
+        or successor.get("routine_deploy_secret_mutation") is not False
+        or successor.get("rotation_lifecycle") != "separate_explicit_rotation_authority"
+    ):
+        raise ValueError("AR-8D successor no longer separates deployment from credential rotation")
+
+
 def tracked_files(root: Path) -> list[Path]:
-    result = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=False)
+    result = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
     if result.returncode != 0:
         raise ValueError("git ls-files failed while discovering credential surfaces")
     return [root / raw.decode("utf-8") for raw in result.stdout.split(b"\0") if raw]
@@ -178,30 +249,45 @@ def scan_material(root: Path, files: list[Path]) -> None:
     for path in files:
         relative = path.relative_to(root).as_posix()
         source = text(path)
-        if relative not in SCAN_EXCLUSIONS and source and any(pattern.search(source) for pattern in MATERIAL_PATTERNS):
+        if (
+            relative not in SCAN_EXCLUSIONS
+            and source
+            and any(pattern.search(source) for pattern in MATERIAL_PATTERNS)
+        ):
             raise ValueError(f"high-confidence credential material found in tracked file: {relative}")
 
 
 def discover(root: Path, files: list[Path]) -> dict[str, set[str]]:
     found: dict[str, set[str]] = {}
+
     def add(name: str, path: Path) -> None:
         found.setdefault(name, set()).add(path.relative_to(root).as_posix())
+
     for path in files:
-        relative, source = path.relative_to(root).as_posix(), text(path)
+        relative = path.relative_to(root).as_posix()
+        source = text(path)
         if not source:
             continue
         if relative.startswith(".github/workflows/") and path.suffix in {".yml", ".yaml"}:
-            for name in WORKFLOW_SECRET.findall(source): add(name, path)
+            for name in WORKFLOW_SECRET.findall(source):
+                add(name, path)
         if relative.startswith("deploy/cloudflare/") and path.suffix in {".json", ".jsonc"}:
             for block in WRANGLER_REQUIRED.findall(source):
-                for name in QUOTED_IDENTIFIER.findall(block): add(name, path)
+                for name in QUOTED_IDENTIFIER.findall(block):
+                    add(name, path)
         if relative.startswith(("apps/", "crates/")) and path.suffix == ".rs":
-            for name in RUST_WORKER_SECRET.findall(source): add(name, path)
+            for name in RUST_WORKER_SECRET.findall(source):
+                add(name, path)
         if relative.startswith(("scripts/", "tools/")) and path.suffix == ".py":
             for pattern in PY_ENV_PATTERNS:
-                for name in pattern.findall(source): add(name, path)
-        if relative.startswith(("scripts/", "tools/", ".github/")) and path.suffix in {".js", ".mjs", ".cjs", ".ts"}:
-            for name in JS_ENV_LOOKUP.findall(source): add(name, path)
+                for name in pattern.findall(source):
+                    add(name, path)
+        if (
+            relative.startswith(("scripts/", "tools/", ".github/"))
+            and path.suffix in {".js", ".mjs", ".cjs", ".ts"}
+        ):
+            for name in JS_ENV_LOOKUP.findall(source):
+                add(name, path)
     return found
 
 
@@ -225,21 +311,42 @@ def entries(value: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def validate_registry(value: dict[str, Any], detected: dict[str, set[str]], lifecycle: dict[str, Any]) -> None:
-    if value.get("schema_version") != 1 or value.get("status") != "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY":
+def validate_registry(
+    value: dict[str, Any],
+    detected: dict[str, set[str]],
+    lifecycle: dict[str, Any],
+    successor: dict[str, Any] | None = None,
+) -> None:
+    if (
+        value.get("schema_version") != 1
+        or value.get("status") != "ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY"
+    ):
         raise ValueError("accepted credential registry identity/version drifted")
-    if value.get("parent_issue") != 308 or value.get("implementation_issue") != 309 or value.get("canonical_inventory") != "architecture/inventory.json" or value.get("metadata_only") is not True:
+    if (
+        value.get("parent_issue") != 308
+        or value.get("implementation_issue") != 309
+        or value.get("canonical_inventory") != "architecture/inventory.json"
+        or value.get("metadata_only") is not True
+    ):
         raise ValueError("accepted credential registry provenance drifted")
     if set(value.get("canonical_environments", [])) != CANONICAL_ENVIRONMENTS:
         raise ValueError("credential registry environment vocabulary drifted")
     invariants = value.get("invariants")
-    if not isinstance(invariants, dict) or invariants.get("plaintext_in_git") != "FORBIDDEN" or invariants.get("competing_registry") != "FORBIDDEN" or invariants.get("mutable_authorities_per_concern") != 1 or invariants.get("production_mutation") is not False or invariants.get("ar9_blocked") is not True:
+    if (
+        not isinstance(invariants, dict)
+        or invariants.get("plaintext_in_git") != "FORBIDDEN"
+        or invariants.get("competing_registry") != "FORBIDDEN"
+        or invariants.get("mutable_authorities_per_concern") != 1
+        or invariants.get("production_mutation") is not False
+        or invariants.get("ar9_blocked") is not True
+    ):
         raise ValueError("accepted AR-8B credential invariants drifted")
     for location, key, nested in walk(value):
         if key.lower() in FORBIDDEN_VALUE_FIELDS:
             raise ValueError(f"forbidden value-bearing field {location}.{key}")
         if isinstance(nested, str) and any(pattern.search(nested) for pattern in MATERIAL_PATTERNS):
             raise ValueError(f"high-confidence credential material found at {location}.{key}")
+
     ids: set[str] = set()
     owners: dict[str, str] = {}
     declaration_only: set[str] = set()
@@ -251,49 +358,85 @@ def validate_registry(value: dict[str, Any], detected: dict[str, set[str]], life
         if not isinstance(logical_id, str) or not logical_id or logical_id in ids:
             raise ValueError(f"invalid/duplicate credential authority id: {logical_id!r}")
         ids.add(logical_id)
-        if not isinstance(item.get("externally_issued"), bool) or not isinstance(item.get("consumers"), list):
+        if not isinstance(item.get("externally_issued"), bool) or not isinstance(
+            item.get("consumers"), list
+        ):
             raise ValueError(f"{logical_id}: malformed externally_issued/consumers")
         scope = item.get("environment_scope")
-        if not isinstance(scope, dict): raise ValueError(f"{logical_id}: environment_scope must be an object")
-        kind, environments = scope.get("kind"), scope.get("environments", [])
+        if not isinstance(scope, dict):
+            raise ValueError(f"{logical_id}: environment_scope must be an object")
+        kind = scope.get("kind")
+        environments = scope.get("environments", [])
         if kind not in {"repository", "environment", "tenant_dynamic", "release"}:
             raise ValueError(f"{logical_id}: unknown environment scope")
         if kind == "environment":
-            if not isinstance(environments, list) or not environments or set(environments) - CANONICAL_ENVIRONMENTS:
+            if (
+                not isinstance(environments, list)
+                or not environments
+                or set(environments) - CANONICAL_ENVIRONMENTS
+            ):
                 raise ValueError(f"{logical_id}: invalid canonical environment scope")
         elif environments:
             raise ValueError(f"{logical_id}: environments allowed only for kind=environment")
-        for field in ("class", "provider_system", "owner", "protected_value_authority", "legitimate_mutable_authority", "version_state_source", "automation_class", "rotation_recovery_policy", "future_cutover"):
+        for field in (
+            "class",
+            "provider_system",
+            "owner",
+            "protected_value_authority",
+            "legitimate_mutable_authority",
+            "version_state_source",
+            "automation_class",
+            "rotation_recovery_policy",
+            "future_cutover",
+        ):
             if not isinstance(item.get(field), str) or not item[field].strip():
                 raise ValueError(f"{logical_id}: {field} must be non-empty")
         bindings = item.get("bindings")
-        if not isinstance(bindings, list): raise ValueError(f"{logical_id}: bindings must be a list")
+        if not isinstance(bindings, list):
+            raise ValueError(f"{logical_id}: bindings must be a list")
         seen: set[tuple[str, str, str]] = set()
         for binding in bindings:
-            if not isinstance(binding, dict): raise ValueError(f"{logical_id}: binding must be an object")
-            name, surface, consumer = binding.get("name"), binding.get("surface"), str(binding.get("consumer", ""))
+            if not isinstance(binding, dict):
+                raise ValueError(f"{logical_id}: binding must be an object")
+            name = binding.get("name")
+            surface = binding.get("surface")
+            consumer = str(binding.get("consumer", ""))
             if not isinstance(name, str) or not name or not isinstance(surface, str) or not surface:
                 raise ValueError(f"{logical_id}: binding name/surface must be non-empty")
             identity = (surface, name, consumer)
-            if identity in seen: raise ValueError(f"{logical_id}: duplicate binding tuple {identity!r}")
+            if identity in seen:
+                raise ValueError(f"{logical_id}: duplicate binding tuple {identity!r}")
             seen.add(identity)
             if surface in ENVIRONMENT_BOUND_SURFACES:
                 binding_envs = binding.get("environments")
-                if kind != "environment" or not isinstance(binding_envs, list) or set(binding_envs) != set(environments):
+                if (
+                    kind != "environment"
+                    or not isinstance(binding_envs, list)
+                    or set(binding_envs) != set(environments)
+                ):
                     raise ValueError(f"{logical_id}/{name}: binding/environment scope mismatch")
             elif binding.get("environments"):
                 raise ValueError(f"{logical_id}/{name}: non-environment binding declares environments")
             previous = owners.get(name)
             if previous is not None and previous != logical_id:
-                raise ValueError(f"binding {name} belongs to multiple authorities: {previous}, {logical_id}")
+                raise ValueError(
+                    f"binding {name} belongs to multiple authorities: {previous}, {logical_id}"
+                )
             owners[name] = logical_id
-            if binding.get("declaration_only") is True: declaration_only.add(name)
+            if binding.get("declaration_only") is True:
+                declaration_only.add(name)
+
     validate_lifecycle(lifecycle)
+    if successor is not None:
+        validate_secret_transport_successor(successor)
     for name, owner in LEGACY_BUNDLE_OWNERS.items():
-        if owners.get(name) != owner: raise ValueError(f"legacy bundle binding {name} lost canonical owner {owner}")
+        if owners.get(name) != owner:
+            raise ValueError(f"legacy bundle binding {name} lost canonical owner {owner}")
     missing = sorted(set(detected) - set(owners))
     if missing:
-        raise ValueError("tracked credential bindings missing canonical authority: " + ", ".join(missing))
+        raise ValueError(
+            "tracked credential bindings missing canonical authority: " + ", ".join(missing)
+        )
     stale = sorted(set(owners) - set(detected) - declaration_only - set(LEGACY_BUNDLE_OWNERS))
     if stale:
         raise ValueError("authority has stale non-declaration bindings: " + ", ".join(stale))
@@ -305,68 +448,145 @@ def validate_repository(root: Path = ROOT) -> State:
     registry_path, lifecycle_path = validate_composition(root, composition)
     lifecycle = read_json(root, lifecycle_path)
     validate_lifecycle(lifecycle)
+    successor = read_json(root, EXPECTED_SECRET_TRANSPORT_SUCCESSOR)
+    validate_secret_transport_successor(successor)
     registry = read_json(root, registry_path)
     files = tracked_files(root)
     scan_material(root, files)
     detected = discover(root, files)
-    validate_registry(registry, detected, lifecycle)
-    return State(composition, registry, lifecycle, detected)
+    validate_registry(registry, detected, lifecycle, successor)
+    return State(composition, registry, lifecycle, successor, detected)
 
 
-def load_legacy(root: Path) -> ModuleType:
-    path = root / LEGACY_ENGINE
-    spec = importlib.util.spec_from_file_location("credential_parity_legacy_inventory_engine", path)
-    if spec is None or spec.loader is None: raise ValueError("cannot load historical inventory engine")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def normalized(value: dict[str, set[str]]) -> dict[str, tuple[str, ...]]:
-    return {name: tuple(sorted(paths)) for name, paths in sorted(value.items())}
-
-
-def prove_legacy_parity(root: Path, state: State) -> ModuleType:
-    legacy = load_legacy(root)
-    legacy_registry, legacy_detected = legacy.validate_credential_authority_source()
-    if legacy_registry != state.registry:
-        raise ValueError("neutral validator and historical engine resolve different registry payloads")
-    if normalized(legacy_detected) != normalized(state.detected):
-        raise ValueError("neutral validator and historical engine discover different static bindings")
-    return legacy
-
-
-def negative_self_test(state: State) -> None:
-    def reject(label: str, registry: dict[str, Any], detected: dict[str, set[str]] | None = None, lifecycle: dict[str, Any] | None = None) -> None:
-        try: validate_registry(registry, state.detected if detected is None else detected, state.lifecycle if lifecycle is None else lifecycle)
-        except ValueError: return
+def negative_self_test(state: State, root: Path = ROOT) -> None:
+    def reject(
+        label: str,
+        registry: dict[str, Any],
+        detected: dict[str, set[str]] | None = None,
+        lifecycle: dict[str, Any] | None = None,
+        successor: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            validate_registry(
+                registry,
+                state.detected if detected is None else detected,
+                state.lifecycle if lifecycle is None else lifecycle,
+                state.successor if successor is None else successor,
+            )
+        except ValueError:
+            return
         raise AssertionError(f"negative fixture unexpectedly passed: {label}")
-    bad_root = copy.deepcopy(state.composition); bad_root["status"] = "historical"
-    try: validate_composition(ROOT, bad_root)
-    except ValueError: pass
-    else: raise AssertionError("current-authority status fixture unexpectedly passed")
-    bad_lifecycle = copy.deepcopy(state.lifecycle); bad_lifecycle["routine_release_secret_transport"] = True
-    try: validate_lifecycle(bad_lifecycle)
-    except ValueError: pass
-    else: raise AssertionError("routine-release secret transport fixture unexpectedly passed")
-    plaintext = copy.deepcopy(state.registry); plaintext["credentials"][0]["value"] = "forbidden"; reject("value field", plaintext)
-    material = copy.deepcopy(state.registry); material["credentials"][0]["rotation_recovery_policy"] = "github_pat_" + "A" * 20; reject("secret material", material)
-    env_index = next((i for i, item in enumerate(state.registry["credentials"]) if item.get("environment_scope", {}).get("kind") == "environment"), None)
-    if env_index is None: raise AssertionError("self-test requires environment credential")
-    wrong_env = copy.deepcopy(state.registry); wrong_env["credentials"][env_index]["environment_scope"]["environments"] = ["prod"]; reject("unknown environment", wrong_env)
-    missing = copy.deepcopy(state.registry); missing["credentials"][0].pop("rotation_recovery_policy"); reject("required field", missing)
-    duplicate = copy.deepcopy(state.registry); duplicate["credentials"].append(copy.deepcopy(duplicate["credentials"][0])); reject("duplicate authority", duplicate)
-    sources = [i for i, item in enumerate(state.registry["credentials"]) if item.get("bindings")]
-    if len(sources) < 2: raise AssertionError("self-test requires two bound credentials")
-    dual = copy.deepcopy(state.registry); dual["credentials"][sources[1]]["bindings"].append(copy.deepcopy(dual["credentials"][sources[0]]["bindings"][0])); reject("dual binding owner", dual)
-    binding_index = next((i for i, binding in enumerate(state.registry["credentials"][env_index]["bindings"]) if binding.get("surface") in ENVIRONMENT_BOUND_SURFACES), None)
-    if binding_index is None: raise AssertionError("self-test requires environment-bound binding")
-    scope = copy.deepcopy(state.registry); scope["credentials"][env_index]["bindings"][binding_index]["environments"] = ["production"]; reject("binding scope", scope)
-    unknown = copy.deepcopy(state.detected); unknown["POST_AR11_UNKNOWN_TRACKED_SECRET"] = {"tests/synthetic.yml"}; reject("unknown static binding", state.registry, unknown)
+
+    bad_root = copy.deepcopy(state.composition)
+    bad_root["status"] = "historical"
+    try:
+        validate_composition(root, bad_root)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("current-authority status fixture unexpectedly passed")
+
+    bad_lifecycle = copy.deepcopy(state.lifecycle)
+    bad_lifecycle["routine_release_secret_transport"] = True
+    try:
+        validate_lifecycle(bad_lifecycle)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("routine-release secret transport fixture unexpectedly passed")
+
+    bad_successor = copy.deepcopy(state.successor)
+    bad_successor["successor"]["routine_deploy_secret_mutation"] = True
+    try:
+        validate_secret_transport_successor(bad_successor)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("routine-deploy secret mutation successor fixture unexpectedly passed")
+
+    wrong_successor_issue = copy.deepcopy(state.successor)
+    wrong_successor_issue["tracking_issue"] = 999
+    try:
+        validate_secret_transport_successor(wrong_successor_issue)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("AR-8D successor provenance fixture unexpectedly passed")
+
+    plaintext = copy.deepcopy(state.registry)
+    plaintext["credentials"][0]["value"] = "forbidden"
+    reject("value field", plaintext)
+
+    material = copy.deepcopy(state.registry)
+    material["credentials"][0]["rotation_recovery_policy"] = "github_pat_" + "A" * 20
+    reject("secret material", material)
+
+    env_index = next(
+        (
+            index
+            for index, item in enumerate(state.registry["credentials"])
+            if item.get("environment_scope", {}).get("kind") == "environment"
+        ),
+        None,
+    )
+    if env_index is None:
+        raise AssertionError("self-test requires environment credential")
+
+    wrong_env = copy.deepcopy(state.registry)
+    wrong_env["credentials"][env_index]["environment_scope"]["environments"] = ["prod"]
+    reject("unknown environment", wrong_env)
+
+    missing = copy.deepcopy(state.registry)
+    missing["credentials"][0].pop("rotation_recovery_policy")
+    reject("required field", missing)
+
+    duplicate = copy.deepcopy(state.registry)
+    duplicate["credentials"].append(copy.deepcopy(duplicate["credentials"][0]))
+    reject("duplicate authority", duplicate)
+
+    sources = [
+        index for index, item in enumerate(state.registry["credentials"]) if item.get("bindings")
+    ]
+    if len(sources) < 2:
+        raise AssertionError("self-test requires two bound credentials")
+    dual = copy.deepcopy(state.registry)
+    dual["credentials"][sources[1]]["bindings"].append(
+        copy.deepcopy(dual["credentials"][sources[0]]["bindings"][0])
+    )
+    reject("dual binding owner", dual)
+
+    binding_index = next(
+        (
+            index
+            for index, binding in enumerate(state.registry["credentials"][env_index]["bindings"])
+            if binding.get("surface") in ENVIRONMENT_BOUND_SURFACES
+        ),
+        None,
+    )
+    if binding_index is None:
+        raise AssertionError("self-test requires environment-bound binding")
+    scope = copy.deepcopy(state.registry)
+    scope["credentials"][env_index]["bindings"][binding_index]["environments"] = ["production"]
+    reject("binding scope", scope)
+
+    unknown = copy.deepcopy(state.detected)
+    unknown["POST_AR11_UNKNOWN_TRACKED_SECRET"] = {"tests/synthetic.yml"}
+    reject("unknown static binding", state.registry, unknown)
+
     live = next((name for name in sorted(state.detected) if name not in LEGACY_BUNDLE_OWNERS), None)
-    if live is None: raise AssertionError("self-test requires non-legacy binding")
-    stale = copy.deepcopy(state.detected); stale.pop(live); reject("stale registry binding", state.registry, stale)
-    legacy = copy.deepcopy(state.lifecycle); legacy["global_invariants"]["legacy_bundle_bindings"] = []; reject("legacy bundle lifecycle", state.registry, lifecycle=legacy)
+    if live is None:
+        raise AssertionError("self-test requires non-legacy binding")
+    stale = copy.deepcopy(state.detected)
+    stale.pop(live)
+    reject("stale registry binding", state.registry, stale)
+
+    legacy = copy.deepcopy(state.lifecycle)
+    legacy["global_invariants"]["legacy_bundle_bindings"] = []
+    reject("legacy bundle lifecycle", state.registry, lifecycle=legacy)
+
+    successor_bindings = copy.deepcopy(state.successor)
+    successor_bindings["successor"]["superseded_routine_deploy_bindings"] = []
+    reject("legacy bundle successor set", state.registry, successor=successor_bindings)
 
 
 def main() -> int:
@@ -375,19 +595,27 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
-    if root != ROOT.resolve(): raise ValueError("legacy parity proof requires repository root")
     state = validate_repository(root)
-    legacy = prove_legacy_parity(root, state)
     if args.self_test:
-        negative_self_test(state)
-        legacy.credential_negative_self_test(state.registry, state.detected)
+        negative_self_test(state, root)
     suffix = " and fail-closed negative fixtures" if args.self_test else ""
-    print(f"Current credential authority validates {len(state.detected)} tracked static bindings{suffix}; legacy parity proven; no lifecycle ownership or mutation authority added.")
+    print(
+        f"Current credential authority validates {len(state.detected)} tracked static bindings{suffix}; "
+        "AR-8D successor semantics preserved; historical engine execution not required."
+    )
     return 0
 
 
 if __name__ == "__main__":
-    try: raise SystemExit(main())
-    except (AssertionError, KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    try:
+        raise SystemExit(main())
+    except (
+        AssertionError,
+        KeyError,
+        TypeError,
+        ValueError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as error:
         print(f"credential authority verification failed: {error}")
         raise SystemExit(1) from error
