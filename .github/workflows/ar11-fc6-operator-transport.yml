@@ -1,34 +1,40 @@
 name: AR-11 FC-6 Operator Transport
 
-run-name: AR11 operator transport ${{ github.event.workflow_run.id }}
+run-name: AR11 trusted-main ceremony ${{ github.sha }}
 
 on:
-  workflow_run:
-    workflows: [Release Architecture Gate]
-    types: [completed]
+  push:
+    branches:
+      - main
+    paths:
+      - docs/evidence/ar11-fc6-operator-transaction.json
 
 permissions:
   contents: read
 
+concurrency:
+  group: ar11-fc6-trusted-main-operator
+  cancel-in-progress: false
+
 jobs:
   operator-entrypoint:
-    name: Bind accepted data-only request to canonical dispatch
-    if: github.event.workflow_run.event == 'pull_request' && startsWith(github.event.workflow_run.head_branch, 'codex/ar11-fc6-request-')
+    name: Bind protected-main ceremony transaction to canonical dispatches
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     permissions:
       contents: read
       actions: write
       issues: write
-      pull-requests: read
     env:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout exact protected-main operator adapter
+      - name: Checkout exact trusted protected-main transaction
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Validate immutable request and dispatch canonical promotion authority
+      - name: Validate protected-main transaction and orchestrate canonical FC-6 ceremony
         run: node .github/scripts/ar11-fc6-operator.mjs
