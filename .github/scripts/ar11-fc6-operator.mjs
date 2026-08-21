@@ -129,6 +129,17 @@ function validatePullFiles(files) {
   return file.sha;
 }
 
+function findBoundRun(runs, expectedTitle) {
+  if (!Array.isArray(runs)) fail('workflow run list response is malformed');
+  return runs.find((run) =>
+    run?.event === 'workflow_dispatch'
+    && run?.head_branch === 'main'
+    && run?.display_title === expectedTitle
+    && Number.isInteger(run?.id)
+    && run.id > 0
+  ) ?? null;
+}
+
 async function github(path, { method = 'GET', body } = {}) {
   const token = process.env.GITHUB_TOKEN;
   if (!token) fail('ephemeral github.token is unavailable');
@@ -188,7 +199,13 @@ async function listDispatchRuns() {
 }
 
 async function dispatch(request) {
-  const before = new Set((await listDispatchRuns()).map((run) => run.id));
+  const expectedTitle = `AR11 ${request.operation} ${request.requestId}`;
+  const initialRuns = await listDispatchRuns();
+  const existing = findBoundRun(initialRuns, expectedTitle);
+  if (existing) {
+    return { run: existing, reused: true };
+  }
+  const before = new Set(initialRuns.map((run) => run.id));
   await github(`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`, {
     method: 'POST',
     body: {
@@ -204,11 +221,10 @@ async function dispatch(request) {
     },
   });
 
-  const expectedTitle = `AR11 ${request.operation} ${request.requestId}`;
   for (let attempt = 0; attempt < 30; attempt += 1) {
     const runs = await listDispatchRuns();
-    const match = runs.find((run) => !before.has(run.id) && run.event === 'workflow_dispatch' && run.head_branch === 'main' && run.display_title === expectedTitle);
-    if (match) return match;
+    const match = findBoundRun(runs.filter((run) => !before.has(run.id)), expectedTitle);
+    if (match) return { run: match, reused: false };
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   fail(`dispatched canonical workflow but could not bind the resulting run to ${expectedTitle}`);
@@ -309,6 +325,13 @@ function selfTest() {
     'exactly one data-only file',
   );
 
+  const boundRuns = [
+    { id: 101, event: 'workflow_dispatch', head_branch: 'main', display_title: 'AR11 promote pr-77' },
+    { id: 102, event: 'pull_request', head_branch: 'main', display_title: 'AR11 promote pr-77' },
+  ];
+  if (findBoundRun(boundRuns, 'AR11 promote pr-77')?.id !== 101) fail('idempotent request-to-run binding self-test failed');
+  if (findBoundRun(boundRuns, 'AR11 promote pr-78') !== null) fail('unrelated request unexpectedly reused an existing canonical run');
+
   console.log('AR-11 FC-6 bounded comment/workflow-run operator positive and negative self-tests passed.');
 }
 
@@ -324,9 +347,9 @@ async function main() {
   if (parsed === null) return;
   const request = parsed.request ?? await resolveWorkflowRunRequest(parsed.workflowRun);
   if (!request) fail('operator request could not be resolved');
-  const run = await dispatch(request);
-  await commentRun(parsed.responseIssue, request, run);
-  console.log(JSON.stringify({ operation: request.operation, request_id: request.requestId, run_id: run.id, run_url: run.html_url }));
+  const { run, reused } = await dispatch(request);
+  if (!reused) await commentRun(parsed.responseIssue, request, run);
+  console.log(JSON.stringify({ operation: request.operation, request_id: request.requestId, run_id: run.id, run_url: run.html_url, reused_existing_run: reused }));
 }
 
 main().catch((error) => {
