@@ -1692,7 +1692,7 @@
     {
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
       "status": "EVIDENCE",
-      "scope": "ar4c_outbound_mail_composition_accepted"
+      "scope": "ar4c_outbound_mail_composition_extraction_accepted"
     },
     {
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
@@ -1889,7 +1889,7 @@
       },
       "operator_contract": {
         "path": "architecture/operator-contract.json",
-        "sha256": "d7d5af813fa31bef6b63c48b077dc41ca0418bc201e3502f92b2d00e8f586f7c"
+        "sha256": "cc37dfda784bf263d39715fea47dc7182a64e7392cf1eadb8c686ad8530c66c5"
       },
       "profile_security": {
         "path": "architecture/profile-security.json",
