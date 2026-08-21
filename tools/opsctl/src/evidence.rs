@@ -663,10 +663,9 @@ impl HostedEvidenceEnvelopeV1 {
 
     fn to_value(&self) -> Value {
         let mut value = self.context.to_value();
-        value
-            .as_object_mut()
-            .expect("context serialization is always an object")
-            .insert("payload".to_owned(), self.payload.to_value());
+        if let Value::Object(root) = &mut value {
+            root.insert("payload".to_owned(), self.payload.to_value());
+        }
         value
     }
 
