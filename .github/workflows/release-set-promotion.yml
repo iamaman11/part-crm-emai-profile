@@ -395,7 +395,7 @@ jobs:
             --arg decision "$decision" \
             --arg preflight_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-preflight.json" | cut -d' ' -f1)" \
             --arg plan_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-plan.json" | cut -d' ' -f1)" \
-            '{schema_version:1,release_set_id:$release_set_id,expected_current:$expected_current,promotion_id:$promotion_id,decision:$decision,preflight_sha256256:$preflight_sha256,plan_sha256:$plan_sha256}' \
+            '{schema_version:1,release_set_id:$release_set_id,expected_current:$expected_current,promotion_id:$promotion_id,decision:$decision,preflight_sha256:$preflight_sha256,plan_sha256:$plan_sha256}' \
             > "$RUNNER_TEMP/mutation-fence.json"
           fence_sha="$(sha256sum "$RUNNER_TEMP/mutation-fence.json" | cut -d' ' -f1)"
           echo "decision=$decision" >> "$GITHUB_OUTPUT"
