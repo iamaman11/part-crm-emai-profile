@@ -81,7 +81,6 @@ jobs:
           --head-ref "$PR_HEAD_REF"
           --base-ref "$PR_BASE_REF"
           --base "$PR_BASE_SHA"
-          --base "$PR_BASE_SHA"
           --head "$PR_HEAD_SHA"
 
       - name: Prove architecture acceptance drift fails closed
