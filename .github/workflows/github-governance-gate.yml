@@ -81,6 +81,7 @@ jobs:
           --head-ref "$PR_HEAD_REF"
           --base-ref "$PR_BASE_REF"
           --base "$PR_BASE_SHA"
+          --base "$PR_BASE_SHA"
           --head "$PR_HEAD_SHA"
 
       - name: Prove architecture acceptance drift fails closed
@@ -205,6 +206,27 @@ jobs:
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
           AR8C_AUDIT_ENVIRONMENT: staging
         run: node .github/scripts/credential-lifecycle.mjs cloudflare-live
+
+      - name: Verify AR-11 observe token binding and active identity metadata
+        env:
+          CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+          CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
+          umask 077
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/ar11-observe-binding-manifest.json"
+          verify_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-observe-binding-verify.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+          test "$verify_code" = 200
+          jq -e '.success == true and .result.status == "active" and (.result.id | type == "string")' "$RUNNER_TEMP/ar11-observe-binding-verify.json" >/dev/null
+          account_id="$(jq -r '.control_plane.account_id // .account_id' "$RUNNER_TEMP/ar11-observe-binding-manifest.json")"
+          [[ "$account_id" =~ ^[0-9a-f]{32}$ ]]
+          token_id="$(jq -r '.result.id' "$RUNNER_TEMP/ar11-observe-binding-verify.json")"
+          echo "AR11_OBSERVE_ACTIVE token_id=$token_id account_id=$account_id status=active"
 
       - name: Prove AR-11 staging observe credential READY or fail closed
         env:
