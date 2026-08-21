@@ -3,59 +3,72 @@
 **Document status:** SUBORDINATE_REMEDIATION_PLAN  
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Accepted AR-11 design:** `docs/ARCHITECTURE_REBASELINE_V3_AR11.md`  
-**Baseline for this plan:** protected `main@586e6ea1be9f72b4f3a59c732714a8c12216985e`  
-**Scope:** close residual functional gaps in the already accepted AR-11 release-set / promotion architecture  
+**Live execution tracker:** issue #399  
+**Current FC-6 implementation/hardening tracker:** issue #421  
+**Historical baseline for this plan:** protected `main@586e6ea1be9f72b4f3a59c732714a8c12216985e`  
+**Last sequencing re-baseline (informational only):** protected `main@7596f22ed606cdc7afbf75209bc3925ef80c9e07` on 2026-08-21  
+**Scope:** close residual functional gaps in the already accepted AR-11 release-set / promotion architecture and its required operational tooling before AR-12 implementation  
 **AR-12 implementation:** FORBIDDEN inside this plan  
-**Production mutation / enablement:** FORBIDDEN  
+**Production mutation / enablement:** FORBIDDEN except the already-authorized non-production staging mutation explicitly owned by FC-6 rehearsal  
 **Historical AR-11 acceptance:** PRESERVED; this plan does not rewrite or revoke accepted history
 
-This plan exists because a fresh functional audit of the accepted and subsequently hardened AR-11 implementation found that the architecture core is strong, but several edge conditions in the release trust, historical promotion and rollback contracts are not yet as complete as AR-11's own Definition of Done requires.
+This document is the single subordinate execution plan for Post-AR-11 Functional Closure. It is not a second lifecycle authority, not a new AR slice and not a parallel roadmap. The canonical AR order remains owned by the existing architecture program and Git-derived acceptance mechanism.
 
-The objective is not to redesign AR-11. The objective is to make the existing design mechanically true end-to-end:
-
-```text
-accepted main source
--> immutable component artifacts
--> content-addressed Release Set
--> exact Capability Profile
--> complete compatibility decision
--> deterministic promotion plan
--> least-privilege provider execution
--> observed post-deploy verification
--> reusable historical known-good Release Set
--> compatibility-proven rollback
-```
-
-The completion standard is intentionally strict:
+If a stale SHA, issue comment, PR description or this document conflicts with live protected `main` and canonical machine authorities, use this precedence:
 
 ```text
-P0 = 0
-P1 = 0
-P2 = 0 for in-scope AR-11 correctness/security/operability
-all AR-11 mandatory positive and negative proofs mapped and green
-no production mutation
-no AR-12 implementation
+live protected main
++ canonical architecture/domain authorities
++ current GitHub hosted evidence
++ issue #399 live execution tracker
++ this subordinate plan
++ historical progress notes
 ```
+
+The project remains one modular application with one protected `main`, one architecture hierarchy and one data/schema compatibility history. Functionality may exist in source before it is production-enabled:
+
+```text
+source_present != production_enabled
+```
+
+The purpose of the current update is to make the continuation path explicit and remove two infrastructure/tooling defects before FC-6 continues:
+
+```text
+PF-1  Canonical Architecture Inventory cutover to opsctl
+  ->
+PF-2  Universal Hosted Operational Evidence primitive
+  ->
+re-baseline #399 / #421
+  ->
+resume FC-6 real staging same-bits / rollback rehearsal
+  ->
+FC-7 final whole-AR-11 functional audit
+```
+
+PF-1 and PF-2 are **Functional Closure Prerequisites**, not AR-11A/AR-11.5/AR-12 work. They do not change the binding AR sequence and do not authorize production.
 
 ---
 
-## 1. Non-negotiable invariants
+## 1. Non-negotiable architecture and production invariants
 
-The following accepted architecture remains unchanged throughout this work:
+The following accepted architecture remains binding throughout all work in this plan:
 
 ```text
 one protected main
 one architecture hierarchy
 one application/source history
 one data/schema compatibility history
+one canonical capability/release hierarchy
 source_present != production_enabled
 build once -> promote same bits
 GitHub Actions/Environments = orchestration + approvals + credential boundary
-opsctl = local typed policy/decision engine
+opsctl = local typed project-specific policy / validation / projection engine
 provider executors = actual provider mutation authority
+Git = intended source/release truth
+provider state = deployed/runtime truth
 ```
 
-And the production state remains fail-closed:
+Production remains fail-closed:
 
 ```text
 architecture_complete = false
@@ -67,567 +80,643 @@ production_mutation = false
 Do not:
 
 - rebuild AR-11 from scratch;
-- create a second release registry, second capability registry or hidden `opsctl` state backend;
-- add `promotion execute` to `opsctl`;
-- give `opsctl` network/provider/deployment/secret mutation authority;
+- create a second architecture inventory, release registry, capability registry, lifecycle state machine, evidence database or hidden `opsctl` state backend;
+- create a parallel inventory generator during PF-1;
+- implement acceptance-tag parsing independently in Rust/Python during PF-1;
+- add `promotion execute` or provider mutation authority to `opsctl`;
+- give `opsctl` GitHub/Cloudflare/provider network authority merely to make local validation convenient;
 - rebuild application artifacts during promotion;
 - introduce Terraform or a generic IaC replacement;
 - enable Production Core or mailbox capabilities;
-- absorb AR-12 fresh-environment provisioning, AR-14 disaster recovery, AR-15 Windows updater/signing or AR-17 authorization work;
-- rewrite accepted AR-11 provenance to make the historical acceptance event look different.
+- start AR-12 Fresh Rehearsal Environment work;
+- absorb AR-14 recovery, AR-15 Windows updater/signing or AR-17 production authorization into these prerequisites;
+- rewrite accepted AR-11 provenance;
+- weaken a gate, convert UNKNOWN/UNPROVEN into PASS, or suppress a validator to obtain green CI.
+
+Issue #375 is closed/completed historical hardening. It is not a current execution blocker or lifecycle authority. Any stale text that still says `#375 OPEN` is governance/projection drift and must be corrected only through the existing authority/projection mechanism; it must never be interpreted as permission to start AR-12.
 
 ---
 
-## 2. Current functional baseline
+## 2. Current functional baseline — preserve, do not reimplement blindly
 
-The following AR-11 outcomes are considered accepted foundations and must be preserved rather than reimplemented:
+The live tracker #399 and accepted Git history are the evidence ledger for completed Functional Closure work. At the last sequencing re-baseline:
 
-1. Canonical activation units and Capability Profiles exist and are projected under the existing architecture hierarchy.
-2. `production-core-v1` / `rehearsal-core-v1` enable Core while mailbox administration/jobs/outbound mail remain disabled.
-3. Backend execution is capability-gated before business/provider side effects, including HTTP routes, queue consumers and scheduled execution.
-4. Frontend capability exposure is derived from authenticated backend projection; UI flags are not production authority.
-5. Deployment Closure is profile-aware; Core does not require disabled Mail operational resources.
-6. Release Set is content-addressed and artifacts are exact-byte verified.
-7. Durable immutable publication uses GitHub Release assets; same Release Set ID cannot be overwritten with different bytes.
-8. Promotion consumes immutable Release Set assets and does not rebuild application bits.
-9. `opsctl release inspect|verify|compatibility` and `opsctl promotion plan|preflight|verify` exist as local non-mutating Rust policy surfaces.
-10. Stale expected-current fencing and same-environment workflow concurrency exist.
-11. `NO_CHANGE` is first-class.
-12. Production promotion remains impossible during the architecture program.
-13. Legacy D3 operational Python promotion authority has been retired after cutover.
-14. The accepted-main `release-set.json` verification parity defect discovered after the original merge was fixed by #382.
-15. Post-AR-11 lifecycle/governance cleanup and exact `opsctl` command authority parity were completed through #396.
+- AR-11 remains historically accepted;
+- AR-12 is the Git-derived current slice but implementation remains NOT STARTED for this plan;
+- PR #422 repository-side FC-6 hardening is merged;
+- PR #424 hosted Actions registry reconciliation is merged;
+- live active GitHub Actions registry was directly observed as `active=23 canonical=23` after #424;
+- current accepted-main durable Release Set publication is directly proven;
+- #399 remains OPEN because FC-6 live staging ceremony and FC-7 final audit are not complete;
+- #421 remains the current FC-6 operational hardening/readiness tracker;
+- PR #428 contains a substantial Hosted Operational Evidence candidate but must not be merged before PF-1;
+- remaining FC-6 hosted credential readiness still requires the correctly scoped staging observe credential/evidence; existing deploy/bootstrap credentials must not be widened or reused as a shortcut.
 
-No implementation unit below may weaken these invariants to make a new test pass.
+Existing AR-11 Functional Closure outcomes remain foundations unless a fresh live audit proves a defect, including:
 
----
+1. historical accepted-source semantics rather than `source_sha == current main HEAD`;
+2. content-addressed immutable Release Sets and exact durable artifact verification;
+3. native `opsctl release inspect|verify|compatibility`;
+4. native `opsctl promotion plan|preflight|verify`;
+5. full rollback compatibility vocabulary `COMPATIBLE | INCOMPATIBLE | UNKNOWN`, with UNKNOWN fail-closed where evidence is required;
+6. stale expected-current fencing and same-environment serialization;
+7. `NO_CHANGE` as first-class convergence;
+8. separation of read/observe preflight from protected mutation authority;
+9. backend capability enforcement independent of frontend visibility;
+10. retired legacy D3 Python operational promotion authority;
+11. permanent workflow semantic validation and canonical secret-consumer/environment checks;
+12. terminal machine-readable FC-6 failure audit semantics;
+13. production promotion remains impossible during this architecture program.
 
-## 3. Residual gaps that this plan must close
-
-### FCG-1 — Historical immutable Release Sets are not first-class promotable targets
-
-Current promotion resolves the Release Set source SHA and requires it to equal the **current** `main` HEAD. That is stronger than source acceptance and breaks the intended model after `main` advances.
-
-Required semantic correction:
-
-```text
-WRONG:
-release.source_sha == current_main_head
-
-RIGHT:
-release.source_sha is a proven accepted commit in protected main history
-AND the immutable Release Set is the exact durable artifact published for that source
-```
-
-A previously accepted Release Set must remain eligible for staging promotion or application rollback after newer commits enter `main`, provided compatibility and policy gates pass.
-
-### FCG-2 — Accepted-source evidence is structurally bound but not fully authoritative
-
-The current Release Set binds repository + commit SHA into an `accepted_main_evidence_sha256`, but a self-consistent digest is not by itself proof that the SHA actually entered protected `main`.
-
-The trust chain must distinguish:
-
-```text
-identity integrity != acceptance authority
-```
-
-AR-11 closure must provide one canonical, reproducible proof that a Release Set source belongs to accepted protected-main history without giving `opsctl` network or provider mutation authority.
-
-### FCG-3 — `release verify` does not yet close every declared provenance identity
-
-The final verifier must mechanically validate, not merely carry, all release-critical identities promised by AR-11, including:
-
-- source acceptance evidence;
-- component manifest identity;
-- component source SHA agreement;
-- component release identity;
-- artifact digest + size + exact bounded inventory;
-- contract identity;
-- D1 schema authority identity;
-- runtime lock / runtime identity;
-- protocol identities;
-- Cargo lock identity;
-- Rust toolchain identity;
-- frontend lock identity;
-- release architecture identity;
-- profile compatibility identity;
-- any manifest sidecar required to verify a component later from durable publication alone.
-
-No field may exist in the Release Set as decorative provenance that the canonical verifier cannot actually validate or explicitly classify as externally evaluated evidence.
-
-### FCG-4 — Known-good rollback compatibility is too shallow
-
-The current preflight can establish that a known-good Release Set exists and supports a profile, but that is not enough to prove that the old application bits are compatible with **current** schema/protocol/runtime state.
-
-AR-11 requires application rollback to be allowed only when the observed state lies inside the known-good Release Set's compatibility window.
-
-Required result vocabulary:
-
-```text
-COMPATIBLE
-INCOMPATIBLE
-UNKNOWN
-```
-
-`UNKNOWN` blocks rollback readiness.
-
-### FCG-5 — Promotion credential exposure can be made materially stronger
-
-Current staging promotion exposes deploy-capable Cloudflare credentials at the job boundary before the native preflight decision, because provider observation and deployment share one job/credential scope.
-
-AR-11 already says preflight should occur before provider credentials are exposed **as far as workflow structure allows**. A 10/10 implementation should separate read-only observation authority from mutation authority and expose deployment credentials only after immutable intent + release verification + compatibility + preflight evidence are proven.
-
-### FCG-6 — Mandatory AR-11 negative matrix needs explicit 1:1 behavioural traceability
-
-Static source-marker checks are useful but are not a substitute for every behavioural negative requirement in AR-11.
-
-Every mandatory negative case must map to one permanent test/gate with an unambiguous test identifier and expected fail-closed result.
+Do not repeat accepted work because an old branch or old plan snapshot looks unfinished. Re-read current code and current accepted evidence first.
 
 ---
 
-## 4. Implementation sequence
+## 3. Why the prerequisite order is binding
 
-The units below are proof boundaries, not a quota of one PR per heading. Merge boundaries follow semantic cohesion:
+The required order is:
 
 ```text
-one invariant
-+ one independently reviewable proof obligation
-+ safe intermediate main state
-+ independent rollback value
-= one bounded merge
+PF-1 opsctl Canonical Architecture Inventory Cutover
+        ↓
+PF-2 Hosted Operational Evidence
+        ↓
+FC-6 continuation
 ```
 
-If two adjacent changes cannot be safely or meaningfully verified independently, keep them in one bounded PR. Do not create micro-PRs for file-count aesthetics.
+This order is a dependency, not a stylistic preference.
 
-### FC-0 — Re-baseline and defect registration
+Hosted Evidence adds or changes `opsctl` surfaces, `architecture/operator-contract.json`, GitHub Actions registrations and canonical authority digests. Those changes necessarily affect `architecture/inventory.json`. Building PF-2 first on the historical Python inventory path causes duplicated work and has already exposed recurring stale-inventory failures.
 
-Before implementation:
+PF-1 does not depend on Hosted Evidence. It depends only on existing canonical repository/domain authorities, stable repository structure, the already accepted lifecycle authority and deterministic serialization. Therefore PF-1 must establish the final inventory compiler/validator boundary first, and PF-2 must consume that boundary.
 
-1. Re-read protected `main`, open PRs, branch protection and applicable permanent workflows.
-2. Re-run the AR-11 functional audit against current code, not this plan's snapshot.
-3. Create one tracking issue for the functional closure work and link this document.
-4. Record the six FCG items above with severity and exact owning code/workflow paths.
-5. Confirm AR-12 remains NOT STARTED and production invariants remain blocked.
-6. Confirm no newer accepted change already closed a gap; remove obsolete work rather than reimplementing it.
-
-Exit criterion: one live defect map, no stale-base implementation.
+No implementation may reverse this order without new defect evidence and an explicit update to this plan.
 
 ---
 
-### FC-1 — Accepted Source Authority + historical Release Set eligibility
+## 4. PF-1 — Canonical Architecture Inventory cutover to `opsctl`
 
-**Goal:** prove `was accepted main`, not `is current main`.
+### 4.1 Goal
 
-Required implementation:
+Make `opsctl` the **single current implementation authority** for deterministic construction, rendering, checking, inspection and bounded local writing of `architecture/inventory.json`.
 
-1. Define one typed/versioned `AcceptedSourceEvidence` contract owned by the existing release architecture.
-2. Evidence must bind at minimum:
-   - repository identity;
-   - exact 40-hex source commit;
-   - protected-main lineage/acceptance proof;
-   - evidence schema/version;
-   - collection authority;
-   - deterministic evidence digest.
-3. Keep `opsctl` offline/read-only. Accepted-source proof may be supplied as saved machine evidence collected by GitHub orchestration, or evaluated from repository Git metadata through a non-network Rust implementation. Do **not** shell out to `git`, Python, Node, GitHub CLI or provider clients from `opsctl`.
-4. Promotion must reject:
-   - source SHA absent from protected-main history;
-   - release tag target differing from Release Set source SHA;
-   - source evidence for another repository/SHA;
-   - malformed/unknown evidence;
-   - mutable branch/ref substituted for immutable Release Set identity.
-5. Replace the current `source_sha == current_main_head` requirement with protected-main historical acceptance/reachability proof.
-6. A valid old Release Set must remain promotable after `main` advances.
-7. Current-head Release Sets must continue to work unchanged.
-8. Durable GitHub Release remains the artifact publication authority; accepted-source evidence must not become a second release registry.
-
-Permanent proofs:
+The desired end state is:
 
 ```text
-current accepted main Release Set -> PASS
-previous accepted-main Release Set after main advances -> PASS
-commit not in protected main history -> REJECT SOURCE_NOT_ACCEPTED
-release tag/source mismatch -> REJECT RELEASE_IDENTITY_MISMATCH
-wrong repository -> REJECT
-unknown/malformed acceptance evidence -> REJECT
+canonical repository/domain authorities
++ stable repository structure
++ validated canonical lifecycle-derivation result
+                ↓
+typed Rust architecture inventory model
+                ↓
+one deterministic compiler
+                ↓
+architecture/inventory.json
 ```
 
-Exit criterion: historical immutable Release Sets are first-class policy inputs without weakening source trust.
+The forbidden end state is:
+
+```text
+Rust generator
++ Python generator
++ historical engine constants
++ monkey patches
++ manual inventory edits
+```
+
+`architecture/inventory.json` remains a tracked generated canonical projection under the existing hierarchy. It does not become lifecycle acceptance authority.
+
+### 4.2 Clean layering
+
+PF-1 must preserve inward dependency direction and keep the implementation understandable to a new developer.
+
+Recommended logical layers inside the existing `tools/opsctl` crate:
+
+```text
+architecture/model
+    typed schemas and invariants only
+
+architecture/authorities
+    typed loaders/validators for canonical repository authorities
+
+architecture/inventory/build
+    pure composition from validated inputs -> ArchitectureInventory
+
+architecture/inventory/render
+    canonical deterministic serialization
+
+architecture/inventory/check
+    tracked-byte/semantic comparison + precise drift diagnostics
+
+architecture/inventory/write
+    bounded atomic GENERATED_PROJECTION_WRITE to one fixed target
+
+cli / lib composition root
+    argument parsing, input wiring and presentation only
+```
+
+Physical file names may differ if a smaller module layout is clearer. Do not create micro-modules for aesthetics. The rule is one responsibility per layer and no CLI/parser ownership of domain semantics.
+
+### 4.3 CLI contract
+
+Target active surface:
+
+```text
+opsctl architecture inventory render
+opsctl architecture inventory check
+opsctl architecture inventory write
+opsctl architecture inventory inspect
+```
+
+The existing `opsctl inventory` surface may remain only as a compatibility/read-only alias to the tracked canonical inventory or to `architecture inventory inspect`, provided there is exactly one semantic implementation and operator-contract parity is explicit.
+
+Unknown actions/arguments fail closed.
+
+### 4.4 Lifecycle authority boundary
+
+PF-1 must **not** create a Rust acceptance-tag parser or a second accepted/current derivation algorithm.
+
+Current lifecycle authority remains:
+
+```text
+architecture/architecture-acceptance-policy.json
++ architecture/architecture-program-sequence.json
++ immutable Git acceptance metadata
+-> .github/scripts/architecture-acceptance.mjs derive
+```
+
+`opsctl architecture inventory ...` consumes a versioned, validated lifecycle-derivation input produced by that authority. CI/orchestration may materialize the canonical derivation result as a temporary JSON input before invoking `opsctl`; `opsctl` validates shape, static successor consistency and fail-closed invariants but does not independently enumerate/interpret acceptance tags.
+
+Do not hide a permanent `node`, Python, `git`, `gh` or provider subprocess inside `opsctl` merely to make the command appear self-contained.
+
+A future migration of lifecycle derivation to Rust would be a separate explicit authority cutover with parity proof; it is not PF-1.
+
+### 4.5 Typed authority inputs
+
+Known security/release/lifecycle-critical authorities must use typed Rust structures rather than an unbounded `serde_json::Value` domain model where schemas are known.
+
+At minimum preserve/validate the current semantics for:
+
+- credential authority;
+- credential lifecycle;
+- operator contract;
+- profile security;
+- static architecture program sequence and lifecycle projection policy;
+- AR-9 D1 evolution authority;
+- AR-10 runtime cutover authority;
+- AR-11 release architecture authority;
+- stable workspace/application/runtime/generated-contract inventory inputs currently owned by the historical Python inventory path;
+- documentation classifications required by current inventory semantics.
+
+Generic JSON values are allowed only at genuine extension boundaries and must not bypass version/kind validation.
+
+### 4.6 One canonical serializer/digest primitive
+
+Do not add another JSON canonicalization implementation.
+
+PF-1 must reuse or factor the existing Rust canonical JSON/SHA-256 primitive already used by release/evidence policy so the project converges on one deterministic byte model:
+
+```text
+release metadata
+architecture inventory
+hosted evidence
+future typed generated projections
+        ↓
+one canonical JSON / digest primitive
+```
+
+Repeated render with identical inputs must be byte-identical.
+
+### 4.7 Effect model
+
+Do not falsely label a file-writing command as `side_effects=NONE`.
+
+Extend the existing operator effect taxonomy narrowly:
+
+```text
+network_authority = false
+provider_mutation = false
+database_mutation = false
+deployment_mutation = false
+secret_readback = false
+customer_state_mutation = false
+production_mutation = false
+
+repository_workspace_effect:
+  NONE                       # render/check/inspect
+  GENERATED_PROJECTION_WRITE # inventory write only
+```
+
+`write` may modify exactly the repository-owned canonical target:
+
+```text
+architecture/inventory.json
+```
+
+No arbitrary output path, Git commit/push, GitHub API, provider API or other repository file mutation authority is granted by this command.
+
+### 4.8 Deterministic and atomic write
+
+`write` must follow a fail-closed transaction:
+
+```text
+resolve canonical repo root
+-> validate all inputs
+-> build typed inventory in memory
+-> validate complete output
+-> canonical serialize
+-> write sibling temporary file
+-> flush/safely replace target atomically where supported
+-> read back
+-> parse/validate again
+-> prove read-back bytes == canonical in-memory bytes
+```
+
+Failure before activation must leave the previous tracked inventory intact.
+
+### 4.9 `check` diagnostics
+
+A stale inventory failure must explain the drift, not merely say “run --write”.
+
+`check` should report stable machine-readable or developer-readable differences including, where practical:
+
+- JSON path / field;
+- tracked value;
+- expected value;
+- owning source authority or projection family;
+- decision `CURRENT | DRIFTED | INVALID`;
+- no mutation executed.
+
+Noncanonical bytes must fail where canonical byte identity is part of the contract.
+
+### 4.10 Historical Python inventory retirement
+
+PF-1 is a real cutover, not a permanent dual implementation.
+
+Before retiring any Python file, apply:
+
+```text
+map unique invariants
+-> port required current semantics
+-> positive + negative parity tests
+-> switch every current caller/CI gate
+-> prove zero current callers
+-> prove zero unique current invariants
+-> update Python/historical executable classification
+-> retire/delete predecessor where classified DEAD
+```
+
+The current active path based on `scripts/generate-architecture-inventory.py` + `scripts/generate-architecture-inventory-engine.py` must cease to be current executable authority after PF-1 acceptance. `_architecture_inventory_core.py` or other helpers are removed only if caller/invariant proof classifies them DEAD; do not delete by naming convention.
+
+No CI job may continue invoking the retired current generator after cutover.
+
+### 4.11 PF-1 required positive proofs
+
+At minimum prove:
+
+```text
+current accepted repository -> render succeeds
+render twice -> byte-identical
+write -> tracked file equals render bytes
+write twice -> byte-identical/idempotent
+check immediately after write -> CURRENT
+existing legitimate stable/domain projection coverage -> preserved
+Linux -> pass
+Windows -> pass
+```
+
+### 4.12 PF-1 required negative proofs
+
+At minimum reject:
+
+```text
+missing required authority
+malformed JSON
+unknown authority kind/version
+wrong authority ownership/status
+invalid source/document path
+unknown/duplicate classification where uniqueness is required
+lifecycle accepted/current successor mismatch
+architecture_complete=true before owning stage
+production_core_gate=AUTHORIZED before owning stage
+production_ready=true
+production_mutation=true
+one-byte tracked inventory drift
+semantically changed tracked inventory
+noncanonical inventory bytes where canonicality is required
+attempt to write any path other than architecture/inventory.json
+retired Python generator still reachable from current CI/caller graph
+second lifecycle derivation implementation
+```
+
+### 4.13 PF-1 Definition of Done
+
+PF-1 is accepted only when one exact candidate proves all of the following:
+
+- one current inventory compiler/validator implementation exists: Rust `opsctl`;
+- no current Python inventory generator remains callable by CI/developer canonical commands;
+- every unique current invariant from the predecessor is either ported with proof or explicitly proven obsolete;
+- tracked `architecture/inventory.json` is generated by `opsctl` and passes native `check`;
+- canonical serialization is deterministic and shared, not duplicated;
+- `write` authority is bounded to `GENERATED_PROJECTION_WRITE` for one fixed path;
+- lifecycle derivation remains singular and external to inventory compilation;
+- operator-contract ↔ CLI parity is exact;
+- all change-applicable permanent workflows and all protected required contexts are green on the same exact head;
+- `behind_by=0`, blocking reviews=0, unresolved threads=0;
+- guarded merge is bound to the exact green head;
+- accepted-main reread proves intended tree/authority state;
+- production fail-closed invariants remain unchanged.
+
+Only accepted PF-1 `main` may become the base for PF-2.
 
 ---
 
-### FC-2 — Native Release Verifier provenance closure
+## 5. PF-2 — Universal Hosted Operational Evidence primitive
 
-**Goal:** `opsctl release verify` becomes the complete local verifier for every release-critical identity that can be proven locally.
+### 5.1 Goal
 
-#### FC-2A — Component manifest durability
+Provide one reusable evidence architecture for hosted/provider observations needed by AR-11 Functional Closure and later operational slices without creating per-feature evidence frameworks.
 
-Every `component_manifest_sha256` must refer to bytes that remain available in the durable Release Set.
-
-For each component choose exactly one canonical pattern:
+Canonical boundary:
 
 ```text
-A. manifest embedded inside the immutable component archive
-OR
-B. immutable manifest sidecar included in Release Set artifact_inventory
+GitHub Actions / official provider tools
+-> secret-free raw observation
+-> opsctl typed policy / validation
+-> HostedEvidenceEnvelopeV1
+-> immutable GitHub Actions Artifact
+-> GitHub Artifact Attestation / custom predicate
 ```
 
-Do not retain orphan manifest hashes whose source bytes disappear after build transport expires.
+GitHub issue comments and tracker text may reference evidence but are not the evidence store, signing authority or policy authority.
 
-At minimum close this for:
-
-- control-plane/frontend component;
-- mailbox secret resolver component;
-- runtime bundle component;
-- Windows Profile Bridge component.
-
-If a sidecar is used, it is content-addressed/bounded exactly like every other Release Set artifact.
-
-#### FC-2B — Typed provenance validation
-
-Extend the Rust Release Set model away from unvalidated generic JSON for security-critical identities where a typed schema is practical.
-
-`release verify` must validate:
-
-1. Release Set content address.
-2. exact source repository/SHA and accepted-source evidence contract;
-3. every component source SHA == Release Set source SHA;
-4. every component artifact SHA-256 + exact size;
-5. exact artifact inventory, no extra/missing file;
-6. symlink/path traversal/absolute path/duplicate path rejection;
-7. component manifest bytes -> declared `component_manifest_sha256`;
-8. component manifest release ID -> outer component release ID;
-9. component manifest source SHA -> outer/source SHA;
-10. contracts digest against canonical release input topology;
-11. D1 evolution authority digest against canonical input;
-12. runtime lock digest and runtime role;
-13. Camouhost IPC / profile format / browser identity policy;
-14. Cargo lock digest;
-15. Rust toolchain digest;
-16. frontend lock digest;
-17. release architecture digest;
-18. capability-profile compatibility IDs exist in canonical authority;
-19. unknown release-critical fields fail closed according to schema policy.
-
-No network access, provider credentials, child process or deployment authority is allowed.
-
-#### FC-2C — Machine output
-
-`release verify` output must expose typed result details without leaking payloads:
-
-```json
-{
-  "schema_version": 1,
-  "command": "release.verify",
-  "decision": "VALID",
-  "release_set_id": "...",
-  "source_accepted": true,
-  "verified_components": [],
-  "verified_provenance_dimensions": [],
-  "verified_files": 0,
-  "verified_bytes": 0,
-  "mutation_executed": false
-}
-```
-
-Errors must use stable typed families; at minimum:
+### 5.2 Ownership split
 
 ```text
-SOURCE_NOT_ACCEPTED
-RELEASE_IDENTITY_MISMATCH
-COMPONENT_MANIFEST_MISMATCH
-ARTIFACT_DIGEST_MISMATCH
-ARTIFACT_INVENTORY_MISMATCH
-SCHEMA_IDENTITY_MISMATCH
-PROTOCOL_INCOMPATIBLE
-RUNTIME_INCOMPATIBLE
-PROVENANCE_IDENTITY_MISMATCH
-PROFILE_NOT_AUTHORIZED
+GitHub Actions / Environments
+  orchestration, approvals, OIDC, credential exposure, immutable run identity
+
+official provider tooling
+  live observation and explicitly authorized provider execution
+
+opsctl
+  typed evidence schemas/versions
+  canonicalization/digests
+  secret/material rejection
+  environment/effect policy
+  deterministic inspect/validate/verify
+  NO provider/GitHub network authority
+
+Actions Artifact
+  immutable transport subject
+
+GitHub Artifact Attestation
+  signing/provenance binding
 ```
 
-Exit criterion: no release-critical identity is merely decorative metadata.
+Do not build a second evidence DB, queue, scheduler, daemon, signer, PKI, report service or feature-specific reporter workflow family.
+
+### 5.3 Initial command surface
+
+Target active surface from the existing #428 implementation, re-evaluated after PF-1:
+
+```text
+opsctl evidence build
+opsctl evidence validate
+opsctl evidence inspect
+opsctl evidence verify
+```
+
+All surfaces remain offline and non-provider-mutating.
+
+### 5.4 Initial typed payload families
+
+Preserve a small versioned sum type rather than arbitrary evidence bags. The existing candidate families are:
+
+```text
+credential_readiness v1
+hosted_resource_state v1
+release_set_transition v1
+```
+
+Future evidence kinds must normally extend the Rust typed variant set and reuse the same envelope/publication path rather than create another evidence subsystem.
+
+### 5.5 Rebase/candidate rule for PR #428
+
+PR #428 is preserved as implementation work but is **not merge-authorized before PF-1**.
+
+After PF-1 acceptance:
+
+1. re-read #428 against new accepted `main`;
+2. rebase/reimplement only the still-valid Hosted Evidence changes;
+3. remove manual/stale `architecture/inventory.json` maintenance from the candidate;
+4. update operator-contract and regenerate/check inventory exclusively through PF-1 `opsctl` inventory commands;
+5. retain no compatibility bridge to the retired Python inventory generator;
+6. re-run security/workflow semantics review and complete missing tests;
+7. treat all old #428 CI evidence as invalid after the head/base changes.
+
+### 5.6 Hosted workflow requirements
+
+The reusable publisher must:
+
+- accept no provider secret inheritance;
+- download exactly one expected evidence subject;
+- reconstruct independent expected run/workflow/source/environment/effect context from trusted metadata/explicit caller inputs;
+- invoke `opsctl evidence verify` before signing;
+- attest exact verified evidence bytes with a pinned official GitHub attestation action;
+- use minimal `contents: read`, `id-token: write`, `attestations: write` permissions only where required;
+- perform no provider mutation;
+- perform no production enablement;
+- remain one reusable publication primitive rather than a manual workflow family.
+
+Reusable-workflow GitHub context semantics (`github.sha`, `github.ref`, workflow identity, run id/attempt and caller vs called workflow identity) must be explicitly validated against current GitHub behavior before final acceptance. Do not assume caller/callee identity semantics from memory.
+
+### 5.7 Evidence security rules
+
+Evidence objects must reject or exclude:
+
+- secret/token/password/private-key values;
+- secret-bearing unknown field names;
+- customer/mail/browser/profile payloads;
+- fingerprint raw material;
+- arbitrary provider mutation claims inconsistent with environment/effect policy;
+- unknown schema/kind/payload versions;
+- unexpected top-level fields where schema is closed;
+- malformed or oversized inputs beyond bounded policy;
+- context mismatch between evidence and independently reconstructed expected context.
+
+`opsctl evidence verify` proves local schema/canonical/context policy. GitHub Artifact Attestation proves subject-byte provenance/tampering resistance. Do not claim that local `opsctl verify` alone can detect a semantically valid payload change when no independent expected payload digest exists.
+
+### 5.8 PF-2 required negative matrix
+
+At minimum prove:
+
+```text
+unknown evidence kind -> reject
+unknown payload version -> reject
+unknown top-level field -> reject
+recursive secret-bearing field -> reject
+obvious secret material -> reject
+malformed input -> reject
+oversized input -> reject
+noncanonical evidence bytes -> verify reject
+wrong repository -> reject
+wrong source SHA/ref -> reject
+wrong workflow identity -> reject
+wrong run id/attempt -> reject
+wrong observation job -> reject
+wrong environment -> reject
+wrong effect flags -> reject
+production effect-policy violation -> reject
+invalid release transition decision/effect combination -> reject
+wrong CLI action options -> reject
+unsupported/duplicate action arguments -> reject
+artifact with extra files -> publisher reject
+attestation subject differs from verified bytes -> official attestation verification fails
+```
+
+### 5.9 PF-2 Definition of Done
+
+PF-2 is accepted only when:
+
+- one reusable Hosted Operational Evidence envelope/publication architecture exists;
+- all supported payloads are typed/versioned/fail-closed;
+- canonical JSON/digest logic is shared with existing Rust primitives;
+- `opsctl` remains offline/no-provider/no-secret/no-production mutation authority;
+- publisher has no provider credentials;
+- provider observation and signing authority are separated;
+- reusable workflow context binding has direct proof;
+- negative matrix above is permanent;
+- official attestation verification is documented and demonstrated for a non-secret evidence subject where hosted proof is required;
+- operator-contract/CLI/inventory parity is produced through PF-1 mechanisms;
+- no second evidence framework/backend/PKI/signer is introduced;
+- all applicable permanent workflows + protected contexts are green on one exact head;
+- guarded merge and accepted-main reread succeed;
+- production remains fail-closed and AR-12 remains not started.
+
+Only accepted PF-2 `main` may resume FC-6 execution.
 
 ---
 
-### FC-3 — Full rollback compatibility evaluator
+## 6. Resume gate — re-baseline #399 and #421 after PF-2
 
-**Goal:** known-good means *usable now*, not merely *previously valid*.
+Before any further FC-6 ceremony step:
 
-#### FC-3A — DeploymentSnapshot v2
+1. re-read exact protected `main` after PF-2;
+2. re-read open PRs/issues and close/supersede stale candidates rather than merging them opportunistically;
+3. re-read #399 and #421 live state;
+4. rediscover current protected required contexts and applicable permanent workflows; do not reuse historical counts as timeless constants;
+5. confirm live Actions registry == canonical registry;
+6. confirm current accepted-main durable Release Set publication remains observable through the new Hosted Evidence path where applicable;
+7. confirm staging observe credential readiness through canonical credential authority and Hosted Evidence;
+8. if `CLOUDFLARE_OBSERVE_API_TOKEN` or its issuance/policy metadata is still absent, request the required externally issued credential/metadata explicitly; do not fabricate it and do not widen/reuse the deploy credential;
+9. confirm no AR-12 implementation has entered source;
+10. confirm production fail-closed invariants.
 
-Extend the metadata-only observed-state snapshot only where required to evaluate rollback. It must remain free of secret values/customer data.
-
-Add explicit observed identities as needed for:
-
-- Catalog D1 ledger/schema state;
-- Resolver D1 ledger/schema state when closure requires it;
-- deployed component release IDs;
-- active Capability Profile ID/digest;
-- public/API contract identity where observable;
-- resolver protocol identity where applicable;
-- Bridge protocol identity where applicable;
-- Camouhost IPC identity;
-- runtime bundle/runtime role;
-- profile format;
-- browser identity policy;
-- Windows delivery compatibility metadata when environment/policy requires it.
-
-Unknown/unobservable required state is represented as `UNKNOWN`, never guessed.
-
-#### FC-3B — Target and rollback evaluation use the same compatibility authority
-
-Introduce one Rust-authoritative evaluation path that can answer:
-
-```text
-Can target Release Set T run against observed state S?
-Can known-good Release Set K run against observed state S after rollback?
-```
-
-Do not implement rollback compatibility as a profile-membership shortcut.
-
-For known-good K evaluate at minimum:
-
-- profile compatibility;
-- Catalog schema compatibility window;
-- Resolver schema compatibility window when relevant;
-- API/contract compatibility;
-- resolver protocol compatibility;
-- Bridge protocol compatibility;
-- Camouhost IPC compatibility;
-- runtime bundle compatibility;
-- profile format compatibility;
-- browser identity policy compatibility;
-- Windows delivery compatibility metadata when required.
-
-Result:
-
-```text
-COMPATIBLE -> rollback candidate valid
-INCOMPATIBLE -> hard blocker ROLLBACK_INCOMPATIBLE
-UNKNOWN -> hard blocker ROLLBACK_COMPATIBILITY_UNKNOWN
-```
-
-#### FC-3C — Preflight semantics
-
-When replacing an existing deployment:
-
-1. known-good Release Set is mandatory unless policy explicitly proves no rollback artifact is applicable;
-2. known-good itself must pass `release verify`;
-3. known-good source must satisfy Accepted Source Authority;
-4. known-good rollback compatibility against current observed state must be `COMPATIBLE`;
-5. stale expected-current fence remains mandatory;
-6. production remains blocked.
-
-Fresh environment retains the existing correct rule: no fictitious previous Release Set is required.
-
-Permanent proofs:
-
-```text
-A -> B with A compatible with current state -> READY
-A -> B with A schema-incompatible after B-required contract state -> BLOCK ROLLBACK_INCOMPATIBLE
-A -> B with rollback protocol unknown -> BLOCK ROLLBACK_COMPATIBILITY_UNKNOWN
-fresh environment with no prior release -> rollback artifact N/A, not fabricated
-stale A->B plan after state moved -> PROMOTION_STALE
-```
-
-Exit criterion: rollback readiness is a compatibility proof, not existence metadata.
+Only then update #399/#421 execution status and resume FC-6.
 
 ---
 
-### FC-4 — Promotion workflow trust and least-privilege boundary
+## 7. FC-6 — Real staging same-bits / rollback rehearsal
 
-**Goal:** provider mutation credentials are exposed only after the strongest practical pre-mutation proof boundary.
+FC-6 remains the existing AR-11 Functional Closure staging proof. It is not AR-12 fresh-environment provisioning.
 
-Recommended workflow split:
+Use already supported staging resources and immutable accepted Release Sets only.
 
-```text
-Job 1: resolve immutable intent
-  no provider mutation credential
-  -> resolve Release Set
-  -> prove accepted source
-  -> download durable assets
-  -> release verify
-
-Job 2: observe provider state
-  least-privilege READ/OBSERVE credential only
-  -> collect DeploymentSnapshot
-  -> collect D1/readiness metadata
-  -> release compatibility
-  -> promotion plan
-  -> promotion preflight
-  -> publish signed/digested metadata-only preflight evidence
-
-Job 3: protected staging executor
-  GitHub Environment approval/credential boundary
-  deploy-capable credential becomes available here
-  -> re-download/re-verify immutable target or verify exact carried digests
-  -> re-check expected-current fence immediately before mutation
-  -> require preflight evidence == exact release/profile/environment/snapshot identity
-  -> provider mutation from exact Release Set bits
-
-Job 4: post-deploy verification
-  -> re-observe state
-  -> promotion verify == VERIFIED
-  -> smoke exact staging origin
-```
-
-Rules:
-
-1. Observation token and deploy token are different credential concerns where provider capabilities permit it.
-2. Deploy token is not available to source-resolution, artifact-build or compatibility jobs.
-3. No application build command may appear in promotion.
-4. Provider executor still does not become policy authority.
-5. Exact `release_set_id`, profile, environment, expected-current identity and preflight evidence digest must be carried across the environment boundary.
-6. If provider state changes between preflight and mutation, re-check/fence blocks execution.
-7. `NO_CHANGE` must skip mutation and still allow verification/evidence convergence.
-8. Production environment/job remains absent or mechanically unreachable before its future owner.
-
-Exit criterion: policy proof and mutation authority are structurally separated, not only procedurally ordered in one credential-rich job.
-
----
-
-### FC-5 — Complete AR-11 behavioural certification matrix
-
-Create one machine-readable or mechanically checked traceability table mapping every original AR-11 mandatory negative requirement to a permanent test/gate.
-
-Minimum matrix (preserve original semantics):
-
-1. artifact from another SHA -> reject;
-2. changed component digest -> reject;
-3. Release Set digest mismatch -> reject;
-4. missing artifact -> reject;
-5. duplicate artifact/component -> reject;
-6. unknown component -> reject;
-7. contract digest mismatch -> reject;
-8. Catalog schema incompatible -> reject;
-9. Resolver schema incompatible -> reject;
-10. Bridge protocol incompatible -> reject;
-11. runtime-bundle incompatible -> reject;
-12. capability dependency missing -> reject;
-13. disabled HTTP capability exposed -> failure;
-14. disabled capability can enqueue -> failure;
-15. disabled scheduled side effect -> failure;
-16. disabled outbound mail can send/replay -> failure;
-17. manipulated UI cannot bypass backend gate;
-18. unknown Capability Profile -> reject;
-19. profile digest mismatch -> reject;
-20. profile not allowed in environment -> reject;
-21. production promotion before authorization -> reject;
-22. release from non-accepted source -> reject;
-23. rebuild-on-promotion path -> CI reject;
-24. staging/candidate artifact mismatch -> reject;
-25. stale promotion plan -> reject;
-26. parallel same-environment promotion -> serialize/reject;
-27. D1 state unknown -> reject;
-28. missing/incompatible rollback known-good -> blocker;
-29. retired Python D3 operational authority becomes callable -> CI fail;
-30. `opsctl` gains network/provider/secret mutation authority -> CI fail.
-
-Add closure-specific regression cases:
-
-31. old accepted Release Set after newer `main` -> allowed if compatible;
-32. old Release Set not in protected-main ancestry -> reject;
-33. component manifest sidecar/internal bytes mismatch -> reject;
-34. known-good supports profile but runtime/protocol incompatible -> reject;
-35. known-good rollback required evidence UNKNOWN -> reject;
-36. provider changes after preflight before executor -> stale fence reject;
-37. deploy-capable credential referenced before executor boundary -> CI fail.
-
-The traceability check must fail if a required case has no permanent test identifier.
-
-Exit criterion: no AR-11 acceptance requirement exists only as prose or source-marker intuition.
-
----
-
-### FC-6 — Real staging same-bits / rollback rehearsal
-
-This is **not** AR-12 fresh-environment provisioning. Use already supported staging resources and immutable releases only.
-
-Required scenario with two accepted Release Sets, A and B:
+The canonical scenario remains:
 
 ```text
-A = older accepted-main Release Set
-B = newer accepted-main Release Set
+A = older accepted-main durable Release Set
+B = newer accepted-main durable Release Set
 ```
 
-Prove:
+Required live proof:
 
-1. both A and B resolve to exact durable GitHub Release assets;
+1. A and B resolve to exact durable immutable release assets;
 2. both sources are accepted protected-main history;
-3. `release verify A` = VALID;
-4. `release verify B` = VALID;
-5. staging currently at A can plan/preflight B;
-6. deployment uses B bytes exactly, no rebuild;
-7. post-deploy `promotion verify B` = VERIFIED;
-8. second B plan = NO_CHANGE;
-9. A is evaluated as known-good against the post-B observed state;
-10. if compatible, B -> A rollback promotion is accepted through the same canonical workflow;
-11. rollback uses original A durable bytes, not a rebuild from A source;
+3. `release verify A` and `release verify B` are VALID;
+4. observe current staging state using the least-privilege observe credential;
+5. target compatibility and rollback known-good compatibility evaluate through the same canonical authority;
+6. staging A -> B plan/preflight is READY or fail-closed for a typed legitimate reason;
+7. protected staging executor uses exact B bytes with no rebuild;
+8. post-deploy `promotion verify B` = VERIFIED;
+9. second B plan = NO_CHANGE;
+10. A is evaluated against post-B observed state as rollback known-good;
+11. if compatible, B -> A uses original durable A bytes through the same canonical workflow;
 12. post-rollback `promotion verify A` = VERIFIED;
 13. second A plan = NO_CHANGE;
-14. inject one incompatibility fixture/evidence case and prove rollback blocks before mutation;
-15. production remains untouched.
+14. at least one incompatible/UNKNOWN rollback case blocks before mutation;
+15. stale provider state between preflight and executor trips the expected-current fence;
+16. evidence for every stage is captured through PF-2 primitives where the evidence kind applies;
+17. production remains untouched.
 
-If no compatible A/B pair exists naturally because schema/protocol evolution intentionally makes A incompatible, that is valid evidence only if the evaluator blocks rollback for the correct typed reason. In that case create a compatible two-release rehearsal pair through bounded non-production test/rehearsal evidence without falsifying production readiness.
-
-Exit criterion: historical promotion and rollback semantics are proven against real staging/provider state, not just unit fixtures.
+If no naturally compatible A/B pair exists, that is valid only when the evaluator blocks rollback for the correct typed reason; do not falsify compatibility to complete the ceremony.
 
 ---
 
-### FC-7 — Final whole-AR-11 functional acceptance audit
+## 8. FC-7 — Final whole-AR-11 functional acceptance audit
 
-Perform a fresh audit from current protected `main` after all functional closure units are accepted.
+After FC-6 live proof, perform a fresh audit from current protected `main`.
 
-Audit dimensions:
+Audit at least:
 
-#### Release authority
+### Release authority
 
 - one canonical Release Set model;
-- accepted-source proof is authoritative and historical, not current-HEAD-only;
-- durable publication is immutable;
-- all component/provenance bytes needed for verification remain durably available;
-- `release verify` closes all locally provable identities;
-- unknown state fails closed.
+- accepted-source proof is historical/authoritative, not current-HEAD equality;
+- durable publication immutable;
+- every locally provable release-critical identity is actually verified;
+- unknown release state fails closed.
 
-#### Capability isolation
+### Architecture inventory/tooling
+
+- one current `opsctl` inventory compiler/checker;
+- no current legacy Python generator caller;
+- deterministic/idempotent tracked projection;
+- one canonical serializer/digest implementation family;
+- no duplicate lifecycle derivation;
+- exact operator-contract ↔ CLI ↔ inventory parity.
+
+### Hosted evidence
+
+- one typed reusable evidence primitive;
+- provider observation/signing/policy responsibilities separated;
+- attested exact bytes independently verifiable;
+- no secret material or second evidence backend.
+
+### Capability isolation
 
 - source-present disabled capabilities remain backend-inexecutable;
 - frontend remains projection only;
 - no independent production feature flags.
 
-#### Promotion
+### Promotion / rollback
 
 - deterministic plan;
-- `NO_CHANGE` convergence;
-- expected-current fencing;
+- NO_CHANGE convergence;
+- stale fence;
 - same-environment serialization;
 - historical accepted Release Set promotion;
 - no rebuild;
 - least-privilege credential boundary;
-- post-deploy `VERIFIED` only success.
+- rollback compatibility uses current observed state;
+- incompatible/UNKNOWN rollback blocks before mutation;
+- post-deploy VERIFIED is the only success state.
 
-#### Rollback
+### Behavioural certification
 
-- known-good durability;
-- full current-state compatibility decision;
-- incompatible/unknown rollback blocks before mutation;
-- compatible old Release Set can be promoted from original bytes.
+The original mandatory AR-11 30-case behavioural matrix and closure regressions 31–37 remain binding. The final audit must confirm each requirement maps 1:1 to a permanent test/gate identifier and expected fail-closed result. Static source markers alone are not sufficient where behavioural proof is required.
 
-#### Tooling authority
+### Platforms / CI / governance
 
-- `opsctl` local/read-only/metadata-artifact verification only;
-- no network/client/provider/secret/database/deployment/customer-state mutation authority;
-- no dual Python D3 operational authority.
+- Linux and Windows native `opsctl` tests;
+- applicable permanent workflows green on exact candidates;
+- literal current protected required contexts green;
+- guarded merges use exact expected heads;
+- accepted-main/post-merge evidence directly observable where required;
+- no hidden success inference from inaccessible evidence.
 
-#### CI / evidence
-
-- complete 1:1 mandatory negative matrix;
-- Linux + Windows `opsctl` policy tests;
-- Release Architecture Gate green;
-- current applicable permanent workflows green on exact candidate heads;
-- guarded merges use fresh exact-head evidence;
-- durable accepted-main Release Set publication evidence observable after merge.
-
-Final audit output must classify every finding:
+Classify every final finding:
 
 ```text
 P0
@@ -643,247 +732,159 @@ AR-11 Functional Closure is complete only when:
 ```text
 P0 = 0
 P1 = 0
-P2 = 0 for AR-11 scope
+P2 = 0 for AR-11 Functional Closure scope
+PF-1 = ACCEPTED AND VERIFIED
+PF-2 = ACCEPTED AND VERIFIED
 all mandatory AR-11 behavioural requirements = PROVED
-staging same-bits historical promotion/rollback rehearsal = PROVED or correctly BLOCKED by compatibility policy
-production mutation = false
+FC-6 staging proof = PROVED or correctly BLOCKED by accepted compatibility policy
+production_mutation = false
 AR-12 implementation mixed into closure = false
 ```
 
 ---
 
-## 5. Recommended code ownership map
+## 9. Canonical ownership map for continuation
 
-Expected primary ownership; exact paths must be re-read from live `main` before each unit.
+Exact paths must be re-read from live `main`; this map describes responsibilities, not frozen filenames.
 
-| Concern | Primary owner/path |
+| Concern | Canonical owner / boundary |
 | --- | --- |
-| Release Set typed model | `tools/opsctl/src/release/model.rs` |
-| Artifact verification | `tools/opsctl/src/release/artifact.rs` |
-| Static/local compatibility | `tools/opsctl/src/release/static_compatibility.rs` |
-| Cross-component compatibility | `tools/opsctl/src/release/compatibility.rs` |
-| Release CLI execution | `tools/opsctl/src/release/commands.rs` |
-| Accepted source evidence | existing AR-11 release authority + new bounded Rust/evidence module; no second registry |
-| Promotion plan | `tools/opsctl/src/promotion/plan.rs` |
-| Promotion preflight | `tools/opsctl/src/promotion/preflight.rs` |
-| DeploymentSnapshot | `tools/opsctl/src/promotion/snapshot.rs` |
-| Post-deploy verify | `tools/opsctl/src/promotion/verify.rs` |
-| Deployment closure | `tools/opsctl/src/promotion/authority.rs` |
-| Release Set generator | `scripts/release-set-ar11.py` — generator only, not policy authority |
-| Compatibility evidence adapter | `scripts/release-compat-evidence-ar11.py` — transport/adapter only |
-| Provider snapshot collector | `scripts/deployment-snapshot-ar11.py` — collection only |
-| Durable build/publish | `.github/workflows/release-set-build.yml` |
-| Staging promotion executor | `.github/workflows/release-set-promotion.yml` |
-| Permanent release gate | `.github/workflows/release-architecture-gate.yml` + associated validators/tests |
-| Canonical policy source | `architecture/release-architecture-ar11.json` projected into existing inventory hierarchy |
+| Program/lifecycle order | existing Architecture Re-baseline authorities + Git-derived acceptance mechanism |
+| Architecture inventory model/compiler/check/write | `tools/opsctl` PF-1 architecture module |
+| Architecture inventory tracked projection | `architecture/inventory.json` |
+| Inventory predecessor | existing Python inventory generator path, retired only after parity/caller proof |
+| Operator command authority | `architecture/operator-contract.json` |
+| Canonical JSON / digest | shared Rust policy primitive; no inventory/evidence duplicate |
+| Hosted evidence typed envelope | `tools/opsctl` evidence module |
+| Hosted evidence orchestration | one reusable permanent GitHub Actions publisher |
+| Evidence subject transport | immutable GitHub Actions Artifact |
+| Evidence signing/provenance | GitHub Artifact Attestation / official action |
+| Provider observation | official provider tools under least privilege |
+| Release Set typed model | existing `tools/opsctl/src/release/**` architecture |
+| Promotion plan/preflight/verify | existing `tools/opsctl/src/promotion/**` architecture |
+| Durable build/publish | existing canonical Release Set Build workflow |
+| Staging mutation executor | existing canonical Release Set Promotion protected staging path |
+| FC live tracker | issue #399 |
+| FC-6 operational hardening/readiness | issue #421 |
 
-Python may remain for deterministic packaging/collection adapters when it does not own the policy decision. Do not perform a cosmetic Python-to-Rust rewrite.
+Python remains acceptable for separately classified validators/generators/fixtures/collection adapters when it does not duplicate a concern that has been explicitly cut over to `opsctl`. PF-1 is deliberately such a cutover for architecture inventory generation; it is not a global Python-to-Rust rewrite.
 
 ---
 
-## 6. Required API / schema evolution rules
+## 10. Testing philosophy — required for PF-1, PF-2 and resumed FC work
 
-Any new or changed machine contract introduced here must be versioned and fail closed.
+Every bounded implementation must include positive and negative evidence in the same candidate.
 
-Preferred contracts:
+Use the strongest appropriate layer:
 
 ```text
-AcceptedSourceEvidence v1
-DeploymentSnapshot v2 (only if v1 cannot be compatibly extended)
-RollbackCompatibilityResult v1
-ReleaseVerificationResult v1-compatible additive output where possible
-PromotionPreflightResult v1-compatible additive output where possible
+pure Rust unit tests
+-> Rust filesystem/integration tests
+-> repository fitness/policy tests
+-> workflow semantic/static tests
+-> exact-head GitHub Actions
+-> accepted-main hosted observation
+-> real staging proof only where the requirement is inherently hosted/provider-dependent
 ```
 
-Rules:
+Do not use a higher, slower layer to compensate for missing deterministic unit coverage. Do not use a lower synthetic layer to claim a requirement whose truth depends on real hosted/provider state.
 
-1. Additive backwards-compatible output changes are preferred when safe.
-2. If semantics change incompatibly, increment schema version; never silently reinterpret old evidence.
-3. Unknown schema version -> reject/UNKNOWN.
-4. Evidence binds exact Release Set ID/profile/environment where applicable.
-5. Evidence digests are deterministic canonical JSON digests.
-6. No secret values, tokens, customer payloads, fingerprint raw material or profile payload belong in these evidence objects.
-7. Timestamps are metadata, not authority; compatibility must not become true merely because evidence is recent.
-8. Stale provider snapshots must be rejected by explicit identity/fence policy, not heuristics.
+For security/authority transitions, include explicit negative proof that the predecessor/forbidden authority cannot still execute.
 
 ---
 
-## 7. Security acceptance rules
+## 11. Acceptance discipline for every bounded merge
 
-A 10/10 closure must preserve these threat boundaries:
-
-### Supply chain
-
-- immutable source identity;
-- immutable component bytes;
-- exact manifest/provenance binding;
-- no artifact substitution through release tag/name;
-- no mutable branch used as promotion input;
-- no overwrite of an existing Release Set ID;
-- no unexpected file/symlink/path traversal.
-
-### Promotion TOCTOU
-
-```text
-observe S0
--> plan/preflight bound to S0
--> protected executor
--> re-check current identity == S0 immediately before mutation
--> mutate
--> observe S1
--> verify S1
-```
-
-Any state change between preflight and mutation rejects the stale transaction.
-
-### Capability security
-
-Frontend is never security authority. Direct API/queue/scheduled/provider paths remain gated by backend effective capability state.
-
-### Credential exposure
-
-Read-only observation and mutation credentials use least privilege and separate exposure boundaries where provider capabilities allow. No deploy-capable credential is available to build jobs.
-
-### Rollback
-
-Rollback is not a bypass around compatibility policy. Older bits do not receive privileged treatment merely because they were previously known-good.
-
----
-
-## 8. Testing strategy
-
-### Rust unit/property tests
-
-Cover canonical JSON/digests, typed parsing, unknown fields/versions, manifest relationships, accepted-source evidence, compatibility decisions, rollback decision tables and stale fences.
-
-### Integration tests
-
-Exercise real `opsctl` command surfaces over filesystem fixtures:
-
-```text
-release inspect
-release verify
-release compatibility
-promotion plan
-promotion preflight
-promotion verify
-```
-
-Run on Linux and Windows.
-
-### Workflow static policy tests
-
-Mechanically reject:
-
-- current-main equality as historical acceptance authority;
-- application rebuild commands in promotion;
-- production environment/profile in AR-11 workflow;
-- deploy credential in preflight/build job;
-- Python D3 promotion authority resurrection;
-- unregistered new operational command;
-- missing concurrency/fence semantics.
-
-### Hosted staging evidence
-
-Exercise exact immutable Release Sets against real staging state as described in FC-6.
-
-Static tests cannot substitute for the final staging proof where AR-11 owns that proof.
-
----
-
-## 9. Acceptance discipline for every implementation merge
-
-Before each bounded unit:
+Before each PF or FC implementation merge:
 
 1. start from latest accepted protected `main`;
-2. re-read this plan and live callers;
+2. re-read this plan, #399/#421 as applicable, open PRs and live callers;
 3. confirm no competing open PR owns the same invariant;
-4. use one semantically bounded branch/PR;
-5. add positive + negative permanent tests in the same candidate;
-6. no temporary self-writing CI accepted into `main`;
-7. exact-head applicable workflows green;
-8. protected required contexts green;
-9. `behind_by=0` before guarded merge;
-10. zero blocking reviews;
-11. zero unresolved review threads;
-12. guarded merge bound to exact expected head;
-13. accepted-main reread;
-14. prove candidate tree == accepted merge tree where the repository's generic acceptance protocol requires it;
-15. observe required push/main-only evidence directly where applicable;
-16. do not infer green from inaccessible evidence.
-
-A failed post-merge `Release Set Build` or durable publication check is an actual functional defect and reopens the affected closure unit.
+4. use one semantically cohesive proof boundary;
+5. add permanent positive + negative tests in the candidate;
+6. no self-writing CI accepted into `main`;
+7. no temporary hosted mutation authority unless independently justified, narrowly allowlisted, accepted-main-only and removed/retired by its explicit lifecycle;
+8. rediscover applicable permanent workflows and protected contexts from live policy;
+9. require every applicable workflow green on the exact candidate head;
+10. require every protected required context green on the exact candidate head;
+11. require `behind_by=0`;
+12. require blocking reviews=0;
+13. require unresolved review threads=0;
+14. guarded squash merge must be bound to the exact expected head;
+15. reread accepted `main` immediately after merge;
+16. prove candidate tree == accepted merge tree where required by canonical acceptance policy;
+17. observe required push/main-only hosted evidence directly;
+18. treat unobservable required evidence as UNPROVEN, never implicit SUCCESS;
+19. changing the candidate head invalidates all previous exact-head evidence.
 
 ---
 
-## 10. Definition of Done — AR-11 Functional Closure 10/10
+## 12. Final Definition of Done — AR-11 Functional Closure 10/10
 
-The closure is complete only when one current accepted repository state proves all of the following simultaneously.
+The closure is complete only when one current accepted repository state simultaneously proves:
 
-### Accepted source
+### Inventory / developer architecture
 
-- old accepted-main Release Set remains verifiably accepted after `main` advances;
-- non-main/unaccepted SHA is rejected;
-- release tag/source/evidence identities cannot disagree;
-- accepted-source proof has one authority.
+- `opsctl` is the single current architecture inventory compiler/checker/writer;
+- no parallel current Python inventory authority remains;
+- typed layers are separated from CLI/adapters;
+- deterministic render/check/write is byte-stable;
+- local generated-file write authority is explicit and narrowly bounded;
+- lifecycle derivation remains singular;
+- architecture inventory is understandable from current code/docs without historical issue archaeology.
 
-### Immutable release
+### Hosted operational evidence
 
-- Release Set is content-addressed;
-- durable assets contain every byte needed for later verification;
-- component manifest identity is actually verified;
-- source/component/provenance/toolchain/contract/schema/runtime identities are checked;
-- exact artifact inventory is enforced;
+- one reusable typed/versioned Hosted Evidence primitive exists;
+- artifact subject bytes are immutable and attested;
+- local policy verification and GitHub provenance verification are clearly separated;
+- no secret-bearing evidence or hidden backend exists;
+- future operational evidence can extend by typed payload variant without new workflow/reporting architecture.
+
+### Accepted source / immutable release
+
+- historical accepted-main Release Sets remain valid policy inputs after main advances;
+- non-main/unaccepted sources reject;
+- durable assets contain every byte needed for later local verification;
+- source/component/provenance/toolchain/contract/schema/runtime identities are checked as required;
 - same ID/different bytes is fatal.
 
-### Promotion
+### Promotion / rollback
 
-- no source rebuild;
-- historical compatible Release Set can be promoted;
-- deterministic plan and `NO_CHANGE` work;
-- concurrency is serialized;
-- stale plans fail;
-- policy evidence is bound to exact immutable inputs;
-- deploy credential exposure occurs only at the protected executor boundary as far as provider/workflow structure allows;
-- production remains unreachable.
-
-### Rollback
-
-- known-good is durable and source-accepted;
+- no rebuild on promotion;
+- deterministic plan and NO_CHANGE work;
+- concurrency and expected-current fencing are enforced;
+- observe vs deploy credentials are separated;
+- historical compatible Release Set can be promoted from original bytes;
 - rollback compatibility evaluates current schema/protocol/runtime state;
-- incompatible/unknown rollback fails closed;
-- compatible rollback consumes original known-good bytes;
-- rollback converges to `VERIFIED` and then `NO_CHANGE`.
+- incompatible/UNKNOWN rollback fails closed;
+- post-deploy verification converges to VERIFIED and then NO_CHANGE;
+- production remains unreachable.
 
 ### Capability isolation
 
 - `source_present=true` and `production_enabled=false` remains mechanically demonstrable;
 - disabled HTTP/queue/schedule/outbound paths cannot produce side effects;
-- frontend manipulation cannot bypass backend capability gate.
+- frontend manipulation cannot bypass backend capability gates.
 
-### Tooling
+### Evidence / audit
 
-- exact active `opsctl` command registry remains in parity;
-- `opsctl` has no provider/network/secret/database/deployment/customer/production mutation authority;
-- no second callable Python D3 operational policy authority.
-
-### Evidence
-
-- original mandatory 30-case negative matrix has 1:1 permanent test mapping;
+- original 30-case negative matrix has permanent 1:1 behavioural mapping;
 - closure regressions 31–37 are permanently covered;
-- Linux and Windows regression suites pass;
-- real staging same-bits historical promotion/rollback proof exists where compatibility permits;
-- final fresh audit finds P0=0, P1=0 and P2=0 for AR-11 scope.
+- PF-1 and PF-2 negative matrices are permanently covered;
+- Linux and Windows suites pass;
+- real staging same-bits promotion/rollback evidence exists where compatibility permits;
+- final audit finds P0=0, P1=0 and P2=0 for Functional Closure scope.
 
 Final state remains:
 
 ```text
 AR-11 = historically ACCEPTED + functionally CLOSED
-AR-12 = current / implementation not mixed into this closure
+AR-12 = current / implementation NOT STARTED during this plan
 architecture_complete = false
 production_core_gate = BLOCKED
 production_ready = false
 production_mutation = false
 ```
 
-Only after this Definition of Done is mechanically proven should the project describe AR-11 as **fully functional / 10/10 closed** rather than merely historically accepted.
+Only after this Definition of Done is mechanically proven may the project describe AR-11 as **fully functional / 10/10 closed** and separately consider AR-12 implementation entry under the canonical architecture program.
