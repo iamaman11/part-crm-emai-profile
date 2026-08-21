@@ -61,6 +61,10 @@
       "category": "PERMANENT_REQUIRED"
     },
     {
+      "path": ".github/workflows/hosted-evidence-publish.yml",
+      "category": "PERMANENT_REUSABLE"
+    },
+    {
       "path": ".github/workflows/local-profile-gate.yml",
       "category": "PERMANENT_REQUIRED"
     },
