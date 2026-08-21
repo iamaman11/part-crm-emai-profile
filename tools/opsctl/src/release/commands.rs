@@ -4,7 +4,7 @@ use crate::release::compatibility::{CompatibilityEvidence, evaluate};
 use crate::release::input_topology::ReleaseInputTopology;
 use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
 use crate::release::source::{AcceptedSourceVerification, verify_release_source};
-use crate::release::static_compatibility;
+use crate::release::static_compatibility::{self, VERIFIED_PROVENANCE_DIMENSIONS};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -99,6 +99,7 @@ fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_j
         "schema_version": 1,
         "command": "release.inspect",
         "decision": "VALID",
+        "release_set_schema_version": manifest.schema_version,
         "release_set_id": manifest.release_set_id,
         "display_version": manifest.display_version,
         "source": {
@@ -106,7 +107,7 @@ fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_j
             "commit_sha": manifest.source.commit_sha,
             "accepted_main": manifest.source.accepted_main,
             "accepted_main_evidence_sha256": manifest.source.accepted_main_evidence_sha256,
-            "accepted_main_evidence_role": "LEGACY_IDENTITY_BINDING_ONLY"
+            "accepted_main_evidence_role": "IDENTITY_BINDING_ONLY; AcceptedSourceEvidence is acceptance authority"
         },
         "components": components,
         "capability_profile_compatibility": manifest.capability_profile_compatibility,
@@ -126,12 +127,15 @@ fn verify(
         "schema_version": 1,
         "command": "release.verify",
         "decision": "VALID",
+        "release_set_schema_version": manifest.schema_version,
         "release_set_id": manifest.release_set_id,
         "source_commit_sha": manifest.source.commit_sha,
         "source_accepted": true,
         "accepted_source_evidence_sha256": source.evidence_sha256,
         "observed_protected_main_sha": source.observed_protected_main_sha,
         "source_lineage_status": source.lineage_status,
+        "verified_components": artifacts.verified_components,
+        "verified_provenance_dimensions": VERIFIED_PROVENANCE_DIMENSIONS,
         "verified_files": artifacts.verified_files,
         "verified_bytes": artifacts.verified_bytes,
         "mutation_executed": false

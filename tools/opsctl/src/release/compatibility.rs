@@ -1,30 +1,15 @@
 use crate::release::authority::ReleaseArchitecture;
-use crate::release::model::{CompatibilityDecision, ReleaseModelError, ReleaseSetManifest};
+use crate::release::model::{
+    CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseModelError, ReleaseSetManifest,
+};
 use crate::release::static_compatibility;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-const SCHEMA_VERSION: u64 = 1;
-// The v1 evidence envelope keeps the full accepted vocabulary for replay compatibility,
-// but only provider/runtime facts that cannot be derived from the immutable Release Set
-// are policy inputs. Static API/protocol/runtime decisions in this envelope are ignored.
-const REQUIRED_DIMENSIONS: [&str; 11] = [
-    "catalog_d1",
-    "resolver_d1",
-    "public_api",
-    "frontend_api",
-    "resolver_protocol",
-    "bridge_protocol",
-    "camouhost_ipc",
-    "runtime_bundle",
-    "profile_format",
-    "browser_identity_policy",
-    "windows_profile_bridge",
-];
-const EXTERNAL_POLICY_DIMENSIONS: [&str; 3] =
-    ["catalog_d1", "resolver_d1", "windows_profile_bridge"];
+const SCHEMA_VERSION: u64 = 2;
+const REQUIRED_DIMENSIONS: [&str; 3] = ["catalog_d1", "resolver_d1", "windows_profile_bridge"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompatibilityDimension {
@@ -72,10 +57,15 @@ impl CompatibilityEvidence {
             || required_string(root, "kind")? != "RELEASE_COMPATIBILITY_EVIDENCE"
         {
             return Err(ReleaseModelError::new(
-                "unsupported compatibility evidence identity/version",
+                "unsupported compatibility evidence identity/version; only v2 is accepted",
             ));
         }
         let release_set_id = required_string(root, "release_set_id")?;
+        if !release_set_id.starts_with(RELEASE_SET_ID_PREFIX) {
+            return Err(ReleaseModelError::new(
+                "compatibility evidence must target a Release Set v2 ID",
+            ));
+        }
         let dimensions_value = object(required(root, "dimensions")?, "dimensions")?;
         let observed = dimensions_value
             .keys()
@@ -107,8 +97,13 @@ impl CompatibilityEvidence {
                 && policy_source != "opsctl.d1.compatibility"
             {
                 return Err(ReleaseModelError::new(format!(
-                    "{name} evidence must come from accepted opsctl.d1.compatibility policy"
+                    "{name} evidence must come from opsctl.d1.compatibility"
                 )));
+            }
+            if name == "windows_profile_bridge" && policy_source != "external.windows.delivery" {
+                return Err(ReleaseModelError::new(
+                    "windows_profile_bridge evidence must come from external.windows.delivery",
+                ));
             }
             dimensions.insert(
                 name.clone(),
@@ -145,9 +140,8 @@ pub fn evaluate(
         .iter()
         .any(|profile| profile == profile_id)
     {
-        return Ok(blocked("PROFILE_NOT_AUTHORIZED"));
+        return Ok(blocked("PROFILE_NOT_AUTHORIZED", current_release.is_some()));
     }
-
     let authority = ReleaseArchitecture::load(policy_root)
         .map_err(|error| ReleaseModelError::new(format!("release authority invalid: {error}")))?;
     let effective = authority
@@ -157,7 +151,6 @@ pub fn evaluate(
         .profiles
         .get(profile_id)
         .ok_or_else(|| ReleaseModelError::new("PROFILE_NOT_AUTHORIZED: profile disappeared"))?;
-
     let mut blockers = Vec::new();
     let mut warnings = Vec::new();
     let mut required_steps = Vec::new();
@@ -168,24 +161,20 @@ pub fn evaluate(
             profile.activation_gate
         ));
     }
-
     let mailbox_admin = effective.is_enabled("mailbox_admin");
-    // Current policy authority and immutable release-source provenance are separate roots.
-    // Caller-supplied compatibility decisions cannot override either one.
     blockers.extend(static_compatibility::evaluate(
         source_root,
         manifest,
         mailbox_admin,
     )?);
-
     let windows_delivery_present = authority
         .activation_units
         .values()
         .any(|unit| unit.requires_windows_profile_bridge && effective.is_enabled(&unit.id));
     let windows_required = environment == "production" && windows_delivery_present;
     let required_dimensions = required_external_dimensions(mailbox_admin, windows_required);
-    for name in &required_dimensions {
-        let dimension = evidence.dimensions.get(*name).ok_or_else(|| {
+    for name in required_dimensions {
+        let dimension = evidence.dimensions.get(name).ok_or_else(|| {
             ReleaseModelError::new(format!(
                 "missing external compatibility dimension after parse: {name}"
             ))
@@ -200,9 +189,8 @@ pub fn evaluate(
             }
         }
     }
-
-    for name in EXTERNAL_POLICY_DIMENSIONS {
-        if required_dimensions.contains(name) {
+    for name in REQUIRED_DIMENSIONS {
+        if required_external_dimensions(mailbox_admin, windows_required).contains(name) {
             continue;
         }
         let dimension = evidence.dimensions.get(name).ok_or_else(|| {
@@ -212,7 +200,7 @@ pub fn evaluate(
         })?;
         if !dimension.decision.is_compatible() {
             warnings.push(format!(
-                "{name} is {} but is outside the selected deployment closure",
+                "{name} is {} but outside the selected deployment closure",
                 if dimension.decision == CompatibilityDecision::Unknown {
                     "UNKNOWN"
                 } else {
@@ -221,18 +209,12 @@ pub fn evaluate(
             ));
         }
     }
-
-    let rollback_compatibility = match current_release {
-        Some(current) if current.release_set_id == manifest.release_set_id => "NO_CHANGE",
-        Some(current) => rollback_compatibility(current, evidence, profile_id),
-        None => "UNKNOWN",
+    let rollback_compatibility = if current_release.is_some() {
+        "EVALUATED_IN_PROMOTION_PREFLIGHT"
+    } else {
+        "NOT_APPLICABLE"
     }
     .to_owned();
-    if rollback_compatibility == "UNKNOWN" {
-        warnings
-            .push("rollback compatibility is unknown without current release context".to_owned());
-    }
-
     blockers.sort();
     blockers.dedup();
     warnings.sort();
@@ -252,7 +234,7 @@ impl CompatibilityResult {
     #[must_use]
     pub fn machine_json(&self, release_set_id: &str, profile_id: &str, environment: &str) -> Value {
         json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "command": "release.compatibility",
             "decision": if self.compatible { "COMPATIBLE" } else { "INCOMPATIBLE" },
             "compatible": self.compatible,
@@ -264,18 +246,24 @@ impl CompatibilityResult {
             "required_steps": self.required_steps,
             "rollback_compatibility": self.rollback_compatibility,
             "static_policy_authority": "opsctl.release.compatibility",
+            "external_dimensions": REQUIRED_DIMENSIONS,
             "mutation_executed": false
         })
     }
 }
 
-fn blocked(code: &str) -> CompatibilityResult {
+fn blocked(code: &str, has_current_release: bool) -> CompatibilityResult {
     CompatibilityResult {
         compatible: false,
         blockers: vec![code.to_owned()],
         warnings: Vec::new(),
         required_steps: Vec::new(),
-        rollback_compatibility: "UNKNOWN".to_owned(),
+        rollback_compatibility: if has_current_release {
+            "EVALUATED_IN_PROMOTION_PREFLIGHT"
+        } else {
+            "NOT_APPLICABLE"
+        }
+        .to_owned(),
     }
 }
 
@@ -295,30 +283,12 @@ fn required_external_dimensions(
 
 fn external_blocker_code(name: &str, unknown: bool) -> &'static str {
     match (name, unknown) {
-        ("catalog_d1" | "resolver_d1", _) => "SCHEMA_INCOMPATIBLE",
-        ("windows_profile_bridge", _) => "WINDOWS_DELIVERY_UNSATISFIED",
+        ("catalog_d1" | "resolver_d1", true) => "SCHEMA_COMPATIBILITY_UNKNOWN",
+        ("catalog_d1" | "resolver_d1", false) => "SCHEMA_INCOMPATIBLE",
+        ("windows_profile_bridge", true) => "WINDOWS_DELIVERY_UNKNOWN",
+        ("windows_profile_bridge", false) => "WINDOWS_DELIVERY_UNSATISFIED",
         (_, true) => "PROVIDER_STATE_UNKNOWN",
         _ => "RELEASE_INCOMPATIBLE",
-    }
-}
-
-fn rollback_compatibility(
-    current: &ReleaseSetManifest,
-    evidence: &CompatibilityEvidence,
-    profile_id: &str,
-) -> &'static str {
-    if current
-        .capability_profile_compatibility
-        .iter()
-        .any(|profile| profile == profile_id)
-        && evidence
-            .dimensions
-            .get("catalog_d1")
-            .is_some_and(|value| value.decision.is_compatible())
-    {
-        "COMPATIBLE"
-    } else {
-        "UNKNOWN"
     }
 }
 
@@ -382,24 +352,12 @@ mod tests {
     use super::CompatibilityEvidence;
 
     #[test]
-    fn rejects_unknown_dimension_state() {
+    fn v1_evidence_is_rejected() {
         let input = r#"{
           "schema_version":1,
           "kind":"RELEASE_COMPATIBILITY_EVIDENCE",
           "release_set_id":"release-set-v1-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "dimensions":{
-            "catalog_d1":{"decision":"MAYBE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"opsctl.d1.compatibility"},
-            "resolver_d1":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"opsctl.d1.compatibility"},
-            "public_api":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
-            "frontend_api":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
-            "resolver_protocol":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
-            "bridge_protocol":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
-            "camouhost_ipc":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
-            "runtime_bundle":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
-            "profile_format":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
-            "browser_identity_policy":{"decision":"COMPATIBLE","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"transport-only"},
-            "windows_profile_bridge":{"decision":"UNKNOWN","evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_source":"external.windows.delivery"}
-          }
+          "dimensions":{}
         }"#;
         assert!(CompatibilityEvidence::parse_json(input).is_err());
     }

@@ -1278,7 +1278,7 @@
       "ar9_blocked": true
     },
     "authority_counts": {
-      "credentials": 18,
+      "credentials": 19,
       "dynamic_credential_domains": 1,
       "future_trust_domains": 1
     },
@@ -1301,6 +1301,7 @@
       "resolver.handle-hmac",
       "resolver.google-oauth-application",
       "resolver.microsoft-oauth-application",
+      "cloudflare.release-observation-api",
       "resolver.mailbox-credentials",
       "windows.release-signing-trust"
     ],
@@ -1312,6 +1313,7 @@
       "CLOUDFLARE_BOOTSTRAP_TOKEN",
       "CLOUDFLARE_CONTROL_PLANE_SECRETS_JSON",
       "CLOUDFLARE_DEPLOY_MANIFEST_JSON",
+      "CLOUDFLARE_OBSERVE_API_TOKEN",
       "CLOUDFLARE_RESOLVER_SECRETS_JSON",
       "CLOUDFLARE_TOKEN_ISSUER_TOKEN",
       "GH_ADMIN_OPERATOR_TOKEN",
@@ -1346,6 +1348,7 @@
       "resolver.handle-hmac": "AR-8D",
       "resolver.google-oauth-application": "AR-8E",
       "resolver.microsoft-oauth-application": "AR-8E",
+      "cloudflare.release-observation-api": "AR-11",
       "resolver.mailbox-credentials": "EXISTING_AR8A",
       "windows.release-signing-trust": "AR-15B"
     },
@@ -1878,7 +1881,7 @@
     "sources": {
       "credential_authority": {
         "path": "architecture/credential-authority.json",
-        "sha256": "d7ad45094c867b855749334b2a51d06d8d2496b9ff6e74970c88a524c5f01bfd"
+        "sha256": "afa298c0b9a8985253cdd5f053e16639bea693cc5eaffa7e179dcb2e39b75da2"
       },
       "credential_lifecycle": {
         "path": "architecture/credential-lifecycle.json",
@@ -2076,7 +2079,7 @@
     "schema_version": 1,
     "role": "CURRENT_AR11_RELEASE_ARCHITECTURE_PROJECTION",
     "source_authority": "architecture/release-architecture-ar11.json",
-    "source_sha256": "f2498ead0ce4aa7c0f57c7533cf19bcef206010dac30fa1084d04c1a97840e4d",
+    "source_sha256": "f279d2e07a2db5bfd84da6c71add2c7537df473fc48f8134add49dc0bde09d30",
     "source_status": "current_candidate",
     "tracking_issue": 372,
     "principles": {
@@ -2870,8 +2873,8 @@
       ]
     },
     "release_set": {
-      "schema_version": 1,
-      "id_scheme": "release-set-v1-sha256-SHA256(canonical_identity_payload)",
+      "schema_version": 2,
+      "id_scheme": "release-set-v2-sha256-SHA256(canonical_identity_payload)",
       "source_must_be_accepted_main": true,
       "required_identity_sections": [
         "source",
