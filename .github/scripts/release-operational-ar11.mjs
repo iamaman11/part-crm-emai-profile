@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -7,6 +8,7 @@ import process from 'node:process';
 const ROOT = process.cwd();
 const BUILD = '.github/workflows/release-set-build.yml';
 const PROMOTION = '.github/workflows/release-set-promotion.yml';
+const OPERATOR = '.github/scripts/ar11-fc6-operator.mjs';
 const REGISTRY = 'architecture/github-actions-registry.json';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
 const LEGACY_FILES = [
@@ -81,13 +83,47 @@ function buildErrors(build) {
   return errors;
 }
 
+function operatorScriptErrors(operator) {
+  const errors = [];
+  errors.push(...requireMarkers(operator, [
+    "const REPOSITORY = 'iamaman11/part-crm-emai-profile'",
+    'const ISSUE_NUMBER = 399',
+    "event.action !== 'created'",
+    "event.comment?.user?.login !== 'iamaman11'",
+    "event.comment?.author_association !== 'OWNER'",
+    '/ar11-fc6-promote',
+    '/ar11-fc6-negative',
+    'confirmation does not bind target and expected current',
+    'confirmation does not bind Release Set and source run',
+    '/actions/workflows/${WORKFLOW}/dispatches',
+    "ref: 'main'",
+    "operation: 'rollback-negative'",
+    'ordinary tracker comment unexpectedly became operator input',
+    'non-owner request unexpectedly passed',
+    'wrong issue unexpectedly passed',
+  ], 'FC-6 bounded operator adapter'));
+  errors.push(...forbidMarkers(operator, [
+    'CLOUDFLARE_API_TOKEN',
+    'CLOUDFLARE_DEPLOY_MANIFEST_JSON',
+    'wrangler',
+    'deployments: write',
+    'environment: production',
+    'terraform',
+  ], 'FC-6 bounded operator adapter'));
+  return errors;
+}
+
 function promotionErrors(promotion) {
   const errors = [];
   errors.push(...requireMarkers(promotion, [
     'workflow_dispatch:',
+    'operation:',
     'release_set_id:',
     'expected_current_release_set_id:',
+    'source_run_id:',
+    'request_id:',
     'confirmation:',
+    'issue_comment:\n    types: [created]',
     'concurrency:\n  group: release-set-promotion-staging',
   ], 'Release Set promotion'));
   if (count(promotion, 'workflow_dispatch:') !== 1) {
@@ -97,16 +133,43 @@ function promotionErrors(promotion) {
     errors.push('deploy-capable Cloudflare token must be referenced exactly once, inside mutation executor');
   }
 
+  const operator = jobBlock(promotion, 'operator-entrypoint');
   const resolve = jobBlock(promotion, 'resolve-verify');
   const observe = jobBlock(promotion, 'observe-preflight');
   const mutate = jobBlock(promotion, 'mutate');
   const post = jobBlock(promotion, 'post-verify');
-  for (const [name, block] of Object.entries({ 'resolve-verify': resolve, 'observe-preflight': observe, mutate, 'post-verify': post })) {
+  const rollbackNegative = jobBlock(promotion, 'rollback-negative-evidence');
+  for (const [name, block] of Object.entries({
+    'operator-entrypoint': operator,
+    'resolve-verify': resolve,
+    'observe-preflight': observe,
+    mutate,
+    'post-verify': post,
+    'rollback-negative-evidence': rollbackNegative,
+  })) {
     if (!block) errors.push(`Release Set promotion is missing structural job ${name}`);
   }
   if (errors.some((error) => error.includes('missing structural job'))) return errors;
 
+  errors.push(...requireMarkers(operator, [
+    "if: github.event_name == 'issue_comment'",
+    'actions: write',
+    'issues: write',
+    'ref: main',
+    'persist-credentials: false',
+    'node .github/scripts/ar11-fc6-operator.mjs',
+  ], 'promotion bounded operator entrypoint'));
+  errors.push(...forbidMarkers(operator, [
+    'secrets.CLOUDFLARE_',
+    'environment: staging',
+    'deployments: write',
+    'wrangler',
+  ], 'promotion bounded operator entrypoint'));
+
   errors.push(...requireMarkers(resolve, [
+    "if: github.event_name == 'workflow_dispatch' && inputs.operation == 'promote'",
+    'test "${{ inputs.operation }}" = promote',
+    'test -z "${{ inputs.source_run_id }}"',
     'Prove target source was accepted protected main',
     "test \"$(jq -r '.protected' \"$RUNNER_TEMP/protected-main.json\")\" = true",
     'compare/$source_sha...$main_sha',
@@ -144,11 +207,18 @@ function promotionErrors(promotion) {
     'promotion preflight',
     '--expected-current "$EXPECTED_CURRENT"',
     'mutation-fence.json',
+    'Materialize flat metadata-only preflight artifact contract',
+    'cp "$RUNNER_TEMP/release-policy-input/release-set.json" "$RUNNER_TEMP/release-set.json"',
+    'cp "$RUNNER_TEMP/release-policy-input/accepted-source-evidence.json" "$RUNNER_TEMP/accepted-source-evidence.json"',
+    '${{ runner.temp }}/release-set.json',
+    '${{ runner.temp }}/accepted-source-evidence.json',
   ], 'promotion phase 2 observe+preflight'));
   errors.push(...forbidMarkers(observe, [
     'secrets.CLOUDFLARE_API_TOKEN',
     'wrangler deploy',
     'deployments: write',
+    '${{ runner.temp }}/release-policy-input/release-set.json\n',
+    '${{ runner.temp }}/release-policy-input/accepted-source-evidence.json\n',
   ], 'promotion phase 2 observe+preflight'));
 
   errors.push(...requireMarkers(mutate, [
@@ -206,6 +276,37 @@ function promotionErrors(promotion) {
     'wrangler deploy',
   ], 'promotion phase 4 post-deploy observation'));
 
+  errors.push(...requireMarkers(rollbackNegative, [
+    "if: github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback-negative'",
+    'actions: read',
+    'Validate evidence-only intent and live source run',
+    '.status == "completed"',
+    '.conclusion == "success"',
+    '.path == ".github/workflows/release-set-promotion.yml"',
+    'gh run download "$SOURCE_RUN_ID"',
+    'Download live A-to-A preflight evidence without provider credentials',
+    '.decision == "NO_CHANGE"',
+    '.rollback_compatibility == "COMPATIBLE"',
+    "jq '.catalog_schema_revision = null'",
+    'Native rollback preflight must block UNKNOWN before credentials',
+    '--known-good-release-set "$live/release-set.json"',
+    '.decision == "BLOCKED"',
+    '.rollback_compatibility == "UNKNOWN"',
+    'ROLLBACK_COMPATIBILITY_UNKNOWN',
+    '.credential_values_accessed == false',
+    '.provider_mutation_executed == false',
+    '.mutation_executed == false',
+    'Upload credential-free rollback-negative evidence',
+  ], 'promotion rollback-negative evidence'));
+  errors.push(...forbidMarkers(rollbackNegative, [
+    'secrets.CLOUDFLARE_',
+    'CLOUDFLARE_API_TOKEN',
+    'CLOUDFLARE_DEPLOY_MANIFEST_JSON',
+    'environment: staging',
+    'deployments: write',
+    'wrangler deploy',
+  ], 'promotion rollback-negative evidence'));
+
   errors.push(...forbidMarkers(promotion, [
     'test "$source_sha" = "$main_sha"',
     '--root "$GITHUB_WORKSPACE/target-source" release verify',
@@ -226,15 +327,17 @@ function promotionErrors(promotion) {
 
 function operationalErrors({ requireCutover = true } = {}) {
   const errors = [];
-  for (const relative of [BUILD, PROMOTION, REGISTRY, AUTHORITY]) {
+  for (const relative of [BUILD, PROMOTION, OPERATOR, REGISTRY, AUTHORITY]) {
     if (!existsSync(path.join(ROOT, relative))) errors.push(`missing AR-11 operational authority: ${relative}`);
   }
   if (errors.length > 0) return errors;
 
   const build = read(BUILD);
   const promotion = read(PROMOTION);
+  const operator = read(OPERATOR);
   errors.push(...buildErrors(build));
   errors.push(...promotionErrors(promotion));
+  errors.push(...operatorScriptErrors(operator));
 
   const registry = JSON.parse(read(REGISTRY));
   const workflows = registry.active_registrations ?? [];
@@ -284,9 +387,11 @@ function operationalErrors({ requireCutover = true } = {}) {
 function selfTest() {
   const promotion = read(PROMOTION);
   const build = read(BUILD);
-  if (buildErrors(build).length !== 0 || promotionErrors(promotion).length !== 0) {
+  const operator = read(OPERATOR);
+  if (buildErrors(build).length !== 0 || promotionErrors(promotion).length !== 0 || operatorScriptErrors(operator).length !== 0) {
     throw new Error('canonical AR-11 operational workflow does not satisfy its own structural validator');
   }
+  execFileSync(process.execPath, [path.join(ROOT, OPERATOR), '--self-test'], { cwd: ROOT, stdio: 'inherit' });
 
   const leaked = promotion.replace(
     'permissions:\n      contents: read\n    outputs:',
@@ -339,6 +444,40 @@ function selfTest() {
   const production = promotion.replace('environment: staging', 'environment: production');
   if (!promotionErrors(production).some((error) => error.includes('environment: production'))) {
     throw new Error('production activation fixture unexpectedly passed');
+  }
+
+  const broadOperation = promotion.replace(
+    "if: github.event_name == 'workflow_dispatch' && inputs.operation == 'promote'",
+    "if: github.event_name == 'workflow_dispatch'",
+  );
+  if (!promotionErrors(broadOperation).some((error) => error.includes('promotion phase 1'))) {
+    throw new Error('operation isolation fixture unexpectedly passed');
+  }
+
+  const operatorBlock = jobBlock(promotion, 'operator-entrypoint');
+  const operatorSecretLeak = promotion.replace(
+    operatorBlock,
+    operatorBlock.replace('env:\n      GITHUB_TOKEN:', 'env:\n      LEAKED_DEPLOY: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n      GITHUB_TOKEN:'),
+  );
+  if (!promotionErrors(operatorSecretLeak).some((error) => error.includes('bounded operator entrypoint') || error.includes('referenced exactly once'))) {
+    throw new Error('operator credential leakage fixture unexpectedly passed');
+  }
+
+  const negativeBlock = jobBlock(promotion, 'rollback-negative-evidence');
+  const uncontrolledNegative = promotion.replace(
+    negativeBlock,
+    negativeBlock.replace("jq '.catalog_schema_revision = null'", "jq '.catalog_schema_revision = .catalog_schema_revision'"),
+  );
+  if (!promotionErrors(uncontrolledNegative).some((error) => error.includes('rollback-negative evidence'))) {
+    throw new Error('rollback-negative controlled-condition bypass unexpectedly passed');
+  }
+
+  const nestedArtifact = promotion.replace(
+    '${{ runner.temp }}/release-set.json\n            ${{ runner.temp }}/accepted-source-evidence.json',
+    '${{ runner.temp }}/release-policy-input/release-set.json\n            ${{ runner.temp }}/release-policy-input/accepted-source-evidence.json',
+  );
+  if (!promotionErrors(nestedArtifact).some((error) => error.includes('phase 2 observe+preflight'))) {
+    throw new Error('nested preflight artifact regression unexpectedly passed');
   }
 
   console.log('AR-11 structural release/promotion negative self-test passed.');
