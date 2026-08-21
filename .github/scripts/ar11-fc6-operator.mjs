@@ -12,7 +12,7 @@ const TRANSACTION_PATH = 'docs/evidence/ar11-fc6-operator-transaction.json';
 const RELEASE = 'release-set-v2-sha256-[0-9a-f]{64}';
 const RELEASE_ID = new RegExp(`^${RELEASE}$`);
 const SHA = /^[0-9a-f]{40}$/;
-const TRANSACTION_KEYS = Object.freeze([
+const TRANSACTION_V1_KEYS = Object.freeze([
   'schema_version',
   'kind',
   'authority',
@@ -25,7 +25,31 @@ const TRANSACTION_KEYS = Object.freeze([
   'final_expected_current',
   'confirmation',
 ]);
+const TRANSACTION_V2_KEYS = Object.freeze([
+  'schema_version',
+  'kind',
+  'authority',
+  'tracker_issue',
+  'production_authorized',
+  'operation',
+  'release_set_a',
+  'release_set_b',
+  'initial_expected_current',
+  'final_expected_current',
+  'ceremony_revision',
+  'confirmation',
+]);
 const STAGES = Object.freeze(['a-to-b', 'b-no-change', 'b-to-a', 'a-no-change', 'negative-rollback']);
+const runtimeAudit = {
+  started: false,
+  ceremonyId: null,
+  stage: null,
+  request: null,
+  mainSha: null,
+  runId: null,
+  dispatchBound: false,
+  comments: null,
+};
 
 function fail(message) { throw new Error(`AR-11 FC-6 trusted-main operator rejected: ${message}`); }
 function canonicalJson(value) { return `${JSON.stringify(value, null, 2)}\n`; }
@@ -33,8 +57,9 @@ function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function validateTransaction(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('ceremony transaction must be one object');
-  if (JSON.stringify(Object.keys(value)) !== JSON.stringify(TRANSACTION_KEYS)) fail('ceremony transaction keys/order drifted');
-  if (value.schema_version !== 1) fail('ceremony transaction schema_version must be 1');
+  const keys = value.schema_version === 2 ? TRANSACTION_V2_KEYS : TRANSACTION_V1_KEYS;
+  if (JSON.stringify(Object.keys(value)) !== JSON.stringify(keys)) fail('ceremony transaction keys/order drifted');
+  if (![1, 2].includes(value.schema_version)) fail('ceremony transaction schema_version must be 1 or 2');
   if (value.kind !== 'AR11_FC6_STAGING_CEREMONY') fail('ceremony transaction kind drifted');
   if (value.authority !== 'TRANSPORT_REQUEST_ONLY') fail('ceremony transaction must not claim mutation authority');
   if (value.tracker_issue !== ISSUE_NUMBER) fail(`ceremony transaction tracker_issue must be ${ISSUE_NUMBER}`);
@@ -44,8 +69,13 @@ function validateTransaction(value) {
   if (value.release_set_a === value.release_set_b) fail('ceremony A and B must be source-distinct Release Sets');
   if (value.initial_expected_current !== value.release_set_a) fail('ceremony initial expected-current must equal A');
   if (value.final_expected_current !== value.release_set_a) fail('ceremony final expected-current must equal A');
-  if (value.confirmation !== `${value.release_set_a}:${value.release_set_b}:FC6`) fail('ceremony confirmation must bind exact A and B');
-  return { a: value.release_set_a, b: value.release_set_b };
+  const revision = value.schema_version === 2 ? value.ceremony_revision : 1;
+  if (!Number.isSafeInteger(revision) || revision < 1) fail('ceremony_revision must be a positive integer');
+  const expectedConfirmation = value.schema_version === 2
+    ? `${value.release_set_a}:${value.release_set_b}:FC6:R${revision}`
+    : `${value.release_set_a}:${value.release_set_b}:FC6`;
+  if (value.confirmation !== expectedConfirmation) fail('ceremony confirmation must bind exact A, B and revision');
+  return { a: value.release_set_a, b: value.release_set_b, revision };
 }
 
 function parseTransactionBytes(raw) {
@@ -202,6 +232,36 @@ function auditBody(ceremonyId, stage, phase, request, extra = []) {
   ].join('\n\n');
 }
 
+function sanitizeFailureReason(value) {
+  let text = String(value ?? 'UNKNOWN_FAILURE')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/Bearer\s+[^\s]+/gi, 'Bearer [REDACTED]')
+    .replace(/github_pat_[A-Za-z0-9_]+/g, '[REDACTED_GITHUB_TOKEN]')
+    .replace(/gh[pousr]_[A-Za-z0-9_]+/g, '[REDACTED_GITHUB_TOKEN]')
+    .replace(/(token|secret|password)=([^\s,;]+)/gi, '$1=[REDACTED]')
+    .replace(/`/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) text = 'UNKNOWN_FAILURE';
+  return text.slice(0, 400);
+}
+
+function failureAuditBody(state, reason) {
+  const request = state.request;
+  const providerMutation = state.dispatchBound ? 'unknown' : 'false';
+  return [
+    auditMarker(state.ceremonyId, state.stage ?? 'ceremony', 'FAILED'),
+    `FC-6 trusted-main operator terminal audit: **${state.stage ?? 'ceremony'} / FAILED**.`,
+    `Ceremony: \`${state.ceremonyId}\``,
+    `Main SHA: \`${state.mainSha ?? 'UNKNOWN'}\``,
+    `Request id: \`${request?.requestId ?? 'NONE'}\``,
+    `Canonical run id: \`${state.runId ?? 'NONE'}\``,
+    `Provider mutation: \`${providerMutation}\``,
+    `Bounded failure reason: \`${sanitizeFailureReason(reason)}\``,
+    'This terminal record is metadata-only. The transport itself has no Cloudflare credential, no staging Environment, and no provider mutation authority.',
+  ].join('\n\n');
+}
+
 async function loadAuditComments() {
   const comments = [];
   for (let page = 1; page <= 20; page += 1) {
@@ -224,9 +284,38 @@ async function ensureAudit(comments, ceremonyId, stage, phase, request, extra = 
   return created;
 }
 
+async function ensureFailureAudit(state, reason) {
+  if (!state.started || !state.ceremonyId) return;
+  const comments = state.comments ?? await loadAuditComments();
+  state.comments = comments;
+  const stage = state.stage ?? 'ceremony';
+  const marker = auditMarker(state.ceremonyId, stage, 'FAILED');
+  const matches = comments.filter((comment) => typeof comment?.body === 'string' && comment.body.includes(marker));
+  if (matches.length > 1) fail(`duplicate audit marker for ${stage}/FAILED`);
+  if (matches.length === 1) return;
+  const created = await github(`/repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments`, {
+    method: 'POST',
+    body: { body: failureAuditBody(state, reason) },
+  });
+  if (!Number.isInteger(created?.id) || created.id <= 0) fail('created terminal FAILED audit comment id is invalid');
+  comments.push(created);
+}
+
 async function executeStage({ comments, ceremonyId, stage, request, mainSha }) {
+  Object.assign(runtimeAudit, {
+    started: true,
+    ceremonyId,
+    stage,
+    request,
+    mainSha,
+    runId: null,
+    dispatchBound: false,
+    comments,
+  });
   await ensureAudit(comments, ceremonyId, stage, 'DISPATCH_PENDING', request);
   const { run, reused } = await dispatchOrReuse(request, mainSha);
+  runtimeAudit.runId = run.id;
+  runtimeAudit.dispatchBound = true;
   await ensureAudit(comments, ceremonyId, stage, 'DISPATCH_BOUND', request, [`Canonical run id: \`${run.id}\``, `Canonical run: ${run.html_url}`, `Reused existing canonical run: \`${reused}\``]);
   const completed = await waitForSuccess(run.id, request, mainSha);
   await ensureAudit(comments, ceremonyId, stage, 'RUN_SUCCESS', request, [`Canonical run id: \`${completed.id}\``, `Canonical run: ${completed.html_url}`]);
@@ -243,7 +332,11 @@ function selfTest() {
   const b = `release-set-v2-sha256-${'b'.repeat(64)}`;
   const tx = { schema_version: 1, kind: 'AR11_FC6_STAGING_CEREMONY', authority: 'TRANSPORT_REQUEST_ONLY', tracker_issue: ISSUE_NUMBER, production_authorized: false, operation: 'full-staging-ceremony', release_set_a: a, release_set_b: b, initial_expected_current: a, final_expected_current: a, confirmation: `${a}:${b}:FC6` };
   const parsed = parseTransactionBytes(canonicalJson(tx));
-  if (parsed.a !== a || parsed.b !== b) fail('positive transaction self-test failed');
+  if (parsed.a !== a || parsed.b !== b || parsed.revision !== 1) fail('positive v1 transaction self-test failed');
+  const txV2 = { schema_version: 2, kind: 'AR11_FC6_STAGING_CEREMONY', authority: 'TRANSPORT_REQUEST_ONLY', tracker_issue: ISSUE_NUMBER, production_authorized: false, operation: 'full-staging-ceremony', release_set_a: a, release_set_b: b, initial_expected_current: a, final_expected_current: a, ceremony_revision: 2, confirmation: `${a}:${b}:FC6:R2` };
+  const parsedV2 = parseTransactionBytes(canonicalJson(txV2));
+  if (parsedV2.revision !== 2) fail('positive v2 retry transaction self-test failed');
+  expectReject(() => validateTransaction({ ...txV2, ceremony_revision: 0, confirmation: `${a}:${b}:FC6:R0` }), 'positive integer');
   expectReject(() => parseTransactionBytes(JSON.stringify(tx)), 'canonical JSON bytes');
   expectReject(() => validateTransaction({ ...tx, production_authorized: true }), 'production unauthorized');
   expectReject(() => validateTransaction({ ...tx, release_set_b: a, confirmation: `${a}:${a}:FC6` }), 'source-distinct');
@@ -255,7 +348,7 @@ function selfTest() {
   const compare = { url: `https://api.github.com/repos/${REPOSITORY}/compare/${'1'.repeat(40)}...${'2'.repeat(40)}`, status: 'ahead', ahead_by: 1, behind_by: 0, total_commits: 1, merge_base_commit: { sha: '1'.repeat(40) }, base_commit: { sha: '1'.repeat(40) }, commits: [{ sha: '2'.repeat(40) }], files: [{ filename: TRANSACTION_PATH, status: 'modified', deletions: 0 }] };
   validateCompare(compare, '1'.repeat(40), '2'.repeat(40));
   expectReject(() => validateCompare({ ...compare, files: [...compare.files, { filename: 'src/unsafe.rs', status: 'modified', deletions: 0 }] }, '1'.repeat(40), '2'.repeat(40)), 'exactly one data-only file');
-  const ceremonyId = `main-${'2'.repeat(40)}`;
+  const ceremonyId = `main-${'2'.repeat(40)}-r2`;
   const aToB = stageRequest('a-to-b', a, b, ceremonyId);
   if (aToB.releaseSetId !== b || aToB.expectedCurrent !== a || aToB.confirmation !== `${b}:${a}`) fail('A-to-B stage binding self-test failed');
   const aNoChange = stageRequest('a-no-change', a, b, ceremonyId);
@@ -266,6 +359,11 @@ function selfTest() {
   const runs = [{ id: 77, event: 'workflow_dispatch', head_branch: 'main', head_sha: '2'.repeat(40), path: WORKFLOW_PATH, display_title: expectedRunTitle(request) }];
   if (findBoundRuns(runs, request, '2'.repeat(40)).length !== 1) fail('idempotent canonical run binding self-test failed');
   if (findBoundRuns(runs, request, '3'.repeat(40)).length !== 0) fail('wrong-main canonical run unexpectedly matched');
+  const failureState = { started: true, ceremonyId, stage: 'a-to-b', request, mainSha: '2'.repeat(40), runId: null, dispatchBound: false };
+  const beforeDispatch = failureAuditBody(failureState, 'boom\nsecret=abc123');
+  if (!beforeDispatch.includes('Provider mutation: `false`') || beforeDispatch.includes('abc123')) fail('pre-dispatch FAILED audit sanitization self-test failed');
+  const afterDispatch = failureAuditBody({ ...failureState, runId: 77, dispatchBound: true }, 'canonical run failed');
+  if (!afterDispatch.includes('Provider mutation: `unknown`') || !afterDispatch.includes('Canonical run id: `77`')) fail('post-dispatch FAILED audit state self-test failed');
   console.log('AR-11 FC-6 trusted-main ceremony transport positive and negative self-tests passed.');
 }
 
@@ -277,11 +375,13 @@ async function main() {
   const event = JSON.parse(readFileSync(eventPath, 'utf8'));
   const push = validatePushEvent(event, process.env.GITHUB_SHA, process.env.GITHUB_REF, process.env.GITHUB_EVENT_NAME);
   const raw = readFileSync(TRANSACTION_PATH, 'utf8');
-  const { a, b } = parseTransactionBytes(raw);
+  const { a, b, revision } = parseTransactionBytes(raw);
   await bindHostedTransaction(push.before, push.after, raw);
 
-  const ceremonyId = `main-${push.after}`;
+  const ceremonyId = `main-${push.after}-r${revision}`;
+  Object.assign(runtimeAudit, { started: true, ceremonyId, stage: 'ceremony', request: null, mainSha: push.after, runId: null, dispatchBound: false });
   const comments = await loadAuditComments();
+  runtimeAudit.comments = comments;
   const completed = {};
   for (const stage of ['a-to-b', 'b-no-change', 'b-to-a', 'a-no-change']) {
     const request = stageRequest(stage, a, b, ceremonyId);
@@ -290,12 +390,18 @@ async function main() {
   const negativeRequest = stageRequest('negative-rollback', a, b, ceremonyId, String(completed['a-no-change'].id));
   completed['negative-rollback'] = await executeStage({ comments, ceremonyId, stage: 'negative-rollback', request: negativeRequest, mainSha: push.after });
   const runIds = STAGES.map((stage) => `${stage}=${completed[stage].id}`).join(', ');
+  Object.assign(runtimeAudit, { stage: 'ceremony', request: negativeRequest, runId: completed['negative-rollback'].id, dispatchBound: true });
   await ensureAudit(comments, ceremonyId, 'ceremony', 'COMPLETE', negativeRequest, [`Canonical run ids: \`${runIds}\``, `Final expected provider Release Set after ceremony: \`${a}\``]);
-  console.log(JSON.stringify({ ceremony_id: ceremonyId, release_set_a: a, release_set_b: b, run_ids: Object.fromEntries(STAGES.map((stage) => [stage, completed[stage].id])), production_authorized: false }));
+  console.log(JSON.stringify({ ceremony_id: ceremonyId, ceremony_revision: revision, release_set_a: a, release_set_b: b, run_ids: Object.fromEntries(STAGES.map((stage) => [stage, completed[stage].id])), production_authorized: false }));
 }
 
 main().catch(async (error) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(message);
+  try {
+    await ensureFailureAudit(runtimeAudit, message);
+  } catch (auditError) {
+    console.error(`terminal FAILED audit could not be persisted: ${sanitizeFailureReason(auditError instanceof Error ? auditError.message : auditError)}`);
+  }
+  console.error(sanitizeFailureReason(message));
   process.exitCode = 1;
 });
