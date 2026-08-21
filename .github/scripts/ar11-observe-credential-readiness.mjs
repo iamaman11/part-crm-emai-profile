@@ -40,8 +40,8 @@ function requiredPolicy(extension) {
   if (!Array.isArray(credentials)) fail('credential extension credentials must be an array');
   const credential = credentials.find((row) => row?.id === OBSERVE_CREDENTIAL_ID);
   if (!credential) fail(`credential ${OBSERVE_CREDENTIAL_ID} is missing`);
-  const required = credential?.provider_permissions?.required;
-  const forbidden = credential?.provider_permissions?.forbidden;
+  const required = credential?.required_provider_permissions;
+  const forbidden = credential?.forbidden_provider_permission_classes;
   if (!Array.isArray(required) || required.length === 0 || required.some((value) => typeof value !== 'string' || !value)) {
     fail('observe credential required provider permissions are malformed');
   }
@@ -50,7 +50,9 @@ function requiredPolicy(extension) {
   }
   const scope = credential?.environment_scope?.environments;
   if (!Array.isArray(scope) || scope.length !== 1 || scope[0] !== 'staging') fail('observe credential must remain staging-only');
-  if (credential?.mutation_capability !== 'forbidden') fail('observe credential mutation capability must remain forbidden');
+  if (credential?.mutation_allowed !== false || credential?.provider_mutation_forbidden !== true || credential?.allowed_mutator !== 'NONE') {
+    fail('observe credential mutation capability must remain forbidden');
+  }
   return { required: [...new Set(required)].sort(), forbidden: [...new Set(forbidden)].sort() };
 }
 
@@ -132,7 +134,7 @@ function evaluate({ extension, attestation, verify, deployManifest, observations
 }
 
 function argsFrom(argv) {
-  const result = { attestation: DEFAULT_ATTESTATION };
+  const result = { attestation: DEFAULT_ATTESTATION, extension: EXTENSION_PATH };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === '--self-test') result.selfTest = true;
@@ -146,14 +148,17 @@ function argsFrom(argv) {
 }
 
 function selfTest() {
-  const required = ['D1 Read', 'Workers R2 Storage Read', 'Workers Scripts Read', 'Workers Tail Read'];
+  const required = ['Workers Scripts Read', 'D1 Read', 'Workers R2 Storage Read', 'Queues Read'];
   const extension = {
     production_mutation: false,
     credentials: [{
       id: OBSERVE_CREDENTIAL_ID,
       environment_scope: { environments: ['staging'] },
-      mutation_capability: 'forbidden',
-      provider_permissions: { required, forbidden: ['Account Settings Write', 'API Tokens Write', 'Workers Scripts Write'] },
+      allowed_mutator: 'NONE',
+      mutation_allowed: false,
+      provider_mutation_forbidden: true,
+      required_provider_permissions: required,
+      forbidden_provider_permission_classes: ['Workers Scripts Write', 'D1 Write', 'Workers R2 Storage Write', 'Queues Write', 'API Tokens Write'],
     }],
   };
   const accountId = 'a'.repeat(32);
