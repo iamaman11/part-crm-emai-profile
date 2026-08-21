@@ -110,6 +110,12 @@ jobs:
       - name: Prove Actions registry drift fails closed
         run: node .github/scripts/github-actions-registry.mjs self-test
 
+      - name: Validate exact AR-11 Actions registry retirement contract
+        run: node .github/scripts/ar11-actions-registry-retirement.mjs contract
+
+      - name: Prove AR-11 Actions retirement fails closed
+        run: node .github/scripts/ar11-actions-registry-retirement.mjs self-test
+
       - name: Validate accepted AR-8C operational credential lifecycle provenance
         run: node .github/scripts/credential-lifecycle.mjs contract
 
@@ -139,6 +145,9 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: contract
     runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
     env:
       GOVERNANCE_AUDIT_TOKEN: ${{ secrets.GOVERNANCE_AUDIT_TOKEN }}
     steps:
@@ -167,6 +176,11 @@ jobs:
 
       - name: Audit AR-10 additive live hosted governance
         run: node .github/scripts/ar10-github-governance-extension.mjs live
+
+      - name: Reconcile only exact accepted AR-11 obsolete workflow registrations
+        env:
+          GITHUB_ACTIONS_WRITE_AUTH: ${{ github.token }}
+        run: printf '%s' "$GITHUB_ACTIONS_WRITE_AUTH" | node .github/scripts/ar11-actions-registry-retirement.mjs reconcile
 
       - name: Audit live Actions registry against canonical projection
         env:

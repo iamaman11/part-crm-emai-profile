@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "kind": "AR11_HOSTED_ACTIONS_REGISTRY_RETIREMENTS",
+  "repository": "iamaman11/part-crm-emai-profile",
+  "tracker_issue": 399,
+  "implementation_issue": 421,
+  "discovered_on_accepted_main_sha": "7fc11fad573f0077f1f61fd527350864df59c571",
+  "discovery_workflow_run_id": 32509498633,
+  "historical_runs_preserved": true,
+  "delete_run_history": false,
+  "provider_mutation": false,
+  "production_mutation": false,
+  "required_checks_weakened": false,
+  "retirements": [
+    {
+      "registration_id": 338978790,
+      "path": ".github/workflows/ar11-projection-regeneration.yml",
+      "classification": "SCRATCH_DEBUG",
+      "provenance": "AR-11 branch-only projection regeneration helper",
+      "accepted_main_source_present": false,
+      "decision": "DISABLE_REGISTRATION"
+    },
+    {
+      "registration_id": 338981037,
+      "path": ".github/workflows/ar11-fc2-tar-hardening-helper.yml",
+      "classification": "SCRATCH_DEBUG",
+      "provenance": "AR-11 FC-2 branch-only tar hardening helper",
+      "accepted_main_source_present": false,
+      "decision": "DISABLE_REGISTRATION"
+    },
+    {
+      "registration_id": 338981914,
+      "path": ".github/workflows/ar11-fc4-mutation-fence-helper.yml",
+      "classification": "SCRATCH_DEBUG",
+      "provenance": "AR-11 FC-4 branch-only mutation-fence helper",
+      "accepted_main_source_present": false,
+      "decision": "DISABLE_REGISTRATION"
+    },
+    {
+      "registration_id": 339008570,
+      "path": ".github/workflows/ar11-hosted-observation-probe.yml",
+      "classification": "SCRATCH_DEBUG",
+      "provenance": "closed unmerged diagnostic PR #405",
+      "accepted_main_source_present": false,
+      "decision": "DISABLE_REGISTRATION"
+    },
+    {
+      "registration_id": 339013335,
+      "path": ".github/workflows/ar11-ahead-compare-diagnostic.yml",
+      "classification": "SCRATCH_DEBUG",
+      "provenance": "closed unmerged diagnostic PR #407",
+      "accepted_main_source_present": false,
+      "decision": "DISABLE_REGISTRATION"
+    },
+    {
+      "registration_id": 339019641,
+      "path": ".github/workflows/ar11-release-a-observation.yml",
+      "classification": "SCRATCH_DEBUG",
+      "provenance": "closed unmerged read-only observation PR #409",
+      "accepted_main_source_present": false,
+      "decision": "DISABLE_REGISTRATION"
+    },
+    {
+      "registration_id": 339025235,
+      "path": ".github/workflows/ar11-release-b-observation.yml",
+      "classification": "SCRATCH_DEBUG",
+      "provenance": "closed unmerged read-only observation PR #411",
+      "accepted_main_source_present": false,
+      "decision": "DISABLE_REGISTRATION"
+    },
+    {
+      "registration_id": 339396487,
+      "path": ".github/workflows/ar11-fc6-live-actions-diagnostic.yml",
+      "classification": "SCRATCH_DEBUG",
+      "provenance": "closed unmerged diagnostic PR #420",
+      "accepted_main_source_present": false,
+      "decision": "DISABLE_REGISTRATION"
+    },
+    {
+      "registration_id": 339576692,
+      "path": ".github/workflows/ar11-readonly-hosted-probe.yml",
+      "classification": "SCRATCH_DEBUG",
+      "provenance": "closed unmerged read-only observation PR #423",
+      "accepted_main_source_present": false,
+      "decision": "DISABLE_REGISTRATION"
+    }
+  ]
+}
