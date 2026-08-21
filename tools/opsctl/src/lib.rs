@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod canonical;
 mod cli;
 pub mod credentials;
 pub mod d1;
