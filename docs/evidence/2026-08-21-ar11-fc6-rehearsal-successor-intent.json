@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "kind": "AR11_FC6_REHEARSAL_SUCCESSOR_INTENT",
+  "status": "candidate",
+  "authority_role": "NON_AUTHORITATIVE_EVIDENCE_ONLY",
+  "tracking_issue": 399,
+  "functional_closure_plan": "docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md",
+  "predecessor_accepted_main": "054467335c5d430010453446c7d0c0d7191dc258",
+  "purpose": "Create one minimal source-distinct but behavior-compatible accepted-main successor so the canonical Release Set Build can naturally publish the second immutable Release Set v2 required by the FC-6 live staging rehearsal.",
+  "merge_preconditions": {
+    "predecessor_release_set_v2_durably_observed": true,
+    "predecessor_release_set_built_by_canonical_main_push": true,
+    "exact_head_ci_green": true,
+    "protected_required_contexts_green": true,
+    "behind_by_zero": true,
+    "blocking_reviews_zero": true,
+    "unresolved_review_threads_zero": true,
+    "guarded_merge_bound_to_exact_head": true
+  },
+  "canonical_authorities": {
+    "release_build": ".github/workflows/release-set-build.yml",
+    "staging_promotion": ".github/workflows/release-set-promotion.yml",
+    "native_policy_engine": "tools/opsctl",
+    "live_evidence_verifier": "scripts/check-ar11-staging-rehearsal.py"
+  },
+  "successor_constraints": {
+    "application_behavior_change": false,
+    "schema_change": false,
+    "protocol_change": false,
+    "runtime_contract_change": false,
+    "capability_change": false,
+    "production_enablement": false,
+    "production_mutation": false,
+    "ar12_implementation": false,
+    "historical_release_rebuild": false,
+    "parallel_release_authority": false,
+    "parallel_promotion_authority": false
+  },
+  "acceptance_claims": {
+    "predecessor_release_set_a_observed": false,
+    "successor_release_set_b_published": false,
+    "live_a_to_b_verified": false,
+    "live_b_no_change_verified": false,
+    "live_b_to_a_verified": false,
+    "live_a_no_change_verified": false,
+    "negative_rollback_block_verified": false,
+    "fc6_complete": false,
+    "fc7_complete": false,
+    "ar11_functional_closure_complete": false
+  },
+  "invariants": [
+    "This document is evidence intent only and never becomes release, lifecycle, promotion, or production authority.",
+    "Merge is forbidden until the original predecessor Release Set v2 A from accepted main is directly and durably observed.",
+    "The successor must enter protected main only through the normal PR, exact-head CI, branch-protection, and guarded-merge path.",
+    "Release Set v2 B must be created only by the ordinary accepted-main Release Set Build workflow after merge.",
+    "Rollback must reuse the original durable A bytes; A must never be rebuilt or repackaged for FC-6.",
+    "Production remains blocked and AR-12 remains not started throughout FC-6 and FC-7."
+  ]
+}
