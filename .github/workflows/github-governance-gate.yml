@@ -62,6 +62,12 @@ jobs:
       - name: Prove AR-11 observe credential readiness fails closed
         run: node .github/scripts/ar11-observe-credential-readiness.mjs --self-test
 
+      - name: Prove AR-11 Core mailbox hosted disablement fails closed
+        run: node .github/scripts/ar11-core-mailbox-hosted-disablement.mjs --self-test
+
+      - name: Validate AR-11 Core mailbox hosted disablement contract
+        run: node .github/scripts/ar11-core-mailbox-hosted-disablement.mjs
+
       - name: Validate one-merge architecture acceptance contract
         run: |
           node .github/scripts/architecture-acceptance.mjs contract
@@ -290,3 +296,56 @@ jobs:
             --output "$RUNNER_TEMP/ar11-observe-readiness.json"
           jq -e '.decision == "READY" and .environment == "staging" and .production_mutation == false and .mutation_probe == "FORBIDDEN_NOT_EXECUTED"' \
             "$RUNNER_TEMP/ar11-observe-readiness.json" >/dev/null
+
+      - name: Prove disabled AR-11 Core mailbox surfaces have no hosted execution authority
+        env:
+          CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+          CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
+          umask 077
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/ar11-core-mailbox-hosted-manifest.json"
+
+          account_id="$(jq -er '.control_plane.account_id // .account_id | select(type == "string" and length == 32)' "$RUNNER_TEMP/ar11-core-mailbox-hosted-manifest.json")"
+          worker_name="$(jq -er '.control_plane.worker_name // .worker_name | select(type == "string" and length > 0)' "$RUNNER_TEMP/ar11-core-mailbox-hosted-manifest.json")"
+          resolver_name="$(jq -er '.env.staging.name | select(type == "string" and length > 0)' deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc)"
+          jq -e '.workers_dev == false and .env.staging.workers_dev == false and (.env.staging.routes | type == "array") and (.env.staging.routes | length) == 0' \
+            deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc >/dev/null
+
+          settings_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-core-settings.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/settings")"
+          if [ "$settings_code" = 200 ]; then
+            jq -e '.success == true and ((.result.bindings // []) | all(.[]; .name != "MAILBOX_SECRET_RESOLVER" and .name != "MAILBOX_JOBS"))' \
+              "$RUNNER_TEMP/ar11-core-settings.json" >/dev/null
+          elif [ "$settings_code" != 404 ]; then
+            cat "$RUNNER_TEMP/ar11-core-settings.json" >&2
+            exit 1
+          fi
+
+          schedules_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-resolver-schedules.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$resolver_name/schedules")"
+          if [ "$schedules_code" = 200 ]; then
+            jq -e '.success == true and (.result.schedules | type == "array") and ((.result.schedules | length) == 0)' \
+              "$RUNNER_TEMP/ar11-resolver-schedules.json" >/dev/null
+          elif [ "$schedules_code" != 404 ]; then
+            cat "$RUNNER_TEMP/ar11-resolver-schedules.json" >&2
+            exit 1
+          fi
+
+          subdomain_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-resolver-subdomain.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$resolver_name/subdomain")"
+          if [ "$subdomain_code" = 200 ]; then
+            jq -e '.success == true and .result.enabled == false and .result.previews_enabled == false' \
+              "$RUNNER_TEMP/ar11-resolver-subdomain.json" >/dev/null
+          elif [ "$subdomain_code" != 404 ]; then
+            cat "$RUNNER_TEMP/ar11-resolver-subdomain.json" >&2
+            exit 1
+          fi
+
+          echo "AR11_CORE_MAILBOX_HOSTED_DISABLED control_plane=$worker_name resolver=$resolver_name service_binding=absent cron_triggers=0 workers_dev=false previews=false production_mutation=false"
