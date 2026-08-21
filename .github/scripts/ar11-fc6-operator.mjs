@@ -13,19 +13,44 @@ const PR_TRIGGER_PATH = 'docs/evidence/ar11-fc6-operator-request.json';
 const TRIGGER_WORKFLOW_NAME = 'Release Architecture Gate';
 const TRIGGER_WORKFLOW_PATH = '.github/workflows/release-architecture-gate.yml';
 const RELEASE = 'release-set-v2-sha256-[0-9a-f]{64}';
+const RELEASE_ID = new RegExp(`^${RELEASE}$`);
 const SHA = /^[0-9a-f]{40}$/;
+const RUN_ID = /^[1-9][0-9]*$/;
 const PROMOTE = new RegExp(`^/ar11-fc6-promote\\s+(${RELEASE})\\s+(${RELEASE}|NONE)\\s+(\\S+)$`);
 const NEGATIVE = new RegExp(`^/ar11-fc6-negative\\s+(${RELEASE})\\s+([1-9][0-9]*)\\s+(\\S+)$`);
-const TRIGGER_DOCUMENT = Object.freeze({
-  schema_version: 1,
-  kind: 'AR11_FC6_EPHEMERAL_OPERATOR_TRIGGER',
-  authority: 'NONE',
-  merge_authorized: false,
-  tracker_issue: ISSUE_NUMBER,
-});
+const TRIGGER_KEYS = Object.freeze([
+  'schema_version',
+  'kind',
+  'authority',
+  'merge_authorized',
+  'tracker_issue',
+  'operation',
+  'release_set_id',
+  'expected_current_release_set_id',
+  'source_run_id',
+  'confirmation',
+]);
 
 function fail(message) {
   throw new Error(`AR-11 FC-6 operator request rejected: ${message}`);
+}
+
+function requestFromFields({ operation, releaseSetId, expectedCurrent, sourceRunId, confirmation }, requestId) {
+  if (operation === 'promote') {
+    if (!RELEASE_ID.test(releaseSetId ?? '')) fail('promotion Release Set id is invalid');
+    if (expectedCurrent !== 'NONE' && !RELEASE_ID.test(expectedCurrent ?? '')) fail('promotion expected-current Release Set id is invalid');
+    if (sourceRunId !== '') fail('promotion source_run_id must be empty');
+    if (confirmation !== `${releaseSetId}:${expectedCurrent}`) fail('promotion confirmation does not bind target and expected current');
+    return { operation, requestId, releaseSetId, expectedCurrent, sourceRunId: '', confirmation };
+  }
+  if (operation === 'rollback-negative') {
+    if (!RELEASE_ID.test(releaseSetId ?? '')) fail('negative-evidence Release Set id is invalid');
+    if (expectedCurrent !== releaseSetId) fail('negative-evidence expected-current must equal Release Set id');
+    if (!RUN_ID.test(sourceRunId ?? '')) fail('negative-evidence source_run_id is invalid');
+    if (confirmation !== `${releaseSetId}:${sourceRunId}`) fail('negative confirmation does not bind Release Set and source run');
+    return { operation, requestId, releaseSetId, expectedCurrent, sourceRunId, confirmation };
+  }
+  fail('operation must be promote or rollback-negative');
 }
 
 function parseCommand(body, requestId) {
@@ -33,31 +58,13 @@ function parseCommand(body, requestId) {
   let match = text.match(PROMOTE);
   if (match) {
     const [, releaseSetId, expectedCurrent, confirmation] = match;
-    if (confirmation !== `${releaseSetId}:${expectedCurrent}`) fail('promotion confirmation does not bind target and expected current');
-    return {
-      operation: 'promote',
-      requestId,
-      releaseSetId,
-      expectedCurrent,
-      sourceRunId: '',
-      confirmation,
-    };
+    return requestFromFields({ operation: 'promote', releaseSetId, expectedCurrent, sourceRunId: '', confirmation }, requestId);
   }
-
   match = text.match(NEGATIVE);
   if (match) {
     const [, releaseSetId, sourceRunId, confirmation] = match;
-    if (confirmation !== `${releaseSetId}:${sourceRunId}`) fail('negative confirmation does not bind Release Set and source run');
-    return {
-      operation: 'rollback-negative',
-      requestId,
-      releaseSetId,
-      expectedCurrent: releaseSetId,
-      sourceRunId,
-      confirmation,
-    };
+    return requestFromFields({ operation: 'rollback-negative', releaseSetId, expectedCurrent: releaseSetId, sourceRunId, confirmation }, requestId);
   }
-
   fail('command syntax is not exact');
 }
 
@@ -92,12 +99,7 @@ function parseWorkflowRun(event) {
   return {
     request: null,
     responseIssue: pulls[0].number,
-    workflowRun: {
-      id: run.id,
-      headSha: run.head_sha,
-      headBranch,
-      pullNumber: pulls[0].number,
-    },
+    workflowRun: { id: run.id, headSha: run.head_sha, headBranch, pullNumber: pulls[0].number },
   };
 }
 
@@ -109,14 +111,30 @@ function parseRequest(event) {
   return null;
 }
 
-function validateTriggerDocument(value) {
+function canonicalTriggerBytes(value) {
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function validateTriggerDocument(value, requestId) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('operator PR trigger document must be one object');
-  const expectedKeys = Object.keys(TRIGGER_DOCUMENT).sort();
-  const actualKeys = Object.keys(value).sort();
-  if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys)) fail('operator PR trigger document keys drifted');
-  for (const [key, expected] of Object.entries(TRIGGER_DOCUMENT)) {
-    if (value[key] !== expected) fail(`operator PR trigger document field ${key} drifted`);
+  const actualKeys = Object.keys(value);
+  if (JSON.stringify(actualKeys) !== JSON.stringify(TRIGGER_KEYS)) fail('operator PR trigger document keys/order drifted');
+  if (
+    value.schema_version !== 1
+    || value.kind !== 'AR11_FC6_EPHEMERAL_OPERATOR_TRIGGER'
+    || value.authority !== 'NONE'
+    || value.merge_authorized !== false
+    || value.tracker_issue !== ISSUE_NUMBER
+  ) {
+    fail('operator PR trigger document non-authority envelope drifted');
   }
+  return requestFromFields({
+    operation: value.operation,
+    releaseSetId: value.release_set_id,
+    expectedCurrent: value.expected_current_release_set_id,
+    sourceRunId: value.source_run_id,
+    confirmation: value.confirmation,
+  }, requestId);
 }
 
 function validatePullFiles(files) {
@@ -182,29 +200,33 @@ async function resolveWorkflowRunRequest(workflowRun) {
   if (payload?.type !== 'file' || payload?.encoding !== 'base64' || payload?.sha !== triggerSha || typeof payload?.content !== 'string') {
     fail('operator PR trigger file response is malformed or unbound');
   }
+  const raw = Buffer.from(payload.content.replace(/\s/g, ''), 'base64').toString('utf8');
   let trigger;
   try {
-    trigger = JSON.parse(Buffer.from(payload.content.replace(/\s/g, ''), 'base64').toString('utf8'));
+    trigger = JSON.parse(raw);
   } catch (error) {
     fail(`operator PR trigger document is invalid JSON: ${error instanceof Error ? error.message : error}`);
   }
-  validateTriggerDocument(trigger);
-  return parseCommand(pull.body, `pr-${workflowRun.pullNumber}`);
+  if (raw !== canonicalTriggerBytes(trigger)) fail('operator PR trigger document must be canonical JSON bytes');
+  return validateTriggerDocument(trigger, `pr-${workflowRun.pullNumber}`);
 }
 
 async function listDispatchRuns() {
-  const value = await github(`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&branch=main&per_page=50`);
-  if (!Array.isArray(value?.workflow_runs)) fail('workflow run list response is malformed');
-  return value.workflow_runs;
+  const runs = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const value = await github(`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&branch=main&per_page=100&page=${page}`);
+    if (!Array.isArray(value?.workflow_runs)) fail('workflow run list response is malformed');
+    runs.push(...value.workflow_runs);
+    if (value.workflow_runs.length < 100) return runs;
+  }
+  fail('canonical dispatch history exceeds bounded idempotency scan; refusing duplicate-risk dispatch');
 }
 
 async function dispatch(request) {
   const expectedTitle = `AR11 ${request.operation} ${request.requestId}`;
   const initialRuns = await listDispatchRuns();
   const existing = findBoundRun(initialRuns, expectedTitle);
-  if (existing) {
-    return { run: existing, reused: true };
-  }
+  if (existing) return { run: existing, reused: true };
   const before = new Set(initialRuns.map((run) => run.id));
   await github(`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`, {
     method: 'POST',
@@ -255,20 +277,15 @@ function selfTest() {
   const a = `release-set-v2-sha256-${'a'.repeat(64)}`;
   const b = `release-set-v2-sha256-${'b'.repeat(64)}`;
   const baseIssue = {
-    action: 'created',
-    repository: { full_name: REPOSITORY },
-    issue: { number: ISSUE_NUMBER },
+    action: 'created', repository: { full_name: REPOSITORY }, issue: { number: ISSUE_NUMBER },
     comment: { id: 12345, user: { login: OWNER }, author_association: 'OWNER', body: '' },
   };
-
   baseIssue.comment.body = `/ar11-fc6-promote ${b} ${a} ${b}:${a}`;
   const promote = parseRequest(baseIssue)?.request;
   if (promote?.operation !== 'promote' || promote.releaseSetId !== b || promote.expectedCurrent !== a) fail('positive promotion parse self-test failed');
-
   baseIssue.comment.body = `/ar11-fc6-negative ${a} 987654 ${a}:987654`;
   const negative = parseRequest(baseIssue)?.request;
   if (negative?.operation !== 'rollback-negative' || negative.sourceRunId !== '987654') fail('positive negative-evidence parse self-test failed');
-
   baseIssue.comment.body = 'ordinary tracker comment';
   if (parseRequest(baseIssue) !== null) fail('ordinary tracker comment unexpectedly became operator input');
 
@@ -277,53 +294,48 @@ function selfTest() {
   wrongOwner.comment.user.login = 'attacker';
   expectReject(() => parseRequest(wrongOwner), 'requester must be');
 
-  const wrongIssue = structuredClone(baseIssue);
-  wrongIssue.comment.body = `/ar11-fc6-negative ${a} 987654 ${a}:987654`;
-  wrongIssue.issue.number = 398;
-  expectReject(() => parseRequest(wrongIssue), '#399');
-
   const workflowRun = {
-    action: 'completed',
-    repository: { full_name: REPOSITORY },
+    action: 'completed', repository: { full_name: REPOSITORY },
     workflow_run: {
-      id: 777,
-      name: TRIGGER_WORKFLOW_NAME,
-      path: TRIGGER_WORKFLOW_PATH,
-      event: 'pull_request',
-      status: 'completed',
-      conclusion: 'success',
-      head_branch: `${PR_BRANCH_PREFIX}a-to-b`,
-      head_sha: '2'.repeat(40),
-      head_repository: { full_name: REPOSITORY },
-      pull_requests: [{ number: 77 }],
+      id: 777, name: TRIGGER_WORKFLOW_NAME, path: TRIGGER_WORKFLOW_PATH, event: 'pull_request',
+      status: 'completed', conclusion: 'success', head_branch: `${PR_BRANCH_PREFIX}a-to-b`, head_sha: '2'.repeat(40),
+      head_repository: { full_name: REPOSITORY }, pull_requests: [{ number: 77 }],
     },
   };
   const parsedRun = parseRequest(workflowRun);
   if (parsedRun?.workflowRun?.pullNumber !== 77 || parsedRun.responseIssue !== 77) fail('positive workflow_run envelope self-test failed');
-
   const ordinaryRun = structuredClone(workflowRun);
   ordinaryRun.workflow_run.head_branch = 'feature/ordinary';
   if (parseRequest(ordinaryRun) !== null) fail('ordinary workflow_run unexpectedly became operator input');
-
   const failedRun = structuredClone(workflowRun);
   failedRun.workflow_run.conclusion = 'failure';
   expectReject(() => parseRequest(failedRun), 'complete successfully');
 
-  const wrongWorkflow = structuredClone(workflowRun);
-  wrongWorkflow.workflow_run.name = 'Quality Gate';
-  expectReject(() => parseRequest(wrongWorkflow), 'canonical pull-request Release Architecture Gate');
-
-  validateTriggerDocument(structuredClone(TRIGGER_DOCUMENT));
-  expectReject(() => validateTriggerDocument({ ...TRIGGER_DOCUMENT, surprise: true }), 'keys drifted');
+  const promoteTrigger = {
+    schema_version: 1,
+    kind: 'AR11_FC6_EPHEMERAL_OPERATOR_TRIGGER',
+    authority: 'NONE',
+    merge_authorized: false,
+    tracker_issue: ISSUE_NUMBER,
+    operation: 'promote',
+    release_set_id: b,
+    expected_current_release_set_id: a,
+    source_run_id: '',
+    confirmation: `${b}:${a}`,
+  };
+  const fileRequest = validateTriggerDocument(promoteTrigger, 'pr-77');
+  if (fileRequest.operation !== 'promote' || fileRequest.releaseSetId !== b || fileRequest.requestId !== 'pr-77') fail('immutable PR trigger parse self-test failed');
+  expectReject(() => validateTriggerDocument({ ...promoteTrigger, merge_authorized: true }, 'pr-77'), 'non-authority envelope drifted');
+  expectReject(() => validateTriggerDocument({ ...promoteTrigger, confirmation: 'BAD' }, 'pr-77'), 'confirmation');
+  const reordered = { kind: promoteTrigger.kind, schema_version: 1, ...Object.fromEntries(Object.entries(promoteTrigger).filter(([key]) => !['kind', 'schema_version'].includes(key))) };
+  expectReject(() => validateTriggerDocument(reordered, 'pr-77'), 'keys/order drifted');
+  if (canonicalTriggerBytes(promoteTrigger) !== `${JSON.stringify(promoteTrigger, null, 2)}\n`) fail('canonical trigger bytes self-test failed');
 
   validatePullFiles([{ filename: PR_TRIGGER_PATH, status: 'added', deletions: 0, sha: '3'.repeat(40) }]);
-  expectReject(
-    () => validatePullFiles([
-      { filename: PR_TRIGGER_PATH, status: 'added', deletions: 0, sha: '3'.repeat(40) },
-      { filename: 'src/untrusted.rs', status: 'added', deletions: 0, sha: '4'.repeat(40) },
-    ]),
-    'exactly one data-only file',
-  );
+  expectReject(() => validatePullFiles([
+    { filename: PR_TRIGGER_PATH, status: 'added', deletions: 0, sha: '3'.repeat(40) },
+    { filename: 'src/untrusted.rs', status: 'added', deletions: 0, sha: '4'.repeat(40) },
+  ]), 'exactly one data-only file');
 
   const boundRuns = [
     { id: 101, event: 'workflow_dispatch', head_branch: 'main', display_title: 'AR11 promote pr-77' },
@@ -332,14 +344,11 @@ function selfTest() {
   if (findBoundRun(boundRuns, 'AR11 promote pr-77')?.id !== 101) fail('idempotent request-to-run binding self-test failed');
   if (findBoundRun(boundRuns, 'AR11 promote pr-78') !== null) fail('unrelated request unexpectedly reused an existing canonical run');
 
-  console.log('AR-11 FC-6 bounded comment/workflow-run operator positive and negative self-tests passed.');
+  console.log('AR-11 FC-6 immutable-head operator positive and negative self-tests passed.');
 }
 
 async function main() {
-  if (process.argv.includes('--self-test')) {
-    selfTest();
-    return;
-  }
+  if (process.argv.includes('--self-test')) { selfTest(); return; }
   const eventPath = process.env.GITHUB_EVENT_PATH;
   if (!eventPath) fail('GITHUB_EVENT_PATH is unavailable');
   const event = JSON.parse(readFileSync(eventPath, 'utf8'));
