@@ -221,6 +221,7 @@ async function expectRejected(label, text) {
 async function selfTest(text) {
   await validateExecutor(text, ROOT);
   const promotionText = await readFile(path.join(ROOT, PROMOTION), 'utf8');
+  let sharedMutexRejected = false;
   try {
     validateSharedMutationGroup(
       text,
@@ -232,7 +233,10 @@ async function selfTest(text) {
       ),
     );
   } catch {
-    // Expected: independent D1/promotion mutation groups must fail closed.
+    sharedMutexRejected = true;
+  }
+  if (!sharedMutexRejected) {
+    fail('independent D1/promotion mutation-group fixture unexpectedly passed');
   }
 
   await expectRejected(
