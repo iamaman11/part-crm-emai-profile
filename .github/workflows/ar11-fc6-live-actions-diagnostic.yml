@@ -1,0 +1,38 @@
+name: AR-11 FC-6 Live Actions Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ar11-fc6-live-actions-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    name: Observe trusted-main transport and canonical promotion runs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read anonymous public Actions API
+        shell: bash
+        env:
+          REPOSITORY: iamaman11/part-crm-emai-profile
+          MAIN_SHA: 399826684d0d71876f614494d781a7cf420a9a60
+          CEREMONY: main-399826684d0d71876f614494d781a7cf420a9a60
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$REPOSITORY"
+          curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
+            "$api/actions/runs?head_sha=$MAIN_SHA&per_page=100" > "$RUNNER_TEMP/main-runs.json"
+          echo '=== exact-main runs ==='
+          jq --arg sha "$MAIN_SHA" '[.workflow_runs[] | select(.head_sha == $sha) | {id,name,display_title,event,status,conclusion,head_branch,head_sha,path,run_number,run_attempt,html_url,created_at,updated_at}] | sort_by(.id)' "$RUNNER_TEMP/main-runs.json"
+
+          curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
+            "$api/actions/workflows/release-set-promotion.yml/runs?event=workflow_dispatch&branch=main&per_page=100" > "$RUNNER_TEMP/promotion-runs.json"
+          echo '=== ceremony promotion runs ==='
+          jq --arg ceremony "$CEREMONY" '[.workflow_runs[] | select(.display_title | contains($ceremony)) | {id,name,display_title,event,status,conclusion,head_branch,head_sha,path,run_number,run_attempt,html_url,created_at,updated_at}] | sort_by(.id)' "$RUNNER_TEMP/promotion-runs.json"
+
+          curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
+            "$api/actions/workflows/ar11-fc6-operator-transport.yml/runs?event=push&branch=main&per_page=100" > "$RUNNER_TEMP/transport-runs.json"
+          echo '=== exact transport run ==='
+          jq --arg sha "$MAIN_SHA" '[.workflow_runs[] | select(.head_sha == $sha) | {id,name,display_title,event,status,conclusion,head_branch,head_sha,path,run_number,run_attempt,html_url,created_at,updated_at}] | sort_by(.id)' "$RUNNER_TEMP/transport-runs.json"
