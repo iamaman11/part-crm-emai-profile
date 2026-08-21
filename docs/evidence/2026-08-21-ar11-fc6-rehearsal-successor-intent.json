@@ -7,15 +7,22 @@
   "functional_closure_plan": "docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md",
   "predecessor_accepted_main": "054467335c5d430010453446c7d0c0d7191dc258",
   "purpose": "Create one minimal source-distinct but behavior-compatible accepted-main successor so the canonical Release Set Build can naturally publish the second immutable Release Set v2 required by the FC-6 live staging rehearsal.",
-  "merge_preconditions": {
-    "predecessor_release_set_v2_durably_observed": true,
-    "predecessor_release_set_built_by_canonical_main_push": true,
-    "exact_head_ci_green": true,
-    "protected_required_contexts_green": true,
-    "behind_by_zero": true,
-    "blocking_reviews_zero": true,
-    "unresolved_review_threads_zero": true,
-    "guarded_merge_bound_to_exact_head": true
+  "merge_policy": {
+    "decision": "BLOCKED_PENDING_PREDECESSOR_RELEASE_OBSERVATION",
+    "required_preconditions": [
+      "predecessor Release Set v2 A is directly and durably observed",
+      "A is proven to come from the canonical accepted-main Release Set Build",
+      "exact candidate-head CI is green",
+      "all protected required contexts are green",
+      "behind_by is zero",
+      "blocking reviews are zero",
+      "unresolved review threads are zero",
+      "guarded merge is bound to the exact candidate head"
+    ],
+    "observed_state": {
+      "predecessor_release_set_v2": "UNPROVEN",
+      "candidate_merge_authorized": false
+    }
   },
   "canonical_authorities": {
     "release_build": ".github/workflows/release-set-build.yml",
