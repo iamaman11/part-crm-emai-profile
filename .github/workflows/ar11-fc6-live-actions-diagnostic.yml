@@ -10,9 +10,32 @@ permissions:
 
 jobs:
   observe:
-    name: Validate complete hosted workflow repair candidate
+    name: Observe hosted state and validate repair candidate
     runs-on: ubuntu-latest
     steps:
+      - name: Observe exact accepted-main push runs and live Actions registry
+        shell: bash
+        env:
+          MAIN_SHA: 399826684d0d71876f614494d781a7cf420a9a60
+          REPOSITORY: iamaman11/part-crm-emai-profile
+        run: |
+          set -euo pipefail
+          runs="$RUNNER_TEMP/main-push-runs.json"
+          workflows="$RUNNER_TEMP/workflows.json"
+          curl --fail --silent --show-error --retry 2 \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$REPOSITORY/actions/runs?head_sha=$MAIN_SHA&event=push&per_page=100" \
+            -o "$runs"
+          echo '=== exact-main push workflow runs ==='
+          jq -r '.workflow_runs[] | [.id, .name, .status, (.conclusion // ""), .path, .event, .head_sha] | @tsv' "$runs"
+          curl --fail --silent --show-error --retry 2 \
+            -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$REPOSITORY/actions/workflows?per_page=100" \
+            -o "$workflows"
+          echo '=== live Actions registry ==='
+          jq -r '.workflows[] | [.id, .name, .state, .path] | @tsv' "$workflows"
+          echo "live_workflow_count=$(jq -r '.total_count' "$workflows")"
+
       - name: Lint exact accepted-main bytes and repaired candidate
         shell: bash
         env:
@@ -45,6 +68,5 @@ jobs:
           original_status=$?
           set -e
           test "$original_status" -ne 0
-          echo '=== repaired candidate actionlint result (must pass) ==='
+          echo '=== repaired candidate actionlint result (must still expose remaining semantic lint) ==='
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 "$repaired"
-          echo 'repaired_actionlint=PASS'
