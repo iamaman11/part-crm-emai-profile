@@ -84,6 +84,14 @@
       "rationale": "fail-closed validator for saved FC-6 staging same-bits and rollback evidence; parses repository/local evidence only and has no provider, network, credential or production mutation authority"
     },
     {
+      "path": "scripts/check-workflow-secret-authority.py",
+      "classification": "KEEP_PYTHON",
+      "role": "workflow_secret_authority_validator",
+      "side_effect_class": "repository_validation_only",
+      "authority": "PYTHON_ALLOWED_BY_POST_AR11_FUNCTIONAL_CLOSURE",
+      "rationale": "fail-closed validator that canonical GitHub Actions secret references remain classified by credential authority and constrained to authorized consumers and environments; no provider, network, credential readback or production mutation authority"
+    },
+    {
       "path": "scripts/check-historical-executable-debt.py",
       "classification": "KEEP_PYTHON",
       "role": "post_ar11_cleanup_validator",
@@ -130,9 +138,9 @@
     ]
   },
   "current_summary": {
-    "tracked_python_files": 126,
+    "tracked_python_files": 127,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 126,
+    "KEEP_PYTHON": 127,
     "MIGRATE_TO_RUST": 0,
     "WRAP_WITH_RUST": 0
   }

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Canonical operation: promote or rollback-negative evidence
+        description: 'Canonical operation: promote or rollback-negative evidence'
         required: true
         default: promote
         type: choice
@@ -33,7 +33,7 @@ on:
         default: MANUAL
         type: string
       confirmation:
-        description: Promote: `<release_set_id>:<expected_current_release_set_id>`; negative: `<release_set_id>:<source_run_id>`
+        description: 'Promote: `<release_set_id>:<expected_current_release_set_id>`; negative: `<release_set_id>:<source_run_id>`'
         required: true
         type: string
 
@@ -226,12 +226,14 @@ jobs:
             --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
             --environment staging \
             --output "$RUNNER_TEMP/wrangler.staging.json"
-          echo "TARGET_RELEASE_ROOT=$release_root" >> "$GITHUB_ENV"
-          echo "TARGET_RELEASE_MANIFEST=$policy_dir/release-set.json" >> "$GITHUB_ENV"
-          echo "TARGET_SOURCE_ROOT=$GITHUB_WORKSPACE/target-source" >> "$GITHUB_ENV"
-          echo "CONTROL_RELEASE_MANIFEST=$manifest" >> "$GITHUB_ENV"
-          echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json" >> "$GITHUB_ENV"
-          echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
+          {
+            echo "TARGET_RELEASE_ROOT=$release_root"
+            echo "TARGET_RELEASE_MANIFEST=$policy_dir/release-set.json"
+            echo "TARGET_SOURCE_ROOT=$GITHUB_WORKSPACE/target-source"
+            echo "CONTROL_RELEASE_MANIFEST=$manifest"
+            echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json"
+            echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json"
+          } >> "$GITHUB_ENV"
 
       - name: Observe current provider state without mutation
         id: observe
@@ -398,9 +400,11 @@ jobs:
             '{schema_version:1,release_set_id:$release_set_id,expected_current:$expected_current,promotion_id:$promotion_id,decision:$decision,preflight_sha256:$preflight_sha256,plan_sha256:$plan_sha256}' \
             > "$RUNNER_TEMP/mutation-fence.json"
           fence_sha="$(sha256sum "$RUNNER_TEMP/mutation-fence.json" | cut -d' ' -f1)"
-          echo "decision=$decision" >> "$GITHUB_OUTPUT"
-          echo "promotion_id=$promotion_id" >> "$GITHUB_OUTPUT"
-          echo "mutation_fence_sha256=$fence_sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "decision=$decision"
+            echo "promotion_id=$promotion_id"
+            echo "mutation_fence_sha256=$fence_sha"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Materialize flat metadata-only preflight artifact contract
         run: |
@@ -622,9 +626,11 @@ jobs:
             --source-config "$control_root/deploy/cloudflare/wrangler.jsonc" \
             --release-root "$control_root" --deploy-manifest "$RUNNER_TEMP/deploy-manifest.json" \
             --environment staging --output "$RUNNER_TEMP/wrangler.staging.json"
-          echo "CONTROL_RELEASE_MANIFEST=$manifest" >> "$GITHUB_ENV"
-          echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json" >> "$GITHUB_ENV"
-          echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json" >> "$GITHUB_ENV"
+          {
+            echo "CONTROL_RELEASE_MANIFEST=$manifest"
+            echo "DEPLOY_MANIFEST=$RUNNER_TEMP/deploy-manifest.json"
+            echo "WRANGLER_CONFIG=$RUNNER_TEMP/wrangler.staging.json"
+          } >> "$GITHUB_ENV"
 
       - name: Set up pinned Node runtime for observation only
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e

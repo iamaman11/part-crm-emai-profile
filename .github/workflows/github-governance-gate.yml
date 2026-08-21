@@ -43,6 +43,31 @@ jobs:
       - name: Enforce Node version
         run: test "$(node --version)" = "v24.19.0"
 
+      - name: Validate every GitHub Actions workflow with digest-pinned actionlint
+        run: |
+          set -euo pipefail
+          image='rhysd/actionlint@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7'
+          docker pull "$image" >/dev/null
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/repo:ro" \
+            --workdir /repo \
+            "$image" -no-color
+
+      - name: Prove workflow secret authority fails closed
+        run: python scripts/check-workflow-secret-authority.py --self-test
+
+      - name: Validate canonical workflow secret consumers and environment boundaries
+        run: python scripts/check-workflow-secret-authority.py
+
+      - name: Prove AR-11 observe credential readiness fails closed
+        run: node .github/scripts/ar11-observe-credential-readiness.mjs --self-test
+
+      - name: Prove AR-11 Core mailbox hosted disablement fails closed
+        run: node .github/scripts/ar11-core-mailbox-hosted-disablement.mjs --self-test
+
+      - name: Validate AR-11 Core mailbox hosted disablement contract
+        run: node .github/scripts/ar11-core-mailbox-hosted-disablement.mjs
+
       - name: Validate one-merge architecture acceptance contract
         run: |
           node .github/scripts/architecture-acceptance.mjs contract
@@ -180,9 +205,147 @@ jobs:
       - name: Enforce Node version
         run: test "$(node --version)" = "v24.19.0"
 
-      - name: Audit staging Cloudflare operational credential metadata
+      - name: Verify AR-11 observe token binding and active identity metadata
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
-          AR8C_AUDIT_ENVIRONMENT: staging
-        run: node .github/scripts/credential-lifecycle.mjs cloudflare-live
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
+          umask 077
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/ar11-observe-binding-manifest.json"
+          verify_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-observe-binding-verify.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+          test "$verify_code" = 200
+          jq -e '.success == true and .result.status == "active" and (.result.id | type == "string")' "$RUNNER_TEMP/ar11-observe-binding-verify.json" >/dev/null
+          account_id="$(jq -r '.control_plane.account_id // .account_id' "$RUNNER_TEMP/ar11-observe-binding-manifest.json")"
+          [[ "$account_id" =~ ^[0-9a-f]{32}$ ]]
+          token_id="$(jq -r '.result.id' "$RUNNER_TEMP/ar11-observe-binding-verify.json")"
+          echo "AR11_OBSERVE_ACTIVE token_id=$token_id account_id=$account_id status=active"
+
+      - name: Prove AR-11 staging observe credential READY or fail closed
+        env:
+          CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+          CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+        run: |
+          set -euo pipefail
+          attestation='docs/evidence/ar11-fc6-cloudflare-observe-token-policy.json'
+          test -f "$attestation"
+          test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
+          umask 077
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/ar11-observe-deploy-manifest.json"
+
+          verify_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-observe-token-verify.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+          test "$verify_code" = 200
+          jq -e '.success == true and .result.status == "active" and (.result.id | type == "string")' "$RUNNER_TEMP/ar11-observe-token-verify.json" >/dev/null
+
+          account_id="$(jq -r '.control_plane.account_id // .account_id' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
+          worker_name="$(jq -r '.control_plane.worker_name // .worker_name' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
+          r2_bucket="$(jq -r '.control_plane.r2_bucket_name // .r2_bucket_name' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
+          queue_name="$(jq -r '.control_plane.integration_events_queue // .integration_events_queue' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
+          test -n "$account_id"
+          test -n "$worker_name"
+          test -n "$r2_bucket"
+          test -n "$queue_name"
+
+          python scripts/release-core-overlay-ar11.py \
+            --source-config deploy/cloudflare/wrangler.jsonc \
+            --release-root . \
+            --deploy-manifest "$RUNNER_TEMP/ar11-observe-deploy-manifest.json" \
+            --environment staging \
+            --output "$RUNNER_TEMP/ar11-observe-wrangler.staging.json"
+
+          deployments_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-observe-deployments.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
+          test "$deployments_code" = 200 -o "$deployments_code" = 404
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote \
+            --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
+            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-d1.json"
+          npx --yes wrangler@4.94.0 r2 bucket info "$r2_bucket" --json \
+            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-r2.json"
+          npx --yes wrangler@4.94.0 queues info "$queue_name" \
+            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-queue.txt"
+          npx --yes wrangler@4.94.0 secret list --name "$worker_name" --json \
+            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-secret-list.json"
+
+          jq -n '{
+            schema_version: 1,
+            kind: "AR11_OBSERVE_CREDENTIAL_READ_OBSERVATIONS",
+            workers_deployments_read: true,
+            d1_catalog_read: true,
+            r2_bucket_read: true,
+            queue_read: true,
+            worker_secret_names_read: true,
+            mutation_probe: "FORBIDDEN_NOT_EXECUTED"
+          }' > "$RUNNER_TEMP/ar11-observe-read-observations.json"
+
+          node .github/scripts/ar11-observe-credential-readiness.mjs \
+            --extension architecture/credential-authority-ar11-extension.json \
+            --attestation "$attestation" \
+            --verify "$RUNNER_TEMP/ar11-observe-token-verify.json" \
+            --deploy-manifest "$RUNNER_TEMP/ar11-observe-deploy-manifest.json" \
+            --observations "$RUNNER_TEMP/ar11-observe-read-observations.json" \
+            --output "$RUNNER_TEMP/ar11-observe-readiness.json"
+          jq -e '.decision == "READY" and .environment == "staging" and .production_mutation == false and .mutation_probe == "FORBIDDEN_NOT_EXECUTED"' \
+            "$RUNNER_TEMP/ar11-observe-readiness.json" >/dev/null
+
+      - name: Prove disabled AR-11 Core mailbox surfaces have no hosted execution authority
+        env:
+          CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+          CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
+          umask 077
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/ar11-core-mailbox-hosted-manifest.json"
+
+          account_id="$(jq -er '.control_plane.account_id // .account_id | select(type == "string" and length == 32)' "$RUNNER_TEMP/ar11-core-mailbox-hosted-manifest.json")"
+          worker_name="$(jq -er '.control_plane.worker_name // .worker_name | select(type == "string" and length > 0)' "$RUNNER_TEMP/ar11-core-mailbox-hosted-manifest.json")"
+          resolver_name="$(jq -er '.env.staging.name | select(type == "string" and length > 0)' deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc)"
+          jq -e '.workers_dev == false and .env.staging.workers_dev == false and (.env.staging.routes | type == "array") and (.env.staging.routes | length) == 0' \
+            deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc >/dev/null
+
+          settings_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-core-settings.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/settings")"
+          if [ "$settings_code" = 200 ]; then
+            jq -e '.success == true and ((.result.bindings // []) | all(.[]; .name != "MAILBOX_SECRET_RESOLVER" and .name != "MAILBOX_JOBS"))' \
+              "$RUNNER_TEMP/ar11-core-settings.json" >/dev/null
+          elif [ "$settings_code" != 404 ]; then
+            cat "$RUNNER_TEMP/ar11-core-settings.json" >&2
+            exit 1
+          fi
+
+          schedules_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-resolver-schedules.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$resolver_name/schedules")"
+          if [ "$schedules_code" = 200 ]; then
+            jq -e '.success == true and (.result.schedules | type == "array") and ((.result.schedules | length) == 0)' \
+              "$RUNNER_TEMP/ar11-resolver-schedules.json" >/dev/null
+          elif [ "$schedules_code" != 404 ]; then
+            cat "$RUNNER_TEMP/ar11-resolver-schedules.json" >&2
+            exit 1
+          fi
+
+          subdomain_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-resolver-subdomain.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$resolver_name/subdomain")"
+          if [ "$subdomain_code" = 200 ]; then
+            jq -e '.success == true and .result.enabled == false and .result.previews_enabled == false' \
+              "$RUNNER_TEMP/ar11-resolver-subdomain.json" >/dev/null
+          elif [ "$subdomain_code" != 404 ]; then
+            cat "$RUNNER_TEMP/ar11-resolver-subdomain.json" >&2
+            exit 1
+          fi
+
+          echo "AR11_CORE_MAILBOX_HOSTED_DISABLED control_plane=$worker_name resolver=$resolver_name service_binding=absent cron_triggers=0 workers_dev=false previews=false production_mutation=false"

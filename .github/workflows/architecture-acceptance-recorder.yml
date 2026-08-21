@@ -143,7 +143,7 @@ jobs:
             -f owner="$OWNER" \
             -f name="$NAME" \
             -F number="$PR_NUMBER" \
-            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewDecision reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}' \
+            -f query="query(\$owner:String!,\$name:String!,\$number:Int!){repository(owner:\$owner,name:\$name){pullRequest(number:\$number){reviewDecision reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}" \
             > review-state.json
 
       - name: Build and validate immutable acceptance record
@@ -273,7 +273,8 @@ jobs:
               'type': 'commit',
           }), encoding='utf-8')
           PY
-          export TAG_OBJECT_SHA="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" --input tag-object.json --jq .sha)"
+          TAG_OBJECT_SHA="$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" --input tag-object.json --jq .sha)"
+          export TAG_OBJECT_SHA
           python - <<'PY'
           import json, os
           from pathlib import Path

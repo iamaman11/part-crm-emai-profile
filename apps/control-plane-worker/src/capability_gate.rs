@@ -154,6 +154,65 @@ pub enum ProfileSelectionError {
     ProductionNotAuthorized,
 }
 
+fn profile_definition(
+    profile_id: &str,
+) -> std::result::Result<CapabilityProfile, ProfileSelectionError> {
+    match profile_id {
+        "production-core-v1" => Ok(CapabilityProfile {
+            id: "production-core-v1",
+            digest: PRODUCTION_CORE_V1_DIGEST,
+            authorization: ProfileAuthorization::ProductionBlocked,
+            capabilities: EffectiveCapabilities(EffectiveCapabilities::CORE),
+        }),
+        "rehearsal-core-v1" => Ok(CapabilityProfile {
+            id: "rehearsal-core-v1",
+            digest: REHEARSAL_CORE_V1_DIGEST,
+            authorization: ProfileAuthorization::NonProductionCandidate,
+            capabilities: EffectiveCapabilities(EffectiveCapabilities::CORE),
+        }),
+        "production-mailbox-admin-v1" => Ok(CapabilityProfile {
+            id: "production-mailbox-admin-v1",
+            digest: PRODUCTION_MAILBOX_ADMIN_V1_DIGEST,
+            authorization: ProfileAuthorization::ProductionBlocked,
+            capabilities: EffectiveCapabilities(
+                EffectiveCapabilities::CORE
+                    | EffectiveCapabilities::MAILBOX_ADMIN
+                    | EffectiveCapabilities::MAILBOX_CLIENT_BINDING
+                    | EffectiveCapabilities::MAILBOX_BROWSER_BINDING
+                    | EffectiveCapabilities::MAILBOX_READ,
+            ),
+        }),
+        "production-mailbox-jobs-v1" => Ok(CapabilityProfile {
+            id: "production-mailbox-jobs-v1",
+            digest: PRODUCTION_MAILBOX_JOBS_V1_DIGEST,
+            authorization: ProfileAuthorization::ProductionBlocked,
+            capabilities: EffectiveCapabilities(
+                EffectiveCapabilities::CORE
+                    | EffectiveCapabilities::MAILBOX_ADMIN
+                    | EffectiveCapabilities::MAILBOX_CLIENT_BINDING
+                    | EffectiveCapabilities::MAILBOX_BROWSER_BINDING
+                    | EffectiveCapabilities::MAILBOX_READ
+                    | EffectiveCapabilities::MAILBOX_JOBS,
+            ),
+        }),
+        "production-outbound-mail-v1" => Ok(CapabilityProfile {
+            id: "production-outbound-mail-v1",
+            digest: PRODUCTION_OUTBOUND_MAIL_V1_DIGEST,
+            authorization: ProfileAuthorization::ProductionBlocked,
+            capabilities: EffectiveCapabilities(
+                EffectiveCapabilities::CORE
+                    | EffectiveCapabilities::MAILBOX_ADMIN
+                    | EffectiveCapabilities::MAILBOX_CLIENT_BINDING
+                    | EffectiveCapabilities::MAILBOX_BROWSER_BINDING
+                    | EffectiveCapabilities::MAILBOX_READ
+                    | EffectiveCapabilities::MAILBOX_JOBS
+                    | EffectiveCapabilities::OUTBOUND_MAIL,
+            ),
+        }),
+        _ => Err(ProfileSelectionError::UnknownProfile),
+    }
+}
+
 pub fn active_profile(env: &Env) -> Result<CapabilityProfile> {
     let environment = env.var(CANONICAL_ENVIRONMENT_VAR)?.to_string();
     let profile_id = env.var(CAPABILITY_PROFILE_ID_VAR)?.to_string();
@@ -186,60 +245,7 @@ pub fn select_profile(
         return Err(ProfileSelectionError::UnknownEnvironment);
     }
 
-    let profile = match profile_id {
-        "production-core-v1" => CapabilityProfile {
-            id: "production-core-v1",
-            digest: PRODUCTION_CORE_V1_DIGEST,
-            authorization: ProfileAuthorization::ProductionBlocked,
-            capabilities: EffectiveCapabilities(EffectiveCapabilities::CORE),
-        },
-        "rehearsal-core-v1" => CapabilityProfile {
-            id: "rehearsal-core-v1",
-            digest: REHEARSAL_CORE_V1_DIGEST,
-            authorization: ProfileAuthorization::NonProductionCandidate,
-            capabilities: EffectiveCapabilities(EffectiveCapabilities::CORE),
-        },
-        "production-mailbox-admin-v1" => CapabilityProfile {
-            id: "production-mailbox-admin-v1",
-            digest: PRODUCTION_MAILBOX_ADMIN_V1_DIGEST,
-            authorization: ProfileAuthorization::ProductionBlocked,
-            capabilities: EffectiveCapabilities(
-                EffectiveCapabilities::CORE
-                    | EffectiveCapabilities::MAILBOX_ADMIN
-                    | EffectiveCapabilities::MAILBOX_CLIENT_BINDING
-                    | EffectiveCapabilities::MAILBOX_BROWSER_BINDING
-                    | EffectiveCapabilities::MAILBOX_READ,
-            ),
-        },
-        "production-mailbox-jobs-v1" => CapabilityProfile {
-            id: "production-mailbox-jobs-v1",
-            digest: PRODUCTION_MAILBOX_JOBS_V1_DIGEST,
-            authorization: ProfileAuthorization::ProductionBlocked,
-            capabilities: EffectiveCapabilities(
-                EffectiveCapabilities::CORE
-                    | EffectiveCapabilities::MAILBOX_ADMIN
-                    | EffectiveCapabilities::MAILBOX_CLIENT_BINDING
-                    | EffectiveCapabilities::MAILBOX_BROWSER_BINDING
-                    | EffectiveCapabilities::MAILBOX_READ
-                    | EffectiveCapabilities::MAILBOX_JOBS,
-            ),
-        },
-        "production-outbound-mail-v1" => CapabilityProfile {
-            id: "production-outbound-mail-v1",
-            digest: PRODUCTION_OUTBOUND_MAIL_V1_DIGEST,
-            authorization: ProfileAuthorization::ProductionBlocked,
-            capabilities: EffectiveCapabilities(
-                EffectiveCapabilities::CORE
-                    | EffectiveCapabilities::MAILBOX_ADMIN
-                    | EffectiveCapabilities::MAILBOX_CLIENT_BINDING
-                    | EffectiveCapabilities::MAILBOX_BROWSER_BINDING
-                    | EffectiveCapabilities::MAILBOX_READ
-                    | EffectiveCapabilities::MAILBOX_JOBS
-                    | EffectiveCapabilities::OUTBOUND_MAIL,
-            ),
-        },
-        _ => return Err(ProfileSelectionError::UnknownProfile),
-    };
+    let profile = profile_definition(profile_id)?;
 
     if profile.digest != profile_digest {
         return Err(ProfileSelectionError::DigestMismatch);
@@ -324,11 +330,79 @@ pub fn route_activation_unit(route: RouteClass, path: &str) -> Option<Activation
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::{
         ActivationUnit, PRODUCTION_CORE_V1_DIGEST, ProfileSelectionError, REHEARSAL_CORE_V1_DIGEST,
-        route_activation_unit, select_profile,
+        profile_definition, route_activation_unit, select_profile,
     };
     use control_plane_contract::RouteClass;
+    use serde_json::Value;
+
+    fn profile_row<'a>(rows: &'a [Value], profile_id: &str) -> &'a Value {
+        rows.iter()
+            .find(|row| row.get("profile_id").and_then(Value::as_str) == Some(profile_id))
+            .unwrap_or_else(|| panic!("missing architecture release profile {profile_id}"))
+    }
+
+    fn string_set(value: Option<&Value>, field: &str, profile_id: &str) -> BTreeSet<String> {
+        let Some(array) = value.and_then(Value::as_array) else {
+            panic!("profile {profile_id} field {field} must be an array");
+        };
+        array
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .unwrap_or_else(|| {
+                        panic!("profile {profile_id} field {field} contains a non-string")
+                    })
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn architecture_effective_units(
+        rows: &[Value],
+        profile_id: &str,
+        visiting: &mut BTreeSet<String>,
+    ) -> BTreeSet<String> {
+        assert!(
+            visiting.insert(profile_id.to_owned()),
+            "capability profile inheritance cycle at {profile_id}"
+        );
+        let row = profile_row(rows, profile_id);
+        let mut result = if let Some(parent) = row.get("extends").and_then(Value::as_str) {
+            architecture_effective_units(rows, parent, visiting)
+        } else {
+            BTreeSet::new()
+        };
+        result.extend(string_set(
+            row.get("enabled_activation_units"),
+            "enabled_activation_units",
+            profile_id,
+        ));
+        for disabled in string_set(
+            row.get("disabled_activation_units"),
+            "disabled_activation_units",
+            profile_id,
+        ) {
+            result.remove(&disabled);
+        }
+        visiting.remove(profile_id);
+        result
+    }
+
+    fn runtime_units(profile_id: &str) -> BTreeSet<String> {
+        profile_definition(profile_id)
+            .unwrap_or_else(|error| panic!("runtime profile {profile_id} missing: {error:?}"))
+            .capabilities
+            .enabled_ids()
+            .split(',')
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
 
     #[test]
     fn production_profile_is_blocked_before_ar17_pc1_authorization() {
@@ -391,5 +465,80 @@ mod tests {
             ),
             Some(ActivationUnit::MailboxClientBinding)
         );
+    }
+
+    #[test]
+    fn runtime_profile_authority_matches_architecture_and_wrangler_projection() {
+        let architecture: Value = serde_json::from_str(include_str!(
+            "../../../architecture/release-architecture-ar11.json"
+        ))
+        .expect("release architecture JSON must parse");
+        let rows = architecture
+            .get("release_profiles")
+            .and_then(Value::as_array)
+            .expect("release_profiles must be an array");
+        let expected_ids = BTreeSet::from([
+            "production-core-v1",
+            "production-mailbox-admin-v1",
+            "production-mailbox-jobs-v1",
+            "production-outbound-mail-v1",
+            "rehearsal-core-v1",
+        ]);
+        let architecture_ids = rows
+            .iter()
+            .map(|row| {
+                row.get("profile_id")
+                    .and_then(Value::as_str)
+                    .expect("every release profile requires profile_id")
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(architecture_ids, expected_ids);
+
+        for profile_id in expected_ids {
+            assert_eq!(
+                architecture_effective_units(rows, profile_id, &mut BTreeSet::new()),
+                runtime_units(profile_id),
+                "architecture/runtime capability composition drifted for {profile_id}"
+            );
+            let allowed = string_set(
+                profile_row(rows, profile_id).get("allowed_environments"),
+                "allowed_environments",
+                profile_id,
+            );
+            let expected_allowed = if profile_id == "rehearsal-core-v1" {
+                BTreeSet::from(["rehearsal".to_owned(), "staging".to_owned()])
+            } else {
+                BTreeSet::from(["production".to_owned()])
+            };
+            assert_eq!(
+                allowed, expected_allowed,
+                "environment authority drifted for {profile_id}"
+            );
+        }
+
+        let wrangler: Value =
+            serde_json::from_str(include_str!("../../../deploy/cloudflare/wrangler.jsonc"))
+                .expect("canonical Wrangler JSON must parse");
+        for (environment, profile_id) in [
+            ("staging", "rehearsal-core-v1"),
+            ("production", "production-core-v1"),
+        ] {
+            let vars = &wrangler["env"][environment]["vars"];
+            let runtime = profile_definition(profile_id)
+                .unwrap_or_else(|error| panic!("runtime profile {profile_id} missing: {error:?}"));
+            assert_eq!(
+                vars.get("CANONICAL_ENVIRONMENT").and_then(Value::as_str),
+                Some(environment)
+            );
+            assert_eq!(
+                vars.get("CAPABILITY_PROFILE_ID").and_then(Value::as_str),
+                Some(runtime.id)
+            );
+            assert_eq!(
+                vars.get("CAPABILITY_PROFILE_DIGEST")
+                    .and_then(Value::as_str),
+                Some(runtime.digest)
+            );
+        }
     }
 }
