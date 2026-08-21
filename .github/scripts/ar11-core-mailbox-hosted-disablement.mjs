@@ -10,8 +10,15 @@ const WORKFLOW = '.github/workflows/github-governance-gate.yml';
 const RESOLVER_CONFIG = 'deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc';
 const CORE_CONFIG = 'deploy/cloudflare/wrangler.jsonc';
 const ARCHITECTURE = 'architecture/release-architecture-ar11.json';
+const CREDENTIAL_EXTENSION = 'architecture/credential-authority-ar11-extension.json';
+const OBSERVE_CREDENTIAL_ID = 'cloudflare.staging-observation-api';
 const OBSERVE_SECRET = 'CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}';
 const DEPLOY_SECRET = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
+const HOSTED_READ_CALLS = Object.freeze([
+  'GET /accounts/{account_id}/workers/scripts/{worker_name}/settings',
+  'GET /accounts/{account_id}/workers/scripts/{resolver_name}/schedules',
+  'GET /accounts/{account_id}/workers/scripts/{resolver_name}/subdomain',
+]);
 
 function fail(message) {
   throw new Error(`AR-11 Core mailbox hosted-disablement contract rejected: ${message}`);
@@ -67,6 +74,35 @@ function validateArchitecture(architecture) {
     if (requiredBindings.has('MAILBOX_SECRET_RESOLVER') || requiredBindings.has('MAILBOX_JOBS')) {
       fail(`${profileId} requires a mailbox operational binding`);
     }
+  }
+}
+
+function validateCredentialAuthority(extension) {
+  if (!object(extension) || extension.kind !== 'AR11_ADDITIVE_CREDENTIAL_CAPABILITY_EXTENSION') {
+    fail('AR-11 credential extension identity drifted');
+  }
+  if (extension.production_mutation !== false || extension.metadata_only !== true) {
+    fail('AR-11 credential extension must remain metadata-only and production-blocked');
+  }
+  const credentials = Array.isArray(extension.credentials) ? extension.credentials : [];
+  const credential = credentials.find((row) => row?.id === OBSERVE_CREDENTIAL_ID);
+  if (!object(credential)) fail(`missing ${OBSERVE_CREDENTIAL_ID} authority`);
+  if (credential.allowed_mutator !== 'NONE' || credential.mutation_allowed !== false || credential.provider_mutation_forbidden !== true) {
+    fail('observe credential unexpectedly gained mutation authority');
+  }
+  const environments = credential?.environment_scope?.environments;
+  if (!Array.isArray(environments) || environments.length !== 1 || environments[0] !== 'staging') {
+    fail('observe credential must remain staging-only');
+  }
+  const permissions = new Set(credential.required_provider_permissions ?? []);
+  if (!permissions.has('Workers Scripts Read') || permissions.has('Workers Scripts Write') || permissions.has('Workers Scripts Edit')) {
+    fail('hosted disablement audit must rely on Workers Scripts Read without write/edit permission');
+  }
+  const consumers = new Set(credential.consumers ?? []);
+  if (!consumers.has(WORKFLOW)) fail('GitHub Governance Gate is not an authorized observe-credential consumer');
+  const calls = new Set(credential?.runtime_verification?.required_read_calls ?? []);
+  for (const call of HOSTED_READ_CALLS) {
+    if (!calls.has(call)) fail(`observe credential authority does not declare hosted disablement read: ${call}`);
   }
 }
 
@@ -129,14 +165,15 @@ async function readJson(root, relative) {
   return value;
 }
 
-async function validate(root, workflowOverride = null) {
+async function validate(root, workflowOverride = null, credentialOverride = null) {
   validateArchitecture(await readJson(root, ARCHITECTURE));
+  validateCredentialAuthority(credentialOverride ?? await readJson(root, CREDENTIAL_EXTENSION));
   validateConfigs(await readJson(root, CORE_CONFIG), await readJson(root, RESOLVER_CONFIG));
   const workflow = workflowOverride ?? await readFile(path.join(root, WORKFLOW), 'utf8');
   validateWorkflow(workflow);
 }
 
-async function expectRejected(label, workflow, from, to) {
+async function expectWorkflowRejected(label, workflow, from, to) {
   const mutated = workflow.replace(from, to);
   if (mutated === workflow) fail(`negative fixture did not mutate workflow: ${label}`);
   try {
@@ -147,34 +184,59 @@ async function expectRejected(label, workflow, from, to) {
   fail(`negative fixture unexpectedly passed: ${label}`);
 }
 
+async function expectCredentialRejected(label, credential, mutate) {
+  const candidate = structuredClone(credential);
+  mutate(candidate);
+  try {
+    await validate(ROOT, null, candidate);
+  } catch {
+    return;
+  }
+  fail(`negative credential fixture unexpectedly passed: ${label}`);
+}
+
 async function selfTest() {
   const workflow = await readFile(path.join(ROOT, WORKFLOW), 'utf8');
-  await validate(ROOT, workflow);
-  await expectRejected(
+  const credential = await readJson(ROOT, CREDENTIAL_EXTENSION);
+  await validate(ROOT, workflow, credential);
+  await expectWorkflowRejected(
     'deploy credential in hosted audit',
     workflow,
     OBSERVE_SECRET,
     DEPLOY_SECRET,
   );
-  await expectRejected(
+  await expectWorkflowRejected(
     'missing resolver schedule proof',
     workflow,
     '(.result.schedules | length) == 0',
     '(.result.schedules | length) >= 0',
   );
-  await expectRejected(
+  await expectWorkflowRejected(
     'workers.dev enabled accepted',
     workflow,
     '.result.enabled == false',
     '.result.enabled == true',
   );
-  await expectRejected(
+  await expectWorkflowRejected(
     'control-plane resolver binding proof removed',
     workflow,
     'MAILBOX_SECRET_RESOLVER',
     'UNREVIEWED_BINDING',
   );
-  console.log('AR-11 Core mailbox hosted-disablement negative fixtures rejected as expected.');
+  await expectCredentialRejected('observe credential gains mutator', credential, (copy) => {
+    copy.credentials[0].allowed_mutator = 'github-governance-gate';
+  });
+  await expectCredentialRejected('resolver schedules read omitted', credential, (copy) => {
+    copy.credentials[0].runtime_verification.required_read_calls = copy.credentials[0].runtime_verification.required_read_calls.filter(
+      (value) => value !== HOSTED_READ_CALLS[1],
+    );
+  });
+  await expectCredentialRejected('Workers Scripts Read removed', credential, (copy) => {
+    copy.credentials[0].required_provider_permissions = copy.credentials[0].required_provider_permissions.filter(
+      (value) => value !== 'Workers Scripts Read',
+    );
+  });
+  console.log('AR-11 Core mailbox hosted-disablement workflow and credential-authority negative fixtures rejected as expected.');
 }
 
 async function main() {
@@ -184,7 +246,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validate(ROOT);
-  console.log('AR-11 Core mailbox hosted-disablement contract passed: Core has no mailbox binding, standalone resolver must have zero cron triggers and workers.dev/previews disabled, and the proof uses observe-only authority.');
+  console.log('AR-11 Core mailbox hosted-disablement contract passed: Core has no mailbox binding, standalone resolver must have zero cron triggers and workers.dev/previews disabled, and every hosted read is declared by observe-only credential authority.');
 }
 
 main().catch((error) => {
