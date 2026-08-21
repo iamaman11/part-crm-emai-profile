@@ -2,10 +2,11 @@
 
 **Document status:** GENERATED_PROJECTION  
 **Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
+**Architecture evolution contract:** `ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
 **Tracking:** issue #266  
 **Accepted product phase:** Phase 2I  
 **Current accepted architecture checkpoint:** AR-11 — Release-set / Promotion Architecture
-**Current architecture slice:** AR-12 — Fresh Rehearsal Environment — **NOT STARTED** pending pre-AR12 hardening issue #375
+**Current architecture slice:** AR-12 — Fresh Rehearsal Environment — **DERIVED CURRENT / NOT STARTED**; implementation entry remains blocked by Post-AR-11 Functional Closure #399
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `production_ready=false`
@@ -15,6 +16,10 @@
 This document projects product history and the active implementation order. It is not a second program
 authority. The single current architecture/program execution authority is
 `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, tracked by issue #266.
+
+The binding prospective development/evolution rules are defined by that authority together with
+`docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`. The quality contract is subordinate to the program
+and existing domain/machine authorities; it is not another roadmap or capability registry.
 
 Stable architecture/security/data authorities remain scoped authorities rather than competing roadmaps:
 `ARCHITECTURE.md`, accepted ADRs, `DATA_CLASSIFICATION.md`, `THREAT_MODEL.md`, `UI_ARCHITECTURE.md`,
@@ -46,7 +51,11 @@ advance during Architecture Re-baseline v3.
 - AR-9 — D1 Evolution / Schema Compatibility: **DONE / ACCEPTED**; accepted provenance is `docs/evidence/2026-08-19-ar9-final-acceptance.json`.
 - AR-10 — Runtime and Historical Executable Simplification: **DONE / ACCEPTED**; accepted provenance is `docs/evidence/2026-08-19-ar10-final-acceptance.json`.
 - AR-11 — Release-set / Promotion Architecture: **DONE / ACCEPTED** through the generic Git-derived acceptance mechanism.
-- AR-12 — Fresh Rehearsal Environment: **CURRENT / NOT STARTED**; implementation entry is blocked until issue #375 and the full pre-AR12 DoD are closed from evidence.
+- AR-12 — Fresh Rehearsal Environment: **DERIVED CURRENT / NOT STARTED**; implementation entry remains blocked by Post-AR-11 Functional Closure #399.
+- Current prerequisite implementation: **PF-1 #430**.
+- PF-2 Hosted Operational Evidence: **Draft PR #428 / blocked on accepted PF-1**.
+- PF-3 Architecture Fitness Baseline: **planned in #431 / blocked on accepted PF-2**.
+- FC-6 #421 resumes only after accepted PF-3 and fresh re-baseline of #399/#421.
 - AR-13…AR-17: ordered future architecture slices.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
@@ -56,7 +65,7 @@ advance during Architecture Re-baseline v3.
 - `GENERATION_VERIFICATION=DELETE`; AR-5 accepted source/Wrangler/deployment authority cleanup while preserving synchronous verification semantics.
 - Historical D3/#251 repository-side machinery is preserved; its old production lane is disabled for forward execution.
 - AR-6 accepted `architecture/python-estate-ar6.json` and the capability-bounded read-only `tools/opsctl` foundation; Draft PR #269 remains feasibility history only.
-- AR-7 accepted classic `main` protection and Environment boundaries; AR-8, AR-9, AR-10 and AR-11 are accepted. Issue #352 remains accepted history; AR-12 is current but NOT STARTED pending #375 closeout.
+- AR-7 accepted classic `main` protection and Environment boundaries; AR-8, AR-9, AR-10 and AR-11 are accepted.
 
 ## 2A. CURRENT_DELIVERY_MAP
 
@@ -64,13 +73,13 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 
 | Delivery dimension | Current status | Scope / gate |
 |---|---|---|
-| Source implemented | **ACCEPTED THROUGH AR-11** | AR-11 source is accepted on `main`; AR-12 is current and NOT STARTED. |
+| Source implemented | **ACCEPTED THROUGH AR-11** | AR-11 source is accepted on `main`; AR-12 is derived current and NOT STARTED. |
 | Accepted on main | **COMPLETE THROUGH AR-11** | AR-8, AR-9, AR-10 and AR-11 are accepted; AR-11 is the generic acceptance migration anchor. |
 | Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; later architecture acceptance does not imply a broader staging or production deployment. |
 | Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
 | Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
-| Current implementation blocker | **ISSUE #375 OPEN** | Pre-AR12 hardening blocks AR-12 implementation entry; it does not create a second lifecycle authority. |
-| Next gate | **AR-12 implementation entry** | AR-12 remains NOT STARTED until #375 is closed; AR-12 acceptance remains a later event. |
+| Current implementation blocker | **POST-AR-11 FUNCTIONAL CLOSURE #399** | Current execution is PF-1 #430; PF-2, PF-3, FC-6 and FC-7 remain ordered prerequisites before AR-12 implementation entry. |
+| Next gate | **PF-1 acceptance on protected main** | PF-2 remains blocked until PF-1 is accepted; FC-6 cannot resume before PF-3 acceptance and fresh #399/#421 re-baseline. |
 
 `source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
 
@@ -112,7 +121,7 @@ AR-8   Secrets / Keys / OAuth Refresh Concurrency                DONE / ACCEPTED
 AR-9   D1 Evolution / Schema Compatibility                       DONE / ACCEPTED
 AR-10  Runtime and Historical Executable Simplification          DONE / ACCEPTED
 AR-11  Release-set / Promotion Architecture                      DONE / ACCEPTED
-AR-12  Fresh Rehearsal Environment                               CURRENT / NOT STARTED
+AR-12  Fresh Rehearsal Environment                               DERIVED CURRENT / NOT STARTED
 AR-13  Rotation Rehearsal
 AR-14  Remote Recovery Rehearsal
 AR-15  Windows Delivery Program — inherited Batch E
@@ -120,9 +129,21 @@ AR-16  Final Whole-project 10/10 Audit
 AR-17  Architecture Closeout + Production Core Gate
 ```
 
+Before AR-12 implementation, the mandatory bounded Functional Closure prerequisite chain is:
+
+```text
+PF-1 #430
+-> PF-2 / Draft PR #428
+-> PF-3 #431
+-> fresh re-baseline #399/#421
+-> FC-6
+-> FC-7
+-> AR-12 implementation entry
+```
+
+PF-1/PF-2/PF-3 are not AR slices and do not alter `architecture/architecture-program-sequence.json`.
 No production provisioning or promotion belongs to an AR slice.
 
-AR-12 implementation remains forbidden until issue #375 and the full pre-AR12 hardening DoD are closed from proved evidence.
 AR-16 requires final whole-project repository-owned `P0=0` and `P1=0` with no production mutation.
 AR-17 may close the architecture program and authorize the Production Core gate while still keeping
 `production_ready=false`.
@@ -138,7 +159,7 @@ PC-4 Outbound / subsequent capabilities
 
 Only successful PC-1 may make `production_ready=true` for `production-core-v1`.
 
-## 5. Non-negotiable clean architecture
+## 5. Non-negotiable clean architecture and development discipline
 
 The valid dependency direction remains inward:
 
@@ -153,8 +174,42 @@ apps -> use-cases-* + adapters + contracts + primitives
 frontend -> generated public contracts + frontend public feature/entity/shared APIs
 ```
 
-Existing permanent positive and negative architecture tests remain authoritative. AR work changes a
-boundary only when the owning bounded slice proves the delta; it does not reopen already-correct layers.
+Prospective work additionally follows the binding `ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`:
+
+```text
+Single Authority
+Bounded Context ownership
+Pure Core / Effect Shell
+Explicit Effect Capabilities
+Typed critical IDs/states/contracts
+Context-owned persistence
+Typed config at composition edges
+Versioned integration events
+Release Profile = sole production-enable authority
+Cutover -> zero callers/invariants -> delete DEAD predecessor
+Touch-to-converge, not global rewrite
+```
+
+Existing permanent positive and negative architecture tests remain authoritative. PF-3 #431 must add the
+machine-readable `architecture/architecture-fitness-policy.json` and Architecture Fitness Gate so every
+REQUIRED cross-cutting rule maps to one primary permanent enforcement owner. After PF-3, a REQUIRED rule
+without active enforcement is a gate failure.
+
+Every later materially architecture-changing PF/FC/AR/PC candidate must declare its Architecture Impact:
+
+```text
+bounded contexts
+authorities
+contracts
+effect classes
+execution surfaces
+activation units / release profiles
+schema/migration impact
+legacy predecessor disposition
+applicable fitness Rule IDs
+```
+
+Acceptance requires all applicable rules and owned negative fixtures to pass on the same exact candidate head.
 
 ## 6. Production capability sequencing
 
@@ -182,9 +237,7 @@ the backend. The project retains one `main`, one architecture and one schema/com
 The target split is GitHub Actions/Environments for CI orchestration, merge/deployment gates and approvals,
 Rust `opsctl` for typed project-specific operational semantics after bounded cutover, Wrangler/provider APIs
 for actual provider mutation, and Python for validators/generators/fixtures/research and explicitly classified
-helpers. `opsctl` is not a GitHub workflow wrapper or merge authority. AR-6 already classifies the resolver
-promotion core for migration into an `opsctl release/promotion` command family in AR-11; that later cutover
-must preserve one mutable authority rather than duplicating the current Python/provider path.
+helpers. `opsctl` is not a GitHub workflow wrapper or merge authority.
 
 For each mutable concern there is exactly one legitimate mutable authority. Terraform and hidden generic
 IaC state are not part of this architecture.
@@ -215,23 +268,38 @@ resolver D1 and service binding are a credential/security boundary rather than a
 
 ## 10. Exact-head acceptance discipline
 
-Every bounded AR candidate follows one immutable-head protocol:
+Every bounded candidate follows one immutable-head protocol:
 
 1. start from the latest accepted `main`;
-2. keep the change bounded to the owning AR slice;
-3. review the complete diff for unrelated files and forbidden production mutation;
-4. require `behind_by=0` before acceptance;
-5. require zero blocking reviews and zero unresolved review threads;
-6. determine the applicable permanent workflow inventory from the candidate tree;
-7. require every applicable workflow to complete successfully on one unchanged exact candidate SHA;
-8. treat any new commit as invalidating all prior exact-head CI evidence;
-9. re-read docs ↔ machine state ↔ issue ledger on the candidate head;
-10. guarded merge commit only after the final base-currentness/mergeability check, binding the expected exact PR head SHA;
-11. re-read accepted `main` after merge before starting the next slice.
+2. keep the change bounded to the owning slice;
+3. declare Architecture Impact when required by the accepted fitness baseline;
+4. review the complete diff for unrelated files and forbidden production mutation;
+5. require `behind_by=0` before acceptance;
+6. require zero blocking reviews and zero unresolved review threads;
+7. determine the applicable permanent workflow/fitness inventory from the candidate tree;
+8. require every applicable workflow and REQUIRED fitness rule to complete successfully on one unchanged exact candidate SHA;
+9. treat any new commit as invalidating all prior exact-head CI evidence;
+10. re-read docs ↔ machine state ↔ issue ledger on the candidate head;
+11. guarded merge only after the final base-currentness/mergeability check, binding the expected exact PR head SHA;
+12. re-read accepted `main` after merge before starting the next slice.
 
 ## 11. Immediate next action
 
-AR-11 — Release-set / Promotion Architecture is **DONE / ACCEPTED** through the canonical generic Git-derived acceptance mechanism. The derived current slice is **AR-12 — Fresh Rehearsal Environment**, but AR-12 implementation is **NOT STARTED** and must not begin while issue #375 or any pre-AR12 hardening DoD item remains open. The immediate work is therefore completion and evidence-backed closeout of issue #375, not AR-12 implementation.
+AR-11 — Release-set / Promotion Architecture remains **DONE / ACCEPTED**. AR-12 is derived current but
+**NOT STARTED**. The immediate implementation authority is Post-AR-11 Functional Closure #399, currently
+**PF-1 #430**.
+
+Mandatory continuation:
+
+```text
+PF-1 #430
+-> PF-2 / Draft PR #428
+-> PF-3 #431
+-> fresh re-baseline #399/#421
+-> FC-6
+-> FC-7
+-> AR-12 implementation entry
+```
 
 Throughout AR-0…AR-17:
 
