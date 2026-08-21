@@ -10,45 +10,41 @@ permissions:
 
 jobs:
   observe:
-    name: Observe trusted-main transport and canonical promotion runs
+    name: Validate complete hosted workflow repair candidate
     runs-on: ubuntu-latest
     steps:
-      - name: Read anonymous public Actions API
-        shell: bash
-        env:
-          REPOSITORY: iamaman11/part-crm-emai-profile
-          MAIN_SHA: 399826684d0d71876f614494d781a7cf420a9a60
-          CEREMONY: main-399826684d0d71876f614494d781a7cf420a9a60
-          INVALID_CHECK_SUITE_ID: '88061513453'
-        run: |
-          set -euo pipefail
-          api="https://api.github.com/repos/$REPOSITORY"
-          curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
-            "$api/actions/workflows/release-set-promotion.yml/runs?event=workflow_dispatch&branch=main&per_page=100" > "$RUNNER_TEMP/promotion-runs.json"
-          echo '=== ceremony promotion runs ==='
-          jq --arg ceremony "$CEREMONY" '[.workflow_runs[] | select(.display_title | contains($ceremony)) | {id,name,display_title,event,status,conclusion,head_branch,head_sha,path}]' "$RUNNER_TEMP/promotion-runs.json"
-          echo '=== invalid workflow object ==='
-          curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
-            "$api/actions/workflows/release-set-promotion.yml" | jq '{id,name,path,state,created_at,updated_at}'
-          echo '=== invalid check suite ==='
-          curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
-            "$api/check-suites/$INVALID_CHECK_SUITE_ID" | jq '{id,status,conclusion,head_sha,latest_check_runs_count}'
-
-      - name: Run pinned actionlint against exact accepted-main promotion bytes
+      - name: Lint exact accepted-main bytes and repaired candidate
         shell: bash
         env:
           MAIN_SHA: 399826684d0d71876f614494d781a7cf420a9a60
           REPOSITORY: iamaman11/part-crm-emai-profile
         run: |
           set -euo pipefail
-          workflow="$RUNNER_TEMP/release-set-promotion.yml"
+          original="$RUNNER_TEMP/release-set-promotion.original.yml"
+          repaired="$RUNNER_TEMP/release-set-promotion.repaired.yml"
           curl --fail --silent --show-error --retry 2 \
             "https://raw.githubusercontent.com/$REPOSITORY/$MAIN_SHA/.github/workflows/release-set-promotion.yml" \
-            -o "$workflow"
-          echo '=== actionlint v1.7.12 exact-main result ==='
+            -o "$original"
+          cp "$original" "$repaired"
+          python - "$repaired" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          old1 = '        description: Canonical operation: promote or rollback-negative evidence\n'
+          new1 = "        description: 'Canonical operation: promote or rollback-negative evidence'\n"
+          old2 = '        description: Promote: `<release_set_id>:<expected_current_release_set_id>`; negative: `<release_set_id>:<source_run_id>`\n'
+          new2 = "        description: 'Promote: `<release_set_id>:<expected_current_release_set_id>`; negative: `<release_set_id>:<source_run_id>`'\n"
+          assert text.count(old1) == 1
+          assert text.count(old2) == 1
+          path.write_text(text.replace(old1, new1).replace(old2, new2))
+          PY
+          echo '=== original exact-main actionlint result (must fail) ==='
           set +e
-          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 "$workflow"
-          status=$?
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 "$original"
+          original_status=$?
           set -e
-          echo "actionlint_exit=$status"
-          test "$status" -ne 0
+          test "$original_status" -ne 0
+          echo '=== repaired candidate actionlint result (must pass) ==='
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 "$repaired"
+          echo 'repaired_actionlint=PASS'
