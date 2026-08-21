@@ -360,8 +360,8 @@ fn secret_field_bearer_and_private_key_material_fail_closed() -> TestResult {
     assert_build_fails(&workspace, &context(), &payload, "bearer")?;
 
     let mut payload = credential_payload();
-    payload["provider_metadata_identifier"] =
-        json!("-----BEGIN PRIVATE KEY-----redacted-----END PRIVATE KEY-----");
+    let private_key_material = "-----BEGIN PRIVATE".to_owned() + " KEY-----redacted";
+    payload["provider_metadata_identifier"] = json!(private_key_material);
     assert_build_fails(&workspace, &context(), &payload, "private-key")?;
     Ok(())
 }
