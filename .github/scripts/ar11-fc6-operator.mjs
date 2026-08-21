@@ -10,6 +10,8 @@ const OWNER = 'iamaman11';
 const PR_TITLE = 'AR-11 FC-6 ephemeral operator request';
 const PR_BRANCH_PREFIX = 'codex/ar11-fc6-request-';
 const PR_TRIGGER_PATH = 'docs/evidence/ar11-fc6-operator-request.json';
+const TRIGGER_WORKFLOW_NAME = 'Release Architecture Gate';
+const TRIGGER_WORKFLOW_PATH = '.github/workflows/release-architecture-gate.yml';
 const RELEASE = 'release-set-v2-sha256-[0-9a-f]{64}';
 const SHA = /^[0-9a-f]{40}$/;
 const PROMOTE = new RegExp(`^/ar11-fc6-promote\\s+(${RELEASE})\\s+(${RELEASE}|NONE)\\s+(\\S+)$`);
@@ -68,31 +70,33 @@ function parseIssueComment(event) {
   if (!Number.isInteger(event.comment?.id) || event.comment.id <= 0) fail('comment id is missing');
   const body = typeof event.comment?.body === 'string' ? event.comment.body.trim() : '';
   if (!body.startsWith('/ar11-fc6-')) return null;
-  return { request: parseCommand(body, String(event.comment.id)), responseIssue: ISSUE_NUMBER, pullRequest: null };
+  return { request: parseCommand(body, String(event.comment.id)), responseIssue: ISSUE_NUMBER, workflowRun: null };
 }
 
-function parsePullRequest(event) {
-  const pull = event.pull_request;
-  const headRef = pull?.head?.ref;
-  const title = pull?.title;
-  const looksLikeOperator = typeof headRef === 'string' && headRef.startsWith(PR_BRANCH_PREFIX);
-  const hasOperatorTitle = title === PR_TITLE;
-  if (!looksLikeOperator && !hasOperatorTitle) return null;
-  if (!looksLikeOperator || !hasOperatorTitle) fail('operator PR branch prefix and exact title must both match');
-  if (event.action !== 'opened') fail('operator PR is accepted only on initial open');
-  if (!Number.isInteger(event.number) || event.number <= 0 || pull?.number !== event.number) fail('operator PR number is invalid');
-  if (pull?.user?.login !== OWNER || pull?.author_association !== 'OWNER') fail('operator PR requester must be repository owner with OWNER association');
-  if (pull?.draft !== true) fail('operator PR must remain Draft');
-  if (pull?.base?.ref !== 'main' || !SHA.test(pull?.base?.sha ?? '')) fail('operator PR must target exact protected main');
-  if (pull?.head?.repo?.full_name !== REPOSITORY || !SHA.test(pull?.head?.sha ?? '')) fail('operator PR must use an exact same-repository head SHA');
+function parseWorkflowRun(event) {
+  const run = event.workflow_run;
+  const headBranch = run?.head_branch;
+  const looksLikeOperator = typeof headBranch === 'string' && headBranch.startsWith(PR_BRANCH_PREFIX);
+  if (!looksLikeOperator) return null;
+  if (event.action !== 'completed') fail('operator workflow_run is accepted only after completion');
+  if (run?.name !== TRIGGER_WORKFLOW_NAME || run?.path !== TRIGGER_WORKFLOW_PATH || run?.event !== 'pull_request') {
+    fail('operator workflow_run must be the canonical pull-request Release Architecture Gate');
+  }
+  if (run?.status !== 'completed' || run?.conclusion !== 'success') fail('operator trigger gate must complete successfully');
+  if (run?.head_repository?.full_name !== REPOSITORY || !SHA.test(run?.head_sha ?? '')) fail('operator trigger gate must use an exact same-repository head SHA');
+  if (!Number.isInteger(run?.id) || run.id <= 0) fail('operator workflow_run id is invalid');
+  const pulls = run?.pull_requests;
+  if (!Array.isArray(pulls) || pulls.length !== 1 || !Number.isInteger(pulls[0]?.number) || pulls[0].number <= 0) {
+    fail('operator workflow_run must bind exactly one pull request');
+  }
   return {
-    request: parseCommand(pull.body, `pr-${event.number}`),
-    responseIssue: event.number,
-    pullRequest: {
-      number: event.number,
-      baseSha: pull.base.sha,
-      headSha: pull.head.sha,
-      headRef,
+    request: null,
+    responseIssue: pulls[0].number,
+    workflowRun: {
+      id: run.id,
+      headSha: run.head_sha,
+      headBranch,
+      pullNumber: pulls[0].number,
     },
   };
 }
@@ -100,7 +104,7 @@ function parsePullRequest(event) {
 function parseRequest(event) {
   if (!event || typeof event !== 'object' || Array.isArray(event)) fail('event must be one object');
   if (event.repository?.full_name !== REPOSITORY) fail(`repository must be ${REPOSITORY}`);
-  if (event.pull_request) return parsePullRequest(event);
+  if (event.workflow_run) return parseWorkflowRun(event);
   if (event.issue) return parseIssueComment(event);
   return null;
 }
@@ -147,15 +151,22 @@ async function github(path, { method = 'GET', body } = {}) {
   return response.json();
 }
 
-async function validatePullRequestEnvelope(pullRequest) {
-  if (!pullRequest) return;
+async function resolveWorkflowRunRequest(workflowRun) {
+  if (!workflowRun) return null;
+  const pull = await github(`/repos/${REPOSITORY}/pulls/${workflowRun.pullNumber}`);
+  if (pull?.number !== workflowRun.pullNumber || pull?.state !== 'open') fail('operator PR must still be open');
+  if (pull?.title !== PR_TITLE || pull?.head?.ref !== workflowRun.headBranch) fail('operator PR exact title or branch binding drifted');
+  if (pull?.user?.login !== OWNER || pull?.author_association !== 'OWNER') fail('operator PR requester must be repository owner with OWNER association');
+  if (pull?.draft !== true) fail('operator PR must remain Draft');
+  if (pull?.base?.ref !== 'main' || !SHA.test(pull?.base?.sha ?? '')) fail('operator PR must target exact protected main');
+  if (pull?.head?.repo?.full_name !== REPOSITORY || pull?.head?.sha !== workflowRun.headSha) fail('operator PR exact same-repository head binding drifted');
+
   const main = await github(`/repos/${REPOSITORY}/branches/main`);
-  if (main?.protected !== true || main?.commit?.sha !== pullRequest.baseSha) {
-    fail('operator PR base must equal the currently protected main SHA');
-  }
-  const files = await github(`/repos/${REPOSITORY}/pulls/${pullRequest.number}/files?per_page=100`);
+  if (main?.protected !== true || main?.commit?.sha !== pull.base.sha) fail('operator PR base must equal the currently protected main SHA');
+
+  const files = await github(`/repos/${REPOSITORY}/pulls/${workflowRun.pullNumber}/files?per_page=100`);
   const triggerSha = validatePullFiles(files);
-  const encodedRef = encodeURIComponent(pullRequest.headSha);
+  const encodedRef = encodeURIComponent(workflowRun.headSha);
   const payload = await github(`/repos/${REPOSITORY}/contents/${PR_TRIGGER_PATH}?ref=${encodedRef}`);
   if (payload?.type !== 'file' || payload?.encoding !== 'base64' || payload?.sha !== triggerSha || typeof payload?.content !== 'string') {
     fail('operator PR trigger file response is malformed or unbound');
@@ -167,6 +178,7 @@ async function validatePullRequestEnvelope(pullRequest) {
     fail(`operator PR trigger document is invalid JSON: ${error instanceof Error ? error.message : error}`);
   }
   validateTriggerDocument(trigger);
+  return parseCommand(pull.body, `pr-${workflowRun.pullNumber}`);
 }
 
 async function listDispatchRuns() {
@@ -254,40 +266,39 @@ function selfTest() {
   wrongIssue.issue.number = 398;
   expectReject(() => parseRequest(wrongIssue), '#399');
 
-  const pr = {
-    action: 'opened',
-    number: 77,
+  const workflowRun = {
+    action: 'completed',
     repository: { full_name: REPOSITORY },
-    pull_request: {
-      number: 77,
-      title: PR_TITLE,
-      body: `/ar11-fc6-promote ${b} ${a} ${b}:${a}`,
-      draft: true,
-      author_association: 'OWNER',
-      user: { login: OWNER },
-      base: { ref: 'main', sha: '1'.repeat(40) },
-      head: { ref: `${PR_BRANCH_PREFIX}a-to-b`, sha: '2'.repeat(40), repo: { full_name: REPOSITORY } },
+    workflow_run: {
+      id: 777,
+      name: TRIGGER_WORKFLOW_NAME,
+      path: TRIGGER_WORKFLOW_PATH,
+      event: 'pull_request',
+      status: 'completed',
+      conclusion: 'success',
+      head_branch: `${PR_BRANCH_PREFIX}a-to-b`,
+      head_sha: '2'.repeat(40),
+      head_repository: { full_name: REPOSITORY },
+      pull_requests: [{ number: 77 }],
     },
   };
-  const prRequest = parseRequest(pr);
-  if (prRequest?.request?.operation !== 'promote' || prRequest.request.requestId !== 'pr-77' || prRequest.responseIssue !== 77) fail('positive operator PR parse self-test failed');
+  const parsedRun = parseRequest(workflowRun);
+  if (parsedRun?.workflowRun?.pullNumber !== 77 || parsedRun.responseIssue !== 77) fail('positive workflow_run envelope self-test failed');
 
-  const ordinaryPr = structuredClone(pr);
-  ordinaryPr.pull_request.title = 'ordinary feature';
-  ordinaryPr.pull_request.head.ref = 'feature/ordinary';
-  if (parseRequest(ordinaryPr) !== null) fail('ordinary PR unexpectedly became operator input');
+  const ordinaryRun = structuredClone(workflowRun);
+  ordinaryRun.workflow_run.head_branch = 'feature/ordinary';
+  if (parseRequest(ordinaryRun) !== null) fail('ordinary workflow_run unexpectedly became operator input');
 
-  const nonDraft = structuredClone(pr);
-  nonDraft.pull_request.draft = false;
-  expectReject(() => parseRequest(nonDraft), 'must remain Draft');
+  const failedRun = structuredClone(workflowRun);
+  failedRun.workflow_run.conclusion = 'failure';
+  expectReject(() => parseRequest(failedRun), 'complete successfully');
 
-  const wrongBase = structuredClone(pr);
-  wrongBase.pull_request.base.ref = 'develop';
-  expectReject(() => parseRequest(wrongBase), 'protected main');
+  const wrongWorkflow = structuredClone(workflowRun);
+  wrongWorkflow.workflow_run.name = 'Quality Gate';
+  expectReject(() => parseRequest(wrongWorkflow), 'canonical pull-request Release Architecture Gate');
 
   validateTriggerDocument(structuredClone(TRIGGER_DOCUMENT));
-  const extraKey = { ...TRIGGER_DOCUMENT, surprise: true };
-  expectReject(() => validateTriggerDocument(extraKey), 'keys drifted');
+  expectReject(() => validateTriggerDocument({ ...TRIGGER_DOCUMENT, surprise: true }), 'keys drifted');
 
   validatePullFiles([{ filename: PR_TRIGGER_PATH, status: 'added', deletions: 0, sha: '3'.repeat(40) }]);
   expectReject(
@@ -298,7 +309,7 @@ function selfTest() {
     'exactly one data-only file',
   );
 
-  console.log('AR-11 FC-6 bounded comment/PR operator positive and negative self-tests passed.');
+  console.log('AR-11 FC-6 bounded comment/workflow-run operator positive and negative self-tests passed.');
 }
 
 async function main() {
@@ -311,10 +322,11 @@ async function main() {
   const event = JSON.parse(readFileSync(eventPath, 'utf8'));
   const parsed = parseRequest(event);
   if (parsed === null) return;
-  await validatePullRequestEnvelope(parsed.pullRequest);
-  const run = await dispatch(parsed.request);
-  await commentRun(parsed.responseIssue, parsed.request, run);
-  console.log(JSON.stringify({ operation: parsed.request.operation, request_id: parsed.request.requestId, run_id: run.id, run_url: run.html_url }));
+  const request = parsed.request ?? await resolveWorkflowRunRequest(parsed.workflowRun);
+  if (!request) fail('operator request could not be resolved');
+  const run = await dispatch(request);
+  await commentRun(parsed.responseIssue, request, run);
+  console.log(JSON.stringify({ operation: request.operation, request_id: request.requestId, run_id: run.id, run_url: run.html_url }));
 }
 
 main().catch((error) => {
