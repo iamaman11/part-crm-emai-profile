@@ -1,0 +1,47 @@
+name: AR-11 Release B Observation
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ar11-release-b-observation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    name: Observe canonical Release Set B
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read public GitHub API until canonical B is durable
+        shell: bash
+        env:
+          SOURCE_SHA: d1b6beaebd33a9517af19b1875652256e98af698
+          REPOSITORY: iamaman11/part-crm-emai-profile
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$REPOSITORY"
+          for attempt in $(seq 1 30); do
+            curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
+              "$api/actions/runs?event=push&head_sha=$SOURCE_SHA&per_page=100" > "$RUNNER_TEMP/runs.json"
+            run="$(jq -c --arg source "$SOURCE_SHA" '[.workflow_runs[] | select(.name == "Release Set Build" and .event == "push" and .head_branch == "main" and .head_sha == $source and .path == ".github/workflows/release-set-build.yml")] | sort_by(.id) | last // empty' "$RUNNER_TEMP/runs.json")"
+            if [ -n "$run" ] && [ "$(jq -r '.status' <<<"$run")" = completed ]; then
+              echo "$run" | jq '{id,run_number,run_attempt,status,conclusion,event,head_branch,head_sha,path,html_url,created_at,updated_at}'
+              test "$(jq -r '.conclusion' <<<"$run")" = success
+              curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
+                "$api/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+              release="$(jq -c --arg source "$SOURCE_SHA" '[.[] | select(.target_commitish == $source and (.tag_name | test("^release-set-v2-sha256-[0-9a-f]{64}$")))] | if length == 1 then .[0] else empty end' "$RUNNER_TEMP/releases.json")"
+              if [ -n "$release" ]; then
+                echo "$release" | jq '{id,tag_name,target_commitish,draft,prerelease,published_at,html_url,assets:[.assets[]|{id,name,size,digest}]}'
+                test "$(jq -r '.draft' <<<"$release")" = false
+                test "$(jq -r '.prerelease' <<<"$release")" = false
+                test "$(jq -r '.target_commitish' <<<"$release")" = "$SOURCE_SHA"
+                test "$(jq -r '[.assets[].name] | sort | join("|")' <<<"$release")" = 'control-plane.tar|profile-bridge.zip|release-set.json|runtime-bundle.tar|secret-resolver.tar'
+                test "$(jq -r '.assets | length' <<<"$release")" = 5
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo 'canonical Release Set B did not become durably observable' >&2
+          exit 1
