@@ -70,6 +70,36 @@ def integer(value: dict[str, Any], key: str, label: str) -> int:
     return observed
 
 
+def compare_head_sha(
+    *,
+    source_sha: str,
+    observed_protected_main_sha: str,
+    comparison: dict[str, Any],
+    base_sha: str,
+    merge_base_sha: str,
+    status: str,
+    ahead_by: int,
+    behind_by: int,
+) -> str:
+    head_commit = comparison.get("head_commit")
+    if isinstance(head_commit, dict):
+        return nested_string(comparison, ("head_commit", "sha"), "compare response")
+    if head_commit is not None:
+        fail("compare response head_commit must be an object or null")
+
+    strict_identical = (
+        status == "identical"
+        and ahead_by == 0
+        and behind_by == 0
+        and source_sha == observed_protected_main_sha
+        and base_sha == source_sha
+        and merge_base_sha == source_sha
+    )
+    if not strict_identical:
+        fail("compare response missing head_commit.sha outside strict identical self-comparison")
+    return observed_protected_main_sha
+
+
 def build_evidence(
     *,
     repository: str,
@@ -85,6 +115,25 @@ def build_evidence(
     if not isinstance(protected, bool):
         fail("branch response protected must be boolean")
 
+    observed_protected_main_sha = nested_string(branch, ("commit", "sha"), "branch response")
+    base_sha = nested_string(comparison, ("base_commit", "sha"), "compare response")
+    merge_base_sha = nested_string(comparison, ("merge_base_commit", "sha"), "compare response")
+    status = comparison.get("status")
+    if not isinstance(status, str):
+        fail("compare response status must be a string")
+    ahead_by = integer(comparison, "ahead_by", "compare response")
+    behind_by = integer(comparison, "behind_by", "compare response")
+    head_sha = compare_head_sha(
+        source_sha=source_sha,
+        observed_protected_main_sha=observed_protected_main_sha,
+        comparison=comparison,
+        base_sha=base_sha,
+        merge_base_sha=merge_base_sha,
+        status=status,
+        ahead_by=ahead_by,
+        behind_by=behind_by,
+    )
+
     value: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "kind": KIND,
@@ -93,20 +142,18 @@ def build_evidence(
         "source_commit_sha": source_sha,
         "protected_ref": f"refs/heads/{branch_name}",
         "protected_ref_verified": protected,
-        "observed_protected_main_sha": nested_string(branch, ("commit", "sha"), "branch response"),
+        "observed_protected_main_sha": observed_protected_main_sha,
         "collection_authority": COLLECTION_AUTHORITY,
         "proof": {
             "method": PROOF_METHOD,
-            "base_sha": nested_string(comparison, ("base_commit", "sha"), "compare response"),
-            "head_sha": nested_string(comparison, ("head_commit", "sha"), "compare response"),
-            "merge_base_sha": nested_string(comparison, ("merge_base_commit", "sha"), "compare response"),
-            "status": comparison.get("status"),
-            "ahead_by": integer(comparison, "ahead_by", "compare response"),
-            "behind_by": integer(comparison, "behind_by", "compare response"),
+            "base_sha": base_sha,
+            "head_sha": head_sha,
+            "merge_base_sha": merge_base_sha,
+            "status": status,
+            "ahead_by": ahead_by,
+            "behind_by": behind_by,
         },
     }
-    if not isinstance(value["proof"]["status"], str):
-        fail("compare response status must be a string")
     value["evidence_sha256"] = sha256(canonical(value))
     return value
 
@@ -127,6 +174,16 @@ def write_evidence(args: argparse.Namespace) -> None:
     if args.output.is_symlink():
         fail(f"output may not be a symlink: {args.output}")
     args.output.write_bytes(document(value))
+
+
+def expect_failure(callable_value: Any, expected_message: str) -> None:
+    try:
+        callable_value()
+    except EvidenceError as error:
+        if expected_message not in str(error):
+            fail(f"unexpected self-test failure: {error}")
+        return
+    fail("self-test expected fail-closed evidence rejection")
 
 
 def self_test() -> None:
@@ -157,6 +214,59 @@ def self_test() -> None:
     )
     if first != second or len(first["evidence_sha256"]) != 64:
         fail("AcceptedSourceEvidence generation is not deterministic")
+
+    identical_branch = {"name": "main", "protected": True, "commit": {"sha": source}}
+    identical_without_head = {
+        "base_commit": {"sha": source},
+        "merge_base_commit": {"sha": source},
+        "status": "identical",
+        "ahead_by": 0,
+        "behind_by": 0,
+    }
+    identical = build_evidence(
+        repository="iamaman11/part-crm-emai-profile",
+        release_set_id="release-set-v2-sha256-" + "b" * 64,
+        source_sha=source,
+        branch=identical_branch,
+        comparison=identical_without_head,
+    )
+    if identical["proof"]["head_sha"] != source or identical["proof"]["status"] != "identical":
+        fail("strict identical comparison normalization failed")
+
+    expect_failure(
+        lambda: build_evidence(
+            repository="iamaman11/part-crm-emai-profile",
+            release_set_id="release-set-v2-sha256-" + "c" * 64,
+            source_sha=source,
+            branch={"name": "main", "protected": True, "commit": {"sha": head}},
+            comparison=identical_without_head,
+        ),
+        "outside strict identical self-comparison",
+    )
+    ahead_without_head = dict(comparison)
+    ahead_without_head.pop("head_commit")
+    expect_failure(
+        lambda: build_evidence(
+            repository="iamaman11/part-crm-emai-profile",
+            release_set_id="release-set-v2-sha256-" + "d" * 64,
+            source_sha=source,
+            branch=branch,
+            comparison=ahead_without_head,
+        ),
+        "outside strict identical self-comparison",
+    )
+    identical_nonzero = dict(identical_without_head)
+    identical_nonzero["ahead_by"] = 1
+    expect_failure(
+        lambda: build_evidence(
+            repository="iamaman11/part-crm-emai-profile",
+            release_set_id="release-set-v2-sha256-" + "e" * 64,
+            source_sha=source,
+            branch=identical_branch,
+            comparison=identical_nonzero,
+        ),
+        "outside strict identical self-comparison",
+    )
     print("AR-11 accepted-source evidence collection adapter self-test passed.")
 
 
