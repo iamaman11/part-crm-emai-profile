@@ -12,6 +12,15 @@ const WORKFLOWS_RELATIVE = '.github/workflows';
 const ALLOWED_CATEGORIES = new Set(['PERMANENT_REQUIRED', 'CURRENT_MANUAL_OPERATION', 'POST_MERGE_METADATA']);
 const EXPECTED_ACTIVE = 23;
 const EXPECTED_PERMANENT = 21;
+const POST424_MAIN_SHA = '7596f22ed606cdc7afbf75209bc3925ef80c9e07';
+const POST424_RELEASE_TAG = 'release-set-v2-sha256-eb44162e282990a85cdaa818cc92ac110b9c6a9c71a0d8ab7a820c96bbf826d6';
+const POST424_RELEASE_ASSETS = [
+  'control-plane.tar',
+  'profile-bridge-manifest.json',
+  'profile-bridge.zip',
+  'release-set.json',
+  'secret-resolver.tar',
+];
 
 function sameStringSet(actual, expected) {
   if (!Array.isArray(actual) || !Array.isArray(expected)) return false;
@@ -215,6 +224,17 @@ async function main() {
       const liveErrors = validateLiveRegistry(policy, workflows);
       if (!report(liveErrors)) return 1;
       console.log(`AR11_POST424_READONLY_REGISTRY_PROBE active=${workflows.filter((entry) => entry?.state === 'active').length} canonical=${policy.active_registrations.length} auth=anonymous mutation=false`);
+
+      const release = await githubJson(`/repos/${repository}/releases/tags/${POST424_RELEASE_TAG}`, '');
+      if (release?.tag_name !== POST424_RELEASE_TAG) throw new Error(`post-424 Release tag mismatch: ${String(release?.tag_name)}`);
+      if (release?.target_commitish !== POST424_MAIN_SHA) throw new Error(`post-424 Release target mismatch: ${String(release?.target_commitish)}`);
+      if (release?.draft !== false || release?.prerelease !== false) throw new Error('post-424 durable Release must be published and non-prerelease');
+      const assets = Array.isArray(release?.assets) ? release.assets : [];
+      const names = assets.map((asset) => asset?.name).sort();
+      if (JSON.stringify(names) !== JSON.stringify(POST424_RELEASE_ASSETS)) throw new Error(`post-424 durable Release asset set mismatch: ${JSON.stringify(names)}`);
+      if (assets.some((asset) => asset?.state !== 'uploaded' || !Number.isInteger(asset?.size) || asset.size <= 0)) throw new Error('post-424 durable Release contains a non-uploaded or empty asset');
+      const digestCount = assets.filter((asset) => typeof asset?.digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(asset.digest)).length;
+      console.log(`AR11_POST424_DURABLE_RELEASE_PROBE tag=${POST424_RELEASE_TAG} target=${POST424_MAIN_SHA} assets=${assets.length} uploaded=${assets.length} api_sha256_digests=${digestCount} draft=false prerelease=false auth=anonymous mutation=false`);
     }
     return 0;
   }
