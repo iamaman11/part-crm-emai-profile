@@ -33,6 +33,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           node .github/scripts/release-architecture-ar11.mjs
           python scripts/release-set-ar11.py self-test
+          python scripts/accepted-source-evidence-ar11.py --self-test
 
       - name: Set up pinned Node runtime
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
