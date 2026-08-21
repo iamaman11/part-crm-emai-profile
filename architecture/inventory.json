@@ -1692,7 +1692,7 @@
     {
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
       "status": "EVIDENCE",
-      "scope": "ar4c_outbound_mail_composition_extraction_accepted"
+      "scope": "ar4c_outbound_mail_composition_accepted"
     },
     {
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
