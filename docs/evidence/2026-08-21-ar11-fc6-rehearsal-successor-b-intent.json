@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "kind": "AR11_FC6_REHEARSAL_SUCCESSOR_INTENT",
+  "authority_role": "NON_AUTHORITATIVE_EVIDENCE_ONLY",
+  "purpose": "Create one source-distinct but behavior-compatible accepted-main successor so the canonical Release Set Build can naturally publish immutable Release Set B for the real FC-6 staging A-to-B-to-A rehearsal.",
+  "predecessor_release_set_a": {
+    "release_set_id": "release-set-v2-sha256-11618f0c870f9ba752b399b8c7e3354da01a3abea8a11cf6d73c50de837e8496",
+    "source_commit_sha": "1b2256f9c6d45b3b7c2ba212a3894a89e1e49065",
+    "canonical_release_build_run_id": 32435532782,
+    "github_release_id": 374116798,
+    "durably_observed": true
+  },
+  "successor_constraints": {
+    "application_behavior_change": false,
+    "runtime_contract_change": false,
+    "schema_change": false,
+    "protocol_change": false,
+    "capability_change": false,
+    "release_or_promotion_authority_change": false,
+    "historical_rebuild_or_backfill_authority": false,
+    "production_enablement": false,
+    "production_mutation": false,
+    "ar12_started": false
+  },
+  "merge_policy": {
+    "decision": "BLOCKED_UNTIL_EXACT_HEAD_ACCEPTANCE",
+    "required_preconditions": [
+      "candidate branch is based on exact accepted main source of durable Release Set A",
+      "only this non-authoritative evidence-only intent differs from accepted main",
+      "all applicable exact-head PR workflows are completed/success",
+      "all protected required contexts are completed/success on the exact candidate head",
+      "behind_by is zero",
+      "blocking reviews are zero",
+      "unresolved review threads are zero",
+      "guarded squash merge is bound to the exact candidate head"
+    ],
+    "observed_state": {
+      "predecessor_release_set_a": "DURABLY_PROVEN",
+      "candidate_merge_authorized": false
+    }
+  },
+  "post_merge_requirement": "Treat the accepted successor source as B only after its ordinary main push produces a directly observed canonical immutable Release Set v2. Do not infer B publication from merge success alone."
+}
