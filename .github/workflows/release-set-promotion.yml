@@ -1,6 +1,6 @@
 name: Release Set Promotion
 
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('AR11 {0} {1}', inputs.operation, inputs.request_id) || format('AR11 operator-entrypoint {0}', github.event.comment.id) }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('AR11 {0} {1}', inputs.operation, inputs.request_id) || github.event_name == 'issue_comment' && format('AR11 comment-operator {0}', github.event.comment.id) || format('AR11 workflow-run-operator {0}', github.event.workflow_run.id) }}
 
 on:
   workflow_dispatch:
@@ -38,6 +38,9 @@ on:
         type: string
   issue_comment:
     types: [created]
+  workflow_run:
+    workflows: [Release Architecture Gate]
+    types: [completed]
 
 permissions:
   contents: read
@@ -48,13 +51,14 @@ concurrency:
 
 jobs:
   operator-entrypoint:
-    name: Bound owner comment to canonical dispatch
-    if: github.event_name == 'issue_comment'
+    name: Bind owner request to canonical dispatch
+    if: github.event_name == 'issue_comment' || github.event_name == 'workflow_run'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: write
       issues: write
+      pull-requests: read
     env:
       GITHUB_TOKEN: ${{ github.token }}
     steps:

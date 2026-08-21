@@ -88,9 +88,24 @@ function operatorScriptErrors(operator) {
   errors.push(...requireMarkers(operator, [
     "const REPOSITORY = 'iamaman11/part-crm-emai-profile'",
     'const ISSUE_NUMBER = 399',
+    "const PR_TITLE = 'AR-11 FC-6 ephemeral operator request'",
+    "const PR_BRANCH_PREFIX = 'codex/ar11-fc6-request-'",
+    "const PR_TRIGGER_PATH = 'docs/evidence/ar11-fc6-operator-request.json'",
+    "const TRIGGER_WORKFLOW_NAME = 'Release Architecture Gate'",
+    "const TRIGGER_WORKFLOW_PATH = '.github/workflows/release-architecture-gate.yml'",
     "event.action !== 'created'",
-    "event.comment?.user?.login !== 'iamaman11'",
-    "event.comment?.author_association !== 'OWNER'",
+    "event.action !== 'completed'",
+    "run?.event !== 'pull_request'",
+    "run?.status !== 'completed' || run?.conclusion !== 'success'",
+    "pull?.user?.login !== OWNER || pull?.author_association !== 'OWNER'",
+    "pull?.draft !== true",
+    "pull?.base?.ref !== 'main'",
+    "pull?.head?.repo?.full_name !== REPOSITORY",
+    'operator PR base must equal the currently protected main SHA',
+    'operator PR must change exactly one data-only file',
+    "kind: 'AR11_FC6_EPHEMERAL_OPERATOR_TRIGGER'",
+    "authority: 'NONE'",
+    'merge_authorized: false',
     '/ar11-fc6-promote',
     '/ar11-fc6-negative',
     'confirmation does not bind target and expected current',
@@ -99,8 +114,9 @@ function operatorScriptErrors(operator) {
     "ref: 'main'",
     "operation: 'rollback-negative'",
     'ordinary tracker comment unexpectedly became operator input',
-    'non-owner request unexpectedly passed',
-    'wrong issue unexpectedly passed',
+    'ordinary workflow_run unexpectedly became operator input',
+    'operator trigger gate must complete successfully',
+    'exactly one data-only file',
   ], 'FC-6 bounded operator adapter'));
   errors.push(...forbidMarkers(operator, [
     'CLOUDFLARE_API_TOKEN',
@@ -124,10 +140,14 @@ function promotionErrors(promotion) {
     'request_id:',
     'confirmation:',
     'issue_comment:\n    types: [created]',
+    'workflow_run:\n    workflows: [Release Architecture Gate]\n    types: [completed]',
     'concurrency:\n  group: release-set-promotion-staging',
   ], 'Release Set promotion'));
   if (count(promotion, 'workflow_dispatch:') !== 1) {
     errors.push('Release Set promotion must expose exactly one manual dispatch surface');
+  }
+  if (count(promotion, 'workflow_run:') !== 1) {
+    errors.push('Release Set promotion must expose exactly one protected workflow-run adapter surface');
   }
   if (count(promotion, 'secrets.CLOUDFLARE_API_TOKEN') !== 1) {
     errors.push('deploy-capable Cloudflare token must be referenced exactly once, inside mutation executor');
@@ -152,9 +172,10 @@ function promotionErrors(promotion) {
   if (errors.some((error) => error.includes('missing structural job'))) return errors;
 
   errors.push(...requireMarkers(operator, [
-    "if: github.event_name == 'issue_comment'",
+    "if: github.event_name == 'issue_comment' || github.event_name == 'workflow_run'",
     'actions: write',
     'issues: write',
+    'pull-requests: read',
     'ref: main',
     'persist-credentials: false',
     'node .github/scripts/ar11-fc6-operator.mjs',
@@ -308,6 +329,8 @@ function promotionErrors(promotion) {
   ], 'promotion rollback-negative evidence'));
 
   errors.push(...forbidMarkers(promotion, [
+    'pull_request_target:',
+    'pull_request:\n',
     'test "$source_sha" = "$main_sha"',
     '--root "$GITHUB_WORKSPACE/target-source" release verify',
     'environment: production',
@@ -461,6 +484,22 @@ function selfTest() {
   );
   if (!promotionErrors(operatorSecretLeak).some((error) => error.includes('bounded operator entrypoint') || error.includes('referenced exactly once'))) {
     throw new Error('operator credential leakage fixture unexpectedly passed');
+  }
+
+  const untrustedPrTrigger = promotion.replace(
+    'workflow_run:\n    workflows: [Release Architecture Gate]\n    types: [completed]',
+    'pull_request:\n    types: [opened]',
+  );
+  if (!promotionErrors(untrustedPrTrigger).some((error) => error.includes('workflow-run adapter') || error.includes('pull_request'))) {
+    throw new Error('direct pull-request write-token adapter fixture unexpectedly passed');
+  }
+
+  const untrustedOperatorCheckout = promotion.replace(
+    'ref: main\n          fetch-depth: 1',
+    'ref: ${{ github.event.workflow_run.head_sha }}\n          fetch-depth: 1',
+  );
+  if (!promotionErrors(untrustedOperatorCheckout).some((error) => error.includes('bounded operator entrypoint'))) {
+    throw new Error('operator untrusted-head checkout fixture unexpectedly passed');
   }
 
   const negativeBlock = jobBlock(promotion, 'rollback-negative-evidence');
