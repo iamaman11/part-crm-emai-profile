@@ -9,6 +9,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXECUTOR = '.github/workflows/d1-migration-executor.yml';
 const WORKFLOWS = '.github/workflows';
 const PINNED_WRANGLER = 'wrangler@4.94.0';
+const OBSERVE_REF = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}';
+const DEPLOY_REF = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
 
 function fail(message) {
   throw new Error(message);
@@ -36,38 +38,48 @@ async function validateExecutor(text, root = ROOT) {
   const requiredMarkers = [
     'workflow_call:',
     'workflow_dispatch:',
-    'environment: ${{ inputs.environment }}',
-    'group: d1-migration-${{ inputs.environment }}-${{ inputs.component }}-${{ inputs.database_id }}',
+    'environment: staging',
+    'group: ar11-provider-mutation-staging',
     'cancel-in-progress: false',
     'authorize:',
     'needs: authorize',
-    'test "$TARGET_ENVIRONMENT" = "staging" || test "$TARGET_ENVIRONMENT" = "production"',
+    'test "$TARGET_ENVIRONMENT" = "staging"',
     'test "$GITHUB_REF" = "refs/heads/main"',
     'test "$GITHUB_SHA" = "$SOURCE_SHA"',
     'test "$MUTATION_AUTHORIZED" = "true"',
     'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"',
-    'docs/status.json',
-    'production_authorized',
-    'production D1 mutation remains blocked before Production Core authorization',
     'd1 info',
     'SELECT id, name FROM d1_migrations ORDER BY id',
     'd1 status',
     'd1 plan',
     'd1 compatibility',
     'd1 time-travel info',
+    'ledger-fence.json',
+    'status-fence.json',
+    'cmp --silent artifacts/d1-migration/status-before.json artifacts/d1-migration/status-fence.json',
     'd1 migrations apply',
     'd1 verify',
     'PRAGMA foreign_key_check',
     'PRAGMA integrity_check',
+    "provider_mutation_executed': bool(plan.get('planned_migrations'))",
     "automatic_restore_executed': False",
     "secret_material_recorded': False",
     'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
     '--experimental-provision=false',
     '--experimental-auto-create=false',
     'env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run',
+    OBSERVE_REF,
+    DEPLOY_REF,
   ];
   for (const marker of requiredMarkers) {
     if (!text.includes(marker)) fail(`protected D1 executor lost required contract marker: ${marker}`);
+  }
+
+  if (text.includes('environment: ${{ inputs.environment }}')) {
+    fail('AR-11 protected D1 executor must use the literal staging Environment, never dynamic production-capable binding');
+  }
+  if (text.includes('          - production')) {
+    fail('AR-11 protected D1 executor must not expose production as a dispatch target');
   }
 
   const authorizeIndex = text.indexOf('\n  authorize:');
@@ -80,10 +92,10 @@ async function validateExecutor(text, root = ROOT) {
     fail('preflight authorization job must not bind any GitHub Environment');
   }
   if (authorizeBody.includes('CLOUDFLARE_API_TOKEN')) {
-    fail('preflight authorization job must not receive the provider API token');
+    fail('preflight authorization job must not receive any provider API token');
   }
   for (const marker of [
-    'test "$TARGET_ENVIRONMENT" = "staging" || test "$TARGET_ENVIRONMENT" = "production"',
+    'test "$TARGET_ENVIRONMENT" = "staging"',
     'test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"',
     'test "$MUTATION_AUTHORIZED" = "true"',
     'test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"',
@@ -97,14 +109,14 @@ async function validateExecutor(text, root = ROOT) {
   if (!migrateHeader.includes('needs: authorize')) {
     fail('protected mutation job must depend on successful preflight authorization');
   }
-  if (!migrateHeader.includes('environment: ${{ inputs.environment }}')) {
-    fail('protected mutation job lost exact environment binding');
+  if (!migrateHeader.includes('environment: staging')) {
+    fail('protected mutation job lost literal staging Environment binding');
   }
   if (!migrateHeader.includes('    env:\n')) {
     fail('protected D1 executor job-level metadata environment is missing');
   }
   if (migrateHeader.includes('CLOUDFLARE_API_TOKEN')) {
-    fail('Cloudflare API token must not exist in the protected mutation job-level environment');
+    fail('Cloudflare API tokens must not exist in the protected mutation job-level environment');
   }
 
   const forbiddenMarkers = [
@@ -144,8 +156,30 @@ async function validateExecutor(text, root = ROOT) {
     fail('every protected provider operation must explicitly disable experimental auto-create');
   }
 
-  const tokenSteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/g) ?? []).length;
-  if (tokenSteps < 5) fail('provider credential must be scoped to explicit Wrangler steps, not omitted or broadened');
+  const observeSteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_OBSERVE_API_TOKEN \}\}/g) ?? []).length;
+  if (observeSteps < 5) {
+    fail(`read-only provider observations must use the dedicated observe credential; observed=${observeSteps}`);
+  }
+  const deploySteps = (text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/g) ?? []).length;
+  if (deploySteps !== 1) {
+    fail(`deploy-capable credential must appear in exactly one post-policy mutation step; observed=${deploySteps}`);
+  }
+  const policyIndex = text.indexOf('Run credential-free native plan, compatibility, and rollback-blocker gates');
+  const deployIndex = text.indexOf(DEPLOY_REF);
+  if (policyIndex < 0 || deployIndex < policyIndex) {
+    fail('deploy-capable credential is materialized before native plan/compatibility');
+  }
+  const deployStepStart = text.lastIndexOf('\n      - name:', deployIndex);
+  const deployStepEndCandidate = text.indexOf('\n      - name:', deployIndex);
+  const deployStepEnd = deployStepEndCandidate < 0 ? text.length : deployStepEndCandidate;
+  const deployStep = text.slice(deployStepStart, deployStepEnd);
+  const fenceRead = deployStep.indexOf('ledger-fence.json');
+  const fenceStatus = deployStep.indexOf('status-fence.json');
+  const fenceCompare = deployStep.indexOf('cmp --silent artifacts/d1-migration/status-before.json artifacts/d1-migration/status-fence.json');
+  const apply = deployStep.indexOf('d1 migrations apply');
+  if (!(fenceRead >= 0 && fenceStatus > fenceRead && fenceCompare > fenceStatus && apply > fenceCompare)) {
+    fail('deploy step must re-observe and compare the exact ledger fence before migrations apply');
+  }
 
   const remoteMutationPaths = [];
   for (const workflowPath of await workflowPaths(root)) {
@@ -207,10 +241,31 @@ async function selfTest(text) {
     ),
   );
   await expectRejected(
+    'dynamic protected environment',
+    replaceFixture('dynamic protected environment', text, '    environment: staging\n', '    environment: ${{ inputs.environment }}\n'),
+  );
+  await expectRejected(
+    'production dispatch target',
+    replaceFixture('production dispatch target', text, '          - staging\n', '          - staging\n          - production\n'),
+  );
+  await expectRejected(
+    'deploy token used for observation',
+    replaceFixture('deploy token used for observation', text, OBSERVE_REF, DEPLOY_REF),
+  );
+  await expectRejected(
+    'missing ledger fence compare',
+    replaceFixture(
+      'missing ledger fence compare',
+      text,
+      '          cmp --silent artifacts/d1-migration/status-before.json artifacts/d1-migration/status-fence.json\n',
+      '',
+    ),
+  );
+  await expectRejected(
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor negative fixtures rejected as expected.');
+  console.log('Protected D1 executor observe-before-mutate and fail-closed negative fixtures rejected as expected.');
 }
 
 async function main() {
@@ -221,7 +276,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: preflight authorization before protected Environment, one remote mutation authority, pinned Wrangler only, credential-free opsctl, no auto-provision/auto-create and no automatic restore.');
+  console.log('Protected D1 executor contract passed: staging-only, read-only observe credential before native policy, one deploy credential after exact ledger fence, one remote mutation authority, pinned Wrangler, credential-free opsctl, no auto-provision/auto-create and no automatic restore.');
 }
 
 main().catch((error) => {
