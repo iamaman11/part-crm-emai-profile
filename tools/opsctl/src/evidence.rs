@@ -546,8 +546,10 @@ impl ReleaseSetTransitionV1 {
         if let Some(value) = &previous_release_set_id {
             validate_text(value, "payload.previous_release_set_id", 256)?;
         }
-        if matches!(decision, TransitionDecision::Applied | TransitionDecision::RolledBack)
-            && !matches!(compatibility, CompatibilityDecision::Compatible)
+        if matches!(
+            decision,
+            TransitionDecision::Applied | TransitionDecision::RolledBack
+        ) && !matches!(compatibility, CompatibilityDecision::Compatible)
         {
             return Err(EvidenceError::new(
                 "APPLIED/ROLLED_BACK Release Set evidence requires COMPATIBLE policy decision",
@@ -621,8 +623,11 @@ impl TypedPayload {
         }
     }
 
-    const fn observation_only(&self) -> bool {
-        matches!(Self::CredentialReadiness(_) | Self::HostedResourceState(_), self)
+    fn observation_only(&self) -> bool {
+        matches!(
+            self,
+            Self::CredentialReadiness(_) | Self::HostedResourceState(_)
+        )
     }
 }
 
@@ -1113,10 +1118,9 @@ fn validate_utc_timestamp(value: &str) -> Result<(), EvidenceError> {
         && bytes.get(13) == Some(&b':')
         && bytes.get(16) == Some(&b':')
         && bytes.get(19) == Some(&b'Z')
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| matches!(index, 4 | 7 | 10 | 13 | 16 | 19) || byte.is_ascii_digit());
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            matches!(index, 4 | 7 | 10 | 13 | 16 | 19) || byte.is_ascii_digit()
+        });
     if !shape {
         return Err(EvidenceError::new(
             "observed_at must use canonical UTC seconds format YYYY-MM-DDTHH:MM:SSZ",
@@ -1193,7 +1197,7 @@ mod tests {
         let first = envelope.canonical_text().map_err(|error| error.to_string())?;
         let second = envelope.canonical_text().map_err(|error| error.to_string())?;
         assert_eq!(first, second);
-        assert!(first.contains(r#"\"capabilities\":[\"d1.read\",\"workers.read\"]"#));
+        assert!(first.contains(r#""capabilities":["d1.read","workers.read"]"#));
         Ok(())
     }
 
@@ -1210,7 +1214,10 @@ mod tests {
 
     #[test]
     fn secret_fields_and_bearer_material_are_rejected_recursively() {
-        assert!(reject_secret_material(&json!({"nested": {"token_value": "secret"}}), "root").is_err());
+        assert!(
+            reject_secret_material(&json!({"nested": {"token_value": "secret"}}), "root")
+                .is_err()
+        );
         assert!(reject_secret_material(&json!({"safe": "Bearer abc"}), "root").is_err());
     }
 
@@ -1259,7 +1266,10 @@ mod tests {
         });
         let envelope = HostedEvidenceEnvelopeV1::from_raw(context, &payload)
             .map_err(|error| error.to_string())?;
-        assert!(matches!(envelope.payload, TypedPayload::ReleaseSetTransition(_)));
+        assert!(matches!(
+            envelope.payload,
+            TypedPayload::ReleaseSetTransition(_)
+        ));
         Ok(())
     }
 
