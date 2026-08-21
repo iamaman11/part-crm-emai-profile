@@ -156,6 +156,7 @@ function promotionErrors(promotion) {
   if (count(promotion, 'secrets.CLOUDFLARE_API_TOKEN') !== 1) errors.push('deploy-capable Cloudflare token must be referenced exactly once, inside mutation executor');
   errors.push(...forbidMarkers(promotion, [
     'workflow_run:', 'issue_comment:', 'pull_request_target:', 'pull_request:\n', 'operator-entrypoint:',
+    'test "$source_sha" = "$main_sha"',
     'preflight_sha256256', 'environment: production', 'TARGET_PROFILE: production-',
     'mailbox-secret-resolver-promotion.py', '_mailbox_secret_resolver_promotion_core.py',
     'wrangler d1 create', 'wrangler r2 bucket create', 'wrangler queues create',
