@@ -19,13 +19,15 @@ jobs:
           REPOSITORY: iamaman11/part-crm-emai-profile
           MAIN_SHA: 399826684d0d71876f614494d781a7cf420a9a60
           CEREMONY: main-399826684d0d71876f614494d781a7cf420a9a60
+          INVALID_RUN_ID: '32485881942'
+          INVALID_CHECK_SUITE_ID: '88061513453'
         run: |
           set -euo pipefail
           api="https://api.github.com/repos/$REPOSITORY"
           curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
             "$api/actions/runs?head_sha=$MAIN_SHA&per_page=100" > "$RUNNER_TEMP/main-runs.json"
           echo '=== exact-main runs ==='
-          jq --arg sha "$MAIN_SHA" '[.workflow_runs[] | select(.head_sha == $sha) | {id,name,display_title,event,status,conclusion,head_branch,head_sha,path,run_number,run_attempt,html_url,created_at,updated_at}] | sort_by(.id)' "$RUNNER_TEMP/main-runs.json"
+          jq --arg sha "$MAIN_SHA" '[.workflow_runs[] | select(.head_sha == $sha) | {id,name,display_title,event,status,conclusion,head_branch,head_sha,path,run_number,run_attempt,html_url,created_at,updated_at,check_suite_id}] | sort_by(.id)' "$RUNNER_TEMP/main-runs.json"
 
           curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
             "$api/actions/workflows/release-set-promotion.yml/runs?event=workflow_dispatch&branch=main&per_page=100" > "$RUNNER_TEMP/promotion-runs.json"
@@ -36,3 +38,22 @@ jobs:
             "$api/actions/workflows/ar11-fc6-operator-transport.yml/runs?event=push&branch=main&per_page=100" > "$RUNNER_TEMP/transport-runs.json"
           echo '=== exact transport run ==='
           jq --arg sha "$MAIN_SHA" '[.workflow_runs[] | select(.head_sha == $sha) | {id,name,display_title,event,status,conclusion,head_branch,head_sha,path,run_number,run_attempt,html_url,created_at,updated_at}] | sort_by(.id)' "$RUNNER_TEMP/transport-runs.json"
+
+          echo '=== invalid workflow object ==='
+          curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
+            "$api/actions/workflows/release-set-promotion.yml" | jq '{id,node_id,name,path,state,created_at,updated_at,url,html_url}'
+
+          echo '=== invalid run check suite ==='
+          curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
+            "$api/check-suites/$INVALID_CHECK_SUITE_ID" > "$RUNNER_TEMP/check-suite.json"
+          jq '{id,status,conclusion,head_sha,latest_check_runs_count,url,check_runs_url}' "$RUNNER_TEMP/check-suite.json"
+
+          echo '=== invalid run check runs ==='
+          curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
+            "$api/check-suites/$INVALID_CHECK_SUITE_ID/check-runs?per_page=100" > "$RUNNER_TEMP/check-runs.json"
+          jq '[.check_runs[] | {id,name,status,conclusion,started_at,completed_at,details_url,output}]' "$RUNNER_TEMP/check-runs.json"
+          for check_id in $(jq -r '.check_runs[].id' "$RUNNER_TEMP/check-runs.json"); do
+            echo "=== annotations for check run $check_id ==="
+            curl --fail --silent --show-error --retry 2 -H 'Accept: application/vnd.github+json' \
+              "$api/check-runs/$check_id/annotations?per_page=100" | jq '[.[] | {path,start_line,end_line,annotation_level,message,title,raw_details}]'
+          done
