@@ -4,10 +4,11 @@
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Static lifecycle order:** `architecture/architecture-program-sequence.json`  
 **Current functional-closure plan:** `docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`  
-**Scope:** prospective quality/evolution rules for PF work, AR-12…AR-17 and PC-1…PC-4 without rewriting accepted AR-0…AR-11 history  
+**PF-3 enforcement specification:** `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`  
+**Scope:** prospective quality/evolution rules for PF work, FC work, AR-12…AR-17 and PC-1…PC-4 without rewriting accepted AR-0…AR-11 history  
 **Production authorization:** NONE
 
-This document is not a second roadmap, lifecycle authority, capability registry, architecture inventory, or product release authority. It records the cross-cutting quality contract that future bounded slices must apply while preserving the canonical AR sequence and the principle:
+This document is not a second roadmap, lifecycle authority, capability registry, architecture inventory, product release authority or generic framework specification. It records the cross-cutting quality contract that future bounded slices must apply while preserving the canonical AR sequence and the principle:
 
 ```text
 source_present != production_enabled
@@ -17,7 +18,7 @@ The existing accepted AR-0…AR-11 checkpoints remain immutable accepted history
 
 ## 1. Target architecture
 
-The project converges toward a high-assurance modular architecture built from four independent concerns:
+The project converges toward a high-assurance modular architecture:
 
 ```text
 canonical authorities
@@ -30,12 +31,78 @@ explicit ports / adapters / effect capabilities
         ↓
 composition roots
         ↓
-release profile / capability admission
+Release / Capability Profile admission
         ↓
 production exposure
 ```
 
 The application remains one modular product with one protected `main`, one architecture hierarchy, one schema/compatibility history and progressive production capability enablement.
+
+`one main` means one product architecture, one source history, one data/schema compatibility lineage and one production-capability authority. It does **not** mean every deployment target must be one OS process. The control-plane Worker, Windows Profile Bridge, Camouhost/runtime adapters and `opsctl` may remain separate technical entrypoints/executables where deployment boundaries require it; they must still consume the same owned contracts and authority hierarchy.
+
+### 1.1 Target bounded contexts
+
+The primary business/module unit is the bounded context, including at least:
+
+```text
+identity
+clients
+profiles
+devices/runtime
+mailboxes
+notifications
+```
+
+Inside a context the intended shape is:
+
+```text
+domain
+application / use cases
+ports
+```
+
+Adapters and composition roots stay at the outside edge. Frontend, HTTP, Queue, Scheduled, service-binding and device/Bridge entrypoints are ingress/transport adapters rather than domain owners.
+
+### 1.2 Conceptual repository convergence shape
+
+This is a direction, not a migration quota and not authorization for a repository-wide move:
+
+```text
+/apps
+  control-plane/{composition,ingress,adapters}
+  frontend/
+  profile-bridge/{composition,adapters}
+
+/crates
+  kernel/
+  identity/{domain,application,ports}
+  clients/{domain,application,ports}
+  profiles/{domain,application,ports}
+  devices/{domain,application,ports}
+  mailboxes/{domain,application,ports}
+  notifications/{domain,application,ports}
+  contracts/{http,events,bridge}
+
+/runtime/camouhost
+
+/tools/opsctl
+  architecture/
+  credentials/
+  d1/
+  release/
+  promotion/
+  canonical/
+  effects/
+
+/architecture
+/migrations/{catalog,resolver}
+```
+
+Physical paths may differ when the existing implementation already provides an equally clear boundary. No slice is required to move correct untouched code solely to resemble this tree.
+
+### 1.3 Small shared kernel
+
+Shared/kernel code must remain small and boring: identifiers, low-level primitives and truly cross-context technical contracts only. Do not create a business-semantic `common`, global service layer or universal repository that becomes an undeclared owner for multiple bounded contexts.
 
 ## 2. Permanent evolution rules
 
@@ -50,6 +117,8 @@ one concern -> one legitimate current authority
 ```
 
 Dual mutable authorities and duplicate lifecycle implementations are forbidden.
+
+The repository may derive a virtual authority graph from existing machine/domain authorities, but must not create a new master registry that duplicates those domain facts.
 
 ### 2.2 Bounded Context Rule
 
@@ -71,7 +140,9 @@ adapters
 composition roots
 ```
 
-Provider SDKs, HTTP frameworks, environment lookups, filesystem/process/network primitives and concrete persistence implementations must not leak into provider-free domain/application logic.
+Provider SDKs, HTTP frameworks, Cloudflare bindings, Microsoft Graph clients, environment lookups, filesystem/process/network primitives and concrete persistence implementations must not leak into provider-free domain/application logic.
+
+Runtime product code must never depend on `opsctl`.
 
 ### 2.4 Pure Core / Effect Shell Rule
 
@@ -92,7 +163,7 @@ NetworkAccess
 DeploymentMutation
 ```
 
-A new abstraction is justified when it makes an invalid dependency or side effect impossible or mechanically detectable; abstractions added only for aesthetic layering are discouraged.
+A new abstraction is justified when it prevents or mechanically detects a class of invalid dependency, state transition or side effect. Abstractions added only for aesthetic layering are discouraged.
 
 ### 2.5 Typed Identity / State / Contract Rule
 
@@ -140,9 +211,11 @@ Schema migration, runtime compatibility and release compatibility must remain co
 
 Raw environment/provider bindings are resolved at composition/bootstrap edges into validated typed configuration. Domain/application modules do not scatter direct environment reads.
 
+Secret material is resolved only through its owned secret boundary and is not converted into general application configuration/readback.
+
 ### 2.12 Error Taxonomy Rule
 
-Keep domain/authorization/contract/infrastructure/operator failures distinguishable so HTTP, CLI and workflow presentation can map them without collapsing semantics or leaking provider details.
+Keep domain, authorization/capability, contract, infrastructure/provider and operator failures distinguishable so HTTP, CLI and workflow presentation can map them without collapsing semantics or leaking provider details.
 
 ### 2.13 Cutover / Legacy Retirement Rule
 
@@ -173,10 +246,11 @@ When `LEGACY_UNTOUCHED` becomes `TOUCHED`, the owning slice must converge it and
 
 ## 3. Architecture fitness functions
 
-Future slices must increase mechanical enforcement rather than rely only on prose. The permanent gate set should converge toward checks for at least:
+Future slices must increase mechanical enforcement rather than rely only on prose. The permanent gate set converges toward checks for at least:
 
 - forbidden dependency edges;
 - provider/runtime SDK imports in provider-free domain/application scopes;
+- runtime/application dependency on `opsctl`;
 - direct environment/process/network/filesystem mutation outside owned boundaries where the architecture requires an explicit port/capability;
 - duplicate semantic/mutable authorities;
 - duplicate or unknown activation-unit ownership;
@@ -185,11 +259,60 @@ Future slices must increase mechanical enforcement rather than rely only on pros
 - mutation surface without explicit mutation capability;
 - unversioned persisted/external/integration contract where versioning is required;
 - second production-enable flag/authority competing with release profiles;
-- stale or unreachable legacy executables after a cutover;
+- forbidden cross-context persistence mutation;
+- stale or reachable legacy executables after a declared cutover;
 - hidden `opsctl` state or provider mutation authority;
 - source-present production-disabled paths that do not fail closed backend-side.
 
-The fitness suite should be implemented incrementally by the slice that first needs each rule. Do not create a broad generic architecture framework ahead of demonstrated use.
+The fitness suite is implemented incrementally by the slice that first needs each rule. Do not create a broad generic architecture framework ahead of demonstrated use.
+
+### 3.1 Development stage verification protocol
+
+Architecture quality is part of Definition of Done, not a later cleanup phase.
+
+For every materially changing bounded candidate:
+
+```text
+1. fresh re-baseline
+   -> latest protected main, live authorities, trackers, competing PRs
+
+2. before implementation
+   -> identify bounded contexts, authority owner, contracts, effects,
+      execution surfaces, activation units/release profiles, schema impact,
+      legacy predecessor and applicable fitness rules
+
+3. during implementation
+   -> deterministic unit/integration tests at the lowest sufficient layer
+   -> provider-free/domain dependency checks
+   -> explicit effect/capability checks
+   -> positive and negative fixtures for changed invariants
+
+4. before PR acceptance
+   -> Architecture Impact declaration when PF-3 applies
+   -> no unexplained duplicate authority
+   -> no unowned effect or production-enable path
+   -> predecessor disposition explicit
+
+5. exact-head PR gate
+   -> all applicable permanent workflows green
+   -> all REQUIRED fitness rules green
+   -> owned negative fixtures green
+   -> protected required contexts green
+   -> behind_by=0
+   -> blocking reviews=0
+   -> unresolved threads=0
+
+6. guarded merge
+   -> merge bound to exact proven head
+
+7. post-merge
+   -> reread accepted main
+   -> verify authority/projection consistency
+   -> verify retired paths/callers are actually absent where cutover completed
+   -> only then start the next bounded slice
+```
+
+Before PF-3 acceptance, PF-1 and PF-2 use their explicit positive/negative DoD and the existing permanent architecture/security gates. PF-3 then makes this protocol persistently machine-enforced for subsequent work.
 
 ## 4. PF and Functional Closure impact
 
@@ -215,9 +338,11 @@ PF-2 must reuse the same canonical serialization/digest and typed-policy princip
 
 PF-3 makes this contract mechanically persistent before FC-6 resumes. It introduces one versioned machine-readable fitness-policy catalog mapping mandatory rule IDs to primary permanent enforcement owners, positive/negative fixtures and the Architecture Fitness Gate. A REQUIRED rule without active enforcement is a gate failure.
 
+Detailed PF-3 requirements are owned by `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` and issue #431.
+
 ### FC-6 / FC-7
 
-Functional Closure remains focused on proving the accepted AR-11 behavior. It must consume PF-1/PF-2/PF-3 primitives and must not create temporary parallel operational authorities. FC-7 also confirms this contract and the fitness baseline are reflected in current program/development projections before AR-12 implementation begins.
+Functional Closure remains focused on proving accepted AR-11 behavior. It must consume PF-1/PF-2/PF-3 primitives and must not create temporary parallel operational authorities. FC-7 also confirms this contract and the fitness baseline are reflected in current program/development projections before AR-12 implementation begins.
 
 ## 5. AR-by-AR prospective impact
 
@@ -274,9 +399,11 @@ Existing E1–E7 + H remain binding and are strengthened rather than replaced:
 - cloud↔Windows release compatibility uses versioned contracts and the same release-profile authority;
 - permanent Windows fitness/integration tests prove forbidden in-place mutation, unsafe activation and incompatible-profile launch paths.
 
+The detailed inherited Batch E requirements E1–E7 and production-equivalent rehearsal H remain in the canonical program plan.
+
 ### AR-16 — Final Whole-project 10/10 Audit
 
-AR-16 is expanded into the convergence audit for this contract. In addition to existing P0/P1 requirements it must prove, for all production-core-relevant and materially touched scopes:
+AR-16 is the convergence audit for this contract. In addition to existing P0/P1 requirements it must prove, for all production-core-relevant and materially touched scopes:
 
 - authority uniqueness and no parallel production-enable registry;
 - bounded-context ownership is understandable and mechanically mapped;
@@ -292,7 +419,7 @@ AR-16 is expanded into the convergence audit for this contract. In addition to e
 - Linux/Windows permanent gates for applicable operator/runtime scopes;
 - developer-readability audit: a new maintainer can identify owner, entry point, authority, dependency direction, effect boundary and production gate for each Production Core context.
 
-AR-16 does not require aesthetic restructuring of untouched correct code. It requires P0/P1=0 and no material production-core architecture debt hidden behind legacy compatibility.
+AR-16 does not require aesthetic restructuring of untouched correct code. It requires P0/P1=0 and no material Production-Core architecture debt hidden behind legacy compatibility.
 
 ### AR-17 — Architecture Closeout + Production Core Gate
 
@@ -312,7 +439,11 @@ AR-17 must not perform the first production deployment.
 
 ### PC-1 — Production Core v1
 
-PC-1 consumes the architecture; it does not invent it. Production enablement occurs only through the accepted `production-core-v1` release/capability profile. PC-1 must deploy/promote same bits, materialize the effective capability set, prove backend admission and prove cloud + Windows compatibility. Mailbox capabilities remain source-present but disabled.
+PC-1 consumes the architecture; it does not invent it. Production enablement occurs only through the accepted `production-core-v1` release/capability profile. PC-1 must deploy/promote same bits, materialize the effective capability set, prove backend admission and prove cloud + Windows compatibility.
+
+The current intended Core projection includes foundation, identity/users, clients/customer cards, browser profiles, profile runtime, Camoufox, Windows Profile Bridge delivery/runtime and required notifications/audit/health/readiness/observability foundations. Exact activation-unit facts remain owned by `architecture/release-architecture-ar11.json` rather than this prose.
+
+Mailbox administration/read/bindings/jobs/outbound capabilities may remain source-present and tested but remain production-disabled.
 
 ### PC-2 — Mailbox Administration
 
@@ -354,9 +485,9 @@ Do not create a repository-wide architecture rewrite project. The execution mode
 
 ```text
 PF-1 reference implementation
--> PF-2 hosted evidence primitive
--> PF-3 architecture fitness baseline
--> re-baseline #399/#421
+-> PF-2 Hosted Operational Evidence primitive
+-> PF-3 Architecture Fitness Baseline
+-> fresh re-baseline #399/#421
 -> FC-6 / FC-7 closure
 -> AR-12…AR-15 with touch-to-converge
 -> AR-16 whole-project convergence audit
@@ -365,7 +496,7 @@ PF-1 reference implementation
 -> PC-2 / PC-3 / PC-4 progressive capability enablement
 ```
 
-Every bounded candidate keeps `main` releasable/testable, adds positive + negative permanent proofs, and deletes proven-dead predecessor paths after cutover.
+Every bounded candidate keeps `main` releasable/testable, adds positive + negative permanent proofs, and deletes proven-dead predecessor paths after cutover. Architecture evolves together with functionality; no global architecture freeze or feature-development stop is required.
 
 ## 8. Non-goals
 
