@@ -354,7 +354,9 @@ mod tests {
             .map(|entry| {
                 entry
                     .as_str()
-                    .unwrap_or_else(|| panic!("profile {profile_id} field {field} contains a non-string"))
+                    .unwrap_or_else(|| {
+                        panic!("profile {profile_id} field {field} contains a non-string")
+                    })
                     .to_owned()
             })
             .collect()
@@ -508,13 +510,15 @@ mod tests {
             } else {
                 BTreeSet::from(["production".to_owned()])
             };
-            assert_eq!(allowed, expected_allowed, "environment authority drifted for {profile_id}");
+            assert_eq!(
+                allowed, expected_allowed,
+                "environment authority drifted for {profile_id}"
+            );
         }
 
-        let wrangler: Value = serde_json::from_str(include_str!(
-            "../../../deploy/cloudflare/wrangler.jsonc"
-        ))
-        .expect("canonical Wrangler JSON must parse");
+        let wrangler: Value =
+            serde_json::from_str(include_str!("../../../deploy/cloudflare/wrangler.jsonc"))
+                .expect("canonical Wrangler JSON must parse");
         for (environment, profile_id) in [
             ("staging", "rehearsal-core-v1"),
             ("production", "production-core-v1"),
@@ -531,7 +535,8 @@ mod tests {
                 Some(runtime.id)
             );
             assert_eq!(
-                vars.get("CAPABILITY_PROFILE_DIGEST").and_then(Value::as_str),
+                vars.get("CAPABILITY_PROFILE_DIGEST")
+                    .and_then(Value::as_str),
                 Some(runtime.digest)
             );
         }
