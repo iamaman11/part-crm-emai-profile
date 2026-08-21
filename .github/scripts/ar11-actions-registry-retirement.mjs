@@ -9,6 +9,9 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(SCRIPT_DIR, '..', '..');
 const MANIFEST_RELATIVE = 'docs/evidence/2026-08-21-ar11-hosted-actions-registry-retirements.json';
 const REGISTRY_RELATIVE = 'architecture/github-actions-registry.json';
+const BASE_CREDENTIAL_RELATIVE = 'architecture/credential-authority-ar8b.json';
+const AR11_CREDENTIAL_RELATIVE = 'architecture/credential-authority-ar11-extension.json';
+const GOVERNANCE_WORKFLOW_RELATIVE = '.github/workflows/github-governance-gate.yml';
 const WORKFLOWS_RELATIVE = '.github/workflows';
 const REPOSITORY = 'iamaman11/part-crm-emai-profile';
 const EXPECTED_DISCOVERY_SHA = '7fc11fad573f0077f1f61fd527350864df59c571';
@@ -96,6 +99,51 @@ function validateManifest(manifest, trackedPaths, registry) {
   return errors;
 }
 
+function validateEphemeralAuthority(baseAuthority, extension, workflowText) {
+  const errors = [];
+  const expect = (condition, message) => { if (!condition) errors.push(message); };
+  const baseCredential = (baseAuthority?.credentials ?? []).find((row) => row?.id === 'github.actions-runtime-api');
+  expect(Boolean(baseCredential), 'accepted base authority must retain github.actions-runtime-api');
+  expect(baseCredential?.class === 'EPHEMERAL_WORKFLOW_CREDENTIAL', 'github.actions-runtime-api class drifted');
+  const aliases = (baseCredential?.bindings ?? [])
+    .filter((row) => row?.surface === 'process_environment_credential_alias')
+    .map((row) => row?.name)
+    .sort();
+  expect(JSON.stringify(aliases) === JSON.stringify(['GH_TOKEN', 'GITHUB_TOKEN']), 'github.actions-runtime-api aliases must remain GH_TOKEN/GITHUB_TOKEN');
+
+  const rows = extension?.ephemeral_runtime_credential_extensions;
+  expect(Array.isArray(rows) && rows.length === 1, 'AR-11 ephemeral runtime credential extensions must contain exactly one bounded row');
+  const row = Array.isArray(rows) ? rows[0] : null;
+  expect(row?.credential_id === 'github.actions-runtime-api', 'AR-11 ephemeral runtime extension must target github.actions-runtime-api');
+  expect(JSON.stringify(row?.add_consumers) === JSON.stringify([
+    '.github/scripts/ar11-actions-registry-retirement.mjs',
+    GOVERNANCE_WORKFLOW_RELATIVE,
+  ]), 'AR-11 ephemeral runtime consumers drifted');
+  const boundary = row?.allowed_permission_boundary;
+  expect(boundary?.workflow === GOVERNANCE_WORKFLOW_RELATIVE, 'ephemeral runtime workflow boundary drifted');
+  expect(boundary?.job === 'hosted-state', 'ephemeral runtime job boundary must remain hosted-state');
+  expect(boundary?.accepted_main_only === true, 'ephemeral runtime authority must remain accepted-main only');
+  expect(boundary?.pull_request_exposure === false, 'pull-request Actions write exposure is forbidden');
+  expect(boundary?.actions === 'write' && boundary?.contents === 'read', 'ephemeral runtime permission boundary must remain actions:write + contents:read');
+  expect(boundary?.provider_credentials === false, 'ephemeral runtime retirement authority must not include provider credentials');
+  expect(boundary?.production_mutation === false, 'ephemeral runtime retirement authority must not mutate production');
+  expect(boundary?.historical_run_deletion === false, 'ephemeral runtime retirement authority must preserve historical runs');
+  expect(typeof row?.rationale === 'string' && row.rationale.length >= 40, 'ephemeral runtime authority requires a reviewed rationale');
+
+  const hostedMatch = workflowText.match(/\n  hosted-state:\n([\s\S]*?)\n  operational-credential-state:\n/);
+  expect(Boolean(hostedMatch), 'governance workflow hosted-state job boundary is unavailable');
+  const hosted = hostedMatch?.[1] ?? '';
+  expect(workflowText.includes('permissions:\n  actions: read\n  contents: read'), 'governance workflow top-level Actions permission must remain read-only');
+  expect(hosted.includes("if: github.event_name != 'pull_request'"), 'hosted-state must remain excluded from pull_request');
+  expect(hosted.includes('permissions:\n      actions: write\n      contents: read'), 'hosted-state must declare the exact bounded Actions write permission');
+  expect(!hosted.includes('environment: staging') && !hosted.includes('environment: production'), 'Actions registry retirement must not enter provider environments');
+  expect(!hosted.includes('CLOUDFLARE_'), 'Actions registry retirement job must not consume Cloudflare credentials');
+  expect(hosted.includes('GITHUB_ACTIONS_WRITE_AUTH: ${{ github.token }}'), 'retirement must use only ephemeral github.token');
+  expect(hosted.includes("printf '%s' \"$GITHUB_ACTIONS_WRITE_AUTH\" | node .github/scripts/ar11-actions-registry-retirement.mjs reconcile"), 'hosted-state must invoke only the canonical exact-id retirement reconciler');
+  expect(hosted.indexOf('ar11-actions-registry-retirement.mjs reconcile') < hosted.indexOf('github-actions-registry.mjs live'), 'canonical live registry audit must run after retirement convergence');
+  return errors;
+}
+
 function validateLiveRowsForRetirement(manifest, workflows) {
   if (!Array.isArray(workflows)) return ['live workflow registry must be an array'];
   const errors = [];
@@ -165,8 +213,11 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function selfTest(manifest, trackedPaths, registry) {
-  const contractErrors = validateManifest(manifest, trackedPaths, registry);
+function selfTest(manifest, trackedPaths, registry, baseAuthority, extension, workflowText) {
+  const contractErrors = [
+    ...validateManifest(manifest, trackedPaths, registry),
+    ...validateEphemeralAuthority(baseAuthority, extension, workflowText),
+  ];
   if (contractErrors.length !== 0) fail(`self-test requires valid contract: ${JSON.stringify(contractErrors)}`);
   const baseline = manifest.retirements.map((row) => ({ id: row.registration_id, path: row.path, state: 'active' }));
   if (validateLiveRowsForRetirement(manifest, baseline).length !== 0) fail('positive live retirement fixture failed');
@@ -189,6 +240,14 @@ function selfTest(manifest, trackedPaths, registry) {
   authorityFixture.active_registrations.push({ path: manifest.retirements[0].path, category: 'PERMANENT_REQUIRED' });
   const authorityErrors = validateManifest(manifest, trackedPaths, authorityFixture);
   if (!authorityErrors.some((error) => error.includes('canonical active authority'))) fail('active-authority negative fixture was not rejected');
+
+  const permissionFixture = clone(extension);
+  permissionFixture.ephemeral_runtime_credential_extensions[0].allowed_permission_boundary.pull_request_exposure = true;
+  const permissionErrors = validateEphemeralAuthority(baseAuthority, permissionFixture, workflowText);
+  if (!permissionErrors.some((error) => error.includes('pull-request Actions write exposure'))) fail('pull-request authority negative fixture was not rejected');
+  const providerWorkflowFixture = workflowText.replace('GITHUB_ACTIONS_WRITE_AUTH: ${{ github.token }}', 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n          GITHUB_ACTIONS_WRITE_AUTH: ${{ github.token }}');
+  const providerErrors = validateEphemeralAuthority(baseAuthority, extension, providerWorkflowFixture);
+  if (!providerErrors.some((error) => error.includes('Cloudflare credentials'))) fail('provider credential exposure negative fixture was not rejected');
   console.log('AR-11 exact-id Actions retirement positive and fail-closed negative fixtures passed.');
 }
 
@@ -197,16 +256,22 @@ async function main() {
   const root = DEFAULT_ROOT;
   const manifest = await readJson(path.join(root, MANIFEST_RELATIVE));
   const registry = await readJson(path.join(root, REGISTRY_RELATIVE));
+  const baseAuthority = await readJson(path.join(root, BASE_CREDENTIAL_RELATIVE));
+  const extension = await readJson(path.join(root, AR11_CREDENTIAL_RELATIVE));
+  const workflowText = await readFile(path.join(root, GOVERNANCE_WORKFLOW_RELATIVE), 'utf8');
   const trackedPaths = await trackedWorkflowPaths(root);
-  const contractErrors = validateManifest(manifest, trackedPaths, registry);
+  const contractErrors = [
+    ...validateManifest(manifest, trackedPaths, registry),
+    ...validateEphemeralAuthority(baseAuthority, extension, workflowText),
+  ];
   if (!report(contractErrors)) return 1;
 
   if (command === 'contract') {
-    console.log(`AR-11 Actions retirement manifest classifies ${manifest.retirements.length} exact obsolete registrations; source authority remains absent.`);
+    console.log(`AR-11 Actions retirement manifest classifies ${manifest.retirements.length} exact obsolete registrations; source authority remains absent and Actions write is accepted-main-only.`);
     return 0;
   }
   if (command === 'self-test') {
-    selfTest(manifest, trackedPaths, registry);
+    selfTest(manifest, trackedPaths, registry, baseAuthority, extension, workflowText);
     return 0;
   }
   if (command !== 'reconcile') {
