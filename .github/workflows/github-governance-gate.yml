@@ -59,6 +59,9 @@ jobs:
       - name: Validate canonical workflow secret consumers and environment boundaries
         run: python scripts/check-workflow-secret-authority.py
 
+      - name: Prove AR-11 observe credential readiness fails closed
+        run: node .github/scripts/ar11-observe-credential-readiness.mjs --self-test
+
       - name: Validate one-merge architecture acceptance contract
         run: |
           node .github/scripts/architecture-acceptance.mjs contract
@@ -202,3 +205,74 @@ jobs:
           CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
           AR8C_AUDIT_ENVIRONMENT: staging
         run: node .github/scripts/credential-lifecycle.mjs cloudflare-live
+
+      - name: Prove AR-11 staging observe credential READY or fail closed
+        env:
+          CLOUDFLARE_OBSERVE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
+          CLOUDFLARE_DEPLOY_MANIFEST_JSON: ${{ secrets.CLOUDFLARE_DEPLOY_MANIFEST_JSON }}
+        run: |
+          set -euo pipefail
+          attestation='docs/evidence/ar11-fc6-cloudflare-observe-token-policy.json'
+          test -f "$attestation"
+          test -n "$CLOUDFLARE_OBSERVE_API_TOKEN"
+          test -n "$CLOUDFLARE_DEPLOY_MANIFEST_JSON"
+          echo "::add-mask::$CLOUDFLARE_OBSERVE_API_TOKEN"
+          umask 077
+          printf '%s' "$CLOUDFLARE_DEPLOY_MANIFEST_JSON" > "$RUNNER_TEMP/ar11-observe-deploy-manifest.json"
+
+          verify_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-observe-token-verify.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            'https://api.cloudflare.com/client/v4/user/tokens/verify')"
+          test "$verify_code" = 200
+          jq -e '.success == true and .result.status == "active" and (.result.id | type == "string")' "$RUNNER_TEMP/ar11-observe-token-verify.json" >/dev/null
+
+          account_id="$(jq -r '.control_plane.account_id // .account_id' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
+          worker_name="$(jq -r '.control_plane.worker_name // .worker_name' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
+          r2_bucket="$(jq -r '.control_plane.r2_bucket_name // .r2_bucket_name' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
+          queue_name="$(jq -r '.control_plane.integration_events_queue // .integration_events_queue' "$RUNNER_TEMP/ar11-observe-deploy-manifest.json")"
+          test -n "$account_id"
+          test -n "$worker_name"
+          test -n "$r2_bucket"
+          test -n "$queue_name"
+
+          python scripts/release-core-overlay-ar11.py \
+            --source-config deploy/cloudflare/wrangler.jsonc \
+            --release-root . \
+            --deploy-manifest "$RUNNER_TEMP/ar11-observe-deploy-manifest.json" \
+            --environment staging \
+            --output "$RUNNER_TEMP/ar11-observe-wrangler.staging.json"
+
+          deployments_code="$(curl --silent --show-error --output "$RUNNER_TEMP/ar11-observe-deployments.json" --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_OBSERVE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$account_id/workers/scripts/$worker_name/deployments")"
+          test "$deployments_code" = 200 -o "$deployments_code" = 404
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB --remote \
+            --command 'SELECT name FROM d1_migrations ORDER BY name' --json \
+            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-d1.json"
+          npx --yes wrangler@4.94.0 r2 bucket info "$r2_bucket" --json \
+            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-r2.json"
+          npx --yes wrangler@4.94.0 queues info "$queue_name" \
+            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-queue.txt"
+          npx --yes wrangler@4.94.0 secret list --name "$worker_name" --json \
+            --config "$RUNNER_TEMP/ar11-observe-wrangler.staging.json" --env staging > "$RUNNER_TEMP/ar11-observe-secret-list.json"
+
+          jq -n '{
+            schema_version: 1,
+            kind: "AR11_OBSERVE_CREDENTIAL_READ_OBSERVATIONS",
+            workers_deployments_read: true,
+            d1_catalog_read: true,
+            r2_bucket_read: true,
+            queue_read: true,
+            worker_secret_names_read: true,
+            mutation_probe: "FORBIDDEN_NOT_EXECUTED"
+          }' > "$RUNNER_TEMP/ar11-observe-read-observations.json"
+
+          node .github/scripts/ar11-observe-credential-readiness.mjs \
+            --extension architecture/credential-authority-ar11-extension.json \
+            --attestation "$attestation" \
+            --verify "$RUNNER_TEMP/ar11-observe-token-verify.json" \
+            --deploy-manifest "$RUNNER_TEMP/ar11-observe-deploy-manifest.json" \
+            --observations "$RUNNER_TEMP/ar11-observe-read-observations.json" \
+            --output "$RUNNER_TEMP/ar11-observe-readiness.json"
+          jq -e '.decision == "READY" and .environment == "staging" and .production_mutation == false and .mutation_probe == "FORBIDDEN_NOT_EXECUTED"' \
+            "$RUNNER_TEMP/ar11-observe-readiness.json" >/dev/null
