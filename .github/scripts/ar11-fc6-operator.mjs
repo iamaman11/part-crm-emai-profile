@@ -71,9 +71,7 @@ function parseCommand(body, requestId) {
 function parseIssueComment(event) {
   if (event.action !== 'created') fail('only newly created issue comments are accepted');
   if (event.issue?.number !== ISSUE_NUMBER || event.issue?.pull_request) fail(`request must be an issue comment on #${ISSUE_NUMBER}`);
-  if (event.comment?.user?.login !== OWNER || event.comment?.author_association !== 'OWNER') {
-    fail('requester must be the repository owner with OWNER association');
-  }
+  if (event.comment?.user?.login !== OWNER || event.comment?.author_association !== 'OWNER') fail('requester must be the repository owner with OWNER association');
   if (!Number.isInteger(event.comment?.id) || event.comment.id <= 0) fail('comment id is missing');
   const body = typeof event.comment?.body === 'string' ? event.comment.body.trim() : '';
   if (!body.startsWith('/ar11-fc6-')) return null;
@@ -86,16 +84,12 @@ function parseWorkflowRun(event) {
   const looksLikeOperator = typeof headBranch === 'string' && headBranch.startsWith(PR_BRANCH_PREFIX);
   if (!looksLikeOperator) return null;
   if (event.action !== 'completed') fail('operator workflow_run is accepted only after completion');
-  if (run?.name !== TRIGGER_WORKFLOW_NAME || run?.path !== TRIGGER_WORKFLOW_PATH || run?.event !== 'pull_request') {
-    fail('operator workflow_run must be the canonical pull-request Release Architecture Gate');
-  }
+  if (run?.name !== TRIGGER_WORKFLOW_NAME || run?.path !== TRIGGER_WORKFLOW_PATH || run?.event !== 'pull_request') fail('operator workflow_run must be the canonical pull-request Release Architecture Gate');
   if (run?.status !== 'completed' || run?.conclusion !== 'success') fail('operator trigger gate must complete successfully');
   if (run?.head_repository?.full_name !== REPOSITORY || !SHA.test(run?.head_sha ?? '')) fail('operator trigger gate must use an exact same-repository head SHA');
   if (!Number.isInteger(run?.id) || run.id <= 0) fail('operator workflow_run id is invalid');
   const pulls = run?.pull_requests;
-  if (!Array.isArray(pulls) || pulls.length !== 1 || !Number.isInteger(pulls[0]?.number) || pulls[0].number <= 0) {
-    fail('operator workflow_run must bind exactly one pull request');
-  }
+  if (!Array.isArray(pulls) || pulls.length !== 1 || !Number.isInteger(pulls[0]?.number) || pulls[0].number <= 0) fail('operator workflow_run must bind exactly one pull request');
   return {
     request: null,
     responseIssue: pulls[0].number,
@@ -125,9 +119,7 @@ function validateTriggerDocument(value, requestId) {
     || value.authority !== 'NONE'
     || value.merge_authorized !== false
     || value.tracker_issue !== ISSUE_NUMBER
-  ) {
-    fail('operator PR trigger document non-authority envelope drifted');
-  }
+  ) fail('operator PR trigger document non-authority envelope drifted');
   return requestFromFields({
     operation: value.operation,
     releaseSetId: value.release_set_id,
@@ -137,12 +129,21 @@ function validateTriggerDocument(value, requestId) {
   }, requestId);
 }
 
+function parseTriggerBytes(raw, requestId) {
+  let trigger;
+  try {
+    trigger = JSON.parse(raw);
+  } catch (error) {
+    fail(`operator PR trigger document is invalid JSON: ${error instanceof Error ? error.message : error}`);
+  }
+  if (raw !== canonicalTriggerBytes(trigger)) fail('operator PR trigger document must be canonical JSON bytes');
+  return validateTriggerDocument(trigger, requestId);
+}
+
 function validatePullFiles(files) {
   if (!Array.isArray(files) || files.length !== 1) fail('operator PR must change exactly one data-only file');
   const file = files[0];
-  if (file?.filename !== PR_TRIGGER_PATH || file?.status !== 'added' || file?.deletions !== 0) {
-    fail(`operator PR may only add ${PR_TRIGGER_PATH}`);
-  }
+  if (file?.filename !== PR_TRIGGER_PATH || file?.status !== 'added' || file?.deletions !== 0) fail(`operator PR may only add ${PR_TRIGGER_PATH}`);
   if (typeof file?.sha !== 'string' || !SHA.test(file.sha)) fail('operator PR trigger blob SHA is invalid');
   return file.sha;
 }
@@ -197,18 +198,9 @@ async function resolveWorkflowRunRequest(workflowRun) {
   const triggerSha = validatePullFiles(files);
   const encodedRef = encodeURIComponent(workflowRun.headSha);
   const payload = await github(`/repos/${REPOSITORY}/contents/${PR_TRIGGER_PATH}?ref=${encodedRef}`);
-  if (payload?.type !== 'file' || payload?.encoding !== 'base64' || payload?.sha !== triggerSha || typeof payload?.content !== 'string') {
-    fail('operator PR trigger file response is malformed or unbound');
-  }
+  if (payload?.type !== 'file' || payload?.encoding !== 'base64' || payload?.sha !== triggerSha || typeof payload?.content !== 'string') fail('operator PR trigger file response is malformed or unbound');
   const raw = Buffer.from(payload.content.replace(/\s/g, ''), 'base64').toString('utf8');
-  let trigger;
-  try {
-    trigger = JSON.parse(raw);
-  } catch (error) {
-    fail(`operator PR trigger document is invalid JSON: ${error instanceof Error ? error.message : error}`);
-  }
-  if (raw !== canonicalTriggerBytes(trigger)) fail('operator PR trigger document must be canonical JSON bytes');
-  return validateTriggerDocument(trigger, `pr-${workflowRun.pullNumber}`);
+  return parseTriggerBytes(raw, `pr-${workflowRun.pullNumber}`);
 }
 
 async function listDispatchRuns() {
@@ -242,7 +234,6 @@ async function dispatch(request) {
       },
     },
   });
-
   for (let attempt = 0; attempt < 30; attempt += 1) {
     const runs = await listDispatchRuns();
     const match = findBoundRun(runs.filter((run) => !before.has(run.id)), expectedTitle);
@@ -323,13 +314,16 @@ function selfTest() {
     source_run_id: '',
     confirmation: `${b}:${a}`,
   };
-  const fileRequest = validateTriggerDocument(promoteTrigger, 'pr-77');
+  const canonical = canonicalTriggerBytes(promoteTrigger);
+  const fileRequest = parseTriggerBytes(canonical, 'pr-77');
   if (fileRequest.operation !== 'promote' || fileRequest.releaseSetId !== b || fileRequest.requestId !== 'pr-77') fail('immutable PR trigger parse self-test failed');
+  expectReject(() => parseTriggerBytes(JSON.stringify(promoteTrigger), 'pr-77'), 'canonical JSON bytes');
   expectReject(() => validateTriggerDocument({ ...promoteTrigger, merge_authorized: true }, 'pr-77'), 'non-authority envelope drifted');
   expectReject(() => validateTriggerDocument({ ...promoteTrigger, confirmation: 'BAD' }, 'pr-77'), 'confirmation');
   const reordered = { kind: promoteTrigger.kind, schema_version: 1, ...Object.fromEntries(Object.entries(promoteTrigger).filter(([key]) => !['kind', 'schema_version'].includes(key))) };
   expectReject(() => validateTriggerDocument(reordered, 'pr-77'), 'keys/order drifted');
-  if (canonicalTriggerBytes(promoteTrigger) !== `${JSON.stringify(promoteTrigger, null, 2)}\n`) fail('canonical trigger bytes self-test failed');
+  if (resolveWorkflowRunRequest.toString().includes('pull.body')) fail('mutable PR body unexpectedly became operator authority');
+  if (!resolveWorkflowRunRequest.toString().includes('parseTriggerBytes')) fail('immutable exact-head trigger parser is not bound into workflow-run resolution');
 
   validatePullFiles([{ filename: PR_TRIGGER_PATH, status: 'added', deletions: 0, sha: '3'.repeat(40) }]);
   expectReject(() => validatePullFiles([
