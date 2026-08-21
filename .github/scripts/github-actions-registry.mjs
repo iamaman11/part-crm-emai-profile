@@ -16,9 +16,9 @@ const POST424_MAIN_SHA = '7596f22ed606cdc7afbf75209bc3925ef80c9e07';
 const POST424_RELEASE_TAG = 'release-set-v2-sha256-eb44162e282990a85cdaa818cc92ac110b9c6a9c71a0d8ab7a820c96bbf826d6';
 const POST424_RELEASE_ASSETS = [
   'control-plane.tar',
-  'profile-bridge-manifest.json',
   'profile-bridge.zip',
   'release-set.json',
+  'runtime-bundle.tar',
   'secret-resolver.tar',
 ];
 
