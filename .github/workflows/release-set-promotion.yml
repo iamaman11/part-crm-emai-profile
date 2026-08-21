@@ -1,8 +1,18 @@
 name: Release Set Promotion
 
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('AR11 {0} {1}', inputs.operation, inputs.request_id) || format('AR11 operator-entrypoint {0}', github.event.comment.id) }}
+
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Canonical operation: promote or rollback-negative evidence
+        required: true
+        default: promote
+        type: choice
+        options:
+          - promote
+          - rollback-negative
       release_set_id:
         description: Immutable GitHub Release tag `release-set-v2-sha256-...`
         required: true
@@ -12,10 +22,22 @@ on:
         required: true
         default: NONE
         type: string
+      source_run_id:
+        description: Completed canonical A-to-A run id; required only for rollback-negative evidence
+        required: false
+        default: ''
+        type: string
+      request_id:
+        description: Bounded operator correlation id; MANUAL for direct UI dispatch
+        required: false
+        default: MANUAL
+        type: string
       confirmation:
-        description: Must equal `<release_set_id>:<expected_current_release_set_id>`
+        description: Promote: `<release_set_id>:<expected_current_release_set_id>`; negative: `<release_set_id>:<source_run_id>`
         required: true
         type: string
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -25,8 +47,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  operator-entrypoint:
+    name: Bound owner comment to canonical dispatch
+    if: github.event_name == 'issue_comment'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+      issues: write
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact protected-main operator adapter
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Parse owner-only FC-6 request and dispatch this same workflow
+        run: node .github/scripts/ar11-fc6-operator.mjs
+
   resolve-verify:
     name: Resolve and verify immutable intent
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'promote'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,9 +86,11 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "${{ inputs.operation }}" = promote
           test "$GITHUB_REF" = refs/heads/main
           [[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]
           [[ "$EXPECTED_CURRENT" == NONE || "$EXPECTED_CURRENT" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]
+          test -z "${{ inputs.source_run_id }}"
           test "${{ inputs.confirmation }}" = "$RELEASE_SET_ID:$EXPECTED_CURRENT"
 
       - name: Prove target source was accepted protected main
@@ -379,13 +425,21 @@ jobs:
           echo "promotion_id=$promotion_id" >> "$GITHUB_OUTPUT"
           echo "mutation_fence_sha256=$fence_sha" >> "$GITHUB_OUTPUT"
 
+      - name: Materialize flat metadata-only preflight artifact contract
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/release-policy-input/release-set.json" "$RUNNER_TEMP/release-set.json"
+          cp "$RUNNER_TEMP/release-policy-input/accepted-source-evidence.json" "$RUNNER_TEMP/accepted-source-evidence.json"
+          cmp --silent "$RUNNER_TEMP/release-set.json" "$TARGET_RELEASE_MANIFEST"
+          cmp --silent "$RUNNER_TEMP/accepted-source-evidence.json" "$RUNNER_TEMP/release-policy-input/accepted-source-evidence.json"
+
       - name: Upload metadata-only preflight authority
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ar11-preflight-${{ inputs.release_set_id }}
           path: |
-            ${{ runner.temp }}/release-policy-input/release-set.json
-            ${{ runner.temp }}/release-policy-input/accepted-source-evidence.json
+            ${{ runner.temp }}/release-set.json
+            ${{ runner.temp }}/accepted-source-evidence.json
             ${{ runner.temp }}/release-verify.json
             ${{ runner.temp }}/release-compatibility.json
             ${{ runner.temp }}/compatibility-evidence.json
@@ -650,5 +704,122 @@ jobs:
           path: |
             ${{ runner.temp }}/post-snapshot.json
             ${{ runner.temp }}/promotion-verify.json
+          if-no-files-found: error
+          retention-days: 30
+
+  rollback-negative-evidence:
+    name: Prove incompatible or unknown rollback blocks before mutation
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback-negative'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SET_ID: ${{ inputs.release_set_id }}
+      EXPECTED_CURRENT: ${{ inputs.expected_current_release_set_id }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+    steps:
+      - name: Validate evidence-only intent and live source run
+        id: bind
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]
+          test "$EXPECTED_CURRENT" = "$RELEASE_SET_ID"
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          test "${{ inputs.confirmation }}" = "$RELEASE_SET_ID:$SOURCE_RUN_ID"
+          gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$RUNNER_TEMP/protected-main.json"
+          test "$(jq -r '.protected' "$RUNNER_TEMP/protected-main.json")" = true
+          main_sha="$(jq -r '.commit.sha' "$RUNNER_TEMP/protected-main.json")"
+          test "$GITHUB_SHA" = "$main_sha"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$RUNNER_TEMP/source-run.json"
+          jq -e --arg sha "$main_sha" '
+            .event == "workflow_dispatch" and
+            .status == "completed" and
+            .conclusion == "success" and
+            .head_branch == "main" and
+            .head_sha == $sha and
+            .path == ".github/workflows/release-set-promotion.yml"
+          ' "$RUNNER_TEMP/source-run.json" >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_SET_ID" > "$RUNNER_TEMP/target-release.json"
+          source_sha="$(jq -r '.target_commitish' "$RUNNER_TEMP/target-release.json")"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout current protected-main policy authority
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ steps.bind.outputs.main_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout exact immutable target source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ steps.bind.outputs.source_sha }}
+          path: target-source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download live A-to-A preflight evidence without provider credentials
+        run: |
+          set -euo pipefail
+          live="$RUNNER_TEMP/live-preflight"
+          mkdir -p "$live"
+          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "ar11-preflight-$RELEASE_SET_ID" --dir "$live"
+          for name in release-set.json release-verify.json compatibility-evidence.json promotion-plan.json promotion-preflight.json pre-snapshot.json; do
+            test -f "$live/$name"
+          done
+          jq -e --arg id "$RELEASE_SET_ID" '.decision == "VALID" and .release_set_id == $id and .source_accepted == true and .mutation_executed == false' "$live/release-verify.json" >/dev/null
+          jq -e --arg id "$RELEASE_SET_ID" '.decision == "NO_CHANGE" and .observed_current_release_set_id == $id and .target_release_set_id == $id and (.actions | length) == 0 and .mutation_executed == false' "$live/promotion-plan.json" >/dev/null
+          jq -e --arg id "$RELEASE_SET_ID" '.decision == "READY" and .ready == true and .target_release_set_id == $id and .rollback_compatibility == "COMPATIBLE" and .credential_values_accessed == false and .provider_mutation_executed == false and .mutation_executed == false' "$live/promotion-preflight.json" >/dev/null
+          jq -e --arg id "$RELEASE_SET_ID" '.release_set_id == $id and .environment == "staging"' "$live/pre-snapshot.json" >/dev/null
+          jq '.catalog_schema_revision = null' "$live/pre-snapshot.json" > "$RUNNER_TEMP/controlled-unknown-snapshot.json"
+          test "$(jq -r '.release_set_id' "$RUNNER_TEMP/controlled-unknown-snapshot.json")" = "$RELEASE_SET_ID"
+
+      - name: Native rollback preflight must block UNKNOWN before credentials
+        run: |
+          set -euo pipefail
+          live="$RUNNER_TEMP/live-preflight"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . promotion preflight \
+            --release-set "$live/release-set.json" \
+            --source-root "$GITHUB_WORKSPACE/target-source" \
+            --profile rehearsal-core-v1 \
+            --environment staging \
+            --snapshot "$RUNNER_TEMP/controlled-unknown-snapshot.json" \
+            --evidence-json "$live/compatibility-evidence.json" \
+            --current-release-set "$live/release-set.json" \
+            --known-good-release-set "$live/release-set.json" \
+            --expected-current "$RELEASE_SET_ID" \
+            | tee "$RUNNER_TEMP/blocked-preflight.json"
+          jq -e '
+            .command == "promotion.preflight" and
+            .decision == "BLOCKED" and
+            .ready == false and
+            .rollback_compatibility == "UNKNOWN" and
+            (.blockers | index("ROLLBACK_COMPATIBILITY_UNKNOWN") != null) and
+            .credential_values_accessed == false and
+            .provider_mutation_executed == false and
+            .mutation_executed == false
+          ' "$RUNNER_TEMP/blocked-preflight.json" >/dev/null
+
+      - name: Upload credential-free rollback-negative evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ar11-rollback-negative-${{ inputs.release_set_id }}
+          path: |
+            ${{ runner.temp }}/source-run.json
+            ${{ runner.temp }}/live-preflight/release-set.json
+            ${{ runner.temp }}/live-preflight/release-verify.json
+            ${{ runner.temp }}/live-preflight/promotion-plan.json
+            ${{ runner.temp }}/live-preflight/promotion-preflight.json
+            ${{ runner.temp }}/live-preflight/pre-snapshot.json
+            ${{ runner.temp }}/controlled-unknown-snapshot.json
+            ${{ runner.temp }}/blocked-preflight.json
           if-no-files-found: error
           retention-days: 30
