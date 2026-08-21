@@ -263,8 +263,11 @@ fn read_unique_tar_member_by_basename(
             pending_path = Some(path.to_owned());
             continue;
         }
+        if typeflag == b'5' && size != 0 {
+            return Err(mismatch("tar directory member must have zero payload size"));
+        }
         let effective_path = pending_path.take().unwrap_or(raw_path);
-        validate_archive_member_path(&effective_path)?;
+        validate_archive_member_path(&effective_path, typeflag)?;
         if matches!(typeflag, 0 | b'0') && basename(&effective_path) == target_basename {
             if found.is_some() {
                 return Err(mismatch(format!(
@@ -706,10 +709,16 @@ fn parse_pax_path(payload: &[u8]) -> Result<Option<String>, ReleaseModelError> {
     Ok(path)
 }
 
-fn validate_archive_member_path(path: &str) -> Result<(), ReleaseModelError> {
-    if path.starts_with('/')
-        || path.contains('\\')
-        || path
+fn validate_archive_member_path(path: &str, typeflag: u8) -> Result<(), ReleaseModelError> {
+    let normalized = if typeflag == b'5' {
+        path.strip_suffix('/').unwrap_or(path)
+    } else {
+        path
+    };
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.contains('\\')
+        || normalized
             .split('/')
             .any(|part| part.is_empty() || part == "." || part == "..")
     {
@@ -731,6 +740,7 @@ mod tests {
     use super::{
         PROFILE_BRIDGE_EXECUTABLE, ZIP_CENTRAL_HEADER_SIGNATURE, ZIP_END_SIGNATURE,
         ZIP_LOCAL_HEADER_SIGNATURE, read_profile_bridge_zip, read_unique_tar_member_by_basename,
+        validate_archive_member_path,
     };
     use std::fs;
     use std::io::Write;
@@ -747,6 +757,16 @@ mod tests {
         assert!(read_profile_bridge_zip(&path).is_err());
         fs::remove_file(path)?;
         Ok(())
+    }
+
+    #[test]
+    fn safe_tar_directory_trailing_slash_is_type_bound() {
+        assert!(validate_archive_member_path("cloudflare-release/", b'5').is_ok());
+        assert!(validate_archive_member_path("cloudflare-release/", b'0').is_err());
+        assert!(validate_archive_member_path("../", b'5').is_err());
+        assert!(validate_archive_member_path("nested//", b'5').is_err());
+        assert!(validate_archive_member_path("/absolute/", b'5').is_err());
+        assert!(validate_archive_member_path("nested\\escape/", b'5').is_err());
     }
 
     #[test]
