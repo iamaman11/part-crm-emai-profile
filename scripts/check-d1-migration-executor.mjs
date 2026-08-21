@@ -7,8 +7,10 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXECUTOR = '.github/workflows/d1-migration-executor.yml';
+const PROMOTION = '.github/workflows/release-set-promotion.yml';
 const WORKFLOWS = '.github/workflows';
 const PINNED_WRANGLER = 'wrangler@4.94.0';
+const SHARED_MUTATION_GROUP = 'release-set-promotion-staging';
 const OBSERVE_REF = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}';
 const DEPLOY_REF = 'CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}';
 
@@ -34,12 +36,28 @@ async function workflowPaths(root) {
     .sort();
 }
 
+function validateSharedMutationGroup(executorText, promotionText) {
+  const marker = `group: ${SHARED_MUTATION_GROUP}`;
+  if (!executorText.includes(marker)) {
+    fail(`protected D1 executor lost shared staging provider mutation group: ${SHARED_MUTATION_GROUP}`);
+  }
+  if (!promotionText.includes(marker)) {
+    fail(`Release Set Promotion lost shared staging provider mutation group: ${SHARED_MUTATION_GROUP}`);
+  }
+  if (!executorText.includes('cancel-in-progress: false') || !promotionText.includes('cancel-in-progress: false')) {
+    fail('shared staging provider mutation authority must serialize without cancellation');
+  }
+}
+
 async function validateExecutor(text, root = ROOT) {
+  const promotionText = await readFile(path.join(root, PROMOTION), 'utf8');
+  validateSharedMutationGroup(text, promotionText);
+
   const requiredMarkers = [
     'workflow_call:',
     'workflow_dispatch:',
     'environment: staging',
-    'group: ar11-provider-mutation-staging',
+    `group: ${SHARED_MUTATION_GROUP}`,
     'cancel-in-progress: false',
     'authorize:',
     'needs: authorize',
@@ -202,6 +220,21 @@ async function expectRejected(label, text) {
 
 async function selfTest(text) {
   await validateExecutor(text, ROOT);
+  const promotionText = await readFile(path.join(ROOT, PROMOTION), 'utf8');
+  try {
+    validateSharedMutationGroup(
+      text,
+      replaceFixture(
+        'promotion mutex drift',
+        promotionText,
+        `group: ${SHARED_MUTATION_GROUP}`,
+        'group: unsafe-independent-promotion',
+      ),
+    );
+  } catch {
+    // Expected: independent D1/promotion mutation groups must fail closed.
+  }
+
   await expectRejected(
     'automatic restore',
     replaceFixture('automatic restore', text, 'd1 time-travel info', 'd1 time-travel restore'),
@@ -265,7 +298,7 @@ async function selfTest(text) {
     'second remote apply',
     `${text}\n# npx --yes ${PINNED_WRANGLER} d1 migrations apply X --remote --experimental-provision=false --experimental-auto-create=false\n`,
   );
-  console.log('Protected D1 executor observe-before-mutate and fail-closed negative fixtures rejected as expected.');
+  console.log('Protected D1 executor observe-before-mutate, shared mutation mutex and fail-closed negative fixtures rejected as expected.');
 }
 
 async function main() {
@@ -276,7 +309,7 @@ async function main() {
   }
   if (process.argv.length > 2) fail(`unknown arguments: ${process.argv.slice(2).join(' ')}`);
   await validateExecutor(text, ROOT);
-  console.log('Protected D1 executor contract passed: staging-only, read-only observe credential before native policy, one deploy credential after exact ledger fence, one remote mutation authority, pinned Wrangler, credential-free opsctl, no auto-provision/auto-create and no automatic restore.');
+  console.log('Protected D1 executor contract passed: staging-only, shared Release Set/D1 mutation mutex, read-only observe credential before native policy, one deploy credential after exact ledger fence, one remote mutation authority, pinned Wrangler, credential-free opsctl, no auto-provision/auto-create and no automatic restore.');
 }
 
 main().catch((error) => {
