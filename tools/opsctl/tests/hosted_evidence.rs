@@ -309,12 +309,7 @@ fn verify_rejects_every_independent_binding_mismatch() -> TestResult {
 #[test]
 fn noncanonical_serialized_bytes_fail_verification() -> TestResult {
     let workspace = TempWorkspace::new("noncanonical")?;
-    let (_, canonical) = build_to_file(
-        &workspace,
-        &context(),
-        &credential_payload(),
-        "canonical",
-    )?;
+    let (_, canonical) = build_to_file(&workspace, &context(), &credential_payload(), "canonical")?;
     let parsed: Value = serde_json::from_slice(&canonical)?;
     let pretty = serde_json::to_string_pretty(&parsed)?;
     let evidence_path = workspace.write_bytes("pretty-evidence.json", pretty.as_bytes())?;
@@ -535,10 +530,7 @@ fn cli_rejects_forbidden_argument_combinations_and_unknown_actions() -> TestResu
             ("--raw-observation", &raw_path),
         ],
     )?);
-    assert_failure(&run_evidence(
-        "build",
-        &[("--raw-observation", &raw_path)],
-    )?);
+    assert_failure(&run_evidence("build", &[("--raw-observation", &raw_path)])?);
     assert_failure(&run_evidence("validate", &[])?);
     assert_failure(&run_evidence("publish", &[])?);
     Ok(())
