@@ -12,6 +12,7 @@ const TRANSPORT = '.github/workflows/ar11-fc6-operator-transport.yml';
 const OPERATOR = '.github/scripts/ar11-fc6-operator.mjs';
 const REGISTRY = 'architecture/github-actions-registry.json';
 const AUTHORITY = 'architecture/release-architecture-ar11.json';
+const TRANSACTION = 'docs/evidence/ar11-fc6-operator-transaction.json';
 const LEGACY_FILES = [
   '.github/workflows/mailbox-secret-resolver-promotion.yml',
   'scripts/mailbox-secret-resolver-promotion.py',
@@ -78,45 +79,51 @@ function operatorScriptErrors(operator) {
     "const REPOSITORY = 'iamaman11/part-crm-emai-profile'",
     'const ISSUE_NUMBER = 399',
     "const WORKFLOW = 'release-set-promotion.yml'",
+    "const WORKFLOW_PATH = '.github/workflows/release-set-promotion.yml'",
     "const TRANSPORT_WORKFLOW = 'AR-11 FC-6 Operator Transport'",
-    "const PR_TITLE = 'AR-11 FC-6 ephemeral operator request'",
-    "const PR_BRANCH_PREFIX = 'codex/ar11-fc6-request-'",
-    "const PR_TRIGGER_PATH = 'docs/evidence/ar11-fc6-operator-request.json'",
-    "const TRIGGER_WORKFLOW_NAME = 'Release Architecture Gate'",
-    "const TRIGGER_WORKFLOW_PATH = '.github/workflows/release-architecture-gate.yml'",
-    "run.status !== 'completed' || run.conclusion !== 'success'",
-    'operator workflow_run must not bind multiple pull requests',
-    'workflow_run fallback must resolve exactly one open exact-head pull request',
-    "pull?.user?.login !== OWNER || pull?.author_association !== 'OWNER'",
-    "pull?.draft !== true",
-    'pull?.changed_files !== 1',
-    "pull?.base?.ref !== 'main'",
-    "pull?.head?.repo?.full_name !== REPOSITORY",
-    'operator PR base must equal the currently protected main SHA',
-    'operator PR must change exactly one data-only file',
-    "kind !== 'AR11_FC6_EPHEMERAL_OPERATOR_TRIGGER'",
-    "authority !== 'NONE'",
-    'merge_authorized !== false',
-    'confirmation does not bind target and expected current',
-    'confirmation does not bind Release Set and source run',
+    "const TRANSACTION_PATH = 'docs/evidence/ar11-fc6-operator-transaction.json'",
+    "kind !== 'AR11_FC6_STAGING_CEREMONY'",
+    "authority !== 'TRANSPORT_REQUEST_ONLY'",
+    'production_authorized !== false',
+    "operation !== 'full-staging-ceremony'",
+    'ceremony A and B must be source-distinct Release Sets',
+    'ceremony initial expected-current must equal A',
+    'ceremony final expected-current must equal A',
+    'ceremony confirmation must bind exact A and B',
+    "eventName !== 'push' || githubRef !== 'refs/heads/main'",
+    'operator requires an ordinary protected-main update',
+    'push event must bind exact checked-out main SHA',
+    'operator transaction must be exactly one accepted-main commit',
+    'operator transaction commit must change exactly one data-only file',
+    'operator transaction may only add or modify',
+    'ceremony commit must remain the current protected main while dispatching',
+    'checked-out ceremony transaction bytes differ from hosted exact-SHA bytes',
+    "if (stage === 'a-to-b')",
+    "if (stage === 'b-no-change')",
+    "if (stage === 'b-to-a')",
+    "if (stage === 'a-no-change')",
+    "operation: 'rollback-negative'",
+    'negative rollback requires completed A-to-A canonical run id',
     '/actions/workflows/${WORKFLOW}/dispatches',
     "ref: 'main'",
-    "operation: 'rollback-negative'",
-    'issue comments must not be an operator authority',
-    'ordinary workflow_run unexpectedly became operator input',
-    'operator trigger gate must complete successfully',
-    'exactly one data-only file',
-    'AR11_FC6_OPERATOR_AUDIT',
-    'VALIDATED / DISPATCH PENDING',
-    'FAILED / NO NEW AUTHORITY',
-    'Reused existing canonical run',
+    'duplicate canonical runs already exist',
+    'dispatch accepted but resulting canonical run could not be bound',
+    'canonical run ${runId} identity drifted',
+    "run?.path === WORKFLOW_PATH",
+    'AR11_FC6_TRUSTED_MAIN_AUDIT',
+    'DISPATCH_PENDING',
+    'DISPATCH_BOUND',
+    'RUN_SUCCESS',
+    "'ceremony', 'COMPLETE'",
     'operator must execute only inside',
-    "run?.path === '.github/workflows/release-set-promotion.yml'",
-  ], 'FC-6 bounded operator adapter'));
+    "for (const stage of ['a-to-b', 'b-no-change', 'b-to-a', 'a-no-change'])",
+    "completed['a-no-change'].id",
+    'production_authorized: false',
+  ], 'FC-6 trusted-main operator adapter'));
   errors.push(...forbidMarkers(operator, [
     'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEPLOY_MANIFEST_JSON', 'wrangler', 'deployments: write',
-    'environment: production', 'terraform', 'pull.body',
-  ], 'FC-6 bounded operator adapter'));
+    'environment: staging', 'environment: production', 'terraform', 'pull.body', 'pull_request_target',
+  ], 'FC-6 trusted-main operator adapter'));
   return errors;
 }
 
@@ -124,23 +131,24 @@ function transportErrors(transport) {
   const errors = [];
   errors.push(...requireMarkers(transport, [
     'name: AR-11 FC-6 Operator Transport',
-    'workflow_run:\n    workflows: [Release Architecture Gate]\n    types: [completed]',
-    "if: github.event.workflow_run.event == 'pull_request' && startsWith(github.event.workflow_run.head_branch, 'codex/ar11-fc6-request-')",
+    'push:\n    branches:\n      - main\n    paths:\n      - docs/evidence/ar11-fc6-operator-transaction.json',
+    'concurrency:\n  group: ar11-fc6-trusted-main-operator\n  cancel-in-progress: false',
+    "if: github.ref == 'refs/heads/main'",
     'actions: write',
     'issues: write',
-    'pull-requests: read',
-    'ref: main',
+    'ref: ${{ github.sha }}',
     'fetch-depth: 1',
     'persist-credentials: false',
+    'timeout-minutes: 180',
     'node .github/scripts/ar11-fc6-operator.mjs',
   ], 'FC-6 operator transport'));
-  if (count(transport, 'workflow_run:') !== 1) errors.push('FC-6 operator transport must expose exactly one workflow_run trigger');
+  if (count(transport, 'push:') !== 1) errors.push('FC-6 operator transport must expose exactly one push trigger');
   if (count(transport, 'operator-entrypoint:') !== 1) errors.push('FC-6 operator transport must contain exactly one operator job');
   errors.push(...forbidMarkers(transport, [
-    'workflow_dispatch:', 'issue_comment:', 'pull_request_target:', 'pull_request:\n',
+    'workflow_run:', 'workflow_dispatch:', 'issue_comment:', 'pull_request_target:', 'pull_request:\n',
     'secrets.CLOUDFLARE_', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEPLOY_MANIFEST_JSON',
     'environment: staging', 'environment: production', 'deployments: write', 'wrangler', 'terraform',
-    'ref: ${{ github.event.workflow_run.head_sha }}',
+    'ref: main\n', 'github.event.pull_request', 'github.event.workflow_run',
   ], 'FC-6 operator transport'));
   return errors;
 }
@@ -322,11 +330,20 @@ function selfTest() {
   const transportSecretLeak = transport.replace('GITHUB_TOKEN: ${{ github.token }}', 'LEAKED_DEPLOY: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n      GITHUB_TOKEN: ${{ github.token }}');
   if (!transportErrors(transportSecretLeak).some((error) => error.includes('CLOUDFLARE_API_TOKEN'))) throw new Error('operator transport credential leakage fixture unexpectedly passed');
 
-  const directPrTransport = transport.replace('workflow_run:\n    workflows: [Release Architecture Gate]\n    types: [completed]', 'pull_request_target:\n    types: [opened]');
-  if (!transportErrors(directPrTransport).some((error) => error.includes('pull_request_target') || error.includes('workflow_run'))) throw new Error('direct PR write-token transport fixture unexpectedly passed');
+  const reintroducedWorkflowRun = transport.replace('  push:\n', '  workflow_run:\n    workflows: [Release Architecture Gate]\n    types: [completed]\n  push:\n');
+  if (!transportErrors(reintroducedWorkflowRun).some((error) => error.includes('workflow_run'))) throw new Error('workflow_run transport reintroduction fixture unexpectedly passed');
 
-  const untrustedCheckout = transport.replace('ref: main', 'ref: ${{ github.event.workflow_run.head_sha }}');
-  if (!transportErrors(untrustedCheckout).some((error) => error.includes('workflow_run.head_sha') || error.includes('ref: main'))) throw new Error('operator untrusted-head checkout fixture unexpectedly passed');
+  const directPrTransport = transport.replace('  push:\n', '  pull_request_target:\n    types: [opened]\n  push:\n');
+  if (!transportErrors(directPrTransport).some((error) => error.includes('pull_request_target'))) throw new Error('direct PR write-token transport fixture unexpectedly passed');
+
+  const untrustedCheckout = transport.replace('ref: ${{ github.sha }}', 'ref: main');
+  if (!transportErrors(untrustedCheckout).some((error) => error.includes('ref: main') || error.includes('github.sha'))) throw new Error('operator non-exact-main checkout fixture unexpectedly passed');
+
+  const broadPath = transport.replace('      - docs/evidence/ar11-fc6-operator-transaction.json', '      - docs/evidence/**');
+  if (!transportErrors(broadPath).some((error) => error.includes('push'))) throw new Error('operator broad path trigger fixture unexpectedly passed');
+
+  const stagingAuthority = transport.replace('    runs-on: ubuntu-latest', '    runs-on: ubuntu-latest\n    environment: staging\n    permissions:\n      deployments: write');
+  if (!transportErrors(stagingAuthority).some((error) => error.includes('environment: staging') || error.includes('deployments: write'))) throw new Error('operator mutation-authority escalation fixture unexpectedly passed');
 
   const negativeBlock = jobBlock(promotion, 'rollback-negative-evidence');
   const uncontrolledNegative = promotion.replace(negativeBlock, negativeBlock.replace("jq '.catalog_schema_revision = null'", "jq '.catalog_schema_revision = .catalog_schema_revision'"));
@@ -335,7 +352,7 @@ function selfTest() {
   const nestedArtifact = promotion.replace('${{ runner.temp }}/release-set.json\n            ${{ runner.temp }}/accepted-source-evidence.json', '${{ runner.temp }}/release-policy-input/release-set.json\n            ${{ runner.temp }}/release-policy-input/accepted-source-evidence.json');
   if (!promotionErrors(nestedArtifact).some((error) => error.includes('phase 2 observe+preflight'))) throw new Error('nested preflight artifact regression unexpectedly passed');
 
-  console.log('AR-11 isolated transport and structural release/promotion negative self-test passed.');
+  console.log('AR-11 trusted-main transport and structural release/promotion negative self-test passed.');
 }
 
 if (process.argv.includes('--self-test')) { selfTest(); process.exit(0); }
@@ -344,4 +361,4 @@ if (errors.length > 0) {
   console.error(`AR-11 operational policy failed:\n${errors.map((error) => `- ${error}`).join('\n')}`);
   process.exit(1);
 }
-console.log('AR-11 durable Release Set, isolated operator transport, and structural promotion policy passed.');
+console.log('AR-11 durable Release Set, trusted-main operator transport, and structural promotion policy passed.');
