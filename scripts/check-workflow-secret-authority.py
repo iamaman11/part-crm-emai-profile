@@ -11,12 +11,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-AUTHORITY = Path("architecture/credential-authority-ar8b.json")
+BASE_AUTHORITY = Path("architecture/credential-authority-ar8b.json")
+AR11_EXTENSION = Path("architecture/credential-authority-ar11-extension.json")
 REGISTRY = Path("architecture/github-actions-registry.json")
 SECRET_RE = re.compile(r"\$\{\{\s*secrets\.([A-Z][A-Z0-9_]*)")
 JOB_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$")
 ENV_RE = re.compile(r"^    environment:\s*([^#\s]+)")
-WORKFLOW_CONSUMER_PREFIX = ".github/workflows/"
+WORKFLOW_PREFIX = ".github/workflows/"
 SECRET_SURFACES = {"github_actions_secret", "github_environment_secret"}
 
 
@@ -47,6 +48,18 @@ def load_json(root: Path, relative: Path) -> dict:
     return payload
 
 
+def load_authorities(root: Path) -> list[dict]:
+    base = load_json(root, BASE_AUTHORITY)
+    extension = load_json(root, AR11_EXTENSION)
+    if extension.get("kind") != "AR11_ADDITIVE_CREDENTIAL_CAPABILITY_EXTENSION":
+        raise ValueError("AR-11 credential extension kind is invalid")
+    if extension.get("parent_authority") != BASE_AUTHORITY.as_posix():
+        raise ValueError("AR-11 credential extension must point to the accepted parent authority")
+    if extension.get("competing_registry") is not False or extension.get("metadata_only") is not True:
+        raise ValueError("AR-11 credential extension must remain metadata-only and non-competing")
+    return [base, extension]
+
+
 def canonical_workflows(registry: dict) -> list[str]:
     rows = registry.get("active_registrations")
     if not isinstance(rows, list):
@@ -56,7 +69,7 @@ def canonical_workflows(registry: dict) -> list[str]:
         if not isinstance(row, dict) or not isinstance(row.get("path"), str):
             raise ValueError("canonical Actions registry contains a malformed active registration")
         path = row["path"]
-        if not path.startswith(WORKFLOW_CONSUMER_PREFIX) or not re.search(r"\.ya?ml$", path, re.I):
+        if not path.startswith(WORKFLOW_PREFIX) or not re.search(r"\.ya?ml$", path, re.I):
             raise ValueError(f"canonical Actions registry contains invalid workflow path: {path}")
         paths.append(path)
     if len(paths) != len(set(paths)):
@@ -64,53 +77,62 @@ def canonical_workflows(registry: dict) -> list[str]:
     return sorted(paths)
 
 
-def bindings_from_authority(authority: dict) -> tuple[dict[str, Binding], list[str]]:
+def bindings_from_authorities(authorities: list[dict]) -> tuple[dict[str, Binding], list[str]]:
     errors: list[str] = []
     result: dict[str, Binding] = {}
-    credentials = authority.get("credentials")
-    if not isinstance(credentials, list):
-        return {}, ["credential authority credentials must be an array"]
-    for credential in credentials:
-        if not isinstance(credential, dict):
-            errors.append("credential authority contains a non-object credential")
+    for authority in authorities:
+        credentials = authority.get("credentials")
+        if not isinstance(credentials, list):
+            errors.append("credential authority credentials must be an array")
             continue
-        credential_id = credential.get("id")
-        consumers_raw = credential.get("consumers", [])
-        if not isinstance(credential_id, str) or not isinstance(consumers_raw, list) or any(not isinstance(value, str) for value in consumers_raw):
-            errors.append("every credential requires a string id and string-array consumers")
-            continue
-        workflow_consumers = frozenset(value for value in consumers_raw if value.startswith(WORKFLOW_CONSUMER_PREFIX))
-        scope_environments = credential.get("environment_scope", {}).get("environments", []) if isinstance(credential.get("environment_scope"), dict) else []
-        if not isinstance(scope_environments, list) or any(not isinstance(value, str) for value in scope_environments):
-            errors.append(f"credential {credential_id} has malformed environment_scope.environments")
-            continue
-        for binding in credential.get("bindings", []):
-            if not isinstance(binding, dict) or binding.get("surface") not in SECRET_SURFACES:
+        for credential in credentials:
+            if not isinstance(credential, dict):
+                errors.append("credential authority contains a non-object credential")
                 continue
-            name = binding.get("name")
-            if not isinstance(name, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
-                errors.append(f"credential {credential_id} has malformed GitHub secret binding name")
+            credential_id = credential.get("id")
+            consumers_raw = credential.get("consumers", [])
+            if not isinstance(credential_id, str) or not isinstance(consumers_raw, list) or any(
+                not isinstance(value, str) for value in consumers_raw
+            ):
+                errors.append("every credential requires a string id and string-array consumers")
                 continue
-            environments_raw = binding.get("environments", scope_environments)
-            if not isinstance(environments_raw, list) or any(not isinstance(value, str) for value in environments_raw):
-                errors.append(f"credential {credential_id} binding {name} has malformed environments")
+            workflow_consumers = frozenset(value for value in consumers_raw if value.startswith(WORKFLOW_PREFIX))
+            scope = credential.get("environment_scope")
+            scope_environments = scope.get("environments", []) if isinstance(scope, dict) else []
+            if not isinstance(scope_environments, list) or any(not isinstance(value, str) for value in scope_environments):
+                errors.append(f"credential {credential_id} has malformed environment_scope.environments")
                 continue
-            classified = Binding(
-                credential_id=credential_id,
-                name=name,
-                surface=binding["surface"],
-                consumers=workflow_consumers,
-                environments=frozenset(environments_raw),
-                declaration_only=binding.get("declaration_only") is True,
-                required_usage=binding.get("required_usage") is True,
-            )
-            if name in result:
-                errors.append(
-                    f"GitHub secret binding {name} is classified by multiple credential authorities: "
-                    f"{result[name].credential_id}, {credential_id}"
+            bindings = credential.get("bindings", [])
+            if not isinstance(bindings, list):
+                errors.append(f"credential {credential_id} bindings must be an array")
+                continue
+            for binding in bindings:
+                if not isinstance(binding, dict) or binding.get("surface") not in SECRET_SURFACES:
+                    continue
+                name = binding.get("name")
+                if not isinstance(name, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+                    errors.append(f"credential {credential_id} has malformed GitHub secret binding name")
+                    continue
+                environments_raw = binding.get("environments", scope_environments)
+                if not isinstance(environments_raw, list) or any(not isinstance(value, str) for value in environments_raw):
+                    errors.append(f"credential {credential_id} binding {name} has malformed environments")
+                    continue
+                classified = Binding(
+                    credential_id=credential_id,
+                    name=name,
+                    surface=binding["surface"],
+                    consumers=workflow_consumers,
+                    environments=frozenset(environments_raw),
+                    declaration_only=binding.get("declaration_only") is True,
+                    required_usage=binding.get("required_usage") is True,
                 )
-            else:
-                result[name] = classified
+                if name in result:
+                    errors.append(
+                        f"GitHub secret binding {name} is classified by multiple credential authorities: "
+                        f"{result[name].credential_id}, {credential_id}"
+                    )
+                else:
+                    result[name] = classified
     return result, errors
 
 
@@ -129,14 +151,14 @@ def workflow_job_metadata(text: str) -> tuple[dict[int, str | None], dict[str, s
             in_jobs = False
             current_job = None
         if in_jobs:
-            match = JOB_RE.match(line)
-            if match:
-                current_job = match.group(1)
+            job_match = JOB_RE.match(line)
+            if job_match:
+                current_job = job_match.group(1)
                 environments.setdefault(current_job, None)
             elif current_job is not None:
-                environment = ENV_RE.match(line)
-                if environment:
-                    value = environment.group(1).strip("'\"")
+                env_match = ENV_RE.match(line)
+                if env_match:
+                    value = env_match.group(1).strip("'\"")
                     environments[current_job] = value if value and "${{" not in value else None
         line_jobs[number] = current_job if in_jobs else None
     return line_jobs, environments
@@ -168,10 +190,9 @@ def scan_references(root: Path, workflows: list[str]) -> tuple[list[Reference], 
 
 
 def validate(root: Path) -> list[str]:
-    authority = load_json(root, AUTHORITY)
-    registry = load_json(root, REGISTRY)
-    workflows = canonical_workflows(registry)
-    bindings, errors = bindings_from_authority(authority)
+    authorities = load_authorities(root)
+    workflows = canonical_workflows(load_json(root, REGISTRY))
+    bindings, errors = bindings_from_authorities(authorities)
     references, scan_errors = scan_references(root, workflows)
     errors.extend(scan_errors)
     usage: dict[str, set[str]] = {name: set() for name in bindings}
@@ -205,7 +226,12 @@ def validate(root: Path) -> list[str]:
 
 
 def self_test() -> bool:
-    authority = {
+    base = {"credentials": []}
+    extension = {
+        "kind": "AR11_ADDITIVE_CREDENTIAL_CAPABILITY_EXTENSION",
+        "parent_authority": BASE_AUTHORITY.as_posix(),
+        "metadata_only": True,
+        "competing_registry": False,
         "credentials": [
             {
                 "id": "cloudflare.observe",
@@ -220,18 +246,15 @@ def self_test() -> bool:
                     }
                 ],
             }
-        ]
+        ],
     }
-    registry = {
-        "active_registrations": [
-            {"path": ".github/workflows/ok.yml", "category": "CURRENT_MANUAL_OPERATION"}
-        ]
-    }
+    registry = {"active_registrations": [{"path": ".github/workflows/ok.yml", "category": "CURRENT_MANUAL_OPERATION"}]}
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         (root / "architecture").mkdir()
         (root / ".github/workflows").mkdir(parents=True)
-        (root / AUTHORITY).write_text(json.dumps(authority), encoding="utf-8")
+        (root / BASE_AUTHORITY).write_text(json.dumps(base), encoding="utf-8")
+        (root / AR11_EXTENSION).write_text(json.dumps(extension), encoding="utf-8")
         (root / REGISTRY).write_text(json.dumps(registry), encoding="utf-8")
         workflow = root / ".github/workflows/ok.yml"
         workflow.write_text(
@@ -244,24 +267,21 @@ def self_test() -> bool:
             "jobs:\n  observe:\n    environment: staging\n    env:\n      TOKEN: ${{ secrets.UNKNOWN_TOKEN }}\n",
             encoding="utf-8",
         )
-        errors = validate(root)
-        if not any("unclassified permanent workflow secret reference" in error for error in errors):
+        if not any("unclassified permanent workflow secret reference" in error for error in validate(root)):
             return False
         workflow.write_text(
             "jobs:\n  observe:\n    environment: production\n    env:\n      TOKEN: ${{ secrets.OBSERVE_TOKEN }}\n",
             encoding="utf-8",
         )
-        errors = validate(root)
-        if not any("wrong secret environment" in error for error in errors):
+        if not any("wrong secret environment" in error for error in validate(root)):
             return False
-        authority["credentials"][0]["consumers"] = [".github/workflows/other.yml"]
-        (root / AUTHORITY).write_text(json.dumps(authority), encoding="utf-8")
+        extension["credentials"][0]["consumers"] = [".github/workflows/other.yml"]
+        (root / AR11_EXTENSION).write_text(json.dumps(extension), encoding="utf-8")
         workflow.write_text(
             "jobs:\n  observe:\n    environment: staging\n    env:\n      TOKEN: ${{ secrets.OBSERVE_TOKEN }}\n",
             encoding="utf-8",
         )
-        errors = validate(root)
-        if not any("wrong secret consumer" in error for error in errors):
+        if not any("wrong secret consumer" in error for error in validate(root)):
             return False
     print("Workflow secret authority negative fixtures passed.")
     return True
