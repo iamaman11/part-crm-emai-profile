@@ -1,0 +1,88 @@
+name: AR-11 Hosted Observation Probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ar11-hosted-observation-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  observe-release-set-a:
+    name: Observe canonical Release Set A
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: 054467335c5d430010453446c7d0c0d7191dc258
+    steps:
+      - name: Observe public durable release and canonical push run
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          release_json="$RUNNER_TEMP/release.json"
+          runs_json="$RUNNER_TEMP/runs.json"
+          release_set_json="$RUNNER_TEMP/release-set.json"
+
+          curl --fail --silent --show-error --retry 3 \
+            -H 'Accept: application/vnd.github+json' \
+            "$api/releases?per_page=100" \
+            | jq -ce --arg source "$SOURCE_SHA" '
+                [ .[]
+                  | select(.target_commitish == $source)
+                  | select(.tag_name | startswith("release-set-v2-sha256-"))
+                ]
+                | if length == 1 then .[0]
+                  else error("expected exactly one durable Release Set v2 for source, observed \(length)")
+                  end
+              ' > "$release_json"
+
+          tag="$(jq -r '.tag_name' "$release_json")"
+          [[ "$tag" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]
+          test "$(jq -r '.draft' "$release_json")" = false
+          test "$(jq -r '.prerelease' "$release_json")" = false
+          test "$(jq -r '.target_commitish' "$release_json")" = "$SOURCE_SHA"
+          test "$(jq '.assets | length' "$release_json")" -eq 5
+          jq -e '[.assets[].name] | sort == ["control-plane.tar","profile-bridge-manifest.json","profile-bridge.zip","release-set.json","secret-resolver.tar"]' "$release_json" >/dev/null
+          jq -e '[.assets[] | .size > 0] | all' "$release_json" >/dev/null
+
+          release_set_url="$(jq -r '.assets[] | select(.name == "release-set.json") | .browser_download_url' "$release_json")"
+          test -n "$release_set_url"
+          curl --fail --silent --show-error --retry 3 "$release_set_url" -o "$release_set_json"
+          jq -e --arg tag "$tag" --arg source "$SOURCE_SHA" '
+            .schema_version == 2
+            and .release_set_id == $tag
+            and .source.commit_sha == $source
+          ' "$release_set_json" >/dev/null
+
+          curl --fail --silent --show-error --retry 3 \
+            -H 'Accept: application/vnd.github+json' \
+            "$api/actions/runs?event=push&head_sha=$SOURCE_SHA&per_page=100" > "$runs_json"
+
+          jq -ce --arg source "$SOURCE_SHA" '
+            [ .workflow_runs[]
+              | select(.name == "Release Set Build")
+              | select(.event == "push")
+              | select(.head_branch == "main")
+              | select(.head_sha == $source)
+              | select(.status == "completed")
+              | select(.conclusion == "success")
+              | select(.path == ".github/workflows/release-set-build.yml")
+            ]
+            | if length >= 1 then sort_by(.run_number) | last
+              else error("no successful canonical Release Set Build push run for source")
+              end
+          ' "$runs_json" > "$RUNNER_TEMP/canonical-run.json"
+
+          jq -n \
+            --arg source "$SOURCE_SHA" \
+            --arg release_set_id "$tag" \
+            --arg release_id "$(jq -r '.id' "$release_json")" \
+            --arg release_url "$(jq -r '.html_url' "$release_json")" \
+            --arg published_at "$(jq -r '.published_at' "$release_json")" \
+            --arg run_id "$(jq -r '.id' "$RUNNER_TEMP/canonical-run.json")" \
+            --arg run_url "$(jq -r '.html_url' "$RUNNER_TEMP/canonical-run.json")" \
+            --arg run_number "$(jq -r '.run_number' "$RUNNER_TEMP/canonical-run.json")" \
+            --arg run_attempt "$(jq -r '.run_attempt' "$RUNNER_TEMP/canonical-run.json")" \
+            '{schema_version:1,kind:"AR11_FC6_HOSTED_RELEASE_OBSERVATION",source_sha:$source,durable_release:{release_set_id:$release_set_id,release_id:($release_id|tonumber),url:$release_url,published_at:$published_at,target_commitish:$source,asset_count:5},canonical_build_run:{run_id:($run_id|tonumber),url:$run_url,run_number:($run_number|tonumber),run_attempt:($run_attempt|tonumber),status:"completed",conclusion:"success",event:"push",head_branch:"main",head_sha:$source,workflow_path:".github/workflows/release-set-build.yml"},observation:"PROVED",mutation_executed:false}'
