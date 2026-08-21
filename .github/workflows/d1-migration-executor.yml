@@ -119,7 +119,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ar11-provider-mutation-staging
+  group: release-set-promotion-staging
   cancel-in-progress: false
 
 jobs:
