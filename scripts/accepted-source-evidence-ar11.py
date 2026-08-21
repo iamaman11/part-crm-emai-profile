@@ -70,33 +70,35 @@ def integer(value: dict[str, Any], key: str, label: str) -> int:
     return observed
 
 
+def git_sha(value: str, label: str) -> str:
+    if len(value) != 40 or any(character not in "0123456789abcdef" for character in value):
+        fail(f"{label} must be an exact 40-character lowercase hexadecimal SHA")
+    return value
+
+
 def compare_head_sha(
     *,
+    repository: str,
     source_sha: str,
     observed_protected_main_sha: str,
     comparison: dict[str, Any],
-    base_sha: str,
-    merge_base_sha: str,
-    status: str,
-    ahead_by: int,
-    behind_by: int,
 ) -> str:
+    expected_url = (
+        f"https://api.github.com/repos/{repository}/compare/"
+        f"{source_sha}...{observed_protected_main_sha}"
+    )
+    observed_url = comparison.get("url")
+    if observed_url != expected_url:
+        fail("compare response URL is not bound to the exact repository/source/protected-main request")
+
     head_commit = comparison.get("head_commit")
     if isinstance(head_commit, dict):
-        return nested_string(comparison, ("head_commit", "sha"), "compare response")
-    if head_commit is not None:
+        explicit_head_sha = nested_string(comparison, ("head_commit", "sha"), "compare response")
+        if explicit_head_sha != observed_protected_main_sha:
+            fail("compare response head_commit.sha differs from observed protected-main SHA")
+    elif head_commit is not None:
         fail("compare response head_commit must be an object or null")
 
-    strict_identical = (
-        status == "identical"
-        and ahead_by == 0
-        and behind_by == 0
-        and source_sha == observed_protected_main_sha
-        and base_sha == source_sha
-        and merge_base_sha == source_sha
-    )
-    if not strict_identical:
-        fail("compare response missing head_commit.sha outside strict identical self-comparison")
     return observed_protected_main_sha
 
 
@@ -108,6 +110,7 @@ def build_evidence(
     branch: dict[str, Any],
     comparison: dict[str, Any],
 ) -> dict[str, Any]:
+    source_sha = git_sha(source_sha, "source SHA")
     branch_name = branch.get("name")
     if not isinstance(branch_name, str) or not branch_name:
         fail("branch response missing name")
@@ -115,23 +118,28 @@ def build_evidence(
     if not isinstance(protected, bool):
         fail("branch response protected must be boolean")
 
-    observed_protected_main_sha = nested_string(branch, ("commit", "sha"), "branch response")
-    base_sha = nested_string(comparison, ("base_commit", "sha"), "compare response")
-    merge_base_sha = nested_string(comparison, ("merge_base_commit", "sha"), "compare response")
+    observed_protected_main_sha = git_sha(
+        nested_string(branch, ("commit", "sha"), "branch response"),
+        "observed protected-main SHA",
+    )
+    base_sha = git_sha(
+        nested_string(comparison, ("base_commit", "sha"), "compare response"),
+        "compare base SHA",
+    )
+    merge_base_sha = git_sha(
+        nested_string(comparison, ("merge_base_commit", "sha"), "compare response"),
+        "compare merge-base SHA",
+    )
     status = comparison.get("status")
     if not isinstance(status, str):
         fail("compare response status must be a string")
     ahead_by = integer(comparison, "ahead_by", "compare response")
     behind_by = integer(comparison, "behind_by", "compare response")
     head_sha = compare_head_sha(
+        repository=repository,
         source_sha=source_sha,
         observed_protected_main_sha=observed_protected_main_sha,
         comparison=comparison,
-        base_sha=base_sha,
-        merge_base_sha=merge_base_sha,
-        status=status,
-        ahead_by=ahead_by,
-        behind_by=behind_by,
     )
 
     value: dict[str, Any] = {
@@ -186,37 +194,45 @@ def expect_failure(callable_value: Any, expected_message: str) -> None:
     fail("self-test expected fail-closed evidence rejection")
 
 
+def compare_url(repository: str, source: str, head: str) -> str:
+    return f"https://api.github.com/repos/{repository}/compare/{source}...{head}"
+
+
 def self_test() -> None:
+    repository = "iamaman11/part-crm-emai-profile"
     source = "1" * 40
     head = "2" * 40
     branch = {"name": "main", "protected": True, "commit": {"sha": head}}
-    comparison = {
+    ahead_without_head = {
+        "url": compare_url(repository, source, head),
         "base_commit": {"sha": source},
-        "head_commit": {"sha": head},
         "merge_base_commit": {"sha": source},
         "status": "ahead",
         "ahead_by": 2,
         "behind_by": 0,
     }
     first = build_evidence(
-        repository="iamaman11/part-crm-emai-profile",
+        repository=repository,
         release_set_id="release-set-v1-sha256-" + "a" * 64,
         source_sha=source,
         branch=branch,
-        comparison=comparison,
+        comparison=ahead_without_head,
     )
     second = build_evidence(
-        repository="iamaman11/part-crm-emai-profile",
+        repository=repository,
         release_set_id="release-set-v1-sha256-" + "a" * 64,
         source_sha=source,
         branch=branch,
-        comparison=comparison,
+        comparison=ahead_without_head,
     )
     if first != second or len(first["evidence_sha256"]) != 64:
         fail("AcceptedSourceEvidence generation is not deterministic")
+    if first["proof"]["head_sha"] != head or first["proof"]["status"] != "ahead":
+        fail("raw ahead comparison normalization failed")
 
     identical_branch = {"name": "main", "protected": True, "commit": {"sha": source}}
     identical_without_head = {
+        "url": compare_url(repository, source, source),
         "base_commit": {"sha": source},
         "merge_base_commit": {"sha": source},
         "status": "identical",
@@ -224,49 +240,91 @@ def self_test() -> None:
         "behind_by": 0,
     }
     identical = build_evidence(
-        repository="iamaman11/part-crm-emai-profile",
+        repository=repository,
         release_set_id="release-set-v2-sha256-" + "b" * 64,
         source_sha=source,
         branch=identical_branch,
         comparison=identical_without_head,
     )
     if identical["proof"]["head_sha"] != source or identical["proof"]["status"] != "identical":
-        fail("strict identical comparison normalization failed")
+        fail("raw identical comparison normalization failed")
 
-    expect_failure(
-        lambda: build_evidence(
-            repository="iamaman11/part-crm-emai-profile",
-            release_set_id="release-set-v2-sha256-" + "c" * 64,
-            source_sha=source,
-            branch={"name": "main", "protected": True, "commit": {"sha": head}},
-            comparison=identical_without_head,
-        ),
-        "outside strict identical self-comparison",
+    explicit_head = dict(ahead_without_head)
+    explicit_head["head_commit"] = {"sha": head}
+    explicit = build_evidence(
+        repository=repository,
+        release_set_id="release-set-v2-sha256-" + "c" * 64,
+        source_sha=source,
+        branch=branch,
+        comparison=explicit_head,
     )
-    ahead_without_head = dict(comparison)
-    ahead_without_head.pop("head_commit")
+    if explicit["proof"]["head_sha"] != head:
+        fail("explicit compare head consistency proof failed")
+
+    missing_url = dict(ahead_without_head)
+    missing_url.pop("url")
     expect_failure(
         lambda: build_evidence(
-            repository="iamaman11/part-crm-emai-profile",
+            repository=repository,
             release_set_id="release-set-v2-sha256-" + "d" * 64,
             source_sha=source,
             branch=branch,
-            comparison=ahead_without_head,
+            comparison=missing_url,
         ),
-        "outside strict identical self-comparison",
+        "URL is not bound",
     )
-    identical_nonzero = dict(identical_without_head)
-    identical_nonzero["ahead_by"] = 1
+
+    wrong_head_url = dict(ahead_without_head)
+    wrong_head_url["url"] = compare_url(repository, source, "3" * 40)
     expect_failure(
         lambda: build_evidence(
-            repository="iamaman11/part-crm-emai-profile",
+            repository=repository,
             release_set_id="release-set-v2-sha256-" + "e" * 64,
             source_sha=source,
-            branch=identical_branch,
-            comparison=identical_nonzero,
+            branch=branch,
+            comparison=wrong_head_url,
         ),
-        "outside strict identical self-comparison",
+        "URL is not bound",
     )
+
+    wrong_repository_url = dict(ahead_without_head)
+    wrong_repository_url["url"] = compare_url("other/repository", source, head)
+    expect_failure(
+        lambda: build_evidence(
+            repository=repository,
+            release_set_id="release-set-v2-sha256-" + "f" * 64,
+            source_sha=source,
+            branch=branch,
+            comparison=wrong_repository_url,
+        ),
+        "URL is not bound",
+    )
+
+    mismatched_explicit_head = dict(ahead_without_head)
+    mismatched_explicit_head["head_commit"] = {"sha": "3" * 40}
+    expect_failure(
+        lambda: build_evidence(
+            repository=repository,
+            release_set_id="release-set-v2-sha256-" + "0" * 64,
+            source_sha=source,
+            branch=branch,
+            comparison=mismatched_explicit_head,
+        ),
+        "differs from observed protected-main SHA",
+    )
+
+    malformed_source = "1" * 39
+    expect_failure(
+        lambda: build_evidence(
+            repository=repository,
+            release_set_id="release-set-v2-sha256-" + "1" * 64,
+            source_sha=malformed_source,
+            branch=branch,
+            comparison=ahead_without_head,
+        ),
+        "source SHA must be an exact",
+    )
+
     print("AR-11 accepted-source evidence collection adapter self-test passed.")
 
 
