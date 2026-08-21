@@ -9,6 +9,10 @@
   "duplicate_registration_paths_forbidden": true,
   "active_registrations": [
     {
+      "path": ".github/workflows/ar11-fc6-operator-transport.yml",
+      "category": "PERMANENT_REQUIRED"
+    },
+    {
       "path": ".github/workflows/architecture-acceptance-recorder.yml",
       "category": "POST_MERGE_METADATA"
     },
