@@ -1,6 +1,6 @@
 name: Release Set Promotion
 
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('AR11 {0} {1}', inputs.operation, inputs.request_id) || github.event_name == 'issue_comment' && format('AR11 comment-operator {0}', github.event.comment.id) || format('AR11 workflow-run-operator {0}', github.event.workflow_run.id) }}
+run-name: AR11 ${{ inputs.operation }} ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
@@ -36,11 +36,6 @@ on:
         description: Promote: `<release_set_id>:<expected_current_release_set_id>`; negative: `<release_set_id>:<source_run_id>`
         required: true
         type: string
-  issue_comment:
-    types: [created]
-  workflow_run:
-    workflows: [Release Architecture Gate]
-    types: [completed]
 
 permissions:
   contents: read
@@ -50,28 +45,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  operator-entrypoint:
-    name: Bind owner request to canonical dispatch
-    if: github.event_name == 'issue_comment' || github.event_name == 'workflow_run'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: write
-      issues: write
-      pull-requests: read
-    env:
-      GITHUB_TOKEN: ${{ github.token }}
-    steps:
-      - name: Checkout exact protected-main operator adapter
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: main
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Parse owner-only FC-6 request and dispatch this same workflow
-        run: node .github/scripts/ar11-fc6-operator.mjs
-
   resolve-verify:
     name: Resolve and verify immutable intent
     if: github.event_name == 'workflow_dispatch' && inputs.operation == 'promote'
@@ -422,7 +395,7 @@ jobs:
             --arg decision "$decision" \
             --arg preflight_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-preflight.json" | cut -d' ' -f1)" \
             --arg plan_sha256 "$(sha256sum "$RUNNER_TEMP/promotion-plan.json" | cut -d' ' -f1)" \
-            '{schema_version:1,release_set_id:$release_set_id,expected_current:$expected_current,promotion_id:$promotion_id,decision:$decision,preflight_sha256:$preflight_sha256,plan_sha256:$plan_sha256}' \
+            '{schema_version:1,release_set_id:$release_set_id,expected_current:$expected_current,promotion_id:$promotion_id,decision:$decision,preflight_sha256256:$preflight_sha256,plan_sha256:$plan_sha256}' \
             > "$RUNNER_TEMP/mutation-fence.json"
           fence_sha="$(sha256sum "$RUNNER_TEMP/mutation-fence.json" | cut -d' ' -f1)"
           echo "decision=$decision" >> "$GITHUB_OUTPUT"
