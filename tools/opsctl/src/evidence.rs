@@ -136,7 +136,13 @@ impl WorkflowIdentity {
         let object = as_object(value, "workflow")?;
         strict_fields(
             object,
-            &["name", "workflow_ref", "run_id", "run_attempt", "observation_job"],
+            &[
+                "name",
+                "workflow_ref",
+                "run_id",
+                "run_attempt",
+                "observation_job",
+            ],
             "workflow",
         )?;
         let result = Self {
@@ -197,8 +203,7 @@ impl HostedEvidenceContextV1 {
                 "unsupported HostedEvidenceEnvelope schema_version: {schema}"
             )));
         }
-        let payload_version =
-            required_u64(object, "payload_version", "hosted evidence context")?;
+        let payload_version = required_u64(object, "payload_version", "hosted evidence context")?;
         let kind = required_string(object, "evidence_kind", "hosted evidence context")?;
         let evidence_kind = EvidenceKind::parse(&kind, payload_version)?;
         let repository = required_string(object, "repository", "hosted evidence context")?;
@@ -216,11 +221,8 @@ impl HostedEvidenceContextV1 {
             ));
         }
         validate_text(&source_ref, "source_ref", 512)?;
-        let workflow = WorkflowIdentity::parse(required(
-            object,
-            "workflow",
-            "hosted evidence context",
-        )?)?;
+        let workflow =
+            WorkflowIdentity::parse(required(object, "workflow", "hosted evidence context")?)?;
         let environment = Environment::parse(&required_string(
             object,
             "environment",
@@ -408,11 +410,7 @@ impl HostedResourceStateV1 {
                 "resource_type",
                 "hosted_resource_state payload",
             )?,
-            resource_id: required_string(
-                object,
-                "resource_id",
-                "hosted_resource_state payload",
-            )?,
+            resource_id: required_string(object, "resource_id", "hosted_resource_state payload")?,
             state: required_string(object, "state", "hosted_resource_state payload")?,
             revision: nullable_string(object, "revision", "hosted_resource_state payload")?,
             enabled: nullable_bool(object, "enabled", "hosted_resource_state payload")?,
@@ -439,7 +437,7 @@ impl HostedResourceStateV1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy,PartialEq, Eq)]
 enum TransitionDecision {
     Applied,
     NoChange,
@@ -755,9 +753,9 @@ fn evidence_only_path<'a>(
     request: &'a EvidenceRunRequest<'a>,
     action: &str,
 ) -> Result<&'a Path, EvidenceError> {
-    let path = request.evidence_json.ok_or_else(|| {
-        EvidenceError::new(format!("evidence {action} requires --evidence-json"))
-    })?;
+    let path = request
+        .evidence_json
+        .ok_or_else(|| EvidenceError::new(format!("evidence {action} requires --evidence-json")))?;
     if request.raw_observation.is_some() || request.context_json.is_some() {
         return Err(EvidenceError::new(format!(
             "evidence {action} accepts only --evidence-json"
@@ -908,7 +906,9 @@ fn strict_fields(
     let allowed = allowed.iter().copied().collect::<BTreeSet<_>>();
     for key in object.keys() {
         if !allowed.contains(key.as_str()) {
-            return Err(EvidenceError::new(format!("unknown field in {label}: {key}")));
+            return Err(EvidenceError::new(format!(
+                "unknown field in {label}: {key}"
+            )));
         }
     }
     Ok(())
@@ -935,11 +935,7 @@ fn required_string(
         .ok_or_else(|| EvidenceError::new(format!("{label}.{key} must be a string")))
 }
 
-fn required_u64(
-    object: &Map<String, Value>,
-    key: &str,
-    label: &str,
-) -> Result<u64, EvidenceError> {
+fn required_u64(object: &Map<String, Value>, key: &str, label: &str) -> Result<u64, EvidenceError> {
     required(object, key, label)?
         .as_u64()
         .ok_or_else(|| EvidenceError::new(format!("{label}.{key} must be an unsigned integer")))
@@ -993,9 +989,9 @@ fn required_string_set(
         .ok_or_else(|| EvidenceError::new(format!("{label}.{key} must be an array")))?;
     let mut unique = BTreeSet::new();
     for value in values {
-        let text = value.as_str().ok_or_else(|| {
-            EvidenceError::new(format!("{label}.{key} entries must be strings"))
-        })?;
+        let text = value
+            .as_str()
+            .ok_or_else(|| EvidenceError::new(format!("{label}.{key} entries must be strings")))?;
         validate_text(text, &format!("{label}.{key}"), 256)?;
         if !unique.insert(text.to_owned()) {
             return Err(EvidenceError::new(format!(
@@ -1030,7 +1026,14 @@ fn validate_sha(value: &str) -> Result<(), EvidenceError> {
 
 fn validate_utc_timestamp(value: &str) -> Result<(), EvidenceError> {
     let bytes = value.as_bytes();
-    let separators = [(4, b'-'), (7, b'-'), (10, b'T'), (13, b':'), (16, b':'), (19, b'Z')];
+    let separators = [
+        (4, b'-'),
+        (7, b'-'),
+        (10, b'T'),
+        (13, b':'),
+        (16, b':'),
+        (19, b'Z'),
+    ];
     if bytes.len() != 20
         || separators
             .iter()
@@ -1114,11 +1117,16 @@ mod tests {
 
     #[test]
     fn typed_build_is_deterministic_and_normalizes_capabilities() -> Result<(), String> {
-        let context = HostedEvidenceContextV1::parse(&context()).map_err(|error| error.to_string())?;
+        let context =
+            HostedEvidenceContextV1::parse(&context()).map_err(|error| error.to_string())?;
         let envelope = HostedEvidenceEnvelopeV1::from_raw(context, &payload())
             .map_err(|error| error.to_string())?;
-        let first = envelope.canonical_text().map_err(|error| error.to_string())?;
-        let second = envelope.canonical_text().map_err(|error| error.to_string())?;
+        let first = envelope
+            .canonical_text()
+            .map_err(|error| error.to_string())?;
+        let second = envelope
+            .canonical_text()
+            .map_err(|error| error.to_string())?;
         assert_eq!(first, second);
         assert!(first.contains(r#""capabilities":["d1.read","workers.read"]"#));
         Ok(())
@@ -1163,7 +1171,8 @@ mod tests {
 
     #[test]
     fn unknown_payload_fields_fail_closed() -> Result<(), String> {
-        let context = HostedEvidenceContextV1::parse(&context()).map_err(|error| error.to_string())?;
+        let context =
+            HostedEvidenceContextV1::parse(&context()).map_err(|error| error.to_string())?;
         let mut payload = payload();
         payload["arbitrary"] = json!(true);
         assert!(HostedEvidenceEnvelopeV1::from_raw(context, &payload).is_err());
@@ -1186,13 +1195,19 @@ mod tests {
         });
         let envelope = HostedEvidenceEnvelopeV1::from_raw(context, &payload)
             .map_err(|error| error.to_string())?;
-        assert!(matches!(envelope.payload, TypedPayload::ReleaseSetTransition(_)));
+        assert!(matches!(
+            envelope.payload,
+            TypedPayload::ReleaseSetTransition(_)
+        ));
         Ok(())
     }
 
     #[test]
     fn canonicalization_remains_shared_with_release_policy() -> Result<(), String> {
-        assert_eq!(canonical_json(&json!({"z": 1, "a": 2}))?, r#"{"a":2,"z":1}"#);
+        assert_eq!(
+            canonical_json(&json!({"z": 1, "a": 2}))?,
+            r#"{"a":2,"z":1}"#
+        );
         Ok(())
     }
 }
