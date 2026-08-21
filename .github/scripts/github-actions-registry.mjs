@@ -9,9 +9,10 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(SCRIPT_DIR, '..', '..');
 const POLICY_RELATIVE = 'architecture/github-actions-registry.json';
 const WORKFLOWS_RELATIVE = '.github/workflows';
-const ALLOWED_CATEGORIES = new Set(['PERMANENT_REQUIRED', 'CURRENT_MANUAL_OPERATION', 'POST_MERGE_METADATA']);
-const EXPECTED_ACTIVE = 23;
-const EXPECTED_PERMANENT = 21;
+const ALLOWED_CATEGORIES = new Set(['PERMANENT_REQUIRED', 'PERMANENT_REUSABLE', 'CURRENT_MANUAL_OPERATION', 'POST_MERGE_METADATA']);
+const EXPECTED_ACTIVE = 24;
+const EXPECTED_PERMANENT_REQUIRED = 21;
+const EXPECTED_PERMANENT_REUSABLE = 1;
 
 function sameStringSet(actual, expected) {
   if (!Array.isArray(actual) || !Array.isArray(expected)) return false;
@@ -52,13 +53,15 @@ function validatePolicy(policy, trackedPaths) {
   expect(paths.every((value) => typeof value === 'string' && value.startsWith(`${WORKFLOWS_RELATIVE}/`) && /\.ya?ml$/i.test(value)), 'every active registration path must be a workflow YAML path');
   expect(new Set(paths).size === paths.length, 'registry policy active paths must be unique');
   expect(registrations.every((entry) => ALLOWED_CATEGORIES.has(entry?.category)), 'registry policy contains an unsupported active category');
-  expect(registrations.filter((entry) => entry.category === 'PERMANENT_REQUIRED').length === EXPECTED_PERMANENT, `registry policy must classify exactly ${EXPECTED_PERMANENT} permanent workflows`);
+  expect(registrations.filter((entry) => entry.category === 'PERMANENT_REQUIRED').length === EXPECTED_PERMANENT_REQUIRED, `registry policy must classify exactly ${EXPECTED_PERMANENT_REQUIRED} permanent required workflows`);
+  expect(registrations.filter((entry) => entry.category === 'PERMANENT_REUSABLE').length === EXPECTED_PERMANENT_REUSABLE, `registry policy must classify exactly ${EXPECTED_PERMANENT_REUSABLE} permanent reusable workflow`);
   expect(registrations.filter((entry) => entry.category === 'CURRENT_MANUAL_OPERATION').length === 1, 'registry policy must classify exactly one current manual operation');
   expect(registrations.filter((entry) => entry.category === 'POST_MERGE_METADATA').length === 1, 'registry policy must classify exactly one post-merge metadata workflow');
   expect(registrations.some((entry) => entry.path === '.github/workflows/ar11-fc6-operator-transport.yml' && entry.category === 'PERMANENT_REQUIRED'), 'AR-11 FC-6 operator transport must be a permanent non-manual workflow');
   expect(registrations.some((entry) => entry.path === '.github/workflows/architecture-acceptance-recorder.yml' && entry.category === 'POST_MERGE_METADATA'), 'Architecture Acceptance Recorder must be the single post-merge metadata workflow');
   expect(registrations.some((entry) => entry.path === '.github/workflows/camoufox-runtime-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Camoufox Runtime Gate must be a permanent AR-10 gate');
   expect(registrations.some((entry) => entry.path === '.github/workflows/github-governance-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'GitHub Governance Gate must remain permanent');
+  expect(registrations.some((entry) => entry.path === '.github/workflows/hosted-evidence-publish.yml' && entry.category === 'PERMANENT_REUSABLE'), 'Hosted Evidence Publish must be the single permanent reusable publication workflow');
   expect(registrations.some((entry) => entry.path === '.github/workflows/quality-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Quality Gate must remain permanent');
   expect(registrations.some((entry) => entry.path === '.github/workflows/release-architecture-gate.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Release Architecture Gate must be a permanent AR-11 gate');
   expect(registrations.some((entry) => entry.path === '.github/workflows/mailbox-secret-resolver-release.yml' && entry.category === 'PERMANENT_REQUIRED'), 'Mailbox Secret Resolver Release must remain permanent');
@@ -172,6 +175,12 @@ function selfTest(policy) {
   transportFixture.active_registrations.find((entry) => entry.path === '.github/workflows/ar11-fc6-operator-transport.yml').category = 'CURRENT_MANUAL_OPERATION';
   if (!validatePolicy(transportFixture, paths).some((error) => error.includes('operator transport') || error.includes('current manual operation'))) {
     console.error('operator transport authority escalation fixture was not rejected');
+    return false;
+  }
+  const reusableFixture = clone(policy);
+  reusableFixture.active_registrations.find((entry) => entry.path === '.github/workflows/hosted-evidence-publish.yml').category = 'PERMANENT_REQUIRED';
+  if (!validatePolicy(reusableFixture, paths).some((error) => error.includes('permanent reusable') || error.includes('Hosted Evidence Publish'))) {
+    console.error('hosted evidence reusable classification drift fixture was not rejected');
     return false;
   }
   console.log('GitHub Actions registry negative fixtures passed.');
