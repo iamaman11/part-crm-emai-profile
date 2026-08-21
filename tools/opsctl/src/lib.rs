@@ -4,6 +4,7 @@ mod cli;
 pub mod credentials;
 pub mod d1;
 mod doctor;
+pub mod evidence;
 mod error;
 mod inventory;
 pub mod promotion;
@@ -22,7 +23,7 @@ use repository::resolve_repo_root;
 ///
 /// This function is the library composition root. Its operational policy authority
 /// remains read-only and metadata-only: it does not own provider credentials,
-/// hidden state, deployment scheduling, or runtime application logic.
+/// hidden state, deployment scheduling, signing, or runtime application logic.
 pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
     match invocation {
         Invocation::Help => Ok(HELP.to_owned()),
@@ -66,6 +67,22 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                 authority_path: authority.as_deref(),
             })
             .map_err(|error| OpsctlError::new("d1", error.to_string()))
+        }
+        Invocation::Evidence {
+            root,
+            action,
+            evidence_json,
+            raw_observation,
+            context_json,
+        } => {
+            let _repo_root = resolve_repo_root(root.as_deref(), "evidence")?;
+            evidence::run(evidence::EvidenceRunRequest {
+                action,
+                evidence_json: evidence_json.as_deref(),
+                raw_observation: raw_observation.as_deref(),
+                context_json: context_json.as_deref(),
+            })
+            .map_err(|error| OpsctlError::new("evidence", error.to_string()))
         }
         Invocation::Release {
             root,
@@ -159,6 +176,9 @@ mod tests {
                 Some(format!("opsctl credentials {}", action.name()))
             }
             Invocation::D1 { action, .. } => Some(format!("opsctl d1 {}", action.name())),
+            Invocation::Evidence { action, .. } => {
+                Some(format!("opsctl evidence {}", action.name()))
+            }
             Invocation::Release { action, .. } => Some(format!("opsctl release {}", action.name())),
             Invocation::Promotion { action, .. } => {
                 Some(format!("opsctl promotion {}", action.name()))
@@ -239,7 +259,7 @@ mod tests {
                 "{id}"
             );
         }
-        assert_eq!(active.len(), 15, "Unit B active command count drifted");
+        assert_eq!(active.len(), 19, "active opsctl command count drifted");
 
         let reserved = authority["reserved_namespaces"]
             .as_array()
