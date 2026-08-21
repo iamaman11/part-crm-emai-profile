@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "kind": "AR11_FC6_EPHEMERAL_OPERATOR_TRIGGER",
+  "authority": "NONE",
+  "merge_authorized": false,
+  "tracker_issue": 399,
+  "operation": "promote",
+  "release_set_id": "release-set-v2-sha256-87f67378e86ea9d83efa5d8aa2a46a50179d559c266d5e6e6b2278d9facb823b",
+  "expected_current_release_set_id": "release-set-v2-sha256-11618f0c870f9ba752b399b8c7e3354da01a3abea8a11cf6d73c50de837e8496",
+  "source_run_id": "",
+  "confirmation": "release-set-v2-sha256-87f67378e86ea9d83efa5d8aa2a46a50179d559c266d5e6e6b2278d9facb823b:release-set-v2-sha256-11618f0c870f9ba752b399b8c7e3354da01a3abea8a11cf6d73c50de837e8496"
+}
