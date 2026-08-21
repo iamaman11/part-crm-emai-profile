@@ -204,9 +204,11 @@ jobs:
             --root . release verify --release-set "$policy_dir/release-set.json" \
             --source-root . --artifact-root "$release_dir" \
             | jq -e '.decision == "VALID" and .release_set_schema_version == 2 and .source_accepted == true and .mutation_executed == false' >/dev/null
-          echo "release_dir=$release_dir" >> "$GITHUB_OUTPUT"
-          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
-          echo "accepted_source_evidence=$policy_dir/accepted-source-evidence.json" >> "$GITHUB_OUTPUT"
+          {
+            echo "release_dir=$release_dir"
+            echo "release_id=$release_id"
+            echo "accepted_source_evidence=$policy_dir/accepted-source-evidence.json"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Publish once or prove byte-identical replay
         env:
