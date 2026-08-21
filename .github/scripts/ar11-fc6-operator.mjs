@@ -74,7 +74,7 @@ function validateTransaction(value) {
   const expectedConfirmation = value.schema_version === 2
     ? `${value.release_set_a}:${value.release_set_b}:FC6:R${revision}`
     : `${value.release_set_a}:${value.release_set_b}:FC6`;
-  if (value.confirmation !== expectedConfirmation) fail('ceremony confirmation must bind exact A, B and revision');
+  if (value.confirmation !== expectedConfirmation) fail('ceremony confirmation must bind exact A and B; schema v2 must also bind revision');
   return { a: value.release_set_a, b: value.release_set_b, revision };
 }
 
