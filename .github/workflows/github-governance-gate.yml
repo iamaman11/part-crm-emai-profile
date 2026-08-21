@@ -43,6 +43,17 @@ jobs:
       - name: Enforce Node version
         run: test "$(node --version)" = "v24.19.0"
 
+      - name: Validate every GitHub Actions workflow with digest-pinned actionlint
+        uses: docker://rhysd/actionlint@sha256:9d36088643581e728c969f35141f88139fec77280b2be23c1f66f8e40e1025e7
+        with:
+          args: -no-color
+
+      - name: Prove workflow secret authority fails closed
+        run: python scripts/check-workflow-secret-authority.py --self-test
+
+      - name: Validate canonical workflow secret consumers and environment boundaries
+        run: python scripts/check-workflow-secret-authority.py
+
       - name: Validate one-merge architecture acceptance contract
         run: |
           node .github/scripts/architecture-acceptance.mjs contract
