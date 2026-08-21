@@ -102,9 +102,13 @@ function validateLiveRegistry(policy, workflows) {
 }
 
 async function githubJson(apiPath, token) {
-  const response = await fetch(`https://api.github.com${apiPath}`, {
-    headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'User-Agent': 'part-crm-actions-registry-audit', 'X-GitHub-Api-Version': '2022-11-28' },
-  });
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'part-crm-actions-registry-audit',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`https://api.github.com${apiPath}`, { headers });
   if (!response.ok) {
     const body = (await response.text()).slice(0, 1000);
     throw new Error(`GitHub API ${apiPath} failed closed: HTTP ${response.status}: ${body}`);
@@ -199,7 +203,21 @@ async function main() {
   const trackedPaths = await trackedWorkflowPaths(root);
   const contractErrors = validatePolicy(policy, trackedPaths);
   if (!report(contractErrors)) return 1;
-  if (command === 'contract') { console.log('GitHub Actions registry policy matches the tracked workflow surface.'); return 0; }
+  if (command === 'contract') {
+    console.log('GitHub Actions registry policy matches the tracked workflow surface.');
+    if (process.env.GITHUB_ACTIONS === 'true' && process.env.GITHUB_EVENT_NAME === 'pull_request') {
+      const repository = process.env.GITHUB_REPOSITORY || policy.repository;
+      if (repository !== policy.repository) {
+        console.error(`GITHUB_REPOSITORY must be ${policy.repository}; observed ${repository}`);
+        return 1;
+      }
+      const workflows = await listLiveWorkflows(repository, '');
+      const liveErrors = validateLiveRegistry(policy, workflows);
+      if (!report(liveErrors)) return 1;
+      console.log(`AR11_POST424_READONLY_REGISTRY_PROBE active=${workflows.filter((entry) => entry?.state === 'active').length} canonical=${policy.active_registrations.length} auth=anonymous mutation=false`);
+    }
+    return 0;
+  }
   if (command === 'self-test') return selfTest(policy) ? 0 : 1;
   if (command === 'live') {
     const token = await readEphemeralGitHubTokenFromStdin();
