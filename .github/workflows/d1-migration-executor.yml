@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: Exact protected target environment
+        description: Exact protected target environment; AR-11 permits staging only
         required: true
         type: string
       source_sha:
@@ -16,7 +16,7 @@ on:
         required: true
         type: string
       account_id:
-        description: Exact Cloudflare account ID for the protected environment
+        description: Exact Cloudflare account ID for staging
         required: true
         type: string
       database_name:
@@ -45,7 +45,7 @@ on:
         default: '{}'
         type: string
       mutation_authorized:
-        description: Explicit caller authorization for the migration mutation
+        description: Explicit caller authorization for the staging migration mutation
         required: true
         type: boolean
       confirmation:
@@ -53,17 +53,18 @@ on:
         required: true
         type: string
     secrets:
+      CLOUDFLARE_OBSERVE_API_TOKEN:
+        required: true
       CLOUDFLARE_API_TOKEN:
         required: true
   workflow_dispatch:
     inputs:
       environment:
-        description: Protected target environment
+        description: Protected target environment; production is intentionally unavailable in AR-11
         required: true
         type: choice
         options:
           - staging
-          - production
       source_sha:
         description: Exact accepted-main source SHA
         required: true
@@ -76,7 +77,7 @@ on:
           - catalog
           - resolver
       account_id:
-        description: Exact Cloudflare account ID for the protected environment
+        description: Exact Cloudflare account ID for staging
         required: true
         type: string
       database_name:
@@ -105,7 +106,7 @@ on:
         default: '{}'
         type: string
       mutation_authorized:
-        description: Explicitly authorize this migration mutation
+        description: Explicitly authorize this staging migration mutation
         required: true
         default: false
         type: boolean
@@ -118,7 +119,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: d1-migration-${{ inputs.environment }}-${{ inputs.component }}-${{ inputs.database_id }}
+  group: ar11-provider-mutation-staging
   cancel-in-progress: false
 
 jobs:
@@ -139,7 +140,7 @@ jobs:
       - name: Fail closed before any Environment binding
         run: |
           set -euo pipefail
-          test "$TARGET_ENVIRONMENT" = "staging" || test "$TARGET_ENVIRONMENT" = "production"
+          test "$TARGET_ENVIRONMENT" = "staging"
           test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
           test "$MUTATION_AUTHORIZED" = "true"
           test -n "$SOURCE_SHA"
@@ -150,10 +151,10 @@ jobs:
 
   migrate:
     needs: authorize
-    name: ${{ inputs.environment }} / ${{ inputs.component }} / exact D1 migration
+    name: staging / ${{ inputs.component }} / exact D1 migration
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: ${{ inputs.environment }}
+    environment: staging
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account_id }}
       SOURCE_SHA: ${{ inputs.source_sha }}
@@ -168,12 +169,12 @@ jobs:
       MUTATION_AUTHORIZED: ${{ inputs.mutation_authorized }}
       CONFIRMATION: ${{ inputs.confirmation }}
     steps:
-      - name: Reject non-main, non-exact, or disabled mutation authority
+      - name: Reject non-main, non-exact, production, or disabled mutation authority
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          test "$TARGET_ENVIRONMENT" = "staging" || test "$TARGET_ENVIRONMENT" = "production"
+          test "$TARGET_ENVIRONMENT" = "staging"
           test "$COMPONENT" = "catalog" || test "$COMPONENT" = "resolver"
           test "$MUTATION_AUTHORIZED" = "true"
           test "$CONFIRMATION" = "$SOURCE_SHA:$TARGET_ENVIRONMENT:$COMPONENT:$DATABASE_ID"
@@ -187,19 +188,11 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Verify source and production authorization gate
+      - name: Verify exact checked-out source and staging-only authority
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          status = json.loads(Path('docs/status.json').read_text(encoding='utf-8'))
-          if os.environ['TARGET_ENVIRONMENT'] == 'production':
-              delivery = status['current']['current_delivery_map']
-              assert delivery['production_authorized']['status'] is True, 'production D1 mutation remains blocked before Production Core authorization'
-          PY
+          test "$TARGET_ENVIRONMENT" = "staging"
 
       - name: Set up pinned Node and npm
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
@@ -274,9 +267,9 @@ jobs:
           }, sort_keys=True, indent=2) + '\n', encoding='utf-8')
           PY
 
-      - name: Verify exact remote database identity before any mutation
+      - name: Verify exact remote database identity with observe credential
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
@@ -303,9 +296,9 @@ jobs:
           assert paired(document), 'provider identity does not contain the exact database name and UUID in one object'
           PY
 
-      - name: Read remote migration ledger through pinned Wrangler
+      - name: Read remote migration ledger with observe credential
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
@@ -354,10 +347,10 @@ jobs:
           PY
           cat /tmp/d1-policy-output >> "$GITHUB_OUTPUT"
 
-      - name: Capture metadata-only pre-migration Time Travel bookmark
+      - name: Capture metadata-only pre-migration Time Travel bookmark with observe credential
         if: steps.policy.outputs.apply_required == 'true'
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
@@ -367,22 +360,33 @@ jobs:
             --experimental-provision=false \
             --experimental-auto-create=false > artifacts/d1-migration/pre-migration-bookmark.json
 
-      - name: Apply planned migrations with pinned Wrangler only
+      - name: Revalidate exact ledger fence and apply planned migrations with deploy credential
         if: steps.policy.outputs.apply_required == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
+          npx --yes wrangler@4.94.0 d1 execute "$DATABASE_NAME" \
+            --remote \
+            --config artifacts/d1-migration/wrangler.json \
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-migration/ledger-fence.json
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- --root . d1 status \
+            --component "$COMPONENT" \
+            --ledger-json artifacts/d1-migration/ledger-fence.json > artifacts/d1-migration/status-fence.json
+          cmp --silent artifacts/d1-migration/status-before.json artifacts/d1-migration/status-fence.json
           npx --yes wrangler@4.94.0 d1 migrations apply "$DATABASE_NAME" \
             --remote \
             --config artifacts/d1-migration/wrangler.json \
             --experimental-provision=false \
             --experimental-auto-create=false
 
-      - name: Reread remote ledger through pinned Wrangler
+      - name: Reread remote ledger with observe credential
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
@@ -411,9 +415,9 @@ jobs:
           assert verify['mutation_executed'] is False, verify
           PY
 
-      - name: Verify post-apply database invariants
+      - name: Verify post-apply database invariants with observe credential
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_OBSERVE_API_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
@@ -454,13 +458,15 @@ jobs:
               if optional and not path.exists():
                   return None
               return json.loads(path.read_text(encoding='utf-8'))
+          plan = load('plan.json')
           evidence = {
               'schema_version': 1,
               'evidence_kind': 'protected-d1-migration-execution',
               'context': load('context.json'),
               'provider_identity': load('provider-identity.json'),
               'status_before': load('status-before.json'),
-              'plan': load('plan.json'),
+              'status_fence': load('status-fence.json', optional=True),
+              'plan': plan,
               'compatibility': load('compatibility.json'),
               'pre_migration_bookmark': load('pre-migration-bookmark.json', optional=True),
               'ledger_before': load('ledger-before.json'),
@@ -468,11 +474,12 @@ jobs:
               'verify': load('verify.json'),
               'foreign_key_check': load('foreign-key-check.json'),
               'integrity_check': load('integrity-check.json'),
+              'provider_mutation_executed': bool(plan.get('planned_migrations')),
               'automatic_restore_executed': False,
               'secret_material_recorded': False,
           }
           (root / 'evidence.json').write_text(json.dumps(evidence, sort_keys=True, indent=2) + '\n', encoding='utf-8')
-          for sensitive in ('wrangler.json', 'target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json'):
+          for sensitive in ('wrangler.json', 'target-release.json', 'current-release.json', 'known-good-release.json', 'preconditions.json', 'ledger-fence.json'):
               (root / sensitive).unlink(missing_ok=True)
           PY
 
