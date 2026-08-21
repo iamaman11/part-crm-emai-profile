@@ -47,6 +47,7 @@ const runtimeAudit = {
   request: null,
   mainSha: null,
   runId: null,
+  dispatchAttempted: false,
   dispatchBound: false,
   comments: null,
 };
@@ -173,13 +174,14 @@ async function listDispatchRuns() {
   fail('canonical dispatch history exceeds bounded idempotency scan');
 }
 
-async function dispatchOrReuse(request, mainSha) {
+async function dispatchOrReuse(request, mainSha, onDispatchAttempted = () => {}) {
   await assertProtectedMain(mainSha);
   const initial = await listDispatchRuns();
   const existing = findBoundRuns(initial, request, mainSha);
   if (existing.length > 1) fail(`duplicate canonical runs already exist for ${request.requestId}`);
   if (existing.length === 1) return { run: existing[0], reused: true };
   const before = new Set(initial.map((run) => run.id));
+  onDispatchAttempted();
   await github(`/repos/${REPOSITORY}/actions/workflows/${WORKFLOW}/dispatches`, {
     method: 'POST',
     body: {
@@ -248,7 +250,7 @@ function sanitizeFailureReason(value) {
 
 function failureAuditBody(state, reason) {
   const request = state.request;
-  const providerMutation = state.dispatchBound ? 'unknown' : 'false';
+  const providerMutation = state.dispatchAttempted || state.dispatchBound ? 'unknown' : 'false';
   return [
     auditMarker(state.ceremonyId, state.stage ?? 'ceremony', 'FAILED'),
     `FC-6 trusted-main operator terminal audit: **${state.stage ?? 'ceremony'} / FAILED**.`,
@@ -256,6 +258,7 @@ function failureAuditBody(state, reason) {
     `Main SHA: \`${state.mainSha ?? 'UNKNOWN'}\``,
     `Request id: \`${request?.requestId ?? 'NONE'}\``,
     `Canonical run id: \`${state.runId ?? 'NONE'}\``,
+    `Canonical dispatch attempted: \`${state.dispatchAttempted === true}\``,
     `Provider mutation: \`${providerMutation}\``,
     `Bounded failure reason: \`${sanitizeFailureReason(reason)}\``,
     'This terminal record is metadata-only. The transport itself has no Cloudflare credential, no staging Environment, and no provider mutation authority.',
@@ -309,11 +312,12 @@ async function executeStage({ comments, ceremonyId, stage, request, mainSha }) {
     request,
     mainSha,
     runId: null,
+    dispatchAttempted: false,
     dispatchBound: false,
     comments,
   });
   await ensureAudit(comments, ceremonyId, stage, 'DISPATCH_PENDING', request);
-  const { run, reused } = await dispatchOrReuse(request, mainSha);
+  const { run, reused } = await dispatchOrReuse(request, mainSha, () => { runtimeAudit.dispatchAttempted = true; });
   runtimeAudit.runId = run.id;
   runtimeAudit.dispatchBound = true;
   await ensureAudit(comments, ceremonyId, stage, 'DISPATCH_BOUND', request, [`Canonical run id: \`${run.id}\``, `Canonical run: ${run.html_url}`, `Reused existing canonical run: \`${reused}\``]);
@@ -359,9 +363,11 @@ function selfTest() {
   const runs = [{ id: 77, event: 'workflow_dispatch', head_branch: 'main', head_sha: '2'.repeat(40), path: WORKFLOW_PATH, display_title: expectedRunTitle(request) }];
   if (findBoundRuns(runs, request, '2'.repeat(40)).length !== 1) fail('idempotent canonical run binding self-test failed');
   if (findBoundRuns(runs, request, '3'.repeat(40)).length !== 0) fail('wrong-main canonical run unexpectedly matched');
-  const failureState = { started: true, ceremonyId, stage: 'a-to-b', request, mainSha: '2'.repeat(40), runId: null, dispatchBound: false };
+  const failureState = { started: true, ceremonyId, stage: 'a-to-b', request, mainSha: '2'.repeat(40), runId: null, dispatchAttempted: false, dispatchBound: false };
   const beforeDispatch = failureAuditBody(failureState, 'boom\nsecret=abc123');
   if (!beforeDispatch.includes('Provider mutation: `false`') || beforeDispatch.includes('abc123')) fail('pre-dispatch FAILED audit sanitization self-test failed');
+  const attemptedUnbound = failureAuditBody({ ...failureState, dispatchAttempted: true }, 'dispatch accepted but run unbound');
+  if (!attemptedUnbound.includes('Provider mutation: `unknown`') || !attemptedUnbound.includes('Canonical run id: `NONE`')) fail('attempted-unbound FAILED audit state self-test failed');
   const afterDispatch = failureAuditBody({ ...failureState, runId: 77, dispatchBound: true }, 'canonical run failed');
   if (!afterDispatch.includes('Provider mutation: `unknown`') || !afterDispatch.includes('Canonical run id: `77`')) fail('post-dispatch FAILED audit state self-test failed');
   console.log('AR-11 FC-6 trusted-main ceremony transport positive and negative self-tests passed.');
@@ -379,7 +385,7 @@ async function main() {
   await bindHostedTransaction(push.before, push.after, raw);
 
   const ceremonyId = `main-${push.after}-r${revision}`;
-  Object.assign(runtimeAudit, { started: true, ceremonyId, stage: 'ceremony', request: null, mainSha: push.after, runId: null, dispatchBound: false });
+  Object.assign(runtimeAudit, { started: true, ceremonyId, stage: 'ceremony', request: null, mainSha: push.after, runId: null, dispatchAttempted: false, dispatchBound: false });
   const comments = await loadAuditComments();
   runtimeAudit.comments = comments;
   const completed = {};
@@ -390,7 +396,7 @@ async function main() {
   const negativeRequest = stageRequest('negative-rollback', a, b, ceremonyId, String(completed['a-no-change'].id));
   completed['negative-rollback'] = await executeStage({ comments, ceremonyId, stage: 'negative-rollback', request: negativeRequest, mainSha: push.after });
   const runIds = STAGES.map((stage) => `${stage}=${completed[stage].id}`).join(', ');
-  Object.assign(runtimeAudit, { stage: 'ceremony', request: negativeRequest, runId: completed['negative-rollback'].id, dispatchBound: true });
+  Object.assign(runtimeAudit, { stage: 'ceremony', request: negativeRequest, runId: completed['negative-rollback'].id, dispatchAttempted: true, dispatchBound: true });
   await ensureAudit(comments, ceremonyId, 'ceremony', 'COMPLETE', negativeRequest, [`Canonical run ids: \`${runIds}\``, `Final expected provider Release Set after ceremony: \`${a}\``]);
   console.log(JSON.stringify({ ceremony_id: ceremonyId, ceremony_revision: revision, release_set_a: a, release_set_b: b, run_ids: Object.fromEntries(STAGES.map((stage) => [stage, completed[stage].id])), production_authorized: false }));
 }
