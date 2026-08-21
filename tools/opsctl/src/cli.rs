@@ -1,11 +1,12 @@
 use crate::OpsctlError;
 use crate::d1;
+use crate::evidence;
 use crate::promotion;
 use crate::release;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub const HELP: &str = "opsctl — project-specific operations policy interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n    opsctl [--root PATH] credentials <ACTION>\n    opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [D1 OPTIONS]\n    opsctl [--root PATH] release <ACTION> --release-set PATH [RELEASE OPTIONS]\n    opsctl [--root PATH] promotion <ACTION> --release-set PATH --profile ID --environment ENV --snapshot PATH --evidence-json PATH [PROMOTION OPTIONS]\n\nCOMMANDS:\n    doctor                     Validate canonical repository authorities\n    status                     Print canonical docs/status.json\n    inventory                  Print canonical architecture/inventory.json\n    credentials status         Print canonical credential lifecycle metadata\n    credentials rotation-plan  Print canonical operator rotation/recovery metadata\n    d1 status                  Classify a saved D1 migration ledger against canonical history\n    d1 plan                    Build a deterministic migration/rollback plan\n    d1 compatibility           Evaluate runtime/schema compatibility\n    d1 verify                  Verify a post-apply ledger against a release schema contract\n    release inspect            Parse and inspect one immutable Release Set\n    release verify             Verify Release Set identity and exact artifact bytes\n    release compatibility      Evaluate Release Set + Capability Profile compatibility\n    promotion plan             Build a deterministic no-mutation transition plan\n    promotion preflight        Fail-closed gate before provider credential exposure\n    promotion verify           Verify observed state after provider mutation\n\nD1 OPTIONS:\n    --component ID              catalog or resolver\n    --ledger-json PATH          Saved machine-readable Wrangler D1 ledger query result\n    --release-manifest PATH     Target release; required for plan/compatibility/verify\n    --current-manifest PATH     Current runtime schema contract; plan rollback context\n    --known-good-manifest PATH  Known-good rollback release schema contract\n    --preconditions-json PATH   Metadata-only CONTRACT precondition evidence\n    --authority PATH            Optional D1 evolution authority override for fixtures\n\nRELEASE OPTIONS:\n    --release-set PATH          Target content-addressed Release Set manifest\n    --source-root PATH          Exact source tree for release provenance; defaults to --root\n    --artifact-root PATH        Exact artifact tree; required for release verify\n    --profile ID                Target Capability Profile; compatibility only\n    --environment ID            rehearsal, staging, or production; compatibility only\n    --evidence-json PATH        Saved compatibility evidence; compatibility only\n    --current-release-set PATH  Optional current Release Set for rollback context\n\nPROMOTION OPTIONS:\n    --release-set PATH          Target immutable Release Set\n    --source-root PATH          Exact target source tree; current --root remains policy authority\n    --profile ID                Target Capability Profile\n    --environment ID            rehearsal, staging, or production\n    --snapshot PATH             Saved metadata-only DeploymentSnapshot\n    --evidence-json PATH        Saved release compatibility evidence\n    --current-release-set PATH  Optional current Release Set\n    --known-good-release-set PATH  Rollback candidate for preflight\n    --expected-current ID       Stale-plan fence (use NONE for fresh state)\n\nGLOBAL OPTIONS:\n    --root PATH  Explicit current policy repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nAR-11 release commands remain local, read-only and metadata/artifact-verification-only. opsctl never executes Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. GitHub Actions/Environments retain orchestration/approval authority and provider executors retain actual mutation authority.\n";
+pub const HELP: &str = "opsctl — project-specific operations policy interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n    opsctl [--root PATH] credentials <ACTION>\n    opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [D1 OPTIONS]\n    opsctl [--root PATH] evidence <ACTION> [EVIDENCE OPTIONS]\n    opsctl [--root PATH] release <ACTION> --release-set PATH [RELEASE OPTIONS]\n    opsctl [--root PATH] promotion <ACTION> --release-set PATH --profile ID --environment ENV --snapshot PATH --evidence-json PATH [PROMOTION OPTIONS]\n\nCOMMANDS:\n    doctor                     Validate canonical repository authorities\n    status                     Print canonical docs/status.json\n    inventory                  Print canonical architecture/inventory.json\n    credentials status         Print canonical credential lifecycle metadata\n    credentials rotation-plan  Print canonical operator rotation/recovery metadata\n    d1 status                  Classify a saved D1 migration ledger against canonical history\n    d1 plan                    Build a deterministic migration/rollback plan\n    d1 compatibility           Evaluate runtime/schema compatibility\n    d1 verify                  Verify a post-apply ledger against a release schema contract\n    evidence build             Build canonical typed evidence from one saved raw observation\n    evidence validate          Validate one HostedEvidenceEnvelope without network access\n    evidence inspect           Inspect one validated HostedEvidenceEnvelope\n    evidence verify            Verify canonical bytes and expected workflow/run/source binding\n    release inspect            Parse and inspect one immutable Release Set\n    release verify             Verify Release Set identity and exact artifact bytes\n    release compatibility      Evaluate Release Set + Capability Profile compatibility\n    promotion plan             Build a deterministic no-mutation transition plan\n    promotion preflight        Fail-closed gate before provider credential exposure\n    promotion verify           Verify observed state after provider mutation\n\nD1 OPTIONS:\n    --component ID              catalog or resolver\n    --ledger-json PATH          Saved machine-readable Wrangler D1 ledger query result\n    --release-manifest PATH     Target release; required for plan/compatibility/verify\n    --current-manifest PATH     Current runtime schema contract; plan rollback context\n    --known-good-manifest PATH  Known-good rollback release schema contract\n    --preconditions-json PATH   Metadata-only CONTRACT precondition evidence\n    --authority PATH            Optional D1 evolution authority override for fixtures\n\nEVIDENCE OPTIONS:\n    --raw-observation PATH      Saved provider/GitHub observation; build only\n    --context-json PATH         Typed expected context; build and verify\n    --evidence-json PATH        HostedEvidenceEnvelope; validate/inspect/verify\n\nRELEASE OPTIONS:\n    --release-set PATH          Target content-addressed Release Set manifest\n    --source-root PATH          Exact source tree for release provenance; defaults to --root\n    --artifact-root PATH        Exact artifact tree; required for release verify\n    --profile ID                Target Capability Profile; compatibility only\n    --environment ID            rehearsal, staging, or production; compatibility only\n    --evidence-json PATH        Saved compatibility evidence; compatibility only\n    --current-release-set PATH  Optional current Release Set for rollback context\n\nPROMOTION OPTIONS:\n    --release-set PATH          Target immutable Release Set\n    --source-root PATH          Exact target source tree; current --root remains policy authority\n    --profile ID                Target Capability Profile\n    --environment ID            rehearsal, staging, or production\n    --snapshot PATH             Saved metadata-only DeploymentSnapshot\n    --evidence-json PATH        Saved release compatibility evidence\n    --current-release-set PATH  Optional current Release Set\n    --known-good-release-set PATH  Rollback candidate for preflight\n    --expected-current ID       Stale-plan fence (use NONE for fresh state)\n\nGLOBAL OPTIONS:\n    --root PATH  Explicit current policy repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nopsctl remains a local policy engine: it never executes Python, Node, npx, Wrangler, provider APIs, GitHub APIs, signing, database mutation, secret access, deployment, or customer-state mutation. GitHub Actions/Environments retain orchestration, approval and attestation authority; provider executors retain observation/mutation authority.\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadCommand {
@@ -63,6 +64,13 @@ pub enum Invocation {
         known_good_manifest: Option<PathBuf>,
         preconditions_json: Option<PathBuf>,
         authority: Option<PathBuf>,
+    },
+    Evidence {
+        root: Option<PathBuf>,
+        action: evidence::EvidenceAction,
+        evidence_json: Option<PathBuf>,
+        raw_observation: Option<PathBuf>,
+        context_json: Option<PathBuf>,
     },
     Release {
         root: Option<PathBuf>,
@@ -130,6 +138,7 @@ where
 
     match command.as_str() {
         "d1" => parse_d1_invocation(root, iterator),
+        "evidence" => parse_evidence_invocation(root, iterator),
         "release" => parse_release_invocation(root, iterator),
         "promotion" => parse_promotion_invocation(root, iterator),
         _ => {
@@ -325,6 +334,108 @@ where
         known_good_manifest,
         preconditions_json,
         authority,
+    })
+}
+
+fn parse_evidence_invocation<I>(
+    root: Option<PathBuf>,
+    mut iterator: I,
+) -> Result<Invocation, OpsctlError>
+where
+    I: Iterator<Item = OsString>,
+{
+    let action_value = iterator
+        .next()
+        .ok_or_else(|| OpsctlError::new("evidence", "missing evidence action"))?;
+    let action_text = action_value
+        .to_str()
+        .ok_or_else(|| OpsctlError::new("evidence", "evidence action must be valid UTF-8"))?;
+    let action = match action_text {
+        "build" => evidence::EvidenceAction::Build,
+        "validate" => evidence::EvidenceAction::Validate,
+        "inspect" => evidence::EvidenceAction::Inspect,
+        "verify" => evidence::EvidenceAction::Verify,
+        other => {
+            return Err(OpsctlError::new(
+                "evidence",
+                format!("unsupported evidence action: {other}"),
+            ));
+        }
+    };
+
+    let mut evidence_json: Option<PathBuf> = None;
+    let mut raw_observation: Option<PathBuf> = None;
+    let mut context_json: Option<PathBuf> = None;
+
+    while let Some(argument) = iterator.next() {
+        let flag = argument
+            .to_str()
+            .ok_or_else(|| OpsctlError::new("evidence", "evidence flags must be valid UTF-8"))?;
+        match flag {
+            "--evidence-json" => {
+                let value = iterator.next().ok_or_else(|| {
+                    OpsctlError::new("evidence", "--evidence-json requires a value")
+                })?;
+                set_once(&mut evidence_json, PathBuf::from(value), "--evidence-json")?;
+            }
+            "--raw-observation" => {
+                let value = iterator.next().ok_or_else(|| {
+                    OpsctlError::new("evidence", "--raw-observation requires a value")
+                })?;
+                set_once(
+                    &mut raw_observation,
+                    PathBuf::from(value),
+                    "--raw-observation",
+                )?;
+            }
+            "--context-json" => {
+                let value = iterator.next().ok_or_else(|| {
+                    OpsctlError::new("evidence", "--context-json requires a value")
+                })?;
+                set_once(&mut context_json, PathBuf::from(value), "--context-json")?;
+            }
+            other => {
+                return Err(OpsctlError::new(
+                    "evidence",
+                    format!("unsupported evidence argument: {other}"),
+                ));
+            }
+        }
+    }
+
+    match action {
+        evidence::EvidenceAction::Build => {
+            if raw_observation.is_none() || context_json.is_none() || evidence_json.is_some() {
+                return Err(OpsctlError::new(
+                    "evidence",
+                    "evidence build requires --raw-observation and --context-json only",
+                ));
+            }
+        }
+        evidence::EvidenceAction::Validate | evidence::EvidenceAction::Inspect => {
+            if evidence_json.is_none() || raw_observation.is_some() || context_json.is_some() {
+                return Err(OpsctlError::new(
+                    "evidence",
+                    format!("evidence {} requires --evidence-json only", action.name()),
+                ));
+            }
+        }
+        evidence::EvidenceAction::Verify => {
+            if evidence_json.is_none() || context_json.is_none() || raw_observation.is_some() {
+                return Err(OpsctlError::new(
+                    "evidence",
+                    "evidence verify requires --evidence-json and --context-json only",
+                ));
+            }
+        }
+    }
+
+    Ok(Invocation::Evidence {
+        root,
+        action,
+        evidence_json,
+        raw_observation,
+        context_json,
     })
 }
 
@@ -713,6 +824,7 @@ fn set_once<T>(slot: &mut Option<T>, value: T, flag: &str) -> Result<(), OpsctlE
 mod tests {
     use super::{CredentialsAction, Invocation, ReadCommand, parse_invocation};
     use crate::d1::D1Action;
+    use crate::evidence::EvidenceAction;
     use crate::release::ReleaseAction;
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -847,6 +959,60 @@ mod tests {
             ]))
             .is_err()
         );
+    }
+
+    #[test]
+    fn activates_typed_evidence_surface() {
+        assert_eq!(
+            parse_invocation(args(&[
+                "opsctl",
+                "evidence",
+                "build",
+                "--raw-observation",
+                "raw.json",
+                "--context-json",
+                "context.json",
+            ])),
+            Ok(Invocation::Evidence {
+                root: None,
+                action: EvidenceAction::Build,
+                evidence_json: None,
+                raw_observation: Some(PathBuf::from("raw.json")),
+                context_json: Some(PathBuf::from("context.json")),
+            })
+        );
+        assert!(matches!(
+            parse_invocation(args(&[
+                "opsctl",
+                "evidence",
+                "verify",
+                "--evidence-json",
+                "evidence.json",
+                "--context-json",
+                "context.json",
+            ])),
+            Ok(Invocation::Evidence {
+                action: EvidenceAction::Verify,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn evidence_cli_rejects_cross_action_inputs_and_unknown_actions() {
+        assert!(
+            parse_invocation(args(&[
+                "opsctl",
+                "evidence",
+                "validate",
+                "--evidence-json",
+                "evidence.json",
+                "--context-json",
+                "context.json",
+            ]))
+            .is_err()
+        );
+        assert!(parse_invocation(args(&["opsctl", "evidence", "publish"])).is_err());
     }
 
     #[test]
