@@ -12,6 +12,7 @@ const TRANSACTION_PATH = 'docs/evidence/ar11-fc6-operator-transaction.json';
 const RELEASE = 'release-set-v2-sha256-[0-9a-f]{64}';
 const RELEASE_ID = new RegExp(`^${RELEASE}$`);
 const SHA = /^[0-9a-f]{40}$/;
+const TRUSTED_AUDIT_ACTOR = Object.freeze({ login: 'github-actions[bot]', id: 41898282, type: 'Bot' });
 const TRANSACTION_V1_KEYS = Object.freeze([
   'schema_version',
   'kind',
@@ -234,6 +235,17 @@ function auditBody(ceremonyId, stage, phase, request, extra = []) {
   ].join('\n\n');
 }
 
+function isTrustedAuditComment(comment) {
+  return comment?.user?.login === TRUSTED_AUDIT_ACTOR.login
+    && comment?.user?.id === TRUSTED_AUDIT_ACTOR.id
+    && comment?.user?.type === TRUSTED_AUDIT_ACTOR.type
+    && typeof comment?.body === 'string';
+}
+
+function trustedMarkerMatches(comments, marker) {
+  return comments.filter((comment) => isTrustedAuditComment(comment) && comment.body.includes(marker));
+}
+
 function sanitizeFailureReason(value) {
   let text = String(value ?? 'UNKNOWN_FAILURE')
     .replace(/[\r\n\t]+/g, ' ')
@@ -278,11 +290,11 @@ async function loadAuditComments() {
 
 async function ensureAudit(comments, ceremonyId, stage, phase, request, extra = []) {
   const marker = auditMarker(ceremonyId, stage, phase);
-  const matches = comments.filter((comment) => typeof comment?.body === 'string' && comment.body.includes(marker));
-  if (matches.length > 1) fail(`duplicate audit marker for ${stage}/${phase}`);
+  const matches = trustedMarkerMatches(comments, marker);
+  if (matches.length > 1) fail(`duplicate trusted audit marker for ${stage}/${phase}`);
   if (matches.length === 1) return matches[0];
   const created = await github(`/repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments`, { method: 'POST', body: { body: auditBody(ceremonyId, stage, phase, request, extra) } });
-  if (!Number.isInteger(created?.id) || created.id <= 0) fail('created operator audit comment id is invalid');
+  if (!Number.isInteger(created?.id) || created.id <= 0 || !isTrustedAuditComment(created)) fail('created operator audit comment identity is invalid/untrusted');
   comments.push(created);
   return created;
 }
@@ -293,14 +305,14 @@ async function ensureFailureAudit(state, reason) {
   state.comments = comments;
   const stage = state.stage ?? 'ceremony';
   const marker = auditMarker(state.ceremonyId, stage, 'FAILED');
-  const matches = comments.filter((comment) => typeof comment?.body === 'string' && comment.body.includes(marker));
-  if (matches.length > 1) fail(`duplicate audit marker for ${stage}/FAILED`);
+  const matches = trustedMarkerMatches(comments, marker);
+  if (matches.length > 1) fail(`duplicate trusted audit marker for ${stage}/FAILED`);
   if (matches.length === 1) return;
   const created = await github(`/repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments`, {
     method: 'POST',
     body: { body: failureAuditBody(state, reason) },
   });
-  if (!Number.isInteger(created?.id) || created.id <= 0) fail('created terminal FAILED audit comment id is invalid');
+  if (!Number.isInteger(created?.id) || created.id <= 0 || !isTrustedAuditComment(created)) fail('created terminal FAILED audit comment identity is invalid/untrusted');
   comments.push(created);
 }
 
@@ -363,6 +375,11 @@ function selfTest() {
   const runs = [{ id: 77, event: 'workflow_dispatch', head_branch: 'main', head_sha: '2'.repeat(40), path: WORKFLOW_PATH, display_title: expectedRunTitle(request) }];
   if (findBoundRuns(runs, request, '2'.repeat(40)).length !== 1) fail('idempotent canonical run binding self-test failed');
   if (findBoundRuns(runs, request, '3'.repeat(40)).length !== 0) fail('wrong-main canonical run unexpectedly matched');
+  const marker = auditMarker(ceremonyId, 'a-to-b', 'DISPATCH_PENDING');
+  const spoof = { user: { login: 'untrusted-user', id: 1, type: 'User' }, body: marker };
+  const trusted = { user: { ...TRUSTED_AUDIT_ACTOR }, body: marker };
+  if (trustedMarkerMatches([spoof], marker).length !== 0) fail('untrusted issue comment spoofed canonical audit marker');
+  if (trustedMarkerMatches([spoof, trusted], marker).length !== 1) fail('trusted audit actor identity binding self-test failed');
   const failureState = { started: true, ceremonyId, stage: 'a-to-b', request, mainSha: '2'.repeat(40), runId: null, dispatchAttempted: false, dispatchBound: false };
   const beforeDispatch = failureAuditBody(failureState, 'boom\nsecret=abc123');
   if (!beforeDispatch.includes('Provider mutation: `false`') || beforeDispatch.includes('abc123')) fail('pre-dispatch FAILED audit sanitization self-test failed');
