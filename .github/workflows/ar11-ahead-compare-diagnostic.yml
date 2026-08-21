@@ -1,0 +1,55 @@
+name: AR-11 Ahead Compare Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ar11-ahead-compare-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    name: Observe raw ahead compare and Release Set B
+    runs-on: ubuntu-latest
+    env:
+      A_SHA: 054467335c5d430010453446c7d0c0d7191dc258
+      B_SHA: 5d92a6dbc1225e0dc363c7ef316d874da2bb5ab6
+    steps:
+      - name: Read public GitHub API only
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          compare="$RUNNER_TEMP/compare.json"
+          releases="$RUNNER_TEMP/releases.json"
+          runs="$RUNNER_TEMP/runs.json"
+
+          curl --fail --silent --show-error --retry 3 -H 'Accept: application/vnd.github+json' \
+            "$api/compare/$A_SHA...$B_SHA" > "$compare"
+          curl --fail --silent --show-error --retry 3 -H 'Accept: application/vnd.github+json' \
+            "$api/releases?per_page=100" > "$releases"
+          curl --fail --silent --show-error --retry 3 -H 'Accept: application/vnd.github+json' \
+            "$api/actions/runs?event=push&head_sha=$B_SHA&per_page=100" > "$runs"
+
+          jq '{
+            compare: {
+              keys: (keys | sort),
+              url, html_url, permalink_url,
+              status, ahead_by, behind_by, total_commits,
+              base_sha: .base_commit.sha,
+              merge_base_sha: .merge_base_commit.sha,
+              head_commit_present: has("head_commit"),
+              commits_length: (.commits | length),
+              first_commit_sha: (.commits[0].sha // null),
+              last_commit_sha: (.commits[-1].sha // null)
+            }
+          }' "$compare"
+
+          jq --arg source "$B_SHA" '[.[] | select(.target_commitish == $source) | {id,tag_name,target_commitish,draft,prerelease,published_at,html_url,assets:[.assets[]|{id,name,size}]}]' "$releases"
+          jq --arg source "$B_SHA" '[.workflow_runs[] | select(.name == "Release Set Build" and .head_sha == $source) | {id,run_number,run_attempt,status,conclusion,event,head_branch,head_sha,path,html_url,created_at,updated_at}]' "$runs"
+
+          test "$(jq -r '.status' "$compare")" = ahead
+          test "$(jq -r '.base_commit.sha' "$compare")" = "$A_SHA"
+          test "$(jq -r '.merge_base_commit.sha' "$compare")" = "$A_SHA"
+          test "$(jq -r '.behind_by' "$compare")" = 0
