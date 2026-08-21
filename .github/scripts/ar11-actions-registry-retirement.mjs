@@ -104,7 +104,7 @@ function validateEphemeralAuthority(baseAuthority, extension, workflowText) {
   const expect = (condition, message) => { if (!condition) errors.push(message); };
   const baseCredential = (baseAuthority?.credentials ?? []).find((row) => row?.id === 'github.actions-runtime-api');
   expect(Boolean(baseCredential), 'accepted base authority must retain github.actions-runtime-api');
-  expect(baseCredential?.class === 'EPHEMERAL_WORKFLOW_CREDENTIAL', 'github.actions-runtime-api class drifted');
+  expect(baseCredential?.class === 'EPHEMERAL_JOB_API_CREDENTIAL', 'github.actions-runtime-api class drifted');
   const aliases = (baseCredential?.bindings ?? [])
     .filter((row) => row?.surface === 'process_environment_credential_alias')
     .map((row) => row?.name)
