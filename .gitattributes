@@ -1,2 +1,3 @@
+# D1 history digests cover checkout bytes, so every platform must materialize LF.
 /migrations/d1/*.sql text eol=lf
 /migrations/resolver-d1/*.sql text eol=lf
