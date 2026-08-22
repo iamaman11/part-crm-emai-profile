@@ -44,14 +44,12 @@ impl D1Component {
             Self::Catalog => HistoricalEpoch {
                 final_revision: "0026_outbound_mail_intents.sql",
                 migration_count: 26,
-                accepted_history_digest:
-                    "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
+                accepted_history_digest: "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
             },
             Self::Resolver => HistoricalEpoch {
                 final_revision: "0004_refresh_owner_hmac_version.sql",
                 migration_count: 4,
-                accepted_history_digest:
-                    "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
+                accepted_history_digest: "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
             },
         }
     }
@@ -137,7 +135,9 @@ impl RepositoryMigrationCatalog {
             ))
         })? {
             let entry = entry.map_err(|error| {
-                D1Error::new(format!("cannot inspect canonical D1 migration entry: {error}"))
+                D1Error::new(format!(
+                    "cannot inspect canonical D1 migration entry: {error}"
+                ))
             })?;
             let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
                 D1Error::new(format!(
@@ -151,9 +151,10 @@ impl RepositoryMigrationCatalog {
                     entry.path().display()
                 )));
             }
-            let name = entry.file_name().into_string().map_err(|_| {
-                D1Error::new("canonical D1 migration filename must be valid UTF-8")
-            })?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| D1Error::new("canonical D1 migration filename must be valid UTF-8"))?;
             let revision = parse_revision(&name)?;
             let bytes = fs::read(entry.path()).map_err(|error| {
                 D1Error::new(format!(
@@ -277,7 +278,10 @@ pub(crate) fn component_authority(
 pub(crate) fn repository_projection(root: &Path) -> Result<String, D1Error> {
     let catalog = RepositoryMigrationCatalog::load(root, D1Component::Catalog)?;
     let resolver = RepositoryMigrationCatalog::load(root, D1Component::Resolver)?;
-    let components = vec![catalog.inventory_projection()?, resolver.inventory_projection()?];
+    let components = vec![
+        catalog.inventory_projection()?,
+        resolver.inventory_projection()?,
+    ];
     let identity = json!({
         "schema_version": 1,
         "kind": "D1_REPOSITORY_IDENTITY",
@@ -335,17 +339,17 @@ pub(crate) fn repository_identity_sha256(root: &Path) -> Result<String, D1Error>
         .map_err(D1Error::new)
 }
 
-pub(crate) fn release_contract(
-    root: &Path,
-    component: &str,
-) -> Result<Value, D1Error> {
+pub(crate) fn release_contract(root: &Path, component: &str) -> Result<Value, D1Error> {
     RepositoryMigrationCatalog::load(root, D1Component::parse(component)?)?
         .release_contract_projection()
 }
 
 fn checked_migration_directory(root: &Path, component: D1Component) -> Result<PathBuf, D1Error> {
     let root_metadata = fs::symlink_metadata(root).map_err(|error| {
-        D1Error::new(format!("cannot inspect repository root {}: {error}", root.display()))
+        D1Error::new(format!(
+            "cannot inspect repository root {}: {error}",
+            root.display()
+        ))
     })?;
     if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
         return Err(D1Error::new(
@@ -353,7 +357,10 @@ fn checked_migration_directory(root: &Path, component: D1Component) -> Result<Pa
         ));
     }
     let canonical_root = fs::canonicalize(root).map_err(|error| {
-        D1Error::new(format!("cannot canonicalize repository root {}: {error}", root.display()))
+        D1Error::new(format!(
+            "cannot canonicalize repository root {}: {error}",
+            root.display()
+        ))
     })?;
     let path = root.join(component.migration_root());
     let metadata = fs::symlink_metadata(&path).map_err(|error| {
@@ -408,7 +415,9 @@ fn parse_revision(name: &str) -> Result<u32, D1Error> {
         )));
     }
     name[..4].parse::<u32>().map_err(|error| {
-        D1Error::new(format!("invalid canonical D1 migration revision {name}: {error}"))
+        D1Error::new(format!(
+            "invalid canonical D1 migration revision {name}: {error}"
+        ))
     })
 }
 
@@ -469,7 +478,10 @@ fn verify_future_specs(
     component: D1Component,
 ) -> Result<(), D1Error> {
     let post_epoch = migrations.get(epoch.migration_count..).ok_or_else(|| {
-        D1Error::new(format!("{} historical epoch boundary is invalid", component.id()))
+        D1Error::new(format!(
+            "{} historical epoch boundary is invalid",
+            component.id()
+        ))
     })?;
     if post_epoch.len() != specs.len() {
         return Err(D1Error::new(format!(
@@ -567,14 +579,21 @@ mod tests {
     }
 
     #[test]
-    fn accepted_repository_epochs_match_compiled_anchors() -> Result<(), Box<dyn std::error::Error>> {
+    fn accepted_repository_epochs_match_compiled_anchors() -> Result<(), Box<dyn std::error::Error>>
+    {
         let root = repository_root();
         let catalog = component_authority(&root, "catalog")?;
         let resolver = component_authority(&root, "resolver")?;
         assert_eq!(catalog.ordered_history.len(), 26);
         assert_eq!(resolver.ordered_history.len(), 4);
-        assert_eq!(catalog.current_repository_revision, "0026_outbound_mail_intents.sql");
-        assert_eq!(resolver.current_repository_revision, "0004_refresh_owner_hmac_version.sql");
+        assert_eq!(
+            catalog.current_repository_revision,
+            "0026_outbound_mail_intents.sql"
+        );
+        assert_eq!(
+            resolver.current_repository_revision,
+            "0004_refresh_owner_hmac_version.sql"
+        );
         Ok(())
     }
 
@@ -583,10 +602,22 @@ mod tests {
         let repository = TempRepository::new("tampered")?;
         let directory = repository.root().join("migrations/resolver-d1");
         copy_resolver_epoch(&directory)?;
-        fs::write(directory.join("0002_oauth_refresh_fencing.sql"), b"SELECT 1;\n")?;
-        let error = RepositoryMigrationCatalog::load(repository.root(), D1Component::Resolver)
-            .expect_err("tampered historical SQL must fail");
-        assert!(error.to_string().contains("historical epoch digest mismatch"));
+        fs::write(
+            directory.join("0002_oauth_refresh_fencing.sql"),
+            b"SELECT 1;\n",
+        )?;
+        let error = match RepositoryMigrationCatalog::load(
+            repository.root(),
+            D1Component::Resolver,
+        ) {
+            Ok(_) => return Err("tampered historical SQL unexpectedly passed".into()),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("historical epoch digest mismatch")
+        );
         Ok(())
     }
 
@@ -596,8 +627,13 @@ mod tests {
         let directory = repository.root().join("migrations/resolver-d1");
         copy_resolver_epoch(&directory)?;
         fs::remove_file(directory.join("0003_lookup_hmac_versions.sql"))?;
-        let error = RepositoryMigrationCatalog::load(repository.root(), D1Component::Resolver)
-            .expect_err("missing historical SQL must fail");
+        let error = match RepositoryMigrationCatalog::load(
+            repository.root(),
+            D1Component::Resolver,
+        ) {
+            Ok(_) => return Err("missing historical SQL unexpectedly passed".into()),
+            Err(error) => error,
+        };
         assert!(
             error.to_string().contains("revision gap")
                 || error.to_string().contains("missing migrations")
@@ -606,14 +642,19 @@ mod tests {
     }
 
     #[test]
-    fn unexpected_post_epoch_sql_without_typed_spec_fails_closed(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn unexpected_post_epoch_sql_without_typed_spec_fails_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
         let repository = TempRepository::new("post-epoch")?;
         let directory = repository.root().join("migrations/resolver-d1");
         copy_resolver_epoch(&directory)?;
         fs::write(directory.join("0005_unowned.sql"), b"SELECT 1;\n")?;
-        let error = RepositoryMigrationCatalog::load(repository.root(), D1Component::Resolver)
-            .expect_err("unowned post-epoch SQL must fail");
+        let error = match RepositoryMigrationCatalog::load(
+            repository.root(),
+            D1Component::Resolver,
+        ) {
+            Ok(_) => return Err("unowned post-epoch SQL unexpectedly passed".into()),
+            Err(error) => error,
+        };
         assert!(error.to_string().contains("migration/spec count mismatch"));
         Ok(())
     }
@@ -629,8 +670,7 @@ mod tests {
             copy_resolver_epoch(&directory)?;
             fs::write(directory.join(filename), b"SELECT 1;\n")?;
             assert!(
-                RepositoryMigrationCatalog::load(repository.root(), D1Component::Resolver)
-                    .is_err()
+                RepositoryMigrationCatalog::load(repository.root(), D1Component::Resolver).is_err()
             );
         }
         Ok(())

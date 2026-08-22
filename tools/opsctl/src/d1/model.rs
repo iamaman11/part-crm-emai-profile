@@ -112,12 +112,7 @@ pub(super) enum MigrationClass {
 }
 
 impl MigrationClass {
-    pub(super) const ALL: [Self; 4] = [
-        Self::Expand,
-        Self::Backfill,
-        Self::Contract,
-        Self::Repair,
-    ];
+    pub(super) const ALL: [Self; 4] = [Self::Expand, Self::Backfill, Self::Contract, Self::Repair];
 
     pub(super) const fn as_str(self) -> &'static str {
         match self {

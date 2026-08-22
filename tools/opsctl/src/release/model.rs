@@ -506,15 +506,10 @@ fn parse_schemas(value: &Value) -> Result<SchemaIdentity, ReleaseModelError> {
     let root = object(value, "schemas")?;
     reject_unknown_fields(
         root,
-        &[
-            "d1_repository_identity_sha256",
-            "catalog",
-            "resolver",
-        ],
+        &["d1_repository_identity_sha256", "catalog", "resolver"],
         "schemas",
     )?;
-    let d1_repository_identity_sha256 =
-        required_string(root, "d1_repository_identity_sha256")?;
+    let d1_repository_identity_sha256 = required_string(root, "d1_repository_identity_sha256")?;
     validate_sha256_like(
         &d1_repository_identity_sha256,
         "schemas.d1_repository_identity_sha256",

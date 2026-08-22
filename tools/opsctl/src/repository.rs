@@ -44,20 +44,20 @@ pub(crate) fn resolve_repo_root(
 /// two canonical migration directories. Those fixtures are D1 repository
 /// inputs, not complete application repositories, so they must not be forced to
 /// reproduce unrelated architecture sentinels.
-pub(crate) fn resolve_d1_repository_root(
-    explicit: Option<&Path>,
-) -> Result<PathBuf, OpsctlError> {
+pub(crate) fn resolve_d1_repository_root(explicit: Option<&Path>) -> Result<PathBuf, OpsctlError> {
     let Some(root) = explicit else {
         return resolve_repo_root(None, "d1 repository");
     };
     let canonical = fs::canonicalize(root).map_err(|error| {
         OpsctlError::new(
             "d1 repository",
-            format!("cannot resolve D1 repository root {}: {error}", root.display()),
+            format!(
+                "cannot resolve D1 repository root {}: {error}",
+                root.display()
+            ),
         )
     })?;
-    if canonical.join("migrations/d1").is_dir()
-        && canonical.join("migrations/resolver-d1").is_dir()
+    if canonical.join("migrations/d1").is_dir() && canonical.join("migrations/resolver-d1").is_dir()
     {
         return Ok(canonical);
     }

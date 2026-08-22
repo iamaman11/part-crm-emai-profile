@@ -24,7 +24,11 @@ fn historical_authority() -> ComponentAuthority {
 
 fn transition_authority(contracts: Vec<MigrationContract>) -> ComponentAuthority {
     let mut ordered_history = vec!["0001_base.sql".to_owned()];
-    ordered_history.extend(contracts.iter().map(|contract| contract.migration_file.clone()));
+    ordered_history.extend(
+        contracts
+            .iter()
+            .map(|contract| contract.migration_file.clone()),
+    );
     let current_repository_revision = ordered_history
         .last()
         .cloned()
@@ -53,7 +57,8 @@ fn migration(
         rollout_order,
         fail_forward_required,
         destructive: migration_class == MigrationClass::Contract,
-        code_rollback_allowed: !fail_forward_required && migration_class != MigrationClass::Contract,
+        code_rollback_allowed: !fail_forward_required
+            && migration_class != MigrationClass::Contract,
         contract_preconditions: contract_preconditions
             .iter()
             .map(|value| (*value).to_owned())
@@ -118,7 +123,11 @@ fn known_ahead_schema_distinguishes_rollback_window() -> Result<(), D1Error> {
         &authority,
         &remote,
         Some(&contract(
-            "catalog", "0002_b.sql", "0001_a.sql", "0003_c.sql", "history-digest",
+            "catalog",
+            "0002_b.sql",
+            "0001_a.sql",
+            "0003_c.sql",
+            "history-digest",
         )),
         None,
         None,
@@ -133,13 +142,20 @@ fn known_ahead_schema_distinguishes_rollback_window() -> Result<(), D1Error> {
         &authority,
         &remote,
         Some(&contract(
-            "catalog", "0002_b.sql", "0001_a.sql", "0002_b.sql", "history-digest",
+            "catalog",
+            "0002_b.sql",
+            "0001_a.sql",
+            "0002_b.sql",
+            "history-digest",
         )),
         None,
         None,
         &Preconditions::default(),
     )?;
-    assert_eq!(incompatible.ledger_state, LedgerState::AheadKnownIncompatible);
+    assert_eq!(
+        incompatible.ledger_state,
+        LedgerState::AheadKnownIncompatible
+    );
     assert_eq!(incompatible.decision, Decision::CodeRollbackBlocked);
     assert!(!incompatible.allowed);
     Ok(())
@@ -149,7 +165,11 @@ fn known_ahead_schema_distinguishes_rollback_window() -> Result<(), D1Error> {
 fn historical_plan_is_visible_but_fail_closed() -> Result<(), D1Error> {
     let authority = historical_authority();
     let target = contract(
-        "catalog", "0003_c.sql", "0001_a.sql", "0003_c.sql", "history-digest",
+        "catalog",
+        "0003_c.sql",
+        "0001_a.sql",
+        "0003_c.sql",
+        "history-digest",
     );
     let result = evaluate(
         D1Action::Plan,
@@ -164,7 +184,10 @@ fn historical_plan_is_visible_but_fail_closed() -> Result<(), D1Error> {
     assert_eq!(result.decision, Decision::MigrationRequired);
     assert!(!result.allowed);
     assert_eq!(result.planned_migrations, vec!["0002_b.sql", "0003_c.sql"]);
-    assert_eq!(result.reason_codes, vec!["HISTORICAL_COMPATIBILITY_UNKNOWN"]);
+    assert_eq!(
+        result.reason_codes,
+        vec!["HISTORICAL_COMPATIBILITY_UNKNOWN"]
+    );
     Ok(())
 }
 
@@ -172,7 +195,11 @@ fn historical_plan_is_visible_but_fail_closed() -> Result<(), D1Error> {
 fn release_contract_policy_digest_mismatch_fails_closed() {
     let authority = historical_authority();
     let mut target = contract(
-        "catalog", "0003_c.sql", "0001_a.sql", "0003_c.sql", "history-digest",
+        "catalog",
+        "0003_c.sql",
+        "0001_a.sql",
+        "0003_c.sql",
+        "history-digest",
     );
     target.compatibility_policy_digest = "other-policy".to_owned();
     assert!(
@@ -212,7 +239,11 @@ fn expand_backfill_and_rollout_order_remain_typed() -> Result<(), D1Error> {
         ),
     ] {
         let authority = transition_authority(vec![migration(
-            "0002_transition.sql", class, rollout, false, &[],
+            "0002_transition.sql",
+            class,
+            rollout,
+            false,
+            &[],
         )]);
         let target = contract(
             "resolver",
@@ -333,7 +364,10 @@ fn repair_fail_forward_is_explicitly_blocked() -> Result<(), D1Error> {
     )?;
     assert_eq!(result.decision, Decision::FailForwardRequired);
     assert!(!result.allowed);
-    assert_eq!(result.reason_codes, vec!["EXPLICIT_FAIL_FORWARD_TRANSITION"]);
+    assert_eq!(
+        result.reason_codes,
+        vec!["EXPLICIT_FAIL_FORWARD_TRANSITION"]
+    );
     Ok(())
 }
 
@@ -341,7 +375,11 @@ fn repair_fail_forward_is_explicitly_blocked() -> Result<(), D1Error> {
 fn verify_requires_exact_target() -> Result<(), D1Error> {
     let authority = historical_authority();
     let target = contract(
-        "catalog", "0002_b.sql", "0001_a.sql", "0003_c.sql", "history-digest",
+        "catalog",
+        "0002_b.sql",
+        "0001_a.sql",
+        "0003_c.sql",
+        "history-digest",
     );
     let result = evaluate(
         D1Action::Verify,

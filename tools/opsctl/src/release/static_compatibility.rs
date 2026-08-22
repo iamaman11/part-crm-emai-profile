@@ -1,5 +1,5 @@
-use crate::release::authority::ReleaseArchitecture;
 use crate::d1;
+use crate::release::authority::ReleaseArchitecture;
 use crate::release::digest::{canonical_json, sha256_hex};
 use crate::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
 use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
