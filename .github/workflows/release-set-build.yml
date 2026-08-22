@@ -124,7 +124,8 @@ jobs:
       - name: Create deterministic self-describing Profile Bridge v2 package
         shell: pwsh
         run: |
-          python scripts/release-set-ar11.py profile-bridge-package `
+          python scripts/profile-bridge-package.py self-test
+          python scripts/profile-bridge-package.py package `
             --source-sha "$env:SOURCE_SHA" `
             --executable target/release/profile-bridge.exe `
             --archive artifacts/ar11-profile-bridge/profile-bridge.zip `

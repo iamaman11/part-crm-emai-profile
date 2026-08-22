@@ -20,6 +20,14 @@
       "rationale": "deterministic Release Set packaging adapter; no provider network, credentials, promotion decision or provider mutation"
     },
     {
+      "path": "scripts/profile-bridge-package.py",
+      "classification": "KEEP_PYTHON",
+      "role": "profile_bridge_component_packaging_adapter",
+      "side_effect_class": "local_artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_POST_AR11_FUNCTIONAL_CLOSURE",
+      "rationale": "deterministically packages the Windows Profile Bridge component only; owns no Release Set schema, aggregate semantics, provider network, credentials, promotion decision or provider mutation"
+    },
+    {
       "path": "scripts/camouhost-runtime-package.py",
       "classification": "KEEP_PYTHON",
       "role": "runtime_component_packaging_adapter",
@@ -154,9 +162,9 @@
     ]
   },
   "current_summary": {
-    "tracked_python_files": 129,
+    "tracked_python_files": 130,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 129,
+    "KEEP_PYTHON": 130,
     "MIGRATE_TO_RUST": 0,
     "WRAP_WITH_RUST": 0
   }
