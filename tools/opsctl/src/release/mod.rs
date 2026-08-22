@@ -34,7 +34,7 @@ impl ReleaseAction {
     }
 }
 
-pub const TARGET_COMMANDS: &[&str] = &["inspect", "verify", "compatibility"];
+pub const TARGET_COMMANDS: &[&str] = &["finalize", "inspect", "verify", "compatibility"];
 pub const ACTIVATION_OWNER: &str = "AR-11";
 pub const PROVIDER_MUTATION_AUTHORITY: bool = false;
 pub const NETWORK_AUTHORITY: bool = false;
