@@ -502,8 +502,11 @@ mod tests {
             crate::release::v3_output::RELEASE_SET_V3_ID_PREFIX,
             "f".repeat(64)
         ));
-        let error = LoadedReleaseSet::parse(&serde_json::to_vec(&value)?).unwrap_err();
-        assert!(error.to_string().contains("RELEASE_IDENTITY_MISMATCH"));
+        let result = LoadedReleaseSet::parse(&serde_json::to_vec(&value)?);
+        assert!(matches!(
+            result,
+            Err(error) if error.to_string().contains("RELEASE_IDENTITY_MISMATCH")
+        ));
         Ok(())
     }
 
@@ -520,11 +523,12 @@ mod tests {
 
     #[test]
     fn unknown_release_schema_is_rejected() {
-        let error = LoadedReleaseSet::parse(br#"{"schema_version":4}"#).unwrap_err();
-        assert!(
-            error
+        let result = LoadedReleaseSet::parse(br#"{"schema_version":4}"#);
+        assert!(matches!(
+            result,
+            Err(error) if error
                 .to_string()
                 .contains("unsupported Release Set schema_version")
-        );
+        ));
     }
 }
