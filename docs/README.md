@@ -9,74 +9,96 @@ This file is a compatibility navigation entrypoint. The canonical documentation 
 - **Accepted top-level architecture slices:** AR-0 through AR-11; AR-8A…AR-8F accepted subslices.
 - **Current accepted checkpoint:** AR-11 — Release-set / Promotion Architecture.
 - **Current architecture slice:** AR-12 — Fresh Rehearsal Environment, **DERIVED CURRENT / NOT STARTED**.
-- **Current implementation authority:** Post-AR-11 Functional Closure #399, current prerequisite **PF-1 #430**.
-- **Mandatory continuation:** PF-1 #430 -> PF-2 / Draft PR #428 -> PF-3 #431 -> fresh #399/#421 re-baseline -> FC-6 -> FC-7 -> AR-12 implementation entry.
-- Issue #375 is closed historical hardening, not a current blocker.
+- **Current execution umbrella:** Post-AR-11 Functional Closure #399.
+- **Current next work:** F1/F2, then N1…N5. PF-1 #430 is blocked until those transactions are accepted.
+- Issue #375 is closed historical hardening, not a current blocker or execution authority.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
 
-### CURRENT_DELIVERY_MAP
+### Binding continuation
 
-| Delivery dimension | Current status | Scope / gate |
-|---|---|---|
-| Source implemented | **ACCEPTED THROUGH AR-11** | AR-12 is derived current and NOT STARTED. |
-| Accepted on main | **COMPLETE THROUGH AR-11** | AR-11 is latest accepted top-level checkpoint. |
-| Staging live | **PARTIAL** | AR-8C foundation is live/smoke-verified only. |
-| Production authorized | **NO** | Only AR-17 may authorize `production_core_gate`. |
-| Production enabled | **NO** | Only PC-1 may set `production_ready=true` for accepted Core after AR-17. |
-| Current blocker | **POST-AR-11 FUNCTIONAL CLOSURE #399** | PF-1/PF-2/PF-3/FC-6/FC-7 precede AR-12 implementation. |
-| Next gate | **PF-1 acceptance on protected main** | PF-2 is blocked on PF-1; FC-6 is blocked on PF-3 plus fresh re-baseline. |
+```text
+F1 Release Set version discipline
++
+F2 permanent application/opsctl/doctor/canonical-JSON/Python foundations
+ ->
+N1 AR-2 authority retirement
+ ->
+N2 AR-6 Python-estate authority retirement
+ ->
+N3 AR-7 current governance normalization
+ ->
+N4 bounded AR-8 operator/provenance cleanup
+ ->
+N5 AR-10 runtime semantic-authority retirement
+ ->
+PF-1 #430
+ ->
+PF-2 / Draft PR #428
+ ->
+PF-3 #431
+ ->
+fresh #399/#421 re-baseline
+ ->
+FC-6
+ ->
+FC-7
+ ->
+AR-12 implementation entry
+```
 
-`source_present != production_enabled` remains binding.
+F1/F2/N1…N5 are foundation/normalization transactions, not new AR/PF lifecycle slices. `source_present != production_enabled` remains binding.
 
 ## Current sources
 
 - [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — CURRENT_AUTHORITY, issue #266;
-- [`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) — subordinate target architecture/development contract;
-- [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — subordinate PF-1/PF-2/PF-3/FC-6/FC-7 execution plan;
-- [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 enforcement specification;
+- [`APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) — permanent prospective application requirements;
+- [`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) — permanent target architecture/development contract;
+- [`OPSCTL_ARCHITECTURE_BOUNDARY.md`](OPSCTL_ARCHITECTURE_BOUNDARY.md) — `opsctl` Pure Core / Effect Shell boundary;
+- [`OPSCTL_DOCTOR_CONTRACT.md`](OPSCTL_DOCTOR_CONTRACT.md) — permanent diagnostic-only `doctor` boundary;
+- [`PYTHON_USAGE_BOUNDARY.md`](PYTHON_USAGE_BOUNDARY.md) — Python role/effect policy;
+- [`PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — F1/F2 + N1…N5 prerequisite specification;
+- [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — subordinate PF/FC execution plan;
+- [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) — PF-1 contract;
+- [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 typed fitness contract;
 - [`../architecture/release-architecture-ar11.json`](../architecture/release-architecture-ar11.json) — accepted Release/Capability Profile authority;
 - [`../architecture/runtime-cutover-ar10.json`](../architecture/runtime-cutover-ar10.json) — accepted runtime-cutover authority;
 - [`../tools/opsctl/src/d1`](../tools/opsctl/src/d1) plus [`../migrations/d1`](../migrations/d1) and [`../migrations/resolver-d1`](../migrations/resolver-d1) — typed D1 policy and executable SQL migration authority;
-- [`../architecture/credential-authority.json`](../architecture/credential-authority.json), [`../architecture/credential-lifecycle.json`](../architecture/credential-lifecycle.json), [`../architecture/profile-security.json`](../architecture/profile-security.json), [`../architecture/operator-contract.json`](../architecture/operator-contract.json) — current subject authorities;
-- [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) — current product/program projection;
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) + accepted ADRs — stable architecture invariants;
-- [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md) — data/privacy authority;
-- [`THREAT_MODEL.md`](THREAT_MODEL.md) — current threat model;
-- [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) — UI architecture;
-- [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md) — accepted capability/evidence projection;
-- [`status.json`](status.json) — machine-readable state/readiness projection;
-- [`../architecture/inventory.json`](../architecture/inventory.json) — tracked generated architecture projection;
-- [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json) — immutable accepted phase ledger.
+- [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md), [`status.json`](status.json), [`../architecture/inventory.json`](../architecture/inventory.json), this README and [`INDEX.md`](INDEX.md) — projection/navigation surfaces only.
+
+Projection lag never overrides current program authority. In particular, a tracked `status.json` or `architecture/inventory.json` snapshot that still names AR-12 as the next direct gate does **not** permit bypassing F1/F2/N1…N5/PF/FC prerequisites.
 
 ## Target architecture / verification
 
-Prospective work converges incrementally rather than by a global rewrite:
-
 ```text
-canonical authorities
+canonical natural owner
 -> typed policy/contracts
 -> bounded-context domain + application
--> explicit ports/adapters/effect capabilities
+-> explicit ports/adapters/effects
 -> composition roots
 -> Release / Capability Profile admission
 -> production exposure
 ```
 
-The permanent rules include Single Authority, bounded-context ownership, inward dependencies, provider-free core, typed IDs/state/contracts, command/query separation, explicit effects, context-owned persistence, typed config, versioned integration events, frontend projection only, touch-to-converge and cutover-to-deletion.
+Permanent rules include Single Authority, bounded-context ownership, inward dependencies, provider-free core, typed critical IDs/state/contracts, Pure Core / Effect Shell, explicit effects, context-owned persistence, typed config, versioned external/integration contracts, frontend projection only, touch-to-converge and cutover-to-deletion.
 
-PF-3 #431 will make the cross-cutting rules machine-persistent through `architecture/architecture-fitness-policy.json`, Rule IDs, one primary enforcement owner per REQUIRED rule, positive/negative fixtures and an Architecture Fitness Gate. After PF-3, materially architecture-changing PF/FC/AR/PC candidates must declare Architecture Impact and pass applicable REQUIRED rules on the exact candidate head.
+PF-1 must use typed lifecycle evaluation plus bounded minimal projections rather than a global repository authority bag. `architecture/inventory.json` remains generated projection only.
+
+PF-3 semantic authority belongs to typed Rust (`FitnessRuleRegistry` or equivalent natural typed owner) with one primary enforcement owner per REQUIRED rule, positive/negative fixtures, anti-weakening and the Architecture Fitness Gate. A manually maintained semantic `architecture/architecture-fitness-policy.json` is not the target.
+
+`opsctl doctor` remains read-only local diagnostic composition. It cannot become a provider observer, process runner, runtime launcher, second authority catalog or CI substitute.
 
 No AR-0…AR-17 step may provision/promote production. AR-16 is the final whole-project convergence audit; AR-17 may authorize the Core gate while `production_ready=false`; PC-1 owns first Production Core enablement.
 
 ## Historical / evidence sources
 
-- [`PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md`](PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md) — explicit predecessor-history stub;
-- [`PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md`](PRE2J_ARCHITECTURE_REMEDIATION_PLAN.md) — accepted R1–R9 historical closeout;
-- [`ARCHITECTURE_REBASELINE_V3_AR0.md`](ARCHITECTURE_REBASELINE_V3_AR0.md) and [`ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md`](ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md) — AR-0 research/evidence;
-- [`DELIVERY_ROADMAP.md`](DELIVERY_ROADMAP.md) and [`evidence/`](evidence/) — historical delivery/evidence.
+Historical AR documents, closed execution plans, `history/**`, [`DELIVERY_ROADMAP.md`](DELIVERY_ROADMAP.md), [`evidence/`](evidence/) and Git history remain provenance/evidence. They may contain wording that was current when accepted; they do not override the current hierarchy above.
 
-Issue #203 remains predecessor history; issue #251's old real-production D3 sequence remains superseded forward execution while its repository-side foundation is preserved.
+In particular:
+
+- [`PLAN_READINESS_REVIEW.md`](PLAN_READINESS_REVIEW.md) is an early Repository-Step readiness record, not current sequencing authority;
+- [`POST_AR11_PRE_AR12_HARDENING_PLAN.md`](POST_AR11_PRE_AR12_HARDENING_PLAN.md) belongs to closed issue #375 and is historical execution evidence;
+- root `IMPLEMENTATION_PLAN.md` and `PROFILE_LIFECYCLE_PLAN.md` are superseded forward-execution entrypoints.
 
 For contributor commands and exact-head acceptance discipline see [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
