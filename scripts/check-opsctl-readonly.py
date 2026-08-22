@@ -136,6 +136,13 @@ def production(text: str) -> str:
     return text.split("#[cfg(test)]", 1)[0]
 
 
+def inject_production(source: str, fragment: str) -> str:
+    marker = "#[cfg(test)]"
+    if marker in source:
+        return source.replace(marker, f"{fragment}\n{marker}", 1)
+    return f"{source}\n{fragment}\n"
+
+
 def rust_sources(root: Path, relative: Path = SRC) -> dict[str, str]:
     source_root = root / relative
     if source_root.is_symlink() or not source_root.is_dir():
@@ -355,11 +362,17 @@ def self_test() -> None:
     expect_source_rejected("unreviewed dependency", sources, provider_manifest, lock, core_cargo, core_sources)
 
     effectful_core = dict(core_sources)
-    effectful_core["release.rs"] += '\nfn forbidden() { let _ = std::fs::read("state"); }\n'
+    effectful_core["release.rs"] = inject_production(
+        effectful_core["release.rs"],
+        'fn forbidden() { let _ = std::fs::read("state"); }',
+    )
     expect_source_rejected("pure-core filesystem effect", sources, cargo, lock, core_cargo, effectful_core)
 
     god_core = dict(core_sources)
-    god_core["release.rs"] += '\nstruct GlobalAuthoritySet;\n'
+    god_core["release.rs"] = inject_production(
+        god_core["release.rs"],
+        "struct GlobalAuthoritySet;",
+    )
     expect_source_rejected("global authority bag", sources, cargo, lock, core_cargo, god_core)
 
     with tempfile.TemporaryDirectory(prefix="opsctl-d1-negative-") as temporary:
