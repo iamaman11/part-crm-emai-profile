@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn canonical_json_uses_rfc8785_number_and_key_rules() -> Result<(), String> {
         let value = json!({
-            "numbers": [333333333.33333329_f64, 1e30_f64, 4.50_f64, 2e-3_f64, 1e-27_f64],
+            "numbers": [333_333_333.333_333_3_f64, 1e30_f64, 4.50_f64, 2e-3_f64, 1e-27_f64],
             "literals": [null, true, false]
         });
         assert_eq!(
