@@ -196,6 +196,7 @@ jobs:
           JSON
 
           for pass in 1 2; do
+            echo "post-epoch Wrangler replay pass ${pass}"
             npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB \
               --local \
               --config .wrangler/ar9-post-epoch-catalog/wrangler.jsonc \
