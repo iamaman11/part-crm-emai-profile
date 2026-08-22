@@ -176,6 +176,8 @@ foundation contract/proof
 -> external adapters
 -> one caller cutover
 -> predecessor retirement
+-> F2 closure audit/fixes
+-> invariant guards
 -> full exact-head proof
 ```
 
@@ -220,6 +222,28 @@ Product Runtime -X-> opsctl-core
 ```
 
 Dependency purity is reviewed by capability/effect, not by dependency count alone.
+
+### 4.4 Relationship between recovery steps and F1/F2
+
+`R0…R9` is an execution/recovery sequence, not a second architecture roadmap and not a decomposition in which each `R` is a separate F-step.
+
+The current combined transaction is interpreted as:
+
+```text
+R0                      recovery baseline / anti-drift setup
+R1…R7                   F1 implementation + shared F2 foundations/cutovers
+R8                      F2 closure gate
+R9                      shared F1/F2 exact-head acceptance + merge gate
+```
+
+Therefore:
+
+- `R8` is **not** a phase after F2 and must not be treated as a post-F2 checker project;
+- F2 is not complete until R8 exits successfully;
+- implementation of a real F2 boundary defect discovered during the R8 audit happens **before** the corresponding guard is accepted;
+- work explicitly assigned by binding contracts to N1/N2/N3/N4/N5/PF-1/PF-2/PF-3 is not pulled forward merely to make F2 look globally clean;
+- the generalized typed fitness registry remains PF-3 work, not R8 work;
+- one existing natural checker/owner should be strengthened where possible instead of creating parallel checker frameworks.
 
 ## 5. Step-by-step recovery sequence
 
@@ -300,20 +324,61 @@ Exit gate: no dual current Release Set semantic authority.
 - keep historical fixtures/evidence without executing retired authority;
 - prove `old_unique_current_invariants = 0`.
 
-### R8 — F2 guards from architectural invariants
+### R8 — F2 closure: gap audit, bounded fixes, invariant guards
 
-- enforce pure-core effect/representation boundaries;
-- enforce no runtime->opsctl dependency;
-- enforce no process/network/provider authority;
-- enforce version bump for breaking durable contracts;
-- reject global authority bags and generated-projection semantic inputs;
-- do not freeze arbitrary dependency/file/byte-count implementation details.
+R8 closes F2; it does not start a separate checker architecture.
 
-### R9 — Exact-head acceptance
+First perform an explicit contract-to-code audit of the F2 scope against the exact current head. Every F2 requirement must be classified as exactly one of:
+
+```text
+ALREADY_PROVED
+TRUE_F2_IMPLEMENTATION_GAP
+EXPLICITLY_OWNED_BY_LATER_BINDING_STEP
+```
+
+Rules:
+
+- `ALREADY_PROVED`: reuse existing implementation/tests/evidence; do not add duplicate machinery merely to increase checker count;
+- `TRUE_F2_IMPLEMENTATION_GAP`: fix the architecture first in its natural owner, add focused positive/negative evidence, then guard the invariant;
+- `EXPLICITLY_OWNED_BY_LATER_BINDING_STEP`: record the exact owning N/PF step and do not pull the retirement/cutover forward into F2.
+
+After all true F2 implementation gaps are closed, enforce the permanent F2 boundaries that are owned by the current transaction, including as applicable:
+
+- pure-core effect/representation boundaries;
+- no Product Runtime -> `opsctl`/`opsctl-core` dependency;
+- no `opsctl` process/network/provider authority;
+- no new/global semantic authority bag in the F1/F2-owned current path;
+- no generated projection used as semantic input by the F1/F2-owned current path;
+- Release Set breaking-contract version discipline;
+- canonical JSON/digest and duplicate-member guarantees already owned by F1/F2.
+
+Guard policy:
+
+- prefer Rust types/tests and existing natural repository checkers over new framework code;
+- one invariant gets one natural enforcement owner;
+- do not freeze arbitrary dependency counts, exact forever dependency lists, file layouts or byte counts;
+- do not build the PF-3 `FitnessRuleRegistry` early;
+- do not turn transitional N2/N4/PF-1 retirement obligations into false F2 blockers when the binding contract explicitly assigns them later.
+
+R8 exit gate:
+
+```text
+unclassified F2 requirements = 0
+true unresolved F2 implementation gaps = 0
+new duplicate checker/semantic owner = 0
+F2-owned permanent zero budgets = mechanically protected where applicable
+later-owned debt = explicitly mapped to its binding N/PF owner
+production mutation/enablement = false
+```
+
+### R9 — Exact-head acceptance and guarded merge gate
+
+R9 adds no architecture feature. It proves the completed R8 head and decides whether #445 may merge.
 
 On one exact head prove:
 
 ```text
+R8 F2 closure exit gate = PASS
 behind_by = 0
 required protected contexts = green
 reviews blocking = 0
@@ -324,7 +389,15 @@ semantic owner count per Release Set fact = 1
 production state unchanged/fail-closed
 ```
 
-Only then may the recovery PR leave Draft and enter guarded merge review.
+Merge discipline:
+
+1. PR #445 remains Draft throughout R8 implementation and its exact-head CI.
+2. Record the R8 closure checkpoint only after the R8 exact head is fully proven.
+3. Run/re-read the complete R9 hosted acceptance on that same exact head: protected contexts, divergence, reviews, threads and production fail-closed state.
+4. Only after R9 passes may #445 leave Draft and enter guarded merge review.
+5. Do not add code/document commits between the accepted R9 head and merge. Any head change invalidates R9 and requires exact-head acceptance again.
+6. Merge F1+F2 together as the current atomic foundation transaction; do not merge at R7 merely because F1 implementation is functionally complete.
+7. After merge, freshly re-read protected `main`, record the accepted-main checkpoint in #441, retire/delete the merged implementation branch where tooling permits, and only then create the N1 implementation branch from the new accepted `main`.
 
 ## 6. Mandatory per-commit checklist
 
@@ -355,11 +428,13 @@ exact shell dependency list as permanent architecture
 large finalizer that becomes a second Release Set semantic owner
 JSON round-trip used as internal semantic validation
 CI-specific architecture exceptions
+R8 implemented as a new generic checker framework
+pulling N2/N4/PF-1/PF-3 retirement work into F2 without a binding ownership reason
 ```
 
 ## 8. Recovery Definition of Done
 
-F1/F2 is complete only when protected-main candidate evidence proves:
+F1/F2 is complete only when the protected-main candidate evidence proves the current F1/F2-owned semantics and boundaries below. Legacy transitional obligations that the binding contracts explicitly assign to N1…N5/PF-1/PF-2/PF-3 remain visible debt, not hidden F2 work.
 
 ```text
 Release Set v3 breaking-contract discipline = true
@@ -367,16 +442,19 @@ one current Release Set semantic owner = true
 current writer is typed Rust-owned = true
 historical v2 is immutable and isolated or absent by proven lack of need = true
 old Python/current writer semantic authority = 0
-serde_json::Value crossing into pure core = 0
-filesystem/process/network/provider effects in pure core = 0
-opsctl provider/network/process authority = 0
-Product Runtime -> opsctl/opsctl-core dependency = 0
+serde_json::Value crossing into F1/F2 pure core = 0
+filesystem/process/network/provider effects in F1/F2 pure core = 0
+opsctl provider/network/process authority introduced/retained by F1/F2 = 0
+Product Runtime -> opsctl/opsctl-core dependency introduced/retained by F1/F2 = 0
 hidden command/composition bypass = 0
-global authority bag = 0
-generated projection used as semantic input = 0
+new/current F1/F2 semantic global authority bag = 0
+generated projection used as semantic input by F1/F2 current path = 0
 canonical digest layer has independent vectors = true
 duplicate-member ambiguity rejected where attestable = true
-breaking durable-contract change without version bump = 0
+breaking Release Set durable-contract change without version bump = 0
+unclassified F2 requirement = 0
+unresolved true F2 implementation gap = 0
+later-owned normalization debt has explicit N/PF owner = true
 architecture_complete = false
 production_core_gate = BLOCKED
 production_ready = false
