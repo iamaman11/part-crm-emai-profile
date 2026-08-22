@@ -1893,7 +1893,7 @@
       },
       "operator_contract": {
         "path": "architecture/operator-contract.json",
-        "sha256": "55067cdced8586db71824d8741e82349de52e6d3a98d27a8e57850a7967fdf50"
+        "sha256": "d427afac5d4f0d715516699fb8334e8df1dc87f2ac221de87a7103e0df73c954"
       },
       "profile_security": {
         "path": "architecture/profile-security.json",
