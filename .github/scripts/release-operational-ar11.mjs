@@ -52,11 +52,14 @@ function buildErrors(build) {
     'Build immutable cloud components once',
     'Build immutable Windows Profile Bridge component',
     'Create deterministic self-describing Profile Bridge v2 package',
-    'release-set-ar11.py build',
+    'Finalize one content-addressed Release Set v3 through opsctl',
+    'camouhost-runtime-package.py package',
+    'kind: "RELEASE_FINALIZE_REQUEST"',
+    'release finalize --request-json',
+    'release-set-v3-sha256-[0-9a-f]{64}',
     'accepted-source-evidence-ar11.py',
     'repos/$GITHUB_REPOSITORY/branches/main',
     'compare/$SOURCE_SHA...$main_sha',
-    'release verify',
     'gh release create',
     'gh release upload',
     'gh release download',
@@ -67,6 +70,7 @@ function buildErrors(build) {
     'test "$(find "$existing" -maxdepth 1 -type f | wc -l)" -eq 5',
   ], 'Release Set build'));
   errors.push(...forbidMarkers(build, [
+    'release-set-ar11.py build', 'release-set-v2-sha256-', '.release_set_schema_version == 2',
     'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEPLOY_MANIFEST_JSON', 'wrangler deploy --env production',
     'environment: production', 'terraform',
   ], 'Release Set build'));
@@ -296,6 +300,12 @@ function selfTest() {
     throw new Error('canonical AR-11 operational workflow does not satisfy its own structural validator');
   }
   execFileSync(process.execPath, [path.join(ROOT, OPERATOR), '--self-test'], { cwd: ROOT, stdio: 'inherit' });
+
+  const predecessorWriter = build.replace('release finalize --request-json', 'release-set-ar11.py build');
+  if (!buildErrors(predecessorWriter).some((error) => error.includes('release-set-ar11.py build'))) throw new Error('Python Release Set writer reintroduction fixture unexpectedly passed');
+
+  const v2Writer = build.replace('release-set-v3-sha256-', 'release-set-v2-sha256-');
+  if (!buildErrors(v2Writer).some((error) => error.includes('release-set-v2-sha256-'))) throw new Error('Release Set v2 current-writer fixture unexpectedly passed');
 
   const leaked = promotion.replace('permissions:\n      contents: read\n    outputs:', 'permissions:\n      contents: read\n    env:\n      LEAKED_DEPLOY: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n    outputs:');
   if (!promotionErrors(leaked).some((error) => error.includes('referenced exactly once'))) throw new Error('deploy-token leakage fixture unexpectedly passed');
