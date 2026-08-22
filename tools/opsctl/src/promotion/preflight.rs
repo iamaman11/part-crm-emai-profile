@@ -1,7 +1,8 @@
 use crate::promotion::plan::{PlanRequest, PromotionPlan, build};
 use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::release::compatibility::CompatibilityEvidence;
-use crate::release::model::{CompatibilityDecision, ReleaseModelError, ReleaseSetManifest};
+use crate::release::document::LoadedReleaseSet;
+use crate::release::model::{CompatibilityDecision, ReleaseModelError};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -16,13 +17,13 @@ const DEPLOY_OWNED_RESOURCES: [&str; 4] = [
 pub struct PreflightRequest<'a> {
     pub root: &'a Path,
     pub source_root: &'a Path,
-    pub target: &'a ReleaseSetManifest,
+    pub target: &'a LoadedReleaseSet,
     pub target_profile_id: &'a str,
     pub environment: &'a str,
     pub snapshot: &'a DeploymentSnapshot,
     pub compatibility_evidence: &'a CompatibilityEvidence,
-    pub current_release: Option<&'a ReleaseSetManifest>,
-    pub known_good_release: Option<&'a ReleaseSetManifest>,
+    pub current_release: Option<&'a LoadedReleaseSet>,
+    pub known_good_release: Option<&'a LoadedReleaseSet>,
     pub expected_current_release_set_id: Option<&'a str>,
 }
 
@@ -220,12 +221,13 @@ fn preflight_from_plan(
 /// and therefore blocks mutation. Exact equality is intentionally strict for protocol and
 /// runtime dimensions until an explicit compatibility window is owned by a later authority.
 fn evaluate_rollback_candidate(
-    known_good: &ReleaseSetManifest,
+    known_good: &LoadedReleaseSet,
     snapshot: &DeploymentSnapshot,
     profile_id: &str,
     resolver_required: bool,
     windows_delivery_required: bool,
 ) -> CompatibilityDecision {
+    let known_good = known_good.semantic();
     if !known_good
         .capability_profile_compatibility
         .iter()
@@ -302,8 +304,9 @@ mod tests {
     use super::evaluate_rollback_candidate;
     use crate::promotion::snapshot::DeploymentSnapshot;
     use crate::release::digest::{canonical_json, sha256_hex};
+    use crate::release::document::LoadedReleaseSet;
     use crate::release::model::ReleaseModelError;
-    use crate::release::model::{CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
+    use crate::release::model::{CompatibilityDecision, RELEASE_SET_ID_PREFIX};
     use serde_json::{Value, json};
     use std::collections::BTreeSet;
 
@@ -311,7 +314,7 @@ mod tests {
     const GIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const REPO: &str = "iamaman11/part-crm-emai-profile";
 
-    fn release() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
+    fn release() -> Result<LoadedReleaseSet, Box<dyn std::error::Error>> {
         let accepted = sha256_hex(
             canonical_json(
                 &json!({"authority":"accepted-main","commit_sha":GIT,"repository":REPO}),
@@ -350,9 +353,8 @@ mod tests {
             "{RELEASE_SET_ID_PREFIX}{}",
             sha256_hex(canonical_json(&identity)?.as_bytes())
         ));
-        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(
-            &value,
-        )?)?)
+        let bytes = serde_json::to_vec(&value)?;
+        Ok(LoadedReleaseSet::parse(&bytes)?)
     }
 
     fn snapshot() -> DeploymentSnapshot {
