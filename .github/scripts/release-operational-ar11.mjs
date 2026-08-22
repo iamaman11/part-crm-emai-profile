@@ -86,6 +86,8 @@ function operatorScriptErrors(operator) {
     "const WORKFLOW_PATH = '.github/workflows/release-set-promotion.yml'",
     "const TRANSPORT_WORKFLOW = 'AR-11 FC-6 Operator Transport'",
     "const TRANSACTION_PATH = 'docs/evidence/ar11-fc6-operator-transaction.json'",
+    "const RELEASE = 'release-set-v3-sha256-[0-9a-f]{64}'",
+    'ceremony Release Set IDs must be canonical v3 IDs',
     "kind !== 'AR11_FC6_STAGING_CEREMONY'",
     "authority !== 'TRANSPORT_REQUEST_ONLY'",
     'production_authorized !== false',
@@ -125,6 +127,7 @@ function operatorScriptErrors(operator) {
     'production_authorized: false',
   ], 'FC-6 trusted-main operator adapter'));
   errors.push(...forbidMarkers(operator, [
+    "const RELEASE = 'release-set-v2-sha256-[0-9a-f]{64}'",
     'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEPLOY_MANIFEST_JSON', 'wrangler', 'deployments: write',
     'environment: staging', 'environment: production', 'terraform', 'pull.body', 'pull_request_target',
   ], 'FC-6 trusted-main operator adapter'));
@@ -188,14 +191,24 @@ function promotionErrors(promotion) {
   errors.push(...requireMarkers(resolve, [
     "if: github.event_name == 'workflow_dispatch' && inputs.operation == 'promote'",
     'test "${{ inputs.operation }}" = promote', 'test -z "${{ inputs.source_run_id }}"',
+    '[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]',
+    '[[ "$EXPECTED_CURRENT" == NONE || "$EXPECTED_CURRENT" =~ ^release-set-v(2|3)-sha256-[0-9a-f]{64}$ ]]',
     'Prove target source was accepted protected main', "test \"$(jq -r '.protected' \"$RUNNER_TEMP/protected-main.json\")\" = true",
     'compare/$source_sha...$main_sha', 'Checkout current protected-main policy authority',
     'Checkout exact target source as read-only provenance input', 'path: target-source', 'accepted-source-evidence-ar11.py',
+    'Download and verify immutable Release Set v3 target with no provider credentials',
     'gh release download "$RELEASE_SET_ID"', 'for name in release-set.json control-plane.tar secret-resolver.tar runtime-bundle.tar profile-bridge.zip',
     'release verify', '--source-root "$GITHUB_WORKSPACE/target-source"',
+    '.release_set_schema_version == 3',
     'test "$(find "$asset_root" -maxdepth 1 -type f | wc -l)" -eq 5', '.source_accepted == true',
   ], 'promotion phase 1 resolve+verify'));
-  errors.push(...forbidMarkers(resolve, ['secrets.CLOUDFLARE_', 'environment: staging', 'wrangler deploy', 'wrangler d1 execute', 'curl --silent --show-error --output "$RUNNER_TEMP/deployments-api.json"'], 'promotion phase 1 resolve+verify'));
+  errors.push(...forbidMarkers(resolve, [
+    '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]',
+    'test "$(jq -r \'.schema_version\' "$policy_dir/release-set.json")" = 2',
+    '.release_set_schema_version == 2',
+    'secrets.CLOUDFLARE_', 'environment: staging', 'wrangler deploy', 'wrangler d1 execute',
+    'curl --silent --show-error --output "$RUNNER_TEMP/deployments-api.json"',
+  ], 'promotion phase 1 resolve+verify'));
 
   errors.push(...requireMarkers(observe, [
     'needs: resolve-verify', 'environment: staging', 'TARGET_PROFILE: rehearsal-core-v1', 'TARGET_ENVIRONMENT: staging',
@@ -213,16 +226,16 @@ function promotionErrors(promotion) {
     'needs: [resolve-verify, observe-preflight]', "if: needs.observe-preflight.outputs.decision == 'PLAN'", 'environment: staging', 'deployments: write',
     'Checkout exact target source before mutation verification', 'Download and bind exact preflight authority before provider use',
     'Re-verify fence and exact immutable Release Set before credentials', 'mutation-fence.json', "'.preflight_sha256'", "'.plan_sha256'",
-    'cmp --silent "$asset_root/release-set.json" "$preflight_root/release-set.json"', 'release verify',
+    'cmp --silent "$asset_root/release-set.json" "$preflight_root/release-set.json"', 'release verify', '.release_set_schema_version == 3',
     'Activate deploy credential after READY and exact-byte verification', 'DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
-    'Re-observe expected-current fence and deploy exact Release Set v2 bits', 'deployment-identity-ar11.py',
+    'Re-observe expected-current fence and deploy exact Release Set v3 bits', 'deployment-identity-ar11.py',
     'test "$current_id" = "$EXPECTED_CURRENT"', 'gh release download "$RELEASE_SET_ID"', '--dry-run',
     '--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v1"',
   ], 'promotion phase 3 protected mutation'));
-  errors.push(...forbidMarkers(mutate, ['worker-build --release', 'cargo build', 'npm run build', 'release-set-ar11.py build', 'release compatibility', 'promotion plan', 'promotion preflight'], 'promotion phase 3 protected mutation'));
+  errors.push(...forbidMarkers(mutate, ['.release_set_schema_version == 2', 'worker-build --release', 'cargo build', 'npm run build', 'release-set-ar11.py build', 'release compatibility', 'promotion plan', 'promotion preflight'], 'promotion phase 3 protected mutation'));
   const nativeVerify = mutate.indexOf('Re-verify fence and exact immutable Release Set before credentials');
   const deployCredential = mutate.indexOf('DEPLOY_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}');
-  const reobserveFence = mutate.indexOf('Re-observe expected-current fence and deploy exact Release Set v2 bits');
+  const reobserveFence = mutate.indexOf('Re-observe expected-current fence and deploy exact Release Set v3 bits');
   const currentFence = mutate.indexOf('test "$current_id" = "$EXPECTED_CURRENT"', reobserveFence);
   const actualDeploy = mutate.indexOf('--message "release_set=$RELEASE_SET_ID profile=rehearsal-core-v1"', reobserveFence);
   if (!(nativeVerify >= 0 && deployCredential > nativeVerify && reobserveFence > deployCredential && currentFence > reobserveFence && actualDeploy > currentFence)) {
@@ -237,7 +250,9 @@ function promotionErrors(promotion) {
 
   errors.push(...requireMarkers(rollbackNegative, [
     "if: github.event_name == 'workflow_dispatch' && inputs.operation == 'rollback-negative'", 'actions: read',
-    'Validate evidence-only intent and live source run', '.status == "completed"', '.conclusion == "success"',
+    'Validate evidence-only intent and live source run',
+    '[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]',
+    '.status == "completed"', '.conclusion == "success"',
     '.path == ".github/workflows/release-set-promotion.yml"', 'gh run download "$SOURCE_RUN_ID"',
     'Download live A-to-A preflight evidence without provider credentials', '.decision == "NO_CHANGE"', '.rollback_compatibility == "COMPATIBLE"',
     "jq '.catalog_schema_revision = null'", 'Native rollback preflight must block UNKNOWN before credentials',
@@ -245,7 +260,10 @@ function promotionErrors(promotion) {
     'ROLLBACK_COMPATIBILITY_UNKNOWN', '.credential_values_accessed == false', '.provider_mutation_executed == false', '.mutation_executed == false',
     'Upload credential-free rollback-negative evidence',
   ], 'promotion rollback-negative evidence'));
-  errors.push(...forbidMarkers(rollbackNegative, ['secrets.CLOUDFLARE_', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEPLOY_MANIFEST_JSON', 'environment: staging', 'deployments: write', 'wrangler deploy'], 'promotion rollback-negative evidence'));
+  errors.push(...forbidMarkers(rollbackNegative, [
+    '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]',
+    'secrets.CLOUDFLARE_', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_DEPLOY_MANIFEST_JSON', 'environment: staging', 'deployments: write', 'wrangler deploy',
+  ], 'promotion rollback-negative evidence'));
 
   return errors;
 }
@@ -307,10 +325,16 @@ function selfTest() {
   const v2Writer = build.replace('release-set-v3-sha256-', 'release-set-v2-sha256-');
   if (!buildErrors(v2Writer).some((error) => error.includes('release-set-v2-sha256-'))) throw new Error('Release Set v2 current-writer fixture unexpectedly passed');
 
+  const v2Target = promotion.replaceAll('[[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]', '[[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]');
+  if (!promotionErrors(v2Target).some((error) => error.includes('release-set-v2-sha256-') || error.includes('release-set-v3-sha256-'))) throw new Error('Release Set v2 current-target fixture unexpectedly passed');
+
+  const v2Operator = operator.replace("const RELEASE = 'release-set-v3-sha256-[0-9a-f]{64}'", "const RELEASE = 'release-set-v2-sha256-[0-9a-f]{64}'");
+  if (!operatorScriptErrors(v2Operator).some((error) => error.includes('release-set-v2-sha256-') || error.includes('release-set-v3-sha256-'))) throw new Error('FC-6 v2 target authority fixture unexpectedly passed');
+
   const leaked = promotion.replace('permissions:\n      contents: read\n    outputs:', 'permissions:\n      contents: read\n    env:\n      LEAKED_DEPLOY: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n    outputs:');
   if (!promotionErrors(leaked).some((error) => error.includes('referenced exactly once'))) throw new Error('deploy-token leakage fixture unexpectedly passed');
 
-  const rebuild = promotion.replace('Re-observe expected-current fence and deploy exact Release Set v2 bits', 'run: cargo build --release\n      - name: Re-observe expected-current fence and deploy exact Release Set v2 bits');
+  const rebuild = promotion.replace('Re-observe expected-current fence and deploy exact Release Set v3 bits', 'run: cargo build --release\n      - name: Re-observe expected-current fence and deploy exact Release Set v3 bits');
   if (!promotionErrors(rebuild).some((error) => error.includes('cargo build'))) throw new Error('promotion rebuild fixture unexpectedly passed');
 
   const mutate = jobBlock(promotion, 'mutate');

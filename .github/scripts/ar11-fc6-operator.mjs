@@ -9,7 +9,7 @@ const WORKFLOW = 'release-set-promotion.yml';
 const WORKFLOW_PATH = '.github/workflows/release-set-promotion.yml';
 const TRANSPORT_WORKFLOW = 'AR-11 FC-6 Operator Transport';
 const TRANSACTION_PATH = 'docs/evidence/ar11-fc6-operator-transaction.json';
-const RELEASE = 'release-set-v2-sha256-[0-9a-f]{64}';
+const RELEASE = 'release-set-v3-sha256-[0-9a-f]{64}';
 const RELEASE_ID = new RegExp(`^${RELEASE}$`);
 const SHA = /^[0-9a-f]{40}$/;
 const TRUSTED_AUDIT_ACTOR = Object.freeze({ login: 'github-actions[bot]', id: 41898282, type: 'Bot' });
@@ -67,7 +67,7 @@ function validateTransaction(value) {
   if (value.tracker_issue !== ISSUE_NUMBER) fail(`ceremony transaction tracker_issue must be ${ISSUE_NUMBER}`);
   if (value.production_authorized !== false) fail('ceremony transaction must keep production unauthorized');
   if (value.operation !== 'full-staging-ceremony') fail('ceremony transaction operation must be full-staging-ceremony');
-  if (!RELEASE_ID.test(value.release_set_a ?? '') || !RELEASE_ID.test(value.release_set_b ?? '')) fail('ceremony Release Set IDs must be canonical v2 IDs');
+  if (!RELEASE_ID.test(value.release_set_a ?? '') || !RELEASE_ID.test(value.release_set_b ?? '')) fail('ceremony Release Set IDs must be canonical v3 IDs');
   if (value.release_set_a === value.release_set_b) fail('ceremony A and B must be source-distinct Release Sets');
   if (value.initial_expected_current !== value.release_set_a) fail('ceremony initial expected-current must equal A');
   if (value.final_expected_current !== value.release_set_a) fail('ceremony final expected-current must equal A');
@@ -344,14 +344,16 @@ function expectReject(fn, marker) {
 }
 
 function selfTest() {
-  const a = `release-set-v2-sha256-${'a'.repeat(64)}`;
-  const b = `release-set-v2-sha256-${'b'.repeat(64)}`;
+  const a = `release-set-v3-sha256-${'a'.repeat(64)}`;
+  const b = `release-set-v3-sha256-${'b'.repeat(64)}`;
   const tx = { schema_version: 1, kind: 'AR11_FC6_STAGING_CEREMONY', authority: 'TRANSPORT_REQUEST_ONLY', tracker_issue: ISSUE_NUMBER, production_authorized: false, operation: 'full-staging-ceremony', release_set_a: a, release_set_b: b, initial_expected_current: a, final_expected_current: a, confirmation: `${a}:${b}:FC6` };
   const parsed = parseTransactionBytes(canonicalJson(tx));
   if (parsed.a !== a || parsed.b !== b || parsed.revision !== 1) fail('positive v1 transaction self-test failed');
   const txV2 = { schema_version: 2, kind: 'AR11_FC6_STAGING_CEREMONY', authority: 'TRANSPORT_REQUEST_ONLY', tracker_issue: ISSUE_NUMBER, production_authorized: false, operation: 'full-staging-ceremony', release_set_a: a, release_set_b: b, initial_expected_current: a, final_expected_current: a, ceremony_revision: 2, confirmation: `${a}:${b}:FC6:R2` };
   const parsedV2 = parseTransactionBytes(canonicalJson(txV2));
   if (parsedV2.revision !== 2) fail('positive v2 retry transaction self-test failed');
+  const legacyV2 = `release-set-v2-sha256-${'c'.repeat(64)}`;
+  expectReject(() => validateTransaction({ ...tx, release_set_a: legacyV2, initial_expected_current: legacyV2, final_expected_current: legacyV2, confirmation: `${legacyV2}:${b}:FC6` }), 'canonical v3 IDs');
   expectReject(() => validateTransaction({ ...txV2, ceremony_revision: 0, confirmation: `${a}:${b}:FC6:R0` }), 'positive integer');
   expectReject(() => parseTransactionBytes(JSON.stringify(tx)), 'canonical JSON bytes');
   expectReject(() => validateTransaction({ ...tx, production_authorized: true }), 'production unauthorized');
