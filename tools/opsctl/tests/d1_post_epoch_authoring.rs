@@ -108,7 +108,7 @@ fn copy_directory(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
 
 fn patch_future_specs(root: &Path) -> Result<(), Box<dyn Error>> {
     let path = root.join("tools/opsctl/src/d1/catalog.rs");
-    let source = fs::read_to_string(&path)?;
+    let source = fs::read_to_string(&path)?.replace("\r\n", "\n");
     let current = r#"    const fn future_migrations(self) -> &'static [MigrationSpec] {
         match self {
             Self::Catalog | Self::Resolver => &[],
