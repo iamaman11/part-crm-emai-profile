@@ -67,7 +67,11 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
             known_good_release: known_good.as_ref(),
             expected_current_release_set_id: request.expected_current_release_set_id,
         })?
-        .machine_json(target.release_set_id(), request.profile_id, request.environment),
+        .machine_json(
+            target.release_set_id(),
+            request.profile_id,
+            request.environment,
+        ),
         PromotionAction::Verify => verify(VerifyRequest {
             root: request.root,
             target: &target,
@@ -76,7 +80,11 @@ pub fn run(request: PromotionRunRequest<'_>) -> Result<String, ReleaseModelError
             snapshot: &snapshot,
             compatibility_evidence: &evidence,
         })?
-        .machine_json(target.release_set_id(), request.profile_id, request.environment),
+        .machine_json(
+            target.release_set_id(),
+            request.profile_id,
+            request.environment,
+        ),
     };
 
     serde_json::to_string_pretty(&value)

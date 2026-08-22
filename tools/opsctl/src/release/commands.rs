@@ -33,7 +33,8 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
             let artifact_root = request
                 .artifact_root
                 .ok_or_else(|| ReleaseModelError::new("release verify requires --artifact-root"))?;
-            let (_, source_verification) = verify_release_source(request.release_set, &release_set)?;
+            let (_, source_verification) =
+                verify_release_source(request.release_set, &release_set)?;
             let static_blockers =
                 static_compatibility::evaluate(request.source_root, release_set.semantic(), false)?;
             if !static_blockers.is_empty() {
