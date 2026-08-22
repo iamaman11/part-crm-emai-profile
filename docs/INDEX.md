@@ -53,16 +53,17 @@ F1/F2/N1…N5 are foundation/normalization transactions, not AR/PF lifecycle sli
 1. [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — single current architecture/program execution authority.
 2. [`APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) — permanent prospective application architecture requirements.
 3. [`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) — permanent quality/evolution rules.
-4. [`OPSCTL_ARCHITECTURE_BOUNDARY.md`](OPSCTL_ARCHITECTURE_BOUNDARY.md) — permanent standalone `opsctl` pure-core/adapter/effect boundary.
-5. [`OPSCTL_DOCTOR_CONTRACT.md`](OPSCTL_DOCTOR_CONTRACT.md) — permanent `opsctl doctor` diagnostic boundary.
-6. [`PYTHON_USAGE_BOUNDARY.md`](PYTHON_USAGE_BOUNDARY.md) — Python role/effect/authority policy.
-7. [`PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — F1/F2 + N1…N5 prerequisite specification.
-8. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — subordinate execution plan through FC-7.
-9. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) — PF-1 detailed lifecycle/inventory cutover contract.
-10. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 typed fitness semantics/enforcement contract.
-11. Stable bounded authorities such as [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) and current domain/runtime/release contracts.
-12. [`../architecture/inventory.json`](../architecture/inventory.json), `status.json`, `DEVELOPMENT_PLAN.md`, this index and README entrypoints — generated/current projections only.
-13. Historical AR/evidence documents — provenance, not automatically current semantic authorities.
+4. [`ARCHITECTURE_ENFORCEMENT_GUARDRAILS.md`](ARCHITECTURE_ENFORCEMENT_GUARDRAILS.md) — subordinate mechanical-enforcement and anti-centralization guardrails; it adds no roadmap or semantic registry.
+5. [`OPSCTL_ARCHITECTURE_BOUNDARY.md`](OPSCTL_ARCHITECTURE_BOUNDARY.md) — permanent standalone `opsctl` pure-core/adapter/effect boundary.
+6. [`OPSCTL_DOCTOR_CONTRACT.md`](OPSCTL_DOCTOR_CONTRACT.md) — permanent `opsctl doctor` diagnostic boundary.
+7. [`PYTHON_USAGE_BOUNDARY.md`](PYTHON_USAGE_BOUNDARY.md) — Python role/effect/authority policy.
+8. [`PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — F1/F2 + N1…N5 prerequisite specification.
+9. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — subordinate execution plan through FC-7.
+10. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) — PF-1 detailed lifecycle/inventory cutover contract.
+11. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 typed fitness semantics/enforcement contract.
+12. Stable bounded authorities such as [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) and current domain/runtime/release contracts.
+13. [`../architecture/inventory.json`](../architecture/inventory.json), `status.json`, `DEVELOPMENT_PLAN.md`, this index and README entrypoints — generated/current projections only.
+14. Historical AR/evidence documents — provenance, not automatically current semantic authorities.
 
 An open PR/branch never outranks accepted protected `main`.
 
@@ -89,6 +90,8 @@ Product Runtime -> opsctl = forbidden
 generated projection used as semantic source = forbidden
 cutover -> zero callers -> zero unique current invariants -> delete DEAD predecessor
 ```
+
+Mechanical anti-regression follows [`ARCHITECTURE_ENFORCEMENT_GUARDRAILS.md`](ARCHITECTURE_ENFORCEMENT_GUARDRAILS.md): prefer structural/type/dependency enforcement over prose or grep-only convention; aggregate proofs without centralizing bounded policy; keep DTOs boundary-local; prohibit god-core/global-authority designs and semantic round-trips through generated projections.
 
 ## `opsctl` navigation
 
