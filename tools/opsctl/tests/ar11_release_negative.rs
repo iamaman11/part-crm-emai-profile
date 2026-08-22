@@ -1,6 +1,6 @@
 use opsctl::release::digest::{canonical_json, sha256_hex};
 use opsctl::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
-use opsctl::release::model::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
+use opsctl::release::model::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest, parse_json};
 use opsctl::release::static_compatibility;
 use serde_json::{Value, json};
 use std::io;
@@ -134,7 +134,7 @@ fn fixture_value() -> Result<Value, Box<dyn std::error::Error>> {
         .as_bytes(),
     );
     let mut value = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{SHA_A}"),
         "source": {
             "repository": REPOSITORY,
@@ -182,10 +182,8 @@ fn resign(value: &mut Value) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn parse(value: &Value) -> Result<ReleaseSetManifest, String> {
-    ReleaseSetManifest::parse_json(
-        &serde_json::to_string(value).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())
+    parse_json(&serde_json::to_string(value).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())
 }
 
 fn require_error(
