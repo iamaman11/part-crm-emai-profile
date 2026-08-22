@@ -180,17 +180,14 @@ pub fn parse_release_set_v3_dto(bytes: &[u8]) -> Result<ReleaseSetV3Dto, Release
             format!("Release Set v3 input is not UTF-8: {error}"),
         )
     })?;
-    let value = parse_strict_json_with_limits(
-        input,
-        MAX_RELEASE_SET_V3_BYTES,
-        DEFAULT_MAX_JSON_DEPTH,
-    )
-    .map_err(|error| {
-        ReleaseSetV3DtoError::new(
-            ReleaseSetV3DtoErrorKind::JsonAdmission,
-            format!("Release Set v3 strict JSON admission failed: {error}"),
-        )
-    })?;
+    let value =
+        parse_strict_json_with_limits(input, MAX_RELEASE_SET_V3_BYTES, DEFAULT_MAX_JSON_DEPTH)
+            .map_err(|error| {
+                ReleaseSetV3DtoError::new(
+                    ReleaseSetV3DtoErrorKind::JsonAdmission,
+                    format!("Release Set v3 strict JSON admission failed: {error}"),
+                )
+            })?;
     let dto: ReleaseSetV3Dto = serde_json::from_value(value).map_err(|error| {
         ReleaseSetV3DtoError::new(
             ReleaseSetV3DtoErrorKind::DtoShape,
@@ -673,10 +670,7 @@ mod tests {
     #[test]
     fn strict_v3_dto_converts_directly_to_and_from_pure_core() -> Result<(), String> {
         let dto = valid_dto();
-        let model = dto
-            .clone()
-            .into_core()
-            .map_err(|error| error.to_string())?;
+        let model = dto.clone().into_core().map_err(|error| error.to_string())?;
         assert_eq!(model.schema_version, core::ReleaseSetSchemaVersion::V3);
         assert_eq!(ReleaseSetV3Dto::from(&model), dto);
 
