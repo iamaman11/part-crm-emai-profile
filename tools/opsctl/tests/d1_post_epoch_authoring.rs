@@ -71,7 +71,11 @@ fn copy_directory(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
         } else if entry.file_type()?.is_file() {
             fs::copy(source_path, target_path)?;
         } else {
-            return Err(format!("unexpected non-regular fixture entry: {}", source_path.display()).into());
+            return Err(format!(
+                "unexpected non-regular fixture entry: {}",
+                source_path.display()
+            )
+            .into());
         }
     }
     Ok(())
@@ -102,7 +106,9 @@ fn patch_future_catalog_spec(root: &Path) -> Result<(), Box<dyn Error>> {
     }
 "#;
     if source.matches(current).count() != 1 {
-        return Err("canonical empty future-migration sentinel changed; update the post-epoch proof".into());
+        return Err(
+            "canonical empty future-migration sentinel changed; update the post-epoch proof".into(),
+        );
     }
     fs::write(path, source.replacen(current, future, 1))?;
     Ok(())
@@ -189,7 +195,8 @@ fn component<'a>(projection: &'a Value, id: &str) -> Result<&'a Value, Box<dyn E
 }
 
 #[test]
-fn first_post_epoch_catalog_migration_runs_through_real_authoring_path() -> Result<(), Box<dyn Error>> {
+fn first_post_epoch_catalog_migration_runs_through_real_authoring_path()
+-> Result<(), Box<dyn Error>> {
     let repository = TempRepository::from_current()?;
     let root = repository.root();
     let historical = historical_catalog_names(root)?;
@@ -244,7 +251,10 @@ fn first_post_epoch_catalog_migration_runs_through_real_authoring_path() -> Resu
     assert_eq!(compatibility["ledger_state"], "BEHIND_KNOWN_PREFIX");
     assert_eq!(compatibility["decision"], "MIGRATION_REQUIRED");
     assert_eq!(compatibility["allowed"], true);
-    assert_eq!(compatibility["planned_migrations"], json!([FUTURE_REVISION]));
+    assert_eq!(
+        compatibility["planned_migrations"],
+        json!([FUTURE_REVISION])
+    );
     assert_eq!(
         compatibility["planned_migration_contracts"][0]["migration_class"],
         "EXPAND"
