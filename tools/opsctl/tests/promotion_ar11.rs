@@ -5,7 +5,7 @@ use opsctl::promotion::snapshot::DeploymentSnapshot;
 use opsctl::release::compatibility::CompatibilityEvidence;
 use opsctl::release::digest::{canonical_json, sha256_hex};
 use opsctl::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
-use opsctl::release::model::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
+use opsctl::release::model::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest, parse_json};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -154,7 +154,7 @@ fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
         build_provenance,
     } = static_compatibility_fields()?;
     let mut value = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{SHA_A}"),
         "source": {
             "repository": REPOSITORY,
@@ -189,9 +189,7 @@ fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
         .remove("release_set_id");
     let digest = sha256_hex(canonical_json(&identity)?.as_bytes());
     value["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{digest}"));
-    Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(
-        &value,
-    )?)?)
+    Ok(parse_json(&serde_json::to_string(&value)?)?)
 }
 
 fn evidence(
@@ -352,7 +350,7 @@ fn stale_expected_current_is_rejected_before_plan_creation()
         snapshot: &snapshot,
         compatibility_evidence: &compatibility,
         current_release: Some(&target),
-        expected_current_release_set_id: Some("release-set-v2-sha256-stale"),
+        expected_current_release_set_id: Some("release-set-v3-sha256-stale"),
     });
     assert!(result.is_err());
     Ok(())
