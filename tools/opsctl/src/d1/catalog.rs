@@ -606,10 +606,8 @@ mod tests {
             directory.join("0002_oauth_refresh_fencing.sql"),
             b"SELECT 1;\n",
         )?;
-        let error = match RepositoryMigrationCatalog::load(
-            repository.root(),
-            D1Component::Resolver,
-        ) {
+        let error = match RepositoryMigrationCatalog::load(repository.root(), D1Component::Resolver)
+        {
             Ok(_) => return Err("tampered historical SQL unexpectedly passed".into()),
             Err(error) => error,
         };
@@ -627,10 +625,8 @@ mod tests {
         let directory = repository.root().join("migrations/resolver-d1");
         copy_resolver_epoch(&directory)?;
         fs::remove_file(directory.join("0003_lookup_hmac_versions.sql"))?;
-        let error = match RepositoryMigrationCatalog::load(
-            repository.root(),
-            D1Component::Resolver,
-        ) {
+        let error = match RepositoryMigrationCatalog::load(repository.root(), D1Component::Resolver)
+        {
             Ok(_) => return Err("missing historical SQL unexpectedly passed".into()),
             Err(error) => error,
         };
@@ -648,10 +644,8 @@ mod tests {
         let directory = repository.root().join("migrations/resolver-d1");
         copy_resolver_epoch(&directory)?;
         fs::write(directory.join("0005_unowned.sql"), b"SELECT 1;\n")?;
-        let error = match RepositoryMigrationCatalog::load(
-            repository.root(),
-            D1Component::Resolver,
-        ) {
+        let error = match RepositoryMigrationCatalog::load(repository.root(), D1Component::Resolver)
+        {
             Ok(_) => return Err("unowned post-epoch SQL unexpectedly passed".into()),
             Err(error) => error,
         };

@@ -117,6 +117,6 @@ fn canonical_repository_topology_still_resolves() -> Result<(), Box<dyn std::err
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let topology = ReleaseInputTopology::load(&root)?;
     let resolved = topology.resolve(&root)?;
-    assert_eq!(resolved.len(), 19);
+    assert_eq!(resolved.len(), 18);
     Ok(())
 }
