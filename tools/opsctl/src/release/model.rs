@@ -1,11 +1,17 @@
+use crate::canonical::parse_strict_json;
 use crate::release::digest::{canonical_json, sha256_hex};
+pub use opsctl_core::release::{
+    ArtifactIdentity, BuildProvenanceIdentity, CompatibilityDecision, ContractsIdentity,
+    EXPECTED_REPOSITORY, ProtocolIdentity, ProvenanceFileIdentity, RELEASE_SET_ID_PREFIX_V3,
+    ReleaseComponentIdentity, ReleaseModelError, ReleaseSetManifest, ReleaseSetSchemaVersion,
+    ReleaseSetSource, RuntimeCompatibilityIdentity, SchemaCompatibilityWindow, SchemaIdentity,
+};
+use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::{Display, Formatter};
 
-pub const RELEASE_SET_SCHEMA_VERSION: u64 = 2;
-pub const RELEASE_SET_ID_PREFIX: &str = "release-set-v2-sha256-";
-pub const EXPECTED_REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
+pub const RELEASE_SET_SCHEMA_VERSION: u64 = ReleaseSetSchemaVersion::CURRENT.number();
+pub const RELEASE_SET_ID_PREFIX: &str = RELEASE_SET_ID_PREFIX_V3;
 const REQUIRED_COMPONENTS: [&str; 3] = ["control_plane", "secret_resolver", "runtime_bundle"];
 const ALLOWED_COMPONENTS: [&str; 5] = [
     "control_plane",
@@ -14,231 +20,275 @@ const ALLOWED_COMPONENTS: [&str; 5] = [
     "runtime_bundle",
     "profile_bridge",
 ];
+const MAX_JCS_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompatibilityDecision {
-    Compatible,
-    Incompatible,
-    Unknown,
+pub fn parse_json(input: &str) -> Result<ReleaseSetManifest, ReleaseModelError> {
+    let value = parse_strict_json(input)
+        .map_err(|error| ReleaseModelError::new(format!("invalid release-set JSON: {error}")))?;
+    let root = object(&value, "release-set root")?;
+    reject_unknown_fields(
+        root,
+        &[
+            "schema_version",
+            "release_set_id",
+            "display_version",
+            "source",
+            "components",
+            "contracts",
+            "protocols",
+            "schemas",
+            "runtime_compatibility",
+            "capability_profile_compatibility",
+            "build_provenance",
+            "artifact_inventory",
+        ],
+        "release-set root",
+    )?;
+    let schema_version = ReleaseSetSchemaVersion::from_number(required_u64(root, "schema_version")?)?;
+    let release_set_id = required_string(root, "release_set_id")?;
+    validate_release_set_id(&release_set_id, schema_version)?;
+    let display_version = optional_string(root, "display_version")?;
+    let source = parse_source(required(root, "source")?)?;
+    let components = parse_components(required(root, "components")?, &source.commit_sha)?;
+    let artifact_inventory = parse_artifact_inventory(required(root, "artifact_inventory")?)?;
+    validate_component_artifacts(&components, &artifact_inventory)?;
+    let contracts = parse_contracts(required(root, "contracts")?)?;
+    let protocols = parse_protocols(required(root, "protocols")?)?;
+    let schemas = parse_schemas(required(root, "schemas")?)?;
+    let runtime_compatibility = parse_runtime(required(root, "runtime_compatibility")?)?;
+    let capability_profile_compatibility =
+        required_string_array(root, "capability_profile_compatibility")?;
+    if capability_profile_compatibility.is_empty() {
+        return Err(ReleaseModelError::new(
+            "capability_profile_compatibility must not be empty",
+        ));
+    }
+    let build_provenance = parse_build_provenance(required(root, "build_provenance")?)?;
+    let manifest = ReleaseSetManifest {
+        schema_version,
+        release_set_id,
+        display_version,
+        source,
+        components,
+        contracts,
+        protocols,
+        schemas,
+        runtime_compatibility,
+        capability_profile_compatibility,
+        build_provenance,
+        artifact_inventory,
+    };
+    verify_content_address(&manifest)?;
+    Ok(manifest)
 }
 
-impl CompatibilityDecision {
-    pub fn parse(value: &str) -> Result<Self, ReleaseModelError> {
-        match value {
-            "COMPATIBLE" => Ok(Self::Compatible),
-            "INCOMPATIBLE" => Ok(Self::Incompatible),
-            "UNKNOWN" => Ok(Self::Unknown),
-            other => Err(ReleaseModelError::new(format!(
-                "unsupported compatibility decision: {other}"
-            ))),
+pub fn verify_content_address(manifest: &ReleaseSetManifest) -> Result<(), ReleaseModelError> {
+    let identity = ReleaseSetIdentityV3::from_manifest(manifest);
+    let value = serde_json::to_value(identity).map_err(|error| {
+        ReleaseModelError::new(format!("cannot encode typed Release Set v3 identity: {error}"))
+    })?;
+    let canonical = canonical_json(&value).map_err(ReleaseModelError::new)?;
+    let expected = format!(
+        "{}{}",
+        manifest.schema_version.id_prefix(),
+        sha256_hex(canonical.as_bytes())
+    );
+    if manifest.release_set_id != expected {
+        return Err(ReleaseModelError::new(format!(
+            "RELEASE_IDENTITY_MISMATCH: expected {expected}, observed {}",
+            manifest.release_set_id
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct ReleaseSetIdentityV3<'a> {
+    schema_version: u64,
+    source: SourceIdentityV3<'a>,
+    components: BTreeMap<&'a str, ComponentIdentityV3<'a>>,
+    contracts: ContractsIdentityV3<'a>,
+    protocols: ProtocolIdentityV3<'a>,
+    schemas: SchemasIdentityV3<'a>,
+    runtime_compatibility: RuntimeIdentityV3<'a>,
+    capability_profile_compatibility: Vec<&'a str>,
+    build_provenance: BuildIdentityV3<'a>,
+    artifact_inventory: Vec<ArtifactIdentityV3<'a>>,
+}
+
+impl<'a> ReleaseSetIdentityV3<'a> {
+    fn from_manifest(manifest: &'a ReleaseSetManifest) -> Self {
+        Self {
+            schema_version: manifest.schema_version.number(),
+            source: SourceIdentityV3 {
+                repository: &manifest.source.repository,
+                commit_sha: &manifest.source.commit_sha,
+                accepted_main: manifest.source.accepted_main,
+                accepted_main_evidence_sha256: &manifest.source.accepted_main_evidence_sha256,
+            },
+            components: manifest
+                .components
+                .iter()
+                .map(|(id, component)| {
+                    (
+                        id.as_str(),
+                        ComponentIdentityV3 {
+                            release_id: &component.release_id,
+                            source_commit_sha: &component.source_commit_sha,
+                            artifact_path: &component.artifact_path,
+                            artifact_sha256: &component.artifact_sha256,
+                            artifact_size_bytes: component.artifact_size_bytes,
+                            component_manifest_sha256: &component.component_manifest_sha256,
+                        },
+                    )
+                })
+                .collect(),
+            contracts: ContractsIdentityV3 {
+                files: manifest
+                    .contracts
+                    .files
+                    .iter()
+                    .map(|entry| ProvenanceFileIdentityV3 {
+                        path: &entry.path,
+                        sha256: &entry.sha256,
+                        size_bytes: entry.size_bytes,
+                    })
+                    .collect(),
+                sha256: &manifest.contracts.sha256,
+            },
+            protocols: ProtocolIdentityV3 {
+                public_api_contract_sha256: &manifest.protocols.public_api_contract_sha256,
+                camouhost_ipc_version: manifest.protocols.camouhost_ipc_version,
+                profile_bridge_protocol_version: manifest.protocols.profile_bridge_protocol_version,
+                resolver_protocol: &manifest.protocols.resolver_protocol,
+            },
+            schemas: SchemasIdentityV3 {
+                d1_repository_identity_sha256: &manifest.schemas.d1_repository_identity_sha256,
+                catalog: SchemaWindowV3::from_window(&manifest.schemas.catalog),
+                resolver: SchemaWindowV3::from_window(&manifest.schemas.resolver),
+            },
+            runtime_compatibility: RuntimeIdentityV3 {
+                runtime_lock_sha256: &manifest.runtime_compatibility.runtime_lock_sha256,
+                runtime_role: &manifest.runtime_compatibility.runtime_role,
+                profile_format: &manifest.runtime_compatibility.profile_format,
+                browser_identity_policy: &manifest.runtime_compatibility.browser_identity_policy,
+            },
+            capability_profile_compatibility: manifest
+                .capability_profile_compatibility
+                .iter()
+                .map(String::as_str)
+                .collect(),
+            build_provenance: BuildIdentityV3 {
+                cargo_lock_sha256: &manifest.build_provenance.cargo_lock_sha256,
+                rust_toolchain_sha256: &manifest.build_provenance.rust_toolchain_sha256,
+                frontend_lock_sha256: &manifest.build_provenance.frontend_lock_sha256,
+                release_architecture_sha256: &manifest.build_provenance.release_architecture_sha256,
+            },
+            artifact_inventory: manifest
+                .artifact_inventory
+                .iter()
+                .map(|entry| ArtifactIdentityV3 {
+                    path: &entry.path,
+                    sha256: &entry.sha256,
+                    size_bytes: entry.size_bytes,
+                    kind: &entry.kind,
+                })
+                .collect(),
         }
     }
-
-    #[must_use]
-    pub const fn is_compatible(self) -> bool {
-        matches!(self, Self::Compatible)
-    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReleaseSetSource {
-    pub repository: String,
-    pub commit_sha: String,
-    pub accepted_main: bool,
-    pub accepted_main_evidence_sha256: String,
+#[derive(Serialize)]
+struct SourceIdentityV3<'a> {
+    repository: &'a str,
+    commit_sha: &'a str,
+    accepted_main: bool,
+    accepted_main_evidence_sha256: &'a str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReleaseComponentIdentity {
-    pub component_id: String,
-    pub release_id: String,
-    pub source_commit_sha: String,
-    pub artifact_path: String,
-    pub artifact_sha256: String,
-    pub artifact_size_bytes: u64,
-    pub component_manifest_sha256: String,
+#[derive(Serialize)]
+struct ComponentIdentityV3<'a> {
+    release_id: &'a str,
+    source_commit_sha: &'a str,
+    artifact_path: &'a str,
+    artifact_sha256: &'a str,
+    artifact_size_bytes: u64,
+    component_manifest_sha256: &'a str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArtifactIdentity {
-    pub path: String,
-    pub sha256: String,
-    pub size_bytes: u64,
-    pub kind: String,
+#[derive(Serialize)]
+struct ProvenanceFileIdentityV3<'a> {
+    path: &'a str,
+    sha256: &'a str,
+    size_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProvenanceFileIdentity {
-    pub path: String,
-    pub sha256: String,
-    pub size_bytes: u64,
+#[derive(Serialize)]
+struct ContractsIdentityV3<'a> {
+    files: Vec<ProvenanceFileIdentityV3<'a>>,
+    sha256: &'a str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContractsIdentity {
-    pub files: Vec<ProvenanceFileIdentity>,
-    pub sha256: String,
+#[derive(Serialize)]
+struct ProtocolIdentityV3<'a> {
+    public_api_contract_sha256: &'a str,
+    camouhost_ipc_version: u64,
+    profile_bridge_protocol_version: u64,
+    resolver_protocol: &'a str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProtocolIdentity {
-    pub public_api_contract_sha256: String,
-    pub camouhost_ipc_version: u64,
-    pub profile_bridge_protocol_version: u64,
-    pub resolver_protocol: String,
+#[derive(Serialize)]
+struct SchemaWindowV3<'a> {
+    database_component: &'a str,
+    target_schema_revision: &'a str,
+    supported_schema_min: &'a str,
+    supported_schema_max: &'a str,
+    migration_history_digest: &'a str,
+    compatibility_policy_digest: &'a str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchemaCompatibilityWindow {
-    pub database_component: String,
-    pub target_schema_revision: String,
-    pub supported_schema_min: String,
-    pub supported_schema_max: String,
-    pub migration_history_digest: String,
-    pub compatibility_policy_digest: String,
-}
-
-impl SchemaCompatibilityWindow {
-    #[must_use]
-    pub fn supports(&self, revision: &str) -> bool {
-        revision >= self.supported_schema_min.as_str()
-            && revision <= self.supported_schema_max.as_str()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchemaIdentity {
-    pub d1_repository_identity_sha256: String,
-    pub catalog: SchemaCompatibilityWindow,
-    pub resolver: SchemaCompatibilityWindow,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeCompatibilityIdentity {
-    pub runtime_lock_sha256: String,
-    pub runtime_role: String,
-    pub profile_format: String,
-    pub browser_identity_policy: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BuildProvenanceIdentity {
-    pub cargo_lock_sha256: String,
-    pub rust_toolchain_sha256: String,
-    pub frontend_lock_sha256: String,
-    pub release_architecture_sha256: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReleaseSetManifest {
-    pub schema_version: u64,
-    pub release_set_id: String,
-    pub display_version: Option<String>,
-    pub source: ReleaseSetSource,
-    pub components: BTreeMap<String, ReleaseComponentIdentity>,
-    pub contracts: ContractsIdentity,
-    pub protocols: ProtocolIdentity,
-    pub schemas: SchemaIdentity,
-    pub runtime_compatibility: RuntimeCompatibilityIdentity,
-    pub capability_profile_compatibility: Vec<String>,
-    pub build_provenance: BuildProvenanceIdentity,
-    pub artifact_inventory: Vec<ArtifactIdentity>,
-    identity_payload: Value,
-}
-
-impl ReleaseSetManifest {
-    pub fn parse_json(input: &str) -> Result<Self, ReleaseModelError> {
-        let value: Value = serde_json::from_str(input).map_err(|error| {
-            ReleaseModelError::new(format!("invalid release-set JSON: {error}"))
-        })?;
-        let root = object(&value, "release-set root")?;
-        reject_unknown_fields(
-            root,
-            &[
-                "schema_version",
-                "release_set_id",
-                "display_version",
-                "source",
-                "components",
-                "contracts",
-                "protocols",
-                "schemas",
-                "runtime_compatibility",
-                "capability_profile_compatibility",
-                "build_provenance",
-                "artifact_inventory",
-            ],
-            "release-set root",
-        )?;
-        let schema_version = required_u64(root, "schema_version")?;
-        if schema_version != RELEASE_SET_SCHEMA_VERSION {
-            return Err(ReleaseModelError::new(format!(
-                "unsupported release-set schema_version: {schema_version}; only v2 is supported before first production release"
-            )));
+impl<'a> SchemaWindowV3<'a> {
+    fn from_window(window: &'a SchemaCompatibilityWindow) -> Self {
+        Self {
+            database_component: &window.database_component,
+            target_schema_revision: &window.target_schema_revision,
+            supported_schema_min: &window.supported_schema_min,
+            supported_schema_max: &window.supported_schema_max,
+            migration_history_digest: &window.migration_history_digest,
+            compatibility_policy_digest: &window.compatibility_policy_digest,
         }
-        let release_set_id = required_string(root, "release_set_id")?;
-        validate_release_set_id(&release_set_id)?;
-        let display_version = optional_string(root, "display_version")?;
-        let source = parse_source(required(root, "source")?)?;
-        let components = parse_components(required(root, "components")?, &source.commit_sha)?;
-        let artifact_inventory = parse_artifact_inventory(required(root, "artifact_inventory")?)?;
-        validate_component_artifacts(&components, &artifact_inventory)?;
-        let contracts = parse_contracts(required(root, "contracts")?)?;
-        let protocols = parse_protocols(required(root, "protocols")?)?;
-        let schemas = parse_schemas(required(root, "schemas")?)?;
-        let runtime_compatibility = parse_runtime(required(root, "runtime_compatibility")?)?;
-        let capability_profile_compatibility =
-            required_string_array(root, "capability_profile_compatibility")?;
-        if capability_profile_compatibility.is_empty() {
-            return Err(ReleaseModelError::new(
-                "capability_profile_compatibility must not be empty",
-            ));
-        }
-        let build_provenance = parse_build_provenance(required(root, "build_provenance")?)?;
-        let mut identity_payload = value.clone();
-        let payload = identity_payload
-            .as_object_mut()
-            .ok_or_else(|| ReleaseModelError::new("release-set root must remain an object"))?;
-        payload.remove("release_set_id");
-        payload.remove("display_version");
-        let manifest = Self {
-            schema_version,
-            release_set_id,
-            display_version,
-            source,
-            components,
-            contracts,
-            protocols,
-            schemas,
-            runtime_compatibility,
-            capability_profile_compatibility,
-            build_provenance,
-            artifact_inventory,
-            identity_payload,
-        };
-        manifest.verify_content_address()?;
-        Ok(manifest)
     }
+}
 
-    pub fn verify_content_address(&self) -> Result<(), ReleaseModelError> {
-        let canonical = canonical_json(&self.identity_payload).map_err(ReleaseModelError::new)?;
-        let expected = format!(
-            "{RELEASE_SET_ID_PREFIX}{}",
-            sha256_hex(canonical.as_bytes())
-        );
-        if self.release_set_id != expected {
-            return Err(ReleaseModelError::new(format!(
-                "RELEASE_IDENTITY_MISMATCH: expected {expected}, observed {}",
-                self.release_set_id
-            )));
-        }
-        Ok(())
-    }
+#[derive(Serialize)]
+struct SchemasIdentityV3<'a> {
+    d1_repository_identity_sha256: &'a str,
+    catalog: SchemaWindowV3<'a>,
+    resolver: SchemaWindowV3<'a>,
+}
 
-    #[must_use]
-    pub fn component_ids(&self) -> Vec<&str> {
-        self.components.keys().map(String::as_str).collect()
-    }
+#[derive(Serialize)]
+struct RuntimeIdentityV3<'a> {
+    runtime_lock_sha256: &'a str,
+    runtime_role: &'a str,
+    profile_format: &'a str,
+    browser_identity_policy: &'a str,
+}
+
+#[derive(Serialize)]
+struct BuildIdentityV3<'a> {
+    cargo_lock_sha256: &'a str,
+    rust_toolchain_sha256: &'a str,
+    frontend_lock_sha256: &'a str,
+    release_architecture_sha256: &'a str,
+}
+
+#[derive(Serialize)]
+struct ArtifactIdentityV3<'a> {
+    path: &'a str,
+    sha256: &'a str,
+    size_bytes: u64,
+    kind: &'a str,
 }
 
 fn parse_source(value: &Value) -> Result<ReleaseSetSource, ReleaseModelError> {
@@ -272,12 +322,12 @@ fn parse_source(value: &Value) -> Result<ReleaseSetSource, ReleaseModelError> {
         &accepted_main_evidence_sha256,
         "source.accepted_main_evidence_sha256",
     )?;
-    let legacy_identity = serde_json::json!({
+    let identity = serde_json::json!({
         "authority": "accepted-main",
         "commit_sha": commit_sha,
         "repository": repository,
     });
-    let canonical = canonical_json(&legacy_identity).map_err(ReleaseModelError::new)?;
+    let canonical = canonical_json(&identity).map_err(ReleaseModelError::new)?;
     if accepted_main_evidence_sha256 != sha256_hex(canonical.as_bytes()) {
         return Err(ReleaseModelError::new(
             "SOURCE_NOT_ACCEPTED: accepted-main identity binding is invalid",
@@ -344,7 +394,7 @@ fn parse_components(
             &artifact_sha256,
             &format!("components.{component_id}.artifact_sha256"),
         )?;
-        let artifact_size_bytes = required_u64(component, "artifact_size_bytes")?;
+        let artifact_size_bytes = required_jcs_u64(component, "artifact_size_bytes")?;
         if artifact_size_bytes == 0 {
             return Err(ReleaseModelError::new(format!(
                 "components.{component_id}.artifact_size_bytes must be positive"
@@ -396,7 +446,7 @@ fn parse_contracts(value: &Value) -> Result<ContractsIdentity, ReleaseModelError
         }
         let sha256 = required_string(entry, "sha256")?;
         validate_sha256_like(&sha256, "contracts.files.sha256")?;
-        let size_bytes = required_u64(entry, "size_bytes")?;
+        let size_bytes = required_jcs_u64(entry, "size_bytes")?;
         if size_bytes == 0 {
             return Err(ReleaseModelError::new(
                 "contracts file size must be positive",
@@ -434,8 +484,8 @@ fn parse_protocols(value: &Value) -> Result<ProtocolIdentity, ReleaseModelError>
         &public_api_contract_sha256,
         "protocols.public_api_contract_sha256",
     )?;
-    let camouhost_ipc_version = required_u64(root, "camouhost_ipc_version")?;
-    let profile_bridge_protocol_version = required_u64(root, "profile_bridge_protocol_version")?;
+    let camouhost_ipc_version = required_jcs_u64(root, "camouhost_ipc_version")?;
+    let profile_bridge_protocol_version = required_jcs_u64(root, "profile_bridge_protocol_version")?;
     if camouhost_ipc_version == 0 || profile_bridge_protocol_version == 0 {
         return Err(ReleaseModelError::new("protocol versions must be positive"));
     }
@@ -564,18 +614,9 @@ fn parse_build_provenance(value: &Value) -> Result<BuildProvenanceIdentity, Rele
     let release_architecture_sha256 = required_string(root, "release_architecture_sha256")?;
     for (value, field) in [
         (&cargo_lock_sha256, "build_provenance.cargo_lock_sha256"),
-        (
-            &rust_toolchain_sha256,
-            "build_provenance.rust_toolchain_sha256",
-        ),
-        (
-            &frontend_lock_sha256,
-            "build_provenance.frontend_lock_sha256",
-        ),
-        (
-            &release_architecture_sha256,
-            "build_provenance.release_architecture_sha256",
-        ),
+        (&rust_toolchain_sha256, "build_provenance.rust_toolchain_sha256"),
+        (&frontend_lock_sha256, "build_provenance.frontend_lock_sha256"),
+        (&release_architecture_sha256, "build_provenance.release_architecture_sha256"),
     ] {
         validate_sha256_like(value, field)?;
     }
@@ -612,7 +653,7 @@ fn parse_artifact_inventory(value: &Value) -> Result<Vec<ArtifactIdentity>, Rele
         }
         let sha256 = required_string(item, "sha256")?;
         validate_sha256_like(&sha256, &format!("artifact_inventory.{path}.sha256"))?;
-        let size_bytes = required_u64(item, "size_bytes")?;
+        let size_bytes = required_jcs_u64(item, "size_bytes")?;
         if size_bytes == 0 {
             return Err(ReleaseModelError::new(format!(
                 "artifact {path} has zero size"
@@ -621,7 +662,7 @@ fn parse_artifact_inventory(value: &Value) -> Result<Vec<ArtifactIdentity>, Rele
         let kind = required_string(item, "kind")?;
         if kind != "component" {
             return Err(ReleaseModelError::new(format!(
-                "Release Set v2 artifact {path} must be a component archive, observed kind={kind}"
+                "Release Set v3 artifact {path} must be a component archive, observed kind={kind}"
             )));
         }
         result.push(ArtifactIdentity {
@@ -682,27 +723,6 @@ pub fn validate_artifact_path(path: &str) -> Result<(), ReleaseModelError> {
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReleaseModelError {
-    message: String,
-}
-
-impl ReleaseModelError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl Display for ReleaseModelError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for ReleaseModelError {}
-
 fn required<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a Value, ReleaseModelError> {
     object
         .get(key)
@@ -751,6 +771,16 @@ fn required_u64(object: &Map<String, Value>, key: &str) -> Result<u64, ReleaseMo
     required(object, key)?
         .as_u64()
         .ok_or_else(|| ReleaseModelError::new(format!("field {key} must be an unsigned integer")))
+}
+
+fn required_jcs_u64(object: &Map<String, Value>, key: &str) -> Result<u64, ReleaseModelError> {
+    let value = required_u64(object, key)?;
+    if value > MAX_JCS_SAFE_INTEGER {
+        return Err(ReleaseModelError::new(format!(
+            "field {key} exceeds RFC 8785/I-JSON safe integer range"
+        )));
+    }
+    Ok(value)
 }
 
 fn required_string_array(
@@ -805,11 +835,15 @@ fn reject_unknown_fields(
     Ok(())
 }
 
-fn validate_release_set_id(value: &str) -> Result<(), ReleaseModelError> {
-    let digest = value.strip_prefix(RELEASE_SET_ID_PREFIX).ok_or_else(|| {
-        ReleaseModelError::new(
-            "release_set_id must use the only supported release-set-v2-sha256 prefix",
-        )
+fn validate_release_set_id(
+    value: &str,
+    version: ReleaseSetSchemaVersion,
+) -> Result<(), ReleaseModelError> {
+    let digest = value.strip_prefix(version.id_prefix()).ok_or_else(|| {
+        ReleaseModelError::new(format!(
+            "release_set_id must use the schema-owned {} prefix",
+            version.id_prefix()
+        ))
     })?;
     validate_sha256_like(digest, "release_set_id digest")
 }
@@ -842,7 +876,7 @@ fn validate_sha256_like(value: &str, field: &str) -> Result<(), ReleaseModelErro
 
 #[cfg(test)]
 mod tests {
-    use super::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
+    use super::{RELEASE_SET_ID_PREFIX, ReleaseSetSchemaVersion, parse_json};
     use crate::release::digest::{canonical_json, sha256_hex};
     use serde_json::{Value, json};
 
@@ -879,7 +913,7 @@ mod tests {
             })
         };
         let mut value = json!({
-            "schema_version":2,
+            "schema_version":3,
             "release_set_id":format!("{RELEASE_SET_ID_PREFIX}{SHA}"),
             "source":{"repository":REPO,"commit_sha":GIT,"accepted_main":true,"accepted_main_evidence_sha256":accepted},
             "components":{
@@ -912,13 +946,33 @@ mod tests {
     }
 
     #[test]
-    fn accepts_v2_and_rejects_v1() -> Result<(), Box<dyn std::error::Error>> {
+    fn accepts_v3_and_rejects_v2() -> Result<(), Box<dyn std::error::Error>> {
         let input = signed_fixture()?;
-        assert_eq!(ReleaseSetManifest::parse_json(&input)?.schema_version, 2);
-        let v1 = input
-            .replace("\"schema_version\":2", "\"schema_version\":1")
-            .replace("release-set-v2-sha256-", "release-set-v1-sha256-");
-        assert!(ReleaseSetManifest::parse_json(&v1).is_err());
+        assert_eq!(parse_json(&input)?.schema_version, ReleaseSetSchemaVersion::V3);
+        let v2 = input
+            .replace("\"schema_version\":3", "\"schema_version\":2")
+            .replace("release-set-v3-sha256-", "release-set-v2-sha256-");
+        assert!(parse_json(&v2).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_members_fail_closed_before_semantic_decode() -> Result<(), Box<dyn std::error::Error>> {
+        let input = signed_fixture()?;
+        let duplicate = input.replacen("{", "{\"schema_version\":3,", 1);
+        assert!(parse_json(&duplicate).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn display_version_is_not_part_of_semantic_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let input = signed_fixture()?;
+        let manifest = parse_json(&input)?;
+        let mut with_display: Value = serde_json::from_str(&input)?;
+        with_display["display_version"] = Value::String("human-label-only".to_owned());
+        let rendered = serde_json::to_string(&with_display)?;
+        let reparsed = parse_json(&rendered)?;
+        assert_eq!(manifest.release_set_id, reparsed.release_set_id);
         Ok(())
     }
 }
