@@ -151,6 +151,118 @@ jobs:
           assert status['mutation_executed'] is False, status
           PY
 
+      - name: Prove first post-epoch Catalog and Resolver SQL with pinned Wrangler
+        run: |
+          mkdir -p artifacts/d1-evolution
+          mkdir -p .wrangler/ar9-post-epoch-catalog/migrations .wrangler/ar9-post-epoch-catalog/state
+          mkdir -p .wrangler/ar9-post-epoch-resolver/migrations .wrangler/ar9-post-epoch-resolver/state
+
+          cp migrations/d1/*.sql .wrangler/ar9-post-epoch-catalog/migrations/
+          cp tests/d1-evolution/post-epoch/catalog/0027_post_epoch_probe.sql \
+            .wrangler/ar9-post-epoch-catalog/migrations/
+          cp migrations/resolver-d1/*.sql .wrangler/ar9-post-epoch-resolver/migrations/
+          cp tests/d1-evolution/post-epoch/resolver/0005_post_epoch_probe.sql \
+            .wrangler/ar9-post-epoch-resolver/migrations/
+
+          cat > .wrangler/ar9-post-epoch-catalog/wrangler.jsonc <<'JSON'
+          {
+            "name": "ar9-post-epoch-catalog-proof",
+            "main": "../../tests/d1-runtime/worker.mjs",
+            "compatibility_date": "2026-08-05",
+            "d1_databases": [
+              {
+                "binding": "CATALOG_DB",
+                "database_name": "ar9-post-epoch-catalog-proof",
+                "database_id": "00000000-0000-0000-0000-000000000027",
+                "migrations_dir": "migrations"
+              }
+            ]
+          }
+          JSON
+          cat > .wrangler/ar9-post-epoch-resolver/wrangler.jsonc <<'JSON'
+          {
+            "name": "ar9-post-epoch-resolver-proof",
+            "main": "../../tests/d1-runtime/worker.mjs",
+            "compatibility_date": "2026-08-05",
+            "d1_databases": [
+              {
+                "binding": "RESOLVER_DB",
+                "database_name": "ar9-post-epoch-resolver-proof",
+                "database_id": "00000000-0000-0000-0000-000000000005",
+                "migrations_dir": "migrations"
+              }
+            ]
+          }
+          JSON
+
+          for pass in 1 2; do
+            echo "post-epoch Wrangler replay pass ${pass}"
+            npx --yes wrangler@4.94.0 d1 migrations apply CATALOG_DB \
+              --local \
+              --config .wrangler/ar9-post-epoch-catalog/wrangler.jsonc \
+              --persist-to .wrangler/ar9-post-epoch-catalog/state \
+              --experimental-provision=false \
+              --experimental-auto-create=false
+            npx --yes wrangler@4.94.0 d1 migrations apply RESOLVER_DB \
+              --local \
+              --config .wrangler/ar9-post-epoch-resolver/wrangler.jsonc \
+              --persist-to .wrangler/ar9-post-epoch-resolver/state \
+              --experimental-provision=false \
+              --experimental-auto-create=false
+          done
+
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB \
+            --local \
+            --config .wrangler/ar9-post-epoch-catalog/wrangler.jsonc \
+            --persist-to .wrangler/ar9-post-epoch-catalog/state \
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-evolution/post-epoch-catalog-ledger.json
+          npx --yes wrangler@4.94.0 d1 execute CATALOG_DB \
+            --local \
+            --config .wrangler/ar9-post-epoch-catalog/wrangler.jsonc \
+            --persist-to .wrangler/ar9-post-epoch-catalog/state \
+            --command "SELECT COUNT(*) AS present FROM sqlite_master WHERE type='table' AND name='ar9_post_epoch_catalog_probe'" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-evolution/post-epoch-catalog-table.json
+          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
+            --local \
+            --config .wrangler/ar9-post-epoch-resolver/wrangler.jsonc \
+            --persist-to .wrangler/ar9-post-epoch-resolver/state \
+            --command "SELECT id, name FROM d1_migrations ORDER BY id" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-evolution/post-epoch-resolver-ledger.json
+          npx --yes wrangler@4.94.0 d1 execute RESOLVER_DB \
+            --local \
+            --config .wrangler/ar9-post-epoch-resolver/wrangler.jsonc \
+            --persist-to .wrangler/ar9-post-epoch-resolver/state \
+            --command "SELECT COUNT(*) AS present FROM sqlite_master WHERE type='table' AND name='ar9_post_epoch_resolver_probe'" \
+            --json \
+            --experimental-provision=false \
+            --experimental-auto-create=false > artifacts/d1-evolution/post-epoch-resolver-table.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          catalog = json.loads(Path('artifacts/d1-evolution/post-epoch-catalog-ledger.json').read_text())
+          resolver = json.loads(Path('artifacts/d1-evolution/post-epoch-resolver-ledger.json').read_text())
+          catalog_table = json.loads(Path('artifacts/d1-evolution/post-epoch-catalog-table.json').read_text())
+          resolver_table = json.loads(Path('artifacts/d1-evolution/post-epoch-resolver-table.json').read_text())
+
+          catalog_rows = catalog[0]['results']
+          resolver_rows = resolver[0]['results']
+          assert len(catalog_rows) == 27, catalog_rows
+          assert catalog_rows[-1]['name'] == '0027_post_epoch_probe.sql', catalog_rows[-1]
+          assert len(resolver_rows) == 5, resolver_rows
+          assert resolver_rows[-1]['name'] == '0005_post_epoch_probe.sql', resolver_rows[-1]
+          assert catalog_table[0]['results'][0]['present'] == 1, catalog_table
+          assert resolver_table[0]['results'][0]['present'] == 1, resolver_table
+          PY
+
       - name: Prove Wrangler partial failure leaves a valid canonical prefix
         run: |
           mkdir -p .wrangler/ar9-partial/migrations .wrangler/ar9-partial/state
