@@ -1,7 +1,8 @@
-//! Project-specific release policy namespace.
+//! Project-specific release contract and policy namespace.
 //!
-//! AR-11 owns semantic activation. The module remains a local policy engine:
-//! no provider credentials, network clients, deployment execution or mutation authority.
+//! Release Set semantics are owned by the typed pure core. This outer module owns
+//! local filesystem/JSON adapters only; it has no provider credentials, network
+//! clients, deployment execution or production mutation authority.
 
 pub mod artifact;
 pub mod authority;
@@ -9,10 +10,14 @@ pub mod commands;
 pub mod compatibility;
 pub mod component_manifest;
 pub mod digest;
+pub mod document;
+pub mod finalize;
 pub mod input_topology;
 pub mod model;
 pub mod source;
 pub mod static_compatibility;
+pub mod v3_dto;
+pub mod v3_output;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseAction {
@@ -32,7 +37,7 @@ impl ReleaseAction {
     }
 }
 
-pub const TARGET_COMMANDS: &[&str] = &["inspect", "verify", "compatibility"];
+pub const TARGET_COMMANDS: &[&str] = &["finalize", "inspect", "verify", "compatibility"];
 pub const ACTIVATION_OWNER: &str = "AR-11";
 pub const PROVIDER_MUTATION_AUTHORITY: bool = false;
 pub const NETWORK_AUTHORITY: bool = false;

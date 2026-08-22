@@ -4,8 +4,9 @@ use opsctl::promotion::preflight::{PreflightRequest, evaluate as preflight};
 use opsctl::promotion::snapshot::DeploymentSnapshot;
 use opsctl::release::compatibility::CompatibilityEvidence;
 use opsctl::release::digest::{canonical_json, sha256_hex};
+use opsctl::release::document::LoadedReleaseSet;
 use opsctl::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
-use opsctl::release::model::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
+use opsctl::release::model::RELEASE_SET_ID_PREFIX;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -144,7 +145,7 @@ fn component(release_id: &str, path: &str, digest: &str, size: u64) -> Value {
     })
 }
 
-fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
+fn release_set() -> Result<LoadedReleaseSet, Box<dyn std::error::Error>> {
     let evidence = accepted_main_evidence()?;
     let StaticCompatibilityFields {
         contracts,
@@ -189,9 +190,8 @@ fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
         .remove("release_set_id");
     let digest = sha256_hex(canonical_json(&identity)?.as_bytes());
     value["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{digest}"));
-    Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(
-        &value,
-    )?)?)
+    let bytes = serde_json::to_vec(&value)?;
+    Ok(LoadedReleaseSet::parse(&bytes)?)
 }
 
 fn evidence(
@@ -228,10 +228,11 @@ fn evidence(
 fn converged_snapshot(
     environment: &str,
     profile_id: &str,
-    release: &ReleaseSetManifest,
+    release: &LoadedReleaseSet,
 ) -> Result<DeploymentSnapshot, Box<dyn std::error::Error>> {
     let closure = load_closure(&repo_root(), profile_id)?;
-    let component_release_ids = release
+    let semantic = release.semantic();
+    let component_release_ids = semantic
         .components
         .iter()
         .map(|(id, component)| (id.clone(), component.release_id.clone()))
@@ -241,24 +242,24 @@ fn converged_snapshot(
     Ok(DeploymentSnapshot {
         environment: environment.to_owned(),
         collected_at: "2026-08-21T00:00:00Z".to_owned(),
-        release_set_id: Some(release.release_set_id.clone()),
+        release_set_id: Some(release.release_set_id().to_owned()),
         capability_profile_id: Some(profile_id.to_owned()),
         component_release_ids,
         logical_resources: closure.required_resources,
         logical_bindings: closure.required_bindings,
         logical_credentials: closure.required_credentials,
         catalog_ledger_sha256: Some(SHA_A.to_owned()),
-        catalog_schema_revision: Some(release.schemas.catalog.target_schema_revision.clone()),
+        catalog_schema_revision: Some(semantic.schemas.catalog.target_schema_revision.clone()),
         resolver_ledger_sha256: None,
         resolver_schema_revision: None,
-        contracts_sha256: Some(release.contracts.sha256.clone()),
-        resolver_protocol: Some(release.protocols.resolver_protocol.clone()),
-        camouhost_ipc_version: Some(release.protocols.camouhost_ipc_version),
-        profile_bridge_protocol_version: Some(release.protocols.profile_bridge_protocol_version),
-        runtime_role: Some(release.runtime_compatibility.runtime_role.clone()),
-        profile_format: Some(release.runtime_compatibility.profile_format.clone()),
+        contracts_sha256: Some(semantic.contracts.sha256.clone()),
+        resolver_protocol: Some(semantic.protocols.resolver_protocol.clone()),
+        camouhost_ipc_version: Some(semantic.protocols.camouhost_ipc_version),
+        profile_bridge_protocol_version: Some(semantic.protocols.profile_bridge_protocol_version),
+        runtime_role: Some(semantic.runtime_compatibility.runtime_role.clone()),
+        profile_format: Some(semantic.runtime_compatibility.profile_format.clone()),
         browser_identity_policy: Some(
-            release
+            semantic
                 .runtime_compatibility
                 .browser_identity_policy
                 .clone(),
@@ -272,7 +273,7 @@ fn converged_staging_plan_is_no_change_and_preflight_ready()
     let root = repo_root();
     let target = release_set()?;
     let snapshot = converged_snapshot("staging", "rehearsal-core-v1", &target)?;
-    let compatibility = evidence(&target.release_set_id, "UNKNOWN")?;
+    let compatibility = evidence(target.release_set_id(), "UNKNOWN")?;
 
     let plan = build(PlanRequest {
         root: &root,
@@ -283,7 +284,7 @@ fn converged_staging_plan_is_no_change_and_preflight_ready()
         snapshot: &snapshot,
         compatibility_evidence: &compatibility,
         current_release: Some(&target),
-        expected_current_release_set_id: Some(&target.release_set_id),
+        expected_current_release_set_id: Some(target.release_set_id()),
     })?;
     assert_eq!(plan.decision, "NO_CHANGE");
     assert!(plan.actions.is_empty());
@@ -298,7 +299,7 @@ fn converged_staging_plan_is_no_change_and_preflight_ready()
         compatibility_evidence: &compatibility,
         current_release: Some(&target),
         known_good_release: Some(&target),
-        expected_current_release_set_id: Some(&target.release_set_id),
+        expected_current_release_set_id: Some(target.release_set_id()),
     })?;
     assert!(result.ready, "staging blockers: {:?}", result.blockers);
     Ok(())
@@ -310,7 +311,7 @@ fn production_remains_blocked_even_with_compatible_saved_evidence()
     let root = repo_root();
     let target = release_set()?;
     let snapshot = converged_snapshot("production", "production-core-v1", &target)?;
-    let compatibility = evidence(&target.release_set_id, "COMPATIBLE")?;
+    let compatibility = evidence(target.release_set_id(), "COMPATIBLE")?;
     let plan = build(PlanRequest {
         root: &root,
         source_root: &root,
@@ -320,7 +321,7 @@ fn production_remains_blocked_even_with_compatible_saved_evidence()
         snapshot: &snapshot,
         compatibility_evidence: &compatibility,
         current_release: Some(&target),
-        expected_current_release_set_id: Some(&target.release_set_id),
+        expected_current_release_set_id: Some(target.release_set_id()),
     })?;
     assert_eq!(plan.decision, "BLOCKED");
     assert!(
@@ -342,7 +343,7 @@ fn stale_expected_current_is_rejected_before_plan_creation()
     let root = repo_root();
     let target = release_set()?;
     let snapshot = converged_snapshot("staging", "rehearsal-core-v1", &target)?;
-    let compatibility = evidence(&target.release_set_id, "UNKNOWN")?;
+    let compatibility = evidence(target.release_set_id(), "UNKNOWN")?;
     let result = build(PlanRequest {
         root: &root,
         source_root: &root,

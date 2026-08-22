@@ -2,8 +2,8 @@
 """Project saved Cloudflare observations into DeploymentSnapshot v2.
 
 Observation-only adapter. It never authorizes deployment, infers compatibility, reads
-secret values, or maintains hidden release state. v1 snapshots/releases are intentionally
-unsupported before first production release.
+secret values, or maintains hidden release state. Provider deployment identity is delegated
+to deployment-identity-ar11.py, and Release Set semantics are delegated to native opsctl.
 """
 
 from __future__ import annotations
@@ -12,11 +12,12 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
-RELEASE_RE = re.compile(r"release_set=(release-set-v2-sha256-[0-9a-f]{64})\s+profile=([a-z0-9-]+)")
 MIGRATION_RE = re.compile(r"^[0-9]{4}_[a-z0-9_]+\.sql$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CORE_BINDINGS = {
@@ -82,18 +83,6 @@ def latest_migration_revision(value: Any, label: str) -> str:
     return names[-1]
 
 
-def current_identity(deployment_status: Any) -> tuple[str | None, str | None]:
-    observed: set[tuple[str, str]] = set()
-    for value in strings(deployment_status):
-        for match in RELEASE_RE.finditer(value):
-            observed.add((match.group(1), match.group(2)))
-    if len(observed) > 1:
-        fail(f"provider deployment state contains ambiguous Release Set identities: {sorted(observed)}")
-    if not observed:
-        return None, None
-    return next(iter(observed))
-
-
 def object_value(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         fail(f"{label} must be a JSON object")
@@ -119,6 +108,53 @@ def required_uint(value: dict[str, Any], field: str, label: str) -> int:
     if not isinstance(observed, int) or isinstance(observed, bool) or observed < 0:
         fail(f"{label}.{field} must be an unsigned integer")
     return observed
+
+
+def repository_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def run_command(command: list[str], label: str) -> subprocess.CompletedProcess[str]:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=repository_root(),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise SnapshotError(f"{label} could not start: {error}") from error
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip() or f"exit {completed.returncode}"
+        fail(f"{label} failed: {detail}")
+    return completed
+
+
+def deployment_identity_from_output(value: Any) -> tuple[str | None, str | None]:
+    identity = object_value(value, "deployment identity observation")
+    if identity.get("schema_version") != 2 or identity.get("kind") != "DEPLOYMENT_IDENTITY_OBSERVATION":
+        fail("deployment identity observation identity/version is invalid")
+    release_set_id = identity.get("release_set_id")
+    profile_id = identity.get("capability_profile_id")
+    if release_set_id is None and profile_id is None:
+        return None, None
+    if not isinstance(release_set_id, str) or not release_set_id:
+        fail("deployment identity observation release_set_id is invalid")
+    if not isinstance(profile_id, str) or not profile_id:
+        fail("deployment identity observation capability_profile_id is invalid")
+    return release_set_id, profile_id
+
+
+def observe_deployment_identity(status_path: Path) -> tuple[str | None, str | None]:
+    adapter = Path(__file__).resolve().with_name("deployment-identity-ar11.py")
+    with tempfile.TemporaryDirectory(prefix="ar11-deployment-identity-") as directory:
+        output = Path(directory) / "identity.json"
+        run_command(
+            [sys.executable, str(adapter), "--status", str(status_path), "--output", str(output)],
+            "deployment identity adapter",
+        )
+        return deployment_identity_from_output(load(output, "deployment identity observation"))
 
 
 def rendered_core(config: dict[str, Any], environment: str) -> dict[str, Any]:
@@ -186,49 +222,87 @@ def empty_compatibility() -> dict[str, Any]:
     }
 
 
+def release_observation_from_inspect(
+    value: Any,
+    release_set_id: str,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    inspection = object_value(value, "native Release Set inspection")
+    if (
+        inspection.get("schema_version") != 1
+        or inspection.get("command") != "release.inspect"
+        or inspection.get("decision") != "VALID"
+        or inspection.get("mutation_executed") is not False
+    ):
+        fail("current Release Set inspection is not normal native release.inspect output")
+    if inspection.get("release_set_schema_version") not in {2, 3}:
+        fail("current Release Set inspection reports an unsupported external schema")
+    if inspection.get("release_set_id") != release_set_id:
+        fail("current Release Set inspection does not match provider deployment annotation")
+
+    component_values = object_value(inspection.get("component_release_ids"), "native component_release_ids")
+    component_ids: dict[str, str] = {}
+    for component_id, component_release_id in component_values.items():
+        if not isinstance(component_id, str) or not component_id:
+            fail("native component_release_ids contains an invalid component id")
+        if not isinstance(component_release_id, str) or not component_release_id:
+            fail(f"native component_release_ids.{component_id} must be a non-empty string")
+        component_ids[component_id] = component_release_id
+
+    compatibility_value = object_value(inspection.get("compatibility_identity"), "native compatibility_identity")
+    compatibility = {
+        "contracts_sha256": required_sha256(compatibility_value, "contracts_sha256", "native compatibility_identity"),
+        "resolver_protocol": required_string(compatibility_value, "resolver_protocol", "native compatibility_identity"),
+        "camouhost_ipc_version": required_uint(compatibility_value, "camouhost_ipc_version", "native compatibility_identity"),
+        "profile_bridge_protocol_version": required_uint(
+            compatibility_value,
+            "profile_bridge_protocol_version",
+            "native compatibility_identity",
+        ),
+        "runtime_role": required_string(compatibility_value, "runtime_role", "native compatibility_identity"),
+        "profile_format": required_string(compatibility_value, "profile_format", "native compatibility_identity"),
+        "browser_identity_policy": required_string(
+            compatibility_value,
+            "browser_identity_policy",
+            "native compatibility_identity",
+        ),
+    }
+    return component_ids, compatibility
+
+
 def current_release_observation(
     path: Path | None,
     release_set_id: str | None,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     if release_set_id is None:
         if path is not None:
-            fail("current Release Set manifest supplied while provider reports no current Release Set")
+            fail("current Release Set supplied while provider reports no current Release Set")
         return {}, empty_compatibility()
     if path is None:
-        fail("provider reports a current Release Set but its immutable manifest was not supplied")
-    value = object_value(load(path, "current Release Set manifest"), "current Release Set manifest")
-    if value.get("schema_version") != 2:
-        fail("current provider Release Set is not schema v2")
-    if value.get("release_set_id") != release_set_id:
-        fail("current Release Set manifest does not match provider deployment annotation")
-
-    components = object_value(value.get("components"), "current Release Set components")
-    component_ids: dict[str, str] = {}
-    for name, row in components.items():
-        entry = object_value(row, f"current component {name}")
-        component_ids[name] = required_string(entry, "release_id", f"current component {name}")
-
-    contracts = object_value(value.get("contracts"), "current Release Set contracts")
-    protocols = object_value(value.get("protocols"), "current Release Set protocols")
-    runtime = object_value(value.get("runtime_compatibility"), "current Release Set runtime_compatibility")
-    compatibility = {
-        "contracts_sha256": required_sha256(contracts, "sha256", "current Release Set contracts"),
-        "resolver_protocol": required_string(protocols, "resolver_protocol", "current Release Set protocols"),
-        "camouhost_ipc_version": required_uint(protocols, "camouhost_ipc_version", "current Release Set protocols"),
-        "profile_bridge_protocol_version": required_uint(
-            protocols,
-            "profile_bridge_protocol_version",
-            "current Release Set protocols",
-        ),
-        "runtime_role": required_string(runtime, "runtime_role", "current Release Set runtime_compatibility"),
-        "profile_format": required_string(runtime, "profile_format", "current Release Set runtime_compatibility"),
-        "browser_identity_policy": required_string(
-            runtime,
-            "browser_identity_policy",
-            "current Release Set runtime_compatibility",
-        ),
-    }
-    return component_ids, compatibility
+        fail("provider reports a current Release Set but its immutable document was not supplied")
+    root = repository_root()
+    completed = run_command(
+        [
+            "cargo",
+            "run",
+            "--locked",
+            "--quiet",
+            "--manifest-path",
+            str(root / "tools/opsctl/Cargo.toml"),
+            "--",
+            "--root",
+            str(root),
+            "release",
+            "inspect",
+            "--release-set",
+            str(path),
+        ],
+        "native Release Set inspection",
+    )
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise SnapshotError(f"native Release Set inspection emitted invalid JSON: {error}") from error
+    return release_observation_from_inspect(value, release_set_id)
 
 
 def build(args: argparse.Namespace) -> dict[str, Any]:
@@ -244,7 +318,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     control = object_value(deploy_manifest.get("control_plane", deploy_manifest), "control_plane deploy manifest")
     selected = rendered_core(config, "staging")
 
-    release_set_id, profile_id = current_identity(deployment_status)
+    release_set_id, profile_id = observe_deployment_identity(args.deployment_status)
     components, compatibility = current_release_observation(args.current_release_set, release_set_id)
     logical_resources: set[str] = set()
     if deployment_status not in ({}, [], None):
@@ -310,21 +384,56 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def native_inspection_fixture(schema_version: int, release_set_id: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "command": "release.inspect",
+        "decision": "VALID",
+        "release_set_schema_version": schema_version,
+        "release_set_id": release_set_id,
+        "component_release_ids": {"control-plane": "control-plane-test"},
+        "compatibility_identity": {
+            "contracts_sha256": "a" * 64,
+            "resolver_protocol": "resolver-v1",
+            "camouhost_ipc_version": 1,
+            "profile_bridge_protocol_version": 1,
+            "runtime_role": "desktop-profile-runtime",
+            "profile_format": "profile-v1",
+            "browser_identity_policy": "stable",
+        },
+        "mutation_executed": False,
+    }
+
+
 def self_test() -> None:
-    first = {"annotations": {"workers/message": "release_set=release-set-v2-sha256-" + "a" * 64 + " profile=rehearsal-core-v1"}}
-    second = {"message": "release_set=release-set-v2-sha256-" + "b" * 64 + " profile=rehearsal-core-v1"}
-    if current_identity(first)[0] is None:
-        fail("current Release Set v2 marker fixture was not detected")
-    if current_identity({"message": "release_set=release-set-v1-sha256-" + "a" * 64 + " profile=rehearsal-core-v1"})[0] is not None:
-        fail("legacy Release Set v1 marker unexpectedly retained executable compatibility")
+    v2 = "release-set-v2-sha256-" + "a" * 64
+    v3 = "release-set-v3-sha256-" + "b" * 64
+    profile = "rehearsal-core-v1"
+    for release_id in (v2, v3):
+        if deployment_identity_from_output(
+            {
+                "schema_version": 2,
+                "kind": "DEPLOYMENT_IDENTITY_OBSERVATION",
+                "release_set_id": release_id,
+                "capability_profile_id": profile,
+            }
+        ) != (release_id, profile):
+            fail("deployment identity observation fixture was not retained")
+        components, compatibility = release_observation_from_inspect(
+            native_inspection_fixture(2 if release_id == v2 else 3, release_id),
+            release_id,
+        )
+        if components != {"control-plane": "control-plane-test"} or compatibility["contracts_sha256"] != "a" * 64:
+            fail("native Release Set inspection projection fixture drifted")
+    try:
+        release_observation_from_inspect(native_inspection_fixture(4, v3), v3)
+    except SnapshotError:
+        pass
+    else:
+        fail("unsupported native Release Set inspection schema unexpectedly passed")
     if any(value is not None for value in empty_compatibility().values()):
         fail("fresh-environment compatibility observation must be UNKNOWN/null")
-    try:
-        current_identity([first, second])
-    except SnapshotError:
-        print("AR-11 DeploymentSnapshot v2 adapter self-test passed.")
-        return
-    fail("ambiguous deployment identity fixture unexpectedly passed")
+    print("AR-11 DeploymentSnapshot v2 adapter self-test passed.")
 
 
 def main() -> int:

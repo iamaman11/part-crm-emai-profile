@@ -1,7 +1,8 @@
 use crate::promotion::authority::load_closure;
 use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::release::compatibility::CompatibilityEvidence;
-use crate::release::model::{CompatibilityDecision, ReleaseModelError, ReleaseSetManifest};
+use crate::release::document::LoadedReleaseSet;
+use crate::release::model::{CompatibilityDecision, ReleaseModelError};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -28,7 +29,7 @@ impl VerificationDecision {
 
 pub struct VerifyRequest<'a> {
     pub root: &'a Path,
-    pub target: &'a ReleaseSetManifest,
+    pub target: &'a LoadedReleaseSet,
     pub target_profile_id: &'a str,
     pub environment: &'a str,
     pub snapshot: &'a DeploymentSnapshot,
@@ -70,7 +71,7 @@ pub fn verify(request: VerifyRequest<'_>) -> Result<VerifyResult, ReleaseModelEr
             vec!["ENVIRONMENT_IDENTITY_MISMATCH".to_owned()],
         ));
     }
-    if request.compatibility_evidence.release_set_id != request.target.release_set_id {
+    if request.compatibility_evidence.release_set_id != request.target.release_set_id() {
         return Ok(result(
             VerificationDecision::Unknown,
             vec!["COMPATIBILITY_EVIDENCE_RELEASE_MISMATCH".to_owned()],
@@ -78,12 +79,13 @@ pub fn verify(request: VerifyRequest<'_>) -> Result<VerifyResult, ReleaseModelEr
     }
 
     let closure = load_closure(request.root, request.target_profile_id)?;
+    let target = request.target.semantic();
     let mut drift = Vec::new();
     let mut incomplete = Vec::new();
     let mut unknown = Vec::new();
 
     match request.snapshot.release_set_id.as_deref() {
-        Some(observed) if observed == request.target.release_set_id => {}
+        Some(observed) if observed == request.target.release_set_id() => {}
         Some(_) => drift.push("DEPLOYED_RELEASE_SET_MISMATCH".to_owned()),
         None => incomplete.push("DEPLOYED_RELEASE_SET_ID_MISSING".to_owned()),
     }
@@ -93,8 +95,7 @@ pub fn verify(request: VerifyRequest<'_>) -> Result<VerifyResult, ReleaseModelEr
         None => incomplete.push("ACTIVE_CAPABILITY_PROFILE_ID_MISSING".to_owned()),
     }
 
-    let expected_components = request
-        .target
+    let expected_components = target
         .components
         .iter()
         .filter(|(id, _)| closure.required_components.contains(*id))

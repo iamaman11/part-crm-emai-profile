@@ -1,5 +1,6 @@
 use crate::release::digest::{canonical_json, sha256_hex, sha256_reader_hex};
-use crate::release::model::{ReleaseComponentIdentity, ReleaseModelError, ReleaseSetManifest};
+use crate::release::model::ReleaseModelError;
+use opsctl_core::release::{ReleaseComponentIdentity, ReleaseSetV3};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -37,7 +38,7 @@ struct ZipLocalIdentity {
 }
 
 pub fn verify_component_manifests(
-    manifest: &ReleaseSetManifest,
+    manifest: &ReleaseSetV3,
     artifact_root: &Path,
 ) -> Result<ComponentManifestVerification, ReleaseModelError> {
     let mut verified = Vec::with_capacity(manifest.components.len());
@@ -72,7 +73,7 @@ pub fn verify_component_manifests(
 
 fn verify_manifest(
     component: &ReleaseComponentIdentity,
-    release_set: &ReleaseSetManifest,
+    release_set: &ReleaseSetV3,
     bytes: &[u8],
     profile_bridge: Option<&ProfileBridgeArchiveIdentity>,
 ) -> Result<(), ReleaseModelError> {
@@ -140,7 +141,7 @@ fn verify_manifest(
 
 fn verify_profile_bridge_manifest(
     object: &serde_json::Map<String, Value>,
-    release_set: &ReleaseSetManifest,
+    release_set: &ReleaseSetV3,
     release_id: &str,
     profile_bridge: Option<&ProfileBridgeArchiveIdentity>,
 ) -> Result<(), ReleaseModelError> {

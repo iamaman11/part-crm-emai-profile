@@ -14,11 +14,11 @@ on:
           - promote
           - rollback-negative
       release_set_id:
-        description: Immutable GitHub Release tag `release-set-v2-sha256-...`
+        description: Immutable GitHub Release tag `release-set-v3-sha256-...`
         required: true
         type: string
       expected_current_release_set_id:
-        description: Current provider Release Set v2 ID or NONE for a clean staging environment
+        description: Current provider Release Set v2/v3 ID or NONE for a clean staging environment
         required: true
         default: NONE
         type: string
@@ -59,14 +59,14 @@ jobs:
       RELEASE_SET_ID: ${{ inputs.release_set_id }}
       EXPECTED_CURRENT: ${{ inputs.expected_current_release_set_id }}
     steps:
-      - name: Validate exact v2 operator intent
+      - name: Validate exact v3 target and historical/current fence
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "${{ inputs.operation }}" = promote
           test "$GITHUB_REF" = refs/heads/main
-          [[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]
-          [[ "$EXPECTED_CURRENT" == NONE || "$EXPECTED_CURRENT" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]
+          [[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_CURRENT" == NONE || "$EXPECTED_CURRENT" =~ ^release-set-v(2|3)-sha256-[0-9a-f]{64}$ ]]
           test -z "${{ inputs.source_run_id }}"
           test "${{ inputs.confirmation }}" = "$RELEASE_SET_ID:$EXPECTED_CURRENT"
 
@@ -102,7 +102,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Download and verify durable Release Set v2 with no provider credentials
+      - name: Download and verify immutable Release Set v3 target with no provider credentials
         run: |
           set -euo pipefail
           asset_root="$RUNNER_TEMP/target-assets"
@@ -120,7 +120,6 @@ jobs:
           cp "$asset_root/secret-resolver.tar" "$release_root/components/secret-resolver.tar"
           cp "$asset_root/runtime-bundle.tar" "$release_root/components/runtime-bundle.tar"
           cp "$asset_root/profile-bridge.zip" "$release_root/components/profile-bridge.zip"
-          test "$(jq -r '.schema_version' "$policy_dir/release-set.json")" = 2
           test "$(jq -r '.release_set_id' "$policy_dir/release-set.json")" = "$RELEASE_SET_ID"
           python scripts/accepted-source-evidence-ar11.py \
             --repository "$GITHUB_REPOSITORY" \
@@ -135,7 +134,7 @@ jobs:
             --source-root "$GITHUB_WORKSPACE/target-source" \
             --artifact-root "$release_root" \
             | tee "$RUNNER_TEMP/release-verify.json" \
-            | jq -e '.decision == "VALID" and .release_set_schema_version == 2 and .source_accepted == true and .mutation_executed == false' >/dev/null
+            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
 
   observe-preflight:
     name: Observe provider and prove READY without deploy credential
@@ -502,7 +501,7 @@ jobs:
           cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
             --root . release verify --release-set "$policy_dir/release-set.json" \
             --source-root "$GITHUB_WORKSPACE/target-source" --artifact-root "$release_root" \
-            | jq -e '.decision == "VALID" and .release_set_schema_version == 2 and .source_accepted == true and .mutation_executed == false' >/dev/null
+            | jq -e '.decision == "VALID" and .release_set_schema_version == 3 and .source_accepted == true and .mutation_executed == false' >/dev/null
 
           control_extract="$RUNNER_TEMP/control-release"
           mkdir -p "$control_extract"
@@ -545,7 +544,7 @@ jobs:
           echo "::add-mask::$DEPLOY_TOKEN"
           echo "CLOUDFLARE_API_TOKEN=$DEPLOY_TOKEN" >> "$GITHUB_ENV"
 
-      - name: Re-observe expected-current fence and deploy exact Release Set v2 bits
+      - name: Re-observe expected-current fence and deploy exact Release Set v3 bits
         run: |
           set -euo pipefail
           account_id="$(jq -r '.control_plane.account_id // .account_id' "$DEPLOY_MANIFEST")"
@@ -709,7 +708,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/main
-          [[ "$RELEASE_SET_ID" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]
+          [[ "$RELEASE_SET_ID" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
           test "$EXPECTED_CURRENT" = "$RELEASE_SET_ID"
           [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           test "${{ inputs.confirmation }}" = "$RELEASE_SET_ID:$SOURCE_RUN_ID"

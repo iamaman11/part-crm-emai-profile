@@ -1,6 +1,7 @@
 use opsctl::release::digest::{canonical_json, sha256_hex};
+use opsctl::release::document::LoadedReleaseSet;
 use opsctl::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
-use opsctl::release::model::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
+use opsctl::release::model::RELEASE_SET_ID_PREFIX;
 use opsctl::release::static_compatibility;
 use serde_json::{Value, json};
 use std::io;
@@ -181,15 +182,13 @@ fn resign(value: &mut Value) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn parse(value: &Value) -> Result<ReleaseSetManifest, String> {
-    ReleaseSetManifest::parse_json(
-        &serde_json::to_string(value).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())
+fn parse(value: &Value) -> Result<LoadedReleaseSet, String> {
+    let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+    LoadedReleaseSet::parse(&bytes).map_err(|error| error.to_string())
 }
 
 fn require_error(
-    result: Result<ReleaseSetManifest, String>,
+    result: Result<LoadedReleaseSet, String>,
     context: &str,
 ) -> Result<String, io::Error> {
     result
@@ -284,7 +283,7 @@ fn contract_digest_mismatch_is_rejected_by_static_compatibility()
     value["protocols"]["public_api_contract_sha256"] = Value::String(SHA_B.to_owned());
     resign(&mut value)?;
     let release = parse(&value).map_err(io::Error::other)?;
-    let blockers = static_compatibility::evaluate(&repo_root(), &release, false)?;
+    let blockers = static_compatibility::evaluate(&repo_root(), release.semantic(), false)?;
     assert!(
         blockers
             .iter()
@@ -300,7 +299,7 @@ fn unknown_capability_profile_is_rejected_by_static_compatibility()
     value["capability_profile_compatibility"] = json!(["unknown-profile-v1"]);
     resign(&mut value)?;
     let release = parse(&value).map_err(io::Error::other)?;
-    let blockers = static_compatibility::evaluate(&repo_root(), &release, false)?;
+    let blockers = static_compatibility::evaluate(&repo_root(), release.semantic(), false)?;
     assert!(
         blockers
             .iter()
