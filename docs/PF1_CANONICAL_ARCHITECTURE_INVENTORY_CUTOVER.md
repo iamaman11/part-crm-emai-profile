@@ -218,9 +218,11 @@ At minimum re-prove and switch all current callers discovered at implementation 
 - `.github/workflows/architecture-acceptance-recorder.yml` (`contract`, `premerge`, `record`);
 - `scripts/generate-architecture-inventory.py` (`derive` through Node subprocess);
 - `architecture/lifecycle-projection-policy.json` live deriver/explicit-sync references;
-- any repository validator, documentation, generated projection or test that names the old deriver.
+- `tools/opsctl` doctor/repository-root assumptions that still require historical inventory executables;
+- `.github/workflows/quality-gate.yml` and `.github/workflows/repository-quality-audit-gate.yml` inventory/opsctl caller surfaces;
+- any repository validator, documentation, generated projection or test that names the old deriver or Python inventory generator.
 
-Caller discovery must be repeated on the exact candidate head before deletion.
+Caller discovery must be repeated on the exact candidate head before deletion. `opsctl doctor`, repository-root detection and permanent quality/audit workflows must no longer require a retired Node/Python predecessor after cutover.
 
 ## 8. Inventory compiler layering
 
@@ -264,6 +266,35 @@ Inventory projection
 ```
 
 If an invariant is fully owned inside one bounded context/authority, its specialized validator remains the primary semantic owner. PF-1 references or invokes typed results/contracts rather than duplicating the invariant.
+
+### 8.2 Canonical authority inputs and source ownership
+
+Known machine/domain contracts use typed Rust models. Inventory inputs are classified explicitly as:
+
+```text
+A. DERIVED_REPOSITORY_STRUCTURE
+B. EXISTING_CANONICAL_MACHINE_OR_DOMAIN_AUTHORITY
+C. INTENTIONAL_STATIC_CONTRACT only where no stronger authority exists
+```
+
+PF-1 must not mechanically translate historical Python `CLASSIFIERS`, route specs, document-status tables or other constant registries into Rust constants and call that a cutover. A static Rust table is the last resort and requires explicit ownership justification.
+
+At minimum the exact-candidate audit must consume/validate the current applicable authority set including:
+
+- `architecture/runtime-topology-ar2.json`;
+- `architecture/d1-evolution-ar9.json`;
+- `architecture/runtime-cutover-ar10.json`;
+- `architecture/release-architecture-ar11.json`;
+- `architecture/credential-authority.json`;
+- `architecture/credential-lifecycle.json`;
+- `architecture/profile-security.json`;
+- `architecture/operator-contract.json`;
+- `architecture/architecture-program-sequence.json`;
+- the cut-over current architecture acceptance policy;
+- `architecture/lifecycle-projection-policy.json` as projection-policy input after it is corrected to the new authority boundary;
+- legitimate workspace/application/runtime/generated-contract/document-classification inputs discovered on the candidate tree.
+
+Generic JSON values are permitted only at genuine extension boundaries and cannot bypass kind/version/ownership validation. The applicable authority inventory must be rediscovered from the current candidate rather than frozen forever to this prose list.
 
 ## 9. Inventory CLI and effects
 
@@ -332,13 +363,24 @@ all callers switched
 + repository-wide caller scan = 0
 ```
 
+### 11.3 Historical provenance and current executable-debt bookkeeping
+
 Frozen historical provenance is not rewritten merely because a current executable becomes DEAD.
+
+In particular:
+
+- `architecture/python-estate-ar6.json` remains immutable accepted AR-6 provenance; PF-1 must not falsify its historical counts or classifications to match the new live estate;
+- current PF-1 predecessor disposition belongs in `architecture/historical-executable-debt.json` and other current overlays owned by the current architecture program;
+- current classifications must distinguish historical provenance from executable/current authority;
+- deletion of `.github/scripts/architecture-acceptance.mjs` or the Python inventory cluster happens only after current caller/invariant proof, while historical commits/evidence remain intact.
 
 ## 12. Positive proofs
 
 At minimum PF-1 must prove:
 
 - current accepted repository authorities load successfully;
+- applicable authority inputs are sourced from current machine/domain owners or justified repository derivation, not blindly copied registries;
+- existing legitimate stable/domain projection coverage is preserved;
 - raw observation fixtures parse deterministically;
 - valid historical acceptance chain derives the expected checkpoint/current slice;
 - current target governance merge identity is accepted by the new policy evaluator;
@@ -348,6 +390,7 @@ At minimum PF-1 must prove:
 - write == render and repeated write is idempotent;
 - plain check handles allowed non-authoritative snapshot staleness;
 - Linux and Windows pass;
+- `opsctl doctor`, repository-root detection, quality gate and repository-quality-audit gate no longer depend on retired predecessors;
 - acceptance recorder and governance gate use the new Rust semantics after cutover;
 - old Node/Python current callers are absent after cutover.
 
@@ -372,11 +415,14 @@ At minimum reject:
 - premature `production_ready=true` or `production_mutation=true`;
 - unknown authority kind/version;
 - missing required canonical authority;
+- generic/untyped input bypassing a known authority kind/version contract;
+- central inventory logic duplicating a domain-only semantic invariant instead of using the owned validator/contract;
 - inventory byte drift;
 - attempt to write any path except `architecture/inventory.json`;
 - hidden process/network/Git/GitHub/provider access in Rust lifecycle/inventory path;
 - interpreted upstream document that attempts to declare accepted/current lifecycle as raw observation;
 - old `.mjs` caller remaining after declared cutover;
+- retired Python inventory caller remaining after declared cutover;
 - dual current lifecycle implementation/authority;
 - silent policy weakening to accommodate a fixture.
 
@@ -390,17 +436,20 @@ PF-1 closes only when one exact candidate head proves all of the following:
 4. Rust performs no Git/Node/Python/GitHub/provider subprocess/network access;
 5. domain-specific semantic validators remain owned by their bounded authorities rather than duplicated into inventory;
 6. pure typed builder and repository adapters are separable and directly tested;
-7. `architecture-acceptance.mjs` current caller count = 0 and unique-current-invariant count = 0;
-8. `architecture-acceptance.mjs` is deleted from the current executable estate;
-9. Python inventory predecessor caller count = 0 and every DEAD predecessor is deleted;
-10. lifecycle projection policy and acceptance policy point to the new single authority model and no longer encode superseded #375/squash semantics as current target policy;
-11. one shared canonical JSON/digest authority is used;
-12. `GENERATED_PROJECTION_WRITE` is the only new repository-write effect and is fixed to `architecture/inventory.json`;
-13. permanent positive/negative tests cover lifecycle, policy, inventory and cutover invariants;
-14. Linux/Windows and all applicable workflows/protected contexts are green on the same unchanged head;
-15. `behind_by=0`, blocking reviews=0, unresolved threads=0;
-16. guarded merge is bound to the exact candidate head and preserves the proven candidate tree according to current governance;
-17. accepted-main reread confirms no old lifecycle/inventory authority remains reachable;
-18. production stays fail-closed and AR-12 remains NOT STARTED.
+7. applicable canonical authority inputs are typed/classified and existing legitimate stable/domain projection coverage is preserved;
+8. `architecture-acceptance.mjs` current caller count = 0 and unique-current-invariant count = 0;
+9. `architecture-acceptance.mjs` is deleted from the current executable estate;
+10. Python inventory predecessor caller count = 0 and every DEAD predecessor is deleted;
+11. `architecture/python-estate-ar6.json` remains immutable history while current executable-debt overlays describe the new live disposition;
+12. lifecycle projection policy and acceptance policy point to the new single authority model and no longer encode superseded #375/squash semantics as current target policy;
+13. `opsctl doctor`, repository-root detection and permanent quality/audit workflows no longer require retired predecessors;
+14. one shared canonical JSON/digest authority is used;
+15. `GENERATED_PROJECTION_WRITE` is the only new repository-write effect and is fixed to `architecture/inventory.json`;
+16. permanent positive/negative tests cover lifecycle, policy, inventory and cutover invariants;
+17. Linux/Windows and all applicable workflows/protected contexts are green on the same unchanged head;
+18. `behind_by=0`, blocking reviews=0, unresolved threads=0;
+19. guarded merge is bound to the exact candidate head and preserves the proven candidate tree according to current governance;
+20. accepted-main reread confirms no old lifecycle/inventory authority remains reachable;
+21. production stays fail-closed and AR-12 remains NOT STARTED.
 
 Only accepted PF-1 `main` may become the base for PF-2. No PF-4 or other new planning phase is introduced.
