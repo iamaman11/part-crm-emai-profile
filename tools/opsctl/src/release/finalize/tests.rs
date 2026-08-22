@@ -148,7 +148,11 @@ fn independent_component_identity_reaches_pure_core_fail_closed() -> Result<(), 
     let error = finalize_json(&root(), &input)
         .err()
         .ok_or_else(|| "component key mismatch unexpectedly finalized".to_owned())?;
-    assert!(error.to_string().contains("component identity key mismatch"));
+    assert!(
+        error
+            .to_string()
+            .contains("component identity key mismatch")
+    );
     Ok(())
 }
 

@@ -130,7 +130,9 @@ fn compose_release_set(
         artifact_inventory,
     })
     .map_err(|error| {
-        ReleaseFinalizeError::new(format!("Release Set v3 semantic validation failed: {error}"))
+        ReleaseFinalizeError::new(format!(
+            "Release Set v3 semantic validation failed: {error}"
+        ))
     })
 }
 
@@ -165,7 +167,9 @@ fn contracts_identity(
         ReleaseFinalizeError::new(format!("cannot serialize contract identity scope: {error}"))
     })?;
     let canonical = canonical_json(&value).map_err(|error| {
-        ReleaseFinalizeError::new(format!("cannot canonicalize contract identity scope: {error}"))
+        ReleaseFinalizeError::new(format!(
+            "cannot canonicalize contract identity scope: {error}"
+        ))
     })?;
 
     Ok(core::ContractsIdentity {
@@ -214,7 +218,9 @@ fn d1_schema_window(
     component: &str,
 ) -> Result<core::SchemaCompatibilityWindow, ReleaseFinalizeError> {
     let identity = d1::release_schema_identity(root, component).map_err(|error| {
-        ReleaseFinalizeError::new(format!("typed D1 {component} release identity failed: {error}"))
+        ReleaseFinalizeError::new(format!(
+            "typed D1 {component} release identity failed: {error}"
+        ))
     })?;
     Ok(core::SchemaCompatibilityWindow {
         database_component: identity.database_component,

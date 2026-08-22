@@ -68,15 +68,13 @@ pub(super) fn load(path: &Path) -> Result<RuntimeLockFacts, ReleaseFinalizeError
     let input = fs::read_to_string(path).map_err(|error| {
         ReleaseFinalizeError::new(format!("cannot read canonical runtime lock: {error}"))
     })?;
-    let value = parse_strict_json_with_limits(
-        &input,
-        DEFAULT_MAX_JSON_BYTES,
-        DEFAULT_MAX_JSON_DEPTH,
-    )
-    .map_err(|error| ReleaseFinalizeError::new(format!("invalid runtime lock JSON: {error}")))?;
-    let lock: RuntimeLockV1 = serde_json::from_value(value).map_err(|error| {
-        ReleaseFinalizeError::new(format!("invalid runtime lock DTO: {error}"))
-    })?;
+    let value =
+        parse_strict_json_with_limits(&input, DEFAULT_MAX_JSON_BYTES, DEFAULT_MAX_JSON_DEPTH)
+            .map_err(|error| {
+                ReleaseFinalizeError::new(format!("invalid runtime lock JSON: {error}"))
+            })?;
+    let lock: RuntimeLockV1 = serde_json::from_value(value)
+        .map_err(|error| ReleaseFinalizeError::new(format!("invalid runtime lock DTO: {error}")))?;
     if lock.schema_version != RUNTIME_LOCK_SCHEMA_VERSION {
         return Err(ReleaseFinalizeError::new(format!(
             "unsupported runtime lock schema_version: {}",

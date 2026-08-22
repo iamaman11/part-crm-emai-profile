@@ -47,14 +47,11 @@ pub(super) struct ProtocolObservationV1 {
 }
 
 pub(super) fn parse(input: &str) -> Result<ReleaseFinalizeRequestV1, ReleaseFinalizeError> {
-    let value = parse_strict_json_with_limits(
-        input,
-        DEFAULT_MAX_JSON_BYTES,
-        DEFAULT_MAX_JSON_DEPTH,
-    )
-    .map_err(|error| {
-        ReleaseFinalizeError::new(format!("invalid ReleaseFinalizeRequestV1 JSON: {error}"))
-    })?;
+    let value =
+        parse_strict_json_with_limits(input, DEFAULT_MAX_JSON_BYTES, DEFAULT_MAX_JSON_DEPTH)
+            .map_err(|error| {
+                ReleaseFinalizeError::new(format!("invalid ReleaseFinalizeRequestV1 JSON: {error}"))
+            })?;
     let request: ReleaseFinalizeRequestV1 = serde_json::from_value(value).map_err(|error| {
         ReleaseFinalizeError::new(format!("invalid ReleaseFinalizeRequestV1 DTO: {error}"))
     })?;
