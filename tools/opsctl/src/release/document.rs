@@ -56,14 +56,13 @@ impl LoadedReleaseSet {
         let input = std::str::from_utf8(bytes).map_err(|error| {
             ReleaseModelError::new(format!("Release Set document is not UTF-8: {error}"))
         })?;
-        let value = parse_strict_json_with_limits(
-            input,
-            MAX_RELEASE_SET_V3_BYTES,
-            DEFAULT_MAX_JSON_DEPTH,
-        )
-        .map_err(|error| {
-            ReleaseModelError::new(format!("Release Set strict JSON admission failed: {error}"))
-        })?;
+        let value =
+            parse_strict_json_with_limits(input, MAX_RELEASE_SET_V3_BYTES, DEFAULT_MAX_JSON_DEPTH)
+                .map_err(|error| {
+                    ReleaseModelError::new(format!(
+                        "Release Set strict JSON admission failed: {error}"
+                    ))
+                })?;
         let root = value
             .as_object()
             .ok_or_else(|| ReleaseModelError::new("Release Set document root must be an object"))?;
@@ -324,15 +323,27 @@ mod tests {
         let mut components = BTreeMap::new();
         components.insert(
             "control_plane".to_owned(),
-            component("control_plane", "components/control-plane.tar", &"1".repeat(64)),
+            component(
+                "control_plane",
+                "components/control-plane.tar",
+                &"1".repeat(64),
+            ),
         );
         components.insert(
             "secret_resolver".to_owned(),
-            component("secret_resolver", "components/secret-resolver.tar", &"2".repeat(64)),
+            component(
+                "secret_resolver",
+                "components/secret-resolver.tar",
+                &"2".repeat(64),
+            ),
         );
         components.insert(
             "runtime_bundle".to_owned(),
-            component("runtime_bundle", "components/runtime-bundle.tar", &"3".repeat(64)),
+            component(
+                "runtime_bundle",
+                "components/runtime-bundle.tar",
+                &"3".repeat(64),
+            ),
         );
         let schema = |component: &str| SchemaCompatibilityWindowDto {
             database_component: component.to_owned(),
@@ -416,22 +427,26 @@ mod tests {
             }))?
             .as_bytes(),
         );
-        let schema = |component: &str| json!({
-            "database_component":component,
-            "target_schema_revision":"0001_initial.sql",
-            "supported_schema_min":"0001_initial.sql",
-            "supported_schema_max":"0001_initial.sql",
-            "migration_history_digest":SHA,
-            "compatibility_policy_digest":SHA
-        });
-        let component = |id: &str, path: &str| json!({
-            "release_id":id,
-            "source_commit_sha":GIT,
-            "artifact_path":path,
-            "artifact_sha256":SHA,
-            "artifact_size_bytes":1,
-            "component_manifest_sha256":SHA
-        });
+        let schema = |component: &str| {
+            json!({
+                "database_component":component,
+                "target_schema_revision":"0001_initial.sql",
+                "supported_schema_min":"0001_initial.sql",
+                "supported_schema_max":"0001_initial.sql",
+                "migration_history_digest":SHA,
+                "compatibility_policy_digest":SHA
+            })
+        };
+        let component = |id: &str, path: &str| {
+            json!({
+                "release_id":id,
+                "source_commit_sha":GIT,
+                "artifact_path":path,
+                "artifact_sha256":SHA,
+                "artifact_size_bytes":1,
+                "component_manifest_sha256":SHA
+            })
+        };
         let mut value = json!({
             "schema_version":2,
             "release_set_id":format!("{RELEASE_SET_ID_PREFIX}{SHA}"),
@@ -466,7 +481,8 @@ mod tests {
     }
 
     #[test]
-    fn current_v3_round_trips_through_one_reader_boundary() -> Result<(), Box<dyn std::error::Error>> {
+    fn current_v3_round_trips_through_one_reader_boundary() -> Result<(), Box<dyn std::error::Error>>
+    {
         let semantic = v3_model()?;
         let rendered = render_release_set_v3(&semantic)?;
         let loaded = LoadedReleaseSet::parse(&rendered.canonical_document_bytes)?;
@@ -492,7 +508,8 @@ mod tests {
     }
 
     #[test]
-    fn historical_v2_is_decoder_only_but_projects_to_pure_core() -> Result<(), Box<dyn std::error::Error>> {
+    fn historical_v2_is_decoder_only_but_projects_to_pure_core()
+    -> Result<(), Box<dyn std::error::Error>> {
         let loaded = LoadedReleaseSet::parse(&historical_v2()?)?;
         assert_eq!(loaded.external_schema_version(), 2);
         assert!(loaded.is_historical_v2());
@@ -504,6 +521,10 @@ mod tests {
     #[test]
     fn unknown_release_schema_is_rejected() {
         let error = LoadedReleaseSet::parse(br#"{"schema_version":4}"#).unwrap_err();
-        assert!(error.to_string().contains("unsupported Release Set schema_version"));
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported Release Set schema_version")
+        );
     }
 }
