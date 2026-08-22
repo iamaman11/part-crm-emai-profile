@@ -20,6 +20,14 @@
       "rationale": "deterministic Release Set packaging adapter; no provider network, credentials, promotion decision or provider mutation"
     },
     {
+      "path": "scripts/camouhost-runtime-package.py",
+      "classification": "KEEP_PYTHON",
+      "role": "runtime_component_packaging_adapter",
+      "side_effect_class": "local_artifact_generation_only",
+      "authority": "PYTHON_ALLOWED_BY_POST_AR11_FUNCTIONAL_CLOSURE",
+      "rationale": "deterministically packages the canonical Camouhost runtime component from repository-owned inputs; owns no Release Set semantics, provider network, credentials, promotion decision or provider mutation"
+    },
+    {
       "path": "scripts/accepted-source-evidence-ar11.py",
       "classification": "KEEP_PYTHON",
       "role": "accepted_source_evidence_adapter",
@@ -146,9 +154,9 @@
     ]
   },
   "current_summary": {
-    "tracked_python_files": 128,
+    "tracked_python_files": 129,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 128,
+    "KEEP_PYTHON": 129,
     "MIGRATE_TO_RUST": 0,
     "WRAP_WITH_RUST": 0
   }
