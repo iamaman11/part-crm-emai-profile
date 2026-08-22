@@ -7,6 +7,7 @@ use crate::release::model::ReleaseModelError;
 use crate::release::source::{AcceptedSourceVerification, verify_release_source};
 use crate::release::static_compatibility::{self, VERIFIED_PROVENANCE_DIMENSIONS};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub struct ReleaseRunRequest<'a> {
@@ -90,6 +91,11 @@ fn inspect(release_set: &LoadedReleaseSet, release_input_count: usize) -> serde_
             })
         })
         .collect::<Vec<_>>();
+    let component_release_ids = manifest
+        .components
+        .iter()
+        .map(|(component_id, component)| (component_id.clone(), component.release_id.clone()))
+        .collect::<BTreeMap<_, _>>();
     json!({
         "schema_version": 1,
         "command": "release.inspect",
@@ -105,6 +111,16 @@ fn inspect(release_set: &LoadedReleaseSet, release_input_count: usize) -> serde_
             "accepted_main_evidence_role": "IDENTITY_BINDING_ONLY; AcceptedSourceEvidence is acceptance authority"
         },
         "components": components,
+        "component_release_ids": component_release_ids,
+        "compatibility_identity": {
+            "contracts_sha256": manifest.contracts.sha256,
+            "resolver_protocol": manifest.protocols.resolver_protocol,
+            "camouhost_ipc_version": manifest.protocols.camouhost_ipc_version,
+            "profile_bridge_protocol_version": manifest.protocols.profile_bridge_protocol_version,
+            "runtime_role": manifest.runtime_compatibility.runtime_role,
+            "profile_format": manifest.runtime_compatibility.profile_format,
+            "browser_identity_policy": manifest.runtime_compatibility.browser_identity_policy,
+        },
         "capability_profile_compatibility": manifest.capability_profile_compatibility,
         "artifact_count": manifest.artifact_inventory.len(),
         "release_input_count": release_input_count,
