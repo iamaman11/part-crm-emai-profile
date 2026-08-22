@@ -4,6 +4,7 @@
 **Current program authority:** [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md)  
 **Architecture evolution contract:** [`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md)  
 **Functional Closure plan:** [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md)  
+**PF-1 cutover specification:** [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md)  
 **Tracking:** issue #266
 
 This index classifies repository documents by authority role so a target, historical plan, issue comment or evidence file cannot silently become a second current roadmap.
@@ -16,7 +17,8 @@ This index classifies repository documents by authority role so a target, histor
 - AR-11 is accepted; AR-12 is the **derived current** architecture slice but implementation is **NOT STARTED**.
 - Current implementation authority is Post-AR-11 Functional Closure #399, presently **PF-1 #430**.
 - Mandatory prerequisite order is **PF-1 #430 -> PF-2 / Draft PR #428 -> PF-3 #431 -> fresh re-baseline #399/#421 -> FC-6 -> FC-7 -> AR-12 implementation entry**.
-- Issue #375 is closed historical hardening and is not a current execution blocker or lifecycle authority.
+- PF-1 now includes the bounded acceptance/lifecycle-policy cutover from legacy `.github/scripts/architecture-acceptance.mjs` semantics to typed Rust policy evaluation over explicit raw Git/GitHub observations; Git/GitHub observation effects remain outside Rust, and the Node predecessor is deleted only after zero-caller/zero-unique-current-invariant proof.
+- Issue #375 is closed historical hardening and is not a current execution blocker or lifecycle authority. Current machine files that still encode #375/superseded squash semantics are PF-1 implementation debt, not target architecture.
 - Post-AR-8C cleanup / DX issue #352 remains accepted history; AR-4D remains NOT_REQUIRED unless later accepted evidence reopens it.
 - `architecture_complete=false`.
 - `production_core_gate=BLOCKED`.
@@ -45,14 +47,15 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 1. [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — single current architecture/program execution authority, tracked by #266.
 2. [`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) — subordinate normative contract for how prospective PF/FC/AR/PC work must evolve the architecture; not a roadmap or capability registry.
 3. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — subordinate execution plan for PF-1/PF-2/PF-3/FC-6/FC-7 before AR-12 implementation.
-4. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) — subordinate PF-3 specification; it requires future `architecture/architecture-fitness-policy.json` and permanent machine enforcement but does not itself alter lifecycle order.
-5. [`../architecture/architecture-rebaseline-v3-transition.json`](../architecture/architecture-rebaseline-v3-transition.json) — non-authoritative machine transition projection of Git-derived lifecycle state.
-6. Accepted AR/domain machine authorities such as [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json), [`../architecture/d1-evolution-ar9.json`](../architecture/d1-evolution-ar9.json), [`../architecture/runtime-cutover-ar10.json`](../architecture/runtime-cutover-ar10.json), [`../architecture/release-architecture-ar11.json`](../architecture/release-architecture-ar11.json), credential/lifecycle/profile-security/operator contracts — owners of their bounded facts, not competing roadmaps.
-7. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md), [`status.json`](status.json), this index and README entrypoints — current projections; they do not define a competing sequence.
-8. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) — stable normative authorities within their scopes.
-9. [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md) — capability/evidence projection accepted on `main`; source presence is not production enablement.
-10. [`../architecture/inventory.json`](../architecture/inventory.json) — tracked generated architecture projection. It must not become input authority for the facts it projects; PF-1 #430 cuts current generation/check/write authority to `opsctl`.
-11. [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json) — immutable accepted product-phase provenance.
+4. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) — subordinate PF-1 specification for raw Git/GitHub observations -> typed Rust acceptance/lifecycle policy evaluation -> pure inventory compiler, including deletion of legacy Node/Python current predecessors after proven cutover.
+5. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) — subordinate PF-3 specification; it requires future `architecture/architecture-fitness-policy.json`, anti-weakening/supersession, measured budgets and permanent machine enforcement but does not itself alter lifecycle order.
+6. [`../architecture/architecture-rebaseline-v3-transition.json`](../architecture/architecture-rebaseline-v3-transition.json) — non-authoritative machine transition projection of lifecycle state.
+7. Accepted AR/domain machine authorities such as [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json), [`../architecture/d1-evolution-ar9.json`](../architecture/d1-evolution-ar9.json), [`../architecture/runtime-cutover-ar10.json`](../architecture/runtime-cutover-ar10.json), [`../architecture/release-architecture-ar11.json`](../architecture/release-architecture-ar11.json), credential/lifecycle/profile-security/operator contracts — owners of their bounded facts, not competing roadmaps.
+8. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md), [`status.json`](status.json), this index and README entrypoints — current projections; they do not define a competing sequence.
+9. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) — stable normative authorities within their scopes.
+10. [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md) — capability/evidence projection accepted on `main`; source presence is not production enablement.
+11. [`../architecture/inventory.json`](../architecture/inventory.json) — tracked generated architecture projection. It must not become input authority for the facts it projects; PF-1 #430 cuts current generation/check/write and lifecycle-policy implementation authority to typed `opsctl` while outer workflows retain Git/GitHub observation effects.
+12. [`../architecture/accepted-phases.json`](../architecture/accepted-phases.json) — immutable accepted product-phase provenance.
 
 If these sources disagree, implementation stops and projections are corrected before the next bounded slice proceeds. An open branch/PR never outranks accepted `main`.
 
@@ -70,9 +73,9 @@ canonical authorities
 -> production exposure
 ```
 
-Binding themes include Single Authority, bounded-context ownership, inward dependencies, provider-free domain/application core, typed IDs/state/contracts, command/query separation, explicit effects, context-owned persistence, typed configuration, versioned integration events, frontend-as-projection, Release Profile as sole production enablement authority, touch-to-converge and cutover-to-deletion.
+Binding themes include Single Authority, bounded-context ownership, inward dependencies, provider-free domain/application core, observation-vs-policy separation, typed IDs/state/contracts, command/query separation, explicit effects, context-owned persistence, typed configuration, versioned integration events, frontend-as-projection, Release Profile as sole production enablement authority, touch-to-converge and cutover-to-deletion.
 
-PF-3 #431 makes these rules persistent through machine Rule IDs, primary enforcement owners, positive/negative fixtures and an Architecture Fitness Gate. After PF-3, materially architecture-changing PF/FC/AR/PC candidates must declare Architecture Impact and pass all applicable REQUIRED rules on the exact candidate head.
+PF-3 #431 makes these rules persistent through machine Rule IDs, primary enforcement owners, positive/negative fixtures, anti-weakening/supersession rules, measured budgets and an Architecture Fitness Gate. After PF-3, materially architecture-changing PF/FC/AR/PC candidates must declare Architecture Impact and pass all applicable REQUIRED rules on the exact candidate head.
 
 ## Document status model
 
@@ -94,6 +97,7 @@ The machine/document hierarchy uses these roles:
 - [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md)
 - [`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md)
 - [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md)
+- [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md)
 - [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md)
 - [`../architecture/release-architecture-ar11.json`](../architecture/release-architecture-ar11.json)
 - [`ARCHITECTURE_REBASELINE_V3_AR10.md`](ARCHITECTURE_REBASELINE_V3_AR10.md)

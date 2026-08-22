@@ -4,6 +4,7 @@
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Static lifecycle order:** `architecture/architecture-program-sequence.json`  
 **Current functional-closure plan:** `docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`  
+**PF-1 cutover specification:** `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`  
 **PF-3 enforcement specification:** `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`  
 **Scope:** prospective quality/evolution rules for PF work, FC work, AR-12…AR-17 and PC-1…PC-4 without rewriting accepted AR-0…AR-11 history  
 **Production authorization:** NONE
@@ -244,6 +245,26 @@ LEGACY_UNTOUCHED -> classify and leave until an owning slice needs it
 
 When `LEGACY_UNTOUCHED` becomes `TOUCHED`, the owning slice must converge it and remove the superseded path instead of permanently stacking old + new + compatibility shims.
 
+### 2.15 Observation / Policy Decision Boundary
+
+External facts and policy decisions must be distinguishable.
+
+```text
+Git/GitHub/provider/repository observations
+        ↓
+versioned raw observation contract
+        ↓
+typed validation
+        ↓
+pure policy decision
+```
+
+An observation adapter may report exact bytes, identities, timestamps, statuses and relationships that it actually observed. It must not silently pre-decide the semantic conclusion that the pure policy core is responsible for.
+
+Conversely, a pure policy core must not acquire Git/GitHub/provider/network/process effects merely to fetch its own inputs when an outer composition/orchestration boundary already owns those effects.
+
+This rule is especially binding for PF-1 lifecycle/acceptance evaluation and PF-2 Hosted Evidence.
+
 ## 3. Architecture fitness functions
 
 Future slices must increase mechanical enforcement rather than rely only on prose. The permanent gate set converges toward checks for at least:
@@ -253,6 +274,7 @@ Future slices must increase mechanical enforcement rather than rely only on pros
 - runtime/application dependency on `opsctl`;
 - direct environment/process/network/filesystem mutation outside owned boundaries where the architecture requires an explicit port/capability;
 - duplicate semantic/mutable authorities;
+- observation documents that smuggle policy decisions across an effect boundary;
 - duplicate or unknown activation-unit ownership;
 - unknown execution surfaces;
 - enabled release profile with incomplete dependency closure;
@@ -278,7 +300,8 @@ For every materially changing bounded candidate:
 
 2. before implementation
    -> identify bounded contexts, authority owner, contracts, effects,
-      execution surfaces, activation units/release profiles, schema impact,
+      observation/decision boundaries, execution surfaces,
+      activation units/release profiles, schema impact,
       legacy predecessor and applicable fitness rules
 
 3. during implementation
@@ -314,35 +337,69 @@ For every materially changing bounded candidate:
 
 Before PF-3 acceptance, PF-1 and PF-2 use their explicit positive/negative DoD and the existing permanent architecture/security gates. PF-3 then makes this protocol persistently machine-enforced for subsequent work.
 
+### 3.2 Architecture/tooling budgets
+
+Correctness remains primary, but permanent architecture must also remain usable enough that developers do not need to bypass it. PF-3 establishes a small measured budget set instead of arbitrary aspirational numbers.
+
+At minimum budgets cover:
+
+```text
+canonical semantic owner count per fact = 1
+mutation executor count per owned operation = 1
+REQUIRED rule without enforcement = 0
+required negative fixture missing = 0
+unclassified external effect in protected scope = 0
+hidden production-enable authority = 0
+cross-platform policy result divergence = 0
+bounded local opsctl check duration
+bounded required PR CI duration
+bounded evidence subject size/freshness where PF-2 owns the contract
+```
+
+Thresholds that are not naturally exact-zero/one are established from measured accepted baselines and may change only through governed, evidence-backed policy evolution.
+
 ## 4. PF and Functional Closure impact
 
-### PF-1 — Canonical Architecture Inventory cutover to `opsctl`
+### PF-1 — Canonical Architecture Inventory + Lifecycle Policy cutover to `opsctl`
 
 PF-1 is the first reference implementation of this contract:
 
 ```text
-typed canonical authorities
--> validated inputs
+Git/GitHub raw observations at outer boundary
+-> typed Rust acceptance/lifecycle policy evaluation
+-> typed canonical authorities
 -> pure inventory compiler
 -> canonical render/check/inspect
 -> exactly one bounded GENERATED_PROJECTION_WRITE
 ```
 
-PF-1 must demonstrate Single Authority, Pure Core/Effect Shell, explicit effect capability, typed contracts, minimal composition-root wiring and predecessor retirement. It must not create a second lifecycle derivation or retain the historical Python generator as current compatibility authority.
+PF-1 must demonstrate Single Authority, Pure Core/Effect Shell, Observation/Policy separation, explicit effect capability, typed contracts, minimal composition-root wiring and predecessor retirement.
+
+PF-1 must not trust `.github/scripts/architecture-acceptance.mjs derive` as permanent semantic upstream. The current Node implementation may exist temporarily only for candidate parity while it remains the accepted legacy owner; final PF-1 cutover switches all callers atomically, proves zero callers/zero unique current invariants and deletes `.github/scripts/architecture-acceptance.mjs`. Git/GitHub observation remains outside Rust.
+
+PF-1 must also keep domain semantic validation with bounded owners rather than turning inventory into a central god-validator. Detailed requirements are in `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`.
 
 ### PF-2 — Hosted Operational Evidence
 
 PF-2 must reuse the same canonical serialization/digest and typed-policy principles. Hosted evidence is an immutable evidence envelope/attestation pipeline, not a second evidence database or hidden `opsctl` state system. Provider/GitHub observation stays outside the pure policy core.
 
+PF-2 must define a formal trust model stating what provider observation, envelope validation, digest, GitHub attestation and `opsctl verify` prove and do not prove. Evidence validity and mutation eligibility are distinct; where freshness matters, policy distinguishes `VALID`, `VALID_BUT_STALE`, and `INVALID`, with stale/invalid evidence blocked from mutation admission.
+
 ### PF-3 — Architecture Fitness Baseline
 
 PF-3 makes this contract mechanically persistent before FC-6 resumes. It introduces one versioned machine-readable fitness-policy catalog mapping mandatory rule IDs to primary permanent enforcement owners, positive/negative fixtures and the Architecture Fitness Gate. A REQUIRED rule without active enforcement is a gate failure.
+
+PF-3 must also make the fitness policy itself resistant to silent weakening: rule removal/downgrade, applicability narrowing, checker replacement, negative-fixture removal and fail-closed weakening require explicit versioned supersession/migration evidence. PF-3 establishes the small measured architecture/tooling budgets described above.
 
 Detailed PF-3 requirements are owned by `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` and issue #431.
 
 ### FC-6 / FC-7
 
-Functional Closure remains focused on proving accepted AR-11 behavior. It must consume PF-1/PF-2/PF-3 primitives and must not create temporary parallel operational authorities. FC-7 also confirms this contract and the fitness baseline are reflected in current program/development projections before AR-12 implementation begins.
+Functional Closure remains focused on proving accepted AR-11 behavior. It must consume PF-1/PF-2/PF-3 primitives and must not create temporary parallel operational authorities.
+
+FC-6 must use a versioned promotion/rehearsal ceremony state machine with explicit pre/post-mutation states. Ambiguous provider mutation outcomes enter `MUTATION_OUTCOME_UNKNOWN` and require read-only reconciliation before retry, rollback or success can be decided. Blind retry after an unknown mutation outcome is forbidden.
+
+FC-7 also confirms this contract and the fitness baseline are reflected in current program/development projections before AR-12 implementation begins.
 
 ## 5. AR-by-AR prospective impact
 
@@ -410,6 +467,7 @@ AR-16 is the convergence audit for this contract. In addition to existing P0/P1 
 - inward dependency direction and provider-free core boundaries;
 - no unjustified god composition/service/helper layer;
 - explicit mutation/effect boundaries;
+- raw observation and policy decision boundaries are explicit for hosted/operational concerns;
 - typed critical IDs/states/versioned contracts where ambiguity creates real risk;
 - context-owned persistence and no unsafe cross-context table/repository mutation;
 - frontend projection remains non-authoritative;

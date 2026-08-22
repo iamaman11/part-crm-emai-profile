@@ -3,6 +3,7 @@
 **Document status:** SUBORDINATE_PREREQUISITE_SPEC
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`
 **Cross-cutting quality contract:** `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`
+**PF-1 cutover specification:** `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`
 **Functional Closure tracker:** issue #399
 **Sequence:** PF-1 -> PF-2 -> PF-3 -> re-baseline #399/#421 -> FC-6
 **Production authorization:** NONE
@@ -12,17 +13,18 @@ PF-3 exists to make the architecture-evolution rules mechanically persistent bef
 
 ## 1. Why PF-3 is mandatory
 
-PF-1 establishes a clean typed `opsctl` architecture-inventory reference implementation. PF-2 establishes reusable Hosted Operational Evidence. Those primitives are necessary but do not by themselves prevent future code from drifting back toward duplicated authorities, provider leakage, hidden effects, ad-hoc production flags or permanent compatibility shims.
+PF-1 establishes a clean typed `opsctl` acceptance/lifecycle + architecture-inventory reference implementation from explicit raw observations and retires the legacy Node/Python current authorities. PF-2 establishes reusable Hosted Operational Evidence. Those primitives are necessary but do not by themselves prevent future code from drifting back toward duplicated authorities, provider leakage, hidden effects, ad-hoc production flags, pre-interpreted observation inputs or permanent compatibility shims.
 
-Before FC-6 resumes, the repository therefore needs a small permanent fitness baseline that answers two questions for every future bounded slice:
+Before FC-6 resumes, the repository therefore needs a small permanent fitness baseline that answers three questions for every future bounded slice:
 
 1. what architecture/evolution rules are mandatory?;
-2. which permanent machine check proves each mandatory rule?
+2. which permanent machine check proves each mandatory rule?;
+3. how is weakening or bypassing that rule itself detected?
 
 The required sequence is:
 
 ```text
-PF-1  Canonical Architecture Inventory cutover
+PF-1  Canonical Architecture Inventory + Lifecycle Policy cutover
   ->
 PF-2  Hosted Operational Evidence primitive
   ->
@@ -36,6 +38,8 @@ FC-7
   ->
 AR-12...
 ```
+
+No PF-4 or other planning phase is introduced.
 
 ## 2. Single source model for development requirements
 
@@ -56,6 +60,9 @@ architecture/release-architecture-ar11.json
 
 docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md
     human-readable cross-cutting development/evolution contract
+
+docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md
+    PF-1 raw-observation -> Rust policy/inventory cutover contract
 
 architecture/architecture-fitness-policy.json   [PF-3 target]
     machine-readable rule catalog and enforcement mapping only
@@ -110,6 +117,8 @@ RETIRED
 
 A `REQUIRED` rule without an active machine enforcement mapping is a gate failure. `DEFERRED_WITH_OWNER` requires an explicit future owner/slice and may not be used for a Production-Core-critical P0/P1 boundary at AR-16/AR-17.
 
+The machine policy is an enforcement index, not a copy of every application's semantic rule. It references the primary owner/checker instead of reimplementing that checker.
+
 ## 4. Initial mandatory rule catalog
 
 PF-3 must encode and mechanically enforce an initial baseline covering at least the following rule families.
@@ -119,6 +128,7 @@ PF-3 must encode and mechanically enforce an initial baseline covering at least 
 - one semantic fact -> one canonical owner;
 - one mutable concern -> one legitimate current mutable authority;
 - no second lifecycle derivation;
+- after PF-1, no reachable `.github/scripts/architecture-acceptance.mjs` current policy path;
 - no second production-enable registry;
 - generated projections cannot become input authority for the facts they project.
 
@@ -149,11 +159,14 @@ DeploymentMutation
 
 Critical mutations must have one explicit owner/capability and must fail closed before the first side effect when capability/auth/preconditions fail.
 
+For PF-1/PF-2-style operational policy, raw observation collection belongs outside the pure policy core. A pure evaluator unexpectedly acquiring Git/GitHub/provider/process/network access is an AF-EFFECT violation.
+
 ### AF-TYPE — typed identities/state/contracts
 
 - critical semantically distinct IDs are not interchangeable raw strings at owned boundaries;
 - lifecycle state uses one accepted state machine rather than unrelated boolean combinations;
-- persisted/external/integration contracts are versioned where required;
+- persisted/external/integration/observation contracts are versioned where required;
+- raw observation contracts cannot smuggle already-decided lifecycle/business conclusions as untyped bags;
 - no duplicate OAuth/mailbox/profile/update lifecycle state machine.
 
 ### AF-CAP — capability / production exposure
@@ -206,7 +219,7 @@ Compatibility aliases/shims require a proved current consumer or accepted compat
 - no runtime application dependency;
 - no hidden persistent state backend;
 - no provider/deployment executor role unless a later explicit authority changes the contract;
-- network/process/provider effects remain explicitly bounded;
+- no Git/GitHub/Node/Python subprocess/network observation inside PF-1 lifecycle/inventory pure policy path;
 - command/operator-contract parity remains machine-checked.
 
 ### AF-READ — developer readability
@@ -224,6 +237,8 @@ persistence owner
 execution surfaces
 activation unit / release profile
 ```
+
+For operational-policy flows, a maintainer must also be able to identify observation producer, raw contract, policy evaluator and mutation executor separately.
 
 AR-16 will re-audit this whole-project; PF-3 only establishes the persistent rule/gate mechanism.
 
@@ -255,6 +270,9 @@ The gate must fail when:
 - a positive repository fixture fails;
 - authority/rule IDs are duplicated or unknown;
 - a rule is silently downgraded/removed without owning policy change;
+- applicability is silently narrowed;
+- required negative fixture is removed;
+- primary checker is replaced without governed supersession;
 - the candidate introduces a prohibited dependency/effect/production-enable path.
 
 ## 6. Enforcement registry rules
@@ -279,6 +297,54 @@ AF-OPS-001
   machine_enforcement: opsctl-guard::effect_boundary
 ```
 
+### 6.1 Fitness-policy evolution / supersession
+
+The fitness policy itself is governed. The following changes are not ordinary edits:
+
+```text
+remove REQUIRED rule
+REQUIRED -> weaker status
+narrow scope/applicability
+replace primary checker
+remove required negative fixture
+weaken expected fail-closed result
+retire a rule while its invariant still applies
+```
+
+Such changes require a versioned supersession/migration record containing at least:
+
+```text
+old_rule
+successor_rule or explicit retirement reason
+reason
+compatibility/security impact
+owning authority/slice
+accepted source
+```
+
+The gate must reject a silent weakening transaction.
+
+### 6.2 Measured architecture/tooling budgets
+
+PF-3 must establish a small budget set. Exact-zero/one invariants are fixed; performance/size/freshness thresholds are derived from measured accepted baselines rather than invented aspirational numbers.
+
+Required budget families:
+
+```text
+semantic authority count per owned fact = 1
+mutation executor count per owned operation = 1
+REQUIRED rule without active enforcement = 0
+required negative fixture missing = 0
+unclassified external effect in protected scope = 0
+hidden production-enable authority outside Release Profile = 0
+cross-platform deterministic policy-result divergence = 0
+local opsctl check duration <= governed measured threshold
+required PR CI duration <= governed measured threshold
+Hosted Evidence subject size/freshness <= PF-2 governed policy
+```
+
+A threshold change must be justified by observed evidence and cannot weaken a safety invariant.
+
 ## 7. Slice-level Definition of Done after PF-3
 
 Every future PF/FC/AR/PC implementation candidate that materially changes application architecture must include an Architecture Impact declaration covering:
@@ -288,11 +354,13 @@ bounded contexts touched
 authorities touched
 public/persisted contracts touched
 effect classes added/changed
+observation/decision boundaries added/changed
 execution surfaces added/changed
 activation units/release profiles affected
 migration/schema impact
 legacy predecessor disposition
 fitness rules affected
+budget impact where applicable
 ```
 
 `none` is valid only when mechanically/procedurally justified by the diff.
@@ -304,6 +372,8 @@ all applicable fitness rules PASS
 + all affected rule negative fixtures PASS
 + no new unenforced REQUIRED rule
 + no unexplained authority duplication
++ no silent policy weakening
++ applicable budgets PASS
 + exact-head CI green
 ```
 
@@ -326,6 +396,8 @@ At minimum:
 - policy schema parses and validates;
 - all REQUIRED initial rules map to reachable permanent enforcement;
 - current accepted repository passes the baseline or every pre-existing exception is explicitly bounded/owned;
+- policy supersession transaction with a valid successor is accepted;
+- measured budgets are loaded/checked deterministically;
 - Linux CI passes;
 - Windows CI passes where the checker/tooling is cross-platform;
 - release-profile single-enablement and `opsctl` runtime-boundary checks pass;
@@ -339,12 +411,19 @@ At minimum prove rejection of fixtures containing:
 - provider SDK import in a protected pure scope;
 - product/runtime dependency on `opsctl`;
 - unauthorized filesystem/network/process/provider mutation;
+- Git/GitHub/process observation introduced into PF-1 pure lifecycle/inventory core;
+- pre-interpreted observation document acting as hidden lifecycle authority;
 - second production-enable flag/registry;
 - execution surface with missing/unknown activation unit;
 - enabled release profile with incomplete dependency closure;
-- unversioned required external/integration contract;
+- unversioned required external/integration/observation contract;
 - direct cross-context persistence mutation where forbidden;
 - REQUIRED rule with missing enforcement;
+- REQUIRED rule silently removed/downgraded;
+- applicability silently narrowed;
+- required negative fixture removed;
+- primary checker replaced without supersession record;
+- governed budget exceeded without accepted policy change;
 - stale DEAD predecessor still reachable after declared cutover;
 - hidden operator state/provider executor authority.
 
@@ -355,13 +434,15 @@ PF-3 is complete only when:
 1. one versioned machine-readable fitness policy exists;
 2. every initial REQUIRED rule has one primary permanent enforcement owner;
 3. positive + negative fixtures prove fail-closed behavior;
-4. the Architecture Fitness Gate is part of permanent PR CI and is intended to become/participate in protected required contexts as governance permits;
-5. architecture-impact metadata/process for later slices is documented and mechanically checked where practical;
-6. no parallel roadmap/capability/lifecycle/domain authority is introduced;
-7. current application behavior and production fail-closed state remain unchanged;
-8. exact-head CI is green and accepted on `main`;
-9. #399/#421 are freshly re-baselined only after PF-3 acceptance;
-10. FC-6 resumes only from that accepted baseline.
+4. policy supersession/anti-weakening rules are machine-enforced;
+5. a small measured architecture/tooling budget set is accepted and machine-checked;
+6. the Architecture Fitness Gate is part of permanent PR CI and is intended to become/participate in protected required contexts as governance permits;
+7. architecture-impact metadata/process for later slices is documented and mechanically checked where practical;
+8. no parallel roadmap/capability/lifecycle/domain authority is introduced;
+9. current application behavior and production fail-closed state remain unchanged;
+10. exact-head CI is green and accepted on `main`;
+11. #399/#421 are freshly re-baselined only after PF-3 acceptance;
+12. FC-6 resumes only from that accepted baseline.
 
 ## 12. What PF-3 deliberately does not do
 
@@ -374,6 +455,7 @@ PF-3 does not:
 - replace existing specialized validators with one generic framework;
 - create a second architecture inventory;
 - create a second release/capability authority;
-- create a generic DI/plugin/service-locator architecture.
+- create a generic DI/plugin/service-locator architecture;
+- introduce PF-4 or another planning phase.
 
-Its job is narrower and more important: make the agreed development discipline persistent, machine-visible and fail-closed before feature/functional work continues.
+Its job is narrower and more important: make the agreed development discipline persistent, machine-visible, anti-weakening and fail-closed before feature/functional work continues.
