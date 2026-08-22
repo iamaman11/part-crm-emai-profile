@@ -3,6 +3,7 @@
 **Document status:** SUBORDINATE_REMEDIATION_PLAN  
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Architecture evolution contract:** `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
+**PF-1 detailed specification:** `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`  
 **PF-3 enforcement specification:** `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`  
 **Accepted AR-11 design:** `docs/ARCHITECTURE_REBASELINE_V3_AR11.md`  
 **Live execution tracker:** issue #399  
@@ -39,11 +40,11 @@ source_present != production_enabled
 The mandatory continuation path is:
 
 ```text
-PF-1  Canonical Architecture Inventory cutover to opsctl       #430
+PF-1  Canonical Architecture Inventory + lifecycle-policy cutover  #430
   ->
-PF-2  Universal Hosted Operational Evidence primitive          Draft PR #428
+PF-2  Universal Hosted Operational Evidence primitive              Draft PR #428
   ->
-PF-3  Architecture Fitness Baseline                            #431
+PF-3  Architecture Fitness Baseline                                #431
   ->
 fresh re-baseline #399 / #421
   ->
@@ -54,11 +55,11 @@ FC-7 final whole-AR-11 functional audit
 AR-12 implementation entry under the canonical program
 ```
 
-PF-1/PF-2/PF-3 are **Functional Closure prerequisites**, not AR-11A, AR-11.5 or AR-12 slices. They do not alter `architecture/architecture-program-sequence.json`, reopen accepted AR-11 history or authorize production.
+PF-1/PF-2/PF-3 are **Functional Closure prerequisites**, not AR-11A, AR-11.5 or AR-12 slices. They do not alter `architecture/architecture-program-sequence.json`, reopen accepted AR-11 history or authorize production. No PF-4 or other planning phase is introduced.
 
 No path in this plan may skip PF-3 and resume FC-6 directly after PF-2.
 
-Issue #375 is closed/completed historical hardening. It is not a current blocker or lifecycle authority. Any text that still says `#375 OPEN` is projection drift and must be corrected through the existing authority/projection mechanism; it never authorizes AR-12.
+Issue #375 is closed/completed historical hardening. It is not a current blocker or lifecycle authority. Current machine files that still encode #375 or superseded acceptance mechanics are legacy current implementation debt owned by PF-1 cutover; they are not target architecture and never authorize AR-12.
 
 ## 2. Non-negotiable architecture and production invariants
 
@@ -70,7 +71,7 @@ one data/schema compatibility history
 one canonical capability/release hierarchy
 source_present != production_enabled
 build once -> promote same bits
-GitHub Actions/Environments = orchestration + approvals + credential boundary
+GitHub Actions/Environments = orchestration + approvals + credential + observation boundary
 opsctl = local typed project-specific policy / validation / projection engine
 provider executors = actual provider mutation authority
 Git = intended source/release truth
@@ -93,6 +94,7 @@ Single Authority
 Bounded Context ownership
 Inward Dependency direction
 Pure Core / Effect Shell
+Observation facts separated from policy decisions
 Explicit effect capabilities
 Typed critical IDs / states / versioned contracts
 Command / Query separation
@@ -110,7 +112,9 @@ Do not:
 - rebuild AR-11 from scratch;
 - create a second architecture inventory, release registry, capability registry, lifecycle state machine, evidence database or hidden `opsctl` state backend;
 - create a parallel inventory generator during PF-1;
-- independently parse acceptance tags in Rust/Python during PF-1;
+- make Rust invoke Git, `gh`, GitHub APIs, Node, Python or provider APIs to derive lifecycle state;
+- feed Rust an already-interpreted legacy `.mjs derive` result as authoritative lifecycle truth;
+- leave Node and Rust as two legitimate lifecycle/acceptance authorities after cutover;
 - add `promotion execute` or provider mutation authority to `opsctl`;
 - give `opsctl` GitHub/Cloudflare/provider network authority for convenience;
 - rebuild application artifacts during promotion;
@@ -119,7 +123,7 @@ Do not:
 - start AR-12;
 - absorb AR-14 recovery, AR-15 Windows updater/signing or AR-17 production authorization into this closure work;
 - retain compatibility shims without a proved current consumer or explicit accepted contract;
-- weaken a gate, convert UNKNOWN/UNPROVEN to PASS or suppress a validator to obtain green CI.
+- weaken a gate, policy rule or negative fixture to obtain green CI.
 
 ## 3. Current functional baseline — preserve, do not reimplement blindly
 
@@ -145,14 +149,14 @@ Do not repeat accepted work because an old branch or plan snapshot looks unfinis
 
 ## 4. Why PF-1 -> PF-2 -> PF-3 is binding
 
-PF-1 establishes the single inventory compiler/check/write boundary. PF-2 changes `opsctl`, operator-contract, Actions registration and authority digests, so it must consume PF-1 instead of maintaining the historical Python inventory path.
+PF-1 establishes the single typed architecture inventory and lifecycle/acceptance policy boundary. PF-2 changes `opsctl`, operator-contract, Actions registration and authority digests, so it must consume accepted PF-1 rather than maintaining historical Python inventory or Node lifecycle-policy paths.
 
 PF-3 then converts the agreed development architecture into persistent machine enforcement before Functional Closure resumes. Without PF-3, FC-6 and later AR/PC work could reintroduce duplicated authorities, provider leakage, hidden effects, parallel feature-enable paths or permanent legacy shims even though the prose contract exists.
 
 Therefore:
 
 ```text
-PF-1 owns canonical inventory authority cutover
+PF-1 owns canonical inventory + lifecycle/acceptance implementation cutover
 PF-2 owns reusable hosted evidence
 PF-3 owns permanent architecture-fitness enforcement
 FC-6 consumes all three
@@ -160,255 +164,257 @@ FC-6 consumes all three
 
 Reversing or skipping this order requires new defect evidence plus an explicit update to the canonical program and this plan.
 
-## 5. PF-1 — Canonical Architecture Inventory cutover to `opsctl`
+## 5. PF-1 — Canonical Architecture Inventory + Lifecycle Policy cutover to `opsctl`
+
+Detailed PF-1 requirements are owned by `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` together with issue #430. If older PF-1 wording conflicts with that detailed specification, the detailed specification is the current subordinate PF-1 contract under this plan.
 
 ### 5.1 Goal and end state
 
-Make `opsctl` the **single current implementation authority** for deterministic construction, rendering, checking, inspection and bounded local writing of `architecture/inventory.json`.
+Make `opsctl` the **single current implementation authority** for:
+
+- typed architecture acceptance/lifecycle policy evaluation over explicit raw observations;
+- deterministic construction, rendering, checking and inspection of architecture inventory;
+- exactly one bounded local `GENERATED_PROJECTION_WRITE` to `architecture/inventory.json`.
+
+Target architecture:
 
 ```text
-canonical repository/domain authorities
-+ stable repository structure
-+ validated canonical lifecycle-derivation result
-                ↓
-typed Rust architecture inventory model
-                ↓
-one deterministic compiler
-                ↓
-architecture/inventory.json
+Git / GitHub / repository checkout
+        ↓
+outer observation adapters
+        ↓
+RawArchitectureAcceptanceEvidenceV1
+        ↓
+typed Rust validation
+        ↓
+pure AcceptancePolicy / LifecycleEvaluator
+        ↓
+DerivedLifecycleStateV1
+        ↓
+ValidatedAuthoritySet
+        ↓
+pure ArchitectureInventoryCompiler
+        ↓
+canonical render/check/inspect
+        ↓
+GENERATED_PROJECTION_WRITE only when explicitly requested
 ```
 
 Forbidden final state:
 
 ```text
-Rust generator
-+ Python generator
-+ historical engine constants
-+ monkey patches
-+ manual inventory edits
+Rust lifecycle evaluator + Node lifecycle evaluator both authoritative
+Rust inventory compiler + Python generator both authoritative
+legacy engine constants copied into a new god-validator
+manual inventory edits
+opsctl -> git/gh/network/provider subprocesses
 ```
 
 `architecture/inventory.json` remains a tracked generated projection. It does not become lifecycle acceptance authority or input authority for the stable/domain facts it projects.
 
-### 5.2 Logical layers
+### 5.2 Observation shell and pure core
+
+GitHub Actions/repository adapters own observation effects. They may use existing Git/GitHub mechanisms to collect exact SHAs/trees/parents, annotated acceptance tags, check runs, workflow runs and review/thread observations.
+
+They do **not** decide accepted/current lifecycle state.
+
+Rust receives a closed/versioned raw observation contract and evaluates policy deterministically. It does not execute:
 
 ```text
-architecture/model
-    typed schemas/invariants
-
-architecture/authorities
-    typed canonical-authority loaders/validators
-
-architecture/inventory/build
-    pure validated inputs -> ArchitectureInventory
-
-architecture/inventory/render
-    deterministic canonical bytes
-
-architecture/inventory/check
-    semantic/byte comparison + precise diagnostics
-
-architecture/inventory/write
-    one bounded atomic GENERATED_PROJECTION_WRITE
-
-cli/lib composition root
-    parsing, wiring, presentation only
+git
+gh
+GitHub API
+Node
+Python
+provider API
 ```
 
-Physical modules may be coarser when clearer. CLI/parser code does not own domain semantics and micro-modules are not a goal.
+The static AR order remains owned by `architecture/architecture-program-sequence.json`; the Rust evaluator consumes that authority rather than inventing another sequence.
 
-### 5.3 CLI and lifecycle boundary
+### 5.3 Corrected lifecycle / acceptance boundary
 
-Target active surface:
+The previous rule that `.github/scripts/architecture-acceptance.mjs derive` must remain the canonical upstream deriver is **superseded by this audited PF-1 contract**.
+
+The current Node file is a policy engine, not a unique observer. The current audit proves `architecture-acceptance-recorder.yml` already obtains raw Git/GitHub observations directly. Therefore target lifecycle flow is:
 
 ```text
-opsctl architecture inventory render --lifecycle-json PATH
+architecture/architecture-program-sequence.json
++ current versioned architecture acceptance policy
++ RawArchitectureAcceptanceEvidenceV1
+        ↓
+pure Rust LifecycleEvaluator
+        ↓
+DerivedLifecycleStateV1
+```
+
+PF-1 must audit and correctly migrate still-valid acceptance semantics, including immutable acceptance metadata, exact-head evidence, candidate/merge-tree identity, first-parent/base proof, accepted-main reread and fail-closed production state.
+
+PF-1 must also explicitly remove superseded current policy assumptions such as stale #375 ownership and `merge_method = squash` where they conflict with the accepted guarded merge-commit discipline. No policy field is changed merely to make CI pass.
+
+### 5.4 Atomic authority cutover — no dual current implementation
+
+Temporary candidate parity is allowed; dual legitimacy is not.
+
+```text
+BEFORE
+Node = accepted lifecycle/acceptance implementation
+Python = accepted inventory implementation
+
+CANDIDATE BUILD/PARITY
+Rust evaluators exist as non-authoritative candidate code
+
+CUTOVER
+all current callers switch atomically
+policy/projection references switch
+Rust becomes sole current implementation
+
+AFTER
+architecture-acceptance.mjs caller count = 0
+architecture-acceptance.mjs unique-current-invariant count = 0
+architecture-acceptance.mjs = DEAD -> DELETE
+Python inventory predecessor caller count = 0
+DEAD Python inventory predecessors -> DELETE
+```
+
+The current audit found no unique raw-observation capability requiring a retained Node observer; target disposition for `.github/scripts/architecture-acceptance.mjs` is therefore **DELETE**, not KEEP_AS_OBSERVER.
+
+Known current callers to re-prove and switch include governance gate, acceptance recorder, Python inventory generator and lifecycle-projection policy references. Exact caller discovery is repeated on the candidate head before deletion.
+
+### 5.5 Pure inventory core and domain-validation boundary
+
+PF-1 separates repository adapters from pure compilation:
+
+```text
+RepositoryAuthorityLoader
+        ↓
+ValidatedAuthoritySet
+        +
+DerivedLifecycleStateV1
+        ↓
+PureInventoryBuilder
+        ↓
+ArchitectureInventory
+        ↓
+CanonicalRenderer
+```
+
+Inventory compilation must not become a monolithic copy of every AR/domain validator.
+
+Responsibility split:
+
+| Layer | Responsibility |
+| --- | --- |
+| Domain/machine authority validator | Full semantics owned by that bounded authority |
+| Inventory compiler | kind/version/identity/ownership/reference and cross-authority consistency needed for projection |
+| Inventory projection | deterministic readable representation with no independent semantic authority |
+
+This boundary must be covered by tests so a future authority is added through a typed adapter/contract rather than by growing a central static registry.
+
+### 5.6 CLI and effects
+
+Target inventory surface remains:
+
+```text
+opsctl architecture inventory render [explicit typed observation/lifecycle input]
 opsctl architecture inventory check
-opsctl architecture inventory check --lifecycle-json PATH
-opsctl architecture inventory write --lifecycle-json PATH
+opsctl architecture inventory check [explicit typed observation/lifecycle input]
+opsctl architecture inventory write [explicit typed observation/lifecycle input]
 opsctl architecture inventory inspect
 ```
 
-Unknown/duplicate arguments fail closed. No arbitrary `--output`, stdin authority, hidden state, Git/GitHub/provider invocation or Node/Python/Git child process is allowed.
-
-The canonical lifecycle deriver remains:
-
-```text
-architecture/architecture-acceptance-policy.json
-+ architecture/architecture-program-sequence.json
-+ immutable Git acceptance metadata
--> .github/scripts/architecture-acceptance.mjs derive
-```
-
-Rust consumes and validates its closed/versioned JSON result; Rust does not derive acceptance from Git history/tags. A future lifecycle-deriver language migration would be a separate authority cutover, not PF-1.
+Exact final argument spelling is subordinate to the versioned contract. No arbitrary `--output`, hidden stdin authority, hidden state, Git/GitHub/provider invocation or Node/Python/Git child process is allowed.
 
 The old root `opsctl inventory` surface has no compatibility entitlement before production. Retain an alias only if final repository-wide caller/contract proof demonstrates a legitimate current consumer; otherwise remove it as part of cutover.
 
-### 5.4 Typed authorities and source ownership
+### 5.7 Canonical bytes, atomic write and diagnostics
 
-Known schemas use typed Rust models. Inventory inputs are classified as:
+PF-1 reuses one neutral Rust canonical JSON/SHA-256 implementation for release metadata, architecture/lifecycle evidence, architecture inventory and later PF-2 evidence. No second serializer/digest authority.
 
-```text
-A. DERIVED_REPOSITORY_STRUCTURE
-B. EXISTING_CANONICAL_MACHINE_OR_DOMAIN_AUTHORITY
-C. INTENTIONAL_STATIC_CONTRACT only where no authority exists
-```
+Repeated render with identical validated inputs is byte-identical. Pure core must be directly testable from typed snapshots without requiring a giant fixture repository.
 
-Do not mechanically translate Python `CLASSIFIERS`, route specs, document-status tables or other constant registries into Rust constants and call that a cutover.
-
-At minimum consume/validate current authorities for:
-
-- `architecture/runtime-topology-ar2.json`;
-- `architecture/d1-evolution-ar9.json`;
-- `architecture/runtime-cutover-ar10.json`;
-- `architecture/release-architecture-ar11.json`;
-- `architecture/credential-authority.json`;
-- `architecture/credential-lifecycle.json`;
-- `architecture/profile-security.json`;
-- `architecture/operator-contract.json`;
-- `architecture/architecture-program-sequence.json`;
-- `architecture/lifecycle-projection-policy.json`;
-- legitimate workspace/application/runtime/generated-contract/document-classification inputs.
-
-Generic JSON values are permitted only at genuine extension boundaries and cannot bypass kind/version validation.
-
-### 5.5 Canonical bytes and effects
-
-PF-1 reuses one neutral Rust canonical JSON/SHA-256 implementation for release metadata, architecture inventory and later PF-2 evidence. No second serializer/digest authority.
-
-Repeated render with identical inputs is byte-identical.
-
-`render/check/inspect` are repository read-only. Exactly one bounded effect is added:
+`render/check/inspect` are read-only. Exactly one bounded effect is added:
 
 ```text
 repository_workspace_effect = GENERATED_PROJECTION_WRITE
 ```
 
-reachable only through `architecture inventory write` and targeting exactly:
+reachable only through `architecture inventory write` and targeting exactly `architecture/inventory.json`.
 
-```text
-architecture/inventory.json
-```
+`write` is fail-closed: validate all inputs -> build complete output in memory -> canonical serialize -> safe sibling staging/atomic replacement on supported platform -> read back -> parse/validate -> prove bytes identical. Failure before activation leaves the previous tracked inventory intact.
 
-No Git commit/push, GitHub API, provider API, database/customer-state mutation or other repository file mutation is granted.
+Plain `check` rebuilds stable/domain projection from canonical authorities/repository structure and validates tracked lifecycle snapshot without treating freshness as acceptance authority. Explicit synchronization/check consumes the typed raw-observation/lifecycle contract and requires projection match.
 
-### 5.6 Atomic write contract
+Diagnostics should identify JSON path/field, tracked value, expected value, owning authority/projection family and `CURRENT | DRIFTED | INVALID` without mutation.
 
-`write` is fail-closed:
-
-```text
-resolve canonical repo root
--> validate all inputs
--> build complete typed inventory in memory
--> validate complete output
--> canonical serialize
--> sibling temporary file
--> flush / safely replace target atomically where supported
--> read back
--> parse/validate again
--> prove read-back bytes == canonical in-memory bytes
-```
-
-Failure before activation leaves the previous tracked inventory intact.
-
-### 5.7 Lifecycle snapshot / check semantics
-
-Plain `check` rebuilds stable/domain projection from canonical authorities/repository structure and validates the tracked lifecycle snapshot without treating snapshot freshness as acceptance authority.
-
-`check --lifecycle-json PATH` additionally validates the external canonical lifecycle result and requires the tracked lifecycle projection to match it.
-
-For the same lifecycle input:
-
-```text
-write bytes == render bytes
-```
-
-and explicit check immediately after write returns CURRENT.
-
-A stale inventory diagnostic should identify, where practical:
-
-```text
-JSON path / field
-tracked value
-expected value
-owning authority or projection family
-decision = CURRENT | DRIFTED | INVALID
-mutation_executed = false
-```
-
-### 5.8 Predecessor retirement
-
-Cutover order:
-
-```text
-map unique invariants
--> port required current semantics
--> positive + negative parity tests
--> switch every current caller/CI gate
--> repository-wide caller scan
--> prove zero current callers
--> prove zero unique current invariants
--> update current historical-executable classification
--> retire/delete predecessor classified DEAD
--> repeat caller scan
-```
-
-Expected Python predecessor cluster includes `scripts/generate-architecture-inventory.py`, `scripts/generate-architecture-inventory-engine.py` and `_architecture_inventory_core.py` only when caller/invariant proof classifies each path DEAD.
-
-Frozen `architecture/python-estate-ar6.json` remains immutable AR-6 provenance. Current PF-1 disposition belongs in `architecture/historical-executable-debt.json` and other current overlays; do not falsify historical AR-6 counts to make live estate match.
-
-`opsctl doctor`, repository-root detection, quality workflows and audit workflows must no longer require the retired generator after cutover.
-
-### 5.9 PF-1 positive proofs
+### 5.8 PF-1 positive proofs
 
 At minimum:
 
 ```text
-current accepted repository -> render succeeds
+current accepted repository -> authority loading succeeds
+valid raw acceptance observations -> deterministic lifecycle result
+current target guarded merge identity -> accepted by new evaluator
+pure lifecycle evaluation repeated -> identical result
+pure inventory build from typed snapshot -> deterministic
 render twice -> byte-identical
 write -> tracked file exactly equals render bytes
 write twice -> idempotent / byte-identical
 check immediately after write -> CURRENT
 plain check tolerates only permitted non-authoritative lifecycle staleness
-existing legitimate stable/domain projection coverage -> preserved
 Linux -> pass
 Windows -> pass
+post-cutover governance gate/acceptance recorder -> Rust policy path
+repository-wide old Node/Python caller scan -> zero
 ```
 
-### 5.10 PF-1 negative proofs
+### 5.9 PF-1 negative proofs
 
 At minimum reject:
 
 ```text
+malformed/unknown raw acceptance observation schema
+unknown/duplicate acceptance tag observation
+tag/path/record slice mismatch
+non-contiguous acceptance after a gap
+wrong tag target / merge identity
+candidate tree != merge tree where current policy requires equality
+first-parent/base mismatch
+incomplete/failed exact-head checks or applicable workflows
+blocking review/unresolved thread evidence
+stale accepted-main reread observation
+interpreted upstream document attempting to declare accepted/current state as raw fact
 missing required authority
 malformed JSON
 unknown authority kind/version
 wrong authority ownership/status
-invalid source/document path
-unknown/duplicate classification where uniqueness is required
 lifecycle accepted/current successor mismatch
 architecture_complete=true before owning stage
 production_core_gate=AUTHORIZED before owning stage
-production_ready=true
+production_ready=true before PC-1
 production_mutation=true
 one-byte tracked inventory drift
 semantically changed tracked inventory
 noncanonical bytes where canonicality is required
 attempt to write any path other than architecture/inventory.json
 arbitrary --output
-retired Python generator still reachable from current CI/caller graph
-second lifecycle derivation implementation
-process/network/provider mutation introduced into inventory path
+old .mjs caller reachable after declared cutover
+retired Python generator still reachable after declared cutover
+dual current lifecycle implementation
+process/network/Git/GitHub/provider access introduced into Rust lifecycle/inventory path
+silent acceptance-policy weakening to satisfy a fixture
 ```
 
-### 5.11 PF-1 Definition of Done
+### 5.10 PF-1 Definition of Done
 
 PF-1 closes only when one exact head proves:
 
+- one current Rust lifecycle/acceptance evaluator over typed raw observations;
 - one current Rust inventory compiler/checker/writer;
-- no legitimate Python inventory caller;
-- all unique predecessor invariants ported or intentionally retired with evidence;
-- tracked inventory generated only through native write;
+- no legitimate Node lifecycle-policy caller and `.github/scripts/architecture-acceptance.mjs` deleted after zero-caller/zero-unique-invariant proof;
+- no legitimate Python inventory caller and every DEAD inventory predecessor deleted;
+- current acceptance/lifecycle policy no longer encodes superseded #375/squash assumptions as target semantics;
+- domain validation remains with specialized bounded owners instead of a god inventory validator;
+- pure builder/repository adapters separated and directly tested;
 - canonical bytes shared and deterministic;
 - bounded effect and operator-contract parity exact;
 - Linux/Windows and all applicable workflows/protected contexts green;
@@ -495,12 +501,65 @@ After PF-1 acceptance:
 2. rebase/reimplement only still-valid Hosted Evidence changes;
 3. remove manual/stale inventory maintenance;
 4. update operator-contract and regenerate/check inventory only through PF-1 commands;
-5. retain no bridge to retired Python inventory generation;
+5. retain no bridge to retired Python inventory or Node lifecycle-policy generation;
 6. directly revalidate reusable-workflow GitHub context semantics;
 7. complete Rust/workflow fail-closed matrices;
 8. treat all old #428 CI evidence as obsolete after head/base changes.
 
-### 6.5 Reusable publisher requirements
+### 6.5 Formal trust model
+
+PF-2 must document and mechanically preserve what each layer proves and does **not** prove:
+
+| Layer | Proves | Does not prove |
+| --- | --- | --- |
+| Provider observation | What the authorized observer received from the provider at observation time | Independent truth of provider state or GitHub run identity |
+| Typed envelope | Closed schema, canonical context and policy compliance | Truthfulness of an arbitrary payload source |
+| Artifact digest | Exact subject-byte identity | Observer authority |
+| GitHub Artifact Attestation | Binding of exact subject bytes to hosted workflow identity/provenance | Business-semantic correctness of the provider state |
+| `opsctl evidence verify` | Locally checkable schema/context/policy/digest constraints | Independent provider truth when no trusted expected observation exists |
+
+No UI, issue comment or attestation may be described as proving more than its layer actually establishes.
+
+### 6.6 Freshness, replay and mutation eligibility
+
+Hosted Evidence validity and eligibility for a later mutation are distinct.
+
+Versioned evidence must bind, as applicable:
+
+```text
+observed_at
+issued_at
+repository
+source SHA/ref
+workflow identity/version
+run id/attempt
+environment
+subject identity/digest
+authority/policy version
+observation scope
+fence/current-state identity
+freshness policy/window
+replay policy
+```
+
+Canonical validity outcome must distinguish at least:
+
+```text
+VALID
+VALID_BUT_STALE
+INVALID
+```
+
+For any decision that may authorize mutation:
+
+```text
+VALID_BUT_STALE -> BLOCKED
+INVALID -> BLOCKED
+```
+
+Freshness is policy-owned and environment/observation-specific; it is not an arbitrary CLI timeout. Replay of a cryptographically valid but superseded observation must be rejected when the owning decision requires current state.
+
+### 6.7 Reusable publisher requirements
 
 The publisher must:
 
@@ -516,7 +575,7 @@ The publisher must:
 
 Reusable-workflow semantics for `github.sha`, `github.ref`, workflow identity, run id/attempt and caller-vs-called workflow identity must be proven against current GitHub behavior rather than assumed from memory.
 
-### 6.6 Evidence security rules
+### 6.8 Evidence security rules
 
 Reject/exclude:
 
@@ -528,11 +587,14 @@ Reject/exclude:
 - unknown schema/kind/payload versions;
 - unexpected fields in closed schemas;
 - malformed/oversized inputs;
-- context mismatch between envelope and independently reconstructed expected context.
+- context mismatch between envelope and independently reconstructed expected context;
+- impossible timestamps/future observations;
+- stale evidence presented as mutation-eligible;
+- replayed evidence whose fence/current-state identity no longer matches.
 
 `opsctl evidence verify` proves local schema/canonical/context policy. Artifact Attestation proves subject-byte provenance/tampering resistance. Local verification alone must not be misrepresented as independent semantic truth for an arbitrary valid payload when no trusted expected payload identity exists.
 
-### 6.7 PF-2 negative matrix
+### 6.9 PF-2 negative matrix
 
 At minimum:
 
@@ -558,14 +620,19 @@ wrong CLI options -> reject
 unsupported/duplicate CLI arguments -> reject
 artifact with extra files -> publisher reject
 attestation subject differs from verified bytes -> verification failure
+future/impossible observed_at or issued_at -> reject
+valid-but-stale evidence used for mutation admission -> BLOCKED
+replayed evidence with stale fence/current-state identity -> BLOCKED
 ```
 
-### 6.8 PF-2 Definition of Done
+### 6.10 PF-2 Definition of Done
 
 PF-2 closes only when:
 
 - one reusable Hosted Operational Evidence envelope/publication architecture exists;
 - all supported payloads typed/versioned/fail-closed;
+- formal trust model is documented and tested at relevant boundaries;
+- freshness/replay semantics and `VALID | VALID_BUT_STALE | INVALID` are implemented where required;
 - canonical JSON/digest shared with PF-1/release policy;
 - `opsctl` remains offline/no-provider/no-secret/no-production mutation authority;
 - publisher has no provider credentials;
@@ -583,7 +650,7 @@ Only accepted PF-2 `main` may become the base for PF-3. **PF-2 acceptance does n
 
 ## 7. PF-3 — Architecture Fitness Baseline
 
-PF-3 #431 makes the Architecture Evolution Quality Contract mechanically persistent before FC-6.
+PF-3 #431 makes the Architecture Evolution Quality Contract mechanically persistent before FC-6. Detailed requirements remain in `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`.
 
 Canonical machine target:
 
@@ -634,7 +701,52 @@ The gate fails when:
 - a REQUIRED rule is silently downgraded/removed;
 - candidate introduces prohibited dependency/effect/production-enable path.
 
-### 7.2 PF-3 negative baseline
+### 7.2 Fitness-policy evolution / anti-weakening
+
+A fitness policy must not be weakenable by editing the policy itself.
+
+Changes such as the following require an explicit versioned supersession/migration record and permanent anti-weakening proof:
+
+```text
+remove REQUIRED rule
+REQUIRED -> weaker status
+narrow applicability
+replace primary checker
+remove required negative fixture
+weaken expected fail-closed result
+retire a rule without a successor/justification where the invariant still applies
+```
+
+A supersession record must identify at least:
+
+```text
+old_rule
+successor_rule or explicit retirement reason
+reason
+compatibility/security impact
+owning authority/slice
+accepted source
+```
+
+The gate fails closed on silent weakening.
+
+### 7.3 Architecture budgets
+
+PF-3 must establish a small machine-readable/measurable budget set that protects usability as well as correctness. Exact thresholds are chosen from measured current baselines rather than invented numbers, but the policy must cover at least:
+
+- semantic authority count per owned fact: exactly 1;
+- mutation executor count per owned operation: exactly 1;
+- REQUIRED fitness rules without active enforcement: 0;
+- REQUIRED rules requiring a negative fixture but lacking one: 0;
+- unclassified external effect classes in protected scope: 0;
+- hidden production-enable authorities outside Release Profile: 0;
+- deterministic Linux/Windows result equivalence for cross-platform `opsctl` policy;
+- bounded local `opsctl`/required PR CI runtime budgets derived from an observed baseline;
+- bounded Hosted Evidence subject size/freshness policy where PF-2 owns those values.
+
+Performance budgets are guardrails, not an excuse to weaken correctness. A threshold change is itself governed and justified by observed evidence.
+
+### 7.4 PF-3 negative baseline
 
 At minimum reject fixtures with:
 
@@ -649,13 +761,15 @@ enabled release profile with incomplete dependency closure
 unversioned required external/integration contract
 forbidden cross-context persistence mutation
 REQUIRED rule with missing enforcement
+REQUIRED rule silently downgraded or applicability narrowed
+required negative fixture removed
 reachable DEAD predecessor after cutover
 hidden operator state/provider executor authority
 ```
 
 Linux is mandatory; Windows is mandatory where checker/operator behavior is cross-platform.
 
-### 7.3 Architecture Impact after PF-3
+### 7.5 Architecture Impact after PF-3
 
 Every later materially architecture-changing PF/FC/AR/PC candidate declares:
 
@@ -673,12 +787,14 @@ applicable fitness Rule IDs
 
 `none` is valid only when justified by the diff.
 
-### 7.4 PF-3 Definition of Done
+### 7.6 PF-3 Definition of Done
 
 PF-3 closes only when:
 
 - versioned fitness policy exists;
 - every initial REQUIRED rule has one primary reachable enforcement owner;
+- policy evolution/supersession rules prevent silent weakening;
+- small measured architecture/tooling budgets are accepted and machine-visible;
 - positive/negative fixtures prove fail-closed behavior;
 - permanent Architecture Fitness Gate is active in PR CI/governance as permitted;
 - Architecture Impact discipline is documented/mechanically checked where practical;
@@ -702,7 +818,7 @@ Before any further FC-6 ceremony step:
 6. verify accepted-main durable Release Set publication remains observable through PF-2 evidence where applicable;
 7. verify staging observe credential readiness through canonical credential authority + Hosted Evidence;
 8. request externally issued missing observe credential/metadata if required; never widen/reuse deploy credential as shortcut;
-9. verify PF-3 fitness policy/gate current and no REQUIRED rule unenforced;
+9. verify PF-3 fitness policy/gate current and no REQUIRED rule unenforced/quietly weakened;
 10. verify no AR-12 implementation entered source;
 11. verify production fail-closed invariants.
 
@@ -719,7 +835,67 @@ A = older accepted-main durable Release Set
 B = newer accepted-main durable Release Set
 ```
 
-Required live proof:
+### 9.1 Versioned ceremony state machine
+
+FC-6 must be represented by one versioned state machine rather than inferred only from shell-step ordering.
+
+Minimum non-terminal progression:
+
+```text
+CREATED
+-> SOURCE_RESOLVED
+-> RELEASE_VERIFIED
+-> OBSERVED
+-> PREFLIGHT_PASSED
+-> MUTATION_AUTHORIZED
+-> MUTATION_STARTED
+-> POST_VERIFY_PASSED
+-> SUCCEEDED
+```
+
+Required terminal/control outcomes include:
+
+```text
+FAILED_PRE_MUTATION
+MUTATION_OUTCOME_UNKNOWN
+FAILED_POST_MUTATION
+BLOCKED
+NO_CHANGE
+SUCCEEDED
+```
+
+Every transition binds its allowed predecessor, required evidence identities, permitted effect class, idempotency/fence identity, retry policy and terminal-audit obligation.
+
+### 9.2 Unknown mutation outcome reconciliation
+
+The dangerous case is explicitly modeled:
+
+```text
+provider mutation request sent
+-> transport/workflow result lost or ambiguous
+-> MUTATION_OUTCOME_UNKNOWN
+```
+
+Blind mutation retry is forbidden.
+
+Required recovery path:
+
+```text
+MUTATION_OUTCOME_UNKNOWN
+-> read-only provider reconciliation
+-> APPLIED | NOT_APPLIED | DIVERGED | STILL_UNKNOWN
+```
+
+Then:
+
+- `APPLIED` -> continue post-verify against the exact intended target;
+- `NOT_APPLIED` -> retry only if idempotency/fence policy still authorizes it;
+- `DIVERGED` -> block and use owned rollback/recovery policy;
+- `STILL_UNKNOWN` -> block/escalate; never claim success or issue an uncontrolled retry.
+
+This FC-6 reconciliation is bounded promotion-ceremony semantics and must not become the generic AR-14 recovery subsystem.
+
+### 9.3 Required live proof
 
 1. A/B resolve to exact durable immutable release assets;
 2. both sources are accepted protected-main history;
@@ -728,17 +904,19 @@ Required live proof:
 5. target and rollback-known-good compatibility use the same canonical evaluator;
 6. staging A -> B plan/preflight is READY or fails closed for a typed legitimate reason;
 7. protected executor uses exact B bytes with no rebuild;
-8. post-deploy `promotion verify B` = VERIFIED;
-9. second B plan = NO_CHANGE;
-10. A is reevaluated against post-B observed state as rollback known-good;
-11. if compatible, B -> A uses original durable A bytes through the same canonical workflow;
-12. post-rollback `promotion verify A` = VERIFIED;
-13. second A plan = NO_CHANGE;
-14. incompatible/UNKNOWN rollback blocks before mutation;
-15. stale provider state between preflight/executor trips expected-current fence;
-16. applicable stage evidence is captured through PF-2 primitives;
-17. applicable dependency/effect/capability rules remain green through PF-3;
-18. production remains untouched.
+8. ceremony transition/evidence reaches a valid post-mutation state or `MUTATION_OUTCOME_UNKNOWN` reconciliation path;
+9. post-deploy `promotion verify B` = VERIFIED;
+10. second B plan = NO_CHANGE;
+11. A is reevaluated against post-B observed state as rollback known-good;
+12. if compatible, B -> A uses original durable A bytes through the same canonical workflow;
+13. post-rollback `promotion verify A` = VERIFIED;
+14. second A plan = NO_CHANGE;
+15. incompatible/UNKNOWN rollback blocks before mutation;
+16. stale provider state between preflight/executor trips expected-current fence;
+17. ambiguous provider outcome cannot trigger blind retry and is reconciled read-only first;
+18. applicable stage evidence is captured through PF-2 primitives and must be mutation-eligible, not merely cryptographically valid;
+19. applicable dependency/effect/capability rules remain green through PF-3;
+20. production remains untouched.
 
 If no naturally compatible A/B pair exists, correct typed policy BLOCKED evidence is valid. Compatibility must never be falsified to complete ceremony.
 
@@ -757,15 +935,19 @@ After FC-6, perform a fresh audit from current protected `main`.
 ### 10.2 Inventory/tooling
 
 - one current `opsctl` inventory compiler/checker/writer;
+- one current typed Rust acceptance/lifecycle evaluator over raw observations;
+- `.github/scripts/architecture-acceptance.mjs` absent after proven cutover;
 - zero current legacy Python generator caller;
 - deterministic/idempotent tracked projection;
 - one canonical serializer/digest implementation family;
-- no duplicate lifecycle derivation;
+- no duplicate lifecycle derivation or interpreted legacy upstream authority;
 - exact operator-contract ↔ CLI ↔ inventory parity.
 
 ### 10.3 Hosted evidence
 
 - one reusable typed evidence primitive;
+- formal trust model clearly states proof limits;
+- freshness/replay and mutation-eligibility rules enforced;
 - observation/signing/policy responsibilities separated;
 - attested exact bytes independently verifiable;
 - no secret material or second evidence backend.
@@ -774,6 +956,8 @@ After FC-6, perform a fresh audit from current protected `main`.
 
 - PF-3 policy/gate accepted and current;
 - no REQUIRED rule without enforcement;
+- no silent policy weakening/supersession gap;
+- accepted budgets current and justified;
 - affected positive/negative fixtures green;
 - no duplicate authority, provider leakage, hidden effect, second production-enable path or reachable DEAD predecessor in closure-touched scope;
 - Architecture Impact discipline ready for AR-12 onward.
@@ -787,6 +971,7 @@ After FC-6, perform a fresh audit from current protected `main`.
 
 ### 10.6 Promotion / rollback
 
+- deterministic ceremony state machine;
 - deterministic plan;
 - NO_CHANGE convergence;
 - stale fence;
@@ -796,7 +981,8 @@ After FC-6, perform a fresh audit from current protected `main`.
 - least-privilege credential boundary;
 - rollback compatibility uses current observed state;
 - incompatible/UNKNOWN blocks before mutation;
-- post-deploy VERIFIED is the only success state.
+- ambiguous mutation outcome reconciles read-only before any retry;
+- post-deploy VERIFIED is the only successful mutation completion state.
 
 ### 10.7 Behavioural certification
 
@@ -841,12 +1027,16 @@ AR-12 implementation mixed into closure = false
 
 | Concern | Canonical owner / boundary |
 | --- | --- |
-| Program/lifecycle order | Architecture Re-baseline authority + Git-derived acceptance |
+| Static program/lifecycle order | `architecture/architecture-program-sequence.json` under Architecture Re-baseline authority |
+| Git/GitHub acceptance observations | GitHub Actions/repository observation shell |
+| Acceptance/lifecycle policy evaluation after PF-1 | `tools/opsctl` typed Rust architecture policy core |
+| PF-1 detailed cutover contract | `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` / #430 |
 | Cross-cutting evolution rules | `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md` |
 | Fitness enforcement specification | `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` / #431 |
 | Fitness machine policy after PF-3 | `architecture/architecture-fitness-policy.json` |
 | Architecture inventory model/compiler/check/write | `tools/opsctl` PF-1 architecture module |
 | Architecture inventory tracked projection | `architecture/inventory.json` |
+| Acceptance/lifecycle predecessor | `.github/scripts/architecture-acceptance.mjs`, DELETE after PF-1 proof |
 | Inventory predecessor | Python inventory cluster, retired after invariant/caller proof |
 | Frozen Python provenance | `architecture/python-estate-ar6.json` |
 | Current executable-debt disposition | `architecture/historical-executable-debt.json` |
@@ -864,14 +1054,14 @@ AR-12 implementation mixed into closure = false
 | FC live tracker | issue #399 |
 | FC-6 hardening/readiness | issue #421 |
 
-Python remains valid for separately classified validators/tests/fixtures/collection adapters when it does not duplicate a concern explicitly cut over to another authority. PF-1 is a bounded inventory cutover, not a global Python-to-Rust rewrite.
+Python remains valid for separately classified validators/tests/fixtures/collection adapters when it does not duplicate a concern explicitly cut over to another authority. PF-1 is a bounded architecture-policy/inventory cutover, not a global Python-to-Rust rewrite.
 
 ## 12. Testing and stage-gate discipline
 
 Every bounded PF/FC implementation includes positive and negative evidence in the same candidate. Use the lowest layer that can prove the requirement:
 
 ```text
-pure Rust unit tests
+pure Rust unit/property tests
 -> Rust filesystem/integration tests
 -> repository architecture/fitness policy tests
 -> workflow semantic/static tests
@@ -916,12 +1106,15 @@ One current accepted repository state must simultaneously prove:
 
 - target architecture/evolution contract accepted in `main`;
 - PF-3 fitness baseline accepted and machine-enforced;
-- `opsctl` is sole current architecture inventory compiler/checker/writer;
+- `opsctl` is sole current acceptance/lifecycle policy evaluator and architecture inventory compiler/checker/writer for PF-1 scope;
+- Git/GitHub raw observation effects remain outside Rust policy core;
+- `.github/scripts/architecture-acceptance.mjs` deleted after zero-caller/zero-unique-invariant proof;
 - no parallel current Python inventory authority;
 - typed layers separated from CLI/adapters;
 - deterministic render/check/write byte-stable;
 - explicit bounded generated-file write authority;
-- singular lifecycle derivation;
+- singular lifecycle derivation from raw observations;
+- domain semantic validators remain bounded rather than absorbed into inventory;
 - architecture inventory understandable from current code/docs without historical issue archaeology;
 - no hidden/parallel authority introduced.
 
@@ -929,6 +1122,8 @@ One current accepted repository state must simultaneously prove:
 
 - one reusable typed/versioned Hosted Evidence primitive;
 - immutable attested subject bytes;
+- formal trust model states what each layer proves/does not prove;
+- freshness/replay and mutation eligibility are explicit;
 - local policy and GitHub provenance verification clearly separated;
 - no secret-bearing evidence or hidden backend;
 - future evidence extends by typed payload variant, not new framework.
@@ -943,6 +1138,8 @@ One current accepted repository state must simultaneously prove:
 
 ### Promotion / rollback
 
+- versioned ceremony state machine with explicit terminal states;
+- unknown mutation outcome cannot trigger blind retry and must reconcile read-only;
 - no rebuild on promotion;
 - deterministic plan and NO_CHANGE work;
 - concurrency/expected-current fencing enforced;
@@ -964,6 +1161,7 @@ One current accepted repository state must simultaneously prove:
 - original AR-11 30-case matrix has permanent 1:1 behavioural mapping;
 - closure regressions 31–37 permanently covered;
 - PF-1/PF-2/PF-3 negative matrices permanently covered;
+- PF-3 anti-weakening and budget checks active;
 - Linux/Windows suites pass;
 - real staging same-bits promotion/rollback evidence exists where compatibility permits or is correctly policy-BLOCKED;
 - final audit P0=0/P1=0/P2=0 for Functional Closure scope.
