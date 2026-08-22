@@ -5,11 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
+import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MATRIX = ROOT / "architecture" / "ar11-behavioural-certification.json"
+OPSCTL_BOUNDARY = ROOT / "scripts" / "check-opsctl-readonly.py"
 EXPECTED_CASES = tuple(range(1, 38))
 ALLOWED_KINDS = {
     "rust_test",
@@ -32,21 +35,6 @@ LEGACY_D3 = (
     ".github/workflows/mailbox-secret-resolver-promotion.yml",
     "scripts/mailbox-secret-resolver-promotion.py",
     "scripts/_mailbox_secret_resolver_promotion_core.py",
-)
-OPSCTL_FORBIDDEN = (
-    "reqwest",
-    "ureq",
-    "hyper::",
-    "std::net",
-    "TcpStream",
-    "UdpSocket",
-    "std::process::Command",
-    "tokio::process",
-    "CLOUDFLARE_API_TOKEN",
-    "CLOUDFLARE_DEPLOY_MANIFEST_JSON",
-    "wrangler deploy",
-    "wrangler d1 execute",
-    "secret put",
 )
 
 
@@ -73,16 +61,18 @@ def safe_path(value: str) -> Path:
 
 
 def validate_opsctl_offline_boundary() -> None:
-    manifest = safe_path("tools/opsctl/Cargo.toml").read_text(encoding="utf-8")
-    dependencies = manifest.split("[dependencies]", 1)[1].split("[", 1)[0]
-    dependency_lines = [line.strip() for line in dependencies.splitlines() if line.strip() and not line.lstrip().startswith("#")]
-    if dependency_lines != ['serde_json = "=1.0.151"']:
-        fail(f"opsctl dependency surface drifted: {dependency_lines}")
-    for path in sorted((ROOT / "tools" / "opsctl" / "src").rglob("*.rs")):
-        text = path.read_text(encoding="utf-8")
-        for marker in OPSCTL_FORBIDDEN:
-            if marker.lower() in text.lower():
-                fail(f"opsctl gained forbidden network/provider/secret/process authority {marker!r} in {path.relative_to(ROOT)}")
+    if OPSCTL_BOUNDARY.is_symlink() or not OPSCTL_BOUNDARY.is_file():
+        fail("permanent opsctl boundary checker is missing/not regular")
+    completed = subprocess.run(
+        [sys.executable, str(OPSCTL_BOUNDARY)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        fail(f"permanent opsctl boundary proof failed: {detail}")
 
 
 def validate_absent_legacy_d3() -> None:
