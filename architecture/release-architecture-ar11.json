@@ -65,7 +65,7 @@
     {"surface_id":"service.mailbox_secret_resolver.ingress","kind":"SERVICE_BINDING_INGRESS","selector":["mailbox-secret-resolver fetch"],"activation_unit":"mailbox_admin","enforcement_point":"resolver.fetch.capability_context","disabled_behavior":"REJECT_BEFORE_SECRET_OR_PROVIDER_SIDE_EFFECT"},
     {"surface_id":"schedule.mailbox_secret_resolver.reconciliation","kind":"SCHEDULED","selector":["reconcile_encryption_keys"],"activation_unit":"mailbox_admin","enforcement_point":"resolver.schedule.capability_context","disabled_behavior":"NO_OP"},
     {"surface_id":"bridge.profile_runtime.commands","kind":"DEVICE_BRIDGE_COMMAND","selector":["profile runtime/device command family"],"activation_unit":"profile_runtime","enforcement_point":"bridge command admission","disabled_behavior":"REJECT_BEFORE_RUNTIME_LAUNCH"},
-    {"surface_id":"bridge.camoufox.launch","kind":"DEVICE_RUNTIME","selector":["native Profile Bridge -> Camouhost -> Camoufox"],"activation_unit":"camoufox","enforcement_point":"bridge runtime preflight","disabled_behavior":"REJECT_BEFORE_CAMOUFOX_LAUNCH"},
+    {"surface_id":"bridge.camoufox.launch","kind":"DEVICE_RUNTIME","selector":["native Profile Bridge -> Camouhost -> pinned Camoufox runtime"],"activation_unit":"camoufox","enforcement_point":"bridge runtime preflight","disabled_behavior":"REJECT_BEFORE_CAMOUFOX_LAUNCH"},
     {"surface_id":"frontend.navigation_actions","kind":"FRONTEND","selector":["router","navigation","actions","deep-links"],"activation_unit":"PROFILE_PROJECTED","enforcement_point":"frontend effective capability projection","disabled_behavior":"HIDDEN_OR_UNAVAILABLE"}
   ],
   "deployment_closures": [
@@ -103,14 +103,5 @@
     {"input_id":"frontend_lock","kind":"BUILD_PROVENANCE","semantic_owner":"frontend dependency lock","canonical_source":"frontend/package-lock.json","release_identity_source":"frontend/package-lock.json","compatibility_dimension":"build_provenance","required_for_release_set":true,"verification":["npm ci"],"consumers":["release_set.build_provenance"]},
     {"input_id":"release_architecture_authority","kind":"ARCHITECTURE_AUTHORITY","semantic_owner":"AR-11 release/capability/promotion authority","canonical_source":"architecture/release-architecture-ar11.json","release_identity_source":"architecture/release-architecture-ar11.json","compatibility_dimension":"build_provenance","required_for_release_set":true,"verification":["opsctl release authority"],"consumers":["release_set.build_provenance"]}
   ],
-  "compatibility_dimensions": ["public_api_contract_digest","frontend_api_contract_digest","catalog_d1_min_max_target","resolver_d1_min_max_target","bridge_protocol_version","camouhost_ipc_version","runtime_bundle_version","profile_generation_format","browser_identity_policy","resolver_service_protocol","windows_profile_bridge_delivery"],
-  "release_set": {
-    "schema_version": 2,
-    "id_scheme": "release-set-v2-sha256-SHA256(canonical_identity_payload)",
-    "source_must_be_accepted_main": true,
-    "required_identity_sections": ["source","components","contracts","protocols","schemas","runtime_compatibility","capability_profile_compatibility","build_provenance","artifact_inventory"],
-    "dependency_graph": "ACYCLIC_REQUIRED",
-    "compatibility_result_domain": ["COMPATIBLE","INCOMPATIBLE","UNKNOWN"],
-    "unknown_result": "FAIL_CLOSED"
-  }
+  "compatibility_dimensions": ["public_api_contract_digest","frontend_api_contract_digest","catalog_d1_min_max_target","resolver_d1_min_max_target","bridge_protocol_version","camouhost_ipc_version","runtime_bundle_version","profile_generation_format","browser_identity_policy","resolver_service_protocol","windows_profile_bridge_delivery"]
 }
