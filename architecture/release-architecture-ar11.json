@@ -65,7 +65,7 @@
     {"surface_id":"service.mailbox_secret_resolver.ingress","kind":"SERVICE_BINDING_INGRESS","selector":["mailbox-secret-resolver fetch"],"activation_unit":"mailbox_admin","enforcement_point":"resolver.fetch.capability_context","disabled_behavior":"REJECT_BEFORE_SECRET_OR_PROVIDER_SIDE_EFFECT"},
     {"surface_id":"schedule.mailbox_secret_resolver.reconciliation","kind":"SCHEDULED","selector":["reconcile_encryption_keys"],"activation_unit":"mailbox_admin","enforcement_point":"resolver.schedule.capability_context","disabled_behavior":"NO_OP"},
     {"surface_id":"bridge.profile_runtime.commands","kind":"DEVICE_BRIDGE_COMMAND","selector":["profile runtime/device command family"],"activation_unit":"profile_runtime","enforcement_point":"bridge command admission","disabled_behavior":"REJECT_BEFORE_RUNTIME_LAUNCH"},
-    {"surface_id":"bridge.camoufox.launch","kind":"DEVICE_RUNTIME","selector":["native Profile Bridge -> Camouhost -> pinned Camoufox runtime"],"activation_unit":"camoufox","enforcement_point":"bridge runtime preflight","disabled_behavior":"REJECT_BEFORE_CAMOUFOX_LAUNCH"},
+    {"surface_id":"bridge.camoufox.launch","kind":"DEVICE_RUNTIME","selector":["native Profile Bridge -> Camouhost -> Camoufox"],"activation_unit":"camoufox","enforcement_point":"bridge runtime preflight","disabled_behavior":"REJECT_BEFORE_CAMOUFOX_LAUNCH"},
     {"surface_id":"frontend.navigation_actions","kind":"FRONTEND","selector":["router","navigation","actions","deep-links"],"activation_unit":"PROFILE_PROJECTED","enforcement_point":"frontend effective capability projection","disabled_behavior":"HIDDEN_OR_UNAVAILABLE"}
   ],
   "deployment_closures": [
