@@ -53,6 +53,7 @@ Single Authority
 Bounded Context ownership
 Inward Dependency direction
 Pure Core / Effect Shell
+Observation facts separated from policy decisions
 Explicit Effect Capabilities
 Typed critical IDs / lifecycle states / versioned contracts
 Command / Query separation
@@ -66,6 +67,8 @@ Touch-to-converge instead of repository-wide rewrite
 ```
 
 Accepted AR-0…AR-11 history is not retroactively rewritten. Future bounded work that materially touches an older subsystem must preserve its accepted invariants and converge the touched scope to this contract unless a stronger current canonical authority applies.
+
+PF-1's detailed corrected lifecycle/inventory cutover contract is `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`. It is subordinate to this program authority and issue #430, and explicitly supersedes the prior assumption that `.github/scripts/architecture-acceptance.mjs derive` must remain the permanent upstream lifecycle-policy authority.
 
 PF-3 #431 owns conversion of this human-readable contract into permanent machine enforcement through `architecture/architecture-fitness-policy.json`, rule IDs, primary enforcement owners, positive/negative fixtures and an Architecture Fitness Gate. After PF-3 acceptance, every future PF/FC/AR/PC candidate that materially changes architecture must declare its Architecture Impact and pass all applicable fitness rules on the exact candidate head.
 
@@ -128,7 +131,7 @@ AR-17  Architecture Closeout + Production Core Gate
 AR-12 implementation entry is gated by the subordinate Post-AR-11 Functional Closure program. The current mandatory prerequisite sequence is:
 
 ```text
-PF-1  Canonical Architecture Inventory cutover to opsctl           #430
+PF-1  Canonical Architecture Inventory + lifecycle-policy cutover  #430
   ->
 PF-2  Universal Hosted Operational Evidence primitive              Draft PR #428
   ->
@@ -143,7 +146,7 @@ FC-7 final whole-AR-11 functional audit
 AR-12 implementation entry
 ```
 
-PF-1/PF-2/PF-3 are not added to `architecture/architecture-program-sequence.json` because they are bounded Functional Closure prerequisites rather than AR lifecycle slices. They cannot alter accepted AR history, authorize AR-12 implementation early or authorize production.
+PF-1/PF-2/PF-3 are not added to `architecture/architecture-program-sequence.json` because they are bounded Functional Closure prerequisites rather than AR lifecycle slices. They cannot alter accepted AR history, authorize AR-12 implementation early or authorize production. No PF-4 or other planning phase is introduced.
 
 The architecture program ends after AR-17. Only then:
 
@@ -202,10 +205,10 @@ Because the current Production Core v1 scope includes Camoufox/profile runtime t
 
 Target responsibility split:
 
-- **GitHub Actions / Environments:** orchestration, CI, approvals, workflow concurrency, credential exposure boundary, exact-head evidence and artifact/evidence retention;
-- **Rust `opsctl`:** typed project-specific operational semantics after its owning cutover; it is not CI, GitHub merge or workflow orchestration authority;
+- **GitHub Actions / Environments:** orchestration, CI, approvals, workflow concurrency, credential exposure boundary, exact-head evidence, Git/GitHub raw observation collection and artifact/evidence retention;
+- **Rust `opsctl`:** typed project-specific operational semantics after its owning cutover; it is not CI, GitHub merge, workflow orchestration or network-observation authority;
 - **Wrangler / provider APIs:** actual allowed Cloudflare/provider mutation execution;
-- **Python:** validators, generators, fixtures/tests, research/evidence and other explicitly classified helpers.
+- **Python/Node:** validators, fixtures/tests, research/evidence and explicitly classified adapters only where they do not duplicate a concern cut over to Rust.
 
 For every mutable concern:
 
@@ -213,7 +216,7 @@ For every mutable concern:
 one concern -> one legitimate mutable authority
 ```
 
-A legacy Python mutator and an `opsctl` mutator must never remain simultaneously legitimate for the same lifecycle. No global Python→Rust rewrite is authorized.
+A legacy implementation and an `opsctl` implementation must never remain simultaneously legitimate for the same lifecycle. No global Python→Rust or Node→Rust rewrite is authorized; only bounded authority cutovers are.
 
 Terraform and hidden generic-IaC state are forbidden for this program. The intended stack is GitHub Actions / Environments + Rust `opsctl` + Wrangler / Cloudflare APIs.
 
@@ -228,6 +231,7 @@ opsctl
 ├── doctor
 ├── status
 ├── architecture
+│   ├── acceptance / lifecycle policy surfaces as bounded PF-1 commands
 │   └── inventory
 │       ├── render
 │       ├── check
@@ -262,7 +266,7 @@ opsctl
 └── readiness
 ```
 
-This tree does not change the binding AR sequence and does not prematurely activate future command families. `source_present != executable_authorized` applies to operator tooling exactly as `source_present != production_enabled` applies to product capability: source may reserve a namespace before its owning slice activates it, but unknown or unowned commands fail closed.
+Exact PF-1 acceptance/lifecycle command spelling is subordinate to the typed contract; the architectural boundary is binding. This tree does not change the binding AR sequence and does not prematurely activate future command families. `source_present != executable_authorized` applies to operator tooling exactly as `source_present != production_enabled` applies to product capability: source may reserve a namespace before its owning slice activates it, but unknown or unowned commands fail closed.
 
 The old root `opsctl inventory` spelling is not a permanent authority. PF-1 #430 owns the cutover to `opsctl architecture inventory ...`; retain a compatibility alias only if a final repository-wide caller/contract proof demonstrates a legitimate current consumer, otherwise delete it after caller/invariant proof.
 
@@ -271,12 +275,47 @@ Ownership is fixed unless a later accepted authority transaction explicitly chan
 - **AR-9:** native `d1 status/plan/compatibility/verify`, modular Rust D1 policy layer and source-reserved future family namespaces only;
 - **AR-10:** native tooling/executable simplification, including removal of the AR-6 `doctor -> Python validators` child-process bridge and normalization of command ownership; AR-10 did not grant broad mutation/network authority;
 - **AR-11:** `release inspect/verify/compatibility` and `promotion plan/preflight/verify`, integrated with immutable Release Set authority; GitHub Environments remain approval/orchestration authority and provider executors remain actual mutation boundary;
-- **PF-1 #430:** `architecture inventory render/check/write/inspect`, one typed deterministic inventory compiler/checker and exactly one bounded `GENERATED_PROJECTION_WRITE` to `architecture/inventory.json`; lifecycle derivation remains external/singular;
+- **PF-1 #430:** typed acceptance/lifecycle policy evaluation from explicit raw Git/GitHub observations plus `architecture inventory render/check/write/inspect`; one deterministic policy/inventory core and exactly one bounded `GENERATED_PROJECTION_WRITE` to `architecture/inventory.json`; PF-1 must retire `.github/scripts/architecture-acceptance.mjs` and the Python inventory cluster after zero-caller/zero-unique-current-invariant proof;
 - **PF-2 / #428:** offline `evidence build/validate/inspect/verify`, consuming the shared canonical JSON/digest primitive and never becoming provider observer/signer/network executor;
 - **PF-3 #431:** architecture-fitness policy/gates may be invoked through existing/small bounded checker surfaces, but PF-3 must not turn `opsctl` into a generic linter/plugin framework;
 - **AR-13:** rehearsal-backed `credentials status/readiness/rotation-plan` semantics/evidence, consuming accepted AR-8 credential authority rather than creating a second credential state machine;
 - **AR-14:** `recovery inspect/plan/verify`, consuming accepted D1/release authority; automatic destructive restore remains forbidden unless explicitly authorized by that slice;
 - **AR-16:** aggregate `readiness` proof over accepted component/release/recovery/fitness evidence. `opsctl readiness` is not production authorization; AR-17 alone owns the Production Core authorization transition.
+
+### 5B. PF-1 observation / decision boundary
+
+PF-1 corrects the current lifecycle boundary as follows:
+
+```text
+Git / GitHub / repository checkout
+        ↓
+outer observation adapters
+        ↓
+versioned raw acceptance observations
+        ↓
+opsctl typed validation
+        ↓
+pure Rust acceptance/lifecycle evaluator
+        ↓
+derived lifecycle state
+        ↓
+pure architecture inventory compiler
+```
+
+The observation shell may use checkout/git and GitHub APIs because those effects belong to GitHub Actions/repository tooling. `opsctl` must not execute `git`, `gh`, Node, Python, GitHub/provider APIs or network clients for lifecycle/inventory evaluation.
+
+The current `.github/scripts/architecture-acceptance.mjs` is an implementation predecessor because it owns policy/derive/premerge/record semantics, not a uniquely necessary raw observer. `architecture-acceptance-recorder.yml` already demonstrates direct collection of the required Git/GitHub observations. Therefore PF-1 target disposition is:
+
+```text
+Rust candidate parity
+-> atomic caller/policy cutover
+-> old caller count = 0
+-> old unique-current-invariant count = 0
+-> architecture-acceptance.mjs = DEAD
+-> DELETE
+```
+
+PF-1 also owns reconciliation of stale current acceptance-policy assumptions, including closed #375 ownership and legacy squash semantics where they conflict with the accepted exact-green guarded merge-commit discipline. Historical accepted evidence is preserved; current target policy is corrected rather than historical provenance rewritten.
 
 Permanent `opsctl` invariants are:
 
@@ -302,7 +341,7 @@ recovery_preconditions_machine_enforced = true
 
 `opsctl` may gain only effects explicitly owned by a bounded command contract. PF-1's `GENERATED_PROJECTION_WRITE` is the first intentional repository-write exception and is limited to one fixed generated projection. It does not grant arbitrary filesystem, Git, GitHub, provider, database, customer-state or deployment mutation authority.
 
-`opsctl` must never acquire its own persistent state backend, generic IaC resource graph, plugin scheduler, deployment scheduler or hidden `state.json`. Git answers what source/release was intended; provider state answers what is deployed; `opsctl` evaluates typed policy/compatibility and permitted transitions over accepted authorities and supplied observations.
+`opsctl` must never acquire its own persistent state backend, generic IaC resource graph, plugin scheduler, deployment scheduler or hidden `state.json`. Git answers what source/release was intended; provider state answers what is deployed; outer adapters observe those systems; `opsctl` evaluates typed policy/compatibility and permitted transitions over accepted authorities and explicit supplied observations.
 
 ## 6. Preserved architecture decisions
 
