@@ -7,6 +7,7 @@ use std::io::{Read, Result as IoResult};
 
 pub const DEFAULT_MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_JSON_DEPTH: usize = 64;
+const MAX_JCS_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[must_use]
 pub fn sha256_hex(input: &[u8]) -> String {
@@ -111,11 +112,24 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
         Ok(Value::Bool(value))
     }
 
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        let max = MAX_JCS_SAFE_INTEGER as i64;
+        if value < -max || value > max {
+            return Err(E::custom("integer exceeds RFC 8785/I-JSON safe range"));
+        }
         Ok(Value::Number(Number::from(value)))
     }
 
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        if value > MAX_JCS_SAFE_INTEGER {
+            return Err(E::custom("integer exceeds RFC 8785/I-JSON safe range"));
+        }
         Ok(Value::Number(Number::from(value)))
     }
 
@@ -123,6 +137,12 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
     where
         E: de::Error,
     {
+        if value.is_finite()
+            && value.fract() == 0.0
+            && value.abs() > MAX_JCS_SAFE_INTEGER as f64
+        {
+            return Err(E::custom("integer-valued number exceeds RFC 8785/I-JSON safe range"));
+        }
         Number::from_f64(value)
             .map(Value::Number)
             .ok_or_else(|| E::custom("non-finite JSON number is forbidden"))
@@ -241,6 +261,15 @@ mod tests {
     fn strict_json_rejects_duplicate_members_at_any_depth() {
         assert!(parse_strict_json(r#"{"a":1,"a":2}"#).is_err());
         assert!(parse_strict_json(r#"{"outer":{"a":1,"a":2}}"#).is_err());
+    }
+
+    #[test]
+    fn strict_json_rejects_unsafe_integer_numbers() {
+        assert!(parse_strict_json(r#"{"n":9007199254740991}"#).is_ok());
+        assert!(parse_strict_json(r#"{"n":-9007199254740991}"#).is_ok());
+        assert!(parse_strict_json(r#"{"n":9007199254740992}"#).is_err());
+        assert!(parse_strict_json(r#"{"n":-9007199254740992}"#).is_err());
+        assert!(parse_strict_json(r#"{"n":9007199254740992.0}"#).is_err());
     }
 
     #[test]

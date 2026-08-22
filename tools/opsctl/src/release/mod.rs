@@ -10,6 +10,7 @@ pub mod commands;
 pub mod compatibility;
 pub mod component_manifest;
 pub mod digest;
+pub mod finalize;
 pub mod input_topology;
 pub mod model;
 pub mod source;
