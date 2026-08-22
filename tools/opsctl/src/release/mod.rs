@@ -14,6 +14,7 @@ pub mod model;
 pub mod source;
 pub mod static_compatibility;
 pub mod v3_dto;
+pub mod v3_output;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseAction {
