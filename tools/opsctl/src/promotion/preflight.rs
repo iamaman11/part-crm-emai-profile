@@ -339,8 +339,8 @@ mod tests {
             "build_provenance":{"cargo_lock_sha256":SHA,"rust_toolchain_sha256":SHA,"frontend_lock_sha256":SHA,"release_architecture_sha256":SHA},
             "artifact_inventory":[
                 {"path":"components/control-plane.tar","sha256":SHA,"size_bytes":1,"kind":"component"},
-                {"path":"components/secret-resolver.tar","sha256":SHA,"size_bytes":1,"kind":"component"},
-                {"path":"components/runtime-bundle.tar","sha256":SHA,"size_bytes":1,"kind":"component"}
+                {"path":"components/runtime-bundle.tar","sha256":SHA,"size_bytes":1,"kind":"component"},
+                {"path":"components/secret-resolver.tar","sha256":SHA,"size_bytes":1,"kind":"component"}
             ]
         });
         let mut identity = value.clone();
