@@ -128,6 +128,8 @@ AR-17  Architecture Closeout + Production Core Gate
 
 The normalization/foundation work below does **not** create AR-2B/AR-6B/AR-10B, PF-0 or PF-4 and does not change this static sequence.
 
+No production provisioning, promotion or other real production mutation is an AR-0…AR-17 activity.
+
 ## 4. Binding continuation order before AR-12
 
 AR-12 implementation entry is blocked by Post-AR-11 Functional Closure and the following exact prerequisite order:
