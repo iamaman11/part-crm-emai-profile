@@ -66,10 +66,6 @@ pub enum Invocation {
     D1Repository {
         root: Option<PathBuf>,
     },
-    ReleaseFinalize {
-        root: Option<PathBuf>,
-        request_json: PathBuf,
-    },
     Release {
         root: Option<PathBuf>,
         action: release::ReleaseAction,
@@ -351,9 +347,6 @@ where
     let action_text = action_value
         .to_str()
         .ok_or_else(|| OpsctlError::new("release", "release action must be valid UTF-8"))?;
-    if action_text == "finalize" {
-        return parse_release_finalize_invocation(root, iterator);
-    }
     let action = match action_text {
         "inspect" => release::ReleaseAction::Inspect,
         "verify" => release::ReleaseAction::Verify,
@@ -483,38 +476,6 @@ where
         evidence_json,
         current_release_set,
     })
-}
-
-fn parse_release_finalize_invocation<I>(
-    root: Option<PathBuf>,
-    mut iterator: I,
-) -> Result<Invocation, OpsctlError>
-where
-    I: Iterator<Item = OsString>,
-{
-    let mut request_json: Option<PathBuf> = None;
-    while let Some(argument) = iterator.next() {
-        let flag = argument
-            .to_str()
-            .ok_or_else(|| OpsctlError::new("release", "release flags must be valid UTF-8"))?;
-        match flag {
-            "--request-json" => {
-                let value = iterator.next().ok_or_else(|| {
-                    OpsctlError::new("release", "--request-json requires a value")
-                })?;
-                set_once(&mut request_json, PathBuf::from(value), "--request-json")?;
-            }
-            other => {
-                return Err(OpsctlError::new(
-                    "release",
-                    format!("unsupported release finalize argument: {other}"),
-                ));
-            }
-        }
-    }
-    let request_json = request_json
-        .ok_or_else(|| OpsctlError::new("release", "release finalize requires --request-json"))?;
-    Ok(Invocation::ReleaseFinalize { root, request_json })
 }
 
 fn reject_if_present<T>(
@@ -927,37 +888,6 @@ mod tests {
                 "catalog",
                 "--ledger-json",
                 "ledger.json",
-            ]))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn activates_release_finalize_without_release_set_override() {
-        assert_eq!(
-            parse_invocation(args(&[
-                "opsctl",
-                "--root",
-                "/repo",
-                "release",
-                "finalize",
-                "--request-json",
-                "request.json",
-            ])),
-            Ok(Invocation::ReleaseFinalize {
-                root: Some(PathBuf::from("/repo")),
-                request_json: PathBuf::from("request.json"),
-            })
-        );
-        assert!(
-            parse_invocation(args(&[
-                "opsctl",
-                "release",
-                "finalize",
-                "--request-json",
-                "request.json",
-                "--release-set",
-                "override.json",
             ]))
             .is_err()
         );

@@ -71,22 +71,6 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             d1::repository_projection(&repo_root)
                 .map_err(|error| OpsctlError::new("d1", error.to_string()))
         }
-        // Machine-only build adapter: this is intentionally not an operator surface.
-        // F1 uses the existing opsctl binary without adding a second CLI/registry authority.
-        Invocation::ReleaseFinalize { root, request_json } => {
-            let repo_root = resolve_repo_root(root.as_deref(), "release")?;
-            let input = std::fs::read_to_string(&request_json).map_err(|error| {
-                OpsctlError::new(
-                    "release",
-                    format!(
-                        "RELEASE_FINALIZE_REQUEST_UNAVAILABLE: {}: {error}",
-                        request_json.display()
-                    ),
-                )
-            })?;
-            release::finalize::finalize_json(&repo_root, &input)
-                .map_err(|error| OpsctlError::new("release", error.to_string()))
-        }
         Invocation::Release {
             root,
             action,
@@ -173,7 +157,7 @@ mod tests {
 
     fn invocation_command(invocation: &Invocation) -> Option<String> {
         match invocation {
-            Invocation::Help | Invocation::Version | Invocation::ReleaseFinalize { .. } => None,
+            Invocation::Help | Invocation::Version => None,
             Invocation::Run { command, .. } => Some(format!("opsctl {}", command.name())),
             Invocation::Credentials { action, .. } => {
                 Some(format!("opsctl credentials {}", action.name()))
