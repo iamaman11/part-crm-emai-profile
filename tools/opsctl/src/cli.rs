@@ -5,7 +5,7 @@ use crate::release;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub const HELP: &str = "opsctl — project-specific operations policy interface\n\nUSAGE:\n    opsctl [--root PATH] <COMMAND>\n    opsctl [--root PATH] credentials <ACTION>\n    opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [D1 OPTIONS]\n    opsctl [--root PATH] release <ACTION> --release-set PATH [RELEASE OPTIONS]\n    opsctl [--root PATH] promotion <ACTION> --release-set PATH --profile ID --environment ENV --snapshot PATH --evidence-json PATH [PROMOTION OPTIONS]\n\nCOMMANDS:\n    doctor                     Validate canonical repository authorities\n    status                     Print canonical docs/status.json\n    inventory                  Print canonical architecture/inventory.json\n    credentials status         Print canonical credential lifecycle metadata\n    credentials rotation-plan  Print canonical operator rotation/recovery metadata\n    d1 status                  Classify a saved D1 migration ledger against canonical history\n    d1 plan                    Build a deterministic migration/rollback plan\n    d1 compatibility           Evaluate runtime/schema compatibility\n    d1 verify                  Verify a post-apply ledger against a release schema contract\n    release inspect            Parse and inspect one immutable Release Set\n    release verify             Verify Release Set identity and exact artifact bytes\n    release compatibility      Evaluate Release Set + Capability Profile compatibility\n    promotion plan             Build a deterministic no-mutation transition plan\n    promotion preflight        Fail-closed gate before provider credential exposure\n    promotion verify           Verify observed state after provider mutation\n\nD1 OPTIONS:\n    --component ID              catalog or resolver\n    --ledger-json PATH          Saved machine-readable Wrangler D1 ledger query result\n    --release-manifest PATH     Target release; required for plan/compatibility/verify\n    --current-manifest PATH     Current runtime schema contract; plan rollback context\n    --known-good-manifest PATH  Known-good rollback release schema contract\n    --preconditions-json PATH   Metadata-only CONTRACT precondition evidence\n    --authority PATH            Optional D1 evolution authority override for fixtures\n\nRELEASE OPTIONS:\n    --release-set PATH          Target content-addressed Release Set manifest\n    --source-root PATH          Exact source tree for release provenance; defaults to --root\n    --artifact-root PATH        Exact artifact tree; required for release verify\n    --profile ID                Target Capability Profile; compatibility only\n    --environment ID            rehearsal, staging, or production; compatibility only\n    --evidence-json PATH        Saved compatibility evidence; compatibility only\n    --current-release-set PATH  Optional current Release Set for rollback context\n\nPROMOTION OPTIONS:\n    --release-set PATH          Target immutable Release Set\n    --source-root PATH          Exact target source tree; current --root remains policy authority\n    --profile ID                Target Capability Profile\n    --environment ID            rehearsal, staging, or production\n    --snapshot PATH             Saved metadata-only DeploymentSnapshot\n    --evidence-json PATH        Saved release compatibility evidence\n    --current-release-set PATH  Optional current Release Set\n    --known-good-release-set PATH  Rollback candidate for preflight\n    --expected-current ID       Stale-plan fence (use NONE for fresh state)\n\nGLOBAL OPTIONS:\n    --root PATH  Explicit current policy repository root\n    -h, --help   Print help\n    -V, --version\n                 Print version\n\nAR-11 release commands remain local, read-only and metadata/artifact-verification-only. opsctl never executes Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. GitHub Actions/Environments retain orchestration/approval authority and provider executors retain actual mutation authority.\n";
+pub const HELP: &str = include_str!("help.txt");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadCommand {
@@ -62,7 +62,9 @@ pub enum Invocation {
         current_manifest: Option<PathBuf>,
         known_good_manifest: Option<PathBuf>,
         preconditions_json: Option<PathBuf>,
-        authority: Option<PathBuf>,
+    },
+    D1Repository {
+        root: Option<PathBuf>,
     },
     Release {
         root: Option<PathBuf>,
@@ -193,6 +195,18 @@ where
     let action_text = action_value
         .to_str()
         .ok_or_else(|| OpsctlError::new("d1", "D1 action must be valid UTF-8"))?;
+    if action_text == "repository" {
+        if let Some(extra) = iterator.next() {
+            return Err(OpsctlError::new(
+                "d1",
+                format!(
+                    "unexpected d1 repository argument: {}",
+                    extra.to_string_lossy()
+                ),
+            ));
+        }
+        return Ok(Invocation::D1Repository { root });
+    }
     let action = match action_text {
         "status" => d1::D1Action::Status,
         "plan" => d1::D1Action::Plan,
@@ -212,7 +226,6 @@ where
     let mut current_manifest: Option<PathBuf> = None;
     let mut known_good_manifest: Option<PathBuf> = None;
     let mut preconditions_json: Option<PathBuf> = None;
-    let mut authority: Option<PathBuf> = None;
 
     while let Some(argument) = iterator.next() {
         let flag = argument
@@ -273,12 +286,6 @@ where
                     "--preconditions-json",
                 )?;
             }
-            "--authority" => {
-                let value = iterator
-                    .next()
-                    .ok_or_else(|| OpsctlError::new("d1", "--authority requires a path"))?;
-                set_once(&mut authority, PathBuf::from(value), "--authority")?;
-            }
             other => {
                 return Err(OpsctlError::new(
                     "d1",
@@ -311,7 +318,7 @@ where
     {
         return Err(OpsctlError::new(
             "d1",
-            "d1 status accepts only component, ledger and authority inputs",
+            "d1 status accepts only component and ledger inputs",
         ));
     }
 
@@ -324,7 +331,6 @@ where
         current_manifest,
         known_good_manifest,
         preconditions_json,
-        authority,
     })
 }
 
@@ -810,8 +816,46 @@ mod tests {
                 current_manifest: Some(PathBuf::from("current.json")),
                 known_good_manifest: Some(PathBuf::from("known-good.json")),
                 preconditions_json: Some(PathBuf::from("preconditions.json")),
-                authority: None,
             })
+        );
+    }
+
+    #[test]
+    fn parses_repository_derived_d1_projection_without_observation_inputs() {
+        assert_eq!(
+            parse_invocation(args(&["opsctl", "--root", "/repo", "d1", "repository"])),
+            Ok(Invocation::D1Repository {
+                root: Some(PathBuf::from("/repo")),
+            })
+        );
+        assert!(
+            parse_invocation(args(&[
+                "opsctl",
+                "d1",
+                "repository",
+                "--component",
+                "catalog",
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn d1_authority_override_is_rejected() {
+        let removed_flag = ["--", "authority"].concat();
+        assert!(
+            parse_invocation(args(&[
+                "opsctl",
+                "d1",
+                "status",
+                "--component",
+                "catalog",
+                "--ledger-json",
+                "ledger.json",
+                removed_flag.as_str(),
+                "legacy.json",
+            ]))
+            .is_err()
         );
     }
 

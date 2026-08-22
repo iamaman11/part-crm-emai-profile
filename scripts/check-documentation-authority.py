@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import d1_repository_projection as d1_repository
+
 ROOT = Path(__file__).resolve().parents[1]
 ACCEPTANCE_POLICY = Path("architecture/architecture-acceptance-policy.json")
 LIFECYCLE_POLICY = Path("architecture/lifecycle-projection-policy.json")
@@ -25,7 +27,6 @@ TRANSITION = Path("architecture/architecture-rebaseline-v3-transition.json")
 INVENTORY = Path("architecture/inventory.json")
 PLAN = Path("docs/ARCHITECTURE_REBASELINE_V3_PLAN.md")
 PROTOCOL = Path("docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md")
-AR9_AUTHORITY = Path("architecture/d1-evolution-ar9.json")
 AR10_AUTHORITY = Path("architecture/runtime-cutover-ar10.json")
 AR11_AUTHORITY = Path("architecture/release-architecture-ar11.json")
 IMPLEMENTATION_STUB = Path("IMPLEMENTATION_PLAN.md")
@@ -286,9 +287,13 @@ def validate_projection_fail_closed(status: dict[str, Any], transition: dict[str
 
 
 def validate_owned_authorities(root: Path) -> None:
-    ar9 = load_json(root, AR9_AUTHORITY)
-    if ar9.get("kind") != "D1_EVOLUTION_AUTHORITY" or ar9.get("status") != "accepted" or ar9.get("production_mutation") is not False:
-        fail("accepted AR-9 D1 authority identity/state drifted")
+    d1 = d1_repository.load(root)
+    if (
+        d1.get("kind") != "D1_REPOSITORY_PROJECTION"
+        or d1.get("semantic_authority") != "tools/opsctl/src/d1"
+        or d1.get("production_mutation") is not False
+    ):
+        fail("typed SQL-derived D1 repository identity/state drifted")
 
     ar10 = load_json(root, AR10_AUTHORITY)
     if (

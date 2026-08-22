@@ -208,6 +208,8 @@ Persistence is context-owned. Avoid a universal business `Repository`, global CR
 
 Schema migration, runtime compatibility and release compatibility must remain connected machine-checked concerns rather than independent directories/processes.
 
+For D1, executable migration history, current revision and history identity are derived from the canonical SQL bytes. Non-derivable rollout/compatibility semantics are owned by the bounded typed Rust D1 module. Generated inventory and release metadata may project those facts but must not own or override them; accepted historical epochs are protected by compact immutable digest anchors.
+
 ### 2.11 Typed Configuration Rule
 
 Raw environment/provider bindings are resolved at composition/bootstrap edges into validated typed configuration. Domain/application modules do not scatter direct environment reads.

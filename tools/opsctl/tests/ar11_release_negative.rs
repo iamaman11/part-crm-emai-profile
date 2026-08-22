@@ -34,37 +34,17 @@ fn resolved_input<'a>(
         .ok_or_else(|| io::Error::other(format!("canonical release input missing: {input_id}")))
 }
 
-fn schema_window(
-    authority: &Value,
-    component_id: &str,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    let component = authority["components"]
+fn d1_schema(projection: &Value, component_id: &str) -> Result<Value, io::Error> {
+    let component = projection["components"]
         .as_array()
-        .ok_or_else(|| io::Error::other("D1 authority components must be an array"))?
+        .ok_or_else(|| io::Error::other("D1 repository components must be an array"))?
         .iter()
         .find(|entry| entry["component_id"].as_str() == Some(component_id))
-        .ok_or_else(|| io::Error::other(format!("D1 authority missing {component_id}")))?;
-    let target = component["current_repository_revision"]
-        .as_str()
-        .ok_or_else(|| io::Error::other(format!("D1 {component_id} target revision missing")))?;
-    let policy = component["compatibility_policy"].clone();
-    let history = component["historical_epoch"]["ordered_history"]
-        .as_array()
-        .ok_or_else(|| io::Error::other(format!("D1 {component_id} history missing")))?;
-    let history_identity = Value::Array(
-        history
-            .iter()
-            .map(|entry| json!({"name":entry["name"],"sha256":entry["sha256"]}))
-            .collect(),
-    );
-    Ok(json!({
-        "database_component": component_id,
-        "target_schema_revision": target,
-        "supported_schema_min": target,
-        "supported_schema_max": target,
-        "migration_history_digest": sha256_hex(canonical_json(&history_identity)?.as_bytes()),
-        "compatibility_policy_digest": sha256_hex(canonical_json(&policy)?.as_bytes()),
-    }))
+        .ok_or_else(|| io::Error::other(format!("D1 repository missing {component_id}")))?;
+    component
+        .get("release_schema_contract")
+        .cloned()
+        .ok_or_else(|| io::Error::other(format!("D1 {component_id} release contract missing")))
 }
 
 fn canonical_identity_fields(
@@ -110,12 +90,11 @@ fn canonical_identity_fields(
         "browser_identity_policy": runtime_lock["fingerprint_policy_version"],
     });
 
-    let d1_input = resolved_input(&resolved, "d1_evolution_authority")?;
-    let d1_authority: Value = serde_json::from_slice(&std::fs::read(&d1_input.absolute_path)?)?;
+    let d1_projection: Value = serde_json::from_str(&opsctl::d1::repository_projection(root)?)?;
     let schemas = json!({
-        "d1_evolution_authority_sha256": d1_input.sha256,
-        "catalog": schema_window(&d1_authority, "catalog")?,
-        "resolver": schema_window(&d1_authority, "resolver")?,
+        "d1_repository_identity_sha256": d1_projection["repository_identity_sha256"],
+        "catalog": d1_schema(&d1_projection, "catalog")?,
+        "resolver": d1_schema(&d1_projection, "resolver")?,
     });
     let build = json!({
         "cargo_lock_sha256": resolved_input(&resolved, "cargo_lock")?.sha256,

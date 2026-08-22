@@ -13,9 +13,9 @@ pub(super) fn validate_release_contract(
             "release migration_history_digest differs from canonical component history",
         ));
     }
-    if contract.compatibility_policy_digest.is_empty() {
+    if contract.compatibility_policy_digest != authority.policy_digest {
         return Err(D1Error::new(
-            "compatibility_policy_digest must not be empty",
+            "release compatibility_policy_digest differs from canonical typed D1 policy",
         ));
     }
     let target = revision_index(&authority.ordered_history, &contract.target_schema_revision)?;

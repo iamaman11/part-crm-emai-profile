@@ -91,10 +91,13 @@ function functionSlice(source, functionName) {
 
 function actionLiterals(source, functionName) {
   const body = functionSlice(source, functionName);
+  const actions = [...body.matchAll(/if action_text == "([a-z][a-z0-9_-]*)"/gmu)]
+    .map((match) => match[1]);
   const action = body.match(/let action = match action_text \{(?<body>[\s\S]*?)\n\s*\};/u);
   if (!action?.groups?.body) throw new Error(`opsctl action match is missing: ${functionName}`);
-  return [...action.groups.body.matchAll(/^\s*"([a-z][a-z0-9_-]*)"\s*=>/gmu)]
-    .map((match) => match[1]);
+  actions.push(...[...action.groups.body.matchAll(/^\s*"([a-z][a-z0-9_-]*)"\s*=>/gmu)]
+    .map((match) => match[1]));
+  return actions;
 }
 
 function readCommandLiterals(source) {

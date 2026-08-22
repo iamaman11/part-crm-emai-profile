@@ -50,7 +50,7 @@ Canonical machine projection: `architecture/inventory.json::current_delivery_map
 4. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) — subordinate PF-1 specification for raw Git/GitHub observations -> typed Rust acceptance/lifecycle policy evaluation -> pure inventory compiler, including deletion of legacy Node/Python current predecessors after proven cutover.
 5. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) — subordinate PF-3 specification; it requires future `architecture/architecture-fitness-policy.json`, anti-weakening/supersession, measured budgets and permanent machine enforcement but does not itself alter lifecycle order.
 6. [`../architecture/architecture-rebaseline-v3-transition.json`](../architecture/architecture-rebaseline-v3-transition.json) — non-authoritative machine transition projection of lifecycle state.
-7. Accepted AR/domain machine authorities such as [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json), [`../architecture/d1-evolution-ar9.json`](../architecture/d1-evolution-ar9.json), [`../architecture/runtime-cutover-ar10.json`](../architecture/runtime-cutover-ar10.json), [`../architecture/release-architecture-ar11.json`](../architecture/release-architecture-ar11.json), credential/lifecycle/profile-security/operator contracts — owners of their bounded facts, not competing roadmaps.
+7. Accepted AR/domain authorities such as [`../architecture/runtime-topology-ar2.json`](../architecture/runtime-topology-ar2.json), the typed D1 policy in [`../tools/opsctl/src/d1`](../tools/opsctl/src/d1) with executable SQL under [`../migrations/d1`](../migrations/d1) and [`../migrations/resolver-d1`](../migrations/resolver-d1), [`../architecture/runtime-cutover-ar10.json`](../architecture/runtime-cutover-ar10.json), [`../architecture/release-architecture-ar11.json`](../architecture/release-architecture-ar11.json), and credential/lifecycle/profile-security/operator contracts — owners of their bounded facts, not competing roadmaps.
 8. [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md), [`status.json`](status.json), this index and README entrypoints — current projections; they do not define a competing sequence.
 9. [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) — stable normative authorities within their scopes.
 10. [`DEVELOPER_CAPABILITY_MATRIX.md`](DEVELOPER_CAPABILITY_MATRIX.md) — capability/evidence projection accepted on `main`; source presence is not production enablement.
@@ -103,7 +103,7 @@ The machine/document hierarchy uses these roles:
 - [`ARCHITECTURE_REBASELINE_V3_AR10.md`](ARCHITECTURE_REBASELINE_V3_AR10.md)
 - [`../architecture/runtime-cutover-ar10.json`](../architecture/runtime-cutover-ar10.json)
 - [`evidence/2026-08-19-ar9-final-acceptance.json`](evidence/2026-08-19-ar9-final-acceptance.json)
-- [`../architecture/d1-evolution-ar9.json`](../architecture/d1-evolution-ar9.json)
+- [`../tools/opsctl/src/d1`](../tools/opsctl/src/d1) and the canonical D1 SQL migration directories
 - [`ARCHITECTURE_REBASELINE_V3_AR8.md`](ARCHITECTURE_REBASELINE_V3_AR8.md)
 - [`ARCHITECTURE_REBASELINE_V3_AR7.md`](ARCHITECTURE_REBASELINE_V3_AR7.md)
 - [`../architecture/github-governance-ar7.json`](../architecture/github-governance-ar7.json)

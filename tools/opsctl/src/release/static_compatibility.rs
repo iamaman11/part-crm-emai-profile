@@ -1,3 +1,4 @@
+use crate::d1;
 use crate::release::authority::ReleaseArchitecture;
 use crate::release::digest::{canonical_json, sha256_hex};
 use crate::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
@@ -37,7 +38,7 @@ pub fn evaluate(
     if !protocols_match(&resolved, manifest, mailbox_admin)? {
         blockers.push("PROTOCOL_INCOMPATIBLE:runtime_protocols".to_owned());
     }
-    if !schemas_match(&resolved, manifest)? {
+    if !schemas_match(root, manifest)? {
         blockers.push("SCHEMA_IDENTITY_MISMATCH".to_owned());
     }
     if !runtime_matches(&resolved, manifest)? {
@@ -123,61 +124,30 @@ fn protocols_match(
     Ok(true)
 }
 
-fn schemas_match(
-    resolved: &[ResolvedReleaseInput],
-    manifest: &ReleaseSetManifest,
-) -> Result<bool, ReleaseModelError> {
-    let authority = resolved_input(resolved, "d1_evolution_authority")?;
-    if manifest.schemas.d1_evolution_authority_sha256 != authority.sha256 {
+fn schemas_match(root: &Path, manifest: &ReleaseSetManifest) -> Result<bool, ReleaseModelError> {
+    let repository_identity = d1::repository_identity_sha256(root)
+        .map_err(|error| ReleaseModelError::new(error.to_string()))?;
+    if manifest.schemas.d1_repository_identity_sha256 != repository_identity {
         return Ok(false);
     }
-    let value: Value =
-        serde_json::from_slice(&fs::read(&authority.absolute_path).map_err(|error| {
-            ReleaseModelError::new(format!("cannot read D1 evolution authority: {error}"))
-        })?)
-        .map_err(|error| {
-            ReleaseModelError::new(format!("invalid D1 evolution authority JSON: {error}"))
-        })?;
-    let components = value["components"].as_array().ok_or_else(|| {
-        ReleaseModelError::new("D1 evolution authority components must be an array")
-    })?;
     for (id, window) in [
         ("catalog", &manifest.schemas.catalog),
         ("resolver", &manifest.schemas.resolver),
     ] {
-        let component = components
-            .iter()
-            .find(|entry| entry["component_id"].as_str() == Some(id))
-            .ok_or_else(|| ReleaseModelError::new(format!("D1 authority missing {id}")))?;
-        if component["current_repository_revision"].as_str()
-            != Some(window.target_schema_revision.as_str())
+        let expected = d1::release_contract(root, id)
+            .map_err(|error| ReleaseModelError::new(error.to_string()))?;
+        if expected["database_component"].as_str() != Some(window.database_component.as_str())
+            || expected["target_schema_revision"].as_str()
+                != Some(window.target_schema_revision.as_str())
+            || expected["supported_schema_min"].as_str()
+                != Some(window.supported_schema_min.as_str())
+            || expected["supported_schema_max"].as_str()
+                != Some(window.supported_schema_max.as_str())
+            || expected["migration_history_digest"].as_str()
+                != Some(window.migration_history_digest.as_str())
+            || expected["compatibility_policy_digest"].as_str()
+                != Some(window.compatibility_policy_digest.as_str())
         {
-            return Ok(false);
-        }
-        let policy = component["compatibility_policy"].clone();
-        let policy_digest = sha256_hex(
-            canonical_json(&policy)
-                .map_err(ReleaseModelError::new)?
-                .as_bytes(),
-        );
-        if policy_digest != window.compatibility_policy_digest {
-            return Ok(false);
-        }
-        let history = component["historical_epoch"]["ordered_history"]
-            .as_array()
-            .ok_or_else(|| ReleaseModelError::new(format!("D1 {id} ordered history missing")))?;
-        let identity = Value::Array(
-            history
-                .iter()
-                .map(|entry| json!({"name":entry["name"],"sha256":entry["sha256"]}))
-                .collect(),
-        );
-        let history_digest = sha256_hex(
-            canonical_json(&identity)
-                .map_err(ReleaseModelError::new)?
-                .as_bytes(),
-        );
-        if history_digest != window.migration_history_digest {
             return Ok(false);
         }
     }

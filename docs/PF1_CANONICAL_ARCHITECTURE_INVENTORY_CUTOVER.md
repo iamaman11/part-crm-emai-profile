@@ -282,7 +282,7 @@ PF-1 must not mechanically translate historical Python `CLASSIFIERS`, route spec
 At minimum the exact-candidate audit must consume/validate the current applicable authority set including:
 
 - `architecture/runtime-topology-ar2.json`;
-- `architecture/d1-evolution-ar9.json`;
+- typed D1 policy from `tools/opsctl/src/d1` and executable migration history from `migrations/d1` plus `migrations/resolver-d1`;
 - `architecture/runtime-cutover-ar10.json`;
 - `architecture/release-architecture-ar11.json`;
 - `architecture/credential-authority.json`;

@@ -1,0 +1,63 @@
+opsctl — project-specific operations policy interface
+
+USAGE:
+    opsctl [--root PATH] <COMMAND>
+    opsctl [--root PATH] credentials <ACTION>
+    opsctl [--root PATH] d1 repository
+    opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [D1 OPTIONS]
+    opsctl [--root PATH] release <ACTION> --release-set PATH [RELEASE OPTIONS]
+    opsctl [--root PATH] promotion <ACTION> --release-set PATH --profile ID --environment ENV --snapshot PATH --evidence-json PATH [PROMOTION OPTIONS]
+
+COMMANDS:
+    doctor                     Validate canonical repository authorities
+    status                     Print canonical docs/status.json
+    inventory                  Print canonical architecture/inventory.json
+    credentials status         Print canonical credential lifecycle metadata
+    credentials rotation-plan  Print canonical operator rotation/recovery metadata
+    d1 repository              Project typed D1 policy and SQL-derived repository identity
+    d1 status                  Classify a saved D1 migration ledger against canonical history
+    d1 plan                    Build a deterministic migration/rollback plan
+    d1 compatibility           Evaluate runtime/schema compatibility
+    d1 verify                  Verify a post-apply ledger against a release schema contract
+    release inspect            Parse and inspect one immutable Release Set
+    release verify             Verify Release Set identity and exact artifact bytes
+    release compatibility      Evaluate Release Set + Capability Profile compatibility
+    promotion plan             Build a deterministic no-mutation transition plan
+    promotion preflight        Fail-closed gate before provider credential exposure
+    promotion verify           Verify observed state after provider mutation
+
+D1 OPTIONS:
+    --component ID              catalog or resolver
+    --ledger-json PATH          Saved machine-readable Wrangler D1 ledger query result
+    --release-manifest PATH     Target release; required for plan/compatibility/verify
+    --current-manifest PATH     Current runtime schema contract; plan rollback context
+    --known-good-manifest PATH  Known-good rollback release schema contract
+    --preconditions-json PATH   Metadata-only CONTRACT precondition evidence
+
+RELEASE OPTIONS:
+    --release-set PATH          Target content-addressed Release Set manifest
+    --source-root PATH          Exact source tree for release provenance; defaults to --root
+    --artifact-root PATH        Exact artifact tree; required for release verify
+    --profile ID                Target Capability Profile; compatibility only
+    --environment ID            rehearsal, staging, or production; compatibility only
+    --evidence-json PATH        Saved compatibility evidence; compatibility only
+    --current-release-set PATH  Optional current Release Set for rollback context
+
+PROMOTION OPTIONS:
+    --release-set PATH          Target immutable Release Set
+    --source-root PATH          Exact target source tree; current --root remains policy authority
+    --profile ID                Target Capability Profile
+    --environment ID            rehearsal, staging, or production
+    --snapshot PATH             Saved metadata-only DeploymentSnapshot
+    --evidence-json PATH        Saved release compatibility evidence
+    --current-release-set PATH  Optional current Release Set
+    --known-good-release-set PATH  Rollback candidate for preflight
+    --expected-current ID       Stale-plan fence (use NONE for fresh state)
+
+GLOBAL OPTIONS:
+    --root PATH  Explicit current policy repository root
+    -h, --help   Print help
+    -V, --version
+                 Print version
+
+AR-11 release commands remain local, read-only and metadata/artifact-verification-only. opsctl never executes Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. GitHub Actions/Environments retain orchestration/approval authority and provider executors retain actual mutation authority.

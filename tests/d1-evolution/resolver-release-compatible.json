@@ -2,9 +2,9 @@
   "schema_contract": {
     "database_component": "resolver",
     "target_schema_revision": "0004_refresh_owner_hmac_version.sql",
-    "supported_schema_min": "0001_resolver_security_boundary.sql",
+    "supported_schema_min": "0004_refresh_owner_hmac_version.sql",
     "supported_schema_max": "0004_refresh_owner_hmac_version.sql",
     "migration_history_digest": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
-    "compatibility_policy_digest": "fixture-policy-v1"
+    "compatibility_policy_digest": "7d84cba14dbff39b9ee52ed81d9855089089363600938fa1f6791503c9903047"
   }
 }

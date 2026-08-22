@@ -331,7 +331,7 @@ mod tests {
             },
             "contracts":{"files":[{"path":"openapi/v1/openapi.json","sha256":SHA,"size_bytes":1}],"sha256":SHA},
             "protocols":{"public_api_contract_sha256":SHA,"camouhost_ipc_version":1,"profile_bridge_protocol_version":1,"resolver_protocol":"mailbox-secret-resolver-v1"},
-            "schemas":{"d1_evolution_authority_sha256":SHA,"catalog":schema("catalog"),"resolver":schema("resolver")},
+            "schemas":{"d1_repository_identity_sha256":SHA,"catalog":schema("catalog"),"resolver":schema("resolver")},
             "runtime_compatibility":{"runtime_lock_sha256":SHA,"runtime_role":"real_camoufox","profile_format":"v1","browser_identity_policy":"v1"},
             "capability_profile_compatibility":["rehearsal-core-v1"],
             "build_provenance":{"cargo_lock_sha256":SHA,"rust_toolchain_sha256":SHA,"frontend_lock_sha256":SHA,"release_architecture_sha256":SHA},

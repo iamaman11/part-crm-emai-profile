@@ -1,5 +1,7 @@
 #[path = "d1/authority.rs"]
 mod authority;
+#[path = "d1/catalog.rs"]
+mod catalog;
 #[path = "d1/compatibility.rs"]
 mod compatibility;
 #[path = "d1/model.rs"]
@@ -13,9 +15,8 @@ mod util;
 #[path = "d1/verify.rs"]
 mod verify;
 
-use authority::{
-    load_component_authority, load_preconditions, load_release_contract, load_wrangler_ledger,
-};
+use authority::{load_preconditions, load_release_contract, load_wrangler_ledger};
+use catalog::component_authority;
 use model::{Evaluation, Preconditions, ReleaseSchemaContract};
 use plan::evaluate;
 use serde_json::json;
@@ -24,37 +25,8 @@ use util::resolve_input;
 
 pub use model::{D1Action, D1Error, D1RunRequest};
 
-pub const DEFAULT_AUTHORITY: &str = "architecture/d1-evolution-ar9.json";
-
-/// Canonical AR-9 policy vocabulary. Keeping the vocabulary at the facade makes the
-/// operator surface reviewable while implementation details live in focused modules.
-pub const POLICY_VOCABULARY: &[&str] = &[
-    "EXACT",
-    "BEHIND_KNOWN_PREFIX",
-    "AHEAD_KNOWN_COMPATIBLE",
-    "AHEAD_KNOWN_INCOMPATIBLE",
-    "DIVERGED",
-    "UNKNOWN_MIGRATION",
-    "CORRUPT_LEDGER",
-    "SAFE",
-    "MIGRATION_REQUIRED",
-    "DEPLOY_FIRST",
-    "MIGRATE_FIRST",
-    "CODE_ROLLBACK_SAFE",
-    "CODE_ROLLBACK_BLOCKED",
-    "FAIL_FORWARD_REQUIRED",
-    "CONTRACT_BLOCKED",
-    "RECOVERY_REQUIRED",
-];
-
 pub fn run(request: D1RunRequest<'_>) -> Result<String, D1Error> {
-    let authority = load_component_authority(
-        request.root,
-        request
-            .authority_path
-            .unwrap_or_else(|| Path::new(DEFAULT_AUTHORITY)),
-        request.component,
-    )?;
+    let authority = component_authority(request.root, request.component)?;
     let ledger_path = resolve_input(request.root, request.ledger_json);
     let remote_names = load_wrangler_ledger(&ledger_path)?;
     let target = load_optional_release(
@@ -95,6 +67,12 @@ pub fn run(request: D1RunRequest<'_>) -> Result<String, D1Error> {
     serialize_evaluation(&authority, request.action, evaluation)
 }
 
+pub fn repository_projection(root: &std::path::Path) -> Result<String, D1Error> {
+    catalog::repository_projection(root)
+}
+
+pub(crate) use catalog::{release_contract, repository_identity_sha256};
+
 fn load_optional_release(
     root: &Path,
     path: Option<&Path>,
@@ -119,6 +97,21 @@ fn serialize_evaluation(
     action: D1Action,
     evaluation: Evaluation,
 ) -> Result<String, D1Error> {
+    let planned_contracts = evaluation
+        .planned_contracts
+        .iter()
+        .map(|contract| {
+            json!({
+                "migration_file": contract.migration_file,
+                "migration_class": contract.migration_class.as_str(),
+                "rollout_order": contract.rollout_order.as_str(),
+                "fail_forward_required": contract.fail_forward_required,
+                "destructive": contract.destructive,
+                "code_rollback_allowed": contract.code_rollback_allowed,
+                "contract_preconditions": contract.contract_preconditions,
+            })
+        })
+        .collect::<Vec<_>>();
     let output = json!({
         "schema_version": 1,
         "command": format!("d1 {}", action.name()),
@@ -133,7 +126,7 @@ fn serialize_evaluation(
         "current_repository_revision": authority.current_repository_revision,
         "history_digest": authority.history_digest,
         "planned_migrations": evaluation.planned_migrations,
-        "planned_migration_contracts": evaluation.planned_contracts,
+        "planned_migration_contracts": planned_contracts,
         "rollback_context_complete": evaluation.rollback_context_complete,
         "reason_codes": evaluation.reason_codes,
         "allowed": evaluation.allowed

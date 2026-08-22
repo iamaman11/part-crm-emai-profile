@@ -87,7 +87,7 @@ No production provisioning or promotion is authorized in AR-0…AR-17. AR-17 may
 - [`docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`](docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 specification;
 - [`architecture/release-architecture-ar11.json`](architecture/release-architecture-ar11.json) — accepted release/capability authority;
 - [`architecture/runtime-cutover-ar10.json`](architecture/runtime-cutover-ar10.json) — runtime cutover authority;
-- [`architecture/d1-evolution-ar9.json`](architecture/d1-evolution-ar9.json) — D1 evolution authority;
+- [`tools/opsctl/src/d1`](tools/opsctl/src/d1) plus [`migrations/d1`](migrations/d1) and [`migrations/resolver-d1`](migrations/resolver-d1) — typed D1 policy and executable SQL migration authority; AR-9 acceptance remains historical evidence;
 - [`architecture/credential-authority.json`](architecture/credential-authority.json), [`architecture/credential-lifecycle.json`](architecture/credential-lifecycle.json), [`architecture/profile-security.json`](architecture/profile-security.json), [`architecture/operator-contract.json`](architecture/operator-contract.json) — current subject authorities;
 - [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — current development projection;
 - [`docs/status.json`](docs/status.json) — machine-readable state projection;

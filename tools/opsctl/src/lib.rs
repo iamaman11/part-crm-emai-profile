@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod canonical;
 mod cli;
 pub mod credentials;
 pub mod d1;
@@ -16,7 +17,7 @@ mod status;
 pub use cli::{CredentialsAction, HELP, Invocation, ReadCommand, parse_invocation};
 pub use error::OpsctlError;
 
-use repository::resolve_repo_root;
+use repository::{resolve_d1_repository_root, resolve_repo_root};
 
 /// Execute one already-parsed project-specific operational policy command.
 ///
@@ -51,7 +52,6 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             current_manifest,
             known_good_manifest,
             preconditions_json,
-            authority,
         } => {
             let repo_root = resolve_repo_root(root.as_deref(), "d1")?;
             d1::run(d1::D1RunRequest {
@@ -63,9 +63,13 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                 current_manifest: current_manifest.as_deref(),
                 known_good_manifest: known_good_manifest.as_deref(),
                 preconditions_json: preconditions_json.as_deref(),
-                authority_path: authority.as_deref(),
             })
             .map_err(|error| OpsctlError::new("d1", error.to_string()))
+        }
+        Invocation::D1Repository { root } => {
+            let repo_root = resolve_d1_repository_root(root.as_deref())?;
+            d1::repository_projection(&repo_root)
+                .map_err(|error| OpsctlError::new("d1", error.to_string()))
         }
         Invocation::Release {
             root,
@@ -159,6 +163,7 @@ mod tests {
                 Some(format!("opsctl credentials {}", action.name()))
             }
             Invocation::D1 { action, .. } => Some(format!("opsctl d1 {}", action.name())),
+            Invocation::D1Repository { .. } => Some("opsctl d1 repository".to_owned()),
             Invocation::Release { action, .. } => Some(format!("opsctl release {}", action.name())),
             Invocation::Promotion { action, .. } => {
                 Some(format!("opsctl promotion {}", action.name()))
@@ -239,7 +244,7 @@ mod tests {
                 "{id}"
             );
         }
-        assert_eq!(active.len(), 15, "Unit B active command count drifted");
+        assert_eq!(active.len(), 16, "active operator command count drifted");
 
         let reserved = authority["reserved_namespaces"]
             .as_array()
