@@ -12,14 +12,6 @@
   },
   "additions": [
     {
-      "path": "scripts/release-set-ar11.py",
-      "classification": "KEEP_PYTHON",
-      "role": "deterministic_release_generator",
-      "side_effect_class": "local_artifact_generation_only",
-      "authority": "PYTHON_ALLOWED_BY_AR11",
-      "rationale": "deterministic Release Set packaging adapter; no provider network, credentials, promotion decision or provider mutation"
-    },
-    {
       "path": "scripts/profile-bridge-package.py",
       "classification": "KEEP_PYTHON",
       "role": "profile_bridge_component_packaging_adapter",
@@ -162,9 +154,9 @@
     ]
   },
   "current_summary": {
-    "tracked_python_files": 130,
+    "tracked_python_files": 129,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 130,
+    "KEEP_PYTHON": 129,
     "MIGRATE_TO_RUST": 0,
     "WRAP_WITH_RUST": 0
   }
