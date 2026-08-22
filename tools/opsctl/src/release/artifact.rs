@@ -1,6 +1,6 @@
 use crate::release::component_manifest::verify_component_manifests;
 use crate::release::digest::sha256_reader_hex;
-use crate::release::model::{ArtifactIdentity, ReleaseModelError, ReleaseSetManifest};
+use crate::release::model::{ArtifactIdentity, ReleaseModelError, ReleaseSetManifest, parse_json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -82,7 +82,7 @@ fn remove_verified_control_manifest(
             path.display()
         ))
     })?;
-    let control = ReleaseSetManifest::parse_json(&input).map_err(|error| {
+    let control = parse_json(&input).map_err(|error| {
         ReleaseModelError::new(format!(
             "RELEASE_SET_CONTROL_DOCUMENT_INVALID: {}: {error}",
             path.display()
