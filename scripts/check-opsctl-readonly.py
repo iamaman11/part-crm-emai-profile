@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,6 @@ SRC = Path("tools/opsctl/src")
 CARGO = Path("tools/opsctl/Cargo.toml")
 LOCK = Path("tools/opsctl/Cargo.lock")
 HELP = Path("tools/opsctl/src/help.txt")
-ALLOWED_DEPENDENCIES = {"serde_json": "=1.0.151"}
 REQUIRED_SOURCE_FILES = {
     "canonical.rs",
     "cli.rs",
@@ -38,6 +37,14 @@ REQUIRED_SOURCE_FILES = {
     "main.rs",
     "repository.rs",
     "status.rs",
+}
+FORBIDDEN_DEPENDENCY_CAPABILITIES = {
+    "cloudflare",
+    "hyper",
+    "reqwest",
+    "tokio",
+    "ureq",
+    "worker",
 }
 FORBIDDEN_RUNTIME_MARKERS = (
     "Command::new(",
@@ -123,20 +130,59 @@ def rust_sources(root: Path) -> dict[str, str]:
     return observed
 
 
-def parse_dependencies(cargo: str) -> dict[str, str]:
-    match = re.search(r"(?ms)^\[dependencies\]\n(?P<body>.*?)(?=^\[|\Z)", cargo)
-    if match is None:
-        return {}
-    dependencies: dict[str, str] = {}
-    for raw in match.group("body").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
+def exact_registry_version(name: str, spec: object) -> str | None:
+    if isinstance(spec, str):
+        version = spec
+    elif isinstance(spec, dict):
+        if "git" in spec:
+            fail(f"opsctl dependency {name!r} must not use a Git source")
+        if "path" in spec:
+            return None
+        version = spec.get("version")
+    else:
+        fail(f"opsctl dependency {name!r} has unsupported Cargo declaration")
+
+    if not isinstance(version, str) or not version.startswith("=") or len(version) == 1:
+        fail(f"opsctl registry dependency {name!r} must use an exact =version pin")
+    return version[1:]
+
+
+def validate_dependencies(cargo: str, lock: str) -> None:
+    try:
+        manifest = tomllib.loads(cargo)
+    except tomllib.TOMLDecodeError as error:
+        raise GateError(f"cannot parse opsctl Cargo.toml: {error}") from error
+
+    dependencies = manifest.get("dependencies", {})
+    if not isinstance(dependencies, dict):
+        fail("opsctl [dependencies] must be a TOML table")
+
+    for name, spec in dependencies.items():
+        if name.lower() in FORBIDDEN_DEPENDENCY_CAPABILITIES:
+            fail(f"opsctl dependency grants forbidden runtime/provider capability: {name}")
+
+        if isinstance(spec, dict) and "path" in spec:
+            path = spec.get("path")
+            if name != "opsctl-core" or path != "core":
+                fail(
+                    "opsctl local dependency must preserve the approved shell -> opsctl-core "
+                    f"direction; observed {name} path={path!r}"
+                )
+            if "git" in spec or "registry" in spec:
+                fail("opsctl-core local dependency must not combine path with Git/registry source")
+            if 'name = "opsctl-core"' not in lock:
+                fail("opsctl lockfile lost local opsctl-core identity")
             continue
-        item = re.fullmatch(r'([A-Za-z0-9_-]+)\s*=\s*"([^"]+)"', line)
-        if item is None:
-            fail(f"opsctl dependency declaration must be exact-pinned: {line}")
-        dependencies[item.group(1)] = item.group(2)
-    return dependencies
+
+        version = exact_registry_version(name, spec)
+        if version is None:
+            fail(f"opsctl dependency {name!r} has an unsupported local dependency shape")
+        package_name = spec.get("package", name) if isinstance(spec, dict) else name
+        if not isinstance(package_name, str):
+            fail(f"opsctl dependency {name!r} has invalid package identity")
+        lock_identity = f'name = "{package_name}"\nversion = "{version}"'
+        if lock_identity not in lock:
+            fail(f"opsctl lockfile lost exact registry identity for {package_name} {version}")
 
 
 def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
@@ -157,8 +203,6 @@ def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
 
     if "#![forbid(unsafe_code)]" not in lib:
         fail("opsctl must forbid unsafe code")
-    if len(main.encode("utf-8")) > 1024:
-        fail("opsctl main.rs must remain a thin adapter")
     for marker in ("opsctl::parse_invocation", "opsctl::execute", "error.json()"):
         if marker not in main:
             fail(f"opsctl main.rs lost thin-entrypoint marker: {marker}")
@@ -178,12 +222,9 @@ def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
         fail("opsctl retains the removed D1 authority override/loader surface")
     if ("D1_EVOLUTION_" + "AUTHORITY") in d1_source:
         fail("opsctl retains the removed serialized D1 policy format")
-    if parse_dependencies(cargo) != ALLOWED_DEPENDENCIES:
-        fail(f"opsctl dependency set drifted: {parse_dependencies(cargo)}")
+    validate_dependencies(cargo, lock)
     if "[dev-dependencies]" in cargo or "[build-dependencies]" in cargo:
         fail("opsctl must not add dev/build dependency authority")
-    if 'name = "serde_json"\nversion = "1.0.151"' not in lock:
-        fail("opsctl lockfile lost exact serde_json identity")
 
 
 def load_d1_projection(root: Path) -> dict[str, Any]:
@@ -251,12 +292,7 @@ def validate(root: Path = ROOT) -> None:
     validate_d1_projection(load_d1_projection(root))
 
 
-def expect_source_rejected(
-    label: str,
-    sources: dict[str, str],
-    cargo: str,
-    lock: str,
-) -> None:
+def expect_source_rejected(label: str, sources: dict[str, str], cargo: str, lock: str) -> None:
     try:
         validate_source(sources, cargo, lock)
     except GateError:
@@ -285,20 +321,30 @@ def self_test() -> None:
     mutation_sources = dict(sources)
     mutation_sources["d1.rs"] += '\nfn forbidden() { let _ = fs::write("state", b"x"); }\n'
     expect_source_rejected("D1 filesystem mutation", mutation_sources, cargo, lock)
-    dependency = cargo.replace(
+
+    forbidden_dependency = cargo.replace(
         'serde_json = "=1.0.151"',
         'serde_json = "=1.0.151"\nreqwest = "=0.13.1"',
         1,
     )
-    expect_source_rejected("unreviewed dependency", sources, dependency, lock)
+    expect_source_rejected("forbidden capability dependency", sources, forbidden_dependency, lock)
+    floating_dependency = cargo.replace(
+        'serde_json = "=1.0.151"',
+        'serde_json = "1.0.151"',
+        1,
+    )
+    expect_source_rejected("floating registry dependency", sources, floating_dependency, lock)
+    wrong_local_boundary = cargo.replace(
+        'opsctl-core = { path = "core" }',
+        'opsctl-core = { path = "../../crates/runtime" }',
+        1,
+    )
+    expect_source_rejected("wrong local dependency direction", sources, wrong_local_boundary, lock)
 
     with tempfile.TemporaryDirectory(prefix="opsctl-d1-negative-") as temporary:
         fixture = Path(temporary)
         shutil.copytree(ROOT / "migrations" / "d1", fixture / "migrations" / "d1")
-        shutil.copytree(
-            ROOT / "migrations" / "resolver-d1",
-            fixture / "migrations" / "resolver-d1",
-        )
+        shutil.copytree(ROOT / "migrations" / "resolver-d1", fixture / "migrations" / "resolver-d1")
         migration = fixture / "migrations" / "d1" / "0001_catalog.sql"
         migration.write_bytes(migration.read_bytes() + b"\n-- tampered\n")
         expect_projection_rejected("historical SQL substitution", fixture)

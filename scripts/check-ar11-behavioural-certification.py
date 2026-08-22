@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tomllib
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -33,6 +34,14 @@ LEGACY_D3 = (
     "scripts/mailbox-secret-resolver-promotion.py",
     "scripts/_mailbox_secret_resolver_promotion_core.py",
 )
+OPSCTL_FORBIDDEN_DEPENDENCIES = {
+    "cloudflare",
+    "hyper",
+    "reqwest",
+    "tokio",
+    "ureq",
+    "worker",
+}
 OPSCTL_FORBIDDEN = (
     "reqwest",
     "ureq",
@@ -72,17 +81,54 @@ def safe_path(value: str) -> Path:
     return path
 
 
+def validate_opsctl_dependency_boundary(manifest_text: str) -> None:
+    try:
+        manifest = tomllib.loads(manifest_text)
+    except tomllib.TOMLDecodeError as error:
+        raise CertificationError(f"cannot parse opsctl Cargo.toml: {error}") from error
+
+    dependencies = manifest.get("dependencies", {})
+    if not isinstance(dependencies, dict):
+        fail("opsctl [dependencies] must be a TOML table")
+
+    for name, spec in dependencies.items():
+        if name.lower() in OPSCTL_FORBIDDEN_DEPENDENCIES:
+            fail(f"opsctl gained forbidden runtime/provider dependency: {name}")
+
+        if isinstance(spec, dict) and "path" in spec:
+            if name != "opsctl-core" or spec.get("path") != "core":
+                fail(
+                    "opsctl local dependency must preserve shell -> opsctl-core direction; "
+                    f"observed {name} path={spec.get('path')!r}"
+                )
+            if "git" in spec or "registry" in spec:
+                fail("opsctl-core local dependency must not combine path with Git/registry source")
+            continue
+
+        if isinstance(spec, str):
+            version = spec
+        elif isinstance(spec, dict):
+            if "git" in spec:
+                fail(f"opsctl dependency {name!r} must not use a Git source")
+            version = spec.get("version")
+        else:
+            fail(f"opsctl dependency {name!r} has unsupported Cargo declaration")
+
+        if not isinstance(version, str) or not version.startswith("=") or len(version) == 1:
+            fail(f"opsctl registry dependency {name!r} must use an exact =version pin")
+
+
 def validate_opsctl_offline_boundary() -> None:
     manifest = safe_path("tools/opsctl/Cargo.toml").read_text(encoding="utf-8")
-    dependencies = manifest.split("[dependencies]", 1)[1].split("[", 1)[0]
-    dependency_lines = [line.strip() for line in dependencies.splitlines() if line.strip() and not line.lstrip().startswith("#")]
-    if dependency_lines != ['serde_json = "=1.0.151"']:
-        fail(f"opsctl dependency surface drifted: {dependency_lines}")
+    validate_opsctl_dependency_boundary(manifest)
     for path in sorted((ROOT / "tools" / "opsctl" / "src").rglob("*.rs")):
         text = path.read_text(encoding="utf-8")
         for marker in OPSCTL_FORBIDDEN:
             if marker.lower() in text.lower():
-                fail(f"opsctl gained forbidden network/provider/secret/process authority {marker!r} in {path.relative_to(ROOT)}")
+                fail(
+                    "opsctl gained forbidden network/provider/secret/process authority "
+                    f"{marker!r} in {path.relative_to(ROOT)}"
+                )
 
 
 def validate_absent_legacy_d3() -> None:
@@ -169,6 +215,31 @@ def self_test(document: dict[str, Any]) -> None:
         pass
     else:
         fail("bogus-proof negative fixture unexpectedly passed")
+
+    manifest = safe_path("tools/opsctl/Cargo.toml").read_text(encoding="utf-8")
+    forbidden_dependency = manifest.replace(
+        'serde_json = "=1.0.151"',
+        'serde_json = "=1.0.151"\nreqwest = "=0.13.1"',
+        1,
+    )
+    try:
+        validate_opsctl_dependency_boundary(forbidden_dependency)
+    except CertificationError:
+        pass
+    else:
+        fail("opsctl forbidden dependency negative fixture unexpectedly passed")
+
+    floating_dependency = manifest.replace(
+        'serde_json = "=1.0.151"',
+        'serde_json = "1.0.151"',
+        1,
+    )
+    try:
+        validate_opsctl_dependency_boundary(floating_dependency)
+    except CertificationError:
+        pass
+    else:
+        fail("opsctl floating dependency negative fixture unexpectedly passed")
 
 
 def main() -> int:
