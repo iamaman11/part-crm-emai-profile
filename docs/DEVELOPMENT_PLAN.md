@@ -2,151 +2,248 @@
 
 **Document status:** GENERATED_PROJECTION  
 **Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
-**Architecture evolution contract:** `ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
-**Tracking:** issue #266  
+**Mandatory requirements:** `APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`  
+**Quality contract:** `ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
+**Tracking:** #266  
 **Accepted product phase:** Phase 2I  
-**Current accepted architecture checkpoint:** AR-11 — Release-set / Promotion Architecture
-**Current architecture slice:** AR-12 — Fresh Rehearsal Environment — **DERIVED CURRENT / NOT STARTED**; implementation entry remains blocked by Post-AR-11 Functional Closure #399
-**Architecture complete:** `false`  
+**Accepted architecture checkpoint:** AR-11  
+**Derived current architecture slice:** AR-12 — NOT STARTED  
 **Production Core gate:** `BLOCKED`  
-**Production readiness:** `production_ready=false`
+**Production readiness:** `false`
 
-## 1. Authority and scope
+This file is a projection of the canonical program. It is not a second roadmap or lifecycle authority.
 
-This document projects product history and the active implementation order. It is not a second program
-authority. The single current architecture/program execution authority is
-`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, tracked by issue #266.
+## 1. Current state
 
-The binding prospective development/evolution rules are defined by that authority together with
-`docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`. The quality contract is subordinate to the program
-and existing domain/machine authorities; it is not another roadmap or capability registry.
+- AR-0…AR-11: accepted.
+- AR-12: derived current in the static sequence, implementation NOT STARTED.
+- Post-AR-11 Functional Closure #399 blocks AR-12 entry.
+- Production remains disabled/fail-closed.
+- `source_present != production_enabled` is binding.
 
-Stable architecture/security/data authorities remain scoped authorities rather than competing roadmaps:
-`ARCHITECTURE.md`, accepted ADRs, `DATA_CLASSIFICATION.md`, `THREAT_MODEL.md`, `UI_ARCHITECTURE.md`,
-generated contracts and `architecture/accepted-phases.json`.
-
-The former issue #203 pre-2J product-readiness program is accepted predecessor history. Its exact former
-plan and this file's former #203-oriented projection are preserved under `history/`; their old execution
-order is not the forward queue after AR-1.
-
-Phase 2I remains the last accepted repository-local product phase. The accepted phase ledger does not
-advance during Architecture Re-baseline v3.
-
-## 2. Current repository state
-
-- Accepted repository-local product phase: **Phase 2I**.
-- AR-0 — Delta Architecture Inventory: **DONE / ACCEPTED** through PR #267.
-- AR-1 — Architecture Authority Re-baseline: **DONE / ACCEPTED**.
-- AR-2 — Runtime Topology + D3 Compatibility: **DONE / ACCEPTED**.
-- AR-3 — Application Architecture Contract: **DONE / ACCEPTED**.
-- AR-4A — Composition-root consolidation: **DONE / ACCEPTED**.
-- AR-4B — Client Mail route ownership: **DONE / ACCEPTED**.
-- AR-4C — Outbound Mail composition extraction: **DONE / ACCEPTED**.
-- AR-4D remains **NOT REQUIRED** unless later accepted evidence reopens it.
-- AR-5 — Wrangler / Runtime Authority Cleanup: **DONE / ACCEPTED**.
-- AR-6 — Full Python Estate + read-only Rust opsctl: **DONE / ACCEPTED**.
-- AR-7 — Environments + GitHub Governance + Operational Boundaries: **DONE / ACCEPTED**.
-- AR-8A…AR-8F + final closeout: **DONE / ACCEPTED**; AR-8 is accepted on `main`.
-- Post-AR-8C cleanup / DX issue #352: **DONE / ACCEPTED**.
-- AR-9 — D1 Evolution / Schema Compatibility: **DONE / ACCEPTED**; accepted provenance is `docs/evidence/2026-08-19-ar9-final-acceptance.json`.
-- AR-10 — Runtime and Historical Executable Simplification: **DONE / ACCEPTED**; accepted provenance is `docs/evidence/2026-08-19-ar10-final-acceptance.json`.
-- AR-11 — Release-set / Promotion Architecture: **DONE / ACCEPTED** through the generic Git-derived acceptance mechanism.
-- AR-12 — Fresh Rehearsal Environment: **DERIVED CURRENT / NOT STARTED**; implementation entry remains blocked by Post-AR-11 Functional Closure #399.
-- Current prerequisite implementation: **PF-1 #430**.
-- PF-2 Hosted Operational Evidence: **Draft PR #428 / blocked on accepted PF-1**.
-- PF-3 Architecture Fitness Baseline: **planned in #431 / blocked on accepted PF-2**.
-- FC-6 #421 resumes only after accepted PF-3 and fresh re-baseline of #399/#421.
-- AR-13…AR-17: ordered future architecture slices.
-- `architecture_complete=false`.
-- `production_core_gate=BLOCKED`.
-- `production_ready=false`.
-- Real production mutation: **forbidden throughout AR-0…AR-17**.
-- AR-2 decision authority: `architecture/runtime-topology-ar2.json`.
-- `GENERATION_VERIFICATION=DELETE`; AR-5 accepted source/Wrangler/deployment authority cleanup while preserving synchronous verification semantics.
-- Historical D3/#251 repository-side machinery is preserved; its old production lane is disabled for forward execution.
-- AR-6 accepted `architecture/python-estate-ar6.json` and the capability-bounded read-only `tools/opsctl` foundation; Draft PR #269 remains feasibility history only.
-- AR-7 accepted classic `main` protection and Environment boundaries; AR-8, AR-9, AR-10 and AR-11 are accepted.
-
-## 2A. CURRENT_DELIVERY_MAP
-
-Canonical machine projection: `architecture/inventory.json::current_delivery_map`. This section is a human-readable projection, not a second roadmap or release authority.
-
-| Delivery dimension | Current status | Scope / gate |
-|---|---|---|
-| Source implemented | **ACCEPTED THROUGH AR-11** | AR-11 source is accepted on `main`; AR-12 is derived current and NOT STARTED. |
-| Accepted on main | **COMPLETE THROUGH AR-11** | AR-8, AR-9, AR-10 and AR-11 are accepted; AR-11 is the generic acceptance migration anchor. |
-| Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only; later architecture acceptance does not imply a broader staging or production deployment. |
-| Production authorized | **NO** | `production_core_gate=BLOCKED`; only successful AR-17 may authorize the Production Core gate. |
-| Production enabled | **NO** | `production_ready=false`; only successful PC-1 after AR-17 authorization may enable accepted `production-core-v1` scope. |
-| Current implementation blocker | **POST-AR-11 FUNCTIONAL CLOSURE #399** | Current execution is PF-1 #430; PF-2, PF-3, FC-6 and FC-7 remain ordered prerequisites before AR-12 implementation entry. |
-| Next gate | **PF-1 acceptance on protected main** | PF-2 remains blocked until PF-1 is accepted; FC-6 cannot resume before PF-3 acceptance and fresh #399/#421 re-baseline. |
-
-`source_present != production_enabled` is mechanically enforced. Staging success never implies production authorization or enablement.
-
-## 3. Accepted product phase ledger
-
-The immutable authority is `architecture/accepted-phases.json`:
+## 2. Current implementation order
 
 ```text
-Phase 0 architecture convergence                              ACCEPTED
-Phase 1A durable event/outbox foundation                      ACCEPTED
-Phase 1B notification domain + retry/DLQ/catch-up/operations  ACCEPTED
-Phase 2A client-domain/contact foundation                     ACCEPTED
-Phase 2B protected contact persistence/lifecycle              ACCEPTED
-Phase 2C merge/assignment/projections/Client Registry UI      ACCEPTED
-Phase 2D query/CQRS/global search/client-mail query           ACCEPTED
-Phase 2E mailbox domain + cloud provider lane                 ACCEPTED
-Phase 2F device jobs + browser/Bridge mailbox lane            ACCEPTED
-Phase 2G durable realtime notification hub                    ACCEPTED
-Phase 2H standalone UI/admin UX                               ACCEPTED
-Phase 2I E2E/security/recovery/operations hardening           ACCEPTED
-Architecture Re-baseline v3                                   ACTIVE
+F1  Release Set breaking-contract version discipline
++
+F2  permanent architecture foundations
+    - application mandatory requirements
+    - opsctl pure-core / adapter boundary
+    - opsctl doctor diagnostic boundary
+    - canonical JSON/digest discipline
+    - Python role/effect boundary
+ ->
+N1  AR-2 runtime/resource topology current-authority retirement
+ ->
+N2  AR-6 Python-estate authority retirement + role/effect normalization
+ ->
+N3  AR-7 current GitHub-governance normalization
+ ->
+N4  bounded AR-8 operator/provenance cleanup
+ ->
+N5  AR-10 runtime semantic-authority retirement
+ ->
+PF-1 #430 typed lifecycle + deterministic bounded-projection inventory cutover
+ ->
+PF-2 Hosted Operational Evidence / Draft #428
+ ->
+PF-3 #431 typed Architecture Fitness Baseline
+ ->
+fresh #399/#421 re-baseline
+ ->
+FC-6
+ ->
+FC-7
+ ->
+AR-12 implementation entry
 ```
 
-## 4. Current architecture execution order
+F1/F2/N1…N5 are foundation/normalization transactions, not new AR/PF lifecycle slices. `architecture/architecture-program-sequence.json` remains unchanged.
+
+## 3. Why this normalization exists
+
+The accepted historical AR work is not being reopened. The cleanup removes transitional current semantic intermediaries so PF-1 does not become a mechanical Rust port of old JSON/Python/Node authority machinery.
+
+Target examples:
 
 ```text
-AR-0   Delta Architecture Inventory                              DONE
-AR-1   Architecture Authority Re-baseline                        DONE
-AR-2   Runtime Topology + D3 Compatibility                       DONE / ACCEPTED
-AR-3   Application Architecture Contract                         DONE / ACCEPTED
-AR-4A  Composition-root consolidation                            DONE / ACCEPTED
-AR-4B  Client Mail route ownership                               DONE / ACCEPTED
-AR-4C  Outbound Mail composition extraction                      DONE / ACCEPTED
-AR-4D  Profile extraction — NOT REQUIRED by AR-3; reopen only by later accepted evidence
-AR-5   Wrangler / Runtime Authority Cleanup                      DONE / ACCEPTED
-AR-6   Full Python Estate + read-only Rust opsctl                DONE / ACCEPTED
-AR-7   Environments + GitHub Governance + Operational Boundaries DONE / ACCEPTED
-AR-8   Secrets / Keys / OAuth Refresh Concurrency                DONE / ACCEPTED
-AR-9   D1 Evolution / Schema Compatibility                       DONE / ACCEPTED
-AR-10  Runtime and Historical Executable Simplification          DONE / ACCEPTED
-AR-11  Release-set / Promotion Architecture                      DONE / ACCEPTED
-AR-12  Fresh Rehearsal Environment                               DERIVED CURRENT / NOT STARTED
-AR-13  Rotation Rehearsal
-AR-14  Remote Recovery Rehearsal
-AR-15  Windows Delivery Program — inherited Batch E
-AR-16  Final Whole-project 10/10 Audit
-AR-17  Architecture Closeout + Production Core Gate
+AR-2 topology -> Wrangler/provider config + Product ownership
+AR-6 Python estate -> repository/source role/effect policy
+AR-7 governance -> current desired governance data + live observation
+AR-8 operator contract -> Rust CommandRegistry/effect registry
+AR-9 D1 -> SQL + typed Rust policy                 [already cut over]
+AR-10 runtime -> Product Rust + runtime-lock + Camouhost adapter + tests
 ```
 
-Before AR-12 implementation, the mandatory bounded Functional Closure prerequisite chain is:
+For every cutover:
 
 ```text
-PF-1 #430
--> PF-2 / Draft PR #428
--> PF-3 #431
--> fresh re-baseline #399/#421
--> FC-6
--> FC-7
--> AR-12 implementation entry
+natural owner proved
+-> callers switched
+-> old callers = 0
+-> old unique current invariants = 0
+-> DEAD predecessor deleted/demoted
+-> history preserved in Git/evidence
 ```
 
-PF-1/PF-2/PF-3 are not AR slices and do not alter `architecture/architecture-program-sequence.json`.
-No production provisioning or promotion belongs to an AR slice.
+## 4. Permanent application architecture rules
 
-AR-16 requires final whole-project repository-owned `P0=0` and `P1=0` with no production mutation.
-AR-17 may close the architecture program and authorize the Production Core gate while still keeping
-`production_ready=false`.
+```text
+one semantic fact -> one natural owner
+bounded contexts own business semantics
+inward dependency direction
+Pure Core / Effect Shell
+observation != policy decision
+explicit effect capabilities
+typed critical IDs/states/contracts
+context-owned persistence
+Release Profile = sole production-enable authority
+frontend = projection, not security boundary
+generated projection != semantic source
+```
+
+Do not create global authority bags, universal business repositories, generic plugin/DI/service-locator frameworks or second production feature-flag systems.
+
+## 5. `opsctl` development boundary
+
+`tools/opsctl` is standalone offline operator/policy/planning/verification/projection tooling.
+
+```text
+JSON/filesystem/local artifacts
+        ↓
+adapters + versioned DTOs
+        ↓
+typed semantic inputs
+        ↓
+PURE CORE
+        ↓
+typed results
+        ↓
+output adapter
+```
+
+Hard zero requirements:
+
+```text
+serde_json::Value crossing adapter -> pure core = 0
+filesystem/process/network/provider effects in pure core = 0
+Product Runtime -> opsctl/opsctl-core = 0
+opsctl provider/network/process authority = 0
+opsctl -> Python semantic child process = 0
+global authority bag = 0
+```
+
+A small internal `opsctl-core` crate is preferred when it materially enforces this boundary at compile time.
+
+## 6. `opsctl doctor`
+
+`doctor` remains supported, but its permanent role is narrowed to **read-only local diagnostic composition**.
+
+It may:
+
+```text
+resolve repository root
+read local files/metadata
+strictly decode local contracts through owned adapters
+aggregate typed diagnostic results
+render machine/human report
+```
+
+It must not:
+
+```text
+call Python/Node/Git/GitHub/provider subprocess/API
+access network/providers/secrets
+launch runtime/browser
+perform mutation
+duplicate domain/release/lifecycle/evidence policy
+maintain a global authority list as semantic truth
+```
+
+Current dependencies on AR-6 Python estate, `operator-contract.json`, Python inventory generator and generated/retired root sentinels are transitional. N2/N4/PF-1 remove them. PF-3 prevents regression.
+
+## 7. Python boundary
+
+Python is allowed by role/effects, not by a permanent file whitelist.
+
+Allowed examples:
+
+```text
+runtime/camouhost/real.py -> genuine Camoufox outer runtime adapter
+runtime/camouhost/main.py -> synthetic/test fixture
+repository/source validators/observers
+deterministic generators/renderers
+tests
+developer-local orchestration
+outer observation adapters where justified
+```
+
+Forbidden permanent roles include duplicate Product/release/D1/lifecycle/evidence/fitness semantic authority, Profile Bridge runtime bypass, hidden provider mutation and secret readback.
+
+The AR-6/AR-10/AR-11 Python estate overlay chain is retired by N2. No successor JSON/TOML/YAML/Rust list of every Python file is allowed.
+
+## 8. PF-1 target
+
+```text
+outer Git/GitHub raw observations
+-> typed LifecycleEvaluator
+-> DerivedLifecycleStateV1
+
+D1InventoryProjection
+RuntimeTopologyProjection
+ApplicationInventoryProjection
+OperatorInventoryProjection
+GovernanceInventoryProjection
+RuntimeInventoryProjection
+CredentialInventoryProjection
+ReleaseInventoryProjection
+-> pure ArchitectureInventoryCompiler
+-> architecture/inventory.json
+```
+
+PF-1 must not build `GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet`.
+
+Legacy Node lifecycle and Python architecture inventory/projection current owners are deleted after parity + zero-caller/zero-unique-invariant proof.
+
+## 9. PF-2 target
+
+```text
+outer GitHub/provider observation
+-> strict versioned DTO
+-> typed Rust EvidencePolicy
+-> HostedEvidenceEnvelopeV1
+-> canonical durable JSON
+-> immutable artifact/attestation
+```
+
+Network/provider reads and clocks remain outside `opsctl` pure policy.
+
+## 10. PF-3 target
+
+Fitness semantics are typed Rust:
+
+```text
+FitnessRuleRegistry
+-> evaluator/enforcement mapping
+-> positive/negative fixtures
+-> Architecture Fitness Gate
+-> optional generated report/index
+```
+
+A manually maintained semantic `architecture/architecture-fitness-policy.json` is not the target.
+
+PF-3 permanently enforces authority uniqueness, dependency/effect boundaries, `opsctl`/doctor restrictions, Python role/effect rules, versioned external contracts, cutover-to-deletion and Release Profile admission.
+
+## 11. AR sequence after Functional Closure
+
+```text
+AR-12 Fresh Rehearsal Environment
+AR-13 Rotation Rehearsal
+AR-14 Remote Recovery Rehearsal
+AR-15 Windows Delivery Program / inherited Batch E
+AR-16 Final Whole-project 10/10 Audit
+AR-17 Architecture Closeout + Production Core Gate
+```
 
 Only after AR-17:
 
@@ -154,206 +251,30 @@ Only after AR-17:
 PC-1 Production Core v1
 PC-2 Mailbox Administration
 PC-3 Mailbox Jobs / Automation
-PC-4 Outbound / subsequent capabilities
+PC-4 Outbound / later capabilities
 ```
 
-Only successful PC-1 may make `production_ready=true` for `production-core-v1`.
+Only PC-1 may make `production_ready=true` for the accepted core Release Profile.
 
-## 5. Non-negotiable clean architecture and development discipline
+## 12. Windows delivery requirement
 
-The valid dependency direction remains inward:
+The current Production Core scope includes Camoufox/profile runtime through Windows Profile Bridge. Therefore AR-15 remains mandatory before AR-16/AR-17 closeout and must cover the inherited Batch E concerns: signed/versioned update manifest, trust/key rotation, side-by-side staging, safe activation, health/Last Known Good rollback, immutable publisher integration, permanent failure tests and production-equivalent Windows rehearsal.
+
+## 13. Acceptance discipline
+
+Every bounded F/N/PF/FC/AR/PC candidate requires:
 
 ```text
-primitives
-contracts -> primitives
-domains -> contracts + primitives
-application-ports -> domains + contracts + primitives
-use-cases-* -> application-ports + domains + contracts + primitives
-adapters -> application-ports + domains + contracts + primitives + provider/runtime SDKs
-apps -> use-cases-* + adapters + contracts + primitives
-frontend -> generated public contracts + frontend public feature/entity/shared APIs
+fresh protected-main baseline
+-> natural owner/effect/contract analysis
+-> positive + negative tests
+-> exact-head permanent CI green
+-> protected required contexts green
+-> behind_by=0
+-> blocking reviews=0
+-> unresolved threads=0
+-> guarded merge bound to exact head
+-> post-merge accepted-main reread
 ```
 
-Prospective work additionally follows the binding `ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`:
-
-```text
-Single Authority
-Bounded Context ownership
-Pure Core / Effect Shell
-Explicit Effect Capabilities
-Typed critical IDs/states/contracts
-Context-owned persistence
-Typed config at composition edges
-Versioned integration events
-Release Profile = sole production-enable authority
-Cutover -> zero callers/invariants -> delete DEAD predecessor
-Touch-to-converge, not global rewrite
-```
-
-Existing permanent positive and negative architecture tests remain authoritative. PF-3 #431 must add the
-machine-readable `architecture/architecture-fitness-policy.json` and Architecture Fitness Gate so every
-REQUIRED cross-cutting rule maps to one primary permanent enforcement owner. After PF-3, a REQUIRED rule
-without active enforcement is a gate failure.
-
-Every later materially architecture-changing PF/FC/AR/PC candidate must declare its Architecture Impact:
-
-```text
-bounded contexts
-authorities
-contracts
-effect classes
-execution surfaces
-activation units / release profiles
-schema/migration impact
-legacy predecessor disposition
-applicable fitness Rule IDs
-```
-
-Acceptance requires all applicable rules and owned negative fixtures to pass on the same exact candidate head.
-
-## 6. Production capability sequencing
-
-`source_present != production_enabled` is binding. Production Core v1 may enable the accepted core
-release profile after AR-17 authorization and successful PC-1, while mailbox administration, bulk
-mailbox operations, client↔mailbox binding, mailbox jobs/automation and outbound side effects remain
-production-disabled until later capability gates.
-
-The current Core scope includes Camoufox/profile runtime through Windows Profile Bridge. Therefore the
-unfinished historical Windows updater Batch E is inherited by **AR-15** and is release-blocking for the
-current Core scope: signed/versioned update manifest, trust/key rotation, side-by-side staging, safe
-quiescent activation, health + Last Known Good rollback, immutable Windows publisher integration,
-permanent failure-path tests and a production-equivalent Windows rehearsal must all be accepted before
-AR-16/AR-17 can authorize PC-1. Profile Bridge runtime and updater remain separate failure domains.
-
-PC-1 must consume a Production Capability / Release Profile whose cloud release-set and Windows
-Bridge/updater/runtime/profile-format compatibility are mutually accepted. PC-1 is not allowed to be the
-first exercise of updater signature trust, rollback or activation safety.
-
-UI projection is never the security boundary. Production-disabled capability paths must fail closed in
-the backend. The project retains one `main`, one architecture and one schema/compatibility lineage.
-
-## 7. Operational authority
-
-The target split is GitHub Actions/Environments for CI orchestration, merge/deployment gates and approvals,
-Rust `opsctl` for typed project-specific operational semantics after bounded cutover, Wrangler/provider APIs
-for actual provider mutation, and Python for validators/generators/fixtures/research and explicitly classified
-helpers. `opsctl` is not a GitHub workflow wrapper or merge authority.
-
-For each mutable concern there is exactly one legitimate mutable authority. Terraform and hidden generic
-IaC state are not part of this architecture.
-
-## 8. Public contract and migration discipline
-
-AR-2 changes no public API/OpenAPI semantics and no D1 migration. Historical migration provenance is
-preserved. Fresh bootstrap is not an upgrade migration. One legitimate migration executor is required;
-a DB-level distributed lock is introduced only when an independent concurrent executor is proven and
-cannot be eliminated.
-
-AR-2 also performs no Cloudflare resource mutation. Its `DELETE` decision for the legacy
-`GENERATION_VERIFICATION` queue is architecture input; AR-5 owns source/Wrangler cleanup and PC-1 must
-not provision that queue for the Production Core release.
-
-## 9. Security, privacy and authorization completion rules
-
-Accepted tenant isolation, neutral disclosure, explicit resource grants, PII/secret/mail-content
-redaction, idempotency/replay neutrality, version/fencing, provider ambiguous-outcome recovery and
-cross-boundary reconciliation remain release gates. Relationships such as assignment or mailbox-client
-association never become ACL shortcuts.
-
-The existing mailbox onboarding and `ReauthRequired` lifecycle remains the OAuth domain authority. AR-8
-extends refresh concurrency/revocation safety rather than creating a second OAuth state machine.
-
-Resolver isolation remains intentional after AR-2: the private mailbox-secret-resolver Worker, dedicated
-resolver D1 and service binding are a credential/security boundary rather than accidental duplication.
-
-## 10. Exact-head acceptance discipline
-
-Every bounded candidate follows one immutable-head protocol:
-
-1. start from the latest accepted `main`;
-2. keep the change bounded to the owning slice;
-3. declare Architecture Impact when required by the accepted fitness baseline;
-4. review the complete diff for unrelated files and forbidden production mutation;
-5. require `behind_by=0` before acceptance;
-6. require zero blocking reviews and zero unresolved review threads;
-7. determine the applicable permanent workflow/fitness inventory from the candidate tree;
-8. require every applicable workflow and REQUIRED fitness rule to complete successfully on one unchanged exact candidate SHA;
-9. treat any new commit as invalidating all prior exact-head CI evidence;
-10. re-read docs ↔ machine state ↔ issue ledger on the candidate head;
-11. guarded merge only after the final base-currentness/mergeability check, binding the expected exact PR head SHA;
-12. re-read accepted `main` after merge before starting the next slice.
-
-## 11. Immediate next action
-
-AR-11 — Release-set / Promotion Architecture remains **DONE / ACCEPTED**. AR-12 is derived current but
-**NOT STARTED**. The immediate implementation authority is Post-AR-11 Functional Closure #399, currently
-**PF-1 #430**.
-
-Mandatory continuation:
-
-```text
-PF-1 #430
--> PF-2 / Draft PR #428
--> PF-3 #431
--> fresh re-baseline #399/#421
--> FC-6
--> FC-7
--> AR-12 implementation entry
-```
-
-Throughout AR-0…AR-17:
-
-```text
-architecture_complete=false
-production_core_gate=BLOCKED
-production_ready=false
-```
-
-## Immutable Accepted Phase Provenance
-
-These records are a compact projection of `architecture/accepted-phases.json`. The permanent architecture
-gate verifies them so accepted product history cannot be silently rewritten while program authority changes.
-
-Phase 1A was accepted through issue #114 / implementation PR #115; exact proven source head
-`21b4bc65cd1bb117504c0a0cfe18c8c11e411f25`; guarded squash merge
-`0186b780f7fed4b7c5e7f212c2fe437cbc46a5e5`.
-
-Phase 1B was accepted through issue #120 / implementation PR #135; exact proven source head
-`22b2ef36a943d07d22755bf467ec6e7c27ef081d`; guarded squash merge
-`f081e0709481d6bbaa150f5518ec8552124c78de`.
-
-Phase 2A was accepted through issue #118 / implementation PR #137; exact proven source head
-`2d80ee74bc8d05657414ea4e75dcf6f41c723926`; guarded squash merge
-`a1eb2833a74d9156bce8f4b1c6e92815cc0d55bc`.
-
-Phase 2B was accepted through issue #138 / implementation PR #140; exact proven source head
-`895594e35b77ddd86395300b1644e9df6a712123`; guarded squash merge
-`298062ea443c31c69212cb03b3988265b6bbcd48`.
-
-Phase 2C was accepted through issue #142 / implementation PR #143; exact proven source head
-`d3ad2e774a98ad5fed2565ba410ba9923062d170`; guarded squash merge
-`042d0dc72fa37e99f971d61d21544609a69c6e31`.
-
-Phase 2D was accepted through issue #144 / implementation PR #147; exact proven source head
-`ad491e2f0c9ba9f79130923fdde6fe1407af4dc5`; guarded squash merge
-`26f8fa82bdad02a5a0867b0d36748b915579ef1c`.
-
-Phase 2E was accepted through issue #148 / implementation PR #152; exact proven source head
-`0cefa67abe810db079102462f33ec28fcfc73f69`; guarded squash merge
-`6c6ba4564de88b40d282081e701a2d24f1611cc2`.
-
-Phase 2F was accepted through issue #154 / implementation PR #155; exact proven source head
-`c36df418f9fa877c5143327e97b60087c33ffd02`; guarded squash merge
-`42b26dc0c78c0c65dcea2bc90bb5ce6a3bd4b02b`.
-
-Phase 2G was accepted through issue #159 / implementation PR #160; exact proven source head
-`85ca77b430e7d184204082aea7d51a08fdd72cf9`; guarded squash merge
-`48e24f1f365d87a07bf97322c81099dd6a89f046`.
-
-Phase 2H was accepted through issue #163 / implementation PR #164; exact proven source head
-`9add9b94d0de255b93e5a7c24584fcf6756462a7`; guarded squash merge
-`a32768feddb3da69b872e701bc529aad3521e1b0`.
-
-Phase 2I was accepted through issue #167 / implementation PR #168; exact proven source head
-`c1075337cfc582d0f4c00ec34b1aa7cda9ac1101`; guarded squash merge
-`800c634147d6300ea3989ff0cf87ade6e2387ee9`.
+Historical required-context names/counts are observations and must be re-read live at merge time.
