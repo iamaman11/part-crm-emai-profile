@@ -6,8 +6,8 @@ use crate::release::model;
 use opsctl_core::release::{
     ArtifactIdentity, BuildProvenanceIdentity, ContractsIdentity, EXPECTED_REPOSITORY,
     ProtocolIdentity, ProvenanceFileIdentity, ReleaseComponentIdentity, ReleaseModelError,
-    ReleaseSetDraft, ReleaseSetManifest, ReleaseSetSchemaVersion, ReleaseSetSource,
-    RuntimeCompatibilityIdentity, SchemaCompatibilityWindow, SchemaIdentity,
+    ReleaseSetDraft, ReleaseSetSchemaVersion, ReleaseSetSource, RuntimeCompatibilityIdentity,
+    SchemaCompatibilityWindow, SchemaIdentity,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -74,9 +74,9 @@ pub fn finalize_json(root: &Path, input: &str) -> Result<String, ReleaseModelErr
     let manifest = draft.clone().into_manifest(release_set_id.clone())?;
 
     let mut output_value = identity;
-    let output_object = output_value
-        .as_object_mut()
-        .ok_or_else(|| ReleaseModelError::new("typed Release Set identity must render as an object"))?;
+    let output_object = output_value.as_object_mut().ok_or_else(|| {
+        ReleaseModelError::new("typed Release Set identity must render as an object")
+    })?;
     output_object.insert("release_set_id".to_owned(), Value::String(release_set_id));
     let output = canonical_json(&output_value).map_err(ReleaseModelError::new)?;
 
@@ -230,9 +230,11 @@ fn build_draft(
             resolver_protocol: "mailbox-secret-resolver-v1".to_owned(),
         },
         SchemaIdentity {
-            d1_repository_identity_sha256: d1::repository_identity_sha256(root).map_err(|error| {
-                ReleaseModelError::new(format!("typed D1 repository identity failed: {error}"))
-            })?,
+            d1_repository_identity_sha256: d1::repository_identity_sha256(root).map_err(
+                |error| {
+                    ReleaseModelError::new(format!("typed D1 repository identity failed: {error}"))
+                },
+            )?,
             catalog,
             resolver,
         },
@@ -275,10 +277,7 @@ fn component_identity(
     }
 }
 
-fn artifact_identity(
-    path: &str,
-    observation: &ComponentObservationV1,
-) -> ArtifactIdentity {
+fn artifact_identity(path: &str, observation: &ComponentObservationV1) -> ArtifactIdentity {
     ArtifactIdentity {
         path: path.to_owned(),
         sha256: observation.artifact_sha256.clone(),
@@ -292,7 +291,9 @@ fn d1_schema_window(
     component: &str,
 ) -> Result<SchemaCompatibilityWindow, ReleaseModelError> {
     let identity = d1::release_schema_identity(root, component).map_err(|error| {
-        ReleaseModelError::new(format!("typed D1 {component} release identity failed: {error}"))
+        ReleaseModelError::new(format!(
+            "typed D1 {component} release identity failed: {error}"
+        ))
     })?;
     Ok(SchemaCompatibilityWindow {
         database_component: identity.database_component,
@@ -584,28 +585,46 @@ mod tests {
     }
 
     #[test]
-    fn finalizer_produces_reader_verified_release_set_v3() -> Result<(), Box<dyn std::error::Error>> {
+    fn finalizer_produces_reader_verified_release_set_v3() -> Result<(), Box<dyn std::error::Error>>
+    {
         let input = serde_json::to_string(&request_value())?;
         let output = finalize_json(&root(), &input)?;
         let manifest = model::parse_json(&output)?;
         assert_eq!(manifest.schema_version.number(), 3);
-        assert!(manifest.release_set_id.starts_with("release-set-v3-sha256-"));
+        assert!(
+            manifest
+                .release_set_id
+                .starts_with("release-set-v3-sha256-")
+        );
         assert_eq!(
             manifest.components["control_plane"].release_id,
             "control-plane-v2"
         );
-        assert_eq!(manifest.components["secret_resolver"].release_id, "resolver-v2");
-        assert_eq!(manifest.components["runtime_bundle"].release_id, "runtime-v2");
-        assert_eq!(manifest.components["profile_bridge"].release_id, "bridge-v2");
         assert_eq!(
-            manifest.capability_profile_compatibility.first().map(String::as_str),
+            manifest.components["secret_resolver"].release_id,
+            "resolver-v2"
+        );
+        assert_eq!(
+            manifest.components["runtime_bundle"].release_id,
+            "runtime-v2"
+        );
+        assert_eq!(
+            manifest.components["profile_bridge"].release_id,
+            "bridge-v2"
+        );
+        assert_eq!(
+            manifest
+                .capability_profile_compatibility
+                .first()
+                .map(String::as_str),
             Some("production-core-v1")
         );
         Ok(())
     }
 
     #[test]
-    fn transport_version_is_independent_and_fail_closed() -> Result<(), Box<dyn std::error::Error>> {
+    fn transport_version_is_independent_and_fail_closed() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut request = request_value();
         request["schema_version"] = json!(2);
         assert!(finalize_json(&root(), &serde_json::to_string(&request)?).is_err());
@@ -617,7 +636,8 @@ mod tests {
     }
 
     #[test]
-    fn transport_rejects_duplicate_keys_and_unsafe_integers() -> Result<(), Box<dyn std::error::Error>> {
+    fn transport_rejects_duplicate_keys_and_unsafe_integers()
+    -> Result<(), Box<dyn std::error::Error>> {
         let input = serde_json::to_string(&request_value())?;
         let duplicate = input.replacen('{', "{\"schema_version\":1,", 1);
         assert!(finalize_json(&root(), &duplicate).is_err());
@@ -625,14 +645,13 @@ mod tests {
         let mut unsafe_integer = request_value();
         unsafe_integer["components"]["control_plane"]["artifact_size_bytes"] =
             json!(MAX_JCS_SAFE_INTEGER + 1);
-        assert!(
-            finalize_json(&root(), &serde_json::to_string(&unsafe_integer)?).is_err()
-        );
+        assert!(finalize_json(&root(), &serde_json::to_string(&unsafe_integer)?).is_err());
         Ok(())
     }
 
     #[test]
-    fn transport_whitespace_cannot_change_final_identity() -> Result<(), Box<dyn std::error::Error>> {
+    fn transport_whitespace_cannot_change_final_identity() -> Result<(), Box<dyn std::error::Error>>
+    {
         let request = request_value();
         let compact = finalize_json(&root(), &serde_json::to_string(&request)?)?;
         let pretty = finalize_json(&root(), &serde_json::to_string_pretty(&request)?)?;

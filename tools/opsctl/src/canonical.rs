@@ -137,11 +137,10 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
     where
         E: de::Error,
     {
-        if value.is_finite()
-            && value.fract() == 0.0
-            && value.abs() > MAX_JCS_SAFE_INTEGER as f64
-        {
-            return Err(E::custom("integer-valued number exceeds RFC 8785/I-JSON safe range"));
+        if value.is_finite() && value.fract() == 0.0 && value.abs() > MAX_JCS_SAFE_INTEGER as f64 {
+            return Err(E::custom(
+                "integer-valued number exceeds RFC 8785/I-JSON safe range",
+            ));
         }
         Number::from_f64(value)
             .map(Value::Number)
