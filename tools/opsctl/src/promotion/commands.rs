@@ -4,7 +4,7 @@ use crate::promotion::preflight::{PreflightRequest, evaluate as preflight};
 use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::promotion::verify::{VerifyRequest, verify};
 use crate::release::compatibility::CompatibilityEvidence;
-use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
+use crate::release::model::{ReleaseModelError, ReleaseSetManifest, parse_json};
 use crate::release::source::verify_release_source;
 use std::fs;
 use std::path::Path;
@@ -98,5 +98,5 @@ fn load_manifest(path: &Path) -> Result<ReleaseSetManifest, ReleaseModelError> {
             path.display()
         ))
     })?;
-    ReleaseSetManifest::parse_json(&input)
+    parse_json(&input)
 }
