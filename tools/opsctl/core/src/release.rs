@@ -375,7 +375,10 @@ fn validate_runtime(runtime: &RuntimeCompatibilityIdentity) -> Result<(), Releas
         "runtime_compatibility.runtime_lock_sha256",
     )?;
     non_empty(&runtime.runtime_role, "runtime_compatibility.runtime_role")?;
-    non_empty(&runtime.profile_format, "runtime_compatibility.profile_format")?;
+    non_empty(
+        &runtime.profile_format,
+        "runtime_compatibility.profile_format",
+    )?;
     non_empty(
         &runtime.browser_identity_policy,
         "runtime_compatibility.browser_identity_policy",
@@ -532,18 +535,14 @@ fn validate_relative_path(value: &str, label: &str) -> Result<(), ReleaseModelEr
 
 fn positive(value: u64, label: &str) -> Result<(), ReleaseModelError> {
     if value == 0 {
-        return Err(ReleaseModelError::new(format!(
-            "{label} must be positive"
-        )));
+        return Err(ReleaseModelError::new(format!("{label} must be positive")));
     }
     Ok(())
 }
 
 fn non_empty(value: &str, label: &str) -> Result<(), ReleaseModelError> {
     if value.is_empty() {
-        return Err(ReleaseModelError::new(format!(
-            "{label} must not be empty"
-        )));
+        return Err(ReleaseModelError::new(format!("{label} must not be empty")));
     }
     Ok(())
 }
@@ -682,8 +681,7 @@ mod tests {
             .components
             .get_mut("control_plane")
             .ok_or_else(|| ReleaseModelError::new("fixture missing control_plane"))?;
-        component.source_commit_sha =
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned();
+        component.source_commit_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned();
         assert!(ReleaseSetV3::new(parts).is_err());
         Ok(())
     }
