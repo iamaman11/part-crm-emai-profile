@@ -2,7 +2,7 @@ use crate::release::ReleaseAction;
 use crate::release::artifact::verify_artifacts;
 use crate::release::compatibility::{CompatibilityEvidence, evaluate};
 use crate::release::input_topology::ReleaseInputTopology;
-use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
+use crate::release::model::{ReleaseModelError, ReleaseSetManifest, parse_json};
 use crate::release::source::{AcceptedSourceVerification, verify_release_source};
 use crate::release::static_compatibility::{self, VERIFIED_PROVENANCE_DIMENSIONS};
 use serde_json::json;
@@ -78,7 +78,7 @@ fn load_manifest(path: &Path) -> Result<ReleaseSetManifest, ReleaseModelError> {
             path.display()
         ))
     })?;
-    ReleaseSetManifest::parse_json(&input)
+    parse_json(&input)
 }
 
 fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_json::Value {
@@ -99,7 +99,7 @@ fn inspect(manifest: &ReleaseSetManifest, release_input_count: usize) -> serde_j
         "schema_version": 1,
         "command": "release.inspect",
         "decision": "VALID",
-        "release_set_schema_version": manifest.schema_version,
+        "release_set_schema_version": manifest.schema_version.number(),
         "release_set_id": manifest.release_set_id,
         "display_version": manifest.display_version,
         "source": {
@@ -127,7 +127,7 @@ fn verify(
         "schema_version": 1,
         "command": "release.verify",
         "decision": "VALID",
-        "release_set_schema_version": manifest.schema_version,
+        "release_set_schema_version": manifest.schema_version.number(),
         "release_set_id": manifest.release_set_id,
         "source_commit_sha": manifest.source.commit_sha,
         "source_accepted": true,
