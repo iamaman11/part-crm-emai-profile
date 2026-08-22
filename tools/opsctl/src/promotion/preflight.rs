@@ -302,8 +302,10 @@ mod tests {
     use super::evaluate_rollback_candidate;
     use crate::promotion::snapshot::DeploymentSnapshot;
     use crate::release::digest::{canonical_json, sha256_hex};
-    use crate::release::model::ReleaseModelError;
-    use crate::release::model::{CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
+    use crate::release::model::{
+        CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseModelError, ReleaseSetManifest,
+        parse_json,
+    };
     use serde_json::{Value, json};
     use std::collections::BTreeSet;
 
@@ -321,7 +323,7 @@ mod tests {
         let schema = |component: &str| json!({"database_component":component,"target_schema_revision":"0001_initial.sql","supported_schema_min":"0001_initial.sql","supported_schema_max":"0001_initial.sql","migration_history_digest":SHA,"compatibility_policy_digest":SHA});
         let component = |id: &str, path: &str| json!({"release_id":id,"source_commit_sha":GIT,"artifact_path":path,"artifact_sha256":SHA,"artifact_size_bytes":1,"component_manifest_sha256":SHA});
         let mut value = json!({
-            "schema_version":2,
+            "schema_version":3,
             "release_set_id":format!("{RELEASE_SET_ID_PREFIX}{SHA}"),
             "source":{"repository":REPO,"commit_sha":GIT,"accepted_main":true,"accepted_main_evidence_sha256":accepted},
             "components":{
@@ -350,9 +352,7 @@ mod tests {
             "{RELEASE_SET_ID_PREFIX}{}",
             sha256_hex(canonical_json(&identity)?.as_bytes())
         ));
-        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(
-            &value,
-        )?)?)
+        Ok(parse_json(&serde_json::to_string(&value)?)?)
     }
 
     fn snapshot() -> DeploymentSnapshot {
