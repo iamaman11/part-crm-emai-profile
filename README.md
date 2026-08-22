@@ -9,39 +9,66 @@ Browser Profile Platform is a standalone, provider-neutral control plane for gov
 - **Accepted top-level architecture slices:** AR-0 through AR-11; AR-8A…AR-8F accepted subslices.
 - **Current accepted checkpoint:** AR-11 — Release-set / Promotion Architecture.
 - **Current architecture slice:** AR-12 — Fresh Rehearsal Environment, **DERIVED CURRENT / NOT STARTED**.
-- **Current implementation authority:** Post-AR-11 Functional Closure #399; current prerequisite **PF-1 #430**.
-- **Mandatory pre-AR12 continuation:** PF-1 #430 -> PF-2 / Draft PR #428 -> PF-3 #431 -> fresh #399/#421 re-baseline -> FC-6 -> FC-7 -> AR-12 implementation entry.
-- Issue #375 is closed historical hardening; it is not the current blocker.
+- **Current execution umbrella:** Post-AR-11 Functional Closure #399.
+- **Current next work:** **F1/F2**, followed by **N1…N5**. PF-1 #430 is blocked until those normalization transactions are accepted.
+- Issue #375 is closed historical hardening; it is not a current blocker or execution authority.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
 
-### CURRENT_DELIVERY_MAP
+The binding pre-AR-12 execution path is:
 
-Canonical machine projection: `architecture/inventory.json::current_delivery_map`. This section is human-readable projection, not a second roadmap or release authority.
+```text
+F1 Release Set breaking-contract version discipline
++
+F2 permanent application/opsctl/doctor/canonical-JSON/Python foundations
+ ->
+N1 AR-2 runtime/resource-topology authority retirement
+ ->
+N2 AR-6 Python-estate authority retirement + role/effect normalization
+ ->
+N3 AR-7 current GitHub-governance normalization
+ ->
+N4 bounded AR-8 operator/provenance cleanup
+ ->
+N5 AR-10 runtime semantic-authority retirement
+ ->
+PF-1 #430 typed lifecycle + deterministic bounded-projection inventory cutover
+ ->
+PF-2 Universal Hosted Operational Evidence / Draft PR #428
+ ->
+PF-3 #431 typed Rust Architecture Fitness Baseline
+ ->
+fresh #399/#421 re-baseline
+ ->
+FC-6
+ ->
+FC-7
+ ->
+AR-12 implementation entry
+```
 
-| Delivery dimension | Current status | Scope / gate |
-|---|---|---|
-| Source implemented | **ACCEPTED THROUGH AR-11** | AR-11 source is accepted; AR-12 is derived current and NOT STARTED. |
-| Accepted on main | **COMPLETE THROUGH AR-11** | AR-11 remains the latest accepted top-level architecture checkpoint. |
-| Staging live | **PARTIAL** | AR-8C staging provider/credential foundation is live and smoke-verified only. |
-| Production authorized | **NO** | `production_core_gate=BLOCKED`; only AR-17 may authorize the gate. |
-| Production enabled | **NO** | `production_ready=false`; only PC-1 may enable accepted `production-core-v1` after AR-17. |
-| Current blocker | **POST-AR-11 FUNCTIONAL CLOSURE #399** | PF-1/PF-2/PF-3/FC-6/FC-7 remain before AR-12 implementation. |
-| Next gate | **PF-1 acceptance on protected main** | PF-2 is blocked on PF-1; FC-6 is blocked on PF-3 plus fresh #399/#421 re-baseline. |
+F1/F2/N1…N5 are foundation/normalization transactions, not new AR/PF lifecycle slices. `source_present != production_enabled` remains binding.
 
-`source_present != production_enabled` is binding. Staging success never implies production authorization or enablement.
-
-## Current authority and target architecture
+## Documentation and authority
 
 Start with [`docs/INDEX.md`](docs/INDEX.md).
 
-The single current program authority is [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md). Prospective development must also satisfy the subordinate [`docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md). Current Functional Closure execution is owned by [`docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md); PF-3 enforcement is specified by [`docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`](docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md).
+The single current program authority is [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md). Prospective development must satisfy [`docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md), [`docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md), [`docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`](docs/OPSCTL_ARCHITECTURE_BOUNDARY.md), [`docs/OPSCTL_DOCTOR_CONTRACT.md`](docs/OPSCTL_DOCTOR_CONTRACT.md) and [`docs/PYTHON_USAGE_BOUNDARY.md`](docs/PYTHON_USAGE_BOUNDARY.md).
 
-Target development flow:
+Current prerequisite/closure execution is specified by:
+
+- [`docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — F1/F2 + N1…N5;
+- [`docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — PF/FC execution umbrella;
+- [`docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) — PF-1 contract;
+- [`docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`](docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 typed fitness contract.
+
+`docs/status.json`, `architecture/inventory.json`, `docs/DEVELOPMENT_PLAN.md` and README/index surfaces are projections/navigation, never independent semantic or lifecycle authority. Transitional projection lag must not be interpreted as permission to skip F/N/PF/FC prerequisites.
+
+## Target architecture
 
 ```text
-canonical authorities
+canonical natural owner
 -> typed policy/contracts
 -> bounded-context domain + application
 -> explicit ports/adapters/effect capabilities
@@ -50,25 +77,62 @@ canonical authorities
 -> production exposure
 ```
 
-Permanent themes: one semantic authority, bounded-context ownership, inward dependencies, provider-free domain/application core, typed critical IDs/state/contracts, command/query separation, explicit effects, context-owned persistence, typed configuration, versioned integration events, frontend projection only, touch-to-converge and cutover-to-deletion.
+Permanent themes: one semantic authority, bounded-context ownership, inward dependencies, provider-free domain/application core, typed critical IDs/state/contracts, explicit effects, context-owned persistence, typed configuration, versioned durable/integration contracts, frontend projection only, touch-to-converge and cutover-to-deletion.
 
 `one main` means one product architecture/source/data lineage and one capability-authority model; it does not require the Worker, Profile Bridge, Camouhost and `opsctl` to be one OS executable.
 
-PF-3 #431 will make the cross-cutting rules machine-persistent through `architecture/architecture-fitness-policy.json`, Rule IDs, one primary enforcement owner per REQUIRED rule, positive/negative fixtures and an Architecture Fitness Gate. After PF-3, materially architecture-changing PF/FC/AR/PC work must declare Architecture Impact and pass all applicable REQUIRED rules on the exact candidate head.
+## `opsctl` and `doctor`
+
+`opsctl` is standalone offline operator/policy/planning/verification/projection tooling with a strict Pure Core / Effect Shell boundary:
+
+```text
+filesystem / JSON / explicit observations
+-> adapters + versioned DTOs
+-> typed semantic inputs
+-> PURE CORE
+-> typed results
+-> output adapters
+```
+
+Required zero budgets include:
+
+```text
+serde_json::Value crossing adapter -> pure core = 0
+filesystem/process/network/provider effects in pure core = 0
+Product Runtime -> opsctl/opsctl-core = 0
+opsctl provider/network/process authority = 0
+opsctl -> Python semantic child process = 0
+global authority bag = 0
+```
+
+`opsctl doctor` remains read-only local diagnostic composition only. It must not execute Python/Node/Git/GitHub/provider subprocess/API calls, use network/provider/secrets/runtime, mutate state, duplicate lifecycle/release/evidence/domain policy, or become a global authority catalog.
+
+## PF-1 / PF-3 direction
+
+PF-1 uses a typed `LifecycleEvaluator` plus bounded minimal inventory projections. It must not introduce `GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet`, and `architecture/inventory.json` remains generated output rather than compiler input.
+
+PF-3 semantic authority belongs to typed Rust, for example:
+
+```text
+FitnessRuleRegistry
+-> evaluator / enforcement mapping
+-> positive + negative fixtures
+-> Architecture Fitness Gate
+-> optional generated report/index projection
+```
+
+A manually maintained semantic `architecture/architecture-fitness-policy.json` is explicitly **not** the target owner.
 
 ## Production capability model
 
 Production enablement is owned only by the accepted Release / Capability Profile path. Environment flags or UI visibility cannot independently authorize a capability.
 
-Current intended Production Core includes foundation, identity/users, clients/customer cards, browser profiles, profile runtime, Camoufox, Windows Profile Bridge delivery/runtime and required notification/audit/health/readiness/observability foundations. Exact activation-unit facts remain owned by [`architecture/release-architecture-ar11.json`](architecture/release-architecture-ar11.json).
+Current intended Production Core includes foundation, identity/users, clients/customer cards, browser profiles, profile runtime, Camoufox, Windows Profile Bridge delivery/runtime and required notification/audit/health/readiness/observability foundations. Mailbox administration/read/bindings/jobs/outbound code may remain present and tested in the same `main` while production-disabled; later PC profiles enable them progressively.
 
-Mailbox administration/read/bindings/jobs/outbound code may remain present and tested in the same `main` while production-disabled; later PC-2/PC-3/PC-4 profiles enable them progressively.
-
-The fail-closed program sequence is:
+After Functional Closure the fail-closed program continues:
 
 ```text
-PF-1 -> PF-2 -> PF-3 -> FC-6/FC-7
--> AR-12 -> AR-13 -> AR-14 -> AR-15
+AR-12 -> AR-13 -> AR-14 -> AR-15
 -> AR-16 final whole-project convergence audit
 -> AR-17 architecture closeout / Production Core gate authorization
 -> PC-1 Production Core v1
@@ -77,31 +141,7 @@ PF-1 -> PF-2 -> PF-3 -> FC-6/FC-7
 -> PC-4 Outbound / later capabilities
 ```
 
-No production provisioning or promotion is authorized in AR-0…AR-17. AR-17 may set `architecture_complete=true` and `production_core_gate=AUTHORIZED`, but keeps `production_ready=false`; PC-1 owns first Production Core enablement.
-
-## Key current sources
-
-- [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md) — program authority;
-- [`docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) — target architecture/development discipline;
-- [`docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — PF/FC execution plan;
-- [`docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`](docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 specification;
-- [`architecture/release-architecture-ar11.json`](architecture/release-architecture-ar11.json) — accepted release/capability authority;
-- [`architecture/runtime-cutover-ar10.json`](architecture/runtime-cutover-ar10.json) — runtime cutover authority;
-- [`tools/opsctl/src/d1`](tools/opsctl/src/d1) plus [`migrations/d1`](migrations/d1) and [`migrations/resolver-d1`](migrations/resolver-d1) — typed D1 policy and executable SQL migration authority; AR-9 acceptance remains historical evidence;
-- [`architecture/credential-authority.json`](architecture/credential-authority.json), [`architecture/credential-lifecycle.json`](architecture/credential-lifecycle.json), [`architecture/profile-security.json`](architecture/profile-security.json), [`architecture/operator-contract.json`](architecture/operator-contract.json) — current subject authorities;
-- [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — current development projection;
-- [`docs/status.json`](docs/status.json) — machine-readable state projection;
-- [`architecture/inventory.json`](architecture/inventory.json) — tracked generated architecture projection;
-- [`architecture/accepted-phases.json`](architecture/accepted-phases.json) — immutable product-phase provenance.
-
-## Architecture snapshot
-
-- pure Rust domain/application crates own business rules and provider-neutral use cases;
-- capability-specific ownership stays explicit;
-- provider/D1/R2/Queue/Durable Object mechanics stay in outer adapters/composition;
-- frontend consumes governed public contracts and never becomes activation/security authority;
-- authorization, neutral disclosure, idempotency, fencing, privacy and recovery boundaries remain regression-protected;
-- `source_present != production_enabled`.
+No production provisioning or promotion is authorized in AR-0…AR-17. AR-17 may set `architecture_complete=true` and `production_core_gate=AUTHORIZED`, while `production_ready=false`; PC-1 owns first Production Core enablement.
 
 ## Fast local verification
 
@@ -119,4 +159,4 @@ Full acceptance requires all applicable permanent GitHub workflows and protected
 - Product intent: [`docs/PRODUCT.md`](docs/PRODUCT.md)
 - Future CRM boundary: [`docs/FUTURE_DEVELOPMENT.md`](docs/FUTURE_DEVELOPMENT.md)
 
-Do not infer production authorization from source presence, UI visibility, an open PR, historical plan or synthetic evidence.
+Do not infer production authorization or current execution order from source presence, UI visibility, generated projections, an open PR, a historical plan or synthetic evidence.
