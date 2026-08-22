@@ -17,7 +17,7 @@ mod status;
 pub use cli::{CredentialsAction, HELP, Invocation, ReadCommand, parse_invocation};
 pub use error::OpsctlError;
 
-use repository::resolve_repo_root;
+use repository::{resolve_d1_repository_root, resolve_repo_root};
 
 /// Execute one already-parsed project-specific operational policy command.
 ///
@@ -67,7 +67,7 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             .map_err(|error| OpsctlError::new("d1", error.to_string()))
         }
         Invocation::D1Repository { root } => {
-            let repo_root = resolve_repo_root(root.as_deref(), "d1 repository")?;
+            let repo_root = resolve_d1_repository_root(root.as_deref())?;
             d1::repository_projection(&repo_root)
                 .map_err(|error| OpsctlError::new("d1", error.to_string()))
         }

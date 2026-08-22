@@ -287,6 +287,7 @@ pub(crate) fn repository_projection(root: &Path) -> Result<String, D1Error> {
     let canonical_identity = canonical_json(&identity).map_err(D1Error::new)?;
     let migration_classes = MigrationClass::ALL.map(MigrationClass::as_str);
     let ledger_states = LedgerState::ALL.map(LedgerState::as_str);
+    let rollout_orders = RolloutOrder::ALL.map(RolloutOrder::as_str);
     let rollout_decisions = Decision::ALL.map(Decision::as_str);
     let output = json!({
         "schema_version": 1,
@@ -300,6 +301,7 @@ pub(crate) fn repository_projection(root: &Path) -> Result<String, D1Error> {
         },
         "migration_classes": migration_classes,
         "ledger_states": ledger_states,
+        "rollout_orders": rollout_orders,
         "rollout_decisions": rollout_decisions,
         "repository_identity_sha256": sha256_hex(canonical_identity.as_bytes()),
         "components": components,

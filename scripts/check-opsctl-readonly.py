@@ -299,7 +299,7 @@ def self_test() -> None:
             ROOT / "migrations" / "resolver-d1",
             fixture / "migrations" / "resolver-d1",
         )
-        migration = fixture / "migrations" / "d1" / "0001_initial.sql"
+        migration = fixture / "migrations" / "d1" / "0001_catalog.sql"
         migration.write_bytes(migration.read_bytes() + b"\n-- tampered\n")
         expect_projection_rejected("historical SQL substitution", fixture)
 

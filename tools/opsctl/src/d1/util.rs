@@ -16,19 +16,6 @@ pub(super) fn ensure_unique(values: &[String], label: &str) -> Result<(), D1Erro
     Ok(())
 }
 
-pub(super) fn required_value_string(
-    value: &Value,
-    key: &str,
-    label: &str,
-) -> Result<String, D1Error> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .filter(|item| !item.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| D1Error::new(format!("{label} {key} is missing")))
-}
-
 pub(super) fn required_string(
     object: &serde_json::Map<String, Value>,
     key: &str,
@@ -39,16 +26,6 @@ pub(super) fn required_string(
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .ok_or_else(|| D1Error::new(format!("required string field {key} is missing")))
-}
-
-pub(super) fn required_bool(
-    object: &serde_json::Map<String, Value>,
-    key: &str,
-) -> Result<bool, D1Error> {
-    object
-        .get(key)
-        .and_then(Value::as_bool)
-        .ok_or_else(|| D1Error::new(format!("required boolean field {key} is missing")))
 }
 
 pub(super) fn required_string_array(

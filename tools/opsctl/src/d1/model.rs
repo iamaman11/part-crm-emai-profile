@@ -138,6 +138,13 @@ pub(super) enum RolloutOrder {
 }
 
 impl RolloutOrder {
+    pub(super) const ALL: [Self; 4] = [
+        Self::MigrateBeforeCode,
+        Self::CodeBeforeMigrate,
+        Self::Either,
+        Self::SeparateContractRelease,
+    ];
+
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::MigrateBeforeCode => "MIGRATE_BEFORE_CODE",

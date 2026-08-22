@@ -106,6 +106,14 @@
       "side_effect_class": "repository_validation_only",
       "authority": "PYTHON_ALLOWED_BY_POST_AR11_CLEANUP",
       "rationale": "neutral current credential/security invariant validator and bounded parity proof against the still-current historical inventory engine; no lifecycle, provider, network, secret-readback or production mutation authority"
+    },
+    {
+      "path": "scripts/d1_repository_projection.py",
+      "classification": "KEEP_PYTHON",
+      "role": "typed_d1_projection_adapter",
+      "side_effect_class": "local_metadata_projection_only",
+      "authority": "PYTHON_ALLOWED_BY_POST_AR11_FUNCTIONAL_CLOSURE",
+      "rationale": "invokes native read-only opsctl and validates its typed D1 repository projection; owns no migration, compatibility, provider, credential or mutation policy"
     }
   ],
   "retirements": [
@@ -138,9 +146,9 @@
     ]
   },
   "current_summary": {
-    "tracked_python_files": 127,
+    "tracked_python_files": 128,
     "DELETE_AFTER_SEQUENCE": 0,
-    "KEEP_PYTHON": 127,
+    "KEEP_PYTHON": 128,
     "MIGRATE_TO_RUST": 0,
     "WRAP_WITH_RUST": 0
   }
