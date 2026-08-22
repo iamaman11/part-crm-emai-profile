@@ -9,6 +9,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const HISTORICAL_REVISION: &str = "0026_outbound_mail_intents.sql";
 const FUTURE_REVISION: &str = "0027_post_epoch_probe.sql";
+const CANONICAL_ROOT_SENTINELS: &[&str] = &[
+    "Cargo.toml",
+    "architecture/inventory.json",
+    "architecture/python-estate-ar6.json",
+    "architecture/credential-authority.json",
+    "architecture/credential-lifecycle.json",
+    "architecture/profile-security.json",
+    "architecture/operator-contract.json",
+    "scripts/generate-architecture-inventory.py",
+    "scripts/python-estate-ar6.py",
+];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -27,19 +38,15 @@ impl TempRepository {
         ));
         let source = repo_root();
 
+        for relative in CANONICAL_ROOT_SENTINELS {
+            copy_file(&source, &path, relative)?;
+        }
         copy_directory(
             &source.join("tools/opsctl/src"),
             &path.join("tools/opsctl/src"),
         )?;
-        fs::create_dir_all(path.join("tools/opsctl"))?;
-        fs::copy(
-            source.join("tools/opsctl/Cargo.toml"),
-            path.join("tools/opsctl/Cargo.toml"),
-        )?;
-        fs::copy(
-            source.join("tools/opsctl/Cargo.lock"),
-            path.join("tools/opsctl/Cargo.lock"),
-        )?;
+        copy_file(&source, &path, "tools/opsctl/Cargo.toml")?;
+        copy_file(&source, &path, "tools/opsctl/Cargo.lock")?;
         copy_directory(&source.join("migrations/d1"), &path.join("migrations/d1"))?;
         copy_directory(
             &source.join("migrations/resolver-d1"),
@@ -58,6 +65,17 @@ impl Drop for TempRepository {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+fn copy_file(source_root: &Path, target_root: &Path, relative: &str) -> Result<(), Box<dyn Error>> {
+    let source = source_root.join(relative);
+    let target = target_root.join(relative);
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("fixture path has no parent: {relative}"))?;
+    fs::create_dir_all(parent)?;
+    fs::copy(source, target)?;
+    Ok(())
 }
 
 fn copy_directory(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
