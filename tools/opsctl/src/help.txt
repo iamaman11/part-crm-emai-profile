@@ -5,7 +5,6 @@ USAGE:
     opsctl [--root PATH] credentials <ACTION>
     opsctl [--root PATH] d1 repository
     opsctl [--root PATH] d1 <ACTION> --component COMPONENT --ledger-json PATH [D1 OPTIONS]
-    opsctl [--root PATH] release finalize --request-json PATH
     opsctl [--root PATH] release <ACTION> --release-set PATH [RELEASE OPTIONS]
     opsctl [--root PATH] promotion <ACTION> --release-set PATH --profile ID --environment ENV --snapshot PATH --evidence-json PATH [PROMOTION OPTIONS]
 
@@ -20,7 +19,6 @@ COMMANDS:
     d1 plan                    Build a deterministic migration/rollback plan
     d1 compatibility           Evaluate runtime/schema compatibility
     d1 verify                  Verify a post-apply ledger against a release schema contract
-    release finalize           Finalize packaging observations into canonical Release Set bytes
     release inspect            Parse and inspect one immutable Release Set
     release verify             Verify Release Set identity and exact artifact bytes
     release compatibility      Evaluate Release Set + Capability Profile compatibility
@@ -37,7 +35,6 @@ D1 OPTIONS:
     --preconditions-json PATH   Metadata-only CONTRACT precondition evidence
 
 RELEASE OPTIONS:
-    --request-json PATH         Ephemeral local packaging observation DTO; finalize only
     --release-set PATH          Target content-addressed Release Set manifest
     --source-root PATH          Exact source tree for release provenance; defaults to --root
     --artifact-root PATH        Exact artifact tree; required for release verify
@@ -63,4 +60,4 @@ GLOBAL OPTIONS:
     -V, --version
                  Print version
 
-AR-11 release commands remain local, read-only and metadata/artifact-verification-only. Release finalization consumes only explicit local packaging observations plus canonical repository inputs and writes only its machine-readable result to stdout. opsctl never executes Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. GitHub Actions/Environments retain orchestration/approval authority and provider executors retain actual mutation authority.
+AR-11 release commands remain local, read-only and metadata/artifact-verification-only. opsctl never executes Python, Node, npx, Wrangler, provider APIs, database mutation, secret access, deployment, or customer-state mutation. GitHub Actions/Environments retain orchestration/approval authority and provider executors retain actual mutation authority.

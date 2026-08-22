@@ -71,6 +71,8 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             d1::repository_projection(&repo_root)
                 .map_err(|error| OpsctlError::new("d1", error.to_string()))
         }
+        // Machine-only build adapter: this is intentionally not an operator surface.
+        // F1 uses the existing opsctl binary without adding a second CLI/registry authority.
         Invocation::ReleaseFinalize { root, request_json } => {
             let repo_root = resolve_repo_root(root.as_deref(), "release")?;
             let input = std::fs::read_to_string(&request_json).map_err(|error| {
@@ -171,14 +173,13 @@ mod tests {
 
     fn invocation_command(invocation: &Invocation) -> Option<String> {
         match invocation {
-            Invocation::Help | Invocation::Version => None,
+            Invocation::Help | Invocation::Version | Invocation::ReleaseFinalize { .. } => None,
             Invocation::Run { command, .. } => Some(format!("opsctl {}", command.name())),
             Invocation::Credentials { action, .. } => {
                 Some(format!("opsctl credentials {}", action.name()))
             }
             Invocation::D1 { action, .. } => Some(format!("opsctl d1 {}", action.name())),
             Invocation::D1Repository { .. } => Some("opsctl d1 repository".to_owned()),
-            Invocation::ReleaseFinalize { .. } => Some("opsctl release finalize".to_owned()),
             Invocation::Release { action, .. } => Some(format!("opsctl release {}", action.name())),
             Invocation::Promotion { action, .. } => {
                 Some(format!("opsctl promotion {}", action.name()))
@@ -259,7 +260,7 @@ mod tests {
                 "{id}"
             );
         }
-        assert_eq!(active.len(), 17, "active operator command count drifted");
+        assert_eq!(active.len(), 16, "active operator command count drifted");
 
         let reserved = authority["reserved_namespaces"]
             .as_array()

@@ -191,22 +191,6 @@
       "secret_readback": false,
       "parser_probe_args": ["d1", "verify", "--component", "catalog", "--ledger-json", "ledger.json", "--release-manifest", "release.json"]
     },
-    "release_finalize": {
-      "command": "opsctl release finalize",
-      "namespace": "release",
-      "action": "finalize",
-      "status": "ACTIVE",
-      "activation_owner": "AR-11",
-      "source": "tools/opsctl/core/src/release.rs + tools/opsctl/src/release/finalize.rs",
-      "input_class": "ephemeral local packaging observation DTO plus canonical repository release inputs",
-      "output_semantics": "canonical content-addressed current Release Set bytes",
-      "mode": "READ_ONLY_METADATA_ONLY",
-      "side_effects": "NONE",
-      "network_authority": false,
-      "provider_mutation_authority": false,
-      "secret_readback": false,
-      "parser_probe_args": ["release", "finalize", "--request-json", "release-finalize-request.json"]
-    },
     "release_inspect": {
       "command": "opsctl release inspect",
       "namespace": "release",
