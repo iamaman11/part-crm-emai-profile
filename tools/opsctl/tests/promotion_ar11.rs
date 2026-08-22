@@ -258,7 +258,12 @@ fn converged_snapshot(
         profile_bridge_protocol_version: Some(semantic.protocols.profile_bridge_protocol_version),
         runtime_role: Some(semantic.runtime_compatibility.runtime_role.clone()),
         profile_format: Some(semantic.runtime_compatibility.profile_format.clone()),
-        browser_identity_policy: Some(semantic.runtime_compatibility.browser_identity_policy.clone()),
+        browser_identity_policy: Some(
+            semantic
+                .runtime_compatibility
+                .browser_identity_policy
+                .clone(),
+        ),
     })
 }
 
