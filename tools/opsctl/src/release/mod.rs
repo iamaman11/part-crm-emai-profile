@@ -17,7 +17,6 @@ pub mod static_compatibility;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseAction {
-    Compose,
     Inspect,
     Verify,
     Compatibility,
@@ -27,7 +26,6 @@ impl ReleaseAction {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Compose => "compose",
             Self::Inspect => "inspect",
             Self::Verify => "verify",
             Self::Compatibility => "compatibility",
@@ -35,7 +33,7 @@ impl ReleaseAction {
     }
 }
 
-pub const TARGET_COMMANDS: &[&str] = &["compose", "inspect", "verify", "compatibility"];
+pub const TARGET_COMMANDS: &[&str] = &["inspect", "verify", "compatibility"];
 pub const ACTIVATION_OWNER: &str = "AR-11";
 pub const PROVIDER_MUTATION_AUTHORITY: bool = false;
 pub const NETWORK_AUTHORITY: bool = false;
