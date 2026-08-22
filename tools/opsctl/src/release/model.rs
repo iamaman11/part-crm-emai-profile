@@ -44,7 +44,8 @@ pub fn parse_json(input: &str) -> Result<ReleaseSetManifest, ReleaseModelError> 
         ],
         "release-set root",
     )?;
-    let schema_version = ReleaseSetSchemaVersion::from_number(required_u64(root, "schema_version")?)?;
+    let schema_version =
+        ReleaseSetSchemaVersion::from_number(required_u64(root, "schema_version")?)?;
     let release_set_id = required_string(root, "release_set_id")?;
     validate_release_set_id(&release_set_id, schema_version)?;
     let display_version = optional_string(root, "display_version")?;
@@ -85,7 +86,9 @@ pub fn parse_json(input: &str) -> Result<ReleaseSetManifest, ReleaseModelError> 
 pub fn verify_content_address(manifest: &ReleaseSetManifest) -> Result<(), ReleaseModelError> {
     let identity = ReleaseSetIdentityV3::from_manifest(manifest);
     let value = serde_json::to_value(identity).map_err(|error| {
-        ReleaseModelError::new(format!("cannot encode typed Release Set v3 identity: {error}"))
+        ReleaseModelError::new(format!(
+            "cannot encode typed Release Set v3 identity: {error}"
+        ))
     })?;
     let canonical = canonical_json(&value).map_err(ReleaseModelError::new)?;
     let expected = format!(
@@ -485,7 +488,8 @@ fn parse_protocols(value: &Value) -> Result<ProtocolIdentity, ReleaseModelError>
         "protocols.public_api_contract_sha256",
     )?;
     let camouhost_ipc_version = required_jcs_u64(root, "camouhost_ipc_version")?;
-    let profile_bridge_protocol_version = required_jcs_u64(root, "profile_bridge_protocol_version")?;
+    let profile_bridge_protocol_version =
+        required_jcs_u64(root, "profile_bridge_protocol_version")?;
     if camouhost_ipc_version == 0 || profile_bridge_protocol_version == 0 {
         return Err(ReleaseModelError::new("protocol versions must be positive"));
     }
@@ -614,9 +618,18 @@ fn parse_build_provenance(value: &Value) -> Result<BuildProvenanceIdentity, Rele
     let release_architecture_sha256 = required_string(root, "release_architecture_sha256")?;
     for (value, field) in [
         (&cargo_lock_sha256, "build_provenance.cargo_lock_sha256"),
-        (&rust_toolchain_sha256, "build_provenance.rust_toolchain_sha256"),
-        (&frontend_lock_sha256, "build_provenance.frontend_lock_sha256"),
-        (&release_architecture_sha256, "build_provenance.release_architecture_sha256"),
+        (
+            &rust_toolchain_sha256,
+            "build_provenance.rust_toolchain_sha256",
+        ),
+        (
+            &frontend_lock_sha256,
+            "build_provenance.frontend_lock_sha256",
+        ),
+        (
+            &release_architecture_sha256,
+            "build_provenance.release_architecture_sha256",
+        ),
     ] {
         validate_sha256_like(value, field)?;
     }
@@ -948,7 +961,10 @@ mod tests {
     #[test]
     fn accepts_v3_and_rejects_v2() -> Result<(), Box<dyn std::error::Error>> {
         let input = signed_fixture()?;
-        assert_eq!(parse_json(&input)?.schema_version, ReleaseSetSchemaVersion::V3);
+        assert_eq!(
+            parse_json(&input)?.schema_version,
+            ReleaseSetSchemaVersion::V3
+        );
         let v2 = input
             .replace("\"schema_version\":3", "\"schema_version\":2")
             .replace("release-set-v3-sha256-", "release-set-v2-sha256-");
@@ -957,7 +973,8 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_members_fail_closed_before_semantic_decode() -> Result<(), Box<dyn std::error::Error>> {
+    fn duplicate_members_fail_closed_before_semantic_decode()
+    -> Result<(), Box<dyn std::error::Error>> {
         let input = signed_fixture()?;
         let duplicate = input.replacen("{", "{\"schema_version\":3,", 1);
         assert!(parse_json(&duplicate).is_err());
@@ -965,7 +982,8 @@ mod tests {
     }
 
     #[test]
-    fn display_version_is_not_part_of_semantic_identity() -> Result<(), Box<dyn std::error::Error>> {
+    fn display_version_is_not_part_of_semantic_identity() -> Result<(), Box<dyn std::error::Error>>
+    {
         let input = signed_fixture()?;
         let manifest = parse_json(&input)?;
         let mut with_display: Value = serde_json::from_str(&input)?;
