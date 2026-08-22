@@ -272,13 +272,25 @@ fn prove_future_case(
     let projected = component(projection, case.component)?;
     assert_eq!(projected["migration_count"], historical.len() + 1);
     assert_eq!(projected["post_epoch_migration_count"], 1);
-    assert_eq!(projected["current_repository_revision"], case.future_revision);
+    assert_eq!(
+        projected["current_repository_revision"],
+        case.future_revision
+    );
     assert_ne!(projected["history_digest"], case.historical_digest);
 
     let target_contract = projected["release_schema_contract"].clone();
-    assert_eq!(target_contract["target_schema_revision"], case.future_revision);
-    assert_eq!(target_contract["supported_schema_min"], case.future_revision);
-    assert_eq!(target_contract["supported_schema_max"], case.future_revision);
+    assert_eq!(
+        target_contract["target_schema_revision"],
+        case.future_revision
+    );
+    assert_eq!(
+        target_contract["supported_schema_min"],
+        case.future_revision
+    );
+    assert_eq!(
+        target_contract["supported_schema_max"],
+        case.future_revision
+    );
 
     let mut current_contract = target_contract.clone();
     current_contract["target_schema_revision"] = json!(case.historical_revision);
@@ -420,7 +432,11 @@ fn first_post_epoch_catalog_and_resolver_migrations_run_through_real_authoring_p
         component(&canonical_projection, "resolver")?["post_epoch_migration_count"],
         0
     );
-    assert!(!repo_root().join("migrations/d1/0027_post_epoch_probe.sql").exists());
+    assert!(
+        !repo_root()
+            .join("migrations/d1/0027_post_epoch_probe.sql")
+            .exists()
+    );
     assert!(
         !repo_root()
             .join("migrations/resolver-d1/0005_post_epoch_probe.sql")
