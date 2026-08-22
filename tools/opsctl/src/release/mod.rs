@@ -13,6 +13,7 @@ pub mod input_topology;
 pub mod model;
 pub mod source;
 pub mod static_compatibility;
+pub mod v3_dto;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseAction {
