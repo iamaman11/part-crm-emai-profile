@@ -38,7 +38,7 @@ This file is a compatibility navigation entrypoint. The canonical documentation 
 - [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 enforcement specification;
 - [`../architecture/release-architecture-ar11.json`](../architecture/release-architecture-ar11.json) — accepted Release/Capability Profile authority;
 - [`../architecture/runtime-cutover-ar10.json`](../architecture/runtime-cutover-ar10.json) — accepted runtime-cutover authority;
-- [`../architecture/d1-evolution-ar9.json`](../architecture/d1-evolution-ar9.json) — accepted D1 evolution authority;
+- [`../tools/opsctl/src/d1`](../tools/opsctl/src/d1) plus [`../migrations/d1`](../migrations/d1) and [`../migrations/resolver-d1`](../migrations/resolver-d1) — typed D1 policy and executable SQL migration authority;
 - [`../architecture/credential-authority.json`](../architecture/credential-authority.json), [`../architecture/credential-lifecycle.json`](../architecture/credential-lifecycle.json), [`../architecture/profile-security.json`](../architecture/profile-security.json), [`../architecture/operator-contract.json`](../architecture/operator-contract.json) — current subject authorities;
 - [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) — current product/program projection;
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) + accepted ADRs — stable architecture invariants;

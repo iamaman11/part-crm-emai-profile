@@ -1,4 +1,3 @@
-use serde_json::Value;
 use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
@@ -40,6 +39,16 @@ pub(super) enum LedgerState {
 }
 
 impl LedgerState {
+    pub(super) const ALL: [Self; 7] = [
+        Self::Exact,
+        Self::BehindKnownPrefix,
+        Self::AheadKnownCompatible,
+        Self::AheadKnownIncompatible,
+        Self::Diverged,
+        Self::UnknownMigration,
+        Self::CorruptLedger,
+    ];
+
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Exact => "EXACT",
@@ -67,6 +76,18 @@ pub(super) enum Decision {
 }
 
 impl Decision {
+    pub(super) const ALL: [Self; 9] = [
+        Self::Safe,
+        Self::MigrationRequired,
+        Self::DeployFirst,
+        Self::MigrateFirst,
+        Self::CodeRollbackSafe,
+        Self::CodeRollbackBlocked,
+        Self::FailForwardRequired,
+        Self::ContractBlocked,
+        Self::RecoveryRequired,
+    ];
+
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Safe => "SAFE",
@@ -91,15 +112,12 @@ pub(super) enum MigrationClass {
 }
 
 impl MigrationClass {
-    pub(super) fn parse(value: &str) -> Result<Self, D1Error> {
-        match value {
-            "EXPAND" => Ok(Self::Expand),
-            "BACKFILL" => Ok(Self::Backfill),
-            "CONTRACT" => Ok(Self::Contract),
-            "REPAIR" => Ok(Self::Repair),
-            other => Err(D1Error::new(format!("unknown migration class: {other}"))),
-        }
-    }
+    pub(super) const ALL: [Self; 4] = [
+        Self::Expand,
+        Self::Backfill,
+        Self::Contract,
+        Self::Repair,
+    ];
 
     pub(super) const fn as_str(self) -> &'static str {
         match self {
@@ -120,16 +138,6 @@ pub(super) enum RolloutOrder {
 }
 
 impl RolloutOrder {
-    pub(super) fn parse(value: &str) -> Result<Self, D1Error> {
-        match value {
-            "MIGRATE_BEFORE_CODE" => Ok(Self::MigrateBeforeCode),
-            "CODE_BEFORE_MIGRATE" => Ok(Self::CodeBeforeMigrate),
-            "EITHER" => Ok(Self::Either),
-            "SEPARATE_CONTRACT_RELEASE" => Ok(Self::SeparateContractRelease),
-            other => Err(D1Error::new(format!("unknown rollout order: {other}"))),
-        }
-    }
-
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::MigrateBeforeCode => "MIGRATE_BEFORE_CODE",
@@ -180,6 +188,7 @@ pub(super) struct ComponentAuthority {
     pub(super) post_epoch: Vec<MigrationContract>,
     pub(super) current_repository_revision: String,
     pub(super) history_digest: String,
+    pub(super) policy_digest: String,
 }
 
 #[derive(Debug, Clone)]
@@ -204,10 +213,21 @@ pub(super) struct Evaluation {
     pub(super) remote_revision: Option<String>,
     pub(super) target_revision: String,
     pub(super) planned_migrations: Vec<String>,
-    pub(super) planned_contracts: Vec<Value>,
+    pub(super) planned_contracts: Vec<PlannedMigrationContract>,
     pub(super) reason_codes: Vec<String>,
     pub(super) rollback_context_complete: bool,
     pub(super) allowed: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PlannedMigrationContract {
+    pub(super) migration_file: String,
+    pub(super) migration_class: MigrationClass,
+    pub(super) rollout_order: RolloutOrder,
+    pub(super) fail_forward_required: bool,
+    pub(super) destructive: bool,
+    pub(super) code_rollback_allowed: bool,
+    pub(super) contract_preconditions: Vec<String>,
 }
 
 pub struct D1RunRequest<'a> {
@@ -219,7 +239,6 @@ pub struct D1RunRequest<'a> {
     pub current_manifest: Option<&'a Path>,
     pub known_good_manifest: Option<&'a Path>,
     pub preconditions_json: Option<&'a Path>,
-    pub authority_path: Option<&'a Path>,
 }
 
 #[cfg(test)]

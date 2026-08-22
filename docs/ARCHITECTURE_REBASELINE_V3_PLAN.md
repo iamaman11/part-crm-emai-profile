@@ -272,7 +272,7 @@ The old root `opsctl inventory` spelling is not a permanent authority. PF-1 #430
 
 Ownership is fixed unless a later accepted authority transaction explicitly changes it:
 
-- **AR-9:** native `d1 status/plan/compatibility/verify`, modular Rust D1 policy layer and source-reserved future family namespaces only;
+- **AR-9:** native `d1 repository/status/plan/compatibility/verify`; canonical SQL owns executable history, the bounded Rust D1 module owns non-derivable policy, and compact anchors preserve the accepted historical epoch without a serialized policy authority;
 - **AR-10:** native tooling/executable simplification, including removal of the AR-6 `doctor -> Python validators` child-process bridge and normalization of command ownership; AR-10 did not grant broad mutation/network authority;
 - **AR-11:** `release inspect/verify/compatibility` and `promotion plan/preflight/verify`, integrated with immutable Release Set authority; GitHub Environments remain approval/orchestration authority and provider executors remain actual mutation boundary;
 - **PF-1 #430:** typed acceptance/lifecycle policy evaluation from explicit raw Git/GitHub observations plus `architecture inventory render/check/write/inspect`; one deterministic policy/inventory core and exactly one bounded `GENERATED_PROJECTION_WRITE` to `architecture/inventory.json`; PF-1 must retire `.github/scripts/architecture-acceptance.mjs` and the Python inventory cluster after zero-caller/zero-unique-current-invariant proof;

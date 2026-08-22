@@ -21,7 +21,6 @@ fn status_invocation(root: PathBuf, ledger: &str) -> Invocation {
         current_manifest: None,
         known_good_manifest: None,
         preconditions_json: None,
-        authority: None,
     }
 }
 
@@ -58,7 +57,6 @@ fn resolver_historical_prefix_is_plannable_but_not_auto_mutable() -> Result<(), 
         current_manifest: None,
         known_good_manifest: None,
         preconditions_json: None,
-        authority: None,
     })?;
     let value = parse_output(&output)?;
     assert_eq!(value["ledger_state"], "BEHIND_KNOWN_PREFIX");

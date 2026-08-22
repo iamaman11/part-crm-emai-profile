@@ -1,7 +1,0 @@
-{
-  "rows": [
-    {"id": 1, "name": "0001_base.sql"},
-    {"id": 2, "name": "0002_expand.sql"},
-    {"id": 3, "name": "0003_backfill.sql"}
-  ]
-}

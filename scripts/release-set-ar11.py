@@ -20,6 +20,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import d1_repository_projection as d1_repository
+
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "iamaman11/part-crm-emai-profile"
 SCHEMA_VERSION = 2
@@ -315,7 +317,6 @@ def build(
     contract_paths = release_input_paths_for_consumer(inputs, "release_set.contracts")
     runtime_files = release_input_paths_for_consumer(inputs, "runtime_bundle.files")
     runtime_lock_relative = release_input_path(inputs, "camouhost_runtime_lock")
-    d1_authority_relative = release_input_path(inputs, "d1_evolution_authority")
     cargo_lock_relative = release_input_path(inputs, "cargo_lock")
     rust_toolchain_relative = release_input_path(inputs, "rust_toolchain")
     frontend_lock_relative = release_input_path(inputs, "frontend_lock")
@@ -331,11 +332,26 @@ def build(
     if not profiles:
         fail("release architecture has no capability profiles")
 
+    try:
+        d1_projection = d1_repository.load(ROOT)
+        catalog_contract = d1_repository.release_contract_from_projection(
+            d1_projection, "catalog"
+        )
+        resolver_contract = d1_repository.release_contract_from_projection(
+            d1_projection, "resolver"
+        )
+    except d1_repository.D1ProjectionError as error:
+        raise ReleaseSetError(f"typed D1 repository projection failed: {error}") from error
+
     control_release_id, control_value, control_manifest_bytes = load_component_manifest(control_manifest, source_sha=source_sha)
     resolver_release_id, resolver_value, resolver_manifest_bytes = load_component_manifest(resolver_manifest, source_sha=source_sha)
     bridge_release_id, bridge_value, bridge_manifest_bytes = load_component_manifest(profile_bridge_manifest, source_sha=source_sha)
     if bridge_value.get("schema_version") != 2 or bridge_value.get("kind") != "PROFILE_BRIDGE_COMPONENT":
         fail("Profile Bridge must use the embedded-manifest v2 component format")
+    if schema_contract(control_value, "catalog") != catalog_contract:
+        fail("control-plane component schema contract diverges from typed D1 catalog")
+    if schema_contract(resolver_value, "resolver") != resolver_contract:
+        fail("resolver component schema contract diverges from typed D1 catalog")
 
     staging = Path(tempfile.mkdtemp(prefix="ar11-release-set-v2-"))
     try:
@@ -381,9 +397,9 @@ def build(
                 "resolver_protocol": "mailbox-secret-resolver-v1",
             },
             "schemas": {
-                "d1_evolution_authority_sha256": sha256_file(ROOT / d1_authority_relative),
-                "catalog": schema_contract(control_value, "catalog"),
-                "resolver": schema_contract(resolver_value, "resolver"),
+                "d1_repository_identity_sha256": d1_projection["repository_identity_sha256"],
+                "catalog": catalog_contract,
+                "resolver": resolver_contract,
             },
             "runtime_compatibility": {
                 "runtime_lock_sha256": sha256_file(ROOT / runtime_lock_relative),

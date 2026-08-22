@@ -188,8 +188,13 @@ def main() -> int:
     d1_evolution = expected.get("d1_evolution")
     if not isinstance(d1_evolution, dict):
         raise AssertionError("AR-9 generator lost architecture/inventory.json::d1_evolution")
-    if d1_evolution.get("source_authority") != "architecture/d1-evolution-ar9.json":
-        raise AssertionError("AR-9 D1 projection lost its single source authority")
+    if d1_evolution.get("semantic_authority") != "tools/opsctl/src/d1":
+        raise AssertionError("D1 projection lost its typed semantic authority")
+    if d1_evolution.get("executable_schema_authority") != [
+        "migrations/d1",
+        "migrations/resolver-d1",
+    ]:
+        raise AssertionError("D1 projection lost its executable SQL authority")
 
     workspace_drift = copy.deepcopy(expected)
     workspace_drift["workspace_members"] = [

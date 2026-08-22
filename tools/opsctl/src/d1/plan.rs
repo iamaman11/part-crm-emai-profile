@@ -3,11 +3,11 @@ use super::compatibility::{
 };
 use super::model::{
     ComponentAuthority, D1Action, D1Error, Decision, Evaluation, LedgerState, MigrationClass,
-    MigrationContract, Preconditions, ReleaseSchemaContract, RolloutOrder,
+    MigrationContract, PlannedMigrationContract, Preconditions, ReleaseSchemaContract,
+    RolloutOrder,
 };
 use super::status::{classify_prefix, classify_relative_state, revision_index};
 use super::verify::evaluate_verify;
-use serde_json::{Value, json};
 
 pub(super) fn evaluate(
     action: D1Action,
@@ -322,7 +322,7 @@ fn planned_contract_values(
     authority: &ComponentAuthority,
     remote_count: usize,
     target_count: usize,
-) -> Vec<Value> {
+) -> Vec<PlannedMigrationContract> {
     if remote_count < authority.historical_len {
         return Vec::new();
     }
@@ -334,16 +334,14 @@ fn planned_contract_values(
         .map(|contracts| {
             contracts
                 .iter()
-                .map(|contract| {
-                    json!({
-                        "migration_file": contract.migration_file,
-                        "migration_class": contract.migration_class.as_str(),
-                        "rollout_order": contract.rollout_order.as_str(),
-                        "fail_forward_required": contract.fail_forward_required,
-                        "destructive": contract.destructive,
-                        "code_rollback_allowed": contract.code_rollback_allowed,
-                        "contract_preconditions": contract.contract_preconditions
-                    })
+                .map(|contract| PlannedMigrationContract {
+                    migration_file: contract.migration_file.clone(),
+                    migration_class: contract.migration_class,
+                    rollout_order: contract.rollout_order,
+                    fail_forward_required: contract.fail_forward_required,
+                    destructive: contract.destructive,
+                    code_rollback_allowed: contract.code_rollback_allowed,
+                    contract_preconditions: contract.contract_preconditions.clone(),
                 })
                 .collect()
         })

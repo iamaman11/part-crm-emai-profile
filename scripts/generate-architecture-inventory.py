@@ -21,11 +21,11 @@ from pathlib import Path
 from typing import Any
 
 import credential_authority as credentials
+import d1_repository_projection as d1_repository
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE_PATH = ROOT / "scripts/generate-architecture-inventory-engine.py"
 INVENTORY_PATH = ROOT / "architecture/inventory.json"
-D1_EVOLUTION_SOURCE = "architecture/d1-evolution-ar9.json"
 RUNTIME_CUTOVER_SOURCE = "architecture/runtime-cutover-ar10.json"
 RELEASE_ARCHITECTURE_SOURCE = "architecture/release-architecture-ar11.json"
 AR9_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-19-ar9-final-acceptance.json"
@@ -377,79 +377,7 @@ def subject_projection() -> dict[str, object]:
 
 
 def d1_evolution_projection() -> dict[str, object]:
-    authority = load_json(D1_EVOLUTION_SOURCE)
-    if authority.get("kind") != "D1_EVOLUTION_AUTHORITY" or authority.get("schema_version") != 1:
-        raise ValueError("AR-9 D1 evolution authority identity/version is invalid")
-    if authority.get("status") != "accepted":
-        raise ValueError("AR-9 D1 evolution authority must project accepted status after accepted main")
-    if authority.get("canonical_projection") != "architecture/inventory.json::d1_evolution":
-        raise ValueError("AR-9 D1 evolution authority canonical projection drifted")
-    if authority.get("production_mutation") is not False:
-        raise ValueError("AR-9 D1 evolution authority must remain non-production-mutating")
-    policy = authority.get("global_policy")
-    components = authority.get("components")
-    if not isinstance(policy, dict) or not isinstance(components, list) or len(components) != 2:
-        raise ValueError("AR-9 D1 evolution authority policy/components are malformed")
-    projected_components: list[dict[str, object]] = []
-    observed_ids: set[str] = set()
-    for component in components:
-        if not isinstance(component, dict):
-            raise ValueError("AR-9 D1 component must be an object")
-        component_id = component.get("component_id")
-        historical = component.get("historical_epoch")
-        freeze = historical.get("per_file_sha256_freeze") if isinstance(historical, dict) else None
-        if component_id not in {"catalog", "resolver"} or component_id in observed_ids:
-            raise ValueError("AR-9 D1 component identity set is invalid")
-        if not isinstance(historical, dict) or not isinstance(freeze, dict) or freeze.get("status") != "FROZEN":
-            raise ValueError(f"AR-9 D1 historical epoch is not frozen: {component_id}")
-        if historical.get("retroactive_runtime_compatibility_claims") is not False:
-            raise ValueError(f"AR-9 D1 historical epoch invented compatibility claims: {component_id}")
-        observed_ids.add(component_id)
-        projected_components.append({
-            "component_id": component_id,
-            "binding_identity": component.get("binding_identity"),
-            "migration_root": component.get("migration_root"),
-            "migration_ledger": component.get("migration_ledger"),
-            "current_repository_revision": component.get("current_repository_revision"),
-            "history_digest": component.get("history_digest"),
-            "historical_epoch": {
-                "status": historical.get("status"),
-                "ordered_set_identity": historical.get("ordered_set_identity"),
-                "per_file_sha256_freeze": freeze,
-                "retroactive_runtime_compatibility_claims": False,
-            },
-            "post_epoch_migration_count": len(component.get("post_epoch_migrations", [])),
-            "fresh_bootstrap_authority": component.get("fresh_bootstrap_authority"),
-            "upgrade_authority": component.get("upgrade_authority"),
-            "mutation_authority": component.get("mutation_authority"),
-            "concurrency_authority": component.get("concurrency_authority"),
-            "release_manifest_owner": component.get("release_manifest_owner"),
-        })
-    if observed_ids != {"catalog", "resolver"}:
-        raise ValueError("AR-9 D1 projection requires exactly Catalog and Resolver")
-    return {
-        "schema_version": 1,
-        "role": "ACCEPTED_AR9_D1_EVOLUTION_PROJECTION",
-        "source_authority": D1_EVOLUTION_SOURCE,
-        "source_status": authority.get("status"),
-        "acceptance_evidence": AR9_ACCEPTANCE_EVIDENCE,
-        "tracking_issue": authority.get("tracking_issue"),
-        "start_base": authority.get("start_base"),
-        "migration_classes": policy.get("migration_classes"),
-        "ledger_states": policy.get("ledger_states"),
-        "rollout_decisions": policy.get("rollout_decisions"),
-        "mutation_authority": policy.get("mutation_authority"),
-        "policy_authority": policy.get("policy_authority"),
-        "new_opsctl_process_spawn_sites": policy.get("new_opsctl_process_spawn_sites"),
-        "opsctl_provider_credentials": policy.get("opsctl_provider_credentials"),
-        "resource_auto_provisioning_allowed": policy.get("resource_auto_provisioning_allowed"),
-        "database_lock_required_by_default": policy.get("database_lock_required_by_default"),
-        "components": projected_components,
-        "architecture_complete": False,
-        "production_core_gate": "BLOCKED",
-        "production_ready": False,
-        "production_mutation": False,
-    }
+    return d1_repository.load(ROOT)
 
 
 def runtime_cutover_projection() -> dict[str, object]:
@@ -583,7 +511,11 @@ def build_inventory() -> dict[str, object]:
     documentation["ar9_acceptance_evidence"] = AR9_ACCEPTANCE_EVIDENCE
     documentation["ar10_acceptance_evidence"] = AR10_ACCEPTANCE_EVIDENCE
     documentation["d1_evolution"] = "architecture/inventory.json::d1_evolution"
-    documentation["d1_evolution_source"] = D1_EVOLUTION_SOURCE
+    documentation["d1_semantic_authority"] = "tools/opsctl/src/d1"
+    documentation["d1_executable_schema_authority"] = [
+        "migrations/d1",
+        "migrations/resolver-d1",
+    ]
     documentation["runtime_cutover"] = "architecture/inventory.json::runtime_cutover"
     documentation["runtime_cutover_source"] = RUNTIME_CUTOVER_SOURCE
     documentation["release_architecture"] = "architecture/inventory.json::release_architecture"
