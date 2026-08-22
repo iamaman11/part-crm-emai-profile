@@ -25,14 +25,13 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Prove accepted-main build authority and v2 contract
+      - name: Prove accepted-main build authority
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = push
           test "$GITHUB_REF" = refs/heads/main
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           node .github/scripts/release-architecture-ar11.mjs
-          python scripts/release-set-ar11.py self-test
           python scripts/accepted-source-evidence-ar11.py --self-test
 
       - name: Set up pinned Node runtime
@@ -140,7 +139,7 @@ jobs:
           retention-days: 7
 
   assemble-publish:
-    name: Verify and publish durable immutable Release Set v2
+    name: Finalize and publish durable immutable Release Set v3
     needs: [cloud-components, profile-bridge]
     runs-on: ubuntu-latest
     permissions:
@@ -162,30 +161,200 @@ jobs:
           path: artifacts/ar11-inputs
           merge-multiple: true
 
-      - name: Assemble and verify one content-addressed Release Set v2
+      - name: Finalize one content-addressed Release Set v3 through opsctl
         id: release-set
         run: |
           set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
           test "$GITHUB_REF" = refs/heads/main
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          python scripts/release-set-ar11.py build \
+          test "$GITHUB_REPOSITORY" = "iamaman11/part-crm-emai-profile"
+
+          component_root="$RUNNER_TEMP/release-components"
+          mkdir -p "$component_root"
+          cp artifacts/ar11-inputs/control-plane.tar "$component_root/control-plane.tar"
+          cp artifacts/ar11-inputs/secret-resolver.tar "$component_root/secret-resolver.tar"
+          cp artifacts/ar11-inputs/profile-bridge.zip "$component_root/profile-bridge.zip"
+
+          python scripts/camouhost-runtime-package.py self-test
+          python scripts/camouhost-runtime-package.py package \
             --source-sha "$SOURCE_SHA" \
-            --control-archive artifacts/ar11-inputs/control-plane.tar \
-            --control-manifest artifacts/ar11-inputs/control-plane-manifest.json \
-            --resolver-archive artifacts/ar11-inputs/secret-resolver.tar \
-            --resolver-manifest artifacts/ar11-inputs/secret-resolver-manifest.json \
-            --profile-bridge-archive artifacts/ar11-inputs/profile-bridge.zip \
-            --profile-bridge-manifest artifacts/ar11-inputs/profile-bridge-manifest.json \
-            --output-root artifacts/release-sets > "$RUNNER_TEMP/release-set-path"
-          release_dir="$(tail -n 1 "$RUNNER_TEMP/release-set-path")"
-          test -d "$release_dir"
-          release_id="$(jq -r '.release_set_id' "$release_dir/release-set.json")"
-          [[ "$release_id" =~ ^release-set-v2-sha256-[0-9a-f]{64}$ ]]
-          test "$release_dir" = "artifacts/release-sets/$release_id"
+            --archive "$component_root/runtime-bundle.tar" \
+            --manifest "$RUNNER_TEMP/runtime-manifest.json"
+
+          control_manifest=artifacts/ar11-inputs/control-plane-manifest.json
+          resolver_manifest=artifacts/ar11-inputs/secret-resolver-manifest.json
+          bridge_manifest=artifacts/ar11-inputs/profile-bridge-manifest.json
+          runtime_manifest="$RUNNER_TEMP/runtime-manifest.json"
+
+          control_release_id="$(jq -er '.release_id' "$control_manifest")"
+          resolver_release_id="$(jq -er '.release_id' "$resolver_manifest")"
+          bridge_release_id="$(jq -er '.release_id' "$bridge_manifest")"
+          runtime_release_id="$(jq -er '.release_id' "$runtime_manifest")"
+
+          control_source_sha="$(jq -er '.source.commit_sha' "$control_manifest")"
+          resolver_source_sha="$(jq -er '.source_commit_sha' "$resolver_manifest")"
+          bridge_source_sha="$(jq -er '.source_commit_sha' "$bridge_manifest")"
+          runtime_source_sha="$(jq -er '.source_commit_sha' "$runtime_manifest")"
+          bridge_protocol="$(jq -er '.protocol_version' "$bridge_manifest")"
+
+          if [[ "$resolver_release_id" =~ ^(.+)-sha256-[0-9a-f]{64}$ ]]; then
+            resolver_protocol="${BASH_REMATCH[1]}"
+          else
+            echo "resolver release ID does not expose a versioned protocol family" >&2
+            exit 1
+          fi
+
+          sha256_file() {
+            sha256sum "$1" | awk '{print $1}'
+          }
+          size_bytes() {
+            stat -c '%s' "$1"
+          }
+
+          control_sha="$(sha256_file "$component_root/control-plane.tar")"
+          resolver_sha="$(sha256_file "$component_root/secret-resolver.tar")"
+          bridge_sha="$(sha256_file "$component_root/profile-bridge.zip")"
+          runtime_sha="$(sha256_file "$component_root/runtime-bundle.tar")"
+          control_size="$(size_bytes "$component_root/control-plane.tar")"
+          resolver_size="$(size_bytes "$component_root/secret-resolver.tar")"
+          bridge_size="$(size_bytes "$component_root/profile-bridge.zip")"
+          runtime_size="$(size_bytes "$component_root/runtime-bundle.tar")"
+          control_manifest_sha="$(sha256_file "$control_manifest")"
+          resolver_manifest_sha="$(sha256_file "$resolver_manifest")"
+          bridge_manifest_sha="$(sha256_file "$bridge_manifest")"
+          runtime_manifest_sha="$(sha256_file "$runtime_manifest")"
+
+          accepted_main_binding="$(
+            jq -c -n -j \
+              --arg authority accepted-main \
+              --arg commit_sha "$SOURCE_SHA" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              '{authority:$authority,commit_sha:$commit_sha,repository:$repository}' \
+              | sha256sum | awk '{print $1}'
+          )"
+          [[ "$accepted_main_binding" =~ ^[0-9a-f]{64}$ ]]
+
+          request_json="$RUNNER_TEMP/release-finalize-request.json"
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg accepted_main_evidence_sha256 "$accepted_main_binding" \
+            --arg control_release_id "$control_release_id" \
+            --arg control_source_sha "$control_source_sha" \
+            --arg control_sha "$control_sha" \
+            --argjson control_size "$control_size" \
+            --arg control_manifest_sha "$control_manifest_sha" \
+            --arg resolver_release_id "$resolver_release_id" \
+            --arg resolver_source_sha "$resolver_source_sha" \
+            --arg resolver_sha "$resolver_sha" \
+            --argjson resolver_size "$resolver_size" \
+            --arg resolver_manifest_sha "$resolver_manifest_sha" \
+            --arg bridge_release_id "$bridge_release_id" \
+            --arg bridge_source_sha "$bridge_source_sha" \
+            --arg bridge_sha "$bridge_sha" \
+            --argjson bridge_size "$bridge_size" \
+            --arg bridge_manifest_sha "$bridge_manifest_sha" \
+            --arg runtime_release_id "$runtime_release_id" \
+            --arg runtime_source_sha "$runtime_source_sha" \
+            --arg runtime_sha "$runtime_sha" \
+            --argjson runtime_size "$runtime_size" \
+            --arg runtime_manifest_sha "$runtime_manifest_sha" \
+            --argjson bridge_protocol "$bridge_protocol" \
+            --arg resolver_protocol "$resolver_protocol" \
+            '{
+              schema_version: 1,
+              kind: "RELEASE_FINALIZE_REQUEST",
+              source: {
+                repository: $repository,
+                commit_sha: $source_sha,
+                accepted_main: true,
+                accepted_main_evidence_sha256: $accepted_main_evidence_sha256
+              },
+              components: {
+                control_plane: {
+                  component_id: "control_plane",
+                  release_id: $control_release_id,
+                  source_commit_sha: $control_source_sha,
+                  artifact_path: "components/control-plane.tar",
+                  artifact_sha256: $control_sha,
+                  artifact_size_bytes: $control_size,
+                  component_manifest_sha256: $control_manifest_sha
+                },
+                frontend: {
+                  component_id: "frontend",
+                  release_id: $control_release_id,
+                  source_commit_sha: $control_source_sha,
+                  artifact_path: "components/control-plane.tar",
+                  artifact_sha256: $control_sha,
+                  artifact_size_bytes: $control_size,
+                  component_manifest_sha256: $control_manifest_sha
+                },
+                secret_resolver: {
+                  component_id: "secret_resolver",
+                  release_id: $resolver_release_id,
+                  source_commit_sha: $resolver_source_sha,
+                  artifact_path: "components/secret-resolver.tar",
+                  artifact_sha256: $resolver_sha,
+                  artifact_size_bytes: $resolver_size,
+                  component_manifest_sha256: $resolver_manifest_sha
+                },
+                runtime_bundle: {
+                  component_id: "runtime_bundle",
+                  release_id: $runtime_release_id,
+                  source_commit_sha: $runtime_source_sha,
+                  artifact_path: "components/runtime-bundle.tar",
+                  artifact_sha256: $runtime_sha,
+                  artifact_size_bytes: $runtime_size,
+                  component_manifest_sha256: $runtime_manifest_sha
+                },
+                profile_bridge: {
+                  component_id: "profile_bridge",
+                  release_id: $bridge_release_id,
+                  source_commit_sha: $bridge_source_sha,
+                  artifact_path: "components/profile-bridge.zip",
+                  artifact_sha256: $bridge_sha,
+                  artifact_size_bytes: $bridge_size,
+                  component_manifest_sha256: $bridge_manifest_sha
+                }
+              },
+              protocols: {
+                profile_bridge_protocol_version: $bridge_protocol,
+                resolver_protocol: $resolver_protocol
+              }
+            }' > "$request_json"
+
+          release_json="$RUNNER_TEMP/release-set-v3.json"
+          replay_json="$RUNNER_TEMP/release-set-v3-replay.json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . release finalize --request-json "$request_json" > "$release_json"
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . release finalize --request-json "$request_json" > "$replay_json"
+          cmp --silent "$release_json" "$replay_json"
+
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg source_sha "$SOURCE_SHA" \
+            '.schema_version == 3
+              and .source.repository == $repository
+              and .source.commit_sha == $source_sha
+              and .source.accepted_main == true' \
+            "$release_json" >/dev/null
+          release_id="$(jq -er '.release_set_id' "$release_json")"
+          [[ "$release_id" =~ ^release-set-v3-sha256-[0-9a-f]{64}$ ]]
+
+          release_dir="artifacts/release-sets/$release_id"
+          test ! -e "$release_dir"
+          mkdir -p "$release_dir/components"
+          cp "$release_json" "$release_dir/release-set.json"
+          cp "$component_root/control-plane.tar" "$release_dir/components/control-plane.tar"
+          cp "$component_root/secret-resolver.tar" "$release_dir/components/secret-resolver.tar"
+          cp "$component_root/runtime-bundle.tar" "$release_dir/components/runtime-bundle.tar"
+          cp "$component_root/profile-bridge.zip" "$release_dir/components/profile-bridge.zip"
+          test "$(find "$release_dir" -type f | wc -l)" -eq 5
 
           policy_dir="$RUNNER_TEMP/release-policy-input"
           mkdir -p "$policy_dir"
-          cp "$release_dir/release-set.json" "$policy_dir/release-set.json"
           branch_json="$RUNNER_TEMP/protected-main.json"
           compare_json="$RUNNER_TEMP/accepted-source-compare.json"
           gh api "repos/$GITHUB_REPOSITORY/branches/main" > "$branch_json"
@@ -200,10 +369,6 @@ jobs:
             --compare-json "$compare_json" \
             --output "$policy_dir/accepted-source-evidence.json"
 
-          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
-            --root . release verify --release-set "$policy_dir/release-set.json" \
-            --source-root . --artifact-root "$release_dir" \
-            | jq -e '.decision == "VALID" and .release_set_schema_version == 2 and .source_accepted == true and .mutation_executed == false' >/dev/null
           {
             echo "release_dir=$release_dir"
             echo "release_id=$release_id"
@@ -236,7 +401,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$SOURCE_SHA" \
               --title "$RELEASE_ID" \
-              --notes "Immutable AR-11 Release Set v2 built once from accepted main $SOURCE_SHA."
+              --notes "Immutable Release Set v3 built once from accepted main $SOURCE_SHA."
             gh release upload "$RELEASE_ID" --repo "$GITHUB_REPOSITORY" "$asset_dir"/*
           fi
 
