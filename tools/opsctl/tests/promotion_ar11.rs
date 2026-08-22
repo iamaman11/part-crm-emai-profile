@@ -173,7 +173,7 @@ fn release_set() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
         "protocols": protocols,
         "schemas": schemas,
         "runtime_compatibility": runtime_compatibility,
-        "capability_profile_compatibility": ["rehearsal-core-v1", "production-core-v1"],
+        "capability_profile_compatibility": ["production-core-v1", "rehearsal-core-v1"],
         "build_provenance": build_provenance,
         "artifact_inventory": [
             {"path":"components/control-plane.tar","sha256":SHA_A,"size_bytes":10,"kind":"component"},
