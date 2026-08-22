@@ -35,7 +35,9 @@ fn migration_identity(root: &Path, relative: &str) -> Result<(Vec<Value>, String
     let mut identity = Vec::with_capacity(entries.len());
     for path in entries {
         if !path.is_file() {
-            return Err(format!("non-file entry in migration directory: {}", path.display()).into());
+            return Err(
+                format!("non-file entry in migration directory: {}", path.display()).into(),
+            );
         }
         let name = path
             .file_name()
@@ -87,7 +89,11 @@ fn copy_directory(source: &Path, target: &Path) -> Result<(), Box<dyn Error>> {
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         if !entry.file_type()?.is_file() {
-            return Err(format!("unexpected non-file migration entry: {}", entry.path().display()).into());
+            return Err(format!(
+                "unexpected non-file migration entry: {}",
+                entry.path().display()
+            )
+            .into());
         }
         fs::copy(entry.path(), target.join(entry.file_name()))?;
     }
@@ -191,7 +197,11 @@ fn historical_sql_tampering_fails_closed_for_each_component() -> Result<(), Box<
             Ok(_) => return Err(format!("tampered {label} SQL unexpectedly passed").into()),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("historical epoch digest mismatch"));
+        assert!(
+            error
+                .to_string()
+                .contains("historical epoch digest mismatch")
+        );
     }
     Ok(())
 }
@@ -220,8 +230,14 @@ fn unowned_post_epoch_sql_fails_closed_for_each_component() -> Result<(), Box<dy
 #[test]
 fn first_post_epoch_migration_requires_a_new_real_repository_proof() -> Result<(), Box<dyn Error>> {
     let projection: Value = serde_json::from_str(&repository_projection(&repo_root())?)?;
-    assert_eq!(component(&projection, "catalog")?["post_epoch_migration_count"], 0);
-    assert_eq!(component(&projection, "resolver")?["post_epoch_migration_count"], 0);
+    assert_eq!(
+        component(&projection, "catalog")?["post_epoch_migration_count"],
+        0
+    );
+    assert_eq!(
+        component(&projection, "resolver")?["post_epoch_migration_count"],
+        0
+    );
     Ok(())
 }
 
