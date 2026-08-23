@@ -1,9 +1,9 @@
 name: N3 Ephemeral Materialize
 
 on:
-  push:
+  pull_request:
     branches:
-      - codex/n3-github-governance-normalization
+      - main
 
 permissions:
   contents: write
@@ -15,12 +15,14 @@ jobs:
       - name: Checkout exact staging source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: true
 
       - name: Verify exact source checkout
-        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
 
       - name: Materialize bounded N3 projections
         run: python scripts/_n3_materialize.py
