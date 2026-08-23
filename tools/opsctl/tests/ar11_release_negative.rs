@@ -135,7 +135,7 @@ fn fixture_value() -> Result<Value, Box<dyn std::error::Error>> {
         .as_bytes(),
     );
     let mut value = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{SHA_A}"),
         "source": {
             "repository": REPOSITORY,
