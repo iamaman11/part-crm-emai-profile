@@ -91,7 +91,9 @@ fn historical_v2_wire_semantics_are_isolated_from_current_release_code()
 #[test]
 fn historical_v2_has_no_tracked_current_contract_authority() {
     assert!(
-        !repository_root().join("architecture/release-set-v2.json").exists(),
+        !repository_root()
+            .join("architecture/release-set-v2.json")
+            .exists(),
         "historical v2 wire semantics must live only in the isolated decoder, not a mutable current architecture contract"
     );
 }
