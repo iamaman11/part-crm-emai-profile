@@ -3,14 +3,14 @@
 **Document status:** GENERATED_PROJECTION  
 **Current program authority:** [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md)
 
-This file is navigation only. It does not create program, lifecycle or semantic authority.
+Navigation only. This file creates no program/lifecycle/semantic authority.
 
 ## Current state
 
 ```text
 F1/F2  ACCEPTED
 N1     ACCEPTED
-#454   NEXT — sole pre-N2 implementation transaction
+#454   NEXT — sole actual pre-N2 implementation transaction
 N2     BLOCKED on #454
 N3     BLOCKED on N2
 N4     BLOCKED on N3
@@ -19,61 +19,57 @@ PF-1   BLOCKED on N5 + fresh #430 entry reread
 AR-12  NOT STARTED
 ```
 
-Production remains disabled/fail-closed. `source_present != production_enabled` is binding.
-
-Closed PR #428 is superseded PF-2 history only.
+Production remains fail-closed and `source_present != production_enabled` remains binding.
 
 ## Authority hierarchy
 
-Use the smallest document that owns the question:
-
 1. [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — canonical current program authority.
-2. [`APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) and [`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) — permanent prospective architecture/quality rules.
-3. [`PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — detailed #454/N1…N5 normalization contract.
-4. Issue #441 — live mutable pre-PF-1 execution tracker; issue #454 — sole current pre-N2 work item.
-5. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) / #430 — PF-1 contract and live entry gate.
-6. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) / #431 — PF-3 fitness/freeze contract.
-7. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md), #399 and #421 — Functional Closure and later FC-6 proof obligations.
-8. Bounded subject authorities such as [`ARCHITECTURE.md`](ARCHITECTURE.md), ADRs, data/security/runtime/profile/release contracts and natural Rust/SQL/provider-native owners.
+2. [`APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) + [`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) — permanent architecture/quality rules.
+3. [`PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — detailed #454/N2–N5 retirement contract.
+4. #441 — live mutable pre-PF-1 execution state; #454 — sole current pre-N2 implementation transaction.
+5. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) / #430 — PF-1.
+6. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) / #431 — PF-3.
+7. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md), #399, #421 — Functional Closure.
+8. Bounded subject authorities: Rust/SQL/provider-native/runtime/release/security contracts and ADRs.
 
-Open PRs, generated projections and historical AR documents never outrank accepted protected `main` plus the hierarchy above.
+Open PRs, generated projections and historical AR documents never outrank accepted protected `main` plus this hierarchy.
 
 ## Developer navigation
 
-- [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) — compact current execution projection and “what remains before N2”.
-- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — PR workflow, local verification, exact-head acceptance and GitHub-plugin/no-`gh` environment guidance.
+- [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) — compact execution model + efficiency rules.
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — developer workflow, exact-head acceptance and GitHub-plugin/no-local-`gh` guidance.
 - [`OPSCTL_ARCHITECTURE_BOUNDARY.md`](OPSCTL_ARCHITECTURE_BOUNDARY.md) — `opsctl` pure-core/effect boundary.
-- [`OPSCTL_DOCTOR_CONTRACT.md`](OPSCTL_DOCTOR_CONTRACT.md) — `opsctl doctor` local read-only boundary.
+- [`OPSCTL_DOCTOR_CONTRACT.md`](OPSCTL_DOCTOR_CONTRACT.md) — local read-only doctor boundary.
 - [`PYTHON_USAGE_BOUNDARY.md`](PYTHON_USAGE_BOUNDARY.md) — Python role/effect policy.
-- [`PRODUCT.md`](PRODUCT.md) — product and Production Core boundary.
+- [`PRODUCT.md`](PRODUCT.md) — product/Production Core boundary.
 
 ## Current execution path
 
 ```text
 #454
--> N2
--> N3
--> N4
--> N5
--> PF-1
--> PF-2
--> PF-3 architecture-forming freeze
--> fresh #399/#421 re-baseline
--> FC-6
--> FC-7
--> AR-12 -> AR-13 -> AR-14 -> AR-15 -> AR-16 -> AR-17
--> PC-1
+-> N2 -> N3 -> N4 -> N5
+-> PF-1 -> PF-2 -> PF-3
+-> FC-6 preflight (fresh #399/#421 live re-baseline)
+-> FC-6 staging proof
+-> FC-7 closeout
+-> AR-12 fresh-environment rehearsal
+-> AR-13 rotation rehearsal
+-> AR-14 remote-recovery rehearsal
+-> AR-15 Windows updater/delivery implementation + proof
+-> AR-16 audit only
+-> AR-17 qualification/authorization decision only
+-> PC-1 Production Core v1
 ```
 
-#399/#421 are not extra work to execute before N2; their FC-6 obligations are re-proved after PF-3.
+N2–N5 are sequential authority-retirement transactions, not new architecture programs. Their repository-wide caller discovery may share one read-only ephemeral pass after #454. `fresh #399/#421 re-baseline` is FC-6 preflight, not another implementation phase. FC-7 is closeout unless proof exposes a real defect.
 
-## Projection and history rules
+## Projection/history rules
 
-The following are projections/navigation, never independent semantic input:
+These are projections/navigation, never independent semantic inputs:
 
-- `architecture/inventory.json`;
+- `architecture/inventory.json` when retained;
 - `docs/status.json`;
 - `docs/DEVELOPMENT_PLAN.md`;
-- root/docs README and this index.
+- README/index surfaces.
 
-Historical AR documents, `history/**`, `evidence/**`, `architecture/accepted-phases.json` and Git history preserve provenance. A historical implementation remains executable only when a concrete current consumer or durable/persisted obligation justifies it.
+Historical AR docs, `history/**`, `evidence/**`, `architecture/accepted-phases.json` and Git history preserve provenance. Historical implementation remains executable only for a proved current consumer or durable/persisted/migration obligation.
