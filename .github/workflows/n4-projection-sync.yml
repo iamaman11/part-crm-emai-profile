@@ -1,0 +1,52 @@
+name: N4 Projection Sync Temporary
+
+on:
+  push:
+    branches:
+      - codex/n4-operator-authority-cleanup
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/n4-operator-authority-cleanup
+          fetch-depth: 0
+
+      - name: Regenerate retained inventory projection
+        run: python scripts/generate-architecture-inventory.py --write
+
+      - name: Remove retired operator authority from status projection
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          path = Path("docs/status.json")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          authorities = payload["current"]["architecture_program"]["subject_domain_authorities"]
+          authorities.pop("operator_contract", None)
+          path.write_text(
+              json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+              newline="\n",
+          )
+
+      - name: Commit generated projections
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add architecture/inventory.json docs/status.json
+          if git diff --cached --quiet; then
+            echo "No projection changes required."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "N4: synchronize generated projections"
+          git push origin HEAD:codex/n4-operator-authority-cleanup
