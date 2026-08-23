@@ -4,7 +4,11 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: n1-scratch-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   n1-materialize:
@@ -16,14 +20,14 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Verify exact scratch source
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
 
-      - name: Materialize deterministic N1 blobs
+      - name: Materialize and audit N1 candidate
         run: |
           set +e
           python scripts/check-no-temporary-step4.py
@@ -31,29 +35,26 @@ jobs:
           set -e
           test "$status" -eq 97
           test ! -e architecture/runtime-topology-ar2.json
-          python -m py_compile scripts/_ar3_application_architecture.py scripts/generate-architecture-inventory-engine.py
+          python -m py_compile \
+            scripts/_ar3_application_architecture.py \
+            scripts/generate-architecture-inventory-engine.py \
+            scripts/check-documentation-authority-legacy.py
           python -m json.tool architecture/inventory.json >/dev/null
+          python -m json.tool architecture/architecture-rebaseline-v3-transition.json >/dev/null
           python -m json.tool docs/status.json >/dev/null
+          git diff --check
 
-      - name: Upload deterministic N1 blobs
+      - name: Upload deterministic N1 candidate blobs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: n1-generated-blobs
+          name: n1-final-candidate-blobs
           path: |
             scripts/_ar3_application_architecture.py
             scripts/generate-architecture-inventory-engine.py
+            scripts/check-documentation-authority-legacy.py
             architecture/inventory.json
+            architecture/architecture-rebaseline-v3-transition.json
+            architecture/README.md
             docs/status.json
           if-no-files-found: error
           retention-days: 1
-
-      - name: Commit generated blobs to disposable scratch branch
-        env:
-          SCRATCH_BRANCH: codex/n1-projection-scratch-20260823
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add scripts/_ar3_application_architecture.py scripts/generate-architecture-inventory-engine.py architecture/inventory.json docs/status.json architecture/runtime-topology-ar2.json
-          git diff --cached --check
-          git commit -m "[skip ci] scratch: materialize generated N1 blobs"
-          git push origin "HEAD:refs/heads/$SCRATCH_BRANCH"
