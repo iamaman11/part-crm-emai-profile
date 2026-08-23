@@ -119,7 +119,6 @@
         "applicable_permanent_workflows": "13/13",
         "closeout_issue": 292
       },
-      "python_estate": "architecture/python-estate-ar6.json",
       "python_operational_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR6.md",
       "ar6_acceptance": {
         "issue": 294,

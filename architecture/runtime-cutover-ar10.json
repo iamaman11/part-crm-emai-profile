@@ -115,11 +115,6 @@
     "runtime_component_tuple_exact": true,
     "floating_latest_forbidden": true
   },
-  "python_estate": {
-    "accepted_ar6_baseline": "architecture/python-estate-ar6.json",
-    "ar10_overlay": "architecture/python-estate-ar10.json",
-    "global_python_to_rust_rewrite": false
-  },
   "legacy_executables": {
     "retirement_owner": "AR-10",
     "retire_exactly": [

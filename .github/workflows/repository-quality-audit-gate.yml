@@ -46,7 +46,6 @@ jobs:
           python -m py_compile scripts/check-frontend-feature-boundaries.py
           python -m py_compile scripts/generate-architecture-inventory.py
           python -m py_compile scripts/check-historical-executable-debt.py
-          python -m py_compile scripts/python-estate-ar6.py
           python -m py_compile scripts/check-opsctl-readonly.py
           python -m py_compile scripts/test-architecture-inventory-negative.py
           python -m py_compile scripts/check-phase1a-event-boundaries.py
@@ -216,10 +215,8 @@ jobs:
           python scripts/check-historical-executable-debt.py
           python scripts/check-historical-executable-debt.py --self-test
 
-      - name: Audit AR-6 Python estate and read-only opsctl boundary
+      - name: Audit read-only opsctl boundary
         run: |
-          python scripts/python-estate-ar6.py --check
-          python scripts/python-estate-ar6.py --self-test
           python scripts/check-opsctl-readonly.py
           python scripts/check-opsctl-readonly.py --self-test
           cargo test --locked --manifest-path tools/opsctl/Cargo.toml

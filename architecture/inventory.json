@@ -901,43 +901,6 @@
     "production_mutation": false,
     "next_required_slice": "AR-6"
   },
-  "python_operational_authority": {
-    "schema_version": 1,
-    "status": "ACCEPTED_AR6_PYTHON_OPSCTL_FOUNDATION",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR6.md",
-    "python_estate": "architecture/python-estate-ar6.json",
-    "implementation_issue": 294,
-    "implementation_pr": 295,
-    "exact_green_head": "9b06d542873ffa3122e53e107105098e21f5933c",
-    "implementation_merge": "d0229fedd81ee870822b6d9394bc4ee313ea3a3c",
-    "applicable_permanent_workflows": "13/13",
-    "python_summary": {
-      "tracked_python_files": 116,
-      "KEEP_PYTHON": 108,
-      "MIGRATE_TO_RUST": 2,
-      "DELETE_AFTER_SEQUENCE": 6,
-      "WRAP_WITH_RUST": 0
-    },
-    "opsctl": {
-      "path": "tools/opsctl",
-      "mode": "READ_ONLY_FOUNDATION",
-      "commands": [
-        "doctor",
-        "status",
-        "inventory"
-      ],
-      "third_party_dependencies": false,
-      "provider_mutation": false
-    },
-    "future_cutovers": {
-      "AR-10": "DELETE_AFTER_SEQUENCE",
-      "AR-11": "MIGRATE_TO_RUST"
-    },
-    "application_architecture_accepted_through": "AR-4C",
-    "runtime_authority_cleanup_accepted_through": "AR-5",
-    "production_mutation": false,
-    "next_required_slice": "AR-7"
-  },
   "github_governance_authority": {
     "schema_version": 1,
     "status": "ACCEPTED_AR7_GITHUB_GOVERNANCE",
@@ -1281,7 +1244,6 @@
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
     "runtime_authority_cleanup_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
     "python_operational_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR6.md",
-    "python_estate": "architecture/python-estate-ar6.json",
     "github_governance_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR7.md",
     "github_governance_contract": "architecture/github-governance-ar7.json",
     "credential_authority_source": "architecture/credential-authority-ar8b.json",
@@ -1435,11 +1397,6 @@
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR6.md",
       "status": "EVIDENCE",
       "scope": "ar6_python_estate_and_read_only_opsctl_accepted"
-    },
-    {
-      "path": "architecture/python-estate-ar6.json",
-      "status": "STABLE_AUTHORITY",
-      "scope": "accepted_ar6_full_python_disposition"
     },
     {
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR7.md",

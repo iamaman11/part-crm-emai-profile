@@ -19,13 +19,11 @@ const RESOLVER_FUTURE_REVISION: &str = "0005_post_epoch_probe.sql";
 const CANONICAL_ROOT_SENTINELS: &[&str] = &[
     "Cargo.toml",
     "architecture/inventory.json",
-    "architecture/python-estate-ar6.json",
     "architecture/credential-authority.json",
     "architecture/credential-lifecycle.json",
     "architecture/profile-security.json",
     "architecture/operator-contract.json",
     "scripts/generate-architecture-inventory.py",
-    "scripts/python-estate-ar6.py",
 ];
 
 fn repo_root() -> PathBuf {
