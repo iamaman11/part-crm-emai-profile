@@ -18,7 +18,7 @@ pub fn verify_artifacts(
     release_set: &LoadedReleaseSet,
     artifact_root: &Path,
 ) -> Result<ArtifactVerification, ReleaseModelError> {
-    let manifest = release_set.current_v3()?;
+    let manifest = release_set.semantic();
     let root_metadata = fs::symlink_metadata(artifact_root).map_err(|error| {
         ReleaseModelError::new(format!(
             "ARTIFACT_ROOT_UNAVAILABLE: {}: {error}",
@@ -64,11 +64,21 @@ pub fn verify_artifacts(
             .checked_add(artifact.size_bytes)
             .ok_or_else(|| ReleaseModelError::new("artifact byte total overflow"))?;
     }
-    let component_manifests = verify_component_manifests(manifest, artifact_root)?;
+
+    // Component-manifest semantics are current-v3 authoring semantics. Historical v2 is retained
+    // only as an immutable read/verify input for a still-observed/known-good rollback candidate, so
+    // its minimum executable proof is the historical document/content address + accepted source +
+    // exact artifact inventory bytes. Do not reintroduce a second v2 component-policy authority.
+    let verified_components = if release_set.is_historical_v2() {
+        Vec::new()
+    } else {
+        verify_component_manifests(release_set.current_v3()?, artifact_root)?.verified_components
+    };
+
     Ok(ArtifactVerification {
         verified_files: manifest.artifact_inventory.len(),
         verified_bytes,
-        verified_components: component_manifests.verified_components,
+        verified_components,
     })
 }
 
