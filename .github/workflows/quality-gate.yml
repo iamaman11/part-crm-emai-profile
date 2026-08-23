@@ -32,7 +32,7 @@ jobs:
           python scripts/check-documentation-authority.py --root .
           python scripts/check-historical-executable-debt.py
           test ! -e architecture/runtime-topology-ar2.json
-          ! git grep -n 'architecture/runtime-topology-ar2.json' HEAD -- architecture/architecture-rebaseline-v3-transition.json architecture/README.md
+          ! git grep -n 'architecture/runtime-topology-ar2.json' -- architecture/architecture-rebaseline-v3-transition.json architecture/README.md
 
       - name: Commit only current projection blobs
         env:
