@@ -175,6 +175,17 @@ For release/security/evidence-critical JSON:
 
 Using `serde` derives on external DTOs is allowed. Core models should remain representation-independent where that materially reduces coupling.
 
+Every JSON input/output used by `opsctl` must have exactly one declared role:
+
+```text
+versioned external DTO/manifest -> strict adapter -> typed core input
+observation/evidence            -> strict adapter -> typed policy input
+generated projection/report     <- typed result <- output adapter
+historical evidence             -> isolated verifier only when a named consumer exists
+```
+
+Forbidden roles are `JSON as internal semantic object graph`, `JSON as repository identity`, `tracked projection as input to rebuild its own semantics`, and `generic authority bag`. A local file being easy to parse does not make it a canonical authority.
+
 ## 6. Current audited convergence examples
 
 ### D1 — reference direction
@@ -214,7 +225,7 @@ This is touch-to-converge debt, not authorization for an unrelated repository-wi
 
 ### Repository root discovery — convergence debt
 
-Current repository-root discovery depends on transitional AR-6/AR-8/Python sentinels. N2/N4/PF-1 must remove those sentinels so repository identity does not depend on files scheduled for retirement.
+Current N2 work on `main` removed AR-6 Python-estate sentinels from repository-root discovery. Current discovery still depends on tracked inventory/generator and AR-8 operator sentinels. N4/PF-1 must remove those remaining dependencies so repository identity uses minimal durable workspace markers rather than files scheduled for retirement or generated projections.
 
 ## 7. Command pipeline
 
@@ -255,7 +266,7 @@ SecretResolve
 RuntimeExecution
 ```
 
-`GeneratedProjectionWrite` is not general filesystem mutation. PF-1 may own the bounded write to `architecture/inventory.json`; workflow infrastructure owns hosted artifact publication/attestation.
+`GeneratedProjectionWrite` is not general filesystem mutation. PF-1 may own a bounded write only when pre-PF-1 discovery proves a durable consumer of exact tracked bytes; otherwise the write command and tracked projection retire. Workflow infrastructure owns hosted artifact publication/attestation.
 
 Provider/GitHub observations are gathered externally and passed in as versioned data.
 
@@ -355,7 +366,7 @@ A breaking external-contract change never retains the same schema version.
 
 The accepted current Release Set writer/model is v3 for the `d1_repository_identity_sha256` semantics. Historical v2 assets are immutable evidence/possible compatibility inputs and are never rewritten into v3.
 
-Historical v2 reader compatibility is isolated from current writer semantics and kept only for a proved current consumer/durable obligation. Before N2 starts, the bounded F1 cleanup gate must prove such a consumer or retire executable v2 compatibility and remove `architecture/release-set-v2.json` from any current-authority role.
+Accepted #454 removed `architecture/release-set-v2.json` from current authority, isolated minimum historical v2 source/artifact integrity verification from current writer semantics and made promotion/rollback targets v3-only. Historical verification must not expand into a second current model or v2-to-v3 semantic coercion path.
 
 ## 14. Shared semantic crate extraction test
 
@@ -410,6 +421,18 @@ inventory.json as semantic input
 inventory compiler reimplementing D1/release/runtime policy
 manual AR-qualified application ownership registry as compiler input
 ```
+
+`opsctl inventory` is not entitled to survive merely because it currently prints `architecture/inventory.json`. Before PF-1 it must receive one explicit disposition:
+
+```text
+distinct current user/automation need for an on-demand view
+-> compile from bounded typed natural-owner projections and render to stdout
+
+no distinct consumer/value
+-> delete the command
+```
+
+It must not read a tracked projection and present those bytes as independent semantic truth. `--write`, freshness/drift checks and `doctor` requirements disappear when no durable exact-byte consumer justifies the tracked file.
 
 ## 16. PF-2 evidence boundary
 
@@ -468,7 +491,7 @@ compatibility_shim_without_proved_consumer_or_durable_obligation
 opsctl_python_child_process
 ```
 
-PF-3 also enforces one semantic owner per fact and one mutation executor per owned mutation operation. Accepted PF-3 is the architecture-forming freeze point described by `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`.
+PF-3 also enforces one semantic owner per fact and one mutation executor per owned mutation operation. Accepted PF-3 is the provisional fitness baseline described by `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`; final architecture-form freeze follows accepted AR-15 rehearsal.
 
 ## 18. Definition of Done
 
@@ -489,6 +512,8 @@ inventory compiler consumes bounded typed projections = true
 manual AR-qualified application ownership registry current authority = 0
 operator command/effect semantic authority is Rust-owned = true
 legacy Node/Python lifecycle/inventory predecessors retired = true
+opsctl inventory = typed on-demand render with named consumer OR deleted
+tracked JSON projection without durable exact-byte consumer = 0
 ```
 
 Developer mental model:

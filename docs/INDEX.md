@@ -10,8 +10,8 @@ Navigation only. This file creates no program/lifecycle/semantic authority.
 ```text
 F1/F2  ACCEPTED
 N1     ACCEPTED
-#454   NEXT — sole actual pre-N2 implementation transaction
-N2     BLOCKED on #454
+#454   ACCEPTED
+N2     CURRENT / IN PROGRESS
 N3     BLOCKED on N2
 N4     BLOCKED on N3
 N5     BLOCKED on N4
@@ -26,7 +26,7 @@ Production remains fail-closed and `source_present != production_enabled` remain
 1. [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — canonical current program authority.
 2. [`APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) + [`ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md) — permanent architecture/quality rules.
 3. [`PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — detailed #454/N2–N5 retirement contract.
-4. #441 — live mutable pre-PF-1 execution state; #454 — sole current pre-N2 implementation transaction.
+4. #441 — live mutable pre-PF-1 execution state; #454 — accepted Release Set v2 correction; N2 — current normalization transaction.
 5. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) / #430 — PF-1.
 6. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) / #431 — PF-3.
 7. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md), #399, #421 — Functional Closure.
@@ -46,8 +46,7 @@ Open PRs, generated projections and historical AR documents never outrank accept
 ## Current execution path
 
 ```text
-#454
--> N2 -> N3 -> N4 -> N5
+N2 -> N3 -> N4 -> N5
 -> PF-1 -> PF-2 -> PF-3
 -> FC-6 preflight (fresh #399/#421 live re-baseline)
 -> FC-6 staging proof
@@ -55,13 +54,13 @@ Open PRs, generated projections and historical AR documents never outrank accept
 -> AR-12 fresh-environment rehearsal
 -> AR-13 rotation rehearsal
 -> AR-14 remote-recovery rehearsal
--> AR-15 Windows updater/delivery implementation + proof
+-> AR-15 Windows updater/delivery implementation + proof + final architecture-form freeze
 -> AR-16 audit only
 -> AR-17 qualification/authorization decision only
 -> PC-1 Production Core v1
 ```
 
-N2–N5 are sequential authority-retirement transactions, not new architecture programs. Their repository-wide caller discovery may share one read-only ephemeral pass after #454. `fresh #399/#421 re-baseline` is FC-6 preflight, not another implementation phase. FC-7 is closeout unless proof exposes a real defect.
+N2–N5 are sequential delete/simplify transactions, not new architecture programs. Their repository-wide caller discovery is one read-only ephemeral pass; internal validators/workflows are cutover callers, not durable consumers. PF-3 is a provisional fitness baseline and accepted AR-15 establishes final architecture-form freeze. `fresh #399/#421 re-baseline` is FC-6 preflight, not another implementation phase. FC-7 is closeout unless proof exposes a real defect.
 
 ## Projection/history rules
 

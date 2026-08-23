@@ -13,8 +13,8 @@ This document owns the detailed #454/N2–N5 authority-retirement contract. It d
 ```text
 F1/F2 ACCEPTED
 -> N1 ACCEPTED
--> #454 bounded Release Set v2 correction
--> N2 Python-estate authority retirement
+-> #454 bounded Release Set v2 correction ACCEPTED
+-> N2 Python-estate authority retirement CURRENT / IN PROGRESS
 -> N3 current GitHub-governance normalization
 -> N4 operator/provenance cleanup
 -> N5 runtime semantic-authority retirement
@@ -51,6 +51,8 @@ natural owner identified
 Do not replace a retired JSON/Python/Node/table authority with an equivalent successor registry in another language/format.
 
 Shared exact-head CI/review/merge acceptance is owned by `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md`, not repeated per N-step.
+
+An internal checker/generator/drift gate/self-test/`opsctl` sentinel/workflow that exists only to consume the predecessor belongs to the predecessor estate. It is not a durable consumer. The owning transaction removes or redirects it and deletes the predecessor atomically after moving the few unique current invariants; it does not first add another layer that validates the old validator.
 
 ## 3. Efficiency rule for N2–N5 + tracked-inventory retention
 
@@ -90,33 +92,18 @@ that transaction's affected reachability
 
 Separate merge boundaries remain because the semantic owners are different; repeated repository-wide archaeology is not required.
 
+Every N2…N5 PR includes a compact before/after simplification ledger. Each transaction must strictly reduce current authorities, transitional sources, duplicate representations and compatibility-only callers. New current plan documents, successor registries, tracked projections without durable consumers, meta-checkers and net growth of the predecessor-governance surface are stage failures.
+
 ## 4. #454 — Release Set v2
 
-F1 already established v3 as the current Release Set writer/model.
+#454 is accepted. It deleted the tracked v2 current authority, made v3 the only current writer/target model and isolated minimum historical v2 source/artifact integrity verification from current target semantics.
 
-Prove exactly one outcome:
-
-```text
-A. current v2 consumer exists
-   -> exact consumer + identity/version
-   -> minimum isolated historical-v2 read/verify only
-   -> current writer remains v3-only
-   -> no v2 -> v3 semantic coercion
-   -> explicit retirement condition
-
-B. current v2 consumer = NONE
-   -> executable v2 compatibility/current-v2 authority retires
-   -> compatibility-only code/workflows/tests/fixtures retire after caller/invariant proof
-   -> history remains in Git/releases/evidence
-```
-
-Stage result:
+Accepted result:
 
 ```text
 current_writer = v3
 current_v2_semantic_authority = 0
-v2_consumer = EXACT_ID | NONE
-v2_executable = MINIMUM_ISOLATED | RETIRED
+historical_v2_executable = MINIMUM_ISOLATED_VERIFY_ONLY
 v2_to_v3_semantic_coercion = 0
 production_mutation = false
 ```
@@ -136,7 +123,8 @@ role/effect policy
 
 Requirements:
 
-- retire `architecture/python-estate-ar6.json`, overlays and `scripts/python-estate-ar6.py` from current authority paths after caller/invariant proof;
+- atomically retire `architecture/python-estate-ar6.json`, AR-10/AR-11 overlays and `scripts/python-estate-ar6.py` after one bounded invariant/reachability pass;
+- delete or redirect internal quality/repository-audit/Camoufox workflow calls, compile checks, inventory/runtime-cutover references and self-tests that exist only for that estate in the same cutover; none is durable-consumer proof;
 - no successor 1:1 Python file registry;
 - remove retiring Python/AR sentinels from `opsctl doctor` and repository-root detection;
 - preserve `runtime/camouhost/real.py` as the genuine Camoufox outer-runtime adapter behind Profile Bridge + versioned IPC + `runtime-lock.json`;

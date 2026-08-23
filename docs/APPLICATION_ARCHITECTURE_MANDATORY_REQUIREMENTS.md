@@ -331,6 +331,18 @@ new natural owner
 
 Compatibility is retained only for a proved current consumer or explicit accepted contract. Temporary candidate parity inside one branch is allowed; long-lived dual current implementations on accepted `main` are not.
 
+An internal validator, drift gate, generator, self-test, documentation reference, `opsctl` sentinel or CI workflow that consumes a legacy artifact only because that artifact exists is part of the predecessor estate. It is **not** a durable consumer and may not block retirement. Only a named runtime/external/persisted contract that requires the exact legacy shape/bytes can justify retention.
+
+```text
+one bounded caller discovery
+-> classify durable consumers vs internal ceremony
+-> preserve/move unique current invariants
+-> switch or delete internal callers
+-> delete predecessor + compatibility-only checks in the same transaction
+```
+
+Do not add a checker for the caller checker, repeat repository-wide discovery after unchanged results, or create a successor registry to prove that the old registry was removed.
+
 ## 15. Python usage
 
 Python is an implementation language, not an architecture layer.
@@ -350,13 +362,15 @@ PF-2 uses the same adapter/core boundary. GitHub/provider reads and clocks remai
 
 PF-3 owns fitness semantics in typed Rust `FitnessRuleRegistry` or equivalent. A JSON fitness file may only be generated projection/index.
 
-**PF-3 acceptance is the Architecture Re-baseline v3 architecture-forming freeze point.** It does not authorize production and does not set the lifecycle flag `architecture_complete=true`, but after PF-3 the planned roadmap may no longer introduce new generic architecture layers, global authority frameworks, duplicate lifecycle engines, generic compatibility frameworks or redesign buckets.
+**PF-3 acceptance is a provisional machine-enforced fitness baseline.** It does not authorize production, does not set `architecture_complete=true`, and does not claim that the architecture has survived real staging/recovery/Windows delivery. After PF-3, new generic layers, global authority frameworks, duplicate lifecycle engines, generic compatibility frameworks and open-ended redesign buckets are forbidden.
+
+FC-6 through AR-15 may make only the smallest correction required by a failed product acceptance scenario or rehearsal. The correction names the failed scenario, preserves single ownership, updates the relevant fitness rule/negative proof in the same transaction and does not create a parallel compatibility or registry surface. Accepted AR-15, after its Windows delivery/recovery scenario proof, is the final architecture-form freeze point. AR-16 remains audit-only and AR-17 qualification/authorization-only.
 
 Post-PF-3 roles are fixed:
 
 ```text
-FC-6 / FC-7     functional closure and staging proof
-AR-12..AR-15    implementation/rehearsal/delivery on the established architecture
+FC-6 / FC-7     functional closure/staging proof; bounded scenario-driven correction only
+AR-12..AR-15    rehearsal/delivery; bounded scenario-driven correction only
 AR-16           audit only
 AR-17           qualification/authorization decision only
 PC-1+           functional/capability development and production rollout on the architecture
@@ -381,6 +395,17 @@ duplicate_json_member_accepted_in_attestable_contract = 0
 manual_architecture_semantic_json_authority_without_exception = 0
 unclassified_python_production_or_provider_effect = 0
 python_duplicate_semantic_authority = 0
+internal_ceremony_counted_as_durable_consumer = 0
+checker_whose_primary_purpose_is_checking_another_checker = 0
+new_tracked_projection_without_durable_exact_byte_consumer = 0
+```
+
+N2…PF-3 additionally obey a simplification budget:
+
+```text
+each N2…N5 transaction strictly reduces its predecessor estate
+N2…PF-3 cumulative current plan + validator + projection + compatibility surface is net smaller
+new parallel roadmap / 1:1 registry / global authority catalog = 0
 ```
 
 ## 17. Definition of Done for materially changed architecture
@@ -393,10 +418,13 @@ Every materially changing bounded candidate proves on one exact head:
 4. positive + negative tests at lowest sufficient layer;
 5. no duplicate authority/global bag/hidden production-enable path;
 6. predecessor disposition + zero callers/unique invariants for cutovers;
-7. cross-platform semantic equivalence where required;
-8. all applicable permanent workflows/protected contexts green;
-9. `behind_by=0`, blocking reviews=0, unresolved threads=0;
-10. guarded merge bound to exact proven head;
-11. accepted-main reread before next transaction.
+7. internal compatibility ceremony deleted with the predecessor unless a durable exact-format consumer is named;
+8. before/after authority and plan/validator/projection footprint proves the applicable simplification budget;
+9. affected product acceptance scenario(s) and user-visible outcome identified and proved;
+10. cross-platform semantic equivalence where required;
+11. all applicable permanent workflows/protected contexts green;
+12. `behind_by=0`, blocking reviews=0, unresolved threads=0;
+13. guarded merge bound to exact proven head;
+14. accepted-main reread before next transaction.
 
 These rules are mandatory quality constraints, not authorization for a repository-wide aesthetic rewrite. Correct untouched code remains untouched; touched scope converges.

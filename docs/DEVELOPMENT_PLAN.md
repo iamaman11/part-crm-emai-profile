@@ -18,8 +18,8 @@ source_present != production_enabled
 ```text
 F1/F2  ACCEPTED
 N1     ACCEPTED
-#454   NEXT — sole actual pre-N2 implementation transaction
-N2     BLOCKED on #454
+#454   ACCEPTED
+N2     CURRENT / IN PROGRESS
 N3     BLOCKED on N2
 N4     BLOCKED on N3
 N5     BLOCKED on N4
@@ -62,48 +62,19 @@ Rules:
 - observations may be ephemeral PR/CI artifacts; do not commit a new authority file merely to record a one-time caller audit;
 - uncertainty fails closed.
 
-## 3. #454 — Release Set v2 bounded correction
+## 3. #454 — Release Set v2 bounded correction — ACCEPTED
 
-F1 already made Release Set v3 the current writer/model. #454 answers one question: **does executable historical-v2 compatibility have a real current consumer or durable obligation?**
-
-Rediscover on the exact execution baseline:
-
-- `architecture/release-set-v2.json` callers/references;
-- historical-v2 decode/verification callers;
-- promotion, rollback, deployment-snapshot and expected-current paths;
-- actual current staging Release Set identity;
-- actual current known-good rollback identity;
-- any explicit current #399/#421/FC-6 durable v2 input;
-- hosted workflows/releases/evidence that are real current inputs rather than provenance.
-
-Then choose exactly one outcome:
-
-```text
-A. current v2 consumer exists
-   -> name exact consumer + exact identity/version
-   -> keep only minimum isolated historical-v2 read/verify path
-   -> current writer/model remains v3-only
-   -> v2 -> v3 semantic coercion = 0
-   -> explicit retirement condition
-
-B. current v2 consumer = NONE
-   -> retire executable v2 compatibility/current-v2 authority
-   -> remove compatibility-only code/workflows/tests/fixtures after caller/invariant proof
-   -> preserve history in Git/releases/evidence only
-```
-
-#454 stage-specific DoD is intentionally small:
+#454 removed the tracked v2 current authority and made v3 the only current writer/target model. Minimum historical v2 source/artifact integrity verification remains isolated behind the version-aware document boundary; it cannot become a promotion/rollback target or coerce v2 semantics into v3.
 
 ```text
 current_writer = v3
 current_v2_semantic_authority = 0
-v2_consumer = EXACT_ID | NONE
-v2_executable = MINIMUM_ISOLATED | RETIRED
+historical_v2_executable = MINIMUM_ISOLATED_VERIFY_ONLY
 v2_to_v3_semantic_coercion = 0
 production_mutation = false
 ```
 
-The shared transaction protocol supplies the zero-caller, exact-head, review and merge proofs. Only accepted #454 protected `main` may become the N2 base.
+The shared transaction protocol supplied the zero-caller, exact-head, review and merge proofs. Accepted #454 protected `main` is the N2 base.
 
 ## 4. N2–N5 — canonical-authority cutover group
 
@@ -125,6 +96,10 @@ consumer = NONE
 
 A generator checking the file because it exists, documentation references, historical evidence, and CI drift tests that exist solely for the tracked projection are not consumer proof. This is not an early PF-1 compiler implementation and does not create another phase.
 
+Internal workflows/checkers/self-tests that call a predecessor only because it exists are deleted or redirected with that predecessor; they are not durable consumers. One discovery pass plus affected deltas is enough. Do not add meta-checkers or repeat unchanged discovery in a cycle.
+
+Every N2…PF-3 PR includes a compact before/after ledger for current authorities, transitional sources, callers, tracked projections, compatibility commands and current plan/validator/projection LOC. N2…N5 strictly shrink their predecessor estate; the cumulative N2…PF-3 governance/authority surface must be net smaller. A green but larger duplicate estate is failure.
+
 ### N2 — Python estate
 
 Target:
@@ -134,6 +109,7 @@ Python file existence != Python semantic authority
 ```
 
 - retire AR-6/AR-10/AR-11 per-file Python-estate authority and `scripts/python-estate-ar6.py` when dead;
+- remove the internal quality/repository-audit/Camoufox workflow calls, compile checks, overlays and inventory/runtime-cutover references in the same deletion transaction; they do not justify retention;
 - govern Python by source-derived role/effects; do not create a successor file registry;
 - remove retiring Python/AR sentinels from `opsctl doctor` and repository-root detection;
 - keep `runtime/camouhost/real.py` as the real Camoufox outer-runtime adapter behind Profile Bridge + versioned IPC + `runtime-lock.json`;
@@ -171,7 +147,7 @@ current -> Product Rust | runtime-lock | Bridge/IPC | governance | release/lifec
 
 N5 is field disposition + caller cutover + deletion, not a new runtime framework. Do not create `RuntimeCutoverRegistryV2` or an equivalent successor authority.
 
-## 5. PF-1 → PF-3 — final architecture-forming work
+## 5. PF-1 → PF-3 — bounded replacement + provisional fitness
 
 ### PF-1 — lifecycle + bounded inventory
 
@@ -214,7 +190,7 @@ outer GitHub/provider observation
 
 Add abstraction only after multiple concrete consumers prove the need. Network/provider reads and publication stay outside pure policy.
 
-### PF-3 — small enforcement index + freeze
+### PF-3 — small provisional enforcement baseline
 
 PF-3 makes already-selected architecture guarantees permanent and machine-enforced. `FitnessRuleRegistry` (or equivalent) should be a small typed index such as:
 
@@ -228,7 +204,7 @@ negative fixture
 
 Reuse specialized validators/checkers as enforcement owners. Do not build a generic linter/plugin/DI platform. Machine checks enforce objective properties (dependency/effect/authority/compatibility/projection rules); PR Architecture Impact + protected review handles genuinely semantic questions that cannot be reliably inferred by a universal checker.
 
-PF-3 remains the architecture-forming freeze. After it, ordinary FC/AR/PC work does not invent new generic architecture mechanisms.
+PF-3 is provisional: it prevents silent weakening and generic-framework growth, but the final architecture-form freeze occurs only after accepted AR-15 proves the real Windows delivery/updater/recovery scenarios. FC-6…AR-15 may make only the smallest correction required by a named failed product acceptance scenario; no open redesign bucket is allowed.
 
 ## 6. Functional Closure — proof, not another architecture program
 
@@ -257,7 +233,7 @@ FC-7 remains a logical acceptance checkpoint for traceability, but it should not
 
 ## 7. AR-12…AR-17 — qualification semantics
 
-After PF-3 the architecture is frozen; later AR stages prove/deliver the product inside it.
+After PF-3 the provisional baseline is enforced; later AR stages prove/deliver the product and permit only the smallest correction required by a named failed scenario. AR-15 acceptance establishes the final architecture-form freeze.
 
 - **AR-12 — Fresh Rehearsal Environment:** operational proof that a clean environment can be bootstrapped from canonical inputs, deployed, smoke-tested, torn down and recreated without hidden manual state. Write source only for real gaps discovered by the rehearsal.
 - **AR-13 — Rotation Rehearsal:** prove real key/secret/credential rotation using existing mechanisms. It is primarily an operational test, not a new subsystem.
@@ -265,6 +241,35 @@ After PF-3 the architecture is frozen; later AR stages prove/deliver the product
 - **AR-15 — Windows Delivery Program:** the substantive late implementation stage. It owns the production-grade Profile Bridge/Camoufox updater/delivery chain: signed update contract, signature verification/key rotation, side-by-side staging, safe activation, health/LKG rollback, publisher integration, Windows negative matrix and production-equivalent rehearsal. It may use several bounded implementation PRs, but only the final governed AR-15 candidate accepts the slice.
 - **AR-16 — Final Whole-project Audit:** audit-only. It must not become a cleanup/refactor bucket. A finding blocks -> small defect PR -> audit again.
 - **AR-17 — Qualification / Production Core gate:** decision-only as far as practical. It consumes accepted evidence/state and may authorize `architecture_complete=true`, `production_core_gate=AUTHORIZED`, while `production_ready=false` and `production_mutation=false`. It must not invent another closeout engine.
+
+### 7.1 Seven binding product acceptance scenarios
+
+The detailed contracts live in the canonical plan. The developer-facing map is:
+
+```text
+PAS-1 governed identity/access
+PAS-2 client + browser-profile UI/API/bulk workflow
+PAS-3 encrypted generation/persist/open/restore lifecycle
+PAS-4 real Windows Profile Bridge + pinned Camoufox + updater/LKG
+PAS-5 crash/timeout/duplicate/partial-failure recovery and observability
+PAS-6 fresh same-bits staging delivery + rollback/recreate
+PAS-7 production-core admission + later-capability fail-closed negatives
+```
+
+Every scenario includes its user-visible result, real UI/API/runtime route, data/external contracts, authorization and failure negatives, retry/idempotency behavior, observability, platform, measurable product-owned SLO and durable evidence.
+
+```text
+FC-6/FC-7 -> PAS-1,2,3,6,7
+AR-12     -> PAS-1,2,3,6
+AR-13     -> PAS-3,5,7
+AR-14     -> PAS-3,5,6
+AR-15     -> PAS-4,5,6 + final architecture-form freeze
+AR-16     -> audit PAS-1..7
+AR-17     -> authorize only with PAS-1..7 accepted
+PC-1      -> promote/re-prove PAS-1..7 admission and observability
+```
+
+Passing validators without the assigned end-to-end scenario evidence does not complete a phase.
 
 ## 8. CI efficiency without lowering assurance
 
@@ -308,7 +313,7 @@ PC-4 Outbound / later capabilities
 - `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md` — permanent architecture contract;
 - `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md` — detailed #454/N2–N5 ownership retirement contract;
 - #441 — live mutable execution state;
-- #454 — sole current pre-N2 implementation transaction;
+- #454 — accepted Release Set v2 correction;
 - `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` / #430 — PF-1;
 - `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` / #431 — PF-3;
 - #399 / #421 — Functional Closure obligations;

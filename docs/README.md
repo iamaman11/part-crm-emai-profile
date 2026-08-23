@@ -7,8 +7,8 @@ Current execution state is intentionally simple:
 ```text
 F1/F2 ACCEPTED
 -> N1 ACCEPTED
--> #454 NEXT — sole actual pre-N2 implementation transaction
--> N2 -> N3 -> N4 -> N5
+-> #454 ACCEPTED
+-> N2 CURRENT -> N3 -> N4 -> N5
 -> PF-1 -> PF-2 -> PF-3
 -> FC-6 preflight + staging proof
 -> FC-7 closeout
@@ -16,7 +16,7 @@ F1/F2 ACCEPTED
 -> PC-1 Production Core v1
 ```
 
-`fresh #399/#421 re-baseline` is a required live observation at FC-6 entry, not another implementation phase. N2–N5 are sequential authority-retirement transactions, not new architecture programs. AR-12/13/14 are rehearsals, AR-15 is the substantive Windows delivery/updater implementation stage, AR-16 is audit-only, and AR-17 is qualification/authorization-only as far as practical.
+`fresh #399/#421 re-baseline` is a required live observation at FC-6 entry, not another implementation phase. N2–N5 are sequential delete/simplify transactions, not new architecture programs; internal validators/workflows are cutover callers rather than durable consumers. PF-3 is a provisional fitness baseline. AR-12/13/14 are rehearsals, accepted AR-15 establishes the final architecture-form freeze through real Windows delivery/updater proof, AR-16 is audit-only, and AR-17 is qualification/authorization-only as far as practical.
 
 Production remains fail-closed:
 
@@ -32,7 +32,7 @@ Use:
 
 - `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` — canonical architecture/program authority;
 - #441 — live mutable pre-PF-1 execution state;
-- #454 — sole current pre-N2 implementation transaction;
+- #454 — accepted Release Set v2 correction;
 - `docs/DEVELOPMENT_PLAN.md` — compact developer-facing projection and efficiency rules;
 - `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md` — permanent application architecture contract;
 - `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md` — detailed authority-retirement contract;

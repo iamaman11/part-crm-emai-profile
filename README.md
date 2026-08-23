@@ -11,17 +11,17 @@ source_present != production_enabled
 ```text
 F1/F2 ACCEPTED
 -> N1 ACCEPTED
--> #454 NEXT — sole actual pre-N2 implementation transaction
--> N2 -> N3 -> N4 -> N5 authority retirement
+-> #454 ACCEPTED
+-> N2 CURRENT -> N3 -> N4 -> N5 authority retirement
 -> PF-1 lifecycle + bounded inventory cutover
 -> PF-2 minimal hosted evidence pipeline
--> PF-3 Architecture Fitness + architecture-forming freeze
+-> PF-3 provisional Architecture Fitness baseline
 -> FC-6 preflight (fresh #399/#421 live re-baseline) + staging proof
 -> FC-7 closeout
 -> AR-12 fresh-environment rehearsal
 -> AR-13 rotation rehearsal
 -> AR-14 remote-recovery rehearsal
--> AR-15 Windows updater/delivery implementation + proof
+-> AR-15 Windows updater/delivery implementation + proof + final architecture-form freeze
 -> AR-16 final whole-project audit only
 -> AR-17 qualification / Production Core gate decision only
 -> PC-1 Production Core v1
@@ -36,7 +36,7 @@ production_ready=false
 production_mutation=false
 ```
 
-N2–N5 are sequential normalization transactions, not new architecture programs. Their initial repository-wide predecessor discovery may be shared as one read-only ephemeral pass after accepted #454. The mandatory post-PF-3 #399/#421 re-baseline executes as FC-6 preflight, not another implementation phase. FC-7 is a closeout checkpoint unless proof exposes a concrete defect.
+N2–N5 are sequential delete/simplify transactions, not new architecture programs. Their initial repository-wide predecessor discovery is one read-only ephemeral pass; internal CI/checker callers are deletion scope, not durable consumers. The mandatory post-PF-3 #399/#421 re-baseline executes as FC-6 preflight, not another implementation phase. PF-3 is provisional; final architecture-form freeze follows accepted AR-15 real Windows delivery/recovery proof.
 
 ## Documentation authority
 
@@ -46,7 +46,7 @@ Key references:
 
 - [`docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) — permanent architecture rules;
 - [`docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — #454/N2–N5 retirement contract;
-- #454 — sole current pre-N2 implementation transaction;
+- #454 — accepted Release Set v2 correction;
 - [`docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) / #430 — PF-1;
 - [`docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`](docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md) / #431 — PF-3;
 - [`docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md), #399, #421 — Functional Closure;
