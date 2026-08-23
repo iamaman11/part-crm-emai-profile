@@ -4,7 +4,7 @@
 **Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Mandatory requirements:** `APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`  
 **Quality contract:** `ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
-**Tracking:** #266 / live pre-PF-1 tracker #441  
+**Tracking:** #266 / live pre-PF-1 tracker #441 / bounded correction #454  
 **Accepted product phase:** Phase 2I  
 **Accepted architecture checkpoint:** AR-11  
 **Derived current architecture slice:** AR-12 — NOT STARTED  
@@ -18,8 +18,8 @@ This file is a projection of the canonical program. It is not a second roadmap o
 - AR-0…AR-11: accepted.
 - AR-12: derived current in the static sequence, implementation NOT STARTED.
 - Post-AR-11 Functional Closure #399 blocks AR-12 entry.
-- F1/F2 and N1 are accepted; **N2 is NEXT**.
-- N3/N4/N5 remain sequentially blocked; PF-1 #430 remains blocked until N5 acceptance and a fresh PF-1 entry reread.
+- F1/F2 and N1 are accepted; **#454 is NEXT** as a bounded F1 compatibility/current-v2 correction.
+- **N2 is BLOCKED on #454 acceptance**; N3/N4/N5 remain sequentially blocked; PF-1 #430 remains blocked until #454 + N5 acceptance and a fresh PF-1 entry reread.
 - Closed PR #428 is a superseded pre-normalization PF-2 checkpoint; PF-2 later starts from a fresh branch based on accepted PF-1 `main`.
 - Production remains disabled/fail-closed.
 - `source_present != production_enabled` is binding.
@@ -38,7 +38,11 @@ F2  permanent architecture foundations                               ACCEPTED
  ->
 N1  AR-2 runtime/resource topology current-authority retirement      ACCEPTED
  ->
-N2  AR-6 Python-estate authority retirement + role/effect norm.      NEXT
+#454 bounded Release Set v2 current-compatibility correction          NEXT
+     prove real v2 consumer/durable obligation OR retire executable compatibility
+     correction only; not a new F/N/AR/PF phase
+ ->
+N2  AR-6 Python-estate authority retirement + role/effect norm.      BLOCKED on #454
  ->
 N3  AR-7 current GitHub-governance normalization
  ->
@@ -50,7 +54,7 @@ PF-1 #430 typed lifecycle + deterministic bounded-projection inventory cutover
  ->
 PF-2 Hosted Operational Evidence from a fresh accepted PF-1 base
  ->
-PF-3 #431 typed Architecture Fitness Baseline
+PF-3 #431 typed Architecture Fitness Baseline + architecture-forming freeze
  ->
 fresh #399/#421 re-baseline
  ->
@@ -61,15 +65,24 @@ FC-7
 AR-12 implementation entry
 ```
 
-F1/F2/N1…N5 are foundation/normalization transactions, not new AR/PF lifecycle slices. `architecture/architecture-program-sequence.json` remains unchanged.
+F1/F2/N1…N5 are foundation/normalization transactions, not new AR/PF lifecycle slices. #454 is a bounded correction discovered by fresh audit and does not alter `architecture/architecture-program-sequence.json`.
 
 ## 3. Why this normalization exists
 
 The accepted historical AR work is not being reopened. The cleanup removes transitional current semantic intermediaries so PF-1 does not become a mechanical Rust port of old JSON/Python/Node authority machinery.
 
+Current product/security guarantees and proved durable/external obligations constrain valid solutions; subject to those obligations, current prospective architecture owns internal implementation shape. Historical implementation is not itself a compatibility contract.
+
+```text
+proved current/external consumer = 0
+AND durable/persisted/migration obligation = 0
+-> compatibility bridge default = NO
+```
+
 Target examples:
 
 ```text
+Release Set current semantics -> typed v3 Rust owner; historical v2 only for proved current obligation
 AR-2 topology -> Wrangler/provider config + Product ownership
 AR-6 Python estate -> repository/source role/effect policy
 AR-7 governance -> current desired governance data + live observation
@@ -82,14 +95,14 @@ For every cutover:
 
 ```text
 natural owner proved
--> callers switched
+-> callers/current consumers switched
 -> old callers = 0
 -> old unique current invariants = 0
 -> DEAD predecessor deleted/demoted
 -> history preserved in Git/evidence
 ```
 
-The exact N2→N5 handoff conditions live in #441. N2–N5 prepare unambiguous natural owners and retire predecessors; they do not pre-build a generic PF-1 projection/compiler framework.
+The exact #454→N2→N5 handoff conditions live in #441. N2–N5 prepare unambiguous natural owners and retire predecessors; they do not pre-build a generic PF-1 projection/compiler framework.
 
 ## 4. Permanent application architecture rules
 
@@ -105,6 +118,7 @@ context-owned persistence
 Release Profile = sole production-enable authority
 frontend = projection, not security boundary
 generated projection != semantic source
+no consumer + no durable obligation -> no compatibility bridge
 ```
 
 Do not create global authority bags, universal business repositories, generic plugin/DI/service-locator frameworks or second production feature-flag systems.
@@ -138,7 +152,7 @@ opsctl -> Python semantic child process = 0
 global authority bag = 0
 ```
 
-A small internal `opsctl-core` crate is preferred when it materially enforces this boundary at compile time.
+F2 already introduced the small internal `opsctl-core` where a real pure semantic owner required compile-time separation. New code uses that boundary when justified; dependency/layer count is not a quality KPI.
 
 ## 6. `opsctl doctor`
 
@@ -185,11 +199,11 @@ outer observation adapters where justified
 
 Forbidden permanent roles include duplicate Product/release/D1/lifecycle/evidence/fitness semantic authority, Profile Bridge runtime bypass, hidden provider mutation and secret readback.
 
-The AR-6/AR-10/AR-11 Python estate overlay chain is retired by N2. No successor JSON/TOML/YAML/Rust list of every Python file is allowed.
+The AR-6/AR-10/AR-11 Python estate overlay chain is retired by N2. No successor JSON/TOML/YAML/Rust list of every Python file is allowed. N2 establishes the final role/effect architecture; it does not migrate the AR-6 registry model.
 
 ## 8. PF-1 target
 
-PF-1 starts only after N5 acceptance and a fresh #430 entry reread against then-current protected `main`.
+PF-1 starts only after #454 + N5 acceptance and a fresh #430 entry reread against then-current protected `main`.
 
 ```text
 outer Git/GitHub raw observations
@@ -210,7 +224,7 @@ ReleaseInventoryProjection
 
 PF-1 must not build `GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet`.
 
-Legacy Node lifecycle and Python architecture inventory/projection current owners are deleted after parity + zero-caller/zero-unique-invariant proof.
+Legacy Node lifecycle and Python architecture inventory/projection current owners are deleted after parity + zero-caller/zero-unique-invariant proof. PF-1 must also retire/disposition the manual AR-qualified application ownership tables in `scripts/_ar3_application_architecture.py`; still-valid facts move to natural Rust/source owners, and the old tables must not be ported 1:1 into Rust/JSON/YAML/TOML.
 
 ## 9. PF-2 target
 
@@ -227,7 +241,7 @@ outer GitHub/provider observation
 
 Network/provider reads and clocks remain outside `opsctl` pure policy.
 
-## 10. PF-3 target
+## 10. PF-3 target and freeze
 
 Fitness semantics are typed Rust:
 
@@ -241,7 +255,11 @@ FitnessRuleRegistry
 
 A manually maintained semantic `architecture/architecture-fitness-policy.json` is not the target.
 
-PF-3 permanently enforces authority uniqueness, dependency/effect boundaries, `opsctl`/doctor restrictions, Python role/effect rules, versioned external contracts, cutover-to-deletion and Release Profile admission.
+PF-3 permanently enforces authority uniqueness, dependency/effect boundaries, `opsctl`/doctor restrictions, Python role/effect rules, versioned external contracts, compatibility-consumer justification, cutover-to-deletion and Release Profile admission.
+
+Accepted PF-3 is the Architecture Re-baseline v3 **architecture-forming freeze point**. After it, normal FC/AR/PC work may implement bounded functionality and explicit contract versions inside the established architecture, but may not introduce new generic architecture layers, global registries/authorities, competing lifecycle/evidence/fitness engines or speculative compatibility frameworks.
+
+PF-3 acceptance does not set `architecture_complete=true` or authorize production.
 
 ## 11. AR sequence after Functional Closure
 
@@ -250,8 +268,8 @@ AR-12 Fresh Rehearsal Environment
 AR-13 Rotation Rehearsal
 AR-14 Remote Recovery Rehearsal
 AR-15 Windows Delivery Program / inherited Batch E
-AR-16 Final Whole-project 10/10 Audit
-AR-17 Architecture Closeout + Production Core Gate
+AR-16 Final Whole-project 10/10 Audit only
+AR-17 Architecture qualification + Production Core Gate decision only
 ```
 
 Only after AR-17:
@@ -269,13 +287,15 @@ Only PC-1 may make `production_ready=true` for the accepted core Release Profile
 
 The current Production Core scope includes Camoufox/profile runtime through Windows Profile Bridge. Therefore AR-15 remains mandatory before AR-16/AR-17 closeout and must cover the inherited Batch E concerns: signed/versioned update manifest, trust/key rotation, side-by-side staging, safe activation, health/Last Known Good rollback, immutable publisher integration, permanent failure tests and production-equivalent Windows rehearsal.
 
+AR-15 implements this bounded delivery/updater component within the PF-3-frozen architecture. It does not become an architecture-redesign phase.
+
 ## 13. Acceptance discipline
 
-Every bounded F/N/PF/FC/AR/PC candidate requires:
+Every bounded correction/F/N/PF/FC/AR/PC candidate requires:
 
 ```text
 fresh protected-main baseline
--> natural owner/effect/contract analysis
+-> natural owner/effect/contract/current-consumer analysis
 -> positive + negative tests
 -> exact-head permanent CI green
 -> protected required contexts green
