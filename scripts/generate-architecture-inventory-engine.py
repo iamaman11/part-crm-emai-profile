@@ -25,7 +25,6 @@ ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_PATH = ROOT / "architecture" / "inventory.json"
 CURRENT_AUTHORITY = "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
 TRANSITION = "architecture/architecture-rebaseline-v3-transition.json"
-RUNTIME_TOPOLOGY = "architecture/runtime-topology-ar2.json"
 AR2_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR2.md"
 AR4A_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md"
 AR4B_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md"
@@ -72,7 +71,6 @@ DOCUMENT_STATUS = [
     {"path": "docs/ARCHITECTURE_REBASELINE_V3_AR0.md", "status": "EVIDENCE", "scope": "ar0_research_acceptance"},
     {"path": "docs/ARCHITECTURE_REBASELINE_V3_SECOND_PASS_REVIEW.md", "status": "EVIDENCE", "scope": "ar0_second_pass_research"},
     {"path": AR2_EVIDENCE, "status": "EVIDENCE", "scope": "ar2_runtime_topology_and_d3_compatibility_acceptance"},
-    {"path": RUNTIME_TOPOLOGY, "status": "STABLE_AUTHORITY", "scope": "accepted_ar2_runtime_topology_decision_input_for_ar3"},
     {"path": ar3.AR3_EVIDENCE, "status": "EVIDENCE", "scope": "ar3_application_architecture_contract_accepted"},
     {"path": AR4A_EVIDENCE, "status": "EVIDENCE", "scope": "ar4a_composition_root_consolidation_accepted"},
     {"path": AR4B_EVIDENCE, "status": "EVIDENCE", "scope": "ar4b_client_mail_route_ownership_accepted"},
@@ -207,8 +205,6 @@ def validate_source_documents() -> None:
         raise SystemExit("docs/status.json must project accepted through AR-7 with active AR-8 and AR-9 blocked")
     if program.get("ar8_progress") != expected_ar8_progress():
         raise SystemExit("docs/status.json must project AR-8A/B accepted / AR-8C current / AR-8D..F mandatory")
-    if program.get("runtime_topology_decision") != RUNTIME_TOPOLOGY:
-        raise SystemExit("docs/status.json must project the accepted AR-2 topology decision")
     if program.get("runtime_authority_cleanup_evidence") != AR5_EVIDENCE:
         raise SystemExit("docs/status.json must project the accepted AR-5 runtime-authority cleanup evidence")
     if program.get("python_operational_evidence") != AR6_EVIDENCE or program.get("python_estate") != PYTHON_ESTATE:
@@ -425,7 +421,6 @@ def build_inventory() -> dict[str, object]:
         "runtime_authority_cleanup": {
             "schema_version": 1,
             "status": "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP",
-            "topology_decision_source": RUNTIME_TOPOLOGY,
             "evidence": AR5_EVIDENCE,
             "implementation_issue": 290,
             "implementation_pr": 291,
@@ -433,7 +428,6 @@ def build_inventory() -> dict[str, object]:
             "implementation_merge": "82d251a1d6666199c6eace393eedc1766157fcee",
             "applicable_permanent_workflows": "13/13",
             "generation_verification": {
-                "topology_decision": "DELETE",
                 "wrangler_producer_binding": "ABSENT",
                 "runtime_contract_binding": "ABSENT",
                 "deployment_manifest_identity": "ABSENT",
@@ -519,9 +513,7 @@ def build_inventory() -> dict[str, object]:
             "tracking_issue": TRACKING_ISSUE,
             "current_slice": CURRENT_SLICE,
             "transition": TRANSITION,
-            "runtime_topology_decision": RUNTIME_TOPOLOGY,
             "runtime_topology_evidence": AR2_EVIDENCE,
-            "runtime_topology_projection_owner": "AR-3",
             "runtime_authority_cleanup_evidence": AR5_EVIDENCE,
             "python_operational_evidence": AR6_EVIDENCE,
             "python_estate": PYTHON_ESTATE,
@@ -601,10 +593,6 @@ def self_test(expected: dict[str, object]) -> None:
     credential_identity["credential_authority"]["source_git_blob_sha1"] = "0" * 40
     if serialized(credential_identity) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect credential-authority source identity drift")
-    topology = copy.deepcopy(expected)
-    topology["documentation_authority"]["runtime_topology_decision"] = "architecture/other.json"
-    if serialized(topology) == serialized(expected):
-        raise SystemExit("inventory self-test failed to detect topology authority drift")
     runtime_cleanup = copy.deepcopy(expected)
     runtime_cleanup["runtime_authority_cleanup"]["status"] = "AR5_CANDIDATE"
     if serialized(runtime_cleanup) == serialized(expected):
@@ -613,10 +601,6 @@ def self_test(expected: dict[str, object]) -> None:
     ownership["application_architecture"]["capability_ownership"][0]["application_owner"] = "apps/control-plane-worker"
     if serialized(ownership) == serialized(expected):
         raise SystemExit("inventory self-test failed to detect application ownership drift")
-    missing_resource = copy.deepcopy(expected)
-    missing_resource["application_architecture"]["runtime_resources"] = missing_resource["application_architecture"]["runtime_resources"][1:]
-    if serialized(missing_resource) == serialized(expected):
-        raise SystemExit("inventory self-test failed to detect missing runtime-resource projection")
     ar4d = copy.deepcopy(expected)
     ar4d["application_architecture"]["conditional_ar4d"]["decision"] = "REQUIRED"
     if serialized(ar4d) == serialized(expected):
