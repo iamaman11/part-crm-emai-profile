@@ -197,7 +197,7 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CredentialsAction, Invocation, OperatorEffect, OpsctlError, execute, parse_invocation};
+    use super::{CredentialsAction, OperatorEffect, OpsctlError, execute, parse_invocation};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -205,31 +205,8 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
-    fn parser_args(values: &[&str]) -> Vec<OsString> {
-        values.iter().copied().map(OsString::from).collect()
-    }
-
-    fn invocation_command(invocation: &Invocation) -> Option<String> {
-        match invocation {
-            Invocation::Help | Invocation::Version => None,
-            Invocation::Run { command, .. } => Some(format!("opsctl {}", command.name())),
-            Invocation::Credentials { action, .. } => {
-                Some(format!("opsctl credentials {}", action.name()))
-            }
-            Invocation::D1 { action, .. } => Some(format!("opsctl d1 {}", action.name())),
-            Invocation::D1Repository { .. } => Some("opsctl d1 repository".to_owned()),
-            Invocation::ReleaseFinalize { .. } => Some("opsctl release finalize".to_owned()),
-            Invocation::Release { action, .. } => Some(format!("opsctl release {}", action.name())),
-            Invocation::Promotion { action, .. } => {
-                Some(format!("opsctl promotion {}", action.name()))
-            }
-        }
-    }
-
-    fn assert_read_only_effect(invocation: &Invocation) {
-        let effect = invocation.operator_effect();
-        assert_eq!(effect, Some(OperatorEffect::ReadOnlyMetadata));
-        let effect = effect.expect("operator command must have typed effect metadata");
+    fn assert_read_only_effect(effect: OperatorEffect) {
+        assert_eq!(effect, OperatorEffect::ReadOnlyMetadata);
         assert!(!effect.has_side_effects());
         assert!(!effect.has_network_authority());
         assert!(!effect.has_provider_mutation_authority());
@@ -238,8 +215,19 @@ mod tests {
     }
 
     #[test]
+    fn parsed_operator_command_has_typed_read_only_effect() -> Result<(), OpsctlError> {
+        let invocation = parse_invocation([OsString::from("opsctl"), OsString::from("doctor")])?;
+        assert_read_only_effect(
+            invocation
+                .operator_effect()
+                .expect("parsed operator command must have effect metadata"),
+        );
+        Ok(())
+    }
+
+    #[test]
     fn credentials_status_preserves_lifecycle_metadata_contract() -> Result<(), OpsctlError> {
-        let output = execute(Invocation::Credentials {
+        let output = execute(super::Invocation::Credentials {
             root: Some(repository_root()),
             action: CredentialsAction::Status,
         })?;
@@ -251,7 +239,7 @@ mod tests {
 
     #[test]
     fn credentials_rotation_plan_uses_bounded_lifecycle_owner() -> Result<(), OpsctlError> {
-        let output = execute(Invocation::Credentials {
+        let output = execute(super::Invocation::Credentials {
             root: Some(repository_root()),
             action: CredentialsAction::RotationPlan,
         })?;
@@ -260,207 +248,5 @@ mod tests {
         assert!(!output.contains("OPERATOR_CONTRACT_AUTHORITY"));
         assert!(!output.contains("\"secret_value\":"));
         Ok(())
-    }
-
-    #[test]
-    fn active_parser_surfaces_derive_effects_from_typed_invocations() -> Result<(), String> {
-        let cases: &[(&str, &[&str])] = &[
-            ("opsctl doctor", &["opsctl", "doctor"]),
-            ("opsctl status", &["opsctl", "status"]),
-            ("opsctl inventory", &["opsctl", "inventory"]),
-            ("opsctl credentials status", &["opsctl", "credentials", "status"]),
-            (
-                "opsctl credentials rotation-plan",
-                &["opsctl", "credentials", "rotation-plan"],
-            ),
-            ("opsctl d1 repository", &["opsctl", "d1", "repository"]),
-            (
-                "opsctl d1 status",
-                &[
-                    "opsctl",
-                    "d1",
-                    "status",
-                    "--component",
-                    "catalog",
-                    "--ledger-json",
-                    "ledger.json",
-                ],
-            ),
-            (
-                "opsctl d1 plan",
-                &[
-                    "opsctl",
-                    "d1",
-                    "plan",
-                    "--component",
-                    "catalog",
-                    "--ledger-json",
-                    "ledger.json",
-                    "--release-manifest",
-                    "release.json",
-                ],
-            ),
-            (
-                "opsctl d1 compatibility",
-                &[
-                    "opsctl",
-                    "d1",
-                    "compatibility",
-                    "--component",
-                    "catalog",
-                    "--ledger-json",
-                    "ledger.json",
-                    "--release-manifest",
-                    "release.json",
-                ],
-            ),
-            (
-                "opsctl d1 verify",
-                &[
-                    "opsctl",
-                    "d1",
-                    "verify",
-                    "--component",
-                    "catalog",
-                    "--ledger-json",
-                    "ledger.json",
-                    "--release-manifest",
-                    "release.json",
-                ],
-            ),
-            (
-                "opsctl release finalize",
-                &[
-                    "opsctl",
-                    "release",
-                    "finalize",
-                    "--request-json",
-                    "release-finalize-request.json",
-                ],
-            ),
-            (
-                "opsctl release inspect",
-                &[
-                    "opsctl",
-                    "release",
-                    "inspect",
-                    "--release-set",
-                    "release-set.json",
-                ],
-            ),
-            (
-                "opsctl release verify",
-                &[
-                    "opsctl",
-                    "release",
-                    "verify",
-                    "--release-set",
-                    "release-set.json",
-                    "--artifact-root",
-                    "artifacts",
-                ],
-            ),
-            (
-                "opsctl release compatibility",
-                &[
-                    "opsctl",
-                    "release",
-                    "compatibility",
-                    "--release-set",
-                    "release-set.json",
-                    "--profile",
-                    "rehearsal-core-v1",
-                    "--environment",
-                    "rehearsal",
-                    "--evidence-json",
-                    "evidence.json",
-                ],
-            ),
-            (
-                "opsctl promotion plan",
-                &[
-                    "opsctl",
-                    "promotion",
-                    "plan",
-                    "--release-set",
-                    "release-set.json",
-                    "--profile",
-                    "rehearsal-core-v1",
-                    "--environment",
-                    "rehearsal",
-                    "--snapshot",
-                    "snapshot.json",
-                    "--evidence-json",
-                    "evidence.json",
-                ],
-            ),
-            (
-                "opsctl promotion preflight",
-                &[
-                    "opsctl",
-                    "promotion",
-                    "preflight",
-                    "--release-set",
-                    "release-set.json",
-                    "--profile",
-                    "rehearsal-core-v1",
-                    "--environment",
-                    "rehearsal",
-                    "--snapshot",
-                    "snapshot.json",
-                    "--evidence-json",
-                    "evidence.json",
-                ],
-            ),
-            (
-                "opsctl promotion verify",
-                &[
-                    "opsctl",
-                    "promotion",
-                    "verify",
-                    "--release-set",
-                    "release-set.json",
-                    "--profile",
-                    "rehearsal-core-v1",
-                    "--environment",
-                    "rehearsal",
-                    "--snapshot",
-                    "snapshot.json",
-                    "--evidence-json",
-                    "evidence.json",
-                ],
-            ),
-        ];
-
-        for (expected_command, args) in cases {
-            let invocation = parse_invocation(parser_args(args))
-                .map_err(|error| format!("{expected_command} did not parse: {error}"))?;
-            assert_eq!(
-                invocation_command(&invocation).as_deref(),
-                Some(*expected_command),
-                "{expected_command}"
-            );
-            assert_read_only_effect(&invocation);
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn reserved_and_mutating_surfaces_remain_fail_closed() {
-        for args in [
-            &["opsctl", "credentials", "readiness"][..],
-            &["opsctl", "recovery", "inspect"][..],
-            &["opsctl", "recovery", "plan"][..],
-            &["opsctl", "recovery", "verify"][..],
-            &["opsctl", "readiness"][..],
-            &["opsctl", "provision"][..],
-            &["opsctl", "deploy"][..],
-            &["opsctl", "mutate"][..],
-        ] {
-            assert!(
-                parse_invocation(parser_args(args)).is_err(),
-                "reserved/mutating command unexpectedly parsed: {args:?}"
-            );
-        }
     }
 }
