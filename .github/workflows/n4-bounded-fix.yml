@@ -1,0 +1,346 @@
+name: N4 Bounded Fix Temporary
+
+on:
+  pull_request:
+    types: [reopened]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.ref == 'codex/n4-operator-authority-cleanup'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: codex/n4-operator-authority-cleanup
+          fetch-depth: 0
+
+      - name: Retire remaining N4 predecessor callers
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          # Credential composition remains a credential authority, but must no longer
+          # point at the retired operator predecessor.
+          path = Path('architecture/credential-authority.json')
+          payload = json.loads(path.read_text(encoding='utf-8'))
+          removed = payload.pop('operator_contract_source', None)
+          if removed != 'architecture/operator-contract.json':
+              raise SystemExit('expected credential operator predecessor edge is missing')
+          path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + '\n', encoding='utf-8', newline='\n')
+
+          # Current credential validation owns credential/profile concerns only.
+          path = Path('scripts/credential_authority.py')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+              ('EXPECTED_OPERATOR_CONTRACT = "architecture/operator-contract.json"\n', ''),
+              ('        "profile_security_source": EXPECTED_PROFILE_SECURITY,\n        "operator_contract_source": EXPECTED_OPERATOR_CONTRACT,\n',
+               '        "profile_security_source": EXPECTED_PROFILE_SECURITY,\n'),
+              ('    profile = read_json(root, EXPECTED_PROFILE_SECURITY)\n    operator = read_json(root, EXPECTED_OPERATOR_CONTRACT)\n',
+               '    profile = read_json(root, EXPECTED_PROFILE_SECURITY)\n'),
+              ('    if operator.get("kind") != "OPERATOR_CONTRACT_AUTHORITY" or operator.get("mode") != "READ_ONLY_METADATA_ONLY":\n        raise ValueError("current operator-contract authority identity/mode drifted")\n', ''),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'credential authority patch sentinel count drifted: {old!r}')
+              text = text.replace(old, new, 1)
+          marker = '    for field, expected in sources.items():\n        if repo_path(value.get(field), field) != expected:\n            raise ValueError(f"current credential authority source ownership drifted: {field}")\n'
+          if text.count(marker) != 1:
+              raise SystemExit('credential source validation marker drifted')
+          text = text.replace(
+              marker,
+              marker + '    if "operator_contract_source" in value:\n        raise ValueError("retired operator-contract predecessor may not remain a credential composition source")\n',
+              1,
+          )
+          path.write_text(text, encoding='utf-8', newline='\n')
+
+          # The post-epoch fixture copied the predecessor only because repo-root discovery
+          # used to require it. That is an internal caller, not a durable consumer.
+          path = Path('tools/opsctl/tests/d1_post_epoch_authoring.rs')
+          text = path.read_text(encoding='utf-8')
+          sentinel = '    "architecture/operator-contract.json",\n'
+          if text.count(sentinel) != 1:
+              raise SystemExit('D1 post-epoch operator sentinel count drifted')
+          path.write_text(text.replace(sentinel, '', 1), encoding='utf-8', newline='\n')
+
+          # Keep the typed effect test compatible with repository clippy policy.
+          path = Path('tools/opsctl/src/lib.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '''        assert_read_only_effect(
+              invocation
+                  .operator_effect()
+                  .expect("parsed operator command must have effect metadata"),
+          );
+          '''
+          new = '''        assert_eq!(
+              invocation.operator_effect(),
+              Some(OperatorEffect::ReadOnlyMetadata)
+          );
+          assert_read_only_effect(OperatorEffect::ReadOnlyMetadata);
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('typed operator effect test sentinel drifted')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+
+      - name: Replace mixed Node operator registry validator with bounded subject validator
+        shell: bash
+        run: |
+          cat > .github/scripts/architecture-authority-check.mjs <<'EOF'
+          #!/usr/bin/env node
+
+          import { readFileSync } from 'node:fs';
+          import process from 'node:process';
+
+          const PATHS = {
+            authority: 'architecture/credential-authority.json',
+            lifecycle: 'architecture/credential-lifecycle.json',
+            profile: 'architecture/profile-security.json',
+            historicalRegistry: 'architecture/credential-authority-ar8b.json',
+            opsctl: 'tools/opsctl/src/lib.rs',
+            governance: '.github/workflows/github-governance-gate.yml',
+          };
+
+          const EXPECTED_LIFECYCLE = new Set([
+            'resolver.encryption-keyring',
+            'resolver.handle-hmac',
+            'mailbox-resolver.caller-auth',
+            'control-plane.client-contact-protection',
+            'profile-generation.r2-access',
+            'resolver.google-oauth-application',
+            'resolver.microsoft-oauth-application',
+          ]);
+
+          const FORBIDDEN_VALUE_KEYS = new Set([
+            'value', 'secret_value', 'plaintext', 'plaintext_value', 'private_key', 'password',
+            'token_value', 'credential_value', 'key_material', 'raw_secret', 'raw_token',
+          ]);
+
+          function load(path) {
+            const parsed = JSON.parse(readFileSync(path, 'utf8'));
+            if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
+              throw new Error(`${path}: root must be one JSON object`);
+            }
+            return parsed;
+          }
+
+          function sameSet(values, expected) {
+            return Array.isArray(values)
+              && values.length === expected.size
+              && values.every((value) => expected.has(value));
+          }
+
+          function scanForbidden(value, path, errors) {
+            if (Array.isArray(value)) {
+              value.forEach((entry, index) => scanForbidden(entry, `${path}[${index}]`, errors));
+              return;
+            }
+            if (value === null || typeof value !== 'object') return;
+            for (const [key, nested] of Object.entries(value)) {
+              if (FORBIDDEN_VALUE_KEYS.has(key.toLowerCase())) {
+                errors.push(`${path}.${key}: value-bearing secret field is forbidden`);
+              }
+              scanForbidden(nested, `${path}.${key}`, errors);
+            }
+          }
+
+          function validate(subjects, sources) {
+            const errors = [];
+            const { authority, lifecycle, profile, historicalRegistry } = subjects;
+
+            if (authority.kind !== 'CURRENT_CREDENTIAL_AUTHORITY' || authority.status !== 'current') {
+              errors.push('credential-authority.json must be the current credential composition root');
+            }
+            if (authority.registry_source !== PATHS.historicalRegistry
+                || authority.registry_source_role !== 'IMMUTABLE_ACCEPTED_PROVENANCE_DATASET'
+                || authority.credential_lifecycle_source !== PATHS.lifecycle
+                || authority.profile_security_source !== PATHS.profile) {
+              errors.push('credential authority composition references drifted');
+            }
+            if (Object.hasOwn(authority, 'operator_contract_source')) {
+              errors.push('retired operator-contract predecessor may not remain a credential composition source');
+            }
+            if (authority.historical_provenance?.accepted_ar8b_must_not_be_rewritten !== true
+                || historicalRegistry.status !== 'ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY') {
+              errors.push('accepted AR-8B registry must remain immutable provenance');
+            }
+            if (authority.invariants?.canonical_composition_roots !== 1
+                || authority.invariants?.competing_mutable_authority !== 'FORBIDDEN'
+                || authority.invariants?.routine_application_release_rotates_credentials !== false
+                || authority.invariants?.application_deployment_and_credential_rotation_separated !== true
+                || authority.invariants?.dynamic_mailbox_user_oauth_state_authority !== 'AR-8A'
+                || authority.invariants?.production_mutation_from_architecture_tooling !== false
+                || authority.invariants?.operator_secret_readback !== false) {
+              errors.push('credential authority invariants drifted');
+            }
+
+            if (lifecycle.kind !== 'CREDENTIAL_LIFECYCLE_AUTHORITY' || lifecycle.status !== 'current'
+                || lifecycle.credential_authority !== PATHS.authority
+                || lifecycle.production_mutation !== false
+                || lifecycle.routine_release_rotates_runtime_secrets !== false
+                || lifecycle.routine_release_secret_transport !== false) {
+              errors.push('credential lifecycle root/invariants drifted');
+            }
+            const lifecycleIds = lifecycle.concerns?.map((entry) => entry.id);
+            if (!sameSet(lifecycleIds, EXPECTED_LIFECYCLE)) {
+              errors.push('credential lifecycle concern set drifted');
+            }
+            for (const concern of lifecycle.concerns ?? []) {
+              if (concern.retire_previous_requires_verified_replacement !== true
+                  || typeof concern.allowed_mutator !== 'string'
+                  || !concern.allowed_mutator.includes('rotation')) {
+                errors.push(`${concern.id}: lifecycle must use explicit rotation and verify-before-retire`);
+              }
+              if (typeof concern.recovery !== 'string' || concern.recovery.length === 0) {
+                errors.push(`${concern.id}: recovery guidance is required`);
+              }
+            }
+            const google = lifecycle.concerns?.find((entry) => entry.id === 'resolver.google-oauth-application');
+            const microsoft = lifecycle.concerns?.find((entry) => entry.id === 'resolver.microsoft-oauth-application');
+            for (const oauth of [google, microsoft]) {
+              if (!oauth || oauth.user_token_state_authority !== 'AR-8A'
+                  || oauth.application_credential_failure_state !== 'ConfigurationUnavailable'
+                  || oauth.user_refresh_rejection_state !== 'ReauthRequired'
+                  || oauth.environment_ownership !== 'EXPLICIT_ENVIRONMENT_SCOPED_REGISTRATION_AND_BINDING') {
+                errors.push('provider application credential state must remain distinct from AR-8A user OAuth state');
+              }
+            }
+            const r2 = lifecycle.concerns?.find((entry) => entry.id === 'profile-generation.r2-access');
+            if (!r2 || r2.credential_pair_atomic !== true || r2.routine_release_rotation !== false) {
+              errors.push('R2 credential pair must remain atomic and outside routine release rotation');
+            }
+
+            if (profile.kind !== 'PROFILE_SECURITY_AUTHORITY' || profile.status !== 'current'
+                || profile.credential_authority !== PATHS.authority) {
+              errors.push('profile security authority root drifted');
+            }
+
+            for (const [name, subject] of Object.entries({ authority, lifecycle, profile })) {
+              scanForbidden(subject, name, errors);
+            }
+
+            for (const forbidden of [
+              'architecture/ar8-completion-lifecycle.json',
+              'architecture/ar8-operator-rehearsal.json',
+              'architecture/operator-contract.json',
+            ]) {
+              if (sources.opsctl.includes(forbidden)) {
+                errors.push(`opsctl still depends on retired/transitional architecture path: ${forbidden}`);
+              }
+            }
+            for (const forbidden of [
+              '.github/scripts/ar8-completion-lifecycle.mjs',
+              '.github/scripts/ar8-profile-security.mjs',
+              '.github/scripts/ar8-f-operator-rehearsal.mjs',
+            ]) {
+              if (sources.governance.includes(`run: node ${forbidden}`)) {
+                errors.push(`permanent governance still executes AR-specific candidate validator: ${forbidden}`);
+              }
+            }
+            for (const required of [
+              'run: node .github/scripts/architecture-authority-check.mjs',
+              'run: node .github/scripts/profile-security-authority-check.mjs',
+            ]) {
+              if (!sources.governance.includes(required)) {
+                errors.push(`permanent governance lost subject-domain validator: ${required}`);
+              }
+            }
+            return errors;
+          }
+
+          function readSubjects() {
+            return {
+              authority: load(PATHS.authority),
+              lifecycle: load(PATHS.lifecycle),
+              profile: load(PATHS.profile),
+              historicalRegistry: load(PATHS.historicalRegistry),
+            };
+          }
+
+          function readSources() {
+            return {
+              opsctl: readFileSync(PATHS.opsctl, 'utf8'),
+              governance: readFileSync(PATHS.governance, 'utf8'),
+            };
+          }
+
+          function assertRejected(label, subjects, sources) {
+            if (validate(subjects, sources).length === 0) {
+              throw new Error(`${label}: negative fixture unexpectedly passed`);
+            }
+          }
+
+          function main() {
+            const subjects = readSubjects();
+            const sources = readSources();
+            const errors = validate(subjects, sources);
+            if (errors.length > 0) throw new Error(errors.join('\n'));
+
+            if (process.argv.includes('--self-test')) {
+              const duplicate = structuredClone(subjects);
+              duplicate.authority.invariants.canonical_composition_roots = 2;
+              assertRejected('competing credential authority', duplicate, sources);
+
+              const predecessor = structuredClone(subjects);
+              predecessor.authority.operator_contract_source = 'architecture/operator-contract.json';
+              assertRejected('retired operator predecessor source', predecessor, sources);
+
+              const revokeFirst = structuredClone(subjects);
+              revokeFirst.lifecycle.concerns[0].retire_previous_requires_verified_replacement = false;
+              assertRejected('revoke-before-verify', revokeFirst, sources);
+
+              const insecureProfile = structuredClone(subjects);
+              insecureProfile.profile.status = 'historical';
+              assertRejected('profile authority rollback', insecureProfile, sources);
+
+              console.log('Credential/profile authority negative fixtures rejected; operator semantics remain Rust-owned.');
+              return;
+            }
+            console.log('Credential lifecycle and profile security authorities are canonical; operator semantics are Rust-owned.');
+          }
+
+          try {
+            main();
+          } catch (error) {
+            console.error(`architecture authority check failed: ${error.message}`);
+            process.exit(1);
+          }
+          EOF
+          chmod +x .github/scripts/architecture-authority-check.mjs
+
+      - name: Regenerate retained projection
+        run: python scripts/generate-architecture-inventory.py --write
+
+      - name: Targeted N4 validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/credential_authority.py --self-test
+          node .github/scripts/architecture-authority-check.mjs
+          node .github/scripts/architecture-authority-check.mjs --self-test
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/generate-architecture-inventory.py --self-test
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml --lib
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml --test d1_post_epoch_authoring
+          if git grep -n 'architecture/operator-contract.json' -- tools scripts .github/scripts architecture/credential-authority.json architecture/inventory.json docs/status.json; then
+            echo 'current executable/projection caller of operator-contract remains' >&2
+            exit 1
+          fi
+
+      - name: Commit bounded fixes and retire temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/n4-bounded-fix.yml
+          git add architecture/credential-authority.json architecture/inventory.json \
+            scripts/credential_authority.py .github/scripts/architecture-authority-check.mjs \
+            tools/opsctl/src/lib.rs tools/opsctl/tests/d1_post_epoch_authoring.rs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'N4: retire remaining operator predecessor callers'
+          git push origin HEAD:codex/n4-operator-authority-cleanup
