@@ -95,18 +95,6 @@
       "readiness_owner": "AR-13"
     }
   },
-  "github_governance_extension": {
-    "base_authority": "architecture/github-governance-ar7.json",
-    "mode": "ADDITIVE_REQUIRED_CHECKS_ONLY",
-    "permanent_workflow": ".github/workflows/camoufox-runtime-gate.yml",
-    "required_job_contexts": [
-      "Real Camoufox cold-launch proof",
-      "Profile Bridge Windows regression"
-    ],
-    "historical_ar7_required_checks_may_be_removed": false,
-    "hosted_main_protection_required_before_guarded_merge": true,
-    "live_validator": ".github/scripts/ar10-github-governance-extension.mjs"
-  },
   "build_reproducibility": {
     "camoufox_linux_runner": "ubuntu-24.04",
     "camoufox_windows_runner": "windows-2025",

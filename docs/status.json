@@ -128,7 +128,7 @@
         "applicable_permanent_workflows": "13/13",
         "closeout_issue": 296
       },
-      "github_governance_contract": "architecture/github-governance-ar7.json",
+      "github_governance_contract": "architecture/github-governance.json",
       "github_governance_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR7.md",
       "ar7_acceptance": {
         "issue": 298,
