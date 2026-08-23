@@ -15,12 +15,15 @@ These are mandatory prospective requirements for every PF/FC/AR/PC change. Accep
 
 Accepted history preserves required outcomes, durable compatibility obligations and immutable evidence. It does not make historical internal implementation shape a permanent architecture constraint.
 
-For all current/future work, precedence is:
+Current product/security guarantees and proved durable/external obligations constrain the valid solution space. Subject to those obligations, the current prospective architecture owns internal implementation shape:
 
 ```text
+current product/security/durable obligations
+    -> constrain acceptable solutions
 current prospective architecture contract
--> current product/security/runtime invariants
--> proved current external/durable contracts and real consumers
+    -> owns internal architectural shape
+current natural semantic owners
+-> proved current consumers / external observations
 -> accepted historical AR outcomes + evidence/provenance
 -> historical internal implementation shape
 ```
@@ -29,10 +32,11 @@ This repository has not yet had a production release. Therefore compatibility wi
 
 ```text
 proved current/external consumer absent
++ durable/persisted/migration obligation absent
 -> compatibility bridge default = NO
 ```
 
-A retained compatibility path requires a named current consumer or explicit durable contract, an exact version/shape, isolation from the current writer/semantic owner and an explicit retirement condition. Historical acceptance alone is not sufficient.
+A retained compatibility path requires a named current consumer or explicit durable contract, an exact version/shape, isolation from the current writer/semantic owner and an explicit retirement condition. Historical acceptance alone is not sufficient. Conversely, a real persisted/wire/external obligation may not be discarded merely because the new internal architecture is cleaner; it must be versioned, migrated or explicitly retired through its owning contract.
 
 An older AR implementation must conform to the current architecture, not the reverse. Still-valid AR guarantees remain mandatory; obsolete JSON/Python/Node/registry/table mechanisms may and should retire once callers and unique current invariants are zero.
 
