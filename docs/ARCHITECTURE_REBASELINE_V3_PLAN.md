@@ -71,6 +71,41 @@ Touch-to-converge, not repository-wide rewrite
 
 Historical AR artifacts are evidence of how decisions were accepted. They are not automatically permanent current semantic authorities.
 
+### 1.1 Architecture precedence and pre-production compatibility default
+
+This repository has not yet had a production release. Therefore historical internal implementation shape is not a compatibility target by default.
+
+Current product/security guarantees and proved durable/external obligations constrain which architecture solutions are valid. Subject to those obligations, the current prospective architecture owns the internal implementation shape. The precedence is:
+
+```text
+CURRENT PRODUCT / SECURITY / DURABLE OBLIGATIONS
+        ↓ constrain acceptable solutions
+CURRENT PROSPECTIVE ARCHITECTURE CONTRACT
+        ↓ owns internal architectural shape
+CURRENT NATURAL SEMANTIC OWNERS
+        ↓
+PROVED CURRENT CONSUMERS / EXTERNAL OBSERVATIONS
+        ↓
+ACCEPTED HISTORICAL AR OUTCOMES + IMMUTABLE EVIDENCE/PROVENANCE
+        ↓
+HISTORICAL INTERNAL IMPLEMENTATION SHAPE
+```
+
+An accepted AR preserves still-required behavior, safety guarantees, durable compatibility obligations and historical evidence. It does **not** permanently preserve the JSON/Python/Node/table/registry mechanism through which those guarantees were originally accepted. Conversely, the prospective architecture may not discard a real persisted/wire/external obligation merely because a different internal design would be simpler; such an obligation must be versioned, migrated or explicitly retired through its owning contract.
+
+Accordingly:
+
+```text
+no proved current/external consumer
++ no durable/persisted/migration obligation
+        ↓
+compatibility bridge default = NO
+```
+
+A compatibility reader/bridge may remain only when a concrete current consumer or explicit durable contract is named, the exact version/shape is identified, the compatibility path is isolated from the current writer/semantic owner, and the retirement condition is explicit. "Accepted before" or "might be useful later" is not sufficient justification.
+
+New prospective architecture does not bend around AR-11 or any earlier AR implementation accident. Still-valid AR-11 release/rollback/same-bits/NO_CHANGE/fail-closed outcomes must be implemented through the current architecture; obsolete AR-11 internal machinery must conform, migrate or retire.
+
 ## 2. Artifact-role taxonomy
 
 Every durable machine artifact must be classified as one of:
@@ -146,6 +181,9 @@ F2  Mandatory architecture foundations
  ->
 N1  AR-2 runtime/resource topology current-authority retirement
  ->
+bounded pre-N2 F1 compatibility/current-v2 cleanup gate
+    (correction transaction only; not a new F/N/AR/PF slice)
+ ->
 N2  AR-6 Python-estate current-authority retirement + role/effect normalization
  ->
 N3  AR-7 current GitHub-governance authority normalization
@@ -158,7 +196,7 @@ PF-1  typed lifecycle evaluator + deterministic inventory compiler + Node/Python
  ->
 PF-2  Universal Hosted Operational Evidence
  ->
-PF-3  typed Architecture Fitness Baseline
+PF-3  typed Architecture Fitness Baseline + architecture-forming freeze point
  ->
 fresh re-baseline #399 / #421
  ->
@@ -169,7 +207,9 @@ FC-7  final whole-AR-11 functional audit
 AR-12 implementation entry
 ```
 
-F1/F2 and N1…N5 are foundation/normalization transactions under the current program, not lifecycle slices. Each transaction starts from accepted protected `main` and completes atomically on one PR/merge unless a fresh defect proves another bounded plan is required.
+F1/F2 and N1…N5 are foundation/normalization transactions under the current program, not lifecycle slices. Each transaction starts from accepted protected `main` and completes atomically on one PR/merge unless a fresh defect proves another bounded plan is required. The pre-N2 cleanup gate is exactly such a bounded correction discovered by live audit; it does not create a new roadmap state.
+
+N2…N5 must finish their own authority retirements rather than leaving ownership ambiguity for PF-1. PF-1 is intentionally bounded to lifecycle/inventory replacement and retirement of its own Node/Python predecessors; it is not a catch-all architecture cleanup phase.
 
 ## 5. Purpose of Pre-PF-1 normalization
 
@@ -222,6 +262,8 @@ GlobalRepositoryAuthorityLoader
 ```
 
 `architecture/inventory.json` is a generated projection and never a semantic input for the facts it projects.
+
+PF-1 may temporarily host old/new implementations inside one candidate branch for parity proof, but accepted `main` must not retain a standing compatibility architecture between them. The intended cutover is atomic: switch current callers, prove predecessor caller/invariant counts are zero, then delete the predecessor in the same accepted transaction.
 
 ## 7. Permanent `opsctl` boundary
 
@@ -313,7 +355,19 @@ The historical Python estate baseline/overlay chain is retired by N2; there is n
 
 ## 10. Release Set and canonical-contract foundation
 
-Breaking external contract changes bump schema version. The incompatible change from `d1_evolution_authority_sha256` to `d1_repository_identity_sha256` must not remain under one current v2 meaning; current writer/model moves to a new version (target v3 unless fresh evidence proves another bounded decision). Historical immutable v2 verification, if still needed by #399/#421, is isolated from the current writer/model.
+Breaking external contract changes bump schema version. The incompatible change from `d1_evolution_authority_sha256` to `d1_repository_identity_sha256` must not remain under one current v2 meaning; current writer/model moves to v3. Historical immutable v2 verification exists only while a concrete current consumer/durable obligation is proved and remains isolated from the current writer/model.
+
+Before N2 starts, the bounded pre-N2 cleanup gate must resolve the current-v2 ambiguity discovered after F1 acceptance:
+
+```text
+architecture/release-set-v2.json current semantic authority = 0
+historical v2 current consumer = named OR NONE
+historical v2 executable compatibility = justified-and-isolated OR retired
+current writer/model = v3-only
+v2 -> v3 semantic coercion = 0
+```
+
+A proved current v2 consumer may include an actual current staging deployment, actual known-good rollback Release Set, or explicit current FC-6/#399/#421 durable input. A hypothetical future need or historical acceptance is not enough.
 
 Attestable/content-addressed JSON uses one explicit canonical external contract with:
 
@@ -367,6 +421,35 @@ A hand-maintained `architecture/architecture-fitness-policy.json` must not becom
 
 Minimum zero-budget families include authority duplication, forbidden dependency/effect edges, generated-projection semantic use, runtime dependency on `opsctl`, `opsctl` process/network/provider authority, Python duplicate semantic authority, unclassified Python production/provider effects, and silent breaking-contract changes without version bump.
 
+### 12.1 PF-3 is the architecture-forming freeze point
+
+Accepted PF-3 is the last planned stage allowed to introduce a new generic architecture mechanism for Architecture Re-baseline v3.
+
+After PF-3 acceptance:
+
+```text
+new generic architecture layer/framework = FORBIDDEN
+new global authority/registry/lifecycle engine = FORBIDDEN
+new compatibility architecture without proved consumer = FORBIDDEN
+AR/FC/PC phase used as a redesign bucket = FORBIDDEN
+```
+
+Later work may add or evolve product functionality, bounded contexts, use cases, ports/adapters, provider integrations, explicit contract versions, migrations, security corrections, recovery, delivery and performance within the established architecture. A material architecture change remains possible only through the explicit architecture-change process and PF-3 fitness anti-weakening; it is not normal roadmap work.
+
+This freeze is a **design/enforcement milestone**, not production authorization and not the lifecycle flag `architecture_complete=true`. That lifecycle flag remains false until AR-17 qualification succeeds.
+
+Post-PF-3 phase semantics are therefore:
+
+```text
+FC-6 / FC-7     functional closure + staging proof; no architecture redesign
+AR-12..AR-15    implementation/rehearsal/delivery on the frozen architecture
+AR-16           final whole-project audit only
+AR-17           qualification/authorization decision only
+PC-1            first Production Core release
+```
+
+If AR-16/AR-17 finds a violation, the gate blocks and the violation is corrected under the frozen architecture. AR-16/AR-17 do not invent Architecture v4 in-place.
+
 ## 13. Production state model
 
 These states remain independent:
@@ -385,6 +468,8 @@ production_core_gate = BLOCKED
 production_ready = false
 ```
 
+PF-3 acceptance means the prospective architecture is designed and machine-enforced, but does not set `architecture_complete=true`; AR-12…AR-16 still have to prove the product, delivery and rehearsals on that architecture.
+
 Only AR-17 may authorize the Production Core gate. Only later PC-1 may set `production_ready=true` for the accepted `production-core-v1` Release Profile.
 
 No PF/F/N/FC work here authorizes production.
@@ -400,7 +485,39 @@ PC-3  Mailbox Jobs / Automation
 PC-4  Outbound / later capabilities
 ```
 
-Production Core v1 is intended to include authentication/authorization, users, clients, browser profiles, Camoufox/profile runtime, Windows Profile Bridge delivery/update chain, client↔profile binding and required audit/readiness/recovery foundations. Mailbox/admin/job/outbound code may remain source-present but production-disabled until its owning capability profile is accepted.
+`PC-1 production-core-v1` is explicitly bounded to:
+
+```text
+authentication / authorization / membership foundation
+users
+clients / customer cards
+browser profiles
+single + bulk browser-profile operations
+client <-> browser-profile binding
+grants / access
+profile metadata + generations + sessions + devices
+encrypted immutable profile persistence / restore required by the profile lifecycle
+real Camoufox runtime
+Windows Profile Bridge
+production-grade Windows updater/publisher/delivery chain from AR-15
+runtime/profile certification required by the Core profile
+audit
+health / readiness / observability
+notifications/recovery foundations required by the Core lifecycle
+```
+
+The following may be present and tested on the same `main` but remain `production_enabled=false` in PC-1:
+
+```text
+mailbox administration
+bulk mailbox operations
+client <-> mailbox bindings
+mailbox jobs / automation
+outbound mail/email side effects
+later CRM/communications capabilities
+```
+
+This is one application and one data/compatibility lineage, not a `production-lite` fork. PC-2/PC-3 enable existing or newly completed mailbox capability only through their accepted Release / Capability Profile; source presence never grants production access.
 
 ## 15. GitHub/governance acceptance
 
@@ -426,12 +543,13 @@ Historical required-context counts/names are observations, not timeless constant
 AR-12 remains blocked until:
 
 1. F1 and F2 are accepted on protected `main`;
-2. N1…N5 complete with zero-current-caller/zero-unique-invariant predecessor proofs;
-3. PF-1 is accepted and Node/Python lifecycle/inventory predecessors are deleted;
-4. PF-2 Hosted Evidence is accepted;
-5. PF-3 typed fitness enforcement is accepted;
-6. #399/#421 are freshly re-baselined from that accepted main;
-7. FC-6 completes real staging same-bits/rollback evidence or returns a legitimate typed `BLOCKED` state;
-8. FC-7 reports repository-owned `P0=0`, `P1=0`, `P2=0` for AR-11 Functional Closure scope;
-9. production remains fail-closed;
-10. accepted-main reread proves no parallel authority path was introduced.
+2. the bounded pre-N2 F1 compatibility/current-v2 cleanup gate is accepted, with one current Release Set semantic owner and historical-v2 compatibility either concretely justified/isolated or retired;
+3. N1…N5 complete with zero-current-caller/zero-unique-invariant predecessor proofs;
+4. PF-1 is accepted and Node/Python lifecycle/inventory predecessors are deleted;
+5. PF-2 Hosted Evidence is accepted;
+6. PF-3 typed fitness enforcement and architecture-forming freeze are accepted;
+7. #399/#421 are freshly re-baselined from that accepted main;
+8. FC-6 completes real staging same-bits/rollback evidence or returns a legitimate typed `BLOCKED` state;
+9. FC-7 reports repository-owned `P0=0`, `P1=0`, `P2=0` for AR-11 Functional Closure scope;
+10. production remains fail-closed;
+11. accepted-main reread proves no parallel authority path was introduced.

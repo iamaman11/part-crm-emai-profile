@@ -16,11 +16,54 @@ PF-3 makes the agreed architecture discipline permanently machine-enforced befor
 ## 1. Prerequisite order
 
 ```text
-F1/F2 -> N1..N5 -> PF-1 -> PF-2 -> PF-3
+F1/F2 -> N1 -> bounded pre-N2 F1 compatibility cleanup -> N2..N5 -> PF-1 -> PF-2 -> PF-3
       -> fresh #399/#421 re-baseline -> FC-6 -> FC-7 -> AR-12
 ```
 
 PF-3 starts only from accepted PF-2 `main`.
+
+### 1.1 PF-3 is the architecture-forming freeze point
+
+PF-3 is the final planned stage of Architecture Re-baseline v3 allowed to introduce or replace a **generic architecture mechanism**. Its acceptance means the prospective architecture shape is established and machine-enforced.
+
+After PF-3 acceptance, normal roadmap execution may not introduce:
+
+```text
+new generic architecture layer/framework
+new global authority/registry
+new lifecycle/evidence/fitness engine competing with accepted owners
+new compatibility framework without a proved consumer/durable obligation
+new cross-cutting service locator/plugin container/god-policy layer
+FC/AR/PC phase used as an architecture-redesign bucket
+```
+
+Later stages may still implement or evolve bounded product functionality, use cases, adapters, provider integrations, migrations, Windows delivery, recovery, performance and explicit versioned contracts **inside the established architecture**.
+
+A later discovery that genuinely requires a material architecture change does not silently reopen PF-3 or turn AR-16/AR-17 into redesign phases. The change must use the explicit governed architecture-change/anti-weakening path, identify affected RuleIds and authorities, and remain blocked until the new architecture evidence is accepted.
+
+This freeze is distinct from lifecycle closeout:
+
+```text
+PF-3 accepted
+    = architecture form designed + machine-enforced
+
+architecture_complete=true
+    = NOT YET; only AR-17 qualification may set/authorize this lifecycle outcome
+```
+
+Post-PF-3 planned stage semantics are fixed:
+
+```text
+fresh #399/#421 re-baseline  = re-evaluate functional closure against accepted architecture
+FC-6 / FC-7                  = staging/functional proof, no architecture redesign
+AR-12                        = fresh rehearsal environment implementation/proof
+AR-13                        = rotation rehearsal
+AR-14                        = remote recovery rehearsal
+AR-15                        = Windows delivery/updater implementation + proof within frozen architecture
+AR-16                        = final whole-project audit only
+AR-17                        = qualification / Production Core gate decision only
+PC-1                         = first Production Core release
+```
 
 ## 2. Semantic owner correction
 
@@ -100,6 +143,7 @@ current_mutable_authority_count_per_concern = 1
 generated_projection_used_as_semantic_input = 0
 global_authority_bag = 0
 manual_architecture_semantic_json_authority_without_exception = 0
+manual_AR_qualified_application_ownership_registry_current_authority = 0
 second lifecycle derivation = 0
 second production-enable registry = 0
 ```
@@ -188,6 +232,19 @@ pre-interpreted raw observation smuggling policy decision = 0
 duplicate JSON member accepted in attestable/security contract = 0
 ```
 
+### AF-COMPAT — compatibility justification
+
+Compatibility code/data that affects current execution must have a proved owner and consumer:
+
+```text
+compatibility_shim_without_proved_consumer_or_durable_obligation = 0
+historical_contract_marked_current_without_current_consumer = 0
+current_writer_emits_legacy_breaking_version = 0
+silent_legacy_to_current_semantic_coercion = 0
+```
+
+Historical evidence by itself never satisfies a current compatibility-consumer requirement.
+
 ### AF-CAP — capability/production exposure
 
 ```text
@@ -229,6 +286,20 @@ old_unique_current_invariants = 0
 DEAD predecessor reachable = 0
 compatibility shim without proved consumer/contract = 0
 ```
+
+### AF-FREEZE — post-PF-3 architecture-forming boundary
+
+After PF-3 acceptance:
+
+```text
+unapproved new generic architecture mechanism = 0
+new global semantic registry = 0
+new cross-cutting compatibility framework without proved obligation = 0
+AR-16/AR-17 redesign work = 0
+material architecture change without governed supersession/RuleId impact = 0
+```
+
+A bounded new product capability is not itself an architecture violation. The rule prevents cross-cutting architecture reinvention, not normal product evolution.
 
 ### AF-READ — developer readability
 
@@ -312,6 +383,7 @@ Forbidden:
 ```text
 Python file -> second mutable rule catalog
 Python per-file estate database -> current semantic authority
+Python source observer -> hand-maintained application ownership database
 ```
 
 ## 9. `opsctl-core` enforcement
@@ -353,9 +425,12 @@ schema/migration impact
 legacy predecessor disposition
 fitness RuleIds affected
 budget impact
+whether a new generic architecture mechanism is introduced
 ```
 
 `none` is valid only when justified by the diff.
+
+A post-PF-3 candidate that introduces a new generic architecture mechanism must be treated as an explicit governed architecture-change request, not normal feature implementation. It fails the existing gate until supersession/anti-weakening and affected authority ownership are reviewed and accepted.
 
 ## 12. Positive proofs
 
@@ -369,7 +444,9 @@ At minimum:
 - Rust/Python observer split does not duplicate rule semantics;
 - `opsctl` pure-core, doctor and Product Runtime boundaries pass;
 - Python role/effect boundary passes;
+- Release Set compatibility paths require a named current consumer/durable obligation or are absent;
 - release profile single-enablement passes;
+- post-PF-3 bounded feature implementation that stays inside established architecture is accepted;
 - Linux and applicable Windows checks pass.
 
 ## 13. Negative proofs
@@ -388,13 +465,18 @@ second production-enable registry
 unknown execution surface/activation unit
 incomplete enabled release profile closure
 unversioned/breaking durable contract without bump
+historical compatibility retained without proved current consumer/durable obligation
+silent legacy-to-current semantic coercion
 duplicate JSON member accepted in attestable contract
 forbidden cross-context persistence mutation
+manual AR-qualified application ownership registry used as current semantic authority
 REQUIRED rule without enforcement
 silent rule downgrade/removal/applicability narrowing
 negative fixture removal
 checker replacement without governed supersession
 reachable DEAD predecessor after cutover
+post-PF-3 unapproved new generic architecture mechanism
+AR-16/AR-17 redesign bucket
 ```
 
 ## 14. Touch-to-converge
@@ -418,10 +500,14 @@ PF-3 closes only when:
 5. anti-weakening/supersession is machine enforced;
 6. required exact zero/one budgets are machine checked;
 7. Architecture Fitness Gate is permanent PR CI/governance surface;
-8. Architecture Impact discipline is documented/enforced for later work;
-9. no parallel roadmap/capability/lifecycle/domain authority is introduced;
-10. application behavior and production fail-closed state remain unchanged;
-11. exact-head CI/protected contexts are green, `behind_by=0`, reviews/threads unblocked;
-12. accepted-main reread succeeds;
-13. #399/#421 are re-baselined only after PF-3 acceptance;
-14. FC-6 resumes only from that accepted baseline.
+8. compatibility-without-consumer and historical-current-authority regressions are machine rejected;
+9. manual AR-qualified application ownership registries cannot become current semantic inputs;
+10. post-PF-3 architecture-forming freeze is documented and machine-enforced sufficiently to reject unapproved new generic architecture mechanisms;
+11. Architecture Impact discipline is documented/enforced for later work;
+12. no parallel roadmap/capability/lifecycle/domain authority is introduced;
+13. application behavior and production fail-closed state remain unchanged;
+14. exact-head CI/protected contexts are green, `behind_by=0`, reviews/threads unblocked;
+15. accepted-main reread succeeds;
+16. #399/#421 are re-baselined only after PF-3 acceptance;
+17. FC-6 resumes only from that accepted baseline;
+18. PF-3 acceptance does not set `architecture_complete=true`, authorize production or start AR-12.

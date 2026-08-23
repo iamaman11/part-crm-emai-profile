@@ -28,6 +28,9 @@ F2  permanent architecture foundations
  ->
 N1  AR-2 runtime/resource topology authority retirement
  ->
+bounded pre-N2 F1 compatibility/current-v2 cleanup gate
+    (correction transaction only; not a new F/N/AR/PF slice)
+ ->
 N2  AR-6 Python-estate authority retirement + role/effect normalization
  ->
 N3  AR-7 current GitHub-governance normalization
@@ -45,7 +48,7 @@ PF-1
  -> AR-12 implementation entry
 ```
 
-F1/F2/N1…N5 are foundation/normalization transactions, not lifecycle slices.
+F1/F2/N1…N5 are foundation/normalization transactions, not lifecycle slices. The pre-N2 cleanup gate is a bounded correction discovered by fresh live audit; it does not create F3, N1.5, PF-0 or any lifecycle state.
 
 ## 2. Mandatory artifact-role vocabulary
 
@@ -98,6 +101,45 @@ Requirements:
 - historical decoder is isolated from current writer/model;
 - content-address prefix/fixtures/workflows agree with the new version;
 - PF-3 permanently rejects breaking durable-contract changes without version bump.
+
+### 3.1 Bounded pre-N2 Release Set compatibility/current-v2 cleanup gate
+
+The accepted F1 implementation correctly moved the current writer/model to Release Set v3, but fresh live audit found one remaining ambiguity that must be resolved before N2 starts. `architecture/release-set-v2.json` still presents v2 as `CURRENT_PRE_PRODUCTION`, while current writer/model semantics are v3; executable promotion/rollback paths can also still recognize historical v2 identities.
+
+This is not a new architecture phase. It is a bounded F1 correction transaction with the following required decision:
+
+```text
+prove a concrete current v2 consumer
+    = current staging deployment
+      OR current known-good rollback Release Set
+      OR explicit current FC-6/#399/#421 durable input
+
+if proved:
+    keep only the minimum isolated historical-v2 reader/verification path
+    identify exact v2 artifact/version/consumer
+    current writer remains v3-only
+    no v2 -> v3 semantic coercion
+    define explicit retirement condition
+
+if not proved:
+    historical evidence remains immutable in Git/artifacts
+    executable v2 compatibility machinery retires
+    workflow branches/tests that exist only to serve speculative v2 compatibility retire
+```
+
+`architecture/release-set-v2.json` must not remain a second **current** semantic authority after this gate. It is either deleted from the current tree after zero-caller/zero-unique-invariant proof, or explicitly demoted to a bounded historical/durable contract only when a concrete current consumer requires it.
+
+Required proof before N2 entry:
+
+```text
+current Release Set writer/model version = v3
+current semantic owner count for Release Set shape = 1
+historical v2 current consumer = named OR NONE
+historical v2 executable compatibility = justified-and-isolated OR retired
+architecture/release-set-v2.json current-authority role = 0
+breaking v2/v3 semantic coercion = 0
+production mutation = false
+```
 
 ## 4. F2 — permanent architecture/effect foundations
 
@@ -297,7 +339,7 @@ Required:
 
 ## 10. PF-1 entry contract
 
-PF-1 begins only from protected `main` where F1/F2/N1…N5 are accepted.
+PF-1 begins only from protected `main` where F1/F2/N1…N5 are accepted and the bounded pre-N2 F1 compatibility/current-v2 cleanup gate is closed.
 
 Target inputs:
 
@@ -388,7 +430,7 @@ duplicate_json_member_accepted_in_attestable_contract = 0
 
 ## 13. Transaction discipline
 
-Each F/N step starts from accepted protected `main` and proves on one exact head:
+Each F/N correction/normalization step starts from accepted protected `main` and proves on one exact head:
 
 ```text
 fresh baseline
@@ -415,6 +457,9 @@ PF-1 remains blocked until accepted `main` proves:
 
 ```text
 Release Set breaking shape correctly versioned = true
+Release Set current writer/model version = v3
+architecture/release-set-v2.json current semantic authority = 0
+historical v2 executable compatibility = justified_and_isolated OR retired
 opsctl adapter/pure-core contract = established
 opsctl doctor contract = established
 canonical JSON/digest foundation = established
