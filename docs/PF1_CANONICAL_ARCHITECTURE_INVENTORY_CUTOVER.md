@@ -18,6 +18,7 @@ Required state:
 current Release Set writer/model = v3
 current v2 semantic authority = 0
 historical v2 compatibility = justified_and_isolated OR retired
+tracked inventory retention = JUSTIFIED_MINIMUM OR NOT_RETAINED
 Python estate overlay current authority = 0
 historical governance overlay current authority = 0
 operator JSON used as Rust CLI authorization = 0
@@ -25,7 +26,7 @@ runtime-cutover-ar10 current semantic authority = 0
 production_mutation = false
 ```
 
-Historical/evidence references are allowed when provenance-only.
+Historical/evidence references are allowed when provenance-only. The tracked `architecture/inventory.json` retention decision is already made during the common pre-PF-1 N2–N5 discovery; PF-1 consumes that result rather than postponing the decision until this stage.
 
 ## 2. Permanent `opsctl` boundary
 
@@ -101,23 +102,24 @@ inventory compiler reimplementing D1/release/runtime/operator/governance/credent
 generated projection used as semantic input
 ```
 
-## 5. `architecture/inventory.json` must justify itself
+## 5. `architecture/inventory.json` retention is an input, not a PF-1 decision
 
-A generated projection is not automatically required to be checked into the repository forever.
-
-Before retaining permanent `write`/tracked-byte semantics, PF-1 must prove a concrete current/durable consumer:
+The pre-PF-1 normalization contract has already audited concrete current/durable consumers of the exact tracked bytes and produced exactly one result:
 
 ```text
-consumer exists
--> keep the minimum deterministic GENERATED_PROJECTION needed by that consumer
--> if write is required: atomic + deterministic + idempotent + single allowed target
+JUSTIFIED_MINIMUM
+-> PF-1 may emit only the minimum deterministic GENERATED_PROJECTION required by the proved consumer
+-> retained write, if genuinely required, is atomic + deterministic + idempotent + single-target
 
-consumer = NONE
--> prefer on-demand deterministic render/check
--> retire legacy write/drift ceremony
+NOT_RETAINED
+-> PF-1 does not resurrect tracked architecture/inventory.json
+-> deterministic on-demand render/check may remain where useful
+-> compatibility-only --write / tracked-byte drift ceremony stays retired
 ```
 
-The same rule applies to command surface. Keep only distinct useful operations; do not preserve `render/check/write/inspect` merely because the old system exposed them.
+PF-1 therefore owns the **semantic inventory/lifecycle replacement**, not the first tracked-file retention decision. If pre-PF-1 normalization was able to retire the tracked file after switching its remaining callers, PF-1 accepts that state. If a durable exact-byte consumer justified retention, PF-1 preserves only that minimum projection and never treats it as semantic input.
+
+The same minimality rule applies to command surface. Keep only distinct useful operations; do not preserve `render/check/write/inspect` merely because the old system exposed them.
 
 ## 6. Application projection correction
 
@@ -203,7 +205,7 @@ manual AR-qualified application registry current authority = 0
 legacy Node lifecycle current callers = 0
 legacy Python inventory current callers = 0
 legacy unique current invariants = 0 before deletion
-tracked inventory/write surface = JUSTIFIED_MINIMUM OR NOT_RETAINED
+tracked inventory/write surface = pre-decided JUSTIFIED_MINIMUM OR NOT_RETAINED
 reintroduced N1–N5 semantic authority = 0
 production_mutation = false
 ```
