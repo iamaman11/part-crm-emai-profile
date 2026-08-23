@@ -1,7 +1,10 @@
 use crate::canonical::{DEFAULT_MAX_JSON_DEPTH, parse_strict_json_with_limits};
-use crate::release::model::{
-    RELEASE_SET_ID_PREFIX as HISTORICAL_V2_ID_PREFIX, ReleaseModelError, ReleaseSetManifest,
+use crate::release::historical_v2::{
+    RELEASE_SET_ID_PREFIX as HISTORICAL_V2_ID_PREFIX,
+    ReleaseSetManifest as HistoricalReleaseSetV2,
+    SchemaCompatibilityWindow as HistoricalSchemaCompatibilityWindow,
 };
+use crate::release::model::ReleaseModelError;
 use crate::release::v3_dto::{MAX_RELEASE_SET_V3_BYTES, decode_release_set_v3};
 use crate::release::v3_output::{RELEASE_SET_V3_ID_PREFIX, render_release_set_v3};
 use opsctl_core::release as core;
@@ -10,17 +13,75 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseSetDocumentVersion {
+    HistoricalV2,
+    CurrentV3,
+}
+
+impl ReleaseSetDocumentVersion {
+    #[must_use]
+    pub const fn number(self) -> u64 {
+        match self {
+            Self::HistoricalV2 => 2,
+            Self::CurrentV3 => 3,
+        }
+    }
+}
+
+/// Version-explicit D1 identity carried by the shared read-side compatibility view.
+///
+/// A historical v2 evolution-authority digest is never relabelled as the current v3 repository
+/// identity. Code that needs current repository semantics must match the v3 variant explicitly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum D1SchemaIdentity {
+    HistoricalV2EvolutionAuthoritySha256(String),
+    CurrentV3RepositoryIdentitySha256(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseCompatibilitySchemas {
+    pub d1_identity: D1SchemaIdentity,
+    pub catalog: core::SchemaCompatibilityWindow,
+    pub resolver: core::SchemaCompatibilityWindow,
+}
+
+/// Version-neutral typed read model for facts that are genuinely common to durable v2/v3 sets.
+///
+/// This is deliberately not a current Release Set authoring model. Current authoring/validation is
+/// owned only by `opsctl_core::release::ReleaseSetV3`; historical v2 reaches this view only after
+/// its immutable historical decoder/verifier has admitted the original wire contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseCompatibilityView {
+    pub schema_version: ReleaseSetDocumentVersion,
+    pub source: core::ReleaseSetSource,
+    pub components: BTreeMap<String, core::ReleaseComponentIdentity>,
+    pub contracts: core::ContractsIdentity,
+    pub protocols: core::ProtocolIdentity,
+    pub schemas: ReleaseCompatibilitySchemas,
+    pub runtime_compatibility: core::RuntimeCompatibilityIdentity,
+    pub capability_profile_compatibility: Vec<String>,
+    pub build_provenance: core::BuildProvenanceIdentity,
+    pub artifact_inventory: Vec<core::ArtifactIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LoadedDocument {
+    CurrentV3(core::ReleaseSetV3),
+    HistoricalV2(HistoricalReleaseSetV2),
+}
+
 /// One version-aware outer reader boundary for durable Release Set documents.
 ///
-/// Current v3 documents are admitted through the strict v3 DTO and the pure semantic core.
-/// Historical v2 is decoded only for compatibility/rollback continuity, then projected into the
-/// same pure core. The historical decoder never authors or renders a current Release Set.
+/// Current v3 documents are admitted through the strict v3 DTO and pure semantic core. Historical
+/// v2 documents stay historical: they are decoded by the immutable v2 decoder and may project only
+/// into the version-neutral compatibility view. They are never coerced into `ReleaseSetV3`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedReleaseSet {
-    external_schema_version: u64,
     release_set_id: String,
     display_version: Option<String>,
-    semantic: core::ReleaseSetV3,
+    semantic: ReleaseCompatibilityView,
+    document: LoadedDocument,
 }
 
 impl LoadedReleaseSet {
@@ -98,18 +159,15 @@ impl LoadedReleaseSet {
             ));
         }
 
-        // Strict admission already rejected duplicate members. Re-encoding the representation-only
-        // identity object lets the existing v3 DTO remain the single field/shape adapter; no typed
-        // semantic model is serialized back into a reader and no v3 field table is duplicated here.
         let identity_bytes = serde_json::to_vec(&value).map_err(|error| {
             ReleaseModelError::new(format!(
                 "cannot serialize admitted Release Set v3 identity representation: {error}"
             ))
         })?;
-        let semantic = decode_release_set_v3(&identity_bytes).map_err(|error| {
+        let current = decode_release_set_v3(&identity_bytes).map_err(|error| {
             ReleaseModelError::new(format!("Release Set v3 admission failed: {error}"))
         })?;
-        let rendered = render_release_set_v3(&semantic).map_err(|error| {
+        let rendered = render_release_set_v3(&current).map_err(|error| {
             ReleaseModelError::new(format!("Release Set v3 identity render failed: {error}"))
         })?;
         if rendered.release_set_id != release_set_id {
@@ -118,17 +176,17 @@ impl LoadedReleaseSet {
                 rendered.release_set_id
             )));
         }
-
+        let semantic = current_v3_to_compatibility(&current);
         Ok(Self {
-            external_schema_version: 3,
             release_set_id,
             display_version: None,
             semantic,
+            document: LoadedDocument::CurrentV3(current),
         })
     }
 
     fn parse_historical_v2(input: &str) -> Result<Self, ReleaseModelError> {
-        let historical = ReleaseSetManifest::parse_json(input).map_err(|error| {
+        let historical = HistoricalReleaseSetV2::parse_json(input).map_err(|error| {
             ReleaseModelError::new(format!(
                 "historical Release Set v2 decoder rejected document: {error}"
             ))
@@ -138,18 +196,20 @@ impl LoadedReleaseSet {
                 "historical Release Set v2 release_set_id has invalid content-address shape",
             ));
         }
-        let semantic = historical_v2_to_core(&historical)?;
+        let release_set_id = historical.release_set_id.clone();
+        let display_version = historical.display_version.clone();
+        let semantic = historical_v2_to_compatibility(&historical);
         Ok(Self {
-            external_schema_version: 2,
-            release_set_id: historical.release_set_id,
-            display_version: historical.display_version,
+            release_set_id,
+            display_version,
             semantic,
+            document: LoadedDocument::HistoricalV2(historical),
         })
     }
 
     #[must_use]
     pub const fn external_schema_version(&self) -> u64 {
-        self.external_schema_version
+        self.semantic.schema_version.number()
     }
 
     #[must_use]
@@ -163,13 +223,22 @@ impl LoadedReleaseSet {
     }
 
     #[must_use]
-    pub const fn semantic(&self) -> &core::ReleaseSetV3 {
+    pub const fn semantic(&self) -> &ReleaseCompatibilityView {
         &self.semantic
+    }
+
+    pub fn current_v3(&self) -> Result<&core::ReleaseSetV3, ReleaseModelError> {
+        match &self.document {
+            LoadedDocument::CurrentV3(current) => Ok(current),
+            LoadedDocument::HistoricalV2(_) => Err(ReleaseModelError::new(
+                "CURRENT_RELEASE_SET_V3_REQUIRED: historical v2 is read-only compatibility input",
+            )),
+        }
     }
 
     #[must_use]
     pub const fn is_historical_v2(&self) -> bool {
-        self.external_schema_version == 2
+        matches!(self.document, LoadedDocument::HistoricalV2(_))
     }
 }
 
@@ -189,70 +258,71 @@ fn valid_content_address(value: &str, prefix: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn historical_v2_to_core(
-    historical: &ReleaseSetManifest,
-) -> Result<core::ReleaseSetV3, ReleaseModelError> {
-    let components = historical
-        .components
-        .iter()
-        .map(|(key, component)| {
-            (
-                key.clone(),
-                core::ReleaseComponentIdentity {
-                    component_id: component.component_id.clone(),
-                    release_id: component.release_id.clone(),
-                    source_commit_sha: component.source_commit_sha.clone(),
-                    artifact_path: component.artifact_path.clone(),
-                    artifact_sha256: component.artifact_sha256.clone(),
-                    artifact_size_bytes: component.artifact_size_bytes,
-                    component_manifest_sha256: component.component_manifest_sha256.clone(),
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let contracts = core::ContractsIdentity {
-        files: historical
-            .contracts
-            .files
-            .iter()
-            .map(|file| core::ProvenanceFileIdentity {
-                path: file.path.clone(),
-                sha256: file.sha256.clone(),
-                size_bytes: file.size_bytes,
-            })
-            .collect(),
-        sha256: historical.contracts.sha256.clone(),
-    };
-    let schema_window = |window: &crate::release::model::SchemaCompatibilityWindow| {
-        core::SchemaCompatibilityWindow {
-            database_component: window.database_component.clone(),
-            target_schema_revision: window.target_schema_revision.clone(),
-            supported_schema_min: window.supported_schema_min.clone(),
-            supported_schema_max: window.supported_schema_max.clone(),
-            migration_history_digest: window.migration_history_digest.clone(),
-            compatibility_policy_digest: window.compatibility_policy_digest.clone(),
-        }
-    };
+fn schema_window_from_historical(
+    window: &HistoricalSchemaCompatibilityWindow,
+) -> core::SchemaCompatibilityWindow {
+    core::SchemaCompatibilityWindow {
+        database_component: window.database_component.clone(),
+        target_schema_revision: window.target_schema_revision.clone(),
+        supported_schema_min: window.supported_schema_min.clone(),
+        supported_schema_max: window.supported_schema_max.clone(),
+        migration_history_digest: window.migration_history_digest.clone(),
+        compatibility_policy_digest: window.compatibility_policy_digest.clone(),
+    }
+}
 
-    core::ReleaseSetV3::new(core::ReleaseSetV3Parts {
+fn historical_v2_to_compatibility(historical: &HistoricalReleaseSetV2) -> ReleaseCompatibilityView {
+    ReleaseCompatibilityView {
+        schema_version: ReleaseSetDocumentVersion::HistoricalV2,
         source: core::ReleaseSetSource {
             repository: historical.source.repository.clone(),
             commit_sha: historical.source.commit_sha.clone(),
             accepted_main: historical.source.accepted_main,
             accepted_main_evidence_sha256: historical.source.accepted_main_evidence_sha256.clone(),
         },
-        components,
-        contracts,
+        components: historical
+            .components
+            .iter()
+            .map(|(key, component)| {
+                (
+                    key.clone(),
+                    core::ReleaseComponentIdentity {
+                        component_id: component.component_id.clone(),
+                        release_id: component.release_id.clone(),
+                        source_commit_sha: component.source_commit_sha.clone(),
+                        artifact_path: component.artifact_path.clone(),
+                        artifact_sha256: component.artifact_sha256.clone(),
+                        artifact_size_bytes: component.artifact_size_bytes,
+                        component_manifest_sha256: component.component_manifest_sha256.clone(),
+                    },
+                )
+            })
+            .collect(),
+        contracts: core::ContractsIdentity {
+            files: historical
+                .contracts
+                .files
+                .iter()
+                .map(|file| core::ProvenanceFileIdentity {
+                    path: file.path.clone(),
+                    sha256: file.sha256.clone(),
+                    size_bytes: file.size_bytes,
+                })
+                .collect(),
+            sha256: historical.contracts.sha256.clone(),
+        },
         protocols: core::ProtocolIdentity {
             public_api_contract_sha256: historical.protocols.public_api_contract_sha256.clone(),
             camouhost_ipc_version: historical.protocols.camouhost_ipc_version,
             profile_bridge_protocol_version: historical.protocols.profile_bridge_protocol_version,
             resolver_protocol: historical.protocols.resolver_protocol.clone(),
         },
-        schemas: core::SchemaIdentity {
-            d1_repository_identity_sha256: historical.schemas.d1_repository_identity_sha256.clone(),
-            catalog: schema_window(&historical.schemas.catalog),
-            resolver: schema_window(&historical.schemas.resolver),
+        schemas: ReleaseCompatibilitySchemas {
+            d1_identity: D1SchemaIdentity::HistoricalV2EvolutionAuthoritySha256(
+                historical.schemas.d1_evolution_authority_sha256.clone(),
+            ),
+            catalog: schema_window_from_historical(&historical.schemas.catalog),
+            resolver: schema_window_from_historical(&historical.schemas.resolver),
         },
         runtime_compatibility: core::RuntimeCompatibilityIdentity {
             runtime_lock_sha256: historical.runtime_compatibility.runtime_lock_sha256.clone(),
@@ -283,19 +353,33 @@ fn historical_v2_to_core(
                 kind: artifact.kind.clone(),
             })
             .collect(),
-    })
-    .map_err(|error| {
-        ReleaseModelError::new(format!(
-            "historical Release Set v2 pure-core compatibility projection failed: {error}"
-        ))
-    })
+    }
+}
+
+fn current_v3_to_compatibility(current: &core::ReleaseSetV3) -> ReleaseCompatibilityView {
+    ReleaseCompatibilityView {
+        schema_version: ReleaseSetDocumentVersion::CurrentV3,
+        source: current.source.clone(),
+        components: current.components.clone(),
+        contracts: current.contracts.clone(),
+        protocols: current.protocols.clone(),
+        schemas: ReleaseCompatibilitySchemas {
+            d1_identity: D1SchemaIdentity::CurrentV3RepositoryIdentitySha256(
+                current.schemas.d1_repository_identity_sha256.clone(),
+            ),
+            catalog: current.schemas.catalog.clone(),
+            resolver: current.schemas.resolver.clone(),
+        },
+        runtime_compatibility: current.runtime_compatibility.clone(),
+        capability_profile_compatibility: current.capability_profile_compatibility.clone(),
+        build_provenance: current.build_provenance.clone(),
+        artifact_inventory: current.artifact_inventory.clone(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::LoadedReleaseSet;
-    use crate::release::digest::{canonical_json, sha256_hex};
-    use crate::release::model::{RELEASE_SET_ID_PREFIX, ReleaseModelError};
+    use super::{D1SchemaIdentity, LoadedReleaseSet};
     use crate::release::v3_dto::{
         ArtifactIdentityDto, BuildProvenanceIdentityDto, ContractsIdentityDto, ProtocolIdentityDto,
         ProvenanceFileIdentityDto, RELEASE_SET_V3_SCHEMA_VERSION, ReleaseComponentIdentityDto,
@@ -303,12 +387,14 @@ mod tests {
         SchemaCompatibilityWindowDto, SchemaIdentityDto,
     };
     use crate::release::v3_output::render_release_set_v3;
-    use serde_json::{Value, json};
+    use serde_json::Value;
     use std::collections::BTreeMap;
 
     const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const GIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const REPO: &str = "iamaman11/part-crm-emai-profile";
+    const HISTORICAL_V2: &[u8] =
+        include_bytes!("../../tests/fixtures/release-set-v2-historical.json");
 
     fn v3_model() -> Result<opsctl_core::release::ReleaseSetV3, Box<dyn std::error::Error>> {
         let component = |id: &str, path: &str, digest: &str| ReleaseComponentIdentityDto {
@@ -323,27 +409,15 @@ mod tests {
         let mut components = BTreeMap::new();
         components.insert(
             "control_plane".to_owned(),
-            component(
-                "control_plane",
-                "components/control-plane.tar",
-                &"1".repeat(64),
-            ),
+            component("control_plane", "components/control-plane.tar", &"1".repeat(64)),
         );
         components.insert(
             "secret_resolver".to_owned(),
-            component(
-                "secret_resolver",
-                "components/secret-resolver.tar",
-                &"2".repeat(64),
-            ),
+            component("secret_resolver", "components/secret-resolver.tar", &"2".repeat(64)),
         );
         components.insert(
             "runtime_bundle".to_owned(),
-            component(
-                "runtime_bundle",
-                "components/runtime-bundle.tar",
-                &"3".repeat(64),
-            ),
+            component("runtime_bundle", "components/runtime-bundle.tar", &"3".repeat(64)),
         );
         let schema = |component: &str| SchemaCompatibilityWindowDto {
             database_component: component.to_owned(),
@@ -402,14 +476,14 @@ mod tests {
                     kind: "component".to_owned(),
                 },
                 ArtifactIdentityDto {
-                    path: "components/secret-resolver.tar".to_owned(),
-                    sha256: "2".repeat(64),
+                    path: "components/runtime-bundle.tar".to_owned(),
+                    sha256: "3".repeat(64),
                     size_bytes: 1,
                     kind: "component".to_owned(),
                 },
                 ArtifactIdentityDto {
-                    path: "components/runtime-bundle.tar".to_owned(),
-                    sha256: "3".repeat(64),
+                    path: "components/secret-resolver.tar".to_owned(),
+                    sha256: "2".repeat(64),
                     size_bytes: 1,
                     kind: "component".to_owned(),
                 },
@@ -418,78 +492,47 @@ mod tests {
         .into_core()?)
     }
 
-    fn historical_v2() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        let accepted = sha256_hex(
-            canonical_json(&json!({
-                "authority":"accepted-main",
-                "commit_sha":GIT,
-                "repository":REPO
-            }))?
-            .as_bytes(),
-        );
-        let schema = |component: &str| {
-            json!({
-                "database_component":component,
-                "target_schema_revision":"0001_initial.sql",
-                "supported_schema_min":"0001_initial.sql",
-                "supported_schema_max":"0001_initial.sql",
-                "migration_history_digest":SHA,
-                "compatibility_policy_digest":SHA
-            })
-        };
-        let component = |id: &str, path: &str| {
-            json!({
-                "release_id":id,
-                "source_commit_sha":GIT,
-                "artifact_path":path,
-                "artifact_sha256":SHA,
-                "artifact_size_bytes":1,
-                "component_manifest_sha256":SHA
-            })
-        };
-        let mut value = json!({
-            "schema_version":2,
-            "release_set_id":format!("{RELEASE_SET_ID_PREFIX}{SHA}"),
-            "source":{"repository":REPO,"commit_sha":GIT,"accepted_main":true,"accepted_main_evidence_sha256":accepted},
-            "components":{
-                "control_plane":component("cp","components/control-plane.tar"),
-                "secret_resolver":component("rs","components/secret-resolver.tar"),
-                "runtime_bundle":component("rt","components/runtime-bundle.tar")
-            },
-            "contracts":{"files":[{"path":"openapi/v1/openapi.json","sha256":SHA,"size_bytes":1}],"sha256":SHA},
-            "protocols":{"public_api_contract_sha256":SHA,"camouhost_ipc_version":1,"profile_bridge_protocol_version":1,"resolver_protocol":"mailbox-secret-resolver-v1"},
-            "schemas":{"d1_repository_identity_sha256":SHA,"catalog":schema("catalog"),"resolver":schema("resolver")},
-            "runtime_compatibility":{"runtime_lock_sha256":SHA,"runtime_role":"real_camoufox","profile_format":"profile-v1","browser_identity_policy":"browser-identity-v1"},
-            "capability_profile_compatibility":["rehearsal-core-v1"],
-            "build_provenance":{"cargo_lock_sha256":SHA,"rust_toolchain_sha256":SHA,"frontend_lock_sha256":SHA,"release_architecture_sha256":SHA},
-            "artifact_inventory":[
-                {"path":"components/control-plane.tar","sha256":SHA,"size_bytes":1,"kind":"component"},
-                {"path":"components/secret-resolver.tar","sha256":SHA,"size_bytes":1,"kind":"component"},
-                {"path":"components/runtime-bundle.tar","sha256":SHA,"size_bytes":1,"kind":"component"}
-            ]
-        });
-        let mut identity = value.clone();
-        identity
-            .as_object_mut()
-            .ok_or_else(|| ReleaseModelError::new("fixture root must be object"))?
-            .remove("release_set_id");
-        value["release_set_id"] = Value::String(format!(
-            "{RELEASE_SET_ID_PREFIX}{}",
-            sha256_hex(canonical_json(&identity)?.as_bytes())
-        ));
-        Ok(serde_json::to_vec(&value)?)
-    }
-
     #[test]
     fn current_v3_round_trips_through_one_reader_boundary() -> Result<(), Box<dyn std::error::Error>>
     {
-        let semantic = v3_model()?;
-        let rendered = render_release_set_v3(&semantic)?;
+        let current = v3_model()?;
+        let rendered = render_release_set_v3(&current)?;
         let loaded = LoadedReleaseSet::parse(&rendered.canonical_document_bytes)?;
         assert_eq!(loaded.external_schema_version(), 3);
         assert!(!loaded.is_historical_v2());
         assert_eq!(loaded.release_set_id(), rendered.release_set_id);
-        assert_eq!(loaded.semantic(), &semantic);
+        assert_eq!(loaded.current_v3()?, &current);
+        Ok(())
+    }
+
+    #[test]
+    fn historical_v2_stays_historical_and_keeps_old_d1_meaning()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let loaded = LoadedReleaseSet::parse(HISTORICAL_V2)?;
+        assert_eq!(loaded.external_schema_version(), 2);
+        assert!(loaded.is_historical_v2());
+        assert!(loaded.current_v3().is_err());
+        assert!(matches!(
+            &loaded.semantic().schemas.d1_identity,
+            D1SchemaIdentity::HistoricalV2EvolutionAuthoritySha256(value) if value == SHA
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn historical_v2_rejects_v3_only_d1_field() -> Result<(), Box<dyn std::error::Error>> {
+        let mut value: Value = serde_json::from_slice(HISTORICAL_V2)?;
+        let schemas = value["schemas"]
+            .as_object_mut()
+            .ok_or("historical schemas must be object")?;
+        let digest = schemas
+            .remove("d1_evolution_authority_sha256")
+            .ok_or("historical d1 field missing")?;
+        schemas.insert("d1_repository_identity_sha256".to_owned(), digest);
+        let error = LoadedReleaseSet::parse(&serde_json::to_vec(&value)?)
+            .err()
+            .ok_or("v2 document with v3-only D1 field unexpectedly accepted")?;
+        assert!(error.to_string().contains("historical Release Set v2 decoder rejected"));
         Ok(())
     }
 
@@ -511,19 +554,8 @@ mod tests {
     }
 
     #[test]
-    fn historical_v2_is_decoder_only_but_projects_to_pure_core()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let loaded = LoadedReleaseSet::parse(&historical_v2()?)?;
-        assert_eq!(loaded.external_schema_version(), 2);
-        assert!(loaded.is_historical_v2());
-        assert_eq!(loaded.semantic().schema_version.number(), 3);
-        assert_eq!(loaded.semantic().source.commit_sha, GIT);
-        Ok(())
-    }
-
-    #[test]
     fn unknown_release_schema_is_rejected() {
-        let result = LoadedReleaseSet::parse(br#"{"schema_version":4}"#);
+        let result = LoadedReleaseSet::parse(br#"{\"schema_version\":4}"#);
         assert!(matches!(
             result,
             Err(error) if error

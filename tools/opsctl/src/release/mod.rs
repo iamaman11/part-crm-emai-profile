@@ -1,8 +1,8 @@
 //! Project-specific release contract and policy namespace.
 //!
-//! Release Set semantics are owned by the typed pure core. This outer module owns
-//! local filesystem/JSON adapters only; it has no provider credentials, network
-//! clients, deployment execution or production mutation authority.
+//! Current Release Set v3 semantics are owned by the typed pure core. This outer module owns
+//! local filesystem/JSON adapters and the isolated read-only historical-v2 decoder only; it has
+//! no provider credentials, network clients, deployment execution or production mutation authority.
 
 pub mod artifact;
 pub mod authority;
@@ -12,6 +12,7 @@ pub mod component_manifest;
 pub mod digest;
 pub mod document;
 pub mod finalize;
+mod historical_v2;
 pub mod input_topology;
 pub mod model;
 pub mod source;

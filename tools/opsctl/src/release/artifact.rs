@@ -18,7 +18,7 @@ pub fn verify_artifacts(
     release_set: &LoadedReleaseSet,
     artifact_root: &Path,
 ) -> Result<ArtifactVerification, ReleaseModelError> {
-    let manifest = release_set.semantic();
+    let manifest = release_set.current_v3()?;
     let root_metadata = fs::symlink_metadata(artifact_root).map_err(|error| {
         ReleaseModelError::new(format!(
             "ARTIFACT_ROOT_UNAVAILABLE: {}: {error}",
