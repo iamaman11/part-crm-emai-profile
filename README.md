@@ -10,8 +10,10 @@ Browser Profile Platform is a standalone, provider-neutral control plane for gov
 - **Current accepted checkpoint:** AR-11 — Release-set / Promotion Architecture.
 - **Current architecture slice:** AR-12 — Fresh Rehearsal Environment, **DERIVED CURRENT / NOT STARTED**.
 - **Current execution umbrella:** Post-AR-11 Functional Closure #399.
-- **Current next work:** **F1/F2**, followed by **N1…N5**. PF-1 #430 is blocked until those normalization transactions are accepted.
+- **Accepted pre-PF-1 normalization:** **F1/F2 + N1**.
+- **Current next work:** **N2 — AR-6 Python-estate authority retirement + role/effect normalization**, followed by N3 → N4 → N5. PF-1 #430 remains blocked until N5 acceptance and a fresh PF-1 entry reread.
 - Issue #375 is closed historical hardening; it is not a current blocker or execution authority.
+- Closed PR #428 is a superseded pre-normalization PF-2 checkpoint only; PF-2 must later start from a fresh branch based on accepted PF-1 `main`.
 - **Architecture complete:** `false`.
 - **Production Core gate:** `BLOCKED`.
 - **Production readiness:** `production_ready=false`.
@@ -19,13 +21,13 @@ Browser Profile Platform is a standalone, provider-neutral control plane for gov
 The binding pre-AR-12 execution path is:
 
 ```text
-F1 Release Set breaking-contract version discipline
+F1 Release Set breaking-contract version discipline                 ACCEPTED
 +
-F2 permanent application/opsctl/doctor/canonical-JSON/Python foundations
+F2 permanent application/opsctl/doctor/canonical-JSON/Python       ACCEPTED
  ->
-N1 AR-2 runtime/resource-topology authority retirement
+N1 AR-2 runtime/resource-topology authority retirement             ACCEPTED
  ->
-N2 AR-6 Python-estate authority retirement + role/effect normalization
+N2 AR-6 Python-estate authority retirement + role/effect norm.     NEXT
  ->
 N3 AR-7 current GitHub-governance normalization
  ->
@@ -35,7 +37,7 @@ N5 AR-10 runtime semantic-authority retirement
  ->
 PF-1 #430 typed lifecycle + deterministic bounded-projection inventory cutover
  ->
-PF-2 Universal Hosted Operational Evidence / Draft PR #428
+PF-2 Universal Hosted Operational Evidence from a fresh post-PF-1 branch
  ->
 PF-3 #431 typed Rust Architecture Fitness Baseline
  ->
@@ -59,8 +61,9 @@ The single current program authority is [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.m
 Current prerequisite/closure execution is specified by:
 
 - [`docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — F1/F2 + N1…N5;
+- issue #441 — live accepted-main execution tracker and N2→N5 handoff checklist;
 - [`docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — PF/FC execution umbrella;
-- [`docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) — PF-1 contract;
+- [`docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) and #430 — PF-1 contract and live entry gate;
 - [`docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`](docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 typed fitness contract.
 
 `docs/status.json`, `architecture/inventory.json`, `docs/DEVELOPMENT_PLAN.md` and README/index surfaces are projections/navigation, never independent semantic or lifecycle authority. Transitional projection lag must not be interpreted as permission to skip F/N/PF/FC prerequisites.
@@ -110,6 +113,8 @@ global authority bag = 0
 ## PF-1 / PF-3 direction
 
 PF-1 uses a typed `LifecycleEvaluator` plus bounded minimal inventory projections. It must not introduce `GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet`, and `architecture/inventory.json` remains generated output rather than compiler input.
+
+Before PF-1 starts, issue #430 requires a fresh accepted-main reread proving F1/F2/N1…N5 accepted, no predecessor-normalization implementation PR remains open, no N1–N5 retired current authority was reintroduced, and all permanent `opsctl`/Python/generated-projection zero budgets still hold. N2–N5 prepare unambiguous natural owners; they must not pre-build a generic PF-1 projection framework.
 
 PF-3 semantic authority belongs to typed Rust, for example:
 
