@@ -12,13 +12,16 @@ pub(crate) fn lifecycle(root: &Path) -> Result<String, OpsctlError> {
     )
 }
 
-/// Accepted metadata-only rotation/recovery projection behind
-/// `opsctl credentials rotation-plan`.
+/// Metadata-only rotation/recovery view behind `opsctl credentials rotation-plan`.
 ///
-/// This command does not rotate credentials. AR-13 owns rehearsal-backed
-/// readiness and mutation semantics.
+/// The bounded credential lifecycle contract owns these semantics. This command does
+/// not rotate credentials, execute a provider call, or own a second operator policy.
 pub(crate) fn rotation_plan(root: &Path) -> Result<String, OpsctlError> {
-    canonical_json_document(root, "architecture/operator-contract.json", "rotation-plan")
+    canonical_json_document(
+        root,
+        "architecture/credential-lifecycle.json",
+        "rotation-plan",
+    )
 }
 
 /// AR-10 activates only metadata reads in the modular credentials namespace.
