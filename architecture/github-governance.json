@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "kind": "GITHUB_GOVERNANCE_DESIRED_STATE",
+  "repository": "iamaman11/part-crm-emai-profile",
+  "observation_mode": "READ_ONLY",
+  "main": {
+    "branch": "main",
+    "protection_mechanism": "classic_branch_protection",
+    "require_pull_request": true,
+    "require_conversation_resolution": true,
+    "enforce_admins": true,
+    "strict_required_status_checks": true,
+    "allow_force_pushes": false,
+    "allow_deletions": false,
+    "required_checks": [
+      "Certification Linux And WASM",
+      "Certification Windows",
+      "Cloudflare Worker Release Build",
+      "D1 Catalog Migrations",
+      "Encrypted Generation Linux And WASM",
+      "Encrypted Generation Windows",
+      "External Evidence Metadata",
+      "External Readiness Projection",
+      "External Review Attestations",
+      "GitHub Governance Contract",
+      "Invariants And Fail-Closed Boundaries",
+      "Local Profile Linux",
+      "Local Profile Windows",
+      "Profile Bridge Windows regression",
+      "React Operator UI",
+      "Real Camoufox cold-launch proof",
+      "Registry Domain D1 Adapter Worker And Contract",
+      "Repository-Local Standalone Flow",
+      "Resolver D1 first-bootstrap implementation",
+      "Runtime Bundle Linux",
+      "Runtime Bundle Windows",
+      "Rust Linux and WASM",
+      "Rust Windows And Profile Bridge Artifact"
+    ]
+  },
+  "environments": {
+    "rehearsal": {
+      "required": true,
+      "allowed_branches": [
+        "main"
+      ],
+      "minimum_reviewers": 0
+    },
+    "staging": {
+      "required": true,
+      "allowed_branches": [
+        "main"
+      ],
+      "minimum_reviewers": 0
+    },
+    "production": {
+      "required": true,
+      "allowed_branches": [
+        "main"
+      ],
+      "minimum_reviewers": 1,
+      "can_admins_bypass": false
+    }
+  },
+  "evaluation": {
+    "required_check_match": "EXACT",
+    "unknown_or_unreadable_live_state": "BLOCK",
+    "mutation_authority": false,
+    "production_mutation": false
+  }
+}
