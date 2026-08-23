@@ -23,7 +23,8 @@ for relative in (
 try:
     runpy.run_path(str(Path(__file__).with_name("n1_scratch_audit.py")), run_name="__main__")
 except SystemExit as exc:
-    if exc.code != 1:
+    message = str(exc.code)
+    if "legacy checker executable callers remain: 2" not in message:
         raise
 
 # The audit intentionally reached its final classifier. Its only two reported
@@ -33,7 +34,6 @@ except SystemExit as exc:
 debt = json.loads((ROOT / "architecture/historical-executable-debt.json").read_text(encoding="utf-8"))
 records = [item for item in debt.get("records", []) if isinstance(item, dict) and item.get("path") == "scripts/check-documentation-authority-legacy.py"]
 if not records:
-    # historical-executable-debt uses a top-level array under a different key in some snapshots.
     records = [
         item
         for value in debt.values()
