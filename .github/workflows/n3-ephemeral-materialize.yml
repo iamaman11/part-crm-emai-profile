@@ -117,7 +117,7 @@ jobs:
           docs/status.json
           scripts/generate-architecture-inventory-engine.py
           EOF
-          git diff --cached --name-only | sort > "$actual"
+          git diff --cached --no-renames --name-only | sort > "$actual"
           diff -u "$expected" "$actual"
 
           git config user.name 'iamaman11'
@@ -130,7 +130,7 @@ jobs:
           } | git commit-tree "$tree_sha" -p "$ACCEPTED_BASE")"
 
           test "$(git rev-parse "$commit_sha^")" = "$ACCEPTED_BASE"
-          test "$(git diff-tree --no-commit-id --name-only -r "$commit_sha" | sort | wc -l)" -eq 10
+          test "$(git diff-tree --no-renames --no-commit-id --name-only -r "$commit_sha" | sort | wc -l)" -eq 10
           git push origin "$commit_sha:refs/heads/$FINAL_BRANCH"
           echo "FINAL_CANDIDATE_SHA=$commit_sha" >> "$GITHUB_ENV"
 
