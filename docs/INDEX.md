@@ -21,7 +21,7 @@ AR-12  NOT STARTED
 
 Production remains disabled/fail-closed. `source_present != production_enabled` is binding.
 
-Draft PR #452 is documentation synchronization only, not a gate. Closed PR #428 is superseded PF-2 history only.
+Closed PR #428 is superseded PF-2 history only.
 
 ## Authority hierarchy
 
