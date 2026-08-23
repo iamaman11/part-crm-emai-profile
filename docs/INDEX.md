@@ -14,7 +14,7 @@ This index is a navigation/projection document. It does not create a second road
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
 - Post-AR-11 Functional Closure #399 is the current execution umbrella.
-- F1/F2 and N1 are accepted; **N2 is NEXT** from accepted protected main.
+- F1/F2 and N1 are accepted; **#454 is NEXT** as the bounded pre-N2 Release Set v2 compatibility/current-authority correction. **N2 is BLOCKED on #454 acceptance**.
 - Closed PR #428 is a superseded pre-normalization PF-2 checkpoint only; PF-2 later starts from a clean branch based on accepted PF-1 `main`.
 - The prerequisite order before AR-12 is:
 
@@ -25,7 +25,10 @@ F2 permanent application/opsctl/doctor/canonical-JSON/Python          ACCEPTED
  ->
 N1 AR-2 authority retirement                                          ACCEPTED
  ->
-N2 AR-6 Python-estate authority retirement                            NEXT
+#454 Release Set v2 current-compatibility correction                  NEXT
+     bounded correction only; no new phase
+ ->
+N2 AR-6 Python-estate authority retirement                            BLOCKED on #454
  ->
 N3 AR-7 current governance normalization
  ->
@@ -37,7 +40,7 @@ PF-1 typed lifecycle + deterministic bounded-projection inventory cutover
  ->
 PF-2 Universal Hosted Operational Evidence from fresh accepted PF-1 main
  ->
-PF-3 typed Rust Architecture Fitness Baseline
+PF-3 typed Rust Architecture Fitness Baseline + architecture-forming freeze
  ->
 fresh #399/#421 re-baseline
  ->
@@ -48,7 +51,7 @@ FC-7
 AR-12 implementation entry
 ```
 
-F1/F2/N1…N5 are foundation/normalization transactions, not AR/PF lifecycle slices. `architecture/architecture-program-sequence.json` is unchanged.
+F1/F2/N1…N5 are foundation/normalization transactions, not AR/PF lifecycle slices. #454 is a bounded correction and does not alter `architecture/architecture-program-sequence.json`.
 
 ## Current normative hierarchy
 
@@ -58,21 +61,24 @@ F1/F2/N1…N5 are foundation/normalization transactions, not AR/PF lifecycle sli
 4. [`OPSCTL_ARCHITECTURE_BOUNDARY.md`](OPSCTL_ARCHITECTURE_BOUNDARY.md) — permanent standalone `opsctl` pure-core/adapter/effect boundary.
 5. [`OPSCTL_DOCTOR_CONTRACT.md`](OPSCTL_DOCTOR_CONTRACT.md) — permanent `opsctl doctor` diagnostic boundary.
 6. [`PYTHON_USAGE_BOUNDARY.md`](PYTHON_USAGE_BOUNDARY.md) — Python role/effect/authority policy.
-7. [`PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — F1/F2 + N1…N5 prerequisite specification.
-8. Issue #441 — live accepted-main execution tracker and explicit N2→N5 handoff/readiness checklist; tracker only, never semantic authority.
-9. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — subordinate execution plan through FC-7.
-10. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) + #430 — PF-1 detailed cutover contract and live entry gate.
-11. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 typed fitness semantics/enforcement contract.
-12. Stable bounded authorities such as [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) and current domain/runtime/release contracts.
-13. [`../architecture/inventory.json`](../architecture/inventory.json), `status.json`, `DEVELOPMENT_PLAN.md`, this index and README entrypoints — generated/current projections only.
-14. Historical AR/evidence documents — provenance, not automatically current semantic authorities.
+7. [`PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — F1/F2 + N1…N5 prerequisite specification including the bounded pre-N2 correction gate.
+8. Issue #441 — live accepted-main execution tracker and explicit #454→N2→N5 handoff/readiness checklist; tracker only, never semantic authority.
+9. Issue #454 — bounded current-consumer/compatibility correction before N2; tracker/work item, not a lifecycle phase.
+10. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — subordinate execution plan through FC-7.
+11. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) + #430 — PF-1 detailed cutover contract and live entry gate.
+12. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) + #431 — PF-3 typed fitness + architecture-forming freeze contract.
+13. Stable bounded authorities such as [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) and current domain/runtime/release contracts.
+14. [`../architecture/inventory.json`](../architecture/inventory.json), `status.json`, `DEVELOPMENT_PLAN.md`, this index and README entrypoints — generated/current projections only.
+15. Historical AR/evidence documents — provenance, not automatically current semantic authorities.
 
 An open PR/branch never outranks accepted protected `main`.
 
 ## Mandatory application model
 
 ```text
-natural canonical owner
+current product/security/durable obligations constrain valid solutions
+-> current prospective architecture owns internal shape
+-> natural canonical owner
 -> typed policy/contracts
 -> bounded-context domain + application
 -> ports/adapters/effects
@@ -91,6 +97,7 @@ source_present != production_enabled
 Product Runtime -> opsctl = forbidden
 generated projection used as semantic source = forbidden
 cutover -> zero callers -> zero unique current invariants -> delete DEAD predecessor
+no proved consumer + no durable obligation -> no compatibility bridge
 ```
 
 ## `opsctl` navigation
@@ -144,17 +151,18 @@ The AR-6/AR-10/AR-11 Python estate overlay chain is transitional current-authori
 The exact live execution checklist is #441. Static ownership intent remains in `PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`:
 
 ```text
-N2 -> Python role/effect policy; no estate registry; doctor/root lose Python sentinels
-N3 -> current desired governance + live observation + typed evaluation; no historical overlay chain
-N4 -> Rust CommandRegistry/effect registry; operator-contract JSON cannot authorize behavior
-N5 -> Product Rust/runtime-lock/Camouhost/IPC/tests; runtime-cutover AR-10 authority retired
+#454 -> prove exact current v2 consumer/durable obligation OR retire executable v2 compatibility/current-v2 authority
+N2   -> Python role/effect policy; no estate registry; doctor/root lose Python sentinels
+N3   -> current desired governance + live observation + typed evaluation; no historical overlay chain
+N4   -> Rust CommandRegistry/effect registry; operator-contract JSON cannot authorize behavior
+N5   -> Product Rust/runtime-lock/Camouhost/IPC/tests; runtime-cutover AR-10 authority retired
 ```
 
 N2–N5 make natural owners unambiguous and retire predecessor semantics. They do **not** build a generic PF-1 projection/compiler framework early.
 
 ## PF-1 target
 
-PF-1 starts only after N5 acceptance and a fresh #430 entry reread proving no N1–N5 retired current authority has reappeared.
+PF-1 starts only after #454 and N5 acceptance and a fresh #430 entry reread proving no retired current authority has reappeared.
 
 ```text
 RawArchitectureAcceptanceEvidenceV1
@@ -166,7 +174,7 @@ bounded typed inventory projections
 -> architecture/inventory.json
 ```
 
-PF-1 must not create a `GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet`. It retires/deletes the legacy Node lifecycle engine and Python inventory/projection cluster after parity + zero-caller/zero-unique-invariant proof.
+PF-1 must not create a `GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet`. It retires/deletes the legacy Node lifecycle engine and Python inventory/projection cluster after parity + zero-caller/zero-unique-invariant proof. It must also disposition the manual AR-qualified application ownership tables in `_ar3_application_architecture.py` rather than porting them 1:1 into another semantic registry.
 
 ## PF-2 target
 
@@ -191,7 +199,7 @@ typed Rust FitnessRuleRegistry
 -> optional generated report/index
 ```
 
-A manually maintained semantic `architecture/architecture-fitness-policy.json` is not the target owner.
+A manually maintained semantic `architecture/architecture-fitness-policy.json` is not the target owner. Accepted PF-3 is the Architecture Re-baseline v3 architecture-forming freeze point; later roadmap stages implement/rehearse/deliver on the established architecture.
 
 ## Current delivery map
 
@@ -199,8 +207,9 @@ A manually maintained semantic `architecture/architecture-fitness-policy.json` i
 | --- | --- |
 | Source implemented | Accepted through AR-11 |
 | Pre-PF-1 foundation | F1/F2 accepted |
-| Pre-PF-1 normalization | N1 accepted; **N2 NEXT** |
-| PF-1 | BLOCKED on N5 + fresh entry reread |
+| Pre-PF-1 normalization | N1 accepted; **#454 NEXT; N2 BLOCKED** |
+| PF-1 | BLOCKED on #454 + N5 + fresh entry reread |
+| PF-3 | BLOCKED on PF-2; future architecture-forming freeze |
 | AR-12 | Derived current / NOT STARTED |
 | Staging | Partial non-production foundations only |
 | Production authorized | NO |
