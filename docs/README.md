@@ -1,43 +1,46 @@
-# Documentation Navigation
+# Documentation entrypoint
 
-This file is a compatibility entrypoint. Use [`INDEX.md`](INDEX.md) for the current documentation hierarchy.
+Start with `docs/INDEX.md` for navigation and `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` for canonical program authority.
 
-## Current execution
+Current execution state is intentionally simple:
 
 ```text
 F1/F2 ACCEPTED
 -> N1 ACCEPTED
--> #454 NEXT — sole pre-N2 implementation transaction
--> N2 BLOCKED on #454
--> N3 -> N4 -> N5
+-> #454 NEXT — sole actual pre-N2 implementation transaction
+-> N2 -> N3 -> N4 -> N5
 -> PF-1 -> PF-2 -> PF-3
--> fresh #399/#421 re-baseline
--> FC-6 -> FC-7
--> AR-12
+-> FC-6 preflight + staging proof
+-> FC-7 closeout
+-> AR-12..AR-17 qualification path
+-> PC-1 Production Core v1
 ```
 
-AR-12 is **NOT STARTED**. Production remains fail-closed:
+`fresh #399/#421 re-baseline` is a required live observation at FC-6 entry, not another implementation phase. N2–N5 are sequential authority-retirement transactions, not new architecture programs. AR-12/13/14 are rehearsals, AR-15 is the substantive Windows delivery/updater implementation stage, AR-16 is audit-only, and AR-17 is qualification/authorization-only as far as practical.
+
+Production remains fail-closed:
 
 ```text
 architecture_complete=false
 production_core_gate=BLOCKED
 production_ready=false
 production_mutation=false
+source_present != production_enabled
 ```
 
-Closed PR #428 is superseded PF-2 history only.
+Use:
 
-## Start here
+- `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` — canonical architecture/program authority;
+- #441 — live mutable pre-PF-1 execution state;
+- #454 — sole current pre-N2 implementation transaction;
+- `docs/DEVELOPMENT_PLAN.md` — compact developer-facing projection and efficiency rules;
+- `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md` — permanent application architecture contract;
+- `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md` — detailed authority-retirement contract;
+- `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` / #430 — PF-1;
+- `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` / #431 — PF-3;
+- `docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`, #399, #421 — Functional Closure;
+- `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md` — shared exact-head/guarded-merge acceptance discipline;
+- `CONTRIBUTING.md` — developer workflow and current GitHub-plugin/no-local-`gh` execution guidance;
+- `docs/PRODUCT.md` — product/capability boundary.
 
-- [`ARCHITECTURE_REBASELINE_V3_PLAN.md`](ARCHITECTURE_REBASELINE_V3_PLAN.md) — canonical current program authority;
-- issue #441 — live pre-PF-1 execution tracker;
-- issue #454 — sole current pre-N2 implementation transaction;
-- [`DEVELOPMENT_PLAN.md`](DEVELOPMENT_PLAN.md) — compact developer-facing execution projection;
-- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — contribution workflow, local checks and GitHub-plugin/no-`gh` environment guidance;
-- [`PRODUCT.md`](PRODUCT.md) — product/Production Core boundary.
-
-Detailed architecture, normalization, PF and Functional Closure rules are linked from [`INDEX.md`](INDEX.md) and should not be duplicated here.
-
-`docs/status.json`, `architecture/inventory.json`, README/index surfaces and `DEVELOPMENT_PLAN.md` are projections/navigation only. Historical AR/evidence documents preserve provenance and do not override current protected `main` or the canonical hierarchy.
-
-`source_present != production_enabled` remains binding.
+Historical AR documents remain evidence and context. They are not automatically current semantic authorities.
