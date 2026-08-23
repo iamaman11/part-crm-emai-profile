@@ -25,7 +25,7 @@ production_ready=false
 production_mutation=false
 ```
 
-Draft PR #452 is documentation synchronization only, not a lifecycle gate. Closed PR #428 is superseded PF-2 history only.
+Closed PR #428 is superseded PF-2 history only.
 
 ## Start here
 
