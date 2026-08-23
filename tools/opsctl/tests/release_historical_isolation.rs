@@ -222,7 +222,7 @@ fn historical_v2_verify_is_minimum_integrity_only_and_target_use_is_rejected()
         assert_eq!(verified["verified_components"], json!([]));
         assert_eq!(verified["verified_provenance_dimensions"], json!([]));
 
-        let target_error = commands::run(ReleaseRunRequest {
+        let target_error = match commands::run(ReleaseRunRequest {
             root: &root,
             source_root: &root,
             action: ReleaseAction::Compatibility,
@@ -232,8 +232,15 @@ fn historical_v2_verify_is_minimum_integrity_only_and_target_use_is_rejected()
             environment: None,
             evidence_json: None,
             current_release_set: None,
-        })
-        .expect_err("historical v2 must never be accepted as current compatibility target");
+        }) {
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "historical v2 unexpectedly accepted as current compatibility target",
+                )
+                .into());
+            }
+            Err(error) => error,
+        };
         assert!(
             target_error
                 .to_string()
