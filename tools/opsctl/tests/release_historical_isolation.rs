@@ -1,10 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const APPROVED_HISTORICAL_BOUNDARY: [&str; 2] = [
-    "document.rs",
-    "document/historical_v2.rs",
-];
+const APPROVED_HISTORICAL_BOUNDARY: [&str; 2] = ["document.rs", "document/historical_v2.rs"];
 
 const HISTORICAL_WIRE_MARKERS: [&str; 4] = [
     "d1_evolution_authority_sha256",

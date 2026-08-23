@@ -112,9 +112,10 @@ fn canonical_identity_fields(
     })
 }
 
-fn component(id: &str, path: &str, digest: &str, size: u64) -> Value {
+fn component(component_id: &str, release_id: &str, path: &str, digest: &str, size: u64) -> Value {
     json!({
-        "release_id": id,
+        "component_id": component_id,
+        "release_id": release_id,
         "source_commit_sha": GIT_SHA,
         "artifact_path": path,
         "artifact_sha256": digest,
@@ -144,10 +145,10 @@ fn fixture_value() -> Result<Value, Box<dyn std::error::Error>> {
             "accepted_main_evidence_sha256": accepted,
         },
         "components": {
-            "control_plane": component("control-plane-v2", "components/control-plane.tar", SHA_A, 10),
-            "frontend": component("control-plane-v2", "components/control-plane.tar", SHA_A, 10),
-            "secret_resolver": component("resolver-v2", "components/secret-resolver.tar", SHA_B, 11),
-            "runtime_bundle": component("runtime-v2", "components/runtime-bundle.tar", SHA_A, 12),
+            "control_plane": component("control_plane", "control-plane-v2", "components/control-plane.tar", SHA_A, 10),
+            "frontend": component("frontend", "control-plane-v2", "components/control-plane.tar", SHA_A, 10),
+            "secret_resolver": component("secret_resolver", "resolver-v2", "components/secret-resolver.tar", SHA_B, 11),
+            "runtime_bundle": component("runtime_bundle", "runtime-v2", "components/runtime-bundle.tar", SHA_A, 12),
         },
         "contracts": identity.contracts,
         "protocols": identity.protocols,
