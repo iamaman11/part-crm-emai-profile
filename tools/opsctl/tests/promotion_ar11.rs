@@ -6,7 +6,8 @@ use opsctl::release::compatibility::CompatibilityEvidence;
 use opsctl::release::digest::{canonical_json, sha256_hex};
 use opsctl::release::document::LoadedReleaseSet;
 use opsctl::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
-use opsctl::release::v3_output::RELEASE_SET_V3_ID_PREFIX as RELEASE_SET_ID_PREFIX;
+use opsctl::release::v3_dto::ReleaseSetV3Dto;
+use opsctl::release::v3_output::render_release_set_v3;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -155,9 +156,8 @@ fn release_set() -> Result<LoadedReleaseSet, Box<dyn std::error::Error>> {
         runtime_compatibility,
         build_provenance,
     } = static_compatibility_fields()?;
-    let mut value = json!({
+    let value = json!({
         "schema_version": 3,
-        "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{SHA_A}"),
         "source": {
             "repository": REPOSITORY,
             "commit_sha": GIT_SHA,
@@ -184,15 +184,10 @@ fn release_set() -> Result<LoadedReleaseSet, Box<dyn std::error::Error>> {
             {"path":"components/secret-resolver.tar","sha256":SHA_B,"size_bytes":11,"kind":"component"}
         ]
     });
-    let mut identity = value.clone();
-    identity
-        .as_object_mut()
-        .ok_or_else(|| io::Error::other("release fixture must be an object"))?
-        .remove("release_set_id");
-    let digest = sha256_hex(canonical_json(&identity)?.as_bytes());
-    value["release_set_id"] = Value::String(format!("{RELEASE_SET_ID_PREFIX}{digest}"));
-    let bytes = serde_json::to_vec(&value)?;
-    Ok(LoadedReleaseSet::parse(&bytes)?)
+    let dto: ReleaseSetV3Dto = serde_json::from_value(value)?;
+    let semantic = dto.into_core()?;
+    let rendered = render_release_set_v3(&semantic)?;
+    Ok(LoadedReleaseSet::parse(&rendered.canonical_document_bytes)?)
 }
 
 fn evidence(
