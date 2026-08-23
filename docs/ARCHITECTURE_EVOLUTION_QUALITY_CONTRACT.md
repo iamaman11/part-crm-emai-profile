@@ -19,6 +19,31 @@ Accepted AR-0…AR-11 history remains immutable. Future work preserves correct a
 source_present != production_enabled
 ```
 
+## 0. Precedence and compatibility default
+
+Current product/security guarantees and proved durable/external obligations constrain the valid solution space. Subject to those obligations, current prospective architecture owns the internal implementation shape.
+
+```text
+current product/security/durable obligations
+    -> constrain acceptable solutions
+current prospective architecture
+    -> owns internal architecture shape
+natural semantic owners
+-> current consumers / external observations
+-> historical outcomes + immutable evidence
+-> historical internal implementation shape
+```
+
+Historical implementation is not a compatibility contract by itself.
+
+```text
+proved current/external consumer = 0
+AND durable/persisted/migration obligation = 0
+-> compatibility bridge default = NO
+```
+
+A compatibility path may remain only for a named consumer/obligation, exact version/shape, isolated reader/adapter semantics and an explicit retirement condition. A real persisted/wire/external obligation cannot be discarded merely because a cleaner internal architecture exists; it must be versioned, migrated or explicitly retired through its owner.
+
 ## 1. Target architecture
 
 ```text
@@ -160,7 +185,7 @@ Product Runtime -> opsctl-core = 0
 
 `Path`/`PathBuf` are shell/filesystem representations, not semantic identities. Core uses normalized typed identities such as repository-relative paths where needed.
 
-A small internal `opsctl-core` package is preferred when it materially gives compile-time enforcement. Dependency count itself is not a quality KPI; zero hidden effects/representation leakage is.
+A small internal `opsctl-core` package is appropriate when it materially gives compile-time enforcement. Dependency count itself is not a quality KPI; zero hidden effects/representation leakage is.
 
 ## 7. `opsctl doctor`
 
@@ -303,7 +328,7 @@ Machine stdout contracts are versioned; stderr is diagnostics.
 
 ## 15. Canonical external JSON and digest discipline
 
-Use one explicitly governed canonical external JSON/digest foundation where content addressing/attestation requires semantic identity.
+Use the accepted F2 canonical external JSON/digest foundation where content addressing/attestation requires semantic identity.
 
 Security/release/evidence-critical JSON requires:
 
@@ -327,7 +352,7 @@ exact artifact identity -> exact file bytes -> SHA-256
 
 Do not hash Protobuf serialized bytes as a universal canonical identity.
 
-Breaking external-contract changes bump version. Historical readers may be isolated when a real current historical consumer is proved; current writer/model never silently changes meaning under the old version.
+Breaking external-contract changes bump version. Historical readers may be isolated only when a real current historical consumer/durable obligation is proved; current writer/model never silently changes meaning under the old version. The bounded pre-N2 F1 cleanup gate resolves the remaining v2 current-consumer question before N2 starts.
 
 ## 16. PF-1 target
 
@@ -344,6 +369,8 @@ outer Git/GitHub raw observations
 
 PF-1 must not create a `GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet`. It deletes legacy Node lifecycle and Python inventory/projection current authorities after parity + zero-caller + zero-unique-invariant proof.
 
+PF-1 also disposes the manual AR-qualified application ownership/projection authority embodied in legacy `_ar3_application_architecture.py` tables. Still-valid application facts come from Rust structure/natural owners plus bounded observations; the old tables are not ported 1:1 into Rust or another machine registry.
+
 ## 17. PF-2 target
 
 PF-2 Hosted Evidence reuses the same strict versioned DTO/canonical/digest principles:
@@ -359,7 +386,7 @@ outer provider/GitHub observation
 
 Evidence validity, freshness/replay and mutation eligibility are separate typed concepts. `opsctl` remains offline and has no provider credentials/mutation authority.
 
-## 18. PF-3 target
+## 18. PF-3 target and architecture-forming freeze
 
 PF-3 makes these rules permanent through typed Rust fitness semantics:
 
@@ -388,7 +415,13 @@ serde_json::Value crossing into pure core = 0
 Python duplicate semantic authority = 0
 unclassified Python production/provider effect = 0
 breaking durable contract without version bump = 0
+compatibility shim without proved consumer/durable obligation = 0
+manual AR-qualified application ownership registry current authority = 0
 ```
+
+Accepted PF-3 is the final planned Architecture Re-baseline v3 **architecture-forming freeze point**. After it, FC/AR/PC work may implement bounded functionality and explicit contract versions inside the established architecture, but may not introduce a new generic architecture layer, global authority/registry, duplicate lifecycle/evidence/fitness engine or speculative compatibility framework.
+
+PF-3 acceptance does **not** set `architecture_complete=true` and does not authorize production. AR-16 remains audit-only and AR-17 qualification/authorization-only. A genuine later material architecture change requires the explicit governed architecture-change/anti-weakening path rather than being hidden inside a roadmap phase.
 
 ## 19. Development-stage verification protocol
 
