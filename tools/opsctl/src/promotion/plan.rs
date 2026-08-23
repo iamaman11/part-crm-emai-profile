@@ -2,9 +2,8 @@ use crate::promotion::authority::{DeploymentClosure, load_closure};
 use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::release::compatibility::{CompatibilityEvidence, CompatibilityResult, evaluate};
 use crate::release::digest::sha256_hex;
-use crate::release::document::LoadedReleaseSet;
+use crate::release::document::{LoadedReleaseSet, ReleaseCompatibilityView};
 use crate::release::model::ReleaseModelError;
-use opsctl_core::release::ReleaseSetV3;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -219,7 +218,7 @@ pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelErro
 }
 
 fn validate_release_components(
-    target: &ReleaseSetV3,
+    target: &ReleaseCompatibilityView,
     closure: &DeploymentClosure,
 ) -> Result<(), ReleaseModelError> {
     for component in &closure.required_components {

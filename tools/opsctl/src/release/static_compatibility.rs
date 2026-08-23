@@ -1,9 +1,9 @@
 use crate::d1;
 use crate::release::authority::ReleaseArchitecture;
 use crate::release::digest::{canonical_json, sha256_hex};
+use crate::release::document::{D1SchemaIdentity, ReleaseCompatibilityView};
 use crate::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
 use crate::release::model::ReleaseModelError;
-use opsctl_core::release::ReleaseSetV3;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -20,13 +20,12 @@ pub const VERIFIED_PROVENANCE_DIMENSIONS: [&str; 8] = [
     "release_architecture",
 ];
 
-/// Evaluate release-critical identities that are fully determined by the immutable
-/// Release Set semantic model and the exact source checkout. Every semantic field is
-/// either verified here/artifact verification or is explicit external provider evidence
-/// handled by release compatibility.
+/// Evaluate release-critical identities that are fully determined by a typed durable Release Set
+/// view and the exact source checkout. Historical v2 may be inspected/read for compatibility, but
+/// it cannot satisfy the current v3 D1 repository identity and therefore fails closed here.
 pub fn evaluate(
     root: &Path,
-    manifest: &ReleaseSetV3,
+    manifest: &ReleaseCompatibilityView,
     mailbox_admin: bool,
 ) -> Result<Vec<String>, ReleaseModelError> {
     let topology = ReleaseInputTopology::load(root)?;
@@ -59,7 +58,7 @@ pub fn evaluate(
 
 fn contracts_match(
     resolved: &[ResolvedReleaseInput],
-    manifest: &ReleaseSetV3,
+    manifest: &ReleaseCompatibilityView,
 ) -> Result<bool, ReleaseModelError> {
     let expected = resolved
         .iter()
@@ -99,7 +98,7 @@ fn contracts_match(
 
 fn protocols_match(
     resolved: &[ResolvedReleaseInput],
-    manifest: &ReleaseSetV3,
+    manifest: &ReleaseCompatibilityView,
     mailbox_admin: bool,
 ) -> Result<bool, ReleaseModelError> {
     if manifest.protocols.public_api_contract_sha256 != manifest.contracts.sha256 {
@@ -125,10 +124,14 @@ fn protocols_match(
     Ok(true)
 }
 
-fn schemas_match(root: &Path, manifest: &ReleaseSetV3) -> Result<bool, ReleaseModelError> {
+fn schemas_match(root: &Path, manifest: &ReleaseCompatibilityView) -> Result<bool, ReleaseModelError> {
+    let expected_repository_identity = match &manifest.schemas.d1_identity {
+        D1SchemaIdentity::CurrentV3RepositoryIdentitySha256(value) => value,
+        D1SchemaIdentity::HistoricalV2EvolutionAuthoritySha256(_) => return Ok(false),
+    };
     let repository_identity = d1::repository_identity_sha256(root)
         .map_err(|error| ReleaseModelError::new(error.to_string()))?;
-    if manifest.schemas.d1_repository_identity_sha256 != repository_identity {
+    if expected_repository_identity != &repository_identity {
         return Ok(false);
     }
     for (id, window) in [
@@ -157,7 +160,7 @@ fn schemas_match(root: &Path, manifest: &ReleaseSetV3) -> Result<bool, ReleaseMo
 
 fn runtime_matches(
     resolved: &[ResolvedReleaseInput],
-    manifest: &ReleaseSetV3,
+    manifest: &ReleaseCompatibilityView,
 ) -> Result<bool, ReleaseModelError> {
     let runtime_lock = resolved_input(resolved, "camouhost_runtime_lock")?;
     if manifest.runtime_compatibility.runtime_lock_sha256 != runtime_lock.sha256 {
@@ -183,7 +186,7 @@ fn runtime_matches(
 
 fn build_provenance_matches(
     resolved: &[ResolvedReleaseInput],
-    manifest: &ReleaseSetV3,
+    manifest: &ReleaseCompatibilityView,
 ) -> Result<bool, ReleaseModelError> {
     let expected = [
         ("cargo_lock", &manifest.build_provenance.cargo_lock_sha256),
@@ -208,7 +211,7 @@ fn build_provenance_matches(
     Ok(true)
 }
 
-fn profiles_match(root: &Path, manifest: &ReleaseSetV3) -> Result<bool, ReleaseModelError> {
+fn profiles_match(root: &Path, manifest: &ReleaseCompatibilityView) -> Result<bool, ReleaseModelError> {
     let authority = ReleaseArchitecture::load(root)
         .map_err(|error| ReleaseModelError::new(format!("release authority invalid: {error}")))?;
     Ok(manifest
