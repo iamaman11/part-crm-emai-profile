@@ -31,7 +31,7 @@ F1/F2
 
 The pre-N2 cleanup is a bounded correction transaction, not a new F/N/AR/PF slice.
 
-PF-1 must not preserve retired AR JSON/Python/Node authorities merely because the old inventory loader consumed them.
+PF-1 must not preserve retired AR JSON/Python/Node authorities merely because the old inventory/status loader consumed them.
 
 ## 2. Correct lifecycle boundary
 
@@ -192,6 +192,7 @@ historical AR-7/AR-10 required-check overlay chain
 operator-contract.json as CLI semantic owner
 runtime-cutover-ar10.json current semantic authority
 architecture/inventory.json as source for its own facts
+docs/status.json as lifecycle semantic authority/manual current-state bag
 manual AR-qualified application ownership registry as a second semantic owner
 ```
 
@@ -271,9 +272,23 @@ post-write readback parse + byte equality proof
 
 Every digest declares whether it covers semantic canonical bytes or exact artifact bytes.
 
-## 10. `opsctl doctor` and repository-root cutover
+## 10. `opsctl doctor`, `opsctl status` and repository-root cutover
 
-PF-1 must update `doctor.rs` and `repository.rs` as first-class callers.
+PF-1 must treat `doctor.rs`, `status.rs` and `repository.rs` as first-class callers of the lifecycle/inventory cutover.
+
+Current `tools/opsctl/src/status.rs` is a thin passthrough to `docs/status.json`. Fresh audit found that the tracked status projection is materially stale: it still contains superseded #268/Python-estate/governance/operator/Node-lifecycle/current-work assumptions and pre-AR-10 runtime evidence. Therefore it must **not** be manually refreshed into another hand-maintained current-state authority bag.
+
+Target:
+
+```text
+DerivedLifecycleStateV1 + bounded owned projections
+        ↓
+typed StatusProjection / StatusReport
+        ↓
+versioned machine rendering
+```
+
+`docs/status.json`, if retained as a tracked file, is generated projection only. `opsctl status` must derive/render from current typed owners or consume a generated projection whose generation is owned by PF-1; it must not remain a blind passthrough to manually maintained lifecycle semantics.
 
 After N2/N4/PF-1:
 
@@ -282,10 +297,11 @@ After N2/N4/PF-1:
 - no legacy Python inventory generator is required;
 - no `operator-contract.json` is required as CLI semantic authority;
 - no Node lifecycle predecessor is required;
+- `docs/status.json` is not a semantic lifecycle source and no stale historical field controls current execution;
 - repository-root identity uses durable surviving repository markers, not generated projections/retired AR sentinels;
 - `doctor` remains local read-only diagnostic composition and does not call Python/Node/process/network/provider/runtime.
 
-Detailed DoD: `docs/OPSCTL_DOCTOR_CONTRACT.md`.
+Detailed doctor DoD: `docs/OPSCTL_DOCTOR_CONTRACT.md`.
 
 ## 11. Python predecessor retirement
 
@@ -353,6 +369,7 @@ lifecycle-projection policy references
 legacy Python inventory generator
 AR-3 application architecture projection/validator callers
 opsctl doctor
+opsctl status / docs/status.json consumers
 opsctl repository-root detection
 documentation/projection validators
 developer verify-fast orchestration
@@ -367,13 +384,14 @@ At minimum:
 - valid raw evidence derives the expected accepted/current lifecycle;
 - current guarded merge identity is accepted;
 - pure lifecycle evaluation deterministic across repeated runs;
+- `opsctl status` reports lifecycle/current-work facts from typed current owners rather than stale manually maintained JSON;
 - bounded inventory projections compile without raw authority bag;
 - application projection derives current facts from natural Rust/source owners rather than a hand-maintained AR-qualified ownership registry;
 - inventory render byte-identical across repeated runs;
 - write == render and repeated write is idempotent;
 - specialized bounded validators remain primary semantic owners;
 - Linux/Windows equivalent typed input gives equivalent semantic result;
-- `doctor` and repository-root no longer require retired predecessors;
+- `doctor`, `status` and repository-root no longer require retired predecessors;
 - governance/acceptance workflows use Rust policy after cutover;
 - repository-wide old Node/Python caller scan = 0.
 
@@ -393,6 +411,8 @@ premature architecture_complete/production gate/production_ready/mutation
 unknown bounded projection kind/version
 raw serde_json::Value semantic bypass
 global authority bag
+docs/status.json used as a manually maintained lifecycle/current-work authority
+opsctl status blind passthrough to stale lifecycle semantics
 inventory compiler duplicating bounded policy
 manual AR-qualified application ownership registry used as semantic input
 1:1 Rust/JSON/YAML/TOML port of retired AR-3 ownership tables
@@ -415,17 +435,18 @@ PF-1 closes only when one exact candidate head proves:
 4. compiler consumes bounded typed projections, not a global authority bag;
 5. `serde_json::Value`/filesystem/process/network/provider do not cross into pure core;
 6. domain-specific validators remain with natural owners;
-7. manual AR-qualified application ownership registry current authority is zero and `_ar3_application_architecture.py` is deleted or reduced to a bounded observation-only role with no duplicate semantic tables;
-8. Node lifecycle predecessor has zero callers/unique invariants and is deleted;
-9. Python inventory predecessors have zero callers/unique invariants and DEAD files are deleted;
-10. `opsctl doctor` and repository-root no longer require retired AR/Python/Node sentinels;
-11. `architecture/inventory.json` is generated projection only;
-12. one bounded `GENERATED_PROJECTION_WRITE` exists only for that file;
-13. positive/negative tests cover lifecycle/inventory/cutover;
-14. Linux/Windows + all applicable permanent workflows pass on one exact head;
-15. protected required contexts pass, `behind_by=0`, blocking reviews=0, unresolved threads=0;
-16. guarded merge is bound to exact proven head;
-17. post-merge accepted-main reread finds no reachable old lifecycle/inventory authority;
-18. production remains fail-closed and AR-12 remains NOT STARTED.
+7. `opsctl status`/`docs/status.json` no longer constitute a manually maintained lifecycle/current-work authority; retained status JSON is generated projection only;
+8. manual AR-qualified application ownership registry current authority is zero and `_ar3_application_architecture.py` is deleted or reduced to a bounded observation-only role with no duplicate semantic tables;
+9. Node lifecycle predecessor has zero callers/unique invariants and is deleted;
+10. Python inventory predecessors have zero callers/unique invariants and DEAD files are deleted;
+11. `opsctl doctor` and repository-root no longer require retired AR/Python/Node sentinels;
+12. `architecture/inventory.json` is generated projection only;
+13. one bounded `GENERATED_PROJECTION_WRITE` exists only for explicitly owned generated projections and no arbitrary repository mutation surface is introduced;
+14. positive/negative tests cover lifecycle/status/inventory/cutover;
+15. Linux/Windows + all applicable permanent workflows pass on one exact head;
+16. protected required contexts pass, `behind_by=0`, blocking reviews=0, unresolved threads=0;
+17. guarded merge is bound to exact proven head;
+18. post-merge accepted-main reread finds no reachable old lifecycle/inventory/status authority;
+19. production remains fail-closed and AR-12 remains NOT STARTED.
 
 Only accepted PF-1 `main` may become PF-2 base.
