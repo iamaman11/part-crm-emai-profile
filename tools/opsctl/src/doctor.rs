@@ -4,9 +4,8 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
-const AUTHORITIES: [&str; 7] = [
+const AUTHORITIES: [&str; 6] = [
     "architecture/inventory.json",
-    "architecture/python-estate-ar6.json",
     "architecture/credential-authority.json",
     "architecture/credential-lifecycle.json",
     "architecture/profile-security.json",
@@ -14,10 +13,7 @@ const AUTHORITIES: [&str; 7] = [
     "docs/status.json",
 ];
 
-const RETAINED_VALIDATORS: [&str; 2] = [
-    "scripts/generate-architecture-inventory.py",
-    "scripts/python-estate-ar6.py",
-];
+const RETAINED_VALIDATORS: [&str; 1] = ["scripts/generate-architecture-inventory.py"];
 const INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT: &str =
     "{\"mode\":\"native-read-only\",\"child_processes\":0}";
 
@@ -46,10 +42,7 @@ pub(crate) fn run(root: &Path) -> Result<String, OpsctlError> {
         validate_json_authority(root, relative)?;
     }
 
-    // AR-10 removes the implementation-time Python child-process bridge without changing the
-    // accepted AR-6 read-only machine-output contract. The implementation detail is proved by
-    // Rust/static tests rather than by expanding this public JSON shape.
-    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/python-estate-ar6.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"architecture/operator-contract.json\",\"docs/status.json\"]}\n".to_owned())
+    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"architecture/operator-contract.json\",\"docs/status.json\"]}\n".to_owned())
 }
 
 fn require_regular_file(root: &Path, relative: &str) -> Result<(), OpsctlError> {
@@ -112,13 +105,12 @@ mod tests {
     fn root() -> Result<PathBuf, Box<dyn std::error::Error>> {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let root =
-            std::env::temp_dir().join(format!("opsctl-ar10-doctor-{}-{nonce}", std::process::id()));
+            std::env::temp_dir().join(format!("opsctl-n2-doctor-{}-{nonce}", std::process::id()));
         for directory in ["architecture", "docs", "scripts"] {
             fs::create_dir_all(root.join(directory))?;
         }
         for relative in [
             "architecture/inventory.json",
-            "architecture/python-estate-ar6.json",
             "architecture/credential-authority.json",
             "architecture/credential-lifecycle.json",
             "architecture/profile-security.json",
@@ -131,7 +123,6 @@ mod tests {
             root.join("scripts/generate-architecture-inventory.py"),
             b"# retained\n",
         )?;
-        fs::write(root.join("scripts/python-estate-ar6.py"), b"# retained\n")?;
         Ok(root)
     }
 
@@ -149,6 +140,10 @@ mod tests {
         assert!(parsed.get("implementation").is_none());
         assert!(parsed.get("child_processes").is_none());
         assert!(parsed.get("validators_execution").is_none());
+        assert_eq!(parsed["authorities"].as_array().map(Vec::len), Some(6));
+        assert!(!output.contains("python-estate-ar6"));
+        assert!(!root.join("architecture/python-estate-ar6.json").exists());
+        assert!(!root.join("scripts/python-estate-ar6.py").exists());
         fs::remove_dir_all(root)?;
         Ok(())
     }
