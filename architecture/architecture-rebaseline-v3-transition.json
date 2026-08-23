@@ -1,11 +1,9 @@
 {
   "schema_version": 13,
-  "status": "ACTIVE_AFTER_AR11_ACCEPTANCE",
   "program": "Architecture Re-baseline v3",
   "tracking_issue": 266,
-  "subordinate_preproduction_issue": 268,
-  "accepted_ar0_main": "e00420704950af5ca9352d2f0f02d3a9c9688527",
-  "current_authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
+  "status": "ACTIVE_AFTER_AR11_ACCEPTANCE",
+  "authority": "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md",
   "accepted_slices": [
     "AR-0",
     "AR-1",
@@ -24,54 +22,17 @@
   ],
   "current_slice": "AR-12",
   "next_slice_after_acceptance": "AR-13",
-  "ar8_progress": {
-    "umbrella_issue": 308,
-    "accepted_subslices": [
-      "AR-8A",
-      "AR-8B",
-      "AR-8C",
-      "AR-8D",
-      "AR-8E",
-      "AR-8F"
-    ],
-    "current_subslice": null,
-    "current_implementation_issue": null,
-    "mandatory_remaining": [],
-    "full_ar8_accepted": true,
-    "ar9_blocked": false,
-    "production_mutation": false,
-    "implementation_entry_gate": "AR8_ACCEPTED_MAIN_AR9_CURRENT",
-    "source_complete_candidate": false,
-    "completion_pr": 362,
-    "implemented_through": "AR-8F",
-    "accepted_top_level_slice": "AR-8",
-    "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
-    "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
-    "applicable_permanent_workflows": "14/14",
-    "accepted_main_reread": "874666f6ef6eb003425c9677d558378d6dc0daaf",
-    "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
-    "credential_authority_source": "architecture/credential-authority.json",
-    "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
-    "canonical_projection": "architecture/inventory.json::subject_domain_authorities"
-  },
   "state_model": {
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
     "production_ready": false,
-    "phase_2j": "historical_predecessor_blocked_by_current_architecture_program"
+    "production_mutation": false
   },
-  "authority_cutover": {
-    "former_forward_plan": "docs/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN.md",
-    "former_tracking_issue": 203,
-    "former_status": "ACCEPTED_HISTORICAL_SUPERSEDED_FOR_FORWARD_EXECUTION",
-    "former_plan_exact_body": "history/PRE2J_PRODUCT_READINESS_REMEDIATION_PLAN_PRE_AR_V3_2026-08-15.md",
-    "former_development_projection": "history/DEVELOPMENT_PLAN_PRE_AR_V3_2026-08-15.md",
-    "ar0_plan_baseline": "history/ARCHITECTURE_REBASELINE_V3_PLAN_AR0_ACCEPTED_2026-08-15.md",
-    "ar0_machine_baseline": "history/architecture-rebaseline-v3-transition-ar0-accepted-2026-08-15.json",
-    "history_rewritten": false
-  },
-  "issue_relationships": {
-    "program_tracking": 266,
+  "predecessor_state": {
+    "accepted_product_phase": "Phase 2I",
+    "pre2j_product_plan": "ACCEPTED_HISTORICAL",
+    "pre2j_architecture_plan": "ACCEPTED_HISTORICAL",
+    "pre2j_forward_execution": "SUPERSEDED_BY_ARCHITECTURE_REBASELINE_V3",
     "subordinate_preproduction_tooling": 268,
     "pre2j_tracking_issue_203": "HISTORICAL_PREDECESSOR_NOT_CURRENT_PROGRAM_AUTHORITY",
     "pre2j_d3_external_issue_251": {
@@ -90,9 +51,12 @@
     }
   },
   "runtime_topology": {
-    "decision_authority": "architecture/runtime-topology-ar2.json",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
-    "canonical_inventory_projection_owner": "AR-3",
+    "decision_authority": "RETIRED_CURRENT_SEMANTIC_AUTHORITY",
+    "historical_decision_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
+    "current_resource_topology_authority": "WRANGLER_PROVIDER_NATIVE_CONFIGURATION_AND_PRODUCT_RUST",
+    "current_runtime_workload_authority": "PRODUCT_RUST",
+    "current_anti_regression_authority": "scripts/check-cloudflare-runtime-bindings.py",
+    "canonical_inventory_projection_owner": "AR-3_APPLICATION_PROCESS_AND_CAPABILITY_OWNERSHIP_ONLY",
     "generation_verification_decision": "DELETE",
     "generation_verification_source_binding_removal": "ACCEPTED_AR5",
     "resolver_isolation": "KEEP",
@@ -183,7 +147,7 @@
       "document_status",
       "program_state"
     ],
-    "ar2_decision_input": "architecture/runtime-topology-ar2.json",
+    "ar2_decision_provenance": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
     "ar3_projection_ownership": "ACCEPTED_APPLICATION_ARCHITECTURE_CONTRACT_IN_CANONICAL_INVENTORY",
     "later_dimensions_remain_owned_by_their_ar_slices": true,
     "ar4a_remediation": "ACCEPTED_COMPOSITION_ROOT_CONSOLIDATION_IN_CANONICAL_INVENTORY",
@@ -200,299 +164,60 @@
     "ar8b_registry_role": "IMMUTABLE_ACCEPTED_PROVENANCE_DATASET",
     "ar9_d1_evolution_projection": "architecture/inventory.json::d1_evolution",
     "d1_semantic_authority": "tools/opsctl/src/d1",
-    "d1_executable_schema_authority": ["migrations/d1", "migrations/resolver-d1"],
+    "d1_executable_schema_authority": [
+      "migrations/d1",
+      "migrations/resolver-d1"
+    ],
     "ar9_acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
     "ar10_runtime_cutover_projection": "architecture/inventory.json::runtime_cutover",
-    "ar10_runtime_cutover_source": "architecture/runtime-cutover-ar10.json",
-    "ar10_acceptance_evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json"
+    "ar10_acceptance_evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json",
+    "ar11_release_architecture_projection": "architecture/inventory.json::release_architecture",
+    "ar11_release_architecture_source": "architecture/release-architecture-ar11.json",
+    "ar11_acceptance_evidence": "architecture/accepted-phases.json::AR-11"
   },
-  "preserve_accepted_history": [
-    "repository_steps_0_10",
-    "accepted_product_phases_through_2I",
-    "pre2j_R1_R9",
-    "pre2j_product_readiness_work",
-    "pre2j_D1",
-    "pre2j_D2",
-    "pre2j_D3_repository_side",
-    "accepted_contract_authorities",
-    "accepted_capability_matrix_evidence",
-    "resolver_security_and_bootstrap_authorities",
-    "mailbox_onboarding_reauth_state_machine",
-    "provider_oauth_ceremonies",
-    "resolver_refresh_primitive_and_paths",
-    "versioned_keyrings_and_resolver_rotation_ledger",
-    "phase2i_repository_local_recovery"
-  ],
-  "hard_invariants": [
-    "no_production_mutation_during_ar0_through_ar17",
-    "source_present_not_equal_production_enabled",
-    "ui_not_security_boundary",
-    "one_main_one_architecture_one_schema_history",
-    "extend_architecture_inventory_no_second_capability_registry",
-    "no_terraform",
-    "no_generic_hidden_iac_state",
-    "one_mutable_concern_one_authority",
-    "wrangler_provider_mutation_executor",
-    "no_opsctl_dual_mutation_authority",
-    "no_global_python_to_rust_rewrite",
-    "historical_migration_provenance_preserved",
-    "fresh_bootstrap_not_upgrade_migration",
-    "oauth_reauth_state_machine_preserved",
-    "mailbox_jobs_queue_and_dlq_preserved",
-    "exact_head_acceptance_required"
-  ],
-  "ar2_scope": {
-    "allowed": [
-      "runtime_topology_classification",
-      "generation_verification_delete_decision",
-      "resolver_isolation_confirmation",
-      "queue_dlq_failure_boundary_classification",
-      "d3_predecessor_compatibility",
-      "legacy_d3_production_fail_closed_gate",
-      "ar2_program_state_projection"
-    ],
-    "forbidden": [
-      "cloudflare_resource_creation_update_delete",
-      "staging_or_production_deploy",
-      "openapi_semantics",
-      "d1_migration_change",
-      "capability_activation",
-      "production_ready_change",
-      "wrangler_generation_verification_binding_removal_before_ar5",
-      "canonical_opsctl_integration_before_ar6"
-    ]
+  "ar8_acceptance": {
+    "issue": 361,
+    "implementation_pr": 362,
+    "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
+    "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
+    "evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
+    "metadata_only": true,
+    "production_mutation": false
   },
-  "application_architecture": {
-    "canonical_projection": "architecture/inventory.json::application_architecture",
-    "base_contract_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
-    "status": "ACCEPTED_THROUGH_AR4C",
-    "ar4a": "ACCEPTED_COMPOSITION_ROOT_CONSOLIDATION",
-    "ar4b": "ACCEPTED_CLIENT_MAIL_ROUTE_OWNERSHIP",
-    "ar4c": "ACCEPTED_OUTBOUND_MAIL_COMPOSITION_EXTRACTION",
-    "ar4d": "NOT_REQUIRED_UNLESS_LATER_ACCEPTED_EVIDENCE_REOPENS",
-    "implementation_pr": 287,
-    "exact_green_head": "c62f3a7fb00acf16fa1a8a00d9d2f101949cf8a3",
-    "implementation_merge": "d8382d1578c4911287fb76dd0b9966b23aa85c25",
-    "production_mutation": false,
-    "implementation_issue": 286,
-    "applicable_permanent_workflows": "13/13",
-    "next_required_slice": "AR-5",
-    "program_handoff_status": "AR11_ACCEPTED_AR12_NOT_STARTED",
-    "program_next_required_subslice": "AR-12"
+  "ar9_acceptance": {
+    "issue": 366,
+    "implementation_pr": 367,
+    "exact_green_head": "6110a32ade85d08c6ad93d9064190fff768e7cc2",
+    "implementation_merge": "5933a5e30a534209138485556b4a895706af765a",
+    "evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
+    "metadata_only": true,
+    "production_mutation": false
   },
-  "runtime_authority_cleanup": {
-    "status": "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
-    "implementation_issue": 290,
-    "implementation_pr": 291,
-    "exact_green_head": "afed435bb714794d6c4f252be6b44c592ee31b2b",
-    "implementation_merge": "82d251a1d6666199c6eace393eedc1766157fcee",
-    "applicable_permanent_workflows": "13/13",
-    "generation_verification": {
-      "topology_decision": "DELETE",
-      "wrangler_producer_binding": "ABSENT",
-      "runtime_contract_binding": "ABSENT",
-      "deployment_manifest_identity": "ABSENT",
-      "queue_workload": "ABSENT",
-      "verification_authority": "SYNCHRONOUS_APPLICATION_ROUTE"
-    },
-    "preserved_queue_producers": [
-      "INTEGRATION_EVENTS",
-      "MAILBOX_JOBS"
-    ],
-    "production_mutation": false,
-    "next_required_slice": "AR-6"
-  },
-  "python_operational_authority": {
-    "status": "ACCEPTED_AR6_PYTHON_OPSCTL_FOUNDATION",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR6.md",
-    "python_estate": "architecture/python-estate-ar6.json",
-    "implementation_issue": 294,
-    "implementation_pr": 295,
-    "exact_green_head": "9b06d542873ffa3122e53e107105098e21f5933c",
-    "implementation_merge": "d0229fedd81ee870822b6d9394bc4ee313ea3a3c",
-    "applicable_permanent_workflows": "13/13",
-    "python_summary": {
-      "tracked_python_files": 116,
-      "KEEP_PYTHON": 108,
-      "MIGRATE_TO_RUST": 2,
-      "DELETE_AFTER_SEQUENCE": 6,
-      "WRAP_WITH_RUST": 0
-    },
-    "opsctl": {
-      "path": "tools/opsctl",
-      "mode": "READ_ONLY_FOUNDATION",
-      "commands": [
-        "doctor",
-        "status",
-        "inventory"
-      ],
-      "third_party_dependencies": false,
-      "provider_mutation": false
-    },
-    "future_cutovers": {
-      "AR-10": "DELETE_AFTER_SEQUENCE",
-      "AR-11": "MIGRATE_TO_RUST"
-    },
-    "application_architecture_accepted_through": "AR-4C",
-    "runtime_authority_cleanup_accepted_through": "AR-5",
-    "production_mutation": false,
-    "next_required_slice": "AR-7"
-  },
-  "github_governance_authority": {
-    "schema_version": 1,
-    "status": "ACCEPTED_AR7_GITHUB_GOVERNANCE",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR7.md",
-    "contract": "architecture/github-governance-ar7.json",
-    "validator": ".github/scripts/github-governance.mjs",
-    "workflow": ".github/workflows/github-governance-gate.yml",
-    "implementation_issue": 298,
-    "implementation_pr": 299,
-    "exact_green_head": "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7",
-    "implementation_merge": "3492273cb9237850e3fa27343cc5edbdb0f66aa1",
-    "applicable_permanent_workflows": "14/14",
-    "hosted_audit": {
-      "run_id": 31953316327,
-      "contract_job": "success",
-      "hosted_state_job": "success"
-    },
-    "direct_main_negative_probe": {
-      "result": "HTTP_409_REJECTED",
-      "message": "Changes must be made through a pull request. 21 of 21 required status checks are expected.",
-      "sentinel_present_after_probe": false
-    },
-    "main_protection": {
-      "mechanism": "classic_branch_protection",
-      "required_check_count": 21,
-      "require_pull_request": true,
-      "require_conversation_resolution": true,
-      "enforce_admins": true,
-      "strict_required_status_checks": true,
-      "allow_force_pushes": false,
-      "allow_deletions": false
-    },
-    "environments": {
-      "rehearsal": {
-        "allowed_branches": [
-          "main"
-        ],
-        "minimum_reviewers": 0
-      },
-      "staging": {
-        "allowed_branches": [
-          "main"
-        ],
-        "minimum_reviewers": 0
-      },
-      "production": {
-        "allowed_branches": [
-          "main"
-        ],
-        "minimum_reviewers": 1,
-        "can_admins_bypass": false
-      }
-    },
-    "production_mutation": false,
-    "next_required_slice": "AR-8"
-  },
-  "ar8b_acceptance": {
-    "issue": 309,
-    "implementation_pr": 312,
-    "exact_green_head": "743276b578bb15042e8a42beff0e14f7698e61b0",
-    "implementation_merge": "4e4d1c25226384858ca8905377ee155bedabc6d4",
-    "applicable_permanent_workflows": "14/14"
-  },
-  "ar8c_acceptance": {
-    "issue": 314,
-    "implementation_pr": 315,
-    "implementation_exact_green_head": "8e2e699156bdbca085b44a73b331cf3922b79c54",
-    "implementation_merge": "7cdfdfc3982f23635017d9352a8c08a903e00f33",
-    "applicable_permanent_workflows": "14/14",
-    "hosted_verified_main": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b",
-    "provider_bootstrap": {
-      "run_id": 32063820617,
-      "run_attempt": 1,
-      "source_sha": "03c8b2280a9ed592569a68a2cf8c8e1f549957a6",
-      "conclusion": "success"
-    },
-    "promotion": {
-      "run_id": 32068326946,
-      "run_attempt": 2,
-      "source_sha": "a78f29a1bf402c83fab3a813bf89115519d0dd98",
-      "conclusion": "success",
-      "resolver_release": {
-        "run_id": 32067978790,
-        "artifact_id": 9300729822,
-        "artifact_digest": "sha256:a20090bef6ac570d9dc0db07d705ec86aef35f958bbe1d2be0b5b1f4f9d63c5f",
-        "release_id": "mailbox-secret-resolver-v1-sha256-c4e94819e2e8abfdec65115809cf536a6e68d86d3029bcc58413dbcf787fb788",
-        "worker_sha256": "5ce3d4ad47b52c045d4a610d325320e706265e1abb0db64b368cc7962f503f28"
-      },
-      "control_plane_release": {
-        "run_id": 32067978783,
-        "artifact_id": 9300736107,
-        "artifact_digest": "sha256:d512fea2ceeb1ce5825e7474438907cdfb70ab0ec8743112306e0d6282abc52b",
-        "release_id": "cloudflare-v1-sha256-1f5aec9c82e4e5002bfc2a2e9111fef5b5b3bd94bdd851994197b480baeabb6f"
-      },
-      "evidence_artifact": {
-        "artifact_id": 9300866099,
-        "artifact_digest": "sha256:62034d3b9b8d7b101a7652c2d86833fb7014029ccbd64cf4af69dab303c35751"
-      },
-      "d1_exact_match": true,
-      "access_health_smoke": "success"
-    },
-    "bootstrap_retirement": {
-      "run_id": 32070555089,
-      "run_attempt": 1,
-      "source_sha": "e083b44eddff852672e62609978fe1dbad99227f",
-      "conclusion": "success"
-    },
-    "steady_state_governance": {
-      "run_id": 32071104508,
-      "run_attempt": 1,
-      "source_sha": "29519fbf05f8e4c228a0907ee0dafd2c85e3749b",
-      "contract_job": "success",
-      "github_hosted_state_job": "success",
-      "operational_credential_hosted_state_job": "success"
-    },
+  "ar10_acceptance": {
+    "issue": 368,
+    "implementation_pr": 371,
+    "exact_green_head": "c7f8ac9704433d3e52d3b79f985c9ac60aa068db",
+    "implementation_merge": "7ab5edf583f541d08ff732624af25881d430d427",
+    "evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json",
     "metadata_only": true,
     "production_mutation": false
   },
   "current_delivery_map": {
-    "schema_version": 2,
-    "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT",
-    "lifecycle_authority": ".github/scripts/architecture-acceptance.mjs derive",
-    "projection_policy": "architecture/lifecycle-projection-policy.json",
+    "schema_version": 1,
+    "canonical_authority": "architecture/inventory.json::current_delivery_map",
     "program": "Architecture Re-baseline v3",
     "accepted_checkpoint": "AR-11",
-    "current_work": "AR-12",
+    "current_work": "AR-12_IMPLEMENTATION",
     "source_implemented": {
-      "status": "ACCEPTED_THROUGH_CHECKPOINT",
+      "status": "PARTIAL",
       "through": "AR-11",
-      "current_slice": "AR-12",
-      "current_slice_status": "NOT_STARTED_OR_NOT_ACCEPTED",
-      "current_slice_source": "GIT_DERIVED_SUCCESSOR"
+      "current_subslice": "AR-12",
+      "current_subslice_source": "CURRENT_IMPLEMENTATION_NOT_ACCEPTED"
     },
     "accepted_on_main": {
-      "status": "COMPLETE_THROUGH_CHECKPOINT",
+      "status": "PARTIAL",
       "through": "AR-11",
-      "accepted_slices": [
-        "AR-0",
-        "AR-1",
-        "AR-2",
-        "AR-3",
-        "AR-4A",
-        "AR-4B",
-        "AR-4C",
-        "AR-5",
-        "AR-6",
-        "AR-7",
-        "AR-8",
-        "AR-9",
-        "AR-10",
-        "AR-11"
-      ],
-      "acceptance_authority": ".github/scripts/architecture-acceptance.mjs derive"
+      "full_ar8_accepted": true
     },
     "staging_live": {
       "status": "PARTIAL",
@@ -527,65 +252,16 @@
     "invariants": {
       "source_present_not_equal_production_enabled": true,
       "full_ar8_accepted": true,
+      "ar9_blocked": false,
       "architecture_complete": false,
       "production_core_gate": "BLOCKED",
       "production_ready": false,
-      "production_mutation": false,
-      "tracked_projection_authoritative": false,
-      "future_acceptance_requires_source_projection_commit": false
+      "production_mutation": false
     }
-  },
-  "post_ar8c_cleanup_acceptance": {
-    "issue": 352,
-    "status": "accepted",
-    "evidence": "docs/evidence/2026-08-18-post-ar8c-cleanup-closeout.json"
-  },
-  "ar8_acceptance": {
-    "issue": 361,
-    "umbrella_issue": 308,
-    "implementation_pr": 362,
-    "exact_green_head": "81d1f0c26ff0bd3a688c2d5dc000b93640479e47",
-    "implementation_merge": "874666f6ef6eb003425c9677d558378d6dc0daaf",
-    "applicable_permanent_workflows": "14/14",
-    "behind_by": 0,
-    "blocking_reviews": 0,
-    "unresolved_review_threads": 0,
-    "accepted_main_reread": "874666f6ef6eb003425c9677d558378d6dc0daaf",
-    "evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json",
-    "metadata_only": true,
-    "production_mutation": false
-  },
-  "ar9_acceptance": {
-    "issue": 366,
-    "implementation_pr": 367,
-    "exact_green_head": "6110a32ade85d08c6ad93d9064190fff768e7cc2",
-    "implementation_merge": "5933a5e30a534209138485556b4a895706af765a",
-    "applicable_permanent_workflows": "15/15",
-    "behind_by": 0,
-    "blocking_reviews": 0,
-    "unresolved_review_threads": 0,
-    "accepted_main_reread": "5933a5e30a534209138485556b4a895706af765a",
-    "evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
-    "metadata_only": true,
-    "production_mutation": false
-  },
-  "ar10_acceptance": {
-    "issue": 368,
-    "implementation_pr": 371,
-    "exact_green_head": "c7f8ac9704433d3e52d3b79f985c9ac60aa068db",
-    "implementation_merge": "7ab5edf583f541d08ff732624af25881d430d427",
-    "applicable_permanent_workflows": "16/16",
-    "behind_by": 0,
-    "blocking_reviews": 0,
-    "unresolved_review_threads": 0,
-    "accepted_main_reread": "7ab5edf583f541d08ff732624af25881d430d427",
-    "evidence": "docs/evidence/2026-08-19-ar10-final-acceptance.json",
-    "metadata_only": true,
-    "production_mutation": false
   },
   "current_slice_projection": {
     "slice": "AR-12",
-    "name": "Fresh Rehearsal Environment",
+    "name": "Observability and Operability Architecture",
     "status": "NOT_STARTED",
     "lifecycle_authority": ".github/scripts/architecture-acceptance.mjs derive",
     "projection_role": "NON_AUTHORITATIVE_LIFECYCLE_COMPATIBILITY_SNAPSHOT",
