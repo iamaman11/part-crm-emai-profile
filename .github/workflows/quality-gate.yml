@@ -139,7 +139,7 @@ jobs:
           assert runtime['current_anti_regression_authority'] == 'scripts/check-cloudflare-runtime-bindings.py'
           assert runtime['production_promotion_authority'] == 'PC-1_AFTER_AR-17_USING_AR-11_RELEASE_SET'
           assert transition['state_model']['production_core_gate'] == 'BLOCKED'
-          assert transition['state_model']['production_mutation'] is False
+          assert 'no_production_mutation_during_ar0_through_ar17' in transition['hard_invariants']
           assert unmapped == [], unmapped
 
           print(f'N1_FINAL_AUDIT exact_head={target}')
