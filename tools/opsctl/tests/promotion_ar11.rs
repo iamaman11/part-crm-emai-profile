@@ -155,7 +155,7 @@ fn release_set() -> Result<LoadedReleaseSet, Box<dyn std::error::Error>> {
         build_provenance,
     } = static_compatibility_fields()?;
     let mut value = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{SHA_A}"),
         "source": {
             "repository": REPOSITORY,
@@ -353,7 +353,7 @@ fn stale_expected_current_is_rejected_before_plan_creation()
         snapshot: &snapshot,
         compatibility_evidence: &compatibility,
         current_release: Some(&target),
-        expected_current_release_set_id: Some("release-set-v2-sha256-stale"),
+        expected_current_release_set_id: Some("release-set-v3-sha256-stale"),
     });
     assert!(result.is_err());
     Ok(())
