@@ -2097,7 +2097,7 @@
     "schema_version": 1,
     "role": "CURRENT_AR11_RELEASE_ARCHITECTURE_PROJECTION",
     "source_authority": "architecture/release-architecture-ar11.json",
-    "source_sha256": "caaf2777ba05f3bdcc2b451969abfff8723a429d323272e7fe5733ef3ab7c5a3",
+    "source_sha256": "20c48070667a6a13019ddcb97531af7f6839744d03eb874995a6271c11f6a33a",
     "source_status": "current_candidate",
     "tracking_issue": 372,
     "principles": {
@@ -2889,29 +2889,6 @@
         "frontend-only feature flags",
         "independent dashboard toggles"
       ]
-    },
-    "release_set": {
-      "schema_version": 2,
-      "id_scheme": "release-set-v2-sha256-SHA256(canonical_identity_payload)",
-      "source_must_be_accepted_main": true,
-      "required_identity_sections": [
-        "source",
-        "components",
-        "contracts",
-        "protocols",
-        "schemas",
-        "runtime_compatibility",
-        "capability_profile_compatibility",
-        "build_provenance",
-        "artifact_inventory"
-      ],
-      "dependency_graph": "ACYCLIC_REQUIRED",
-      "compatibility_result_domain": [
-        "COMPATIBLE",
-        "INCOMPATIBLE",
-        "UNKNOWN"
-      ],
-      "unknown_result": "FAIL_CLOSED"
     },
     "architecture_complete": false,
     "production_core_gate": "BLOCKED",
