@@ -288,7 +288,6 @@ fn evaluate_rollback_candidate(
     }
 
     if windows_delivery_required {
-        // AR-15 owns signed Windows delivery compatibility. AR-11 must never invent it.
         return CompatibilityDecision::Unknown;
     }
 
@@ -305,14 +304,14 @@ mod tests {
     use crate::promotion::snapshot::DeploymentSnapshot;
     use crate::release::digest::{canonical_json, sha256_hex};
     use crate::release::document::LoadedReleaseSet;
-    use crate::release::model::ReleaseModelError;
-    use crate::release::model::{CompatibilityDecision, RELEASE_SET_ID_PREFIX};
+    use crate::release::model::{CompatibilityDecision, ReleaseModelError};
     use serde_json::{Value, json};
     use std::collections::BTreeSet;
 
     const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const GIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const REPO: &str = "iamaman11/part-crm-emai-profile";
+    const HISTORICAL_PREFIX: &str = "release-set-v2-sha256-";
 
     fn release() -> Result<LoadedReleaseSet, Box<dyn std::error::Error>> {
         let accepted = sha256_hex(
@@ -325,7 +324,7 @@ mod tests {
         let component = |id: &str, path: &str| json!({"release_id":id,"source_commit_sha":GIT,"artifact_path":path,"artifact_sha256":SHA,"artifact_size_bytes":1,"component_manifest_sha256":SHA});
         let mut value = json!({
             "schema_version":2,
-            "release_set_id":format!("{RELEASE_SET_ID_PREFIX}{SHA}"),
+            "release_set_id":format!("{HISTORICAL_PREFIX}{SHA}"),
             "source":{"repository":REPO,"commit_sha":GIT,"accepted_main":true,"accepted_main_evidence_sha256":accepted},
             "components":{
                 "control_plane":component("cp","components/control-plane.tar"),
@@ -334,7 +333,7 @@ mod tests {
             },
             "contracts":{"files":[{"path":"openapi/v1/openapi.json","sha256":SHA,"size_bytes":1}],"sha256":SHA},
             "protocols":{"public_api_contract_sha256":SHA,"camouhost_ipc_version":1,"profile_bridge_protocol_version":1,"resolver_protocol":"mailbox-secret-resolver-v1"},
-            "schemas":{"d1_repository_identity_sha256":SHA,"catalog":schema("catalog"),"resolver":schema("resolver")},
+            "schemas":{"d1_evolution_authority_sha256":SHA,"catalog":schema("catalog"),"resolver":schema("resolver")},
             "runtime_compatibility":{"runtime_lock_sha256":SHA,"runtime_role":"real_camoufox","profile_format":"v1","browser_identity_policy":"v1"},
             "capability_profile_compatibility":["rehearsal-core-v1"],
             "build_provenance":{"cargo_lock_sha256":SHA,"rust_toolchain_sha256":SHA,"frontend_lock_sha256":SHA,"release_architecture_sha256":SHA},
@@ -350,7 +349,7 @@ mod tests {
             .ok_or_else(|| ReleaseModelError::new("release fixture root must be an object"))?
             .remove("release_set_id");
         value["release_set_id"] = Value::String(format!(
-            "{RELEASE_SET_ID_PREFIX}{}",
+            "{HISTORICAL_PREFIX}{}",
             sha256_hex(canonical_json(&identity)?.as_bytes())
         ));
         let bytes = serde_json::to_vec(&value)?;
@@ -361,7 +360,7 @@ mod tests {
         DeploymentSnapshot {
             environment: "staging".to_owned(),
             collected_at: "2026-08-21T00:00:00Z".to_owned(),
-            release_set_id: Some(format!("{RELEASE_SET_ID_PREFIX}{SHA}")),
+            release_set_id: Some(format!("{HISTORICAL_PREFIX}{SHA}")),
             capability_profile_id: Some("rehearsal-core-v1".to_owned()),
             component_release_ids: Vec::new(),
             logical_resources: BTreeSet::new(),
