@@ -30,7 +30,7 @@ jobs:
           python scripts/generate-ar8-completion-status.py --check
           python scripts/generate-architecture-inventory.py --check
           python scripts/check-documentation-authority.py --root .
-          python scripts/check-historical-executable-debt.py --check
+          python scripts/check-historical-executable-debt.py
           test ! -e architecture/runtime-topology-ar2.json
           ! git grep -n 'architecture/runtime-topology-ar2.json' HEAD -- architecture/architecture-rebaseline-v3-transition.json architecture/README.md
 
