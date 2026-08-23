@@ -1,6 +1,6 @@
+use opsctl::release::ReleaseAction;
 use opsctl::release::commands::{self, ReleaseRunRequest};
 use opsctl::release::digest::{canonical_json, sha256_hex};
-use opsctl::release::ReleaseAction;
 use serde_json::{Value, json};
 use std::fs;
 use std::io;
@@ -234,7 +234,11 @@ fn historical_v2_verify_is_minimum_integrity_only_and_target_use_is_rejected()
             current_release_set: None,
         })
         .expect_err("historical v2 must never be accepted as current compatibility target");
-        assert!(target_error.to_string().contains("CURRENT_RELEASE_SET_V3_REQUIRED"));
+        assert!(
+            target_error
+                .to_string()
+                .contains("CURRENT_RELEASE_SET_V3_REQUIRED")
+        );
         Ok(())
     })();
     let _ = fs::remove_dir_all(&temp);
