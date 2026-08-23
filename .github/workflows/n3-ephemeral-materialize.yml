@@ -1,0 +1,58 @@
+name: N3 Ephemeral Materialize
+
+on:
+  push:
+    branches:
+      - codex/n3-github-governance-normalization
+
+permissions:
+  contents: read
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact staging source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Materialize bounded N3 projections
+        run: python scripts/_n3_materialize.py
+
+      - name: Prove normalized governance contract
+        run: |
+          node .github/scripts/github-governance.mjs contract
+          node .github/scripts/github-governance.mjs self-test
+
+      - name: Regenerate canonical architecture inventory
+        run: |
+          python scripts/generate-architecture-inventory.py --write
+          python scripts/generate-architecture-inventory.py --check
+
+      - name: Verify materialized machine files
+        run: |
+          python -m json.tool architecture/github-governance.json >/dev/null
+          python -m json.tool architecture/architecture-rebaseline-v3-transition.json >/dev/null
+          python -m json.tool architecture/inventory.json >/dev/null
+          python -m json.tool docs/status.json >/dev/null
+          ! grep -F 'architecture/github-governance-ar7.json' .github/workflows/github-governance-gate.yml scripts/generate-architecture-inventory-engine.py architecture/inventory.json architecture/architecture-rebaseline-v3-transition.json docs/status.json
+          ! grep -F 'ar10-github-governance-extension.mjs' .github/workflows/github-governance-gate.yml architecture/inventory.json architecture/architecture-rebaseline-v3-transition.json docs/status.json
+
+      - name: Upload byte-exact materialized files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: n3-materialized-files
+          path: |
+            .github/workflows/github-governance-gate.yml
+            scripts/generate-architecture-inventory-engine.py
+            architecture/architecture-rebaseline-v3-transition.json
+            architecture/inventory.json
+            docs/status.json
+          if-no-files-found: error
+          retention-days: 1
