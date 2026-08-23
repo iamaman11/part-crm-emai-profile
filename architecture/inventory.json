@@ -1223,7 +1223,6 @@
     "current_credential_authority": "architecture/credential-authority.json",
     "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
     "credential_lifecycle": "architecture/credential-lifecycle.json",
-    "operator_contract": "architecture/operator-contract.json",
     "profile_security": "architecture/profile-security.json",
     "ar8_completion_tracking_issue": 361,
     "ar8_completion_pr": 362,
@@ -1530,10 +1529,6 @@
         "path": "architecture/credential-lifecycle.json",
         "sha256": "8f4acce098fe2612f63856e7a94531189f9e5877ae5add19d69c666861ebb800"
       },
-      "operator_contract": {
-        "path": "architecture/operator-contract.json",
-        "sha256": "d427afac5d4f0d715516699fb8334e8df1dc87f2ac221de87a7103e0df73c954"
-      },
       "profile_security": {
         "path": "architecture/profile-security.json",
         "sha256": "ee410f7f3047128aa410c3ea8098803d476a7592a09f792e6acff3c672d88811"
@@ -1556,10 +1551,8 @@
       "profile-bridge.enrollment-claim",
       "profile-generation.short-lived-object-access"
     ],
-    "operator_mode": "READ_ONLY_METADATA_ONLY",
     "completion_provenance": {
       "lifecycle_candidate": "docs/evidence/ar8-completion-lifecycle-candidate.json",
-      "operator_rehearsal_candidate": "docs/evidence/ar8-operator-rehearsal-candidate.json",
       "secret_transport_successor_candidate": "docs/evidence/ar8-d-secret-transport-successor-candidate.json"
     },
     "source_completion": {
