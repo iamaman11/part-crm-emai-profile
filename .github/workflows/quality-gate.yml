@@ -4,7 +4,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   n1-materialize:
@@ -16,7 +16,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Verify exact scratch source
         env:
@@ -46,3 +46,14 @@ jobs:
             docs/status.json
           if-no-files-found: error
           retention-days: 1
+
+      - name: Commit generated blobs to disposable scratch branch
+        env:
+          SCRATCH_BRANCH: codex/n1-projection-scratch-20260823
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/_ar3_application_architecture.py scripts/generate-architecture-inventory-engine.py architecture/inventory.json docs/status.json architecture/runtime-topology-ar2.json
+          git diff --cached --check
+          git commit -m "[skip ci] scratch: materialize generated N1 blobs"
+          git push origin "HEAD:refs/heads/$SCRATCH_BRANCH"
