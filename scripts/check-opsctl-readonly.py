@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Fail closed if native read-only opsctl or its typed D1 catalog gains capability."""
+"""Fail closed if native read-only opsctl or its pure core gains forbidden capability."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -15,9 +16,12 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = Path("tools/opsctl/src")
+CORE_SRC = Path("tools/opsctl/core/src")
 CARGO = Path("tools/opsctl/Cargo.toml")
+CORE_CARGO = Path("tools/opsctl/core/Cargo.toml")
 LOCK = Path("tools/opsctl/Cargo.lock")
 HELP = Path("tools/opsctl/src/help.txt")
+WORKSPACE_CARGO = Path("Cargo.toml")
 REQUIRED_SOURCE_FILES = {
     "canonical.rs",
     "cli.rs",
@@ -38,6 +42,10 @@ REQUIRED_SOURCE_FILES = {
     "repository.rs",
     "status.rs",
 }
+REQUIRED_CORE_SOURCE_FILES = {
+    "lib.rs",
+    "release.rs",
+}
 FORBIDDEN_DEPENDENCY_CAPABILITIES = {
     "cloudflare",
     "hyper",
@@ -46,6 +54,12 @@ FORBIDDEN_DEPENDENCY_CAPABILITIES = {
     "ureq",
     "worker",
 }
+FORBIDDEN_CORE_DEPENDENCIES = FORBIDDEN_DEPENDENCY_CAPABILITIES | {
+    "serde_json",
+    "serde_json_canonicalizer",
+    "sha2",
+}
+FORBIDDEN_PRODUCT_DEPENDENCIES = {"opsctl", "opsctl-core"}
 FORBIDDEN_RUNTIME_MARKERS = (
     "Command::new(",
     "std::process::Command",
@@ -75,6 +89,14 @@ FORBIDDEN_MUTATION_MARKERS = (
     ".write_all(",
     "env::set_var(",
     "env::remove_var(",
+)
+FORBIDDEN_CORE_SOURCE_PATTERNS = (
+    (r"\bserde_json\s*::", "serde_json representation"),
+    (r"\bstd\s*::\s*(?:fs|process|net|env|path)\b", "filesystem/process/network/environment/path effect"),
+    (r"\b(?:Path|PathBuf)\b", "OS path type"),
+    (r"\bCommand\s*::\s*new\s*\(", "process execution"),
+    (r"\b(?:reqwest|ureq|worker|cloudflare)\s*::", "network/provider SDK"),
+    (r"\b(?:SystemTime|Instant)\b", "hidden clock observation"),
 )
 REQUIRED_D1_MARKERS = (
     '"D1_REPOSITORY_PROJECTION"',
@@ -115,36 +137,48 @@ def production(text: str) -> str:
     return text.split("#[cfg(test)]", 1)[0]
 
 
-def rust_sources(root: Path) -> dict[str, str]:
-    source_root = root / SRC
+def collect_rust_sources(root: Path, source_root_relative: Path, required: set[str], label: str) -> dict[str, str]:
+    source_root = root / source_root_relative
     if source_root.is_symlink() or not source_root.is_dir():
-        fail(f"opsctl source root is missing/not regular: {SRC}")
+        fail(f"{label} source root is missing/not regular: {source_root_relative}")
     observed = {
         path.relative_to(source_root).as_posix(): path.read_text(encoding="utf-8")
         for path in sorted(source_root.rglob("*.rs"))
         if path.is_file() and not path.is_symlink()
     }
-    missing = sorted(REQUIRED_SOURCE_FILES - set(observed))
+    missing = sorted(required - set(observed))
     if missing:
-        fail(f"modular opsctl source layout is incomplete: missing={missing}")
+        fail(f"{label} source layout is incomplete: missing={missing}")
     return observed
 
 
-def exact_registry_version(name: str, spec: object) -> str | None:
+def rust_sources(root: Path) -> dict[str, str]:
+    return collect_rust_sources(root, SRC, REQUIRED_SOURCE_FILES, "modular opsctl")
+
+
+def core_rust_sources(root: Path) -> dict[str, str]:
+    return collect_rust_sources(root, CORE_SRC, REQUIRED_CORE_SOURCE_FILES, "opsctl-core")
+
+
+def exact_registry_version(name: str, spec: object, owner: str = "opsctl") -> str | None:
     if isinstance(spec, str):
         version = spec
     elif isinstance(spec, dict):
         if "git" in spec:
-            fail(f"opsctl dependency {name!r} must not use a Git source")
+            fail(f"{owner} dependency {name!r} must not use a Git source")
         if "path" in spec:
             return None
         version = spec.get("version")
     else:
-        fail(f"opsctl dependency {name!r} has unsupported Cargo declaration")
+        fail(f"{owner} dependency {name!r} has unsupported Cargo declaration")
 
     if not isinstance(version, str) or not version.startswith("=") or len(version) == 1:
-        fail(f"opsctl registry dependency {name!r} must use an exact =version pin")
+        fail(f"{owner} registry dependency {name!r} must use an exact =version pin")
     return version[1:]
+
+
+def lock_has_exact_package(lock: str, package_name: str, version: str) -> bool:
+    return f'name = "{package_name}"\nversion = "{version}"' in lock
 
 
 def validate_dependencies(cargo: str, lock: str) -> None:
@@ -180,9 +214,111 @@ def validate_dependencies(cargo: str, lock: str) -> None:
         package_name = spec.get("package", name) if isinstance(spec, dict) else name
         if not isinstance(package_name, str):
             fail(f"opsctl dependency {name!r} has invalid package identity")
-        lock_identity = f'name = "{package_name}"\nversion = "{version}"'
-        if lock_identity not in lock:
+        if not lock_has_exact_package(lock, package_name, version):
             fail(f"opsctl lockfile lost exact registry identity for {package_name} {version}")
+
+
+def dependency_package_name(alias: str, spec: object) -> str:
+    if isinstance(spec, dict):
+        package = spec.get("package", alias)
+        if not isinstance(package, str):
+            fail(f"dependency {alias!r} has invalid package identity")
+        return package
+    return alias
+
+
+def validate_core_dependencies(cargo: str, lock: str, root: Path = ROOT) -> None:
+    try:
+        manifest = tomllib.loads(cargo)
+    except tomllib.TOMLDecodeError as error:
+        raise GateError(f"cannot parse opsctl-core Cargo.toml: {error}") from error
+
+    build_dependencies = manifest.get("build-dependencies", {})
+    if build_dependencies:
+        fail("opsctl-core must not gain build-time dependency/effect authority")
+
+    for table_name in ("dependencies", "dev-dependencies"):
+        dependencies = manifest.get(table_name, {})
+        if not isinstance(dependencies, dict):
+            fail(f"opsctl-core [{table_name}] must be a TOML table")
+        for alias, spec in dependencies.items():
+            package_name = dependency_package_name(alias, spec)
+            if alias.lower() in FORBIDDEN_CORE_DEPENDENCIES or package_name.lower() in FORBIDDEN_CORE_DEPENDENCIES:
+                fail(f"opsctl-core dependency crosses representation/effect boundary: {package_name}")
+            if isinstance(spec, dict) and "path" in spec:
+                if "git" in spec or "registry" in spec:
+                    fail("opsctl-core local dependency must not combine path with Git/registry source")
+                dependency_path = spec.get("path")
+                if not isinstance(dependency_path, str):
+                    fail(f"opsctl-core dependency {alias!r} has invalid local path")
+                resolved = (root / CORE_CARGO.parent / dependency_path).resolve()
+                for product_root in (root / "apps", root / "crates"):
+                    if resolved.is_relative_to(product_root.resolve()):
+                        fail(
+                            "opsctl-core must not depend on Product Runtime/application crates: "
+                            f"{alias} -> {dependency_path}"
+                        )
+                continue
+            version = exact_registry_version(alias, spec, "opsctl-core")
+            if version is None:
+                fail(f"opsctl-core dependency {alias!r} has unsupported local dependency shape")
+            if not lock_has_exact_package(lock, package_name, version):
+                fail(
+                    f"opsctl lockfile lost exact opsctl-core dependency identity for "
+                    f"{package_name} {version}"
+                )
+
+
+def validate_core_source(sources: dict[str, str], cargo: str, lock: str, root: Path = ROOT) -> None:
+    lib = sources["lib.rs"]
+    if "#![forbid(unsafe_code)]" not in lib:
+        fail("opsctl-core must forbid unsafe code")
+    source = "\n".join(sources.values())
+    for pattern, label in FORBIDDEN_CORE_SOURCE_PATTERNS:
+        if re.search(pattern, source):
+            fail(f"opsctl-core pure boundary contains forbidden {label}: /{pattern}/")
+    validate_core_dependencies(cargo, lock, root)
+
+
+def validate_manifest_no_opsctl_dependency(cargo: str, label: str) -> None:
+    try:
+        manifest = tomllib.loads(cargo)
+    except tomllib.TOMLDecodeError as error:
+        raise GateError(f"cannot parse {label}: {error}") from error
+
+    def walk(value: object, path: tuple[str, ...] = ()) -> None:
+        if not isinstance(value, dict):
+            return
+        for key, child in value.items():
+            next_path = (*path, str(key))
+            if key in {"dependencies", "dev-dependencies", "build-dependencies"}:
+                if not isinstance(child, dict):
+                    fail(f"{label} dependency table {'.'.join(next_path)} must be a table")
+                for alias, spec in child.items():
+                    package_name = dependency_package_name(alias, spec)
+                    if alias in FORBIDDEN_PRODUCT_DEPENDENCIES or package_name in FORBIDDEN_PRODUCT_DEPENDENCIES:
+                        fail(
+                            f"Product Runtime/application dependency on {package_name} is forbidden "
+                            f"in {label} ({'.'.join(next_path)})"
+                        )
+            walk(child, next_path)
+
+    walk(manifest)
+
+
+def validate_product_dependency_direction(root: Path) -> None:
+    workspace_text = read(root, WORKSPACE_CARGO)
+    validate_manifest_no_opsctl_dependency(workspace_text, str(WORKSPACE_CARGO))
+    try:
+        workspace = tomllib.loads(workspace_text)
+    except tomllib.TOMLDecodeError as error:
+        raise GateError(f"cannot parse workspace Cargo.toml: {error}") from error
+    members = workspace.get("workspace", {}).get("members", [])
+    if not isinstance(members, list) or not all(isinstance(member, str) for member in members):
+        fail("root Cargo workspace members must be an explicit string list")
+    for member in members:
+        manifest_path = Path(member) / "Cargo.toml"
+        validate_manifest_no_opsctl_dependency(read(root, manifest_path), str(manifest_path))
 
 
 def validate_source(sources: dict[str, str], cargo: str, lock: str) -> None:
@@ -288,7 +424,10 @@ def validate_d1_projection(payload: dict[str, Any]) -> None:
 
 
 def validate(root: Path = ROOT) -> None:
-    validate_source(rust_sources(root), read(root, CARGO), read(root, LOCK))
+    lock = read(root, LOCK)
+    validate_source(rust_sources(root), read(root, CARGO), lock)
+    validate_core_source(core_rust_sources(root), read(root, CORE_CARGO), lock, root)
+    validate_product_dependency_direction(root)
     validate_d1_projection(load_d1_projection(root))
 
 
@@ -298,6 +437,27 @@ def expect_source_rejected(label: str, sources: dict[str, str], cargo: str, lock
     except GateError:
         return
     fail(f"{label} negative fixture unexpectedly passed")
+
+
+def expect_core_rejected(
+    label: str,
+    sources: dict[str, str],
+    cargo: str,
+    lock: str,
+) -> None:
+    try:
+        validate_core_source(sources, cargo, lock)
+    except GateError:
+        return
+    fail(f"{label} opsctl-core negative fixture unexpectedly passed")
+
+
+def expect_product_manifest_rejected(label: str, cargo: str) -> None:
+    try:
+        validate_manifest_no_opsctl_dependency(cargo, label)
+    except GateError:
+        return
+    fail(f"{label} Product Runtime dependency negative fixture unexpectedly passed")
 
 
 def expect_projection_rejected(label: str, root: Path) -> None:
@@ -310,9 +470,13 @@ def expect_projection_rejected(label: str, root: Path) -> None:
 
 def self_test() -> None:
     sources = rust_sources(ROOT)
+    core_sources = core_rust_sources(ROOT)
     cargo = read(ROOT, CARGO)
+    core_cargo = read(ROOT, CORE_CARGO)
     lock = read(ROOT, LOCK)
     validate_source(sources, cargo, lock)
+    validate_core_source(core_sources, core_cargo, lock)
+    validate_product_dependency_direction(ROOT)
     validate_d1_projection(load_d1_projection(ROOT))
 
     process_sources = dict(sources)
@@ -341,6 +505,23 @@ def self_test() -> None:
     )
     expect_source_rejected("wrong local dependency direction", sources, wrong_local_boundary, lock)
 
+    core_representation = dict(core_sources)
+    core_representation["release.rs"] += "\nfn forbidden(value: serde_json::Value) { let _ = value; }\n"
+    expect_core_rejected("serde_json representation", core_representation, core_cargo, lock)
+    core_effect = dict(core_sources)
+    core_effect["release.rs"] += '\nfn forbidden() { let _ = std::fs::read("state"); }\n'
+    expect_core_rejected("filesystem effect", core_effect, core_cargo, lock)
+    core_dependency = core_cargo.replace(
+        "[dependencies]\n",
+        '[dependencies]\nserde_json = "=1.0.151"\n',
+        1,
+    )
+    expect_core_rejected("representation dependency", core_sources, core_dependency, lock)
+    expect_product_manifest_rejected(
+        "synthetic product manifest",
+        '[package]\nname = "synthetic-runtime"\nversion = "0.0.0"\n\n[dependencies]\nopsctl-core = { path = "../../tools/opsctl/core" }\n',
+    )
+
     with tempfile.TemporaryDirectory(prefix="opsctl-d1-negative-") as temporary:
         fixture = Path(temporary)
         shutil.copytree(ROOT / "migrations" / "d1", fixture / "migrations" / "d1")
@@ -350,8 +531,8 @@ def self_test() -> None:
         expect_projection_rejected("historical SQL substitution", fixture)
 
     print(
-        "opsctl read-only capability, typed D1 catalog, historical-anchor and dependency "
-        "negative fixtures passed."
+        "opsctl shell/core purity, Product Runtime dependency direction, typed D1 catalog, "
+        "historical-anchor and dependency negative fixtures passed."
     )
 
 
@@ -364,8 +545,9 @@ def main() -> int:
     else:
         validate()
         print(
-            "opsctl remains native, read-only and provider-free; D1 history is derived from "
-            "canonical SQL under compact typed historical anchors."
+            "opsctl remains native, read-only and provider-free; opsctl-core stays pure and "
+            "Product Runtime remains independent; D1 history is derived from canonical SQL "
+            "under compact typed historical anchors."
         )
     return 0
 
