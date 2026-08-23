@@ -12,7 +12,7 @@
 **Production authorization:** NONE  
 **AR-12 implementation:** NOT AUTHORIZED
 
-PF-1 begins only after F1/F2 and N1…N5 are accepted on protected `main`.
+PF-1 begins only after F1/F2, the bounded pre-N2 F1 compatibility/current-v2 cleanup gate, and N1…N5 are accepted on protected `main`.
 
 It is not a new AR slice. It is the bounded cutover from legacy Node lifecycle + Python architecture inventory/projection machinery to one typed deterministic Rust lifecycle/inventory implementation in standalone `opsctl`.
 
@@ -21,12 +21,15 @@ It is not a new AR slice. It is the bounded cutover from legacy Node lifecycle +
 ```text
 F1/F2
  -> N1 AR-2 authority retirement
+ -> bounded pre-N2 F1 compatibility/current-v2 cleanup gate
  -> N2 AR-6 Python estate retirement
  -> N3 current GitHub governance normalization
  -> N4 bounded AR-8 operator/provenance cleanup
  -> N5 AR-10 runtime authority retirement
  -> PF-1
 ```
+
+The pre-N2 cleanup is a bounded correction transaction, not a new F/N/AR/PF slice.
 
 PF-1 must not preserve retired AR JSON/Python/Node authorities merely because the old inventory loader consumed them.
 
@@ -162,7 +165,7 @@ Runtime/resource topology
   Wrangler/provider config + Product ownership -> RuntimeTopologyProjection
 
 Application architecture
-  Rust structure/owned observations -> ApplicationInventoryProjection
+  Rust structure + bounded source observations -> ApplicationInventoryProjection
 
 Operator
   Rust CommandRegistry/effect registry -> OperatorInventoryProjection
@@ -189,7 +192,10 @@ historical AR-7/AR-10 required-check overlay chain
 operator-contract.json as CLI semantic owner
 runtime-cutover-ar10.json current semantic authority
 architecture/inventory.json as source for its own facts
+manual AR-qualified application ownership registry as a second semantic owner
 ```
+
+Application architecture facts that are directly discoverable from Rust structure/composition/route ownership stay with those natural sources. A source observer may report structural facts; it may not become a new hand-maintained application architecture database.
 
 ## 7. `opsctl` internal boundary
 
@@ -291,7 +297,23 @@ Expected predecessors subject to exact-candidate caller/invariant proof:
 scripts/generate-architecture-inventory.py
 scripts/generate-architecture-inventory-engine.py
 scripts/_architecture_inventory_core.py
+scripts/_ar3_application_architecture.py   # semantic ownership/projection role must be dispositioned
 ```
+
+The last path is not automatically deleted merely because it is Python. PF-1 must specifically audit its current manual semantic tables, including the semantic equivalents of `PROCESS_OWNERSHIP`, `CAPABILITY_OWNERSHIP`, `COMPOSITION_FINDINGS`, `_REQUIRED_SNIPPETS` and `_FORBIDDEN_SNIPPETS`.
+
+Required disposition:
+
+```text
+for each still-valid fact/invariant:
+    map to natural Rust/source/owned contract
+    preserve bounded structural observation only where needed
+
+manual AR-qualified ownership/policy table current authority = 0
+1:1 port of those tables into Rust/JSON/YAML/TOML = FORBIDDEN
+```
+
+If `_ar3_application_architecture.py` has no remaining unique structural-observer role after caller/invariant cutover, delete it. If a bounded source-observer implementation remains useful, it must emit observations only and contain no competing mutable application-architecture registry.
 
 N2 already retires the per-file Python estate authority chain. PF-1 must not resurrect it as a compatibility registry.
 
@@ -329,6 +351,7 @@ architecture-acceptance-recorder workflow
 quality/repository audit workflows
 lifecycle-projection policy references
 legacy Python inventory generator
+AR-3 application architecture projection/validator callers
 opsctl doctor
 opsctl repository-root detection
 documentation/projection validators
@@ -345,6 +368,7 @@ At minimum:
 - current guarded merge identity is accepted;
 - pure lifecycle evaluation deterministic across repeated runs;
 - bounded inventory projections compile without raw authority bag;
+- application projection derives current facts from natural Rust/source owners rather than a hand-maintained AR-qualified ownership registry;
 - inventory render byte-identical across repeated runs;
 - write == render and repeated write is idempotent;
 - specialized bounded validators remain primary semantic owners;
@@ -370,6 +394,8 @@ unknown bounded projection kind/version
 raw serde_json::Value semantic bypass
 global authority bag
 inventory compiler duplicating bounded policy
+manual AR-qualified application ownership registry used as semantic input
+1:1 Rust/JSON/YAML/TOML port of retired AR-3 ownership tables
 inventory byte drift
 write to any path except architecture/inventory.json
 process/network/Git/GitHub/provider access in lifecycle/inventory core
@@ -389,16 +415,17 @@ PF-1 closes only when one exact candidate head proves:
 4. compiler consumes bounded typed projections, not a global authority bag;
 5. `serde_json::Value`/filesystem/process/network/provider do not cross into pure core;
 6. domain-specific validators remain with natural owners;
-7. Node lifecycle predecessor has zero callers/unique invariants and is deleted;
-8. Python inventory predecessors have zero callers/unique invariants and DEAD files are deleted;
-9. `opsctl doctor` and repository-root no longer require retired AR/Python/Node sentinels;
-10. `architecture/inventory.json` is generated projection only;
-11. one bounded `GENERATED_PROJECTION_WRITE` exists only for that file;
-12. positive/negative tests cover lifecycle/inventory/cutover;
-13. Linux/Windows + all applicable permanent workflows pass on one exact head;
-14. protected required contexts pass, `behind_by=0`, blocking reviews=0, unresolved threads=0;
-15. guarded merge is bound to exact proven head;
-16. post-merge accepted-main reread finds no reachable old lifecycle/inventory authority;
-17. production remains fail-closed and AR-12 remains NOT STARTED.
+7. manual AR-qualified application ownership registry current authority is zero and `_ar3_application_architecture.py` is deleted or reduced to a bounded observation-only role with no duplicate semantic tables;
+8. Node lifecycle predecessor has zero callers/unique invariants and is deleted;
+9. Python inventory predecessors have zero callers/unique invariants and DEAD files are deleted;
+10. `opsctl doctor` and repository-root no longer require retired AR/Python/Node sentinels;
+11. `architecture/inventory.json` is generated projection only;
+12. one bounded `GENERATED_PROJECTION_WRITE` exists only for that file;
+13. positive/negative tests cover lifecycle/inventory/cutover;
+14. Linux/Windows + all applicable permanent workflows pass on one exact head;
+15. protected required contexts pass, `behind_by=0`, blocking reviews=0, unresolved threads=0;
+16. guarded merge is bound to exact proven head;
+17. post-merge accepted-main reread finds no reachable old lifecycle/inventory authority;
+18. production remains fail-closed and AR-12 remains NOT STARTED.
 
 Only accepted PF-1 `main` may become PF-2 base.
