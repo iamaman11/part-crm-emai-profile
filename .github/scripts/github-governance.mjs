@@ -296,8 +296,9 @@ async function liveAudit(desired) {
     if (!sameStringSet(policyNames, expected.allowed_branches)) {
       errors.push(`live ${name} deployment branch policies do not equal ${JSON.stringify(expected.allowed_branches)}`);
     }
-    if (requiredReviewerCount(environment) < expected.minimum_reviewers) {
-      errors.push(`live ${name} has fewer than ${expected.minimum_reviewers} required deployment reviewers`);
+    const observedReviewers = requiredReviewerCount(environment);
+    if (observedReviewers !== expected.minimum_reviewers) {
+      errors.push(`live ${name} required deployment reviewers differ from desired state; desired=${expected.minimum_reviewers} observed=${observedReviewers}`);
     }
     if ('can_admins_bypass' in expected && environment?.can_admins_bypass !== expected.can_admins_bypass) {
       errors.push(`live ${name}.can_admins_bypass does not match desired state`);
