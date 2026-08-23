@@ -1,9 +1,5 @@
 use std::fmt::{Display, Formatter};
 
-// Transitional source-compatibility re-export for integration tests while the bounded F1
-// correction updates current fixtures to v3. The semantic owner remains v3_output.
-pub use crate::release::v3_output::RELEASE_SET_V3_ID_PREFIX as RELEASE_SET_ID_PREFIX;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompatibilityDecision {
     Compatible,

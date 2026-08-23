@@ -1,8 +1,8 @@
 use opsctl::release::digest::{canonical_json, sha256_hex};
 use opsctl::release::document::LoadedReleaseSet;
 use opsctl::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
-use opsctl::release::model::RELEASE_SET_ID_PREFIX;
 use opsctl::release::static_compatibility;
+use opsctl::release::v3_output::RELEASE_SET_V3_ID_PREFIX as RELEASE_SET_ID_PREFIX;
 use serde_json::{Value, json};
 use std::io;
 use std::path::{Path, PathBuf};
