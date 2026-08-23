@@ -52,9 +52,34 @@ Do not replace a retired JSON/Python/Node/table authority with an equivalent suc
 
 Shared exact-head CI/review/merge acceptance is owned by `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md`, not repeated per N-step.
 
-## 3. Efficiency rule for N2–N5
+## 3. Efficiency rule for N2–N5 + tracked-inventory retention
 
 After accepted #454, perform one read-only discovery pass across all remaining predecessor estates to identify callers, unique current invariants and likely natural owners. Keep this discovery **ephemeral** (working notes / PR discussion / CI artifact), not as a new checked-in authority file.
+
+The same common discovery must audit concrete **current/durable consumers of the exact tracked bytes** of `architecture/inventory.json`. This is a pre-PF-1 normalization decision; it is deliberately separated from PF-1's later semantic lifecycle/inventory replacement.
+
+Count only a concrete current external/durable consumer, release contract or another proved current consumer that actually requires the tracked exact bytes. The following are **not** consumer proof:
+
+```text
+generator checks inventory because inventory exists
+docs reference an inventory section
+historical evidence
+CI drift test that exists solely for the tracked projection
+```
+
+Resolve the retention result before PF-1:
+
+```text
+real durable exact-byte consumer exists
+-> retain only the minimum deterministic GENERATED_PROJECTION required by it
+
+consumer = NONE
+-> retire tracked architecture/inventory.json when its remaining callers are naturally cut over
+-> retire compatibility-only --write / tracked-byte drift ceremony
+-> keep deterministic on-demand render/check only where useful
+```
+
+This does **not** authorize building `LifecycleEvaluator`, `ArchitectureInventoryCompiler` or another PF-1 semantic successor during N2–N5. If `consumer = NONE`, deletion should occur in the first natural bounded normalization transaction where remaining callers/invariants have already been switched; do not create a new phase or standalone cleanup issue for it.
 
 Before each sequential N2/N3/N4/N5 transaction, refresh only:
 
@@ -202,6 +227,7 @@ N2 accepted
 N3 accepted
 N4 accepted
 N5 accepted
+tracked inventory retention = JUSTIFIED_MINIMUM | NOT_RETAINED
 current Release Set writer/model = v3
 current v2 semantic authority = 0
 Python estate overlay current authority = 0
@@ -212,7 +238,7 @@ retired direct Python browser/profile executables = 0
 production_mutation = false
 ```
 
-N2–N5 leave natural owners unambiguous; they do not pre-build PF-1's generic projection/compiler machinery.
+N2–N5 leave natural owners unambiguous and resolve whether tracked inventory bytes have a real durable consumer. They do not pre-build PF-1's generic lifecycle/projection/compiler machinery.
 
 ## 11. Interactive environment
 

@@ -109,7 +109,21 @@ The shared transaction protocol supplies the zero-caller, exact-head, review and
 
 N2–N5 remain separate sequential transactions because they retire different semantic owners, but they are **one normalization group**, not four new architecture programs.
 
-After #454 acceptance, perform one read-only discovery pass across the N2–N5 predecessor estate to map current callers, current invariants and likely natural owners. Keep this map ephemeral (working notes / PR discussion / CI artifact), not as a new checked-in authority registry. Before each N2/N3/N4/N5 PR, refresh only the affected reachability plus deltas since the common discovery.
+After #454 acceptance, perform one read-only discovery pass across the N2–N5 predecessor estate to map current callers, current invariants and likely natural owners. In that same pass, audit concrete current/durable consumers of the **exact tracked bytes** of `architecture/inventory.json` and resolve `JUSTIFIED_MINIMUM | NOT_RETAINED` before PF-1. Keep this map ephemeral (working notes / PR discussion / CI artifact), not as a new checked-in authority registry. Before each N2/N3/N4/N5 PR, refresh only the affected reachability plus deltas since the common discovery.
+
+The inventory retention audit is intentionally narrow:
+
+```text
+real durable exact-byte consumer exists
+-> keep only the minimum deterministic GENERATED_PROJECTION it requires
+
+consumer = NONE
+-> retire tracked architecture/inventory.json after its remaining callers are naturally cut over
+-> retire compatibility-only --write / tracked-byte drift ceremony
+-> keep useful deterministic on-demand render/check only
+```
+
+A generator checking the file because it exists, documentation references, historical evidence, and CI drift tests that exist solely for the tracked projection are not consumer proof. This is not an early PF-1 compiler implementation and does not create another phase.
 
 ### N2 — Python estate
 
@@ -181,7 +195,7 @@ natural owner -> validated narrow projection --/
 
 No `GlobalRepositoryAuthorityLoader`, `GlobalAuthoritySet`, giant policy compiler or 1:1 port of historical AR-qualified tables.
 
-Before preserving a tracked `architecture/inventory.json` write path as a permanent developer contract, PF-1 must identify its concrete current consumer. If no durable/current consumer requires checked-in bytes, an on-demand generated projection is preferred; if a real consumer exists, keep the minimum deterministic generated projection. In either case it remains output, never semantic input.
+PF-1 consumes the pre-PF-1 tracked-inventory retention result instead of deciding it for the first time. If the result is `NOT_RETAINED`, PF-1 must not resurrect checked-in `architecture/inventory.json` or compatibility-only `--write`/drift ceremony; useful deterministic on-demand rendering/checking may remain. If the result is `JUSTIFIED_MINIMUM`, PF-1 emits only the minimum deterministic generated projection required by the proved exact-byte consumer. In either case generated output is never semantic input.
 
 Similarly, command surface should stay minimal: do not keep `render/check/write/inspect` as four permanent commands unless each has a distinct proved consumer/value.
 
@@ -218,19 +232,22 @@ PF-3 remains the architecture-forming freeze. After it, ordinary FC/AR/PC work d
 
 ## 6. Functional Closure — proof, not another architecture program
 
-The logical `fresh #399/#421 re-baseline` remains mandatory but should execute as the **FC-6 preflight observation**, not as a separate implementation transaction or PR.
+The logical `fresh #399/#421 re-baseline` remains mandatory but executes as the **first read-only FC-6 preflight observation**, not as a separate implementation transaction or PR.
 
 ```text
 PF-3 accepted
 -> FC-6 preflight
+   - fresh #399/#421 live re-baseline
    - current accepted main
    - live workflows / protected contexts
-   - credential readiness
+   - credential readiness/scope
    - current staging identity
    - current known-good identity
    - Release Set identities
+   - required hosted evidence/attestations
    - live provider/GitHub observations
 -> READY | typed BLOCKED
+-> only READY may expose deploy-capable credentials / permit staging mutation
 -> FC-6 same-bits staging / verify / rollback-or-NO_CHANGE ceremony
 -> machine-readable terminal evidence
 -> FC-7 closeout evaluation

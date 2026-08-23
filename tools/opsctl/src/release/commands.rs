@@ -36,17 +36,25 @@ pub fn run(request: ReleaseRunRequest<'_>) -> Result<String, ReleaseModelError> 
                 .ok_or_else(|| ReleaseModelError::new("release verify requires --artifact-root"))?;
             let (_, source_verification) =
                 verify_release_source(request.release_set, &release_set)?;
-            let static_blockers =
-                static_compatibility::evaluate(request.source_root, release_set.semantic(), false)?;
-            if !static_blockers.is_empty() {
-                return Err(ReleaseModelError::new(format!(
-                    "RELEASE_STATIC_IDENTITY_MISMATCH: {}",
-                    static_blockers.join(",")
-                )));
+            if !release_set.is_historical_v2() {
+                let static_blockers = static_compatibility::evaluate(
+                    request.source_root,
+                    release_set.semantic(),
+                    false,
+                )?;
+                if !static_blockers.is_empty() {
+                    return Err(ReleaseModelError::new(format!(
+                        "RELEASE_STATIC_IDENTITY_MISMATCH: {}",
+                        static_blockers.join(",")
+                    )));
+                }
             }
             verify(&release_set, artifact_root, &source_verification)?
         }
         ReleaseAction::Compatibility => {
+            // Compatibility is a current-target decision. Historical v2 may be supplied only via
+            // --current-release-set for rollback/current-state context, never as the target model.
+            release_set.current_v3()?;
             let profile_id = required_text(request.profile_id, "--profile")?;
             let environment = required_text(request.environment, "--environment")?;
             let evidence_path = request.evidence_json.ok_or_else(|| {
@@ -135,19 +143,31 @@ fn verify(
 ) -> Result<serde_json::Value, ReleaseModelError> {
     let artifacts = verify_artifacts(release_set, artifact_root)?;
     let manifest = release_set.semantic();
+    let historical_v2 = release_set.is_historical_v2();
+    let verified_provenance_dimensions = if historical_v2 {
+        Vec::new()
+    } else {
+        VERIFIED_PROVENANCE_DIMENSIONS.to_vec()
+    };
     Ok(json!({
         "schema_version": 1,
         "command": "release.verify",
         "decision": "VALID",
         "release_set_schema_version": release_set.external_schema_version(),
         "release_set_id": release_set.release_set_id(),
+        "verification_scope": if historical_v2 {
+            "HISTORICAL_V2_SOURCE_AND_ARTIFACT_INTEGRITY"
+        } else {
+            "CURRENT_V3_FULL_RELEASE_VERIFICATION"
+        },
+        "historical_compatibility_only": historical_v2,
         "source_commit_sha": manifest.source.commit_sha,
         "source_accepted": true,
         "accepted_source_evidence_sha256": source.evidence_sha256,
         "observed_protected_main_sha": source.observed_protected_main_sha,
         "source_lineage_status": source.lineage_status,
         "verified_components": artifacts.verified_components,
-        "verified_provenance_dimensions": VERIFIED_PROVENANCE_DIMENSIONS,
+        "verified_provenance_dimensions": verified_provenance_dimensions,
         "verified_files": artifacts.verified_files,
         "verified_bytes": artifacts.verified_bytes,
         "mutation_executed": false

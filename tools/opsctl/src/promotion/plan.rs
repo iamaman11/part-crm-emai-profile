@@ -60,6 +60,10 @@ impl PromotionPlan {
 }
 
 pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelError> {
+    // Deployment planning has exactly one current target model. Historical v2 is admitted only as
+    // observed/current or known-good rollback input and must never influence target semantics.
+    request.target.current_v3()?;
+
     if request.snapshot.environment != request.environment {
         return Err(ReleaseModelError::new(format!(
             "PROVIDER_STATE_UNKNOWN: snapshot environment {} does not match target {}",

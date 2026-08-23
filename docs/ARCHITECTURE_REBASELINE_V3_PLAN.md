@@ -198,14 +198,17 @@ PF-2  Universal Hosted Operational Evidence
  ->
 PF-3  typed Architecture Fitness Baseline + architecture-forming freeze point
  ->
-fresh re-baseline #399 / #421
+FC-6 preflight
+    (mandatory fresh #399 / #421 live re-baseline; read-only)
  ->
-FC-6  real staging same-bits / rollback rehearsal
+FC-6 real staging same-bits / rollback ceremony
  ->
-FC-7  final whole-AR-11 functional audit
+FC-7 final whole-AR-11 functional closeout
  ->
 AR-12 implementation entry
 ```
+
+The fresh #399/#421 re-baseline is the mandatory **first read-only step of FC-6 preflight**. It is not a separate implementation transaction, PR or ceremony. Starting from accepted PF-3 `main`, it must refresh live governance/workflows, credential readiness/scope, current staging identity, current known-good identity, current Release Set identities and required hosted evidence/attestations, and return typed `READY | BLOCKED`. Only `READY` permits deploy-capable credentials and staging mutation.
 
 F1/F2 and N1…N5 are foundation/normalization transactions under the current program, not lifecycle slices. Each transaction starts from accepted protected `main` and completes atomically on one PR/merge unless a fresh defect proves another bounded plan is required. The pre-N2 cleanup gate is exactly such a bounded correction discovered by live audit; it does not create a new roadmap state.
 
@@ -226,6 +229,20 @@ AR-10 runtime-cutover semantic intermediary
 ```
 
 Their accepted historical meaning remains in Git/evidence. Current facts move to natural owners such as Wrangler configuration, Product Rust, SQL migrations, typed Rust policy, runtime manifests and current governance data.
+
+After accepted #454, the one common read-only N2–N5 discovery pass also audits concrete current/durable consumers of the **exact tracked bytes** of `architecture/inventory.json`. This retention decision belongs to pre-PF-1 normalization, not to PF-1's semantic compiler work:
+
+```text
+real durable exact-byte consumer exists
+-> retain only the minimum deterministic GENERATED_PROJECTION required by it
+
+consumer = NONE
+-> retire tracked architecture/inventory.json once remaining callers are naturally cut over
+-> retire compatibility-only --write / tracked-byte drift ceremony
+-> keep deterministic on-demand render/check only where useful
+```
+
+A generator checking the file because it exists, a documentation reference, historical evidence, or a CI drift test whose only purpose is the tracked projection is not a durable consumer. Do not create a new phase/issue for this decision and do not pre-build PF-1's lifecycle evaluator or inventory compiler during N2–N5.
 
 ## 6. Target PF-1 boundary
 
@@ -250,7 +267,7 @@ ReleaseInventoryProjection
         ↓
 ArchitectureInventoryCompiler
         ↓
-architecture/inventory.json
+optional deterministic generated projection
 ```
 
 Forbidden target:
@@ -261,7 +278,7 @@ GlobalRepositoryAuthorityLoader
     -> giant god-validator/compiler
 ```
 
-`architecture/inventory.json` is a generated projection and never a semantic input for the facts it projects.
+`architecture/inventory.json`, if the earlier retention decision still requires it, is a generated projection and never a semantic input for the facts it projects. PF-1 consumes the already-accepted `JUSTIFIED_MINIMUM | NOT_RETAINED` retention result; it does not defer or repeat the tracked-file decision.
 
 PF-1 may temporarily host old/new implementations inside one candidate branch for parity proof, but accepted `main` must not retain a standing compatibility architecture between them. The intended cutover is atomic: switch current callers, prove predecessor caller/invariant counts are zero, then delete the predecessor in the same accepted transaction.
 
@@ -544,12 +561,12 @@ AR-12 remains blocked until:
 
 1. F1 and F2 are accepted on protected `main`;
 2. the bounded pre-N2 F1 compatibility/current-v2 cleanup gate is accepted, with one current Release Set semantic owner and historical-v2 compatibility either concretely justified/isolated or retired;
-3. N1…N5 complete with zero-current-caller/zero-unique-invariant predecessor proofs;
+3. N1…N5 complete with zero-current-caller/zero-unique-invariant predecessor proofs and the tracked-inventory retention result is `JUSTIFIED_MINIMUM | NOT_RETAINED`;
 4. PF-1 is accepted and Node/Python lifecycle/inventory predecessors are deleted;
 5. PF-2 Hosted Evidence is accepted;
 6. PF-3 typed fitness enforcement and architecture-forming freeze are accepted;
-7. #399/#421 are freshly re-baselined from that accepted main;
-8. FC-6 completes real staging same-bits/rollback evidence or returns a legitimate typed `BLOCKED` state;
+7. FC-6 preflight executes the mandatory fresh #399/#421 live re-baseline from accepted PF-3 main and returns `READY | BLOCKED`;
+8. only `READY` crosses into FC-6 real staging same-bits/rollback evidence; a legitimate typed `BLOCKED` state remains fail-closed and authorizes no mutation;
 9. FC-7 reports repository-owned `P0=0`, `P1=0`, `P2=0` for AR-11 Functional Closure scope;
 10. production remains fail-closed;
 11. accepted-main reread proves no parallel authority path was introduced.
