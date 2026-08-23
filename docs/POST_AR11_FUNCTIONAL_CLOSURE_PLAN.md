@@ -6,7 +6,7 @@
 **Architecture quality contract:** `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
 **Pre-PF-1 normalization:** `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`  
 **PF-1:** `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` / #430  
-**PF-2:** Draft PR #428  
+**PF-2:** fresh implementation from accepted PF-1 `main`; closed PR #428 is superseded historical salvage only  
 **PF-3:** `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` / #431  
 **Live tracker:** #399  
 **FC-6 tracker:** #421  
@@ -39,7 +39,7 @@ N5  AR-10 runtime semantic-authority retirement
  ->
 PF-1 Canonical Architecture Inventory + typed lifecycle-policy cutover
  ->
-PF-2 Universal Hosted Operational Evidence
+PF-2 Universal Hosted Operational Evidence from a fresh accepted PF-1 base
  ->
 PF-3 typed Architecture Fitness Baseline
  ->
@@ -54,7 +54,7 @@ AR-12 implementation entry
 
 F1/F2/N1…N5 are foundation/normalization transactions, not new lifecycle slices. `architecture/architecture-program-sequence.json` is unchanged.
 
-No path may skip normalization, PF-3 or fresh re-baseline and resume FC-6 from stale evidence.
+No path may skip normalization, PF-3 or fresh re-baseline and resume FC-6 from stale evidence. Current accepted execution state is tracked only by #441/#399 and protected `main`; this static plan does not hard-code a moving implementation SHA.
 
 ## 2. Non-negotiable invariants
 
@@ -146,7 +146,7 @@ pretty rendering separate from canonical identity
 
 ## 6. N1…N5 — authority estate normalization
 
-Detailed DoD is `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`.
+Detailed DoD is `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`. Live accepted-main handoff/state is #441.
 
 Each transaction follows:
 
@@ -198,7 +198,11 @@ current GitHub governance
 Git/evidence history
 ```
 
+N2–N5 must make their natural source owners unambiguous but must not pre-build a generic PF-1 projection/compiler framework. The exact handoff conditions are tracked in #441.
+
 ## 7. PF-1 — lifecycle + canonical inventory
+
+PF-1 starts only after N5 acceptance and a fresh #430 entry-gate reread against then-current protected `main`.
 
 PF-1 target:
 
@@ -227,6 +231,8 @@ PF-1 deletes the old Node lifecycle policy and Python architecture inventory/pro
 Only accepted PF-1 `main` may become PF-2 base.
 
 ## 8. PF-2 — Universal Hosted Operational Evidence
+
+PF-2 must start from a **new clean branch based on accepted PF-1 protected `main`**. Closed PR #428 predates normalization and is historical/selective-salvage material only; it must not be resumed, rebased or treated as accepted PF-2 evidence.
 
 Target reusable architecture:
 
