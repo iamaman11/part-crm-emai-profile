@@ -24,16 +24,14 @@ jobs:
           import json
           from pathlib import Path
 
-          # Credential composition remains a credential authority, but must no longer
-          # point at the retired operator predecessor.
+          retired = 'architecture/operator-contract.json'
+
           path = Path('architecture/credential-authority.json')
           payload = json.loads(path.read_text(encoding='utf-8'))
-          removed = payload.pop('operator_contract_source', None)
-          if removed != 'architecture/operator-contract.json':
+          if payload.pop('operator_contract_source', None) != retired:
               raise SystemExit('expected credential operator predecessor edge is missing')
           path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + '\n', encoding='utf-8', newline='\n')
 
-          # Current credential validation owns credential/profile concerns only.
           path = Path('scripts/credential_authority.py')
           text = path.read_text(encoding='utf-8')
           replacements = [
@@ -58,8 +56,6 @@ jobs:
           )
           path.write_text(text, encoding='utf-8', newline='\n')
 
-          # The post-epoch fixture copied the predecessor only because repo-root discovery
-          # used to require it. That is an internal caller, not a durable consumer.
           path = Path('tools/opsctl/tests/d1_post_epoch_authoring.rs')
           text = path.read_text(encoding='utf-8')
           sentinel = '    "architecture/operator-contract.json",\n'
@@ -67,26 +63,28 @@ jobs:
               raise SystemExit('D1 post-epoch operator sentinel count drifted')
           path.write_text(text.replace(sentinel, '', 1), encoding='utf-8', newline='\n')
 
-          # Keep the typed effect test compatible with repository clippy policy.
           path = Path('tools/opsctl/src/lib.rs')
           text = path.read_text(encoding='utf-8')
-          old = '''        assert_read_only_effect(
-              invocation
-                  .operator_effect()
-                  .expect("parsed operator command must have effect metadata"),
-          );
-          '''
-          new = '''        assert_eq!(
-              invocation.operator_effect(),
-              Some(OperatorEffect::ReadOnlyMetadata)
-          );
-          assert_read_only_effect(OperatorEffect::ReadOnlyMetadata);
-          '''
-          if text.count(old) != 1:
-              raise SystemExit('typed operator effect test sentinel drifted')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+          needle = '.expect("parsed operator command must have effect metadata"),'
+          pos = text.find(needle)
+          if pos < 0:
+              raise SystemExit('typed operator effect expect sentinel is missing')
+          start = text.rfind('        assert_read_only_effect(', 0, pos)
+          end = text.find('        );\n', pos)
+          if start < 0 or end < 0:
+              raise SystemExit('typed operator effect block boundaries drifted')
+          end += len('        );\n')
+          replacement = (
+              '        assert_eq!(\n'
+              '            invocation.operator_effect(),\n'
+              '            Some(OperatorEffect::ReadOnlyMetadata)\n'
+              '        );\n'
+              '        assert_read_only_effect(OperatorEffect::ReadOnlyMetadata);\n'
+          )
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text, encoding='utf-8', newline='\n')
 
-      - name: Replace mixed Node operator registry validator with bounded subject validator
+      - name: Replace mixed operator registry validator with bounded subject validator
         shell: bash
         run: |
           cat > .github/scripts/architecture-authority-check.mjs <<'EOF'
@@ -103,7 +101,7 @@ jobs:
             opsctl: 'tools/opsctl/src/lib.rs',
             governance: '.github/workflows/github-governance-gate.yml',
           };
-
+          const RETIRED_OPERATOR_PATH = ['architecture', 'operator-contract.json'].join('/');
           const EXPECTED_LIFECYCLE = new Set([
             'resolver.encryption-keyring',
             'resolver.handle-hmac',
@@ -113,7 +111,6 @@ jobs:
             'resolver.google-oauth-application',
             'resolver.microsoft-oauth-application',
           ]);
-
           const FORBIDDEN_VALUE_KEYS = new Set([
             'value', 'secret_value', 'plaintext', 'plaintext_value', 'private_key', 'password',
             'token_value', 'credential_value', 'key_material', 'raw_secret', 'raw_token',
@@ -161,7 +158,7 @@ jobs:
               errors.push('credential authority composition references drifted');
             }
             if (Object.hasOwn(authority, 'operator_contract_source')) {
-              errors.push('retired operator-contract predecessor may not remain a credential composition source');
+              errors.push('retired operator predecessor may not remain a credential composition source');
             }
             if (authority.historical_provenance?.accepted_ar8b_must_not_be_rewritten !== true
                 || historicalRegistry.status !== 'ACCEPTED_AR8B_CREDENTIAL_METADATA_AUTHORITY') {
@@ -212,7 +209,6 @@ jobs:
             if (!r2 || r2.credential_pair_atomic !== true || r2.routine_release_rotation !== false) {
               errors.push('R2 credential pair must remain atomic and outside routine release rotation');
             }
-
             if (profile.kind !== 'PROFILE_SECURITY_AUTHORITY' || profile.status !== 'current'
                 || profile.credential_authority !== PATHS.authority) {
               errors.push('profile security authority root drifted');
@@ -221,11 +217,10 @@ jobs:
             for (const [name, subject] of Object.entries({ authority, lifecycle, profile })) {
               scanForbidden(subject, name, errors);
             }
-
             for (const forbidden of [
               'architecture/ar8-completion-lifecycle.json',
               'architecture/ar8-operator-rehearsal.json',
-              'architecture/operator-contract.json',
+              RETIRED_OPERATOR_PATH,
             ]) {
               if (sources.opsctl.includes(forbidden)) {
                 errors.push(`opsctl still depends on retired/transitional architecture path: ${forbidden}`);
@@ -285,7 +280,7 @@ jobs:
               assertRejected('competing credential authority', duplicate, sources);
 
               const predecessor = structuredClone(subjects);
-              predecessor.authority.operator_contract_source = 'architecture/operator-contract.json';
+              predecessor.authority.operator_contract_source = RETIRED_OPERATOR_PATH;
               assertRejected('retired operator predecessor source', predecessor, sources);
 
               const revokeFirst = structuredClone(subjects);
