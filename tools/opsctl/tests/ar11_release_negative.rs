@@ -220,7 +220,8 @@ fn changed_component_digest_is_rejected() -> Result<(), Box<dyn std::error::Erro
         parse(&value),
         "component/inventory digest disagreement unexpectedly accepted",
     )?;
-    assert!(error.contains("artifact identity disagrees with artifact_inventory"));
+    assert!(error.contains("ARTIFACT_INVENTORY_MISMATCH"));
+    assert!(error.contains("component control_plane artifact identity differs"));
     Ok(())
 }
 
@@ -248,7 +249,8 @@ fn missing_artifact_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
         parse(&value),
         "missing component artifact unexpectedly accepted",
     )?;
-    assert!(error.contains("artifact is absent from artifact_inventory"));
+    assert!(error.contains("ARTIFACT_INVENTORY_MISMATCH"));
+    assert!(error.contains("component control_plane artifact is absent"));
     Ok(())
 }
 
