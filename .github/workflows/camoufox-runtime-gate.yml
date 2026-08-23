@@ -55,12 +55,12 @@ jobs:
           python3.12 -m camoufox active | grep -F '152.0.4-beta.28'
 
       - name: Compile AR-10 runtime sources
-        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/test-ar10-real-camoufox.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/python-estate-ar6.py
+        run: python3.12 -m py_compile runtime/camouhost/real.py scripts/test-ar10-real-camoufox.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
 
       - name: Enforce AR-10 successor-runtime policy
         run: |
-          python3.12 scripts/python-estate-ar6.py --check
           python3.12 scripts/check-ar10-runtime-cutover.py
+          python3.12 scripts/check-ar10-runtime-cutover.py --self-test
 
       - name: Prove Firefox writer-lock failure semantics
         run: python3.12 scripts/test-ar10-firefox-writer-locks.py
@@ -94,7 +94,7 @@ jobs:
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
       - name: Compile real Camouhost source without installing browser runtime
-        run: python -m py_compile runtime/camouhost/real.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py scripts/python-estate-ar6.py
+        run: python -m py_compile runtime/camouhost/real.py scripts/test-ar10-firefox-writer-locks.py scripts/check-ar10-runtime-cutover.py
 
       - name: Prove Firefox writer-lock failure semantics
         run: python scripts/test-ar10-firefox-writer-locks.py

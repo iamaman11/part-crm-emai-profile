@@ -73,8 +73,8 @@
     },
     {
       "path": "scripts/check-documentation-authority-legacy.py",
-      "classification": "TRANSITION_PROVENANCE_ONLY",
-      "expected_present": true,
+      "classification": "DEAD",
+      "expected_present": false,
       "standalone_entrypoint": false,
       "proves": "pre-PR-377 documentation assumptions only",
       "duplicate_or_successor": "scripts/check-documentation-authority.py",
@@ -83,7 +83,7 @@
       "materializes_retired_code": false,
       "runtime_mutation_authority": false,
       "remote_mutation_authority": false,
-      "disposition": "ZERO_CURRENT_EXECUTABLE_CALLERS_REQUIRED"
+      "disposition": "DELETED_BY_N2_AFTER_ZERO_CURRENT_CALLER_PROOF"
     },
     {
       "path": "scripts/check-phase2i-release-freeze.sh",

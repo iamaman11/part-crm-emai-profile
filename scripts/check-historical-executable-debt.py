@@ -292,16 +292,20 @@ def self_test(payload: dict[str, Any]) -> None:
         fail("unknown debt classification negative fixture unexpectedly passed")
 
     bad_mutation = copy.deepcopy(payload)
+    mutated_retired = False
     for entry in bad_mutation["entries"]:
-        if entry["classification"] == "TRANSITION_PROVENANCE_ONLY":
+        if entry["classification"] in {"TRANSITION_PROVENANCE_ONLY", "DEAD"}:
             entry["remote_mutation_authority"] = True
+            mutated_retired = True
             break
+    if not mutated_retired:
+        fail("retired mutation-authority negative fixture has no retired entry")
     try:
         validate_entries(bad_mutation, tracked_paths())
     except DebtError:
         pass
     else:
-        fail("provenance mutation-authority negative fixture unexpectedly passed")
+        fail("retired mutation-authority negative fixture unexpectedly passed")
 
 
 def main() -> int:

@@ -53,7 +53,6 @@ jobs:
           scripts/test-phase2d-query-projections.py
           scripts/generate-frontend-contracts.py
           scripts/generate-architecture-inventory.py
-          scripts/python-estate-ar6.py
           scripts/check-opsctl-readonly.py
           scripts/cloudflare-deploy-config.py
           scripts/check-cloudflare-runtime-bindings.py
@@ -161,12 +160,6 @@ jobs:
 
       - name: Prove architecture inventory drift is detected
         run: python scripts/generate-architecture-inventory.py --self-test
-
-      - name: Verify AR-6 full Python estate
-        run: python scripts/python-estate-ar6.py --check
-
-      - name: Prove AR-6 Python estate drift fails closed
-        run: python scripts/python-estate-ar6.py --self-test
 
       - name: Enforce AR-6 read-only Rust opsctl boundary
         run: |

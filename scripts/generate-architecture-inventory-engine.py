@@ -33,7 +33,6 @@ AR5_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR5.md"
 AR6_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR6.md"
 AR7_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR7.md"
 GOVERNANCE_CONTRACT = "architecture/github-governance-ar7.json"
-PYTHON_ESTATE = "architecture/python-estate-ar6.json"
 CREDENTIAL_AUTHORITY = "architecture/credential-authority-ar8b.json"
 AR8C_PROVIDER_EXECUTION_AUTHORITY = "architecture/ar8-staging-provider-bootstrap-contract.json"
 AR8C_PROVIDER_EXECUTION_EVIDENCE = "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md"
@@ -77,7 +76,6 @@ DOCUMENT_STATUS = [
     {"path": AR4C_EVIDENCE, "status": "EVIDENCE", "scope": "ar4c_outbound_mail_composition_accepted"},
     {"path": AR5_EVIDENCE, "status": "EVIDENCE", "scope": "ar5_runtime_authority_cleanup_accepted"},
     {"path": AR6_EVIDENCE, "status": "EVIDENCE", "scope": "ar6_python_estate_and_read_only_opsctl_accepted"},
-    {"path": PYTHON_ESTATE, "status": "STABLE_AUTHORITY", "scope": "accepted_ar6_full_python_disposition"},
     {"path": AR7_EVIDENCE, "status": "EVIDENCE", "scope": "ar7_github_governance_and_operational_boundaries_accepted"},
     {"path": GOVERNANCE_CONTRACT, "status": "STABLE_AUTHORITY", "scope": "accepted_ar7_github_governance_contract"},
     {"path": AR8C_PROVIDER_EXECUTION_EVIDENCE, "status": "EVIDENCE", "scope": "ar8c_protected_staging_provider_execution_authority"},
@@ -207,8 +205,8 @@ def validate_source_documents() -> None:
         raise SystemExit("docs/status.json must project AR-8A/B accepted / AR-8C current / AR-8D..F mandatory")
     if program.get("runtime_authority_cleanup_evidence") != AR5_EVIDENCE:
         raise SystemExit("docs/status.json must project the accepted AR-5 runtime-authority cleanup evidence")
-    if program.get("python_operational_evidence") != AR6_EVIDENCE or program.get("python_estate") != PYTHON_ESTATE:
-        raise SystemExit("docs/status.json must project accepted AR-6 Python/opsctl authority")
+    if program.get("python_operational_evidence") != AR6_EVIDENCE:
+        raise SystemExit("docs/status.json must preserve accepted AR-6 Python/opsctl evidence")
     if program.get("github_governance_evidence") != AR7_EVIDENCE or program.get("github_governance_contract") != GOVERNANCE_CONTRACT:
         raise SystemExit("docs/status.json must project accepted AR-7 GitHub governance authority")
     runtime_gate = subprocess.run(
@@ -440,36 +438,6 @@ def build_inventory() -> dict[str, object]:
             "production_mutation": False,
             "next_required_slice": "AR-6",
         },
-        "python_operational_authority": {
-            "schema_version": 1,
-            "status": "ACCEPTED_AR6_PYTHON_OPSCTL_FOUNDATION",
-            "evidence": AR6_EVIDENCE,
-            "python_estate": PYTHON_ESTATE,
-            "implementation_issue": 294,
-            "implementation_pr": 295,
-            "exact_green_head": "9b06d542873ffa3122e53e107105098e21f5933c",
-            "implementation_merge": "d0229fedd81ee870822b6d9394bc4ee313ea3a3c",
-            "applicable_permanent_workflows": "13/13",
-            "python_summary": {
-                "tracked_python_files": 116,
-                "KEEP_PYTHON": 108,
-                "MIGRATE_TO_RUST": 2,
-                "DELETE_AFTER_SEQUENCE": 6,
-                "WRAP_WITH_RUST": 0,
-            },
-            "opsctl": {
-                "path": "tools/opsctl",
-                "mode": "READ_ONLY_FOUNDATION",
-                "commands": ["doctor", "status", "inventory"],
-                "third_party_dependencies": False,
-                "provider_mutation": False,
-            },
-            "future_cutovers": {"AR-10": "DELETE_AFTER_SEQUENCE", "AR-11": "MIGRATE_TO_RUST"},
-            "application_architecture_accepted_through": "AR-4C",
-            "runtime_authority_cleanup_accepted_through": "AR-5",
-            "production_mutation": False,
-            "next_required_slice": "AR-7",
-        },
         "github_governance_authority": {
             "schema_version": 1,
             "status": "ACCEPTED_AR7_GITHUB_GOVERNANCE",
@@ -516,7 +484,6 @@ def build_inventory() -> dict[str, object]:
             "runtime_topology_evidence": AR2_EVIDENCE,
             "runtime_authority_cleanup_evidence": AR5_EVIDENCE,
             "python_operational_evidence": AR6_EVIDENCE,
-            "python_estate": PYTHON_ESTATE,
             "github_governance_evidence": AR7_EVIDENCE,
             "github_governance_contract": GOVERNANCE_CONTRACT,
             "credential_authority_source": CREDENTIAL_AUTHORITY,
@@ -629,10 +596,6 @@ def self_test(expected: dict[str, object]) -> None:
         raise SystemExit(f"documentation authority negative self-test failed:\n{details}")
     if documentation.stdout.strip():
         print(documentation.stdout.strip())
-    python_ops = copy.deepcopy(expected)
-    python_ops["python_operational_authority"]["status"] = "AR6_CANDIDATE"
-    if serialized(python_ops) == serialized(expected):
-        raise SystemExit("inventory self-test failed to detect AR-6 Python/opsctl acceptance rollback")
     print("Architecture inventory CURRENT_DELIVERY_MAP and active AR-8 fail-closed negative self-tests passed.")
 
 
