@@ -32,7 +32,7 @@ AR4C_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md"
 AR5_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR5.md"
 AR6_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR6.md"
 AR7_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR7.md"
-GOVERNANCE_CONTRACT = "architecture/github-governance-ar7.json"
+GOVERNANCE_CONTRACT = "architecture/github-governance.json"
 CREDENTIAL_AUTHORITY = "architecture/credential-authority-ar8b.json"
 AR8C_PROVIDER_EXECUTION_AUTHORITY = "architecture/ar8-staging-provider-bootstrap-contract.json"
 AR8C_PROVIDER_EXECUTION_EVIDENCE = "docs/AR8_STAGING_PROVIDER_BOOTSTRAP.md"
@@ -77,7 +77,7 @@ DOCUMENT_STATUS = [
     {"path": AR5_EVIDENCE, "status": "EVIDENCE", "scope": "ar5_runtime_authority_cleanup_accepted"},
     {"path": AR6_EVIDENCE, "status": "EVIDENCE", "scope": "ar6_python_estate_and_read_only_opsctl_accepted"},
     {"path": AR7_EVIDENCE, "status": "EVIDENCE", "scope": "ar7_github_governance_and_operational_boundaries_accepted"},
-    {"path": GOVERNANCE_CONTRACT, "status": "STABLE_AUTHORITY", "scope": "accepted_ar7_github_governance_contract"},
+    {"path": GOVERNANCE_CONTRACT, "status": "STABLE_AUTHORITY", "scope": "current_github_governance_desired_configuration"},
     {"path": AR8C_PROVIDER_EXECUTION_EVIDENCE, "status": "EVIDENCE", "scope": "ar8c_protected_staging_provider_execution_authority"},
     {"path": AR8C_PROVIDER_EXECUTION_AUTHORITY, "status": "STABLE_AUTHORITY", "scope": "ar8c_staging_provider_execution_contract"},
     {"path": POST_AR8C_CLEANUP_EVIDENCE, "status": "EVIDENCE", "scope": "post_ar8c_cleanup_dx_acceptance"},
@@ -393,6 +393,12 @@ def build_inventory() -> dict[str, object]:
     application_architecture = ar3.build_projection(ROOT)
     credential_authority = load_credential_authority()
     credential_projection = build_credential_projection(credential_authority)
+    governance_desired = json.loads((ROOT / GOVERNANCE_CONTRACT).read_text(encoding="utf-8"))
+    if not isinstance(governance_desired, dict):
+        raise SystemExit("current GitHub governance desired state must be one JSON object")
+    governance_main = governance_desired.get("main")
+    if not isinstance(governance_main, dict) or not isinstance(governance_main.get("required_checks"), list):
+        raise SystemExit("current GitHub governance desired state is missing main.required_checks")
     routes = [
         {
             "route_class": route_class,
@@ -439,40 +445,14 @@ def build_inventory() -> dict[str, object]:
             "next_required_slice": "AR-6",
         },
         "github_governance_authority": {
-            "schema_version": 1,
-            "status": "ACCEPTED_AR7_GITHUB_GOVERNANCE",
-            "evidence": AR7_EVIDENCE,
-            "contract": GOVERNANCE_CONTRACT,
+            "schema_version": int(governance_desired["schema_version"]),
+            "kind": str(governance_desired["kind"]),
+            "desired_configuration": GOVERNANCE_CONTRACT,
             "validator": ".github/scripts/github-governance.mjs",
             "workflow": ".github/workflows/github-governance-gate.yml",
-            "implementation_issue": 298,
-            "implementation_pr": 299,
-            "exact_green_head": "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7",
-            "implementation_merge": "3492273cb9237850e3fa27343cc5edbdb0f66aa1",
-            "applicable_permanent_workflows": "14/14",
-            "hosted_audit": {"run_id": 31953316327, "contract_job": "success", "hosted_state_job": "success"},
-            "direct_main_negative_probe": {
-                "result": "HTTP_409_REJECTED",
-                "message": "Changes must be made through a pull request. 21 of 21 required status checks are expected.",
-                "sentinel_present_after_probe": False,
-            },
-            "main_protection": {
-                "mechanism": "classic_branch_protection",
-                "required_check_count": 21,
-                "require_pull_request": True,
-                "require_conversation_resolution": True,
-                "enforce_admins": True,
-                "strict_required_status_checks": True,
-                "allow_force_pushes": False,
-                "allow_deletions": False,
-            },
-            "environments": {
-                "rehearsal": {"allowed_branches": ["main"], "minimum_reviewers": 0},
-                "staging": {"allowed_branches": ["main"], "minimum_reviewers": 0},
-                "production": {"allowed_branches": ["main"], "minimum_reviewers": 1, "can_admins_bypass": False},
-            },
-            "production_mutation": False,
-            "next_required_slice": "AR-8",
+            "required_check_count": len(governance_main["required_checks"]),
+            "observation_mode": str(governance_desired["observation_mode"]),
+            "production_mutation": governance_desired.get("evaluation", {}).get("production_mutation") is True,
         },
         "credential_authority": credential_projection,
         "current_delivery_map": current_delivery_map(),

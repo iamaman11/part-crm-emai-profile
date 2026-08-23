@@ -92,17 +92,11 @@ jobs:
       - name: Prove architecture acceptance drift fails closed
         run: node .github/scripts/architecture-acceptance.mjs self-test
 
-      - name: Validate AR-7 governance contract
+      - name: Validate current GitHub governance desired state
         run: node .github/scripts/github-governance.mjs contract
 
-      - name: Prove AR-7 governance drift fails closed
+      - name: Prove GitHub governance weakening fails closed
         run: node .github/scripts/github-governance.mjs self-test
-
-      - name: Validate AR-10 additive governance extension
-        run: node .github/scripts/ar10-github-governance-extension.mjs contract
-
-      - name: Prove AR-10 governance weakening fails closed
-        run: node .github/scripts/ar10-github-governance-extension.mjs self-test
 
       - name: Validate canonical Actions registry projection
         run: node .github/scripts/github-actions-registry.mjs contract
@@ -171,11 +165,8 @@ jobs:
       - name: Enforce Node version
         run: test "$(node --version)" = "v24.19.0"
 
-      - name: Audit accepted AR-7 live hosted GitHub governance baseline
+      - name: Audit current live hosted GitHub governance
         run: node .github/scripts/github-governance.mjs live
-
-      - name: Audit AR-10 additive live hosted governance
-        run: node .github/scripts/ar10-github-governance-extension.mjs live
 
       - name: Reconcile only exact accepted AR-11 obsolete workflow registrations
         env:

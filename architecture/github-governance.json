@@ -1,31 +1,10 @@
 {
   "schema_version": 1,
-  "slice": "AR-7",
-  "status": "ACCEPTED_AR7_GITHUB_GOVERNANCE",
+  "kind": "GITHUB_GOVERNANCE_DESIRED_STATE",
   "repository": "iamaman11/part-crm-emai-profile",
-  "baseline_main": "dde7123586b080c1c053e90ad0ba489d4620e4d2",
-  "issue": 298,
-  "source_authority": {
-    "accepted_branch": "main",
-    "production_ref": "refs/heads/main",
-    "immutable_bits_across_promotion": true,
-    "rebuild_on_promotion": false
-  },
-  "promotion": {
-    "order": [
-      "dev",
-      "rehearsal",
-      "staging",
-      "production"
-    ],
-    "hosted_environments": [
-      "rehearsal",
-      "staging",
-      "production"
-    ],
-    "dev_authority": "local_or_pull_request_candidate"
-  },
-  "main_governance": {
+  "observation_mode": "READ_ONLY",
+  "main": {
+    "branch": "main",
     "protection_mechanism": "classic_branch_protection",
     "require_pull_request": true,
     "require_conversation_resolution": true,
@@ -47,7 +26,9 @@
       "Invariants And Fail-Closed Boundaries",
       "Local Profile Linux",
       "Local Profile Windows",
+      "Profile Bridge Windows regression",
       "React Operator UI",
+      "Real Camoufox cold-launch proof",
       "Registry Domain D1 Adapter Worker And Contract",
       "Repository-Local Standalone Flow",
       "Resolver D1 first-bootstrap implementation",
@@ -81,19 +62,10 @@
       "can_admins_bypass": false
     }
   },
-  "acceptance": {
-    "direct_main_negative_probe_required": true,
-    "live_audit_required": true,
-    "production_ready": false,
-    "implementation_exact_green_head": "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7",
-    "implementation_merge": "3492273cb9237850e3fa27343cc5edbdb0f66aa1",
-    "implementation_pr": 299,
-    "implementation_issue": 298,
-    "applicable_permanent_workflows": "14/14",
-    "hosted_audit_run_id": 31953316327,
-    "hosted_contract_job": "success",
-    "hosted_state_job": "success",
-    "direct_main_negative_probe": "HTTP_409_REJECTED_NO_SENTINEL",
-    "closeout_issue": 300
+  "evaluation": {
+    "required_check_match": "EXACT",
+    "unknown_or_unreadable_live_state": "BLOCK",
+    "mutation_authority": false,
+    "production_mutation": false
   }
 }

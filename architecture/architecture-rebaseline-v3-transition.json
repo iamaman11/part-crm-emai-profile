@@ -312,59 +312,13 @@
   },
   "github_governance_authority": {
     "schema_version": 1,
-    "status": "ACCEPTED_AR7_GITHUB_GOVERNANCE",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR7.md",
-    "contract": "architecture/github-governance-ar7.json",
+    "kind": "GITHUB_GOVERNANCE_DESIRED_STATE",
+    "desired_configuration": "architecture/github-governance.json",
     "validator": ".github/scripts/github-governance.mjs",
     "workflow": ".github/workflows/github-governance-gate.yml",
-    "implementation_issue": 298,
-    "implementation_pr": 299,
-    "exact_green_head": "1ebb9f42bb52cf86f1794667f5c9d630ce78e8a7",
-    "implementation_merge": "3492273cb9237850e3fa27343cc5edbdb0f66aa1",
-    "applicable_permanent_workflows": "14/14",
-    "hosted_audit": {
-      "run_id": 31953316327,
-      "contract_job": "success",
-      "hosted_state_job": "success"
-    },
-    "direct_main_negative_probe": {
-      "result": "HTTP_409_REJECTED",
-      "message": "Changes must be made through a pull request. 21 of 21 required status checks are expected.",
-      "sentinel_present_after_probe": false
-    },
-    "main_protection": {
-      "mechanism": "classic_branch_protection",
-      "required_check_count": 21,
-      "require_pull_request": true,
-      "require_conversation_resolution": true,
-      "enforce_admins": true,
-      "strict_required_status_checks": true,
-      "allow_force_pushes": false,
-      "allow_deletions": false
-    },
-    "environments": {
-      "rehearsal": {
-        "allowed_branches": [
-          "main"
-        ],
-        "minimum_reviewers": 0
-      },
-      "staging": {
-        "allowed_branches": [
-          "main"
-        ],
-        "minimum_reviewers": 0
-      },
-      "production": {
-        "allowed_branches": [
-          "main"
-        ],
-        "minimum_reviewers": 1,
-        "can_admins_bypass": false
-      }
-    },
-    "production_mutation": false,
-    "next_required_slice": "AR-8"
+    "required_check_count": 23,
+    "observation_mode": "READ_ONLY",
+    "production_mutation": false
   },
   "ar8b_acceptance": {
     "issue": 309,
