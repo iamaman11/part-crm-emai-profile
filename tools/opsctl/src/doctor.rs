@@ -4,12 +4,11 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
-const AUTHORITIES: [&str; 6] = [
+const AUTHORITIES: [&str; 5] = [
     "architecture/inventory.json",
     "architecture/credential-authority.json",
     "architecture/credential-lifecycle.json",
     "architecture/profile-security.json",
-    "architecture/operator-contract.json",
     "docs/status.json",
 ];
 
@@ -42,7 +41,7 @@ pub(crate) fn run(root: &Path) -> Result<String, OpsctlError> {
         validate_json_authority(root, relative)?;
     }
 
-    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"architecture/operator-contract.json\",\"docs/status.json\"]}\n".to_owned())
+    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"docs/status.json\"]}\n".to_owned())
 }
 
 fn require_regular_file(root: &Path, relative: &str) -> Result<(), OpsctlError> {
@@ -105,7 +104,7 @@ mod tests {
     fn root() -> Result<PathBuf, Box<dyn std::error::Error>> {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let root =
-            std::env::temp_dir().join(format!("opsctl-n2-doctor-{}-{nonce}", std::process::id()));
+            std::env::temp_dir().join(format!("opsctl-n4-doctor-{}-{nonce}", std::process::id()));
         for directory in ["architecture", "docs", "scripts"] {
             fs::create_dir_all(root.join(directory))?;
         }
@@ -114,7 +113,6 @@ mod tests {
             "architecture/credential-authority.json",
             "architecture/credential-lifecycle.json",
             "architecture/profile-security.json",
-            "architecture/operator-contract.json",
             "docs/status.json",
         ] {
             fs::write(root.join(relative), b"{\"schema_version\":1}\n")?;
@@ -127,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn doctor_is_native_but_preserves_the_accepted_v1_read_only_output()
+    fn doctor_is_native_and_reads_only_current_authorities()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = root()?;
         let output = run(&root)?;
@@ -140,10 +138,9 @@ mod tests {
         assert!(parsed.get("implementation").is_none());
         assert!(parsed.get("child_processes").is_none());
         assert!(parsed.get("validators_execution").is_none());
-        assert_eq!(parsed["authorities"].as_array().map(Vec::len), Some(6));
-        assert!(!output.contains("python-estate-ar6"));
-        assert!(!root.join("architecture/python-estate-ar6.json").exists());
-        assert!(!root.join("scripts/python-estate-ar6.py").exists());
+        assert_eq!(parsed["authorities"].as_array().map(Vec::len), Some(5));
+        assert!(!output.contains("operator-contract"));
+        assert!(!root.join("architecture/operator-contract.json").exists());
         fs::remove_dir_all(root)?;
         Ok(())
     }
