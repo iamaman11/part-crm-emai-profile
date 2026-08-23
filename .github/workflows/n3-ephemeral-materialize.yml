@@ -4,12 +4,9 @@ on:
   push:
     branches:
       - codex/n3-github-governance-normalization
-  pull_request:
-    branches:
-      - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   materialize:
@@ -18,14 +15,12 @@ jobs:
       - name: Checkout exact staging source
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Verify exact source checkout
-        env:
-          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Materialize bounded N3 projections
         run: python scripts/_n3_materialize.py
@@ -49,15 +44,93 @@ jobs:
           ! grep -F 'architecture/github-governance-ar7.json' .github/workflows/github-governance-gate.yml scripts/generate-architecture-inventory-engine.py architecture/inventory.json architecture/architecture-rebaseline-v3-transition.json docs/status.json
           ! grep -F 'ar10-github-governance-extension.mjs' .github/workflows/github-governance-gate.yml architecture/inventory.json architecture/architecture-rebaseline-v3-transition.json docs/status.json
 
-      - name: Upload byte-exact materialized files
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: n3-materialized-files
-          path: |
+      - name: Publish one-commit final candidate from accepted main
+        env:
+          ACCEPTED_BASE: 1546b453f48ac132bb0d0bc3e5cd81763ffc7506
+          FINAL_BRANCH: codex/n3-github-governance-current-state
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          test "$(git rev-parse origin/main)" = "$ACCEPTED_BASE"
+          if git ls-remote --exit-code --heads origin "refs/heads/$FINAL_BRANCH" >/dev/null 2>&1; then
+            echo "refusing to overwrite existing final branch: $FINAL_BRANCH" >&2
+            exit 1
+          fi
+
+          final_root="$(mktemp -d)"
+          paths=(
+            .github/scripts/github-governance.mjs
             .github/workflows/github-governance-gate.yml
-            scripts/generate-architecture-inventory-engine.py
             architecture/architecture-rebaseline-v3-transition.json
+            architecture/github-governance.json
             architecture/inventory.json
+            architecture/runtime-cutover-ar10.json
             docs/status.json
-          if-no-files-found: error
-          retention-days: 1
+            scripts/generate-architecture-inventory-engine.py
+          )
+          for path in "${paths[@]}"; do
+            mkdir -p "$final_root/$(dirname "$path")"
+            cp "$path" "$final_root/$path"
+          done
+
+          git reset --hard "$ACCEPTED_BASE"
+          git clean -fdx
+          for path in "${paths[@]}"; do
+            mkdir -p "$(dirname "$path")"
+            cp "$final_root/$path" "$path"
+          done
+          rm -f architecture/github-governance-ar7.json
+          rm -f .github/scripts/ar10-github-governance-extension.mjs
+
+          node .github/scripts/github-governance.mjs contract
+          node .github/scripts/github-governance.mjs self-test
+          python scripts/generate-architecture-inventory.py --check
+          python scripts/check-ar10-runtime-cutover.py
+          node .github/scripts/architecture-authority-check.mjs
+          node .github/scripts/architecture-authority-check.mjs --self-test
+
+          git add -A -- \
+            .github/scripts/ar10-github-governance-extension.mjs \
+            .github/scripts/github-governance.mjs \
+            .github/workflows/github-governance-gate.yml \
+            architecture/architecture-rebaseline-v3-transition.json \
+            architecture/github-governance-ar7.json \
+            architecture/github-governance.json \
+            architecture/inventory.json \
+            architecture/runtime-cutover-ar10.json \
+            docs/status.json \
+            scripts/generate-architecture-inventory-engine.py
+
+          expected="$RUNNER_TEMP/n3-expected-paths.txt"
+          actual="$RUNNER_TEMP/n3-actual-paths.txt"
+          cat > "$expected" <<'EOF'
+          .github/scripts/ar10-github-governance-extension.mjs
+          .github/scripts/github-governance.mjs
+          .github/workflows/github-governance-gate.yml
+          architecture/architecture-rebaseline-v3-transition.json
+          architecture/github-governance-ar7.json
+          architecture/github-governance.json
+          architecture/inventory.json
+          architecture/runtime-cutover-ar10.json
+          docs/status.json
+          scripts/generate-architecture-inventory-engine.py
+          EOF
+          git diff --cached --name-only | sort > "$actual"
+          diff -u "$expected" "$actual"
+
+          git config user.name 'iamaman11'
+          git config user.email '44100369+iamaman11@users.noreply.github.com'
+          tree_sha="$(git write-tree)"
+          commit_sha="$({
+            printf '%s\n\n' 'N3: normalize GitHub governance authority'
+            printf '%s\n' 'Collapse the historical AR-7 baseline plus AR-10 overlay into one current desired GitHub governance configuration and one read-only live evaluator.'
+            printf '%s\n' 'Retire predecessor governance authority/overlay artifacts and callers, preserve acceptance history as provenance, and regenerate bounded current projections without production mutation.'
+          } | git commit-tree "$tree_sha" -p "$ACCEPTED_BASE")"
+
+          test "$(git rev-parse "$commit_sha^")" = "$ACCEPTED_BASE"
+          test "$(git diff-tree --no-commit-id --name-only -r "$commit_sha" | sort | wc -l)" -eq 10
+          git push origin "$commit_sha:refs/heads/$FINAL_BRANCH"
+          echo "FINAL_CANDIDATE_SHA=$commit_sha" >> "$GITHUB_ENV"
+
+      - name: Report final candidate
+        run: echo "Published $FINAL_CANDIDATE_SHA from accepted base 1546b453f48ac132bb0d0bc3e5cd81763ffc7506"
