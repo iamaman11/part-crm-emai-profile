@@ -641,7 +641,6 @@
   "application_architecture": {
     "schema_version": 1,
     "status": "ACCEPTED_AR4C_APPLICATION_ARCHITECTURE_REMEDIATION",
-    "topology_source": "architecture/runtime-topology-ar2.json",
     "base_contract_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
     "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
     "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
@@ -655,246 +654,6 @@
       "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
       "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED"
     ],
-    "runtime_resources": [
-      {
-        "id": "control_plane_worker",
-        "kind": "WORKER",
-        "owner": "apps/control-plane-worker",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc",
-          "apps/control-plane-worker/src/lib.rs"
-        ]
-      },
-      {
-        "id": "static_assets",
-        "kind": "WORKER_STATIC_ASSETS",
-        "owner": "frontend",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc"
-        ]
-      },
-      {
-        "id": "mailbox_secret_resolver_worker",
-        "kind": "WORKER",
-        "owner": "apps/mailbox-secret-resolver-worker",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "evidence": [
-          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc",
-          "architecture/pre2j-d3-resolver-bootstrap-authority.json"
-        ]
-      },
-      {
-        "id": "catalog_d1",
-        "kind": "D1",
-        "owner": "control-plane/catalog",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc",
-          "migrations/d1"
-        ]
-      },
-      {
-        "id": "resolver_d1",
-        "kind": "D1",
-        "owner": "mailbox-secret-resolver",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "evidence": [
-          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc",
-          "migrations/resolver-d1"
-        ]
-      },
-      {
-        "id": "profile_objects",
-        "kind": "R2",
-        "owner": "profile-generation",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc"
-        ]
-      },
-      {
-        "id": "profile_coordinator",
-        "kind": "DURABLE_OBJECT",
-        "owner": "profile/session coordination",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc",
-          "apps/control-plane-worker/src/profile_coordinator.rs"
-        ]
-      },
-      {
-        "id": "notification_hub",
-        "kind": "DURABLE_OBJECT",
-        "owner": "realtime notifications",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc",
-          "apps/control-plane-worker/src/realtime_notifications.rs"
-        ]
-      },
-      {
-        "id": "integration_events",
-        "kind": "QUEUE",
-        "owner": "notifications/integration-events",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "producer": "scheduled D1 outbox dispatcher",
-        "consumer": "control-plane queue handler",
-        "failure_boundary": "D1 durable delivery state + bounded Queue retry; realtime overlay is non-authoritative",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc",
-          "apps/control-plane-worker/src/integration_events.rs"
-        ]
-      },
-      {
-        "id": "mailbox_jobs",
-        "kind": "QUEUE",
-        "owner": "mailbox scheduling",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "producer": "scheduled D1 dispatcher",
-        "consumer": "control-plane queue handler",
-        "failure_boundary": "D1 job/version authority + bounded Queue retry",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc",
-          "apps/control-plane-worker/src/mailbox_scheduling.rs"
-        ]
-      },
-      {
-        "id": "mailbox_jobs_dlq",
-        "kind": "QUEUE_DLQ",
-        "owner": "mailbox operations",
-        "decision": "KEEP",
-        "execution_slice": "PC-3_MUTABLE_RECOVERY_ONLY_AFTER_AUTHORITY",
-        "producer": "MAILBOX_JOBS consumer retry exhaustion",
-        "consumer": "NO_CURRENT_AUTOMATIC_CONSUMER; FUTURE_OPERATOR_RECOVERY",
-        "failure_boundary": "inspect current D1 authority before controlled requeue/rerun/retire",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc"
-        ]
-      },
-      {
-        "id": "generation_verification",
-        "kind": "QUEUE",
-        "owner": "legacy profile-generation transport",
-        "decision": "DELETE",
-        "execution_slice": "AR-5_SOURCE_BINDING_REMOVAL",
-        "producer": "NO_PRODUCTION_PRODUCER_PROVEN; WRANGLER PRODUCER BINDING ONLY",
-        "consumer": "NONE",
-        "failure_boundary": "synchronous generation verification is authoritative",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc",
-          "apps/control-plane-worker/src/lib.rs",
-          "crates/cloudflare-adapters/src/control_plane_queue.rs",
-          "apps/control-plane-worker/src/profile_generations.rs"
-        ]
-      },
-      {
-        "id": "mailbox_secret_resolver_service",
-        "kind": "SERVICE_BINDING",
-        "owner": "mailbox credential boundary",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc",
-          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc",
-          "crates/cloudflare-adapters/src/cloud_mailbox_secrets.rs"
-        ]
-      },
-      {
-        "id": "control_plane_schedule",
-        "kind": "CRON",
-        "owner": "control-plane dispatchers",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "evidence": [
-          "deploy/cloudflare/wrangler.jsonc",
-          "apps/control-plane-worker/src/lib.rs"
-        ]
-      },
-      {
-        "id": "resolver_reconciliation_schedule",
-        "kind": "CRON",
-        "owner": "mailbox-secret-resolver key reconciliation",
-        "decision": "KEEP",
-        "execution_slice": "NONE",
-        "evidence": [
-          "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc"
-        ]
-      },
-      {
-        "id": "gmail_api",
-        "kind": "PROVIDER_LANE",
-        "owner": "mailbox provider adapters",
-        "decision": "KEEP",
-        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
-        "evidence": [
-          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"
-        ]
-      },
-      {
-        "id": "imap_read",
-        "kind": "PROVIDER_LANE",
-        "owner": "mailbox provider adapters",
-        "decision": "KEEP",
-        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
-        "evidence": [
-          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"
-        ]
-      },
-      {
-        "id": "smtp_send",
-        "kind": "PROVIDER_LANE",
-        "owner": "outbound mail provider adapters",
-        "decision": "KEEP",
-        "execution_slice": "PC-4_ACTIVATION",
-        "evidence": [
-          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs"
-        ]
-      },
-      {
-        "id": "microsoft_graph_oauth_read_delta",
-        "kind": "PROVIDER_LANE",
-        "owner": "mailbox provider adapters",
-        "decision": "KEEP",
-        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
-        "evidence": [
-          "crates/cloudflare-adapters/src/cloud_mailbox_provider.rs",
-          "apps/control-plane-worker/src/mailbox_microsoft_graph_oauth.rs"
-        ]
-      },
-      {
-        "id": "microsoft_graph_mail_send",
-        "kind": "PROVIDER_LANE",
-        "owner": "outbound mail",
-        "decision": "DEFER",
-        "execution_slice": "SEPARATE_ACCEPTANCE_IF_IMPLEMENTED",
-        "evidence": [
-          "docs/ARCHITECTURE_REBASELINE_V3_PLAN.md"
-        ]
-      },
-      {
-        "id": "browser_bridge_mailbox_lane",
-        "kind": "LOCAL_RUNTIME_LANE",
-        "owner": "Profile Bridge/browser mailbox execution",
-        "decision": "KEEP",
-        "execution_slice": "CAPABILITY_ACTIVATION_SEPARATE",
-        "evidence": [
-          "apps/profile-bridge",
-          "apps/control-plane-worker/src/mailbox_bindings.rs"
-        ]
-      }
-    ],
     "runtime_processes": [
       {
         "id": "control_plane_worker",
@@ -904,20 +663,6 @@
         "route_classifier": "crates/control-plane-contract/src/lib.rs::classify_route",
         "composition_root": "apps/control-plane-worker/src/composition.rs",
         "state_authority": "D1/application-owned repositories plus accepted R2/DO runtime boundaries",
-        "resource_refs": [
-          "control_plane_worker",
-          "static_assets",
-          "catalog_d1",
-          "profile_objects",
-          "profile_coordinator",
-          "notification_hub",
-          "integration_events",
-          "mailbox_jobs",
-          "mailbox_jobs_dlq",
-          "generation_verification",
-          "mailbox_secret_resolver_service",
-          "control_plane_schedule"
-        ],
         "status": "CENTRAL_COMPOSITION_ROOT_AR4A_ACCEPTED"
       },
       {
@@ -927,11 +672,6 @@
         "transport_owner": "apps/mailbox-secret-resolver-worker",
         "composition_root": "apps/mailbox-secret-resolver-worker",
         "state_authority": "dedicated resolver D1 encrypted credential/replay boundary",
-        "resource_refs": [
-          "mailbox_secret_resolver_worker",
-          "resolver_d1",
-          "resolver_reconciliation_schedule"
-        ],
         "status": "INTENTIONAL_RUNTIME_BOUNDARY"
       },
       {
@@ -941,9 +681,6 @@
         "transport_owner": "apps/profile-bridge",
         "composition_root": "apps/profile-bridge",
         "state_authority": "local encrypted workspace/cache/outbox under cloud device/profile authority",
-        "resource_refs": [
-          "browser_bridge_mailbox_lane"
-        ],
         "status": "INTENTIONAL_RUNTIME_BOUNDARY"
       }
     ],
@@ -1142,7 +879,6 @@
   "runtime_authority_cleanup": {
     "schema_version": 1,
     "status": "ACCEPTED_AR5_RUNTIME_AUTHORITY_CLEANUP",
-    "topology_decision_source": "architecture/runtime-topology-ar2.json",
     "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
     "implementation_issue": 290,
     "implementation_pr": 291,
@@ -1150,7 +886,6 @@
     "implementation_merge": "82d251a1d6666199c6eace393eedc1766157fcee",
     "applicable_permanent_workflows": "13/13",
     "generation_verification": {
-      "topology_decision": "DELETE",
       "wrangler_producer_binding": "ABSENT",
       "runtime_contract_binding": "ABSENT",
       "deployment_manifest_identity": "ABSENT",
@@ -1543,9 +1278,7 @@
     "tracking_issue": 266,
     "current_slice": "AR-12",
     "transition": "architecture/architecture-rebaseline-v3-transition.json",
-    "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
     "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
-    "runtime_topology_projection_owner": "AR-3",
     "runtime_authority_cleanup_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR5.md",
     "python_operational_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR6.md",
     "python_estate": "architecture/python-estate-ar6.json",
@@ -1672,11 +1405,6 @@
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
       "status": "EVIDENCE",
       "scope": "ar2_runtime_topology_and_d3_compatibility_acceptance"
-    },
-    {
-      "path": "architecture/runtime-topology-ar2.json",
-      "status": "STABLE_AUTHORITY",
-      "scope": "accepted_ar2_runtime_topology_decision_input_for_ar3"
     },
     {
       "path": "docs/ARCHITECTURE_REBASELINE_V3_AR3.md",
@@ -1939,114 +1667,114 @@
     }
   },
   "d1_evolution": {
-      "architecture_complete": false,
-      "components": [
-        {
-          "compatibility_policy_digest": "7d84cba14dbff39b9ee52ed81d9855089089363600938fa1f6791503c9903047",
-          "component_id": "catalog",
-          "current_repository_revision": "0026_outbound_mail_intents.sql",
-          "historical_epoch": {
-            "accepted_history_digest": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
-            "final_revision": "0026_outbound_mail_intents.sql",
-            "migration_count": 26,
-            "retroactive_runtime_compatibility_claims": false
-          },
-          "history_digest": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
-          "history_digest_algorithm": "sha256(canonical-json(name+sha256))",
+    "architecture_complete": false,
+    "components": [
+      {
+        "compatibility_policy_digest": "7d84cba14dbff39b9ee52ed81d9855089089363600938fa1f6791503c9903047",
+        "component_id": "catalog",
+        "current_repository_revision": "0026_outbound_mail_intents.sql",
+        "historical_epoch": {
+          "accepted_history_digest": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
+          "final_revision": "0026_outbound_mail_intents.sql",
           "migration_count": 26,
-          "migration_root": "migrations/d1",
-          "post_epoch_migration_count": 0,
-          "release_schema_contract": {
-            "compatibility_policy_digest": "7d84cba14dbff39b9ee52ed81d9855089089363600938fa1f6791503c9903047",
-            "database_component": "catalog",
-            "migration_history_digest": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
-            "supported_schema_max": "0026_outbound_mail_intents.sql",
-            "supported_schema_min": "0026_outbound_mail_intents.sql",
-            "target_schema_revision": "0026_outbound_mail_intents.sql"
-          }
+          "retroactive_runtime_compatibility_claims": false
         },
-        {
+        "history_digest": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
+        "history_digest_algorithm": "sha256(canonical-json(name+sha256))",
+        "migration_count": 26,
+        "migration_root": "migrations/d1",
+        "post_epoch_migration_count": 0,
+        "release_schema_contract": {
           "compatibility_policy_digest": "7d84cba14dbff39b9ee52ed81d9855089089363600938fa1f6791503c9903047",
-          "component_id": "resolver",
-          "current_repository_revision": "0004_refresh_owner_hmac_version.sql",
-          "historical_epoch": {
-            "accepted_history_digest": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
-            "final_revision": "0004_refresh_owner_hmac_version.sql",
-            "migration_count": 4,
-            "retroactive_runtime_compatibility_claims": false
-          },
-          "history_digest": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
-          "history_digest_algorithm": "sha256(canonical-json(name+sha256))",
-          "migration_count": 4,
-          "migration_root": "migrations/resolver-d1",
-          "post_epoch_migration_count": 0,
-          "release_schema_contract": {
-            "compatibility_policy_digest": "7d84cba14dbff39b9ee52ed81d9855089089363600938fa1f6791503c9903047",
-            "database_component": "resolver",
-            "migration_history_digest": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
-            "supported_schema_max": "0004_refresh_owner_hmac_version.sql",
-            "supported_schema_min": "0004_refresh_owner_hmac_version.sql",
-            "target_schema_revision": "0004_refresh_owner_hmac_version.sql"
-          }
+          "database_component": "catalog",
+          "migration_history_digest": "4d1d8b8d3bba5d0903385d05fc18e0036628ff1123e0e26e9a080a340f7b5e2e",
+          "supported_schema_max": "0026_outbound_mail_intents.sql",
+          "supported_schema_min": "0026_outbound_mail_intents.sql",
+          "target_schema_revision": "0026_outbound_mail_intents.sql"
         }
-      ],
-      "effect_boundary": {
-        "database_mutation": false,
-        "mode": "READ_ONLY_METADATA_ONLY",
-        "network": false,
-        "production_mutation": false,
-        "provider_credentials": false,
-        "provider_mutation": false
       },
-      "executable_schema_authority": [
-        "migrations/d1",
-        "migrations/resolver-d1"
-      ],
-      "historical_provenance": {
-        "acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
-        "program_slice": "AR-9",
-        "tracking_issue": 366
-      },
-      "kind": "D1_REPOSITORY_PROJECTION",
-      "ledger_states": [
-        "EXACT",
-        "BEHIND_KNOWN_PREFIX",
-        "AHEAD_KNOWN_COMPATIBLE",
-        "AHEAD_KNOWN_INCOMPATIBLE",
-        "DIVERGED",
-        "UNKNOWN_MIGRATION",
-        "CORRUPT_LEDGER"
-      ],
-      "migration_classes": [
-        "EXPAND",
-        "BACKFILL",
-        "CONTRACT",
-        "REPAIR"
-      ],
-      "production_core_gate": "BLOCKED",
+      {
+        "compatibility_policy_digest": "7d84cba14dbff39b9ee52ed81d9855089089363600938fa1f6791503c9903047",
+        "component_id": "resolver",
+        "current_repository_revision": "0004_refresh_owner_hmac_version.sql",
+        "historical_epoch": {
+          "accepted_history_digest": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
+          "final_revision": "0004_refresh_owner_hmac_version.sql",
+          "migration_count": 4,
+          "retroactive_runtime_compatibility_claims": false
+        },
+        "history_digest": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
+        "history_digest_algorithm": "sha256(canonical-json(name+sha256))",
+        "migration_count": 4,
+        "migration_root": "migrations/resolver-d1",
+        "post_epoch_migration_count": 0,
+        "release_schema_contract": {
+          "compatibility_policy_digest": "7d84cba14dbff39b9ee52ed81d9855089089363600938fa1f6791503c9903047",
+          "database_component": "resolver",
+          "migration_history_digest": "98fd6f91a839223b06c441df4901dbd4fda8e69f2f90606f00e43faad91877ec",
+          "supported_schema_max": "0004_refresh_owner_hmac_version.sql",
+          "supported_schema_min": "0004_refresh_owner_hmac_version.sql",
+          "target_schema_revision": "0004_refresh_owner_hmac_version.sql"
+        }
+      }
+    ],
+    "effect_boundary": {
+      "database_mutation": false,
+      "mode": "READ_ONLY_METADATA_ONLY",
+      "network": false,
       "production_mutation": false,
-      "production_ready": false,
-      "repository_identity_sha256": "a97f4555d7283b49912a8a2f0ae88de30781681d4fab1ad9d55836eb064a2f5e",
-      "rollout_orders": [
-        "MIGRATE_BEFORE_CODE",
-        "CODE_BEFORE_MIGRATE",
-        "EITHER",
-        "SEPARATE_CONTRACT_RELEASE"
-      ],
-      "rollout_decisions": [
-        "SAFE",
-        "MIGRATION_REQUIRED",
-        "DEPLOY_FIRST",
-        "MIGRATE_FIRST",
-        "CODE_ROLLBACK_SAFE",
-        "CODE_ROLLBACK_BLOCKED",
-        "FAIL_FORWARD_REQUIRED",
-        "CONTRACT_BLOCKED",
-        "RECOVERY_REQUIRED"
-      ],
-      "schema_version": 1,
-      "semantic_authority": "tools/opsctl/src/d1"
+      "provider_credentials": false,
+      "provider_mutation": false
     },
+    "executable_schema_authority": [
+      "migrations/d1",
+      "migrations/resolver-d1"
+    ],
+    "historical_provenance": {
+      "acceptance_evidence": "docs/evidence/2026-08-19-ar9-final-acceptance.json",
+      "program_slice": "AR-9",
+      "tracking_issue": 366
+    },
+    "kind": "D1_REPOSITORY_PROJECTION",
+    "ledger_states": [
+      "EXACT",
+      "BEHIND_KNOWN_PREFIX",
+      "AHEAD_KNOWN_COMPATIBLE",
+      "AHEAD_KNOWN_INCOMPATIBLE",
+      "DIVERGED",
+      "UNKNOWN_MIGRATION",
+      "CORRUPT_LEDGER"
+    ],
+    "migration_classes": [
+      "EXPAND",
+      "BACKFILL",
+      "CONTRACT",
+      "REPAIR"
+    ],
+    "production_core_gate": "BLOCKED",
+    "production_mutation": false,
+    "production_ready": false,
+    "repository_identity_sha256": "a97f4555d7283b49912a8a2f0ae88de30781681d4fab1ad9d55836eb064a2f5e",
+    "rollout_decisions": [
+      "SAFE",
+      "MIGRATION_REQUIRED",
+      "DEPLOY_FIRST",
+      "MIGRATE_FIRST",
+      "CODE_ROLLBACK_SAFE",
+      "CODE_ROLLBACK_BLOCKED",
+      "FAIL_FORWARD_REQUIRED",
+      "CONTRACT_BLOCKED",
+      "RECOVERY_REQUIRED"
+    ],
+    "rollout_orders": [
+      "MIGRATE_BEFORE_CODE",
+      "CODE_BEFORE_MIGRATE",
+      "EITHER",
+      "SEPARATE_CONTRACT_RELEASE"
+    ],
+    "schema_version": 1,
+    "semantic_authority": "tools/opsctl/src/d1"
+  },
   "runtime_cutover": {
     "schema_version": 1,
     "role": "ACCEPTED_AR10_RUNTIME_CUTOVER_PROJECTION",

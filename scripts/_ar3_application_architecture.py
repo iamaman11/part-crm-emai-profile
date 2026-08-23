@@ -2,18 +2,16 @@
 """AR-3 application-architecture projection and fail-closed source verification.
 
 This module is generator logic, not a second architecture registry. The canonical machine
-projection is architecture/inventory.json. Accepted runtime-resource decisions are consumed
-from architecture/runtime-topology-ar2.json without being re-decided here.
+projection is architecture/inventory.json. Runtime/resource topology is owned by provider-native
+configuration and Product Rust rather than consumed from the historical AR-2 decision artifact.
 """
 
 from __future__ import annotations
 
 import copy
-import json
 from pathlib import Path
 from typing import Any
 
-RUNTIME_TOPOLOGY = "architecture/runtime-topology-ar2.json"
 AR3_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR3.md"
 AR4A_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4A.md"
 AR4B_EVIDENCE = "docs/ARCHITECTURE_REBASELINE_V3_AR4B.md"
@@ -28,20 +26,6 @@ PROCESS_OWNERSHIP: list[dict[str, Any]] = [
         "route_classifier": "crates/control-plane-contract/src/lib.rs::classify_route",
         "composition_root": "apps/control-plane-worker/src/composition.rs",
         "state_authority": "D1/application-owned repositories plus accepted R2/DO runtime boundaries",
-        "resource_refs": [
-            "control_plane_worker",
-            "static_assets",
-            "catalog_d1",
-            "profile_objects",
-            "profile_coordinator",
-            "notification_hub",
-            "integration_events",
-            "mailbox_jobs",
-            "mailbox_jobs_dlq",
-            "generation_verification",
-            "mailbox_secret_resolver_service",
-            "control_plane_schedule",
-        ],
         "status": "CENTRAL_COMPOSITION_ROOT_AR4A_ACCEPTED",
     },
     {
@@ -51,11 +35,6 @@ PROCESS_OWNERSHIP: list[dict[str, Any]] = [
         "transport_owner": "apps/mailbox-secret-resolver-worker",
         "composition_root": "apps/mailbox-secret-resolver-worker",
         "state_authority": "dedicated resolver D1 encrypted credential/replay boundary",
-        "resource_refs": [
-            "mailbox_secret_resolver_worker",
-            "resolver_d1",
-            "resolver_reconciliation_schedule",
-        ],
         "status": "INTENTIONAL_RUNTIME_BOUNDARY",
     },
     {
@@ -65,7 +44,6 @@ PROCESS_OWNERSHIP: list[dict[str, Any]] = [
         "transport_owner": "apps/profile-bridge",
         "composition_root": "apps/profile-bridge",
         "state_authority": "local encrypted workspace/cache/outbox under cloud device/profile authority",
-        "resource_refs": ["browser_bridge_mailbox_lane"],
         "status": "INTENTIONAL_RUNTIME_BOUNDARY",
     },
 ]
@@ -382,42 +360,6 @@ def _read(root: Path, relative: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def load_topology(root: Path) -> dict[str, Any]:
-    topology = json.loads(_read(root, RUNTIME_TOPOLOGY))
-    if topology.get("status") != "ACCEPTED_AR2_DECISION" or topology.get("slice") != "AR-2":
-        raise SystemExit("AR-3 requires the accepted AR-2 runtime topology decision")
-    if topology.get("next_slice_after_acceptance") != "AR-3":
-        raise SystemExit("AR-2 topology must hand off to AR-3")
-    if topology.get("production_mutation") is not False:
-        raise SystemExit("AR-2 topology must remain production-mutation-free")
-    resources = topology.get("resources")
-    if not isinstance(resources, list) or not resources:
-        raise SystemExit("AR-2 topology resources must be a non-empty array")
-    ids = [item.get("id") for item in resources if isinstance(item, dict)]
-    if len(ids) != len(resources) or any(not isinstance(value, str) or not value for value in ids):
-        raise SystemExit("every AR-2 topology resource requires a stable id")
-    if len(set(ids)) != len(ids):
-        raise SystemExit("AR-2 topology resource ids must be unique")
-    decisions = {item["id"]: item.get("decision") for item in resources}
-    required = {
-        "control_plane_worker": "KEEP",
-        "mailbox_secret_resolver_worker": "KEEP",
-        "catalog_d1": "KEEP",
-        "resolver_d1": "KEEP",
-        "mailbox_jobs": "KEEP",
-        "mailbox_jobs_dlq": "KEEP",
-        "generation_verification": "DELETE",
-        "mailbox_secret_resolver_service": "KEEP",
-        "browser_bridge_mailbox_lane": "KEEP",
-    }
-    for resource_id, decision in required.items():
-        if decisions.get(resource_id) != decision:
-            raise SystemExit(
-                f"AR-2 topology decision drift for {resource_id}: expected {decision}, got {decisions.get(resource_id)!r}"
-            )
-    return topology
-
-
 def _validate_source_text(relative: str, source: str) -> None:
     for snippet in _REQUIRED_SNIPPETS.get(relative, []):
         if snippet not in source:
@@ -445,17 +387,10 @@ def _validate_unique_ids(items: list[dict[str, Any]], label: str) -> None:
 
 
 def build_projection(root: Path) -> dict[str, Any]:
-    topology = load_topology(root)
     validate_source_contract(root)
     _validate_unique_ids(PROCESS_OWNERSHIP, "process")
     _validate_unique_ids(CAPABILITY_OWNERSHIP, "capability")
     _validate_unique_ids(COMPOSITION_FINDINGS, "finding")
-
-    resource_ids = {item["id"] for item in topology["resources"]}
-    for process in PROCESS_OWNERSHIP:
-        unknown = sorted(set(process["resource_refs"]) - resource_ids)
-        if unknown:
-            raise SystemExit(f"AR-3 process {process['id']} references unknown AR-2 resources: {unknown}")
 
     remediation = {finding["owner_slice"] for finding in COMPOSITION_FINDINGS}
     if remediation != {"AR-4A", "AR-4B", "AR-4C", "AR-4D"}:
@@ -467,7 +402,6 @@ def build_projection(root: Path) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "status": "ACCEPTED_AR4C_APPLICATION_ARCHITECTURE_REMEDIATION",
-        "topology_source": RUNTIME_TOPOLOGY,
         "base_contract_evidence": AR3_EVIDENCE,
         "evidence": AR4C_EVIDENCE,
         "projection_policy": "EXTEND_CANONICAL_INVENTORY_DO_NOT_CREATE_COMPETING_REGISTRY",
@@ -481,7 +415,6 @@ def build_projection(root: Path) -> dict[str, Any]:
             "AR4B_ROUTE_OWNERSHIP_CONSOLIDATION_ACCEPTED",
             "AR4C_OUTBOUND_MAIL_COMPOSITION_EXTRACTION_ACCEPTED",
         ],
-        "runtime_resources": copy.deepcopy(topology["resources"]),
         "runtime_processes": copy.deepcopy(PROCESS_OWNERSHIP),
         "capability_ownership": copy.deepcopy(CAPABILITY_OWNERSHIP),
         "composition_findings": copy.deepcopy(COMPOSITION_FINDINGS),
@@ -577,11 +510,6 @@ def negative_self_test(root: Path) -> None:
         raise SystemExit(
             "AR-4C negative self-test failed to detect accepted-state rollback to candidate remediation state"
         )
-
-    missing_resource = copy.deepcopy(expected)
-    missing_resource["runtime_resources"] = missing_resource["runtime_resources"][1:]
-    if len(missing_resource["runtime_resources"]) == len(expected["runtime_resources"]):
-        raise SystemExit("AR-3 negative self-test failed to model missing resource drift")
 
     duplicate_owner = copy.deepcopy(expected)
     duplicate_owner["capability_ownership"].append(copy.deepcopy(duplicate_owner["capability_ownership"][0]))
