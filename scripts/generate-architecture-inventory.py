@@ -478,7 +478,6 @@ def release_architecture_projection() -> dict[str, object]:
         "compatibility_dimensions": authority.get("compatibility_dimensions"),
         "artifact_authority": authority.get("artifact_authority"),
         "effective_state_model": authority.get("effective_state_model"),
-        "release_set": authority.get("release_set"),
         "architecture_complete": False,
         "production_core_gate": "BLOCKED",
         "production_ready": False,

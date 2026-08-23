@@ -38,7 +38,6 @@ jobs:
           node .github/scripts/release-operational-ar11.mjs
           node .github/scripts/release-operational-ar11.mjs --self-test
           node .github/scripts/ar8-d-secret-transport-successor.mjs
-          python scripts/release-set-ar11.py self-test
           python scripts/accepted-source-evidence-ar11.py --self-test
           python scripts/release-compat-evidence-ar11.py --self-test
           python scripts/release-core-overlay-ar11.py --self-test
@@ -69,6 +68,12 @@ jobs:
           cargo fmt --manifest-path tools/opsctl/Cargo.toml -- --check
           cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path tools/opsctl/Cargo.toml
+
+      - name: Verify pure opsctl-core Release Set v3 foundation
+        run: |
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml --package opsctl-core -- --check
+          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --package opsctl-core --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml --package opsctl-core
 
       - name: Prove production remains blocked
         run: |
@@ -107,3 +112,10 @@ jobs:
           cargo fmt --manifest-path tools/opsctl/Cargo.toml -- --check
           cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path tools/opsctl/Cargo.toml
+
+      - name: Verify pure opsctl-core Release Set v3 foundation on Windows
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path tools/opsctl/Cargo.toml --package opsctl-core -- --check
+          cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --package opsctl-core --all-targets -- -D warnings
+          cargo test --locked --manifest-path tools/opsctl/Cargo.toml --package opsctl-core

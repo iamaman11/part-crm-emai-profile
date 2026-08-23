@@ -1,5 +1,6 @@
 use crate::release::digest::{canonical_json, sha256_hex};
-use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
+use crate::release::document::LoadedReleaseSet;
+use crate::release::model::ReleaseModelError;
 use serde_json::{Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -89,10 +90,11 @@ impl AcceptedSourceEvidence {
 
     pub fn verify_for_release(
         &self,
-        manifest: &ReleaseSetManifest,
+        release_set: &LoadedReleaseSet,
     ) -> Result<AcceptedSourceVerification, ReleaseModelError> {
+        let manifest = release_set.semantic();
         self.verify_bindings(
-            &manifest.release_set_id,
+            release_set.release_set_id(),
             &manifest.source.repository,
             &manifest.source.commit_sha,
         )
@@ -264,12 +266,12 @@ pub fn evidence_path_for_release(release_set: &Path) -> Result<PathBuf, ReleaseM
 }
 
 pub fn verify_release_source(
-    release_set: &Path,
-    manifest: &ReleaseSetManifest,
+    release_set_path: &Path,
+    release_set: &LoadedReleaseSet,
 ) -> Result<(PathBuf, AcceptedSourceVerification), ReleaseModelError> {
-    let evidence_path = evidence_path_for_release(release_set)?;
+    let evidence_path = evidence_path_for_release(release_set_path)?;
     let evidence = AcceptedSourceEvidence::load(&evidence_path)?;
-    let verification = evidence.verify_for_release(manifest)?;
+    let verification = evidence.verify_for_release(release_set)?;
     Ok((evidence_path, verification))
 }
 

@@ -62,7 +62,6 @@ jobs:
           scripts/check-pre2j-d3-resolver-bootstrap-authority.py
           scripts/check-pre2j-d3-resolver-bootstrap-implementation.py
           scripts/mailbox-secret-resolver-release.py
-          scripts/release-set-ar11.py
           scripts/release-compat-evidence-ar11.py
           scripts/release-core-overlay-ar11.py
           scripts/deployment-snapshot-ar11.py
@@ -230,7 +229,6 @@ jobs:
           node .github/scripts/ar8-d-secret-transport-successor.mjs --self-test
           node .github/scripts/release-operational-ar11.mjs
           node .github/scripts/release-operational-ar11.mjs --self-test
-          python scripts/release-set-ar11.py self-test
           python scripts/release-compat-evidence-ar11.py --self-test
           python scripts/release-core-overlay-ar11.py --self-test
           python scripts/deployment-snapshot-ar11.py --self-test

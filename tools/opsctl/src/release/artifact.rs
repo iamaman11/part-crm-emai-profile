@@ -1,6 +1,8 @@
 use crate::release::component_manifest::verify_component_manifests;
 use crate::release::digest::sha256_reader_hex;
-use crate::release::model::{ArtifactIdentity, ReleaseModelError, ReleaseSetManifest};
+use crate::release::document::LoadedReleaseSet;
+use crate::release::model::ReleaseModelError;
+use opsctl_core::release::ArtifactIdentity;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -13,9 +15,10 @@ pub struct ArtifactVerification {
 }
 
 pub fn verify_artifacts(
-    manifest: &ReleaseSetManifest,
+    release_set: &LoadedReleaseSet,
     artifact_root: &Path,
 ) -> Result<ArtifactVerification, ReleaseModelError> {
+    let manifest = release_set.current_v3()?;
     let root_metadata = fs::symlink_metadata(artifact_root).map_err(|error| {
         ReleaseModelError::new(format!(
             "ARTIFACT_ROOT_UNAVAILABLE: {}: {error}",
@@ -33,7 +36,7 @@ pub fn verify_artifacts(
         .map(|artifact| (artifact.path.as_str(), artifact))
         .collect::<BTreeMap<_, _>>();
     let mut observed = collect_files(artifact_root)?;
-    remove_verified_control_manifest(manifest, &mut observed)?;
+    remove_verified_control_manifest(release_set, &mut observed)?;
     let expected_paths = expected.keys().copied().collect::<BTreeSet<_>>();
     let observed_paths = observed.keys().map(String::as_str).collect::<BTreeSet<_>>();
     if expected_paths != observed_paths {
@@ -70,27 +73,21 @@ pub fn verify_artifacts(
 }
 
 fn remove_verified_control_manifest(
-    manifest: &ReleaseSetManifest,
+    release_set: &LoadedReleaseSet,
     observed: &mut BTreeMap<String, PathBuf>,
 ) -> Result<(), ReleaseModelError> {
     let Some(path) = observed.get("release-set.json").cloned() else {
         return Ok(());
     };
-    let input = fs::read_to_string(&path).map_err(|error| {
-        ReleaseModelError::new(format!(
-            "RELEASE_SET_CONTROL_DOCUMENT_READ_FAILED: {}: {error}",
-            path.display()
-        ))
-    })?;
-    let control = ReleaseSetManifest::parse_json(&input).map_err(|error| {
+    let control = LoadedReleaseSet::load(&path).map_err(|error| {
         ReleaseModelError::new(format!(
             "RELEASE_SET_CONTROL_DOCUMENT_INVALID: {}: {error}",
             path.display()
         ))
     })?;
-    if control != *manifest {
+    if &control != release_set {
         return Err(ReleaseModelError::new(
-            "RELEASE_SET_CONTROL_DOCUMENT_MISMATCH: artifact root release-set.json differs from verified manifest",
+            "RELEASE_SET_CONTROL_DOCUMENT_MISMATCH: artifact root release-set.json differs from verified release document",
         ));
     }
     observed.remove("release-set.json");

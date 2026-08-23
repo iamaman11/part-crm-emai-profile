@@ -52,6 +52,10 @@ impl TempRepository {
             &source.join("tools/opsctl/src"),
             &path.join("tools/opsctl/src"),
         )?;
+        copy_directory(
+            &source.join("tools/opsctl/core"),
+            &path.join("tools/opsctl/core"),
+        )?;
         copy_file(&source, &path, "tools/opsctl/Cargo.toml")?;
         copy_file(&source, &path, "tools/opsctl/Cargo.lock")?;
         copy_directory(&source.join("migrations/d1"), &path.join("migrations/d1"))?;

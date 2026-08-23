@@ -2,7 +2,8 @@ use crate::promotion::authority::{DeploymentClosure, load_closure};
 use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::release::compatibility::{CompatibilityEvidence, CompatibilityResult, evaluate};
 use crate::release::digest::sha256_hex;
-use crate::release::model::{ReleaseModelError, ReleaseSetManifest};
+use crate::release::document::{LoadedReleaseSet, ReleaseCompatibilityView};
+use crate::release::model::ReleaseModelError;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -10,12 +11,12 @@ use std::path::Path;
 pub struct PlanRequest<'a> {
     pub root: &'a Path,
     pub source_root: &'a Path,
-    pub target: &'a ReleaseSetManifest,
+    pub target: &'a LoadedReleaseSet,
     pub target_profile_id: &'a str,
     pub environment: &'a str,
     pub snapshot: &'a DeploymentSnapshot,
     pub compatibility_evidence: &'a CompatibilityEvidence,
-    pub current_release: Option<&'a ReleaseSetManifest>,
+    pub current_release: Option<&'a LoadedReleaseSet>,
     pub expected_current_release_set_id: Option<&'a str>,
 }
 
@@ -71,7 +72,8 @@ pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelErro
     )?;
 
     let closure = load_closure(request.root, request.target_profile_id)?;
-    validate_release_components(request.target, &closure)?;
+    let target = request.target.semantic();
+    validate_release_components(target, &closure)?;
     let compatibility = evaluate(
         request.root,
         request.source_root,
@@ -88,7 +90,7 @@ pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelErro
             "environment={}\ncurrent_release_set={}\ntarget_release_set={}\ntarget_profile={}",
             request.environment,
             current_id,
-            request.target.release_set_id,
+            request.target.release_set_id(),
             request.target_profile_id
         )
         .as_bytes(),
@@ -119,8 +121,7 @@ pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelErro
         &closure.required_credentials,
     );
 
-    let target_components = request
-        .target
+    let target_components = target
         .components
         .iter()
         .map(|(id, component)| (id.clone(), component.release_id.clone()))
@@ -132,7 +133,7 @@ pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelErro
         .cloned()
         .collect::<BTreeMap<_, _>>();
     let release_changed = request.snapshot.release_set_id.as_deref()
-        != Some(request.target.release_set_id.as_str())
+        != Some(request.target.release_set_id())
         || target_components != observed_components;
     let profile_changed =
         request.snapshot.capability_profile_id.as_deref() != Some(request.target_profile_id);
@@ -167,7 +168,7 @@ pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelErro
         actions.push(json!({
             "authority": "WRANGLER_DEPLOY",
             "operation": "DEPLOY_EXACT_RELEASE_SET_ARTIFACTS",
-            "release_set_id": request.target.release_set_id,
+            "release_set_id": request.target.release_set_id(),
             "component_release_ids": target_components
         }));
     }
@@ -217,7 +218,7 @@ pub fn build(request: PlanRequest<'_>) -> Result<PromotionPlan, ReleaseModelErro
 }
 
 fn validate_release_components(
-    target: &ReleaseSetManifest,
+    target: &ReleaseCompatibilityView,
     closure: &DeploymentClosure,
 ) -> Result<(), ReleaseModelError> {
     for component in &closure.required_components {

@@ -103,14 +103,5 @@
     {"input_id":"frontend_lock","kind":"BUILD_PROVENANCE","semantic_owner":"frontend dependency lock","canonical_source":"frontend/package-lock.json","release_identity_source":"frontend/package-lock.json","compatibility_dimension":"build_provenance","required_for_release_set":true,"verification":["npm ci"],"consumers":["release_set.build_provenance"]},
     {"input_id":"release_architecture_authority","kind":"ARCHITECTURE_AUTHORITY","semantic_owner":"AR-11 release/capability/promotion authority","canonical_source":"architecture/release-architecture-ar11.json","release_identity_source":"architecture/release-architecture-ar11.json","compatibility_dimension":"build_provenance","required_for_release_set":true,"verification":["opsctl release authority"],"consumers":["release_set.build_provenance"]}
   ],
-  "compatibility_dimensions": ["public_api_contract_digest","frontend_api_contract_digest","catalog_d1_min_max_target","resolver_d1_min_max_target","bridge_protocol_version","camouhost_ipc_version","runtime_bundle_version","profile_generation_format","browser_identity_policy","resolver_service_protocol","windows_profile_bridge_delivery"],
-  "release_set": {
-    "schema_version": 2,
-    "id_scheme": "release-set-v2-sha256-SHA256(canonical_identity_payload)",
-    "source_must_be_accepted_main": true,
-    "required_identity_sections": ["source","components","contracts","protocols","schemas","runtime_compatibility","capability_profile_compatibility","build_provenance","artifact_inventory"],
-    "dependency_graph": "ACYCLIC_REQUIRED",
-    "compatibility_result_domain": ["COMPATIBLE","INCOMPATIBLE","UNKNOWN"],
-    "unknown_result": "FAIL_CLOSED"
-  }
+  "compatibility_dimensions": ["public_api_contract_digest","frontend_api_contract_digest","catalog_d1_min_max_target","resolver_d1_min_max_target","bridge_protocol_version","camouhost_ipc_version","runtime_bundle_version","profile_generation_format","browser_identity_policy","resolver_service_protocol","windows_profile_bridge_delivery"]
 }

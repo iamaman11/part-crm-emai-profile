@@ -25,6 +25,16 @@ use util::resolve_input;
 
 pub use model::{D1Action, D1Error, D1RunRequest};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct D1ReleaseSchemaIdentity {
+    pub database_component: String,
+    pub target_schema_revision: String,
+    pub supported_schema_min: String,
+    pub supported_schema_max: String,
+    pub migration_history_digest: String,
+    pub compatibility_policy_digest: String,
+}
+
 pub fn run(request: D1RunRequest<'_>) -> Result<String, D1Error> {
     let authority = component_authority(request.root, request.component)?;
     let ledger_path = resolve_input(request.root, request.ledger_json);
@@ -72,6 +82,21 @@ pub fn repository_projection(root: &std::path::Path) -> Result<String, D1Error> 
 }
 
 pub(crate) use catalog::{release_contract, repository_identity_sha256};
+
+pub(crate) fn release_schema_identity(
+    root: &Path,
+    component: &str,
+) -> Result<D1ReleaseSchemaIdentity, D1Error> {
+    let authority = component_authority(root, component)?;
+    Ok(D1ReleaseSchemaIdentity {
+        database_component: authority.component_id,
+        target_schema_revision: authority.current_repository_revision.clone(),
+        supported_schema_min: authority.current_repository_revision.clone(),
+        supported_schema_max: authority.current_repository_revision,
+        migration_history_digest: authority.history_digest,
+        compatibility_policy_digest: authority.policy_digest,
+    })
+}
 
 fn load_optional_release(
     root: &Path,

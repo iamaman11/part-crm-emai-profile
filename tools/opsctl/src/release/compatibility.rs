@@ -1,7 +1,6 @@
 use crate::release::authority::ReleaseArchitecture;
-use crate::release::model::{
-    CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseModelError, ReleaseSetManifest,
-};
+use crate::release::document::{LoadedReleaseSet, supported_release_set_id};
+use crate::release::model::{CompatibilityDecision, ReleaseModelError};
 use crate::release::static_compatibility;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -61,9 +60,9 @@ impl CompatibilityEvidence {
             ));
         }
         let release_set_id = required_string(root, "release_set_id")?;
-        if !release_set_id.starts_with(RELEASE_SET_ID_PREFIX) {
+        if !supported_release_set_id(&release_set_id) {
             return Err(ReleaseModelError::new(
-                "compatibility evidence must target a Release Set v2 ID",
+                "compatibility evidence must target a supported current v3 or historical v2 Release Set ID",
             ));
         }
         let dimensions_value = object(required(root, "dimensions")?, "dimensions")?;
@@ -124,17 +123,18 @@ impl CompatibilityEvidence {
 pub fn evaluate(
     policy_root: &Path,
     source_root: &Path,
-    manifest: &ReleaseSetManifest,
+    release_set: &LoadedReleaseSet,
     evidence: &CompatibilityEvidence,
     profile_id: &str,
     environment: &str,
-    current_release: Option<&ReleaseSetManifest>,
+    current_release: Option<&LoadedReleaseSet>,
 ) -> Result<CompatibilityResult, ReleaseModelError> {
-    if evidence.release_set_id != manifest.release_set_id {
+    if evidence.release_set_id != release_set.release_set_id() {
         return Err(ReleaseModelError::new(
             "RELEASE_IDENTITY_MISMATCH: compatibility evidence targets another Release Set",
         ));
     }
+    let manifest = release_set.semantic();
     if !manifest
         .capability_profile_compatibility
         .iter()
@@ -350,15 +350,47 @@ fn validate_sha256(value: &str, field: &str) -> Result<(), ReleaseModelError> {
 #[cfg(test)]
 mod tests {
     use super::CompatibilityEvidence;
+    use serde_json::json;
+
+    const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn evidence(release_set_id: &str) -> String {
+        json!({
+            "schema_version": 2,
+            "kind": "RELEASE_COMPATIBILITY_EVIDENCE",
+            "release_set_id": release_set_id,
+            "dimensions": {
+                "catalog_d1": {
+                    "decision": "COMPATIBLE",
+                    "evidence_sha256": SHA,
+                    "policy_source": "opsctl.d1.compatibility"
+                },
+                "resolver_d1": {
+                    "decision": "UNKNOWN",
+                    "evidence_sha256": SHA,
+                    "policy_source": "opsctl.d1.compatibility"
+                },
+                "windows_profile_bridge": {
+                    "decision": "UNKNOWN",
+                    "evidence_sha256": SHA,
+                    "policy_source": "external.windows.delivery"
+                }
+            }
+        })
+        .to_string()
+    }
 
     #[test]
-    fn v1_evidence_is_rejected() {
-        let input = r#"{
-          "schema_version":1,
-          "kind":"RELEASE_COMPATIBILITY_EVIDENCE",
-          "release_set_id":"release-set-v1-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "dimensions":{}
-        }"#;
-        assert!(CompatibilityEvidence::parse_json(input).is_err());
+    fn compatibility_evidence_accepts_current_v3_and_historical_v2_ids() {
+        let current = format!("release-set-v3-sha256-{SHA}");
+        let historical = format!("release-set-v2-sha256-{SHA}");
+        assert!(CompatibilityEvidence::parse_json(&evidence(&current)).is_ok());
+        assert!(CompatibilityEvidence::parse_json(&evidence(&historical)).is_ok());
+    }
+
+    #[test]
+    fn v1_release_identity_is_rejected() {
+        let legacy = format!("release-set-v1-sha256-{SHA}");
+        assert!(CompatibilityEvidence::parse_json(&evidence(&legacy)).is_err());
     }
 }

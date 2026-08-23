@@ -11,12 +11,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 ZERO_SHA = "0" * 64
-RELEASE_PREFIX = "release-set-v2-sha256-"
+CURRENT_TARGET_ID = re.compile(r"release-set-v3-sha256-[0-9a-f]{64}")
 
 
 class EvidenceError(ValueError):
@@ -91,9 +92,13 @@ def windows_dimension(path: Path | None) -> dict[str, str]:
     }
 
 
+def validate_target_id(release_set_id: str) -> None:
+    if CURRENT_TARGET_ID.fullmatch(release_set_id) is None:
+        fail("release_set_id must be an exact current Release Set v3 target ID")
+
+
 def build(release_set_id: str, catalog: Path, resolver: Path | None, windows: Path | None) -> dict[str, Any]:
-    if not release_set_id.startswith(RELEASE_PREFIX) or len(release_set_id) != len(RELEASE_PREFIX) + 64:
-        fail("release_set_id must be an exact Release Set v2 ID")
+    validate_target_id(release_set_id)
     return {
         "schema_version": 2,
         "kind": "RELEASE_COMPATIBILITY_EVIDENCE",
@@ -107,16 +112,23 @@ def build(release_set_id: str, catalog: Path, resolver: Path | None, windows: Pa
 
 
 def self_test() -> None:
-    release_id = RELEASE_PREFIX + "a" * 64
-    fixture = build(release_id, Path(__file__), None, None) if False else None
-    if fixture is not None:
-        fail("unreachable self-test branch executed")
+    current = "release-set-v3-sha256-" + "a" * 64
+    for invalid in (
+        "release-set-v2-sha256-" + "a" * 64,
+        "release-set-v1-sha256-" + "a" * 64,
+        "release-set-v4-sha256-" + "a" * 64,
+        "release-set-v3-sha256-deadbeef",
+    ):
+        try:
+            validate_target_id(invalid)
+        except EvidenceError:
+            continue
+        fail(f"non-current target identity unexpectedly accepted: {invalid}")
     try:
-        build("release-set-v1-sha256-" + "a" * 64, Path(__file__), None, None)
-    except EvidenceError:
-        print("AR-11 compatibility evidence v2 adapter self-test passed.")
-        return
-    fail("legacy Release Set v1 unexpectedly accepted")
+        validate_target_id(current)
+    except EvidenceError as error:
+        fail(f"current Release Set v3 target identity unexpectedly rejected: {error}")
+    print("AR-11 compatibility evidence v2 adapter self-test passed.")
 
 
 def main() -> int:

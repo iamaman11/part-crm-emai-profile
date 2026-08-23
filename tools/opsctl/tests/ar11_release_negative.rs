@@ -1,7 +1,8 @@
 use opsctl::release::digest::{canonical_json, sha256_hex};
+use opsctl::release::document::LoadedReleaseSet;
 use opsctl::release::input_topology::{ReleaseInputTopology, ResolvedReleaseInput};
-use opsctl::release::model::{RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
 use opsctl::release::static_compatibility;
+use opsctl::release::v3_output::RELEASE_SET_V3_ID_PREFIX as RELEASE_SET_ID_PREFIX;
 use serde_json::{Value, json};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -111,9 +112,10 @@ fn canonical_identity_fields(
     })
 }
 
-fn component(id: &str, path: &str, digest: &str, size: u64) -> Value {
+fn component(component_id: &str, release_id: &str, path: &str, digest: &str, size: u64) -> Value {
     json!({
-        "release_id": id,
+        "component_id": component_id,
+        "release_id": release_id,
         "source_commit_sha": GIT_SHA,
         "artifact_path": path,
         "artifact_sha256": digest,
@@ -134,7 +136,7 @@ fn fixture_value() -> Result<Value, Box<dyn std::error::Error>> {
         .as_bytes(),
     );
     let mut value = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "release_set_id": format!("{RELEASE_SET_ID_PREFIX}{SHA_A}"),
         "source": {
             "repository": REPOSITORY,
@@ -143,10 +145,10 @@ fn fixture_value() -> Result<Value, Box<dyn std::error::Error>> {
             "accepted_main_evidence_sha256": accepted,
         },
         "components": {
-            "control_plane": component("control-plane-v2", "components/control-plane.tar", SHA_A, 10),
-            "frontend": component("control-plane-v2", "components/control-plane.tar", SHA_A, 10),
-            "secret_resolver": component("resolver-v2", "components/secret-resolver.tar", SHA_B, 11),
-            "runtime_bundle": component("runtime-v2", "components/runtime-bundle.tar", SHA_A, 12),
+            "control_plane": component("control_plane", "control-plane-v2", "components/control-plane.tar", SHA_A, 10),
+            "frontend": component("frontend", "control-plane-v2", "components/control-plane.tar", SHA_A, 10),
+            "secret_resolver": component("secret_resolver", "resolver-v2", "components/secret-resolver.tar", SHA_B, 11),
+            "runtime_bundle": component("runtime_bundle", "runtime-v2", "components/runtime-bundle.tar", SHA_A, 12),
         },
         "contracts": identity.contracts,
         "protocols": identity.protocols,
@@ -181,15 +183,13 @@ fn resign(value: &mut Value) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn parse(value: &Value) -> Result<ReleaseSetManifest, String> {
-    ReleaseSetManifest::parse_json(
-        &serde_json::to_string(value).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())
+fn parse(value: &Value) -> Result<LoadedReleaseSet, String> {
+    let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+    LoadedReleaseSet::parse(&bytes).map_err(|error| error.to_string())
 }
 
 fn require_error(
-    result: Result<ReleaseSetManifest, String>,
+    result: Result<LoadedReleaseSet, String>,
     context: &str,
 ) -> Result<String, io::Error> {
     result
@@ -220,7 +220,8 @@ fn changed_component_digest_is_rejected() -> Result<(), Box<dyn std::error::Erro
         parse(&value),
         "component/inventory digest disagreement unexpectedly accepted",
     )?;
-    assert!(error.contains("artifact identity disagrees with artifact_inventory"));
+    assert!(error.contains("ARTIFACT_INVENTORY_MISMATCH"));
+    assert!(error.contains("component control_plane artifact identity differs"));
     Ok(())
 }
 
@@ -248,7 +249,8 @@ fn missing_artifact_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
         parse(&value),
         "missing component artifact unexpectedly accepted",
     )?;
-    assert!(error.contains("artifact is absent from artifact_inventory"));
+    assert!(error.contains("ARTIFACT_INVENTORY_MISMATCH"));
+    assert!(error.contains("component control_plane artifact is absent"));
     Ok(())
 }
 
@@ -284,7 +286,7 @@ fn contract_digest_mismatch_is_rejected_by_static_compatibility()
     value["protocols"]["public_api_contract_sha256"] = Value::String(SHA_B.to_owned());
     resign(&mut value)?;
     let release = parse(&value).map_err(io::Error::other)?;
-    let blockers = static_compatibility::evaluate(&repo_root(), &release, false)?;
+    let blockers = static_compatibility::evaluate(&repo_root(), release.semantic(), false)?;
     assert!(
         blockers
             .iter()
@@ -300,7 +302,7 @@ fn unknown_capability_profile_is_rejected_by_static_compatibility()
     value["capability_profile_compatibility"] = json!(["unknown-profile-v1"]);
     resign(&mut value)?;
     let release = parse(&value).map_err(io::Error::other)?;
-    let blockers = static_compatibility::evaluate(&repo_root(), &release, false)?;
+    let blockers = static_compatibility::evaluate(&repo_root(), release.semantic(), false)?;
     assert!(
         blockers
             .iter()

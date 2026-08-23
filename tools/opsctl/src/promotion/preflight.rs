@@ -1,7 +1,8 @@
 use crate::promotion::plan::{PlanRequest, PromotionPlan, build};
 use crate::promotion::snapshot::DeploymentSnapshot;
 use crate::release::compatibility::CompatibilityEvidence;
-use crate::release::model::{CompatibilityDecision, ReleaseModelError, ReleaseSetManifest};
+use crate::release::document::LoadedReleaseSet;
+use crate::release::model::{CompatibilityDecision, ReleaseModelError};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -16,13 +17,13 @@ const DEPLOY_OWNED_RESOURCES: [&str; 4] = [
 pub struct PreflightRequest<'a> {
     pub root: &'a Path,
     pub source_root: &'a Path,
-    pub target: &'a ReleaseSetManifest,
+    pub target: &'a LoadedReleaseSet,
     pub target_profile_id: &'a str,
     pub environment: &'a str,
     pub snapshot: &'a DeploymentSnapshot,
     pub compatibility_evidence: &'a CompatibilityEvidence,
-    pub current_release: Option<&'a ReleaseSetManifest>,
-    pub known_good_release: Option<&'a ReleaseSetManifest>,
+    pub current_release: Option<&'a LoadedReleaseSet>,
+    pub known_good_release: Option<&'a LoadedReleaseSet>,
     pub expected_current_release_set_id: Option<&'a str>,
 }
 
@@ -220,12 +221,13 @@ fn preflight_from_plan(
 /// and therefore blocks mutation. Exact equality is intentionally strict for protocol and
 /// runtime dimensions until an explicit compatibility window is owned by a later authority.
 fn evaluate_rollback_candidate(
-    known_good: &ReleaseSetManifest,
+    known_good: &LoadedReleaseSet,
     snapshot: &DeploymentSnapshot,
     profile_id: &str,
     resolver_required: bool,
     windows_delivery_required: bool,
 ) -> CompatibilityDecision {
+    let known_good = known_good.semantic();
     if !known_good
         .capability_profile_compatibility
         .iter()
@@ -286,7 +288,6 @@ fn evaluate_rollback_candidate(
     }
 
     if windows_delivery_required {
-        // AR-15 owns signed Windows delivery compatibility. AR-11 must never invent it.
         return CompatibilityDecision::Unknown;
     }
 
@@ -302,16 +303,17 @@ mod tests {
     use super::evaluate_rollback_candidate;
     use crate::promotion::snapshot::DeploymentSnapshot;
     use crate::release::digest::{canonical_json, sha256_hex};
-    use crate::release::model::ReleaseModelError;
-    use crate::release::model::{CompatibilityDecision, RELEASE_SET_ID_PREFIX, ReleaseSetManifest};
+    use crate::release::document::LoadedReleaseSet;
+    use crate::release::model::{CompatibilityDecision, ReleaseModelError};
     use serde_json::{Value, json};
     use std::collections::BTreeSet;
 
     const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const GIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const REPO: &str = "iamaman11/part-crm-emai-profile";
+    const HISTORICAL_PREFIX: &str = "release-set-v2-sha256-";
 
-    fn release() -> Result<ReleaseSetManifest, Box<dyn std::error::Error>> {
+    fn release() -> Result<LoadedReleaseSet, Box<dyn std::error::Error>> {
         let accepted = sha256_hex(
             canonical_json(
                 &json!({"authority":"accepted-main","commit_sha":GIT,"repository":REPO}),
@@ -322,7 +324,7 @@ mod tests {
         let component = |id: &str, path: &str| json!({"release_id":id,"source_commit_sha":GIT,"artifact_path":path,"artifact_sha256":SHA,"artifact_size_bytes":1,"component_manifest_sha256":SHA});
         let mut value = json!({
             "schema_version":2,
-            "release_set_id":format!("{RELEASE_SET_ID_PREFIX}{SHA}"),
+            "release_set_id":format!("{HISTORICAL_PREFIX}{SHA}"),
             "source":{"repository":REPO,"commit_sha":GIT,"accepted_main":true,"accepted_main_evidence_sha256":accepted},
             "components":{
                 "control_plane":component("cp","components/control-plane.tar"),
@@ -331,7 +333,7 @@ mod tests {
             },
             "contracts":{"files":[{"path":"openapi/v1/openapi.json","sha256":SHA,"size_bytes":1}],"sha256":SHA},
             "protocols":{"public_api_contract_sha256":SHA,"camouhost_ipc_version":1,"profile_bridge_protocol_version":1,"resolver_protocol":"mailbox-secret-resolver-v1"},
-            "schemas":{"d1_repository_identity_sha256":SHA,"catalog":schema("catalog"),"resolver":schema("resolver")},
+            "schemas":{"d1_evolution_authority_sha256":SHA,"catalog":schema("catalog"),"resolver":schema("resolver")},
             "runtime_compatibility":{"runtime_lock_sha256":SHA,"runtime_role":"real_camoufox","profile_format":"v1","browser_identity_policy":"v1"},
             "capability_profile_compatibility":["rehearsal-core-v1"],
             "build_provenance":{"cargo_lock_sha256":SHA,"rust_toolchain_sha256":SHA,"frontend_lock_sha256":SHA,"release_architecture_sha256":SHA},
@@ -347,19 +349,18 @@ mod tests {
             .ok_or_else(|| ReleaseModelError::new("release fixture root must be an object"))?
             .remove("release_set_id");
         value["release_set_id"] = Value::String(format!(
-            "{RELEASE_SET_ID_PREFIX}{}",
+            "{HISTORICAL_PREFIX}{}",
             sha256_hex(canonical_json(&identity)?.as_bytes())
         ));
-        Ok(ReleaseSetManifest::parse_json(&serde_json::to_string(
-            &value,
-        )?)?)
+        let bytes = serde_json::to_vec(&value)?;
+        Ok(LoadedReleaseSet::parse(&bytes)?)
     }
 
     fn snapshot() -> DeploymentSnapshot {
         DeploymentSnapshot {
             environment: "staging".to_owned(),
             collected_at: "2026-08-21T00:00:00Z".to_owned(),
-            release_set_id: Some(format!("{RELEASE_SET_ID_PREFIX}{SHA}")),
+            release_set_id: Some(format!("{HISTORICAL_PREFIX}{SHA}")),
             capability_profile_id: Some("rehearsal-core-v1".to_owned()),
             component_release_ids: Vec::new(),
             logical_resources: BTreeSet::new(),
