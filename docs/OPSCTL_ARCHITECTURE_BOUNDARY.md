@@ -89,21 +89,19 @@ tools/opsctl
 
 Physical paths may differ. Dependency direction may not.
 
-## 3. Strong recommendation: internal opsctl-core boundary
+## 3. Internal `opsctl-core` boundary
 
-The project has outgrown a trivial single-command CLI: D1, release, promotion, credentials, recovery and future lifecycle/evidence/fitness/inventory semantics already make compile-time separation valuable.
+F2 introduced the small internal `tools/opsctl/core` (`opsctl-core`) boundary because Release Set semantics already required a real compile-time separation. This is accepted architecture, not a requirement to move every `opsctl` module into that crate immediately.
 
-A small internal `opsctl-core` crate is therefore recommended when F2 is implemented, provided it materially enforces the boundary rather than adding aesthetic layering.
-
-If introduced:
+Permanent direction:
 
 ```text
-opsctl shell/adapters -> opsctl-core
+opsctl shell/adapters -> opsctl-core where a real pure semantic owner belongs there
 opsctl-core -X-> filesystem/network/process/provider/serde_json::Value
 Product Runtime -X-> opsctl-core
 ```
 
-The core crate may use narrowly reviewed pure dependencies where needed. Zero dependencies is not a goal; zero hidden effects/representation leakage is.
+New modules move into or remain outside `opsctl-core` according to the effect/representation boundary, not for layering aesthetics. The core crate may use narrowly reviewed pure dependencies where needed. Zero dependencies is not a goal; zero hidden effects/representation leakage is.
 
 ## 4. Hard pure-core invariant
 
@@ -185,7 +183,7 @@ Current D1 already demonstrates the desired split substantially:
 
 ```text
 d1/authority.rs
-  filesystem + serde_json::Value
+  filesystem + external decode
         ↓
 typed ReleaseSchemaContract / Preconditions / ledger observation
         ↓
@@ -195,13 +193,15 @@ d1/plan.rs::evaluate(...)
 
 Remaining command-shell `Path` fields are adapter/orchestration inputs and must not be mistaken for semantic model types.
 
-### Release — convergence debt
+### Release — accepted F1/F2 reference direction
 
-Current `release/model.rs` parses generic JSON and retains a `serde_json::Value` identity payload inside `ReleaseSetManifest`. F1/F2 must split current external DTO/content-address representation from the typed semantic Release Set model.
+F1/F2 moved the current Release Set writer/model to a typed v3 pure-core boundary. Generic JSON/canonical bytes remain adapter concerns; current semantic release shape is not owned by `serde_json::Value`.
+
+Historical v2 decoding is isolated from the current writer/model and is legitimate only while a concrete current historical consumer/durable obligation is proved. The bounded pre-N2 cleanup gate in `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md` decides whether that executable compatibility remains necessary; historical evidence by itself is not sufficient.
 
 ### Promotion — convergence debt
 
-Current DeploymentSnapshot loading combines filesystem read, generic JSON parse and typed semantic construction. Touched promotion code should converge to:
+Current DeploymentSnapshot loading still combines filesystem read, generic JSON parse and typed semantic construction in touched paths. Promotion code should converge, when its owning work touches it, to:
 
 ```text
 filesystem adapter
@@ -209,6 +209,8 @@ filesystem adapter
 -> typed DeploymentObservation
 -> pure promotion/preflight policy
 ```
+
+This is touch-to-converge debt, not authorization for an unrelated repository-wide rewrite.
 
 ### Repository root discovery — convergence debt
 
@@ -325,16 +327,16 @@ Pure core returns typed results. JSON strings are output-adapter products. Machi
 
 ## 12. Canonical JSON and digest discipline
 
-The current handwritten SHA-256 and project-specific JSON key-sorting implementation are transitional. They must not become permanent cryptographic/canonicalization authority for PF-2.
+F2 established the current canonical external JSON/digest foundation in the `opsctl` adapter layer:
 
-Before PF-2 attestable evidence relies on this layer:
+- pinned reviewed SHA-256 implementation (`sha2`);
+- RFC 8785/JCS canonicalization through a pinned canonicalizer;
+- duplicate-member rejection before canonicalization for strict inputs;
+- bounded JSON byte/depth parsing;
+- canonical bytes separated from pretty rendering;
+- independent digest/canonicalization vectors/tests.
 
-- use a reviewed/pinned SHA-256 implementation unless a documented necessity proves otherwise;
-- define one canonical external JSON scheme, preferably RFC 8785 JCS if contract constraints allow;
-- use independent published canonicalization/hash vectors;
-- reject duplicate JSON keys for release/security/evidence-critical documents;
-- keep pretty rendering separate from canonical digest bytes;
-- commit/verify lockfiles and pass supply-chain/security/license gates.
+This layer is an **adapter/contract foundation**, not a semantic business/release authority. `serde_json::Value` remains confined to strict decoding/canonicalization adapters and does not cross into pure semantic models.
 
 Two digest scopes remain explicit:
 
@@ -345,13 +347,15 @@ exact artifact identity -> exact file bytes -> SHA-256
 
 Never hash Protobuf serialized bytes as a supposed universal canonical identity.
 
+Before PF-2 attestable evidence depends on additional contract kinds, those kinds must reuse this foundation and add their own closed/versioned DTO validation rather than invent another canonicalization/hash mechanism.
+
 ## 13. Release Set version discipline
 
 A breaking external-contract change never retains the same schema version.
 
-The change from `schemas.d1_evolution_authority_sha256` to `schemas.d1_repository_identity_sha256` requires a new current Release Set version before later PF/FC work depends on it. Target is v3 unless exact-candidate evidence proves another bounded version decision.
+The accepted current Release Set writer/model is v3 for the `d1_repository_identity_sha256` semantics. Historical v2 assets are immutable evidence/possible compatibility inputs and are never rewritten into v3.
 
-Historical v2 reader compatibility is isolated from current writer semantics and kept only for proved current historical consumers.
+Historical v2 reader compatibility is isolated from current writer semantics and kept only for a proved current consumer/durable obligation. Before N2 starts, the bounded F1 cleanup gate must prove such a consumer or retire executable v2 compatibility and remove `architecture/release-set-v2.json` from any current-authority role.
 
 ## 14. Shared semantic crate extraction test
 
@@ -404,6 +408,7 @@ GlobalAuthoritySet
 serde_json::Value authority bag
 inventory.json as semantic input
 inventory compiler reimplementing D1/release/runtime policy
+manual AR-qualified application ownership registry as compiler input
 ```
 
 ## 16. PF-2 evidence boundary
@@ -458,10 +463,12 @@ breaking_external_contract_change_without_version_bump
 unversioned_durable_external_contract
 duplicate_json_member_accepted_in_attestable_contract
 manual_architecture_semantic_json_authority_without_explicit_exception
+manual_AR_qualified_application_ownership_registry_current_authority
+compatibility_shim_without_proved_consumer_or_durable_obligation
 opsctl_python_child_process
 ```
 
-PF-3 also enforces one semantic owner per fact and one mutation executor per owned mutation operation.
+PF-3 also enforces one semantic owner per fact and one mutation executor per owned mutation operation. Accepted PF-3 is the architecture-forming freeze point described by `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`.
 
 ## 18. Definition of Done
 
@@ -479,6 +486,7 @@ breaking contract changes version-bumped = true
 canonical digest layer has independent vectors = true
 security/release/evidence duplicate-key ambiguity rejected = true
 inventory compiler consumes bounded typed projections = true
+manual AR-qualified application ownership registry current authority = 0
 operator command/effect semantic authority is Rust-owned = true
 legacy Node/Python lifecycle/inventory predecessors retired = true
 ```
