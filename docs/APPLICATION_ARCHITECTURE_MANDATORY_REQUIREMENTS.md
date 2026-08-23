@@ -11,6 +11,31 @@
 
 These are mandatory prospective requirements for every PF/FC/AR/PC change. Accepted AR-0…AR-11 history is not reopened. The product remains one modular application with one protected `main`, one architecture hierarchy, one schema/compatibility lineage and one Release / Capability Profile authority for production admission.
 
+## 0. Prospective architecture precedence
+
+Accepted history preserves required outcomes, durable compatibility obligations and immutable evidence. It does not make historical internal implementation shape a permanent architecture constraint.
+
+For all current/future work, precedence is:
+
+```text
+current prospective architecture contract
+-> current product/security/runtime invariants
+-> proved current external/durable contracts and real consumers
+-> accepted historical AR outcomes + evidence/provenance
+-> historical internal implementation shape
+```
+
+This repository has not yet had a production release. Therefore compatibility with obsolete internal implementation is **not** the default.
+
+```text
+proved current/external consumer absent
+-> compatibility bridge default = NO
+```
+
+A retained compatibility path requires a named current consumer or explicit durable contract, an exact version/shape, isolation from the current writer/semantic owner and an explicit retirement condition. Historical acceptance alone is not sufficient.
+
+An older AR implementation must conform to the current architecture, not the reverse. Still-valid AR guarantees remain mandatory; obsolete JSON/Python/Node/registry/table mechanisms may and should retire once callers and unique current invariants are zero.
+
 ## 1. Single semantic owner
 
 Every current semantic fact has exactly one natural owner.
@@ -256,6 +281,8 @@ Persisted/durable/external contracts are explicitly versioned. Breaking shape/me
 
 The Release Set change from `d1_evolution_authority_sha256` to `d1_repository_identity_sha256` cannot remain current v2. Historical immutable v2 assets are never rewritten; current successor uses a new version.
 
+Historical compatibility code is not implied by immutable historical evidence. It exists only for a proved current consumer or explicit accepted durable contract under §0.
+
 ```text
 breaking_external_contract_change_without_version_bump = 0
 ```
@@ -298,7 +325,7 @@ new natural owner
 -> provenance preserved in Git/evidence
 ```
 
-Compatibility is retained only for a proved current consumer or explicit accepted contract.
+Compatibility is retained only for a proved current consumer or explicit accepted contract. Temporary candidate parity inside one branch is allowed; long-lived dual current implementations on accepted `main` are not.
 
 ## 15. Python usage
 
@@ -311,13 +338,27 @@ Python must not become a second semantic owner or ungoverned provider mutation a
 
 The real Camouhost adapter is legitimate Product Runtime outer adapter. Synthetic Camouhost is test-only. Historical Python estate registry/overlays are not permanent current authority.
 
-## 16. PF-1 / PF-2 / PF-3 application
+## 16. PF-1 / PF-2 / PF-3 application and architecture freeze
 
-PF-1 consumes bounded typed projections and explicit raw lifecycle observations. It must not build a global raw authority bag or keep Node/Python semantic predecessors after cutover. `opsctl doctor`/repository-root are mandatory callers in that cutover.
+PF-1 consumes bounded typed projections and explicit raw lifecycle observations. It must not build a global raw authority bag or keep Node/Python semantic predecessors after cutover. `opsctl doctor`/repository-root are mandatory callers in that cutover. N2…N5 must have already resolved their own subject authority ambiguities; PF-1 is not a catch-all cleanup phase.
 
 PF-2 uses the same adapter/core boundary. GitHub/provider reads and clocks remain outer observations; typed Rust `EvidencePolicy` owns validity/freshness/trust semantics.
 
 PF-3 owns fitness semantics in typed Rust `FitnessRuleRegistry` or equivalent. A JSON fitness file may only be generated projection/index.
+
+**PF-3 acceptance is the Architecture Re-baseline v3 architecture-forming freeze point.** It does not authorize production and does not set the lifecycle flag `architecture_complete=true`, but after PF-3 the planned roadmap may no longer introduce new generic architecture layers, global authority frameworks, duplicate lifecycle engines, generic compatibility frameworks or redesign buckets.
+
+Post-PF-3 roles are fixed:
+
+```text
+FC-6 / FC-7     functional closure and staging proof
+AR-12..AR-15    implementation/rehearsal/delivery on the established architecture
+AR-16           audit only
+AR-17           qualification/authorization decision only
+PC-1+           functional/capability development and production rollout on the architecture
+```
+
+If a later audit finds a violation, the violation is corrected under this architecture or through an explicit governed architecture change. AR-16/AR-17 do not become architecture-redesign phases.
 
 Minimum PF-3 zero/one budgets include:
 
