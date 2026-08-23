@@ -15,6 +15,8 @@ This contract replaces the long-term idea of maintaining a hand-edited per-file 
 
 The accepted AR-6 estate document currently reports a 119-file Python estate and still records paths classified for AR-10 deletion/migration. At least some of those recorded legacy paths are already physically absent from current `main`; therefore `architecture/python-estate-ar6.json` is useful historical provenance but is not a reliable permanent current Python registry.
 
+On current `main`, `opsctl doctor` and repository-root detection no longer require the AR-6 estate artifacts, but the predecessor remains executable through internal quality/repository-audit/Camoufox workflow calls and through inventory/runtime-cutover projections. These are migration callers, not durable consumers. They must be removed or redirected together with the predecessor; their existence does not justify another estate overlay, validator or observation cycle.
+
 Current Python usage falls into materially different categories:
 
 ```text
@@ -310,12 +312,14 @@ compliance result
 
 PF-3 may enforce role/effect rules mechanically, including detection of new Python production/network/provider-mutation entrypoints, without maintaining a hand-edited 1:1 file registry.
 
+Source-derived does not mean “generate a new census on every run.” Enforcement should detect forbidden entrypoints/effects from repository structure and narrow ownership rules. It must not serialize the whole Python estate into a successor current authority or compare one global generated list with another.
+
 ## 15. N2 — mandatory Python normalization work
 
 N2 must do all of the following before PF-1 entry:
 
 1. stop treating `architecture/python-estate-ar6.json` as current semantic authority;
-2. remove `scripts/python-estate-ar6.py` from current authority/caller chains and delete it when zero-callers/zero-unique-current-invariants are proven;
+2. atomically remove internal CI/workflow/compiler/runtime-cutover callers of `scripts/python-estate-ar6.py` and delete the script, baseline and overlays once every unique current invariant has either moved to a natural owner or been proved obsolete;
 3. update `opsctl` repository-root discovery so it does not require AR-6 estate artifacts or legacy Python inventory scripts;
 4. classify current Python by **role and effects**, not per-file historical AR status;
 5. prove legacy AR-10 direct Python browser/profile executables remain physically absent and unreferenced;
@@ -327,6 +331,30 @@ N2 must do all of the following before PF-1 entry:
 11. add negative tests that new Python runtime/provider-effect entrypoints fail closed unless they match an explicitly allowed role.
 
 N2 does **not** globally rewrite Python tests, generators or valid adapters to Rust.
+
+### 15.1 N2 immediate-deletion protocol
+
+N2 performs one bounded reachability/invariant pass. It classifies only named runtime/external/persisted exact-format users as durable consumers. The following are part of the predecessor deletion set:
+
+```text
+workflow invoking --check/--self-test
+py_compile entry kept only for the predecessor
+inventory/runtime-cutover overlay carrying the old estate reference
+generator or drift gate synchronizing the old baseline
+documentation/current-plan reference that treats it as live
+```
+
+Required transaction shape:
+
+```text
+move the few enduring role/effect invariants to this contract + narrow source checks
+-> delete/redirect all internal callers
+-> delete python-estate-ar6.py + baseline + overlays
+-> prove old path/reachability = 0
+-> stop
+```
+
+Do not introduce `python-estate-v2`, a generated full-file inventory, an estate validator for the estate validator, or a follow-up cleanup phase. If a real durable exact-format consumer is discovered, name it and isolate only the minimum versioned adapter; “CI is calling it” is not such a consumer.
 
 ## 16. PF-1 / PF-2 / PF-3 consequences
 

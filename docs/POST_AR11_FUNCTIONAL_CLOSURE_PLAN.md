@@ -18,11 +18,11 @@ production_mutation = false
 ```text
 F1/F2 ACCEPTED
 -> N1 ACCEPTED
--> #454 bounded Release Set v2 correction
+-> #454 bounded Release Set v2 correction ACCEPTED
 -> N2 -> N3 -> N4 -> N5
 -> PF-1
 -> PF-2
--> PF-3 architecture-forming freeze
+-> PF-3 provisional fitness baseline
 -> FC-6 preflight (includes fresh #399/#421 live re-baseline)
 -> FC-6 staging ceremony
 -> FC-7 closeout
@@ -46,20 +46,13 @@ Accepted foundations such as immutable content addressing, exact artifact-byte v
 
 ## 3. #454 relationship
 
-#454 is the only actual implementation transaction before N2. It does not weaken rollback or same-bits semantics; it decides whether historical Release Set v2 has a real current consumer.
+#454 is accepted. It removed tracked v2 current authority, retained only isolated historical source/artifact integrity verification and made current promotion/rollback targets v3-only without weakening same-bits semantics.
 
 ```text
-current v2 consumer exists
--> exact consumer/identity named
--> minimum isolated historical reader/verify path only
--> v3 writer/model remains current
--> explicit retirement condition
-
-OR
-
-current v2 consumer = NONE
--> executable v2 compatibility/current-v2 authority retires
--> historical evidence remains immutable
+current writer/target model = v3-only
+current v2 semantic authority = 0
+historical v2 = isolated integrity verification only
+v2 -> v3 semantic coercion = 0
 ```
 
 At FC-6 preflight, current target/known-good identities are observed again from then-current accepted authorities. FC-6 does not inherit a stale assumption that v2 must or must not exist.
@@ -95,7 +88,7 @@ exact accepted source / same bits
 
 Permanent workflow YAML remains actionlint-protected. Live workflow registrations are reconciled to current desired governance; stale temporary registrations are removed rather than permanently allow-listed.
 
-FC-6 is staging proof inside the PF-3-frozen architecture. It may expose a defect; it may not invent a new generic architecture mechanism to fix one.
+FC-6 is staging proof under the PF-3 provisional fitness baseline. It may expose a defect; only the smallest correction required by a named failed product acceptance scenario is allowed, with anti-weakening proof updated in the same transaction. It may not become a generic redesign program.
 
 ## 5. FC-7 — closeout, not a second implementation project
 
@@ -131,7 +124,7 @@ FC-6 / FC-7 = proof and closeout; no redesign
 AR-12 = fresh-environment rehearsal
 AR-13 = rotation rehearsal
 AR-14 = remote-recovery rehearsal
-AR-15 = Windows updater/delivery implementation + proof
+AR-15 = Windows updater/delivery implementation + proof + final architecture-form freeze
 AR-16 = final whole-project audit only
 AR-17 = Production Core qualification/authorization decision only
 PC-1  = first Production Core release

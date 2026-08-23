@@ -119,6 +119,8 @@ NOT_RETAINED
 
 PF-1 therefore owns the **semantic inventory/lifecycle replacement**, not the first tracked-file retention decision. If pre-PF-1 normalization was able to retire the tracked file after switching its remaining callers, PF-1 accepts that state. If a durable exact-byte consumer justified retention, PF-1 preserves only that minimum projection and never treats it as semantic input.
 
+`opsctl inventory`, `opsctl doctor`, repository-root detection, a generator/drift test, CI, a self-test or documentation that consumes the tracked file only because the file exists are internal cutover callers, not durable exact-byte consumers. Under `NOT_RETAINED`, they are deleted or redirected to typed natural owners/on-demand stdout in the same transaction as the tracked file; they cannot create a compatibility tail.
+
 The same minimality rule applies to command surface. Keep only distinct useful operations; do not preserve `render/check/write/inspect` merely because the old system exposed them.
 
 ## 6. Application projection correction
@@ -153,6 +155,8 @@ still-current invariant mapped to natural owner
 ```
 
 No compatibility bridge remains merely because PF-2/FC-6 is unfinished.
+
+PF-1 is accepted only if it is a net simplification of the current lifecycle/inventory estate. The typed evaluator/compiler and focused tests may be added, but legacy Node/Python compilers, global tables, compatibility-only commands, tracked projections without consumers and duplicated validators are removed in the same transaction. A larger compiler/validator estate with the old estate still reachable is failure, not incremental progress.
 
 ## 8. `opsctl doctor` / repository root
 

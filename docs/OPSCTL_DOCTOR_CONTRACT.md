@@ -65,16 +65,15 @@ GeneratedProjectionWrite
 
 ## 3. No legacy sentinel registry
 
-Current `doctor.rs` and `repository.rs` depend on transitional sentinels including:
+Current `main` has removed the AR-6 Python-estate sentinels from `doctor.rs` and `repository.rs`. Remaining transitional dependencies include:
 
 ```text
-architecture/python-estate-ar6.json
+architecture/inventory.json
 architecture/operator-contract.json
 scripts/generate-architecture-inventory.py
-scripts/python-estate-ar6.py
 ```
 
-Those dependencies are temporary and must disappear as N2/N4/PF-1 retire the corresponding authorities.
+Those remaining dependencies are temporary and must disappear as N4/PF-1 retire the corresponding authorities. The fact that `doctor` currently requires them is an internal caller to cut over, not a durable-consumer justification for retaining them.
 
 Repository identity must not be defined by files scheduled for retirement.
 
@@ -219,10 +218,9 @@ If current implementation has overlapping output, the owning cutover must conver
 
 ### N2
 
-- remove `architecture/python-estate-ar6.json` and `scripts/python-estate-ar6.py` from `doctor` requirements;
-- remove those files from repository-root sentinels;
+- preserve the accepted removal of `architecture/python-estate-ar6.json` and `scripts/python-estate-ar6.py` from `doctor` requirements and repository-root sentinels;
 - ensure no `doctor -> Python` subprocess is reintroduced;
-- replace per-file Python estate assumptions with source-derived role/effect diagnostics where `doctor` needs only a bounded result.
+- do not replace the removed sentinels with another Python-estate registry/diagnostic. Python role/effect enforcement belongs to its source-derived policy owner and PF-3 mapping, not to a global `doctor` catalog.
 
 ### N4
 
@@ -236,6 +234,8 @@ If current implementation has overlapping output, the owning cutover must conver
 - do not make generated `architecture/inventory.json` a semantic authority;
 - if inventory freshness is diagnosed, call the owned typed inventory check path rather than merely parsing the JSON file;
 - ensure `doctor`, `repository.rs`, quality workflows and audit workflows all converge on the same surviving owners.
+
+When a retired artifact is still referenced by an internal workflow/check, remove or redirect that caller in the same cutover. `doctor`/CI/self-test reachability is not a durable external consumer and cannot justify a compatibility bridge.
 
 ## 11. PF-3 fitness requirements
 

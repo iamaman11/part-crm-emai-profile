@@ -6,6 +6,7 @@
 **Post-AR-11 Functional Closure:** #399  
 **Accepted checkpoint:** AR-11 — Release-set / Promotion Architecture  
 **Derived current AR slice:** AR-12 — Fresh Rehearsal Environment — NOT STARTED  
+**Current prerequisite transaction:** N2 — Python-estate authority retirement — IN PROGRESS
 **Production authorization:** NONE  
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
@@ -69,9 +70,48 @@ Cutover -> zero callers -> zero unique current invariants -> delete DEAD predece
 Touch-to-converge, not repository-wide rewrite
 ```
 
+### 1.1 Product outcome and simplification gate
+
+The remaining program exists to ship a coherent Production Core, not to maximize architecture artifacts. From N2 through PF-3 the mandatory operating mode is **delete and simplify**:
+
+```text
+reduce current semantic authorities
++ reduce transitional execution paths
++ reduce duplicate representations and compatibility surfaces
++ shorten the path to product rehearsal / PC-1
+```
+
+For every N2…PF-3 transaction the PR records a compact before/after table for:
+
+```text
+current semantic authorities
+transitional semantic sources
+duplicate representations
+legacy current callers
+Python/Node semantic-authority paths
+tracked generated projections
+compatibility-only commands/workflows
+current plan + validator + projection LOC
+```
+
+N2…N5 must strictly reduce their predecessor estate. PF-1…PF-3 may add only the named typed owner/enforcement needed by the phase and must delete its replaced machinery in the same accepted transaction. Across N2…PF-3, current planning/validation/projection/governance surface must be net smaller. A phase that adds another large plan, validator family, projection catalog, authority registry or compatibility layer without deleting a larger predecessor fails this gate even when all checks are green.
+
+Permanent zero budgets:
+
+```text
+new parallel roadmap/current-plan document = 0
+new 1:1 successor registry = 0
+new hand-maintained global authority catalog = 0
+new tracked projection without proved durable exact-byte consumer = 0
+new checker whose primary purpose is checking another checker = 0
+legacy predecessor kept alive only by internal CI/docs/self-test = 0
+```
+
+An internal generator, drift gate, validator, self-test, documentation reference or `opsctl`/CI caller that exists only because the legacy artifact exists is part of the deletion set, not proof of a durable consumer. Caller discovery is bounded to one pass plus affected deltas. When no external/runtime/durable exact-format consumer exists, switch or delete those internal callers and delete the predecessor atomically; do not create another observation phase to re-check the same fact.
+
 Historical AR artifacts are evidence of how decisions were accepted. They are not automatically permanent current semantic authorities.
 
-### 1.1 Architecture precedence and pre-production compatibility default
+### 1.2 Architecture precedence and pre-production compatibility default
 
 This repository has not yet had a production release. Therefore historical internal implementation shape is not a compatibility target by default.
 
@@ -196,7 +236,7 @@ PF-1  typed lifecycle evaluator + deterministic inventory compiler + Node/Python
  ->
 PF-2  Universal Hosted Operational Evidence
  ->
-PF-3  typed Architecture Fitness Baseline + architecture-forming freeze point
+PF-3  provisional typed Architecture Fitness Baseline
  ->
 FC-6 preflight
     (mandatory fresh #399 / #421 live re-baseline; read-only)
@@ -374,17 +414,15 @@ The historical Python estate baseline/overlay chain is retired by N2; there is n
 
 Breaking external contract changes bump schema version. The incompatible change from `d1_evolution_authority_sha256` to `d1_repository_identity_sha256` must not remain under one current v2 meaning; current writer/model moves to v3. Historical immutable v2 verification exists only while a concrete current consumer/durable obligation is proved and remains isolated from the current writer/model.
 
-Before N2 starts, the bounded pre-N2 cleanup gate must resolve the current-v2 ambiguity discovered after F1 acceptance:
+#454 resolved the current-v2 ambiguity before N2:
 
 ```text
 architecture/release-set-v2.json current semantic authority = 0
-historical v2 current consumer = named OR NONE
-historical v2 executable compatibility = justified-and-isolated OR retired
+historical v2 executable = minimum isolated source/artifact integrity verification only
 current writer/model = v3-only
+current promotion/rollback target = v3-only
 v2 -> v3 semantic coercion = 0
 ```
-
-A proved current v2 consumer may include an actual current staging deployment, actual known-good rollback Release Set, or explicit current FC-6/#399/#421 durable input. A hypothetical future need or historical acceptance is not enough.
 
 Attestable/content-addressed JSON uses one explicit canonical external contract with:
 
@@ -438,9 +476,9 @@ A hand-maintained `architecture/architecture-fitness-policy.json` must not becom
 
 Minimum zero-budget families include authority duplication, forbidden dependency/effect edges, generated-projection semantic use, runtime dependency on `opsctl`, `opsctl` process/network/provider authority, Python duplicate semantic authority, unclassified Python production/provider effects, and silent breaking-contract changes without version bump.
 
-### 12.1 PF-3 is the architecture-forming freeze point
+### 12.1 PF-3 is provisional; final architecture freeze follows AR-15
 
-Accepted PF-3 is the last planned stage allowed to introduce a new generic architecture mechanism for Architecture Re-baseline v3.
+Accepted PF-3 establishes a **provisional fitness baseline**: already-selected constraints are typed, machine-enforced and protected against silent weakening. It is not the final claim that the architecture form has survived real deployment, recovery and Windows delivery.
 
 After PF-3 acceptance:
 
@@ -448,24 +486,24 @@ After PF-3 acceptance:
 new generic architecture layer/framework = FORBIDDEN
 new global authority/registry/lifecycle engine = FORBIDDEN
 new compatibility architecture without proved consumer = FORBIDDEN
-AR/FC/PC phase used as a redesign bucket = FORBIDDEN
+AR/FC/PC phase used as an open-ended redesign bucket = FORBIDDEN
 ```
 
-Later work may add or evolve product functionality, bounded contexts, use cases, ports/adapters, provider integrations, explicit contract versions, migrations, security corrections, recovery, delivery and performance within the established architecture. A material architecture change remains possible only through the explicit architecture-change process and PF-3 fitness anti-weakening; it is not normal roadmap work.
+FC-6 through AR-15 may make a bounded architecture correction only when a concrete product acceptance scenario or rehearsal fails and the correction is the smallest viable remedy. Such a correction names the failed scenario, changes the natural owner rather than adding a parallel owner, updates PF-3 enforcement in the same transaction and leaves the measured authority estate no larger unless a durable external obligation makes that impossible.
 
-This freeze is a **design/enforcement milestone**, not production authorization and not the lifecycle flag `architecture_complete=true`. That lifecycle flag remains false until AR-17 qualification succeeds.
+Final architecture-form freeze occurs only after AR-15 is accepted and its real Windows delivery/recovery rehearsal passes. From that point AR-16 is audit-only, AR-17 is qualification/authorization-only, and new generic architecture mechanisms are forbidden except through an explicit post-freeze architecture-change process. Neither PF-3 nor AR-15 sets `architecture_complete=true`; that lifecycle flag remains false until AR-17 qualification succeeds.
 
 Post-PF-3 phase semantics are therefore:
 
 ```text
-FC-6 / FC-7     functional closure + staging proof; no architecture redesign
-AR-12..AR-15    implementation/rehearsal/delivery on the frozen architecture
+FC-6 / FC-7     functional closure + staging proof; scenario-driven bounded correction only
+AR-12..AR-15    rehearsal/delivery; smallest scenario-driven correction only
 AR-16           final whole-project audit only
 AR-17           qualification/authorization decision only
 PC-1            first Production Core release
 ```
 
-If AR-16/AR-17 finds a violation, the gate blocks and the violation is corrected under the frozen architecture. AR-16/AR-17 do not invent Architecture v4 in-place.
+If AR-16/AR-17 finds a violation, the gate blocks and the violation is corrected under the final architecture form accepted after AR-15. AR-16/AR-17 do not invent Architecture v4 in-place.
 
 ## 13. Production state model
 
@@ -491,7 +529,37 @@ Only AR-17 may authorize the Production Core gate. Only later PC-1 may set `prod
 
 No PF/F/N/FC work here authorizes production.
 
-## 14. Production capability roadmap
+## 14. Product acceptance scenarios and capability roadmap
+
+Architecture and phase completion are accepted only through these seven end-to-end product scenarios. Unit/integration checks remain necessary but cannot substitute for the scenario outcome.
+
+| ID | Product acceptance scenario | Required observable result |
+| --- | --- | --- |
+| PAS-1 | Identity and governed access | Owner bootstrap/sign-in, invitation/membership and authorization work end to end; unauthorized, revoked and stale access fail before mutation. |
+| PAS-2 | Client and browser-profile workflow | An operator uses the real UI/API to create/update clients and profiles, bind them, grant access and complete representative bulk operations with stable validation and audit. |
+| PAS-3 | Encrypted profile lifecycle | A generation is created, encrypted, persisted, opened, closed and restored from durable data without secret/plaintext leakage or identity ambiguity. |
+| PAS-4 | Real Windows browser execution | Windows Profile Bridge launches the pinned real Camoufox runtime through versioned IPC, enforces single-writer ownership, reports health and safely closes/updates/rolls back. |
+| PAS-5 | Failure, retry and recovery | Crash, timeout, duplicate delivery and partial failure are retried/idempotently fenced; remote recovery restores a consistent usable profile and produces actionable observability. |
+| PAS-6 | Fresh same-bits delivery and rollback | A clean staging environment is created from canonical inputs, exact accepted bits are deployed, verified, rolled back/LKG-restored and recreated without hidden operator state. |
+| PAS-7 | Production admission fails closed | `production-core-v1` enables only its declared backend execution surfaces; mailbox/outbound/later capabilities, missing evidence, invalid credentials and unknown compatibility remain blocked before side effect. |
+
+Each scenario contract must name: user-visible result; UI/API/runtime path; data and external contracts; authorization/security negatives; retry/idempotency behavior; observability and reason codes; platform/environment; measurable performance/reliability budget owned by the product requirement; and durable acceptance evidence. A phase cannot declare success using architecture artifacts alone.
+
+Remaining-phase binding:
+
+| Phase | Product scenarios it must advance or prove |
+| --- | --- |
+| N2…PF-3 | Remove authority ambiguity and build only the minimum enforcement needed to make PAS-1…PAS-7 trustworthy; no substitute product ceremony. |
+| FC-6 / FC-7 | PAS-1, PAS-2, PAS-3, PAS-6 and PAS-7 on real staging, including same-bits/rollback and fail-closed negatives. |
+| AR-12 | PAS-1, PAS-2, PAS-3 and PAS-6 from a genuinely fresh environment. |
+| AR-13 | PAS-3, PAS-5 and PAS-7 under real credential/key/secret rotation. |
+| AR-14 | PAS-3, PAS-5 and PAS-6 through remote recovery from durable state/artifacts. |
+| AR-15 | PAS-4, PAS-5 and PAS-6 through the production-equivalent Windows delivery/updater chain; acceptance establishes the final architecture-form freeze. |
+| AR-16 | Audit PAS-1…PAS-7 evidence and whole-project budgets; no implementation bucket. |
+| AR-17 | Authorize only if PAS-1…PAS-7 and all mandatory gates are accepted; no new closeout engine. |
+| PC-1 | Promote the exact accepted release and re-prove PAS-1…PAS-7 production admission/observability expectations. |
+
+### 14.1 Production capability boundary
 
 After AR-17:
 
@@ -564,9 +632,10 @@ AR-12 remains blocked until:
 3. N1…N5 complete with zero-current-caller/zero-unique-invariant predecessor proofs and the tracked-inventory retention result is `JUSTIFIED_MINIMUM | NOT_RETAINED`;
 4. PF-1 is accepted and Node/Python lifecycle/inventory predecessors are deleted;
 5. PF-2 Hosted Evidence is accepted;
-6. PF-3 typed fitness enforcement and architecture-forming freeze are accepted;
+6. PF-3 provisional typed fitness enforcement is accepted without a new validator/projection estate;
 7. FC-6 preflight executes the mandatory fresh #399/#421 live re-baseline from accepted PF-3 main and returns `READY | BLOCKED`;
 8. only `READY` crosses into FC-6 real staging same-bits/rollback evidence; a legitimate typed `BLOCKED` state remains fail-closed and authorizes no mutation;
 9. FC-7 reports repository-owned `P0=0`, `P1=0`, `P2=0` for AR-11 Functional Closure scope;
-10. production remains fail-closed;
-11. accepted-main reread proves no parallel authority path was introduced.
+10. product acceptance scenarios required by FC-6/FC-7 have durable typed evidence and production remains fail-closed;
+11. accepted-main reread proves no parallel authority path was introduced and the N2…PF-3 simplification ledger is net smaller;
+12. final architecture-form freeze remains pending until accepted AR-15 proves PAS-4/PAS-5/PAS-6; PAS-1…PAS-7 remain the binding route through AR-16/AR-17 to PC-1.

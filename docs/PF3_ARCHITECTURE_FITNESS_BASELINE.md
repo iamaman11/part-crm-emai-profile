@@ -6,7 +6,7 @@
 **Issue:** #431  
 **Production authorization:** NONE
 
-PF-3 makes already-selected architecture guarantees durable and machine-enforced, then freezes generic architecture-forming work for normal roadmap execution. It is not a new roadmap, capability registry or production gate.
+PF-3 makes already-selected architecture guarantees durable and machine-enforced as a **provisional fitness baseline**. It is not a new roadmap, capability registry, final architecture-form freeze or production gate.
 
 ## 1. Entry and result
 
@@ -17,11 +17,12 @@ PF-3 acceptance means:
 ```text
 prospective architecture form = designed
 critical architecture constraints = machine-enforced
+architecture_form_frozen = false
 architecture_complete = false
 production authorization = NONE
 ```
 
-After PF-3, ordinary FC/AR/PC work may implement bounded functionality, adapters, migrations, recovery, provider integrations, delivery and explicit contract versions inside the established architecture. A genuine later material architecture change must use the governed architecture-change + anti-weakening path; it may not hide inside a normal phase.
+After PF-3, ordinary FC/AR work implements and rehearses bounded functionality inside the established architecture. A failed product acceptance scenario may justify only the smallest bounded correction; it must name the scenario, preserve one natural owner and update anti-weakening proof in the same transaction. Final architecture-form freeze is evaluated after accepted AR-15 has proved the real Windows delivery/updater/recovery scenarios.
 
 ## 2. Small typed fitness owner
 
@@ -55,6 +56,8 @@ REQUIRED downgraded/removed silently -> FAIL
 objective rule violated -> FAIL
 competing semantic implementation where one owner is required -> FAIL
 ```
+
+The registry is an index over enforcement that already has a natural owner. It must not wrap every validator in a new validator, mirror every rule into JSON, or build projections whose only consumer is PF-3 itself.
 
 ## 4. Objective machine-enforced rule families
 
@@ -122,7 +125,7 @@ Permanent negative proof rejects any `doctor` behavior that:
 - treats generated `architecture/inventory.json` as semantic authority;
 - restores retired AR-6/operator/Python-inventory root sentinels as permanent dependencies.
 
-## 7. Architecture-forming freeze
+## 7. Provisional baseline and final freeze
 
 After PF-3 acceptance, normal roadmap work may not introduce:
 
@@ -135,17 +138,33 @@ new generic service locator/plugin container/god-policy layer
 FC/AR/PC phase used as a redesign bucket
 ```
 
-This freeze is a design/enforcement milestone, not `architecture_complete=true`. AR-17 still owns Production Core qualification/authorization.
+This restriction is a design/enforcement guardrail, not final freeze and not `architecture_complete=true`. AR-17 still owns Production Core qualification/authorization.
+
+PF-3 itself is provisional because FC-6 and AR-12…AR-15 still exercise staging, fresh bootstrap, rotation, remote recovery and Windows delivery. A concrete rehearsal failure may produce a bounded architecture correction, but cannot become an open redesign program.
+
+Final architecture-form freeze occurs after AR-15 acceptance when:
+
+```text
+PF-3 required rules remain enforced
+PAS-4 Windows real-runtime delivery = accepted
+PAS-5 failure/retry/recovery = accepted for the Windows path
+PAS-6 same-bits update/LKG rollback = accepted for the Windows path
+unresolved scenario-driven architecture correction = 0
+architecture authority/surface budgets = satisfied
+architecture_form_frozen = true
+```
+
+AR-16 audits this frozen result. AR-17 consumes it for qualification; neither phase designs another architecture.
 
 ## 8. Post-PF-3 execution semantics
 
 ```text
 FC-6 preflight = fresh #399/#421 live re-baseline
-FC-6 / FC-7 = staging proof + functional closeout; no redesign
+FC-6 / FC-7 = staging proof + functional closeout; smallest scenario-driven correction only
 AR-12 = fresh-environment rehearsal
 AR-13 = rotation rehearsal
 AR-14 = remote-recovery rehearsal
-AR-15 = Windows updater/delivery implementation + proof
+AR-15 = Windows updater/delivery implementation + proof + final architecture-form freeze
 AR-16 = final whole-project audit only
 AR-17 = Production Core qualification/authorization decision only
 PC-1  = first Production Core release
@@ -164,7 +183,11 @@ objective architecture regressions = mechanically rejected
 generic linter/plugin/DI framework introduced by PF-3 = 0
 second roadmap/domain/capability/production-enable authority = 0
 generated JSON/report used as semantic input = 0
+new validator whose primary purpose is checking another validator = 0
+new tracked projection without durable exact-byte consumer = 0
+PF-3 plan + validator + projection surface larger than deleted predecessor surface = 0
 application behavior unchanged
+architecture_form_frozen = false
 architecture_complete = false
 production_mutation = false
 ```

@@ -106,6 +106,8 @@ natural owner proved
 
 No successor JSON/YAML/TOML/Rust table may merely reproduce the retired duplicate authority under a new name.
 
+Internal reachability is not durable-consumer proof. A generator/drift check, validator/self-test, documentation projection, `opsctl` sentinel or CI workflow whose only purpose is keeping the predecessor synchronized belongs to the same deletion set. Retirement uses one bounded discovery pass, moves only unique current invariants to natural owners, switches/deletes internal callers and deletes the predecessor atomically. A meta-checker or repeated unchanged discovery cycle is forbidden.
+
 ## 4. Inward dependency / bounded context
 
 Target dependency direction:
@@ -352,7 +354,7 @@ exact artifact identity -> exact file bytes -> SHA-256
 
 Do not hash Protobuf serialized bytes as a universal canonical identity.
 
-Breaking external-contract changes bump version. Historical readers may be isolated only when a real current historical consumer/durable obligation is proved; current writer/model never silently changes meaning under the old version. The bounded pre-N2 F1 cleanup gate resolves the remaining v2 current-consumer question before N2 starts.
+Breaking external-contract changes bump version. Historical readers may be isolated only when a real current historical consumer/durable obligation is proved; current writer/model never silently changes meaning under the old version. Accepted #454 removed tracked v2 current authority, kept only isolated historical source/artifact integrity verification and made current promotion/rollback targets v3-only.
 
 ## 16. PF-1 target
 
@@ -364,7 +366,7 @@ outer Git/GitHub raw observations
 -> bounded typed inventory projections
 -> pure ArchitectureInventoryCompiler
 -> canonical render/check/inspect
--> one bounded GENERATED_PROJECTION_WRITE to architecture/inventory.json
+-> optional bounded GENERATED_PROJECTION_WRITE only for a proved durable exact-byte consumer
 ```
 
 PF-1 must not create a `GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet`. It deletes legacy Node lifecycle and Python inventory/projection current authorities after parity + zero-caller + zero-unique-invariant proof.
@@ -386,7 +388,7 @@ outer provider/GitHub observation
 
 Evidence validity, freshness/replay and mutation eligibility are separate typed concepts. `opsctl` remains offline and has no provider credentials/mutation authority.
 
-## 18. PF-3 target and architecture-forming freeze
+## 18. PF-3 target and provisional fitness baseline
 
 PF-3 makes these rules permanent through typed Rust fitness semantics:
 
@@ -419,9 +421,9 @@ compatibility shim without proved consumer/durable obligation = 0
 manual AR-qualified application ownership registry current authority = 0
 ```
 
-Accepted PF-3 is the final planned Architecture Re-baseline v3 **architecture-forming freeze point**. After it, FC/AR/PC work may implement bounded functionality and explicit contract versions inside the established architecture, but may not introduce a new generic architecture layer, global authority/registry, duplicate lifecycle/evidence/fitness engine or speculative compatibility framework.
+Accepted PF-3 is the Architecture Re-baseline v3 **provisional fitness baseline**. After it, FC/AR work may not introduce a new generic architecture layer, global authority/registry, duplicate lifecycle/evidence/fitness engine or speculative compatibility framework. A concrete failed product acceptance scenario or rehearsal may justify only the smallest bounded correction; the same transaction must identify the scenario, preserve one natural owner, update anti-weakening enforcement and avoid a parallel compatibility surface.
 
-PF-3 acceptance does **not** set `architecture_complete=true` and does not authorize production. AR-16 remains audit-only and AR-17 qualification/authorization-only. A genuine later material architecture change requires the explicit governed architecture-change/anti-weakening path rather than being hidden inside a roadmap phase.
+Final architecture-form freeze occurs after accepted AR-15 proves the real Windows delivery/updater/recovery scenarios. PF-3 and AR-15 do **not** set `architecture_complete=true` or authorize production. AR-16 remains audit-only and AR-17 qualification/authorization-only. A genuine post-AR-15 material architecture change requires the explicit governed architecture-change/anti-weakening path rather than being hidden inside a roadmap phase.
 
 ## 19. Development-stage verification protocol
 
@@ -441,6 +443,8 @@ fresh protected-main re-baseline
 -> merge bound to exact proven head
 -> post-merge accepted-main reread
 ```
+
+For N2…PF-3, acceptance also requires a before/after simplification ledger. N2…N5 strictly reduce their predecessor estates; PF-1…PF-3 add only their named typed owner/enforcement and delete the replaced mechanism in the same transaction. The cumulative current plan/validator/projection/compatibility surface must be net smaller. Green CI does not excuse a larger duplicate authority estate.
 
 Before PF-3, F/N/PF-1/PF-2 use their explicit DoD and existing permanent security/architecture gates.
 
