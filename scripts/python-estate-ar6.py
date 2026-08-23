@@ -70,6 +70,46 @@ PROVIDER_MUTATION_TERMS = (
     "secret put",
 )
 GENERIC_KEEP_ROLES = {"validator", "generator", "test", "test_or_fixture"}
+ROLE_EFFECT_ROLES = {
+    "BUILD_OR_GENERATOR",
+    "CROSS_LANGUAGE_RUNTIME_ADAPTER",
+    "STATIC_OR_POLICY_CHECKER",
+    "TEST_FIXTURE_RUNTIME_STUB",
+    "TEST_OR_FIXTURE",
+    "UNSUPPORTED_RUNTIME_OR_PROVIDER_EXECUTOR",
+}
+ROLE_EFFECT_EFFECTS = {
+    "CRYPTO",
+    "FILESYSTEM_MUTATION",
+    "FILESYSTEM_OBSERVATION",
+    "LOCAL_DB",
+    "NETWORK",
+    "NO_RUNTIME_EFFECT",
+    "PROVIDER_MUTATION",
+    "SECRET_ENVIRONMENT_ACCESS",
+    "SUBPROCESS",
+}
+FILESYSTEM_OBSERVATION_METHODS = {
+    "exists",
+    "glob",
+    "is_dir",
+    "is_file",
+    "iterdir",
+    "read_bytes",
+    "read_text",
+    "resolve",
+    "rglob",
+    "stat",
+}
+FILESYSTEM_MUTATION_METHODS = {
+    "mkdir",
+    "rename",
+    "replace",
+    "touch",
+    "unlink",
+    "write_bytes",
+    "write_text",
+}
 AR10_ADDITION_DECISIONS: dict[str, dict[str, str]] = {
     "runtime/camouhost/real.py": {
         "classification": "KEEP_PYTHON",
@@ -397,6 +437,17 @@ def _string_literals(node: ast.AST) -> set[str]:
     }
 
 
+def _literal_subprocess_argv(node: ast.Call) -> list[str]:
+    if not node.args or not isinstance(node.args[0], (ast.List, ast.Tuple)):
+        return []
+    values: list[str] = []
+    for element in node.args[0].elts:
+        if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+            return []
+        values.append(element.value)
+    return values
+
+
 def semantic_capabilities(source: str, *, label: str) -> tuple[set[str], set[str]]:
     try:
         tree = ast.parse(source, filename=label)
@@ -441,6 +492,7 @@ def semantic_capabilities(source: str, *, label: str) -> tuple[set[str], set[str
         if not isinstance(node, ast.Call):
             continue
         name = _call_name(node)
+        leaf = name.rsplit(".", 1)[-1]
         literals = _string_literals(node)
         upper_literals = {value.upper() for value in literals}
         if name in {"os.getenv", "os.environ.get"} and any(
@@ -449,17 +501,15 @@ def semantic_capabilities(source: str, *, label: str) -> tuple[set[str], set[str
             capabilities.add("secret_environment_access")
         if name.startswith("subprocess."):
             capabilities.add("process_exec")
-            lowered = " ".join(sorted(value.lower() for value in literals))
-            if "wrangler" in lowered and any(term in lowered for term in PROVIDER_MUTATION_TERMS):
+            argv = _literal_subprocess_argv(node)
+            lowered = " ".join(argv).lower()
+            has_wrangler = any(
+                value == "wrangler" or value.startswith("wrangler@") for value in argv
+            )
+            if has_wrangler and any(term in lowered for term in PROVIDER_MUTATION_TERMS):
                 capabilities.add("provider_mutation_subprocess")
         if (
-            name.endswith(".write_text")
-            or name.endswith(".write_bytes")
-            or name.endswith(".mkdir")
-            or name.endswith(".unlink")
-            or name.endswith(".rename")
-            or name.endswith(".replace")
-            or name.endswith(".touch")
+            leaf in FILESYSTEM_MUTATION_METHODS
             or name
             in {
                 "os.remove",
@@ -475,6 +525,81 @@ def semantic_capabilities(source: str, *, label: str) -> tuple[set[str], set[str
         ):
             capabilities.add("filesystem_mutation")
     return capabilities, imported_modules
+
+
+def source_role_effects(source: str, *, path: str) -> tuple[str | None, set[str]]:
+    capabilities, _ = semantic_capabilities(source, label=path)
+    try:
+        tree = ast.parse(source, filename=path)
+    except SyntaxError as error:
+        fail(f"tracked Python must parse as Python: {path}: {error}")
+
+    effects = {
+        effect
+        for capability, effect in {
+            "cryptography": "CRYPTO",
+            "filesystem_mutation": "FILESYSTEM_MUTATION",
+            "local_database": "LOCAL_DB",
+            "network_io": "NETWORK",
+            "process_exec": "SUBPROCESS",
+            "provider_mutation_subprocess": "PROVIDER_MUTATION",
+            "secret_environment_access": "SECRET_ENVIRONMENT_ACCESS",
+        }.items()
+        if capability in capabilities
+    }
+    if any(
+        isinstance(node, ast.Call)
+        and _call_name(node).rsplit(".", 1)[-1] in FILESYSTEM_OBSERVATION_METHODS
+        for node in ast.walk(tree)
+    ):
+        effects.add("FILESYSTEM_OBSERVATION")
+    if not effects:
+        effects.add("NO_RUNTIME_EFFECT")
+    if not effects <= ROLE_EFFECT_EFFECTS:
+        fail(f"source-derived effect vocabulary drifted for {path}")
+
+    name = Path(path).name
+    parts = Path(path).parts
+    if path == "runtime/camouhost/real.py":
+        role = "CROSS_LANGUAGE_RUNTIME_ADAPTER"
+    elif path == "runtime/camouhost/main.py":
+        role = "TEST_FIXTURE_RUNTIME_STUB"
+    elif "tests" in parts or name.startswith("test_") or (
+        path.startswith("scripts/") and name.startswith("test-")
+    ):
+        role = "TEST_OR_FIXTURE"
+    elif path.startswith("scripts/") and name.startswith(("build-", "generate-", "render-")):
+        role = "BUILD_OR_GENERATOR"
+    elif path.startswith("scripts/") and name.startswith(("assert-", "check-", "verify-")):
+        role = "STATIC_OR_POLICY_CHECKER"
+    elif any(
+        isinstance(node, ast.Compare)
+        and isinstance(node.left, ast.Name)
+        and node.left.id == "__name__"
+        and any(
+            isinstance(comparator, ast.Constant) and comparator.value == "__main__"
+            for comparator in node.comparators
+        )
+        for node in ast.walk(tree)
+    ) and effects & {"NETWORK", "PROVIDER_MUTATION"}:
+        role = "UNSUPPORTED_RUNTIME_OR_PROVIDER_EXECUTOR"
+    else:
+        role = None
+
+    if role is not None and role not in ROLE_EFFECT_ROLES:
+        fail(f"source-derived role vocabulary drifted for {path}: {role}")
+    if role == "TEST_FIXTURE_RUNTIME_STUB" and "browser_runtime" in capabilities:
+        fail("synthetic Camouhost fixture may not acquire real browser runtime capability")
+    if "PROVIDER_MUTATION" in effects:
+        fail(f"Python provider mutation must not become a current semantic owner: {path}")
+    if role == "STATIC_OR_POLICY_CHECKER" and "NETWORK" in effects:
+        fail(f"static/policy checker may not hide network execution: {path}")
+    if role in {None, "UNSUPPORTED_RUNTIME_OR_PROVIDER_EXECUTOR"} and effects & {
+        "NETWORK",
+        "PROVIDER_MUTATION",
+    }:
+        fail(f"unclassified/unsupported Python network or provider execution fails closed: {path}")
+    return role, effects
 
 
 def semantic_validate_all(rows: list[dict[str, Any]], root: Path = ROOT) -> None:
@@ -556,6 +681,63 @@ def serialized(document: dict[str, Any]) -> str:
     return json.dumps(document, indent=2, ensure_ascii=False, sort_keys=False) + "\n"
 
 
+def source_role_effect_self_test() -> None:
+    role, effects = source_role_effects(
+        'from pathlib import Path\nPath("x").read_text(encoding="utf-8")\n',
+        path="scripts/check-local.py",
+    )
+    if role != "STATIC_OR_POLICY_CHECKER" or "FILESYSTEM_OBSERVATION" not in effects:
+        fail("source-derived static-checker observation fixture drifted")
+
+    role, effects = source_role_effects(
+        'from pathlib import Path\nPath("x").write_text("x", encoding="utf-8")\n',
+        path="scripts/generate-output.py",
+    )
+    if role != "BUILD_OR_GENERATOR" or "FILESYSTEM_MUTATION" not in effects:
+        fail("source-derived generator mutation fixture drifted")
+
+    role, effects = source_role_effects(
+        'import requests\nrequests.get("http://127.0.0.1", timeout=1)\n',
+        path="scripts/test-network.py",
+    )
+    if role != "TEST_OR_FIXTURE" or "NETWORK" not in effects:
+        fail("source-derived test network fixture drifted")
+
+    role, _ = source_role_effects(
+        "from camoufox.sync_api import Camoufox\n",
+        path="runtime/camouhost/real.py",
+    )
+    if role != "CROSS_LANGUAGE_RUNTIME_ADAPTER":
+        fail("source-derived real-runtime adapter fixture drifted")
+
+    rejected = {
+        "synthetic_browser_runtime": (
+            "runtime/camouhost/main.py",
+            "from camoufox.sync_api import Camoufox\n",
+        ),
+        "network_hidden_in_static_checker": (
+            "scripts/check-remote.py",
+            'import urllib.request\nurllib.request.urlopen("https://example.invalid")\n',
+        ),
+        "unclassified_network_executor": (
+            "tools/provider.py",
+            'import urllib.request\nif __name__ == "__main__":\n    urllib.request.urlopen("https://example.invalid")\n',
+        ),
+        "wrangler_provider_mutation": (
+            "scripts/check-provider.py",
+            "import subprocess\n"
+            "subprocess.run(['npx', '--yes', 'wrangler@4.94.0', 'r2', 'object', 'put', 'bucket/key', '--remote'], check=True)\n",
+        ),
+    }
+    for label, (path, source) in rejected.items():
+        try:
+            source_role_effects(source, path=path)
+        except EstateError:
+            pass
+        else:
+            fail(f"source-derived negative fixture unexpectedly passed: {label}")
+
+
 def self_test() -> None:
     expected = build_inventory()
     validate(expected)
@@ -594,14 +776,23 @@ def self_test() -> None:
         fail("semantic dependency detector lost future-cutover negative fixture")
 
     provider_capabilities, _ = semantic_capabilities(
-        "import subprocess\nsubprocess.run(['npx', 'wrangler', 'deploy'], check=True)\n",
+        "import subprocess\n"
+        "subprocess.run(['npx', '--yes', 'wrangler@4.94.0', 'r2', 'object', 'put', 'bucket/key', '--remote'], check=True)\n",
         label="scripts/check-future-provider.py",
     )
     if "provider_mutation_subprocess" not in provider_capabilities:
         fail("semantic capability detector lost provider-mutation negative fixture")
 
+    mutation_capabilities, _ = semantic_capabilities(
+        'from pathlib import Path\nPath("x").write_text("x", encoding="utf-8")\n',
+        label="scripts/generate-future.py",
+    )
+    if "filesystem_mutation" not in mutation_capabilities:
+        fail("semantic capability detector lost Path filesystem-mutation fixture")
+
+    source_role_effect_self_test()
     print(
-        "Frozen AR-6 Python estate, bounded AR-10 overlay and semantic capability negative fixtures rejected as expected."
+        "Frozen AR-6 Python estate, bounded AR-10 overlay and source-derived role/effect negative fixtures rejected as expected."
     )
 
 
