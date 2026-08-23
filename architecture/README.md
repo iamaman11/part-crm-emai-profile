@@ -9,7 +9,8 @@ This directory is organized by **system subject**, not by remediation chronology
 - `credential-lifecycle.json` — current replacement / verification / activation / retirement / rollback / recovery rules for governed credentials and application OAuth credentials.
 - `operator-contract.json` — permanent read-only, metadata-only operator surface and negative/recovery contract.
 - `profile-security.json` — permanent Browser Profile / Camoufox security classifications and ownership boundaries.
-- `runtime-topology-ar2.json`, `python-estate-ar6.json`, `github-governance-ar7.json` — accepted architecture artifacts whose phase-qualified names are preserved because they are accepted provenance/decision inputs rather than newly mutable AR-8 completion authorities.
+- `python-estate-ar6.json`, `github-governance-ar7.json` — accepted architecture artifacts whose phase-qualified names remain tracked provenance/decision inputs.
+- AR-2 runtime-topology authority is retired from the tracked current architecture: provider-native Wrangler configuration and Product Rust own executable topology/workloads, bounded current fitness rules prevent regression, and AR-2 provenance remains in `docs/ARCHITECTURE_REBASELINE_V3_AR2.md` plus Git history.
 
 ## AR-8 provenance and completion artifacts
 

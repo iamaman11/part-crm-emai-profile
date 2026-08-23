@@ -90,9 +90,12 @@
     }
   },
   "runtime_topology": {
-    "decision_authority": "architecture/runtime-topology-ar2.json",
-    "evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
-    "canonical_inventory_projection_owner": "AR-3",
+    "decision_authority": "RETIRED_CURRENT_SEMANTIC_AUTHORITY",
+    "historical_decision_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
+    "current_resource_topology_authority": "WRANGLER_PROVIDER_NATIVE_CONFIGURATION_AND_PRODUCT_RUST",
+    "current_runtime_workload_authority": "PRODUCT_RUST",
+    "current_anti_regression_authority": "scripts/check-cloudflare-runtime-bindings.py",
+    "canonical_inventory_projection_owner": "AR-3_APPLICATION_PROCESS_AND_CAPABILITY_OWNERSHIP_ONLY",
     "generation_verification_decision": "DELETE",
     "generation_verification_source_binding_removal": "ACCEPTED_AR5",
     "resolver_isolation": "KEEP",
@@ -183,7 +186,7 @@
       "document_status",
       "program_state"
     ],
-    "ar2_decision_input": "architecture/runtime-topology-ar2.json",
+    "ar2_decision_provenance": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
     "ar3_projection_ownership": "ACCEPTED_APPLICATION_ARCHITECTURE_CONTRACT_IN_CANONICAL_INVENTORY",
     "later_dimensions_remain_owned_by_their_ar_slices": true,
     "ar4a_remediation": "ACCEPTED_COMPOSITION_ROOT_CONSOLIDATION_IN_CANONICAL_INVENTORY",

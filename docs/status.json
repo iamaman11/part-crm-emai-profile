@@ -85,7 +85,6 @@
         "accepted_main_reread": "874666f6ef6eb003425c9677d558378d6dc0daaf",
         "acceptance_evidence": "docs/evidence/2026-08-18-ar8-final-acceptance.json"
       },
-      "runtime_topology_decision": "architecture/runtime-topology-ar2.json",
       "runtime_topology_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR2.md",
       "application_architecture_evidence": "docs/ARCHITECTURE_REBASELINE_V3_AR4C.md",
       "application_architecture_projection": "architecture/inventory.json::application_architecture",

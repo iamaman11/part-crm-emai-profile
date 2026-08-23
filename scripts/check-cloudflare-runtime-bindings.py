@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Canonical Cloudflare runtime-binding, topology and AR-11 successor fitness gate.
 
-Current runtime proof is profile-aware: source-present Mail resources remain part of the
-accepted AR-2 architecture, but the Core Wrangler closure contains only Core bindings.
-Historical D3 promotion is proved from immutable Git history by the AR-8D checker; current
-promotion authority is the Rust-backed AR-11 Release Set workflow.
+Current runtime proof is profile-aware and provider-native: Wrangler configuration and
+Product Rust own the executable resource/workload topology. Historical D3 promotion is
+proved from immutable Git history by the AR-8D checker; current promotion authority is
+the Rust-backed AR-11 Release Set workflow.
 """
 
 from __future__ import annotations
@@ -22,37 +22,12 @@ import _cloudflare_runtime_bindings_core as core
 ROOT = Path(__file__).resolve().parents[1]
 CONTROL_CONFIG = ROOT / "deploy/cloudflare/wrangler.jsonc"
 RESOLVER_CONFIG = ROOT / "deploy/cloudflare/mailbox-secret-resolver.wrangler.jsonc"
-TOPOLOGY = ROOT / "architecture/runtime-topology-ar2.json"
 QUEUE_ENTRYPOINT = ROOT / "apps/control-plane-worker/src/lib.rs"
 QUEUE_ENVELOPE = ROOT / "crates/cloudflare-adapters/src/control_plane_queue.rs"
 CONTROL_PLANE_CONTRACT = ROOT / "crates/control-plane-contract/src/lib.rs"
 GENERATION_ROUTE = ROOT / "apps/control-plane-worker/src/profile_generations.rs"
 AR8D_CHECKER = ROOT / ".github/scripts/ar8-d-secret-transport-successor.mjs"
 AR11_CHECKER = ROOT / ".github/scripts/release-operational-ar11.mjs"
-
-EXPECTED_RESOURCE_DECISIONS = {
-    "control_plane_worker": "KEEP",
-    "static_assets": "KEEP",
-    "mailbox_secret_resolver_worker": "KEEP",
-    "catalog_d1": "KEEP",
-    "resolver_d1": "KEEP",
-    "profile_objects": "KEEP",
-    "profile_coordinator": "KEEP",
-    "notification_hub": "KEEP",
-    "integration_events": "KEEP",
-    "mailbox_jobs": "KEEP",
-    "mailbox_jobs_dlq": "KEEP",
-    "generation_verification": "DELETE",
-    "mailbox_secret_resolver_service": "KEEP",
-    "control_plane_schedule": "KEEP",
-    "resolver_reconciliation_schedule": "KEEP",
-    "gmail_api": "KEEP",
-    "imap_read": "KEEP",
-    "smtp_send": "KEEP",
-    "microsoft_graph_oauth_read_delta": "KEEP",
-    "microsoft_graph_mail_send": "DEFER",
-    "browser_bridge_mailbox_lane": "KEEP",
-}
 
 
 class RuntimeTopologyError(ValueError):
@@ -173,64 +148,6 @@ def validate_resolver_source_isolation(resolver: dict[str, Any]) -> None:
         fail("resolver staging/production D1 identities must remain isolated")
 
 
-def validate_ar2_topology(topology: dict[str, Any]) -> None:
-    exact = {
-        "schema_version": 1,
-        "status": "ACCEPTED_AR2_DECISION",
-        "program": "Architecture Re-baseline v3",
-        "tracking_issue": 266,
-        "slice": "AR-2",
-        "decision_base": "5d4a0d4a653539c6ae2aaff7d0ee38d2ecb79dbf",
-        "production_mutation": False,
-        "next_slice_after_acceptance": "AR-3",
-    }
-    for key, expected in exact.items():
-        if topology.get(key) != expected:
-            fail(f"AR-2 topology {key} drifted")
-    policies = object_value(topology.get("policies"), "AR-2 policies")
-    for key in (
-        "resource_decisions_are_architecture_input_not_provider_mutation",
-        "wrangler_source_binding_changes_deferred_to_ar5",
-        "runtime_simplification_execution_deferred_to_ar10_when_needed",
-        "production_resource_creation_update_delete_forbidden_during_ar",
-        "new_parallel_runtime_registry_forbidden",
-    ):
-        if policies.get(key) is not True:
-            fail(f"AR-2 policy {key} drifted")
-    if policies.get("production_promotion_authority") != "PC-1_AFTER_AR-17_USING_AR-11_RELEASE_SET":
-        fail("AR-2 production promotion authority drifted")
-    generation = object_value(topology.get("generation_verification"), "generation verification")
-    if (
-        generation.get("binding") != "GENERATION_VERIFICATION"
-        or generation.get("decision") != "DELETE"
-        or generation.get("source_binding_removal_slice") != "AR-5"
-    ):
-        fail("generation-verification AR-2 decision drifted")
-    d3 = object_value(topology.get("d3_compatibility"), "D3 compatibility")
-    if (
-        d3.get("staging_same_bits_lane") != "KEEP_PREPRODUCTION_FOUNDATION"
-        or d3.get("legacy_d3_production_lane") != "DISABLE_FORWARD_EXECUTION"
-        or d3.get("generalize_release_semantics_in") != "AR-11"
-    ):
-        fail("D3 compatibility handoff decision drifted")
-    observed: dict[str, str] = {}
-    for item in array_value(topology.get("resources"), "AR-2 resources"):
-        row = object_value(item, "AR-2 resource")
-        resource_id = row.get("id")
-        decision = row.get("decision")
-        evidence = row.get("evidence")
-        if not isinstance(resource_id, str) or not isinstance(decision, str) or not isinstance(evidence, list) or not evidence:
-            fail("AR-2 resource row is invalid")
-        if resource_id in observed:
-            fail(f"duplicate AR-2 resource: {resource_id}")
-        observed[resource_id] = decision
-        for relative in evidence:
-            if not isinstance(relative, str) or not (ROOT / relative).exists():
-                fail(f"AR-2 resource {resource_id} references missing evidence {relative!r}")
-    if observed != EXPECTED_RESOURCE_DECISIONS:
-        fail("AR-2 resource decision inventory drifted")
-
-
 def run_checker(path: Path, *args: str) -> None:
     completed = subprocess.run(
         ["node", path.relative_to(ROOT).as_posix(), *args],
@@ -244,7 +161,7 @@ def run_checker(path: Path, *args: str) -> None:
         fail(f"{path.name} failed:\n{details}")
 
 
-def self_test(control: dict[str, Any], topology: dict[str, Any]) -> None:
+def self_test(control: dict[str, Any], resolver: dict[str, Any]) -> None:
     restored = copy.deepcopy(control)
     production = object_value(object_value(restored["env"], "env")["production"], "production")
     queues = object_value(production["queues"], "queues")
@@ -257,13 +174,36 @@ def self_test(control: dict[str, Any], topology: dict[str, Any]) -> None:
         pass
     else:
         fail("legacy Queue restoration negative fixture unexpectedly passed")
-    drifted = copy.deepcopy(topology)
-    drifted["production_mutation"] = True
+
+    exposed_resolver = copy.deepcopy(resolver)
+    resolver_production = object_value(
+        object_value(exposed_resolver["env"], "resolver env")["production"],
+        "resolver production",
+    )
+    resolver_production["routes"] = ["https://resolver.invalid/*"]
     try:
-        validate_ar2_topology(drifted)
+        validate_resolver_source_isolation(exposed_resolver)
+    except RuntimeTopologyError:
+        pass
+    else:
+        fail("public resolver route negative fixture unexpectedly passed")
+
+    shared_database = copy.deepcopy(resolver)
+    resolver_env = object_value(shared_database["env"], "resolver env")
+    staging_d1 = object_value(
+        array_value(object_value(resolver_env["staging"], "resolver staging")["d1_databases"], "staging D1")[0],
+        "staging D1",
+    )
+    production_d1 = object_value(
+        array_value(object_value(resolver_env["production"], "resolver production")["d1_databases"], "production D1")[0],
+        "production D1",
+    )
+    production_d1["database_id"] = staging_d1["database_id"]
+    try:
+        validate_resolver_source_isolation(shared_database)
     except RuntimeTopologyError:
         return
-    fail("AR-2 production mutation negative fixture unexpectedly passed")
+    fail("shared resolver D1 identity negative fixture unexpectedly passed")
 
 
 def main() -> int:
@@ -272,16 +212,15 @@ def main() -> int:
     try:
         control = load(CONTROL_CONFIG, "control-plane Wrangler config")
         resolver = load(RESOLVER_CONFIG, "resolver Wrangler config")
-        topology = load(TOPOLOGY, "AR-2 runtime topology")
         validate_core_queue_closure(control)
         validate_generation_verification_runtime(control)
         validate_resolver_source_isolation(resolver)
-        validate_ar2_topology(topology)
         run_checker(AR8D_CHECKER)
         run_checker(AR11_CHECKER)
-        self_test(control, topology)
+        self_test(control, resolver)
         print(
-            "Cloudflare profile-aware Core topology, historical D3 evidence, and AR-11 successor checks passed."
+            "Cloudflare provider-native Core topology, generation-verification retirement, resolver isolation, "
+            "historical D3 evidence, and AR-11 successor checks passed."
         )
         return 0
     except (OSError, json.JSONDecodeError, RuntimeTopologyError, KeyError) as error:
