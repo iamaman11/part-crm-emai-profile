@@ -1,0 +1,106 @@
+{
+  "schema_version": 2,
+  "release_set_id": "release-set-v2-sha256-ab99fd2191f6b7462f90b078b9c09690efdee90b379c8184933e07c3d87d65d0",
+  "source": {
+    "repository": "iamaman11/part-crm-emai-profile",
+    "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "accepted_main": true,
+    "accepted_main_evidence_sha256": "393a0919d8b01752a5e5b6790975d254cb1205ccb9387704c78f2b5b661d1f05"
+  },
+  "components": {
+    "control_plane": {
+      "release_id": "cp",
+      "source_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "artifact_path": "components/control-plane.tar",
+      "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "artifact_size_bytes": 1,
+      "component_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "secret_resolver": {
+      "release_id": "rs",
+      "source_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "artifact_path": "components/secret-resolver.tar",
+      "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "artifact_size_bytes": 1,
+      "component_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "runtime_bundle": {
+      "release_id": "rt",
+      "source_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "artifact_path": "components/runtime-bundle.tar",
+      "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "artifact_size_bytes": 1,
+      "component_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "contracts": {
+    "files": [
+      {
+        "path": "openapi/v1/openapi.json",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "size_bytes": 1
+      }
+    ],
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "protocols": {
+    "public_api_contract_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "camouhost_ipc_version": 1,
+    "profile_bridge_protocol_version": 1,
+    "resolver_protocol": "mailbox-secret-resolver-v1"
+  },
+  "schemas": {
+    "d1_evolution_authority_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "catalog": {
+      "database_component": "catalog",
+      "target_schema_revision": "0001_initial.sql",
+      "supported_schema_min": "0001_initial.sql",
+      "supported_schema_max": "0001_initial.sql",
+      "migration_history_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "compatibility_policy_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "resolver": {
+      "database_component": "resolver",
+      "target_schema_revision": "0001_initial.sql",
+      "supported_schema_min": "0001_initial.sql",
+      "supported_schema_max": "0001_initial.sql",
+      "migration_history_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "compatibility_policy_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "runtime_compatibility": {
+    "runtime_lock_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "runtime_role": "real_camoufox",
+    "profile_format": "profile-v1",
+    "browser_identity_policy": "browser-identity-v1"
+  },
+  "capability_profile_compatibility": [
+    "rehearsal-core-v1"
+  ],
+  "build_provenance": {
+    "cargo_lock_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rust_toolchain_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "frontend_lock_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "release_architecture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "artifact_inventory": [
+    {
+      "path": "components/control-plane.tar",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 1,
+      "kind": "component"
+    },
+    {
+      "path": "components/runtime-bundle.tar",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 1,
+      "kind": "component"
+    },
+    {
+      "path": "components/secret-resolver.tar",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 1,
+      "kind": "component"
+    }
+  ]
+}
