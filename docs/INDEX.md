@@ -14,16 +14,18 @@ This index is a navigation/projection document. It does not create a second road
 - `production_core_gate=BLOCKED`.
 - `production_ready=false`.
 - Post-AR-11 Functional Closure #399 is the current execution umbrella.
+- F1/F2 and N1 are accepted; **N2 is NEXT** from accepted protected main.
+- Closed PR #428 is a superseded pre-normalization PF-2 checkpoint only; PF-2 later starts from a clean branch based on accepted PF-1 `main`.
 - The prerequisite order before AR-12 is:
 
 ```text
-F1 Release Set version discipline
+F1 Release Set version discipline                                      ACCEPTED
 +
-F2 permanent application/opsctl/doctor/canonical-JSON/Python foundations
+F2 permanent application/opsctl/doctor/canonical-JSON/Python          ACCEPTED
  ->
-N1 AR-2 authority retirement
+N1 AR-2 authority retirement                                          ACCEPTED
  ->
-N2 AR-6 Python-estate authority retirement
+N2 AR-6 Python-estate authority retirement                            NEXT
  ->
 N3 AR-7 current governance normalization
  ->
@@ -33,7 +35,7 @@ N5 AR-10 runtime semantic-authority retirement
  ->
 PF-1 typed lifecycle + deterministic bounded-projection inventory cutover
  ->
-PF-2 Universal Hosted Operational Evidence
+PF-2 Universal Hosted Operational Evidence from fresh accepted PF-1 main
  ->
 PF-3 typed Rust Architecture Fitness Baseline
  ->
@@ -57,12 +59,13 @@ F1/F2/N1…N5 are foundation/normalization transactions, not AR/PF lifecycle sli
 5. [`OPSCTL_DOCTOR_CONTRACT.md`](OPSCTL_DOCTOR_CONTRACT.md) — permanent `opsctl doctor` diagnostic boundary.
 6. [`PYTHON_USAGE_BOUNDARY.md`](PYTHON_USAGE_BOUNDARY.md) — Python role/effect/authority policy.
 7. [`PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — F1/F2 + N1…N5 prerequisite specification.
-8. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — subordinate execution plan through FC-7.
-9. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) — PF-1 detailed lifecycle/inventory cutover contract.
-10. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 typed fitness semantics/enforcement contract.
-11. Stable bounded authorities such as [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) and current domain/runtime/release contracts.
-12. [`../architecture/inventory.json`](../architecture/inventory.json), `status.json`, `DEVELOPMENT_PLAN.md`, this index and README entrypoints — generated/current projections only.
-13. Historical AR/evidence documents — provenance, not automatically current semantic authorities.
+8. Issue #441 — live accepted-main execution tracker and explicit N2→N5 handoff/readiness checklist; tracker only, never semantic authority.
+9. [`POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — subordinate execution plan through FC-7.
+10. [`PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) + #430 — PF-1 detailed cutover contract and live entry gate.
+11. [`PF3_ARCHITECTURE_FITNESS_BASELINE.md`](PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 typed fitness semantics/enforcement contract.
+12. Stable bounded authorities such as [`ARCHITECTURE.md`](ARCHITECTURE.md), accepted ADRs, [`DATA_CLASSIFICATION.md`](DATA_CLASSIFICATION.md), [`THREAT_MODEL.md`](THREAT_MODEL.md), [`UI_ARCHITECTURE.md`](UI_ARCHITECTURE.md) and current domain/runtime/release contracts.
+13. [`../architecture/inventory.json`](../architecture/inventory.json), `status.json`, `DEVELOPMENT_PLAN.md`, this index and README entrypoints — generated/current projections only.
+14. Historical AR/evidence documents — provenance, not automatically current semantic authorities.
 
 An open PR/branch never outranks accepted protected `main`.
 
@@ -136,7 +139,22 @@ Forbidden permanent Python roles include duplicate Product/release/D1/lifecycle/
 
 The AR-6/AR-10/AR-11 Python estate overlay chain is transitional current-authority machinery and is retired by N2; no successor 1:1 Python file registry is permitted.
 
+## Pre-PF-1 handoff
+
+The exact live execution checklist is #441. Static ownership intent remains in `PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`:
+
+```text
+N2 -> Python role/effect policy; no estate registry; doctor/root lose Python sentinels
+N3 -> current desired governance + live observation + typed evaluation; no historical overlay chain
+N4 -> Rust CommandRegistry/effect registry; operator-contract JSON cannot authorize behavior
+N5 -> Product Rust/runtime-lock/Camouhost/IPC/tests; runtime-cutover AR-10 authority retired
+```
+
+N2–N5 make natural owners unambiguous and retire predecessor semantics. They do **not** build a generic PF-1 projection/compiler framework early.
+
 ## PF-1 target
+
+PF-1 starts only after N5 acceptance and a fresh #430 entry reread proving no N1–N5 retired current authority has reappeared.
 
 ```text
 RawArchitectureAcceptanceEvidenceV1
@@ -161,6 +179,8 @@ outer GitHub/provider observation
 -> immutable artifact/attestation
 ```
 
+PF-2 starts only from accepted PF-1 `main` on a fresh branch. Closed PR #428 is historical salvage material only.
+
 ## PF-3 target
 
 ```text
@@ -178,12 +198,15 @@ A manually maintained semantic `architecture/architecture-fitness-policy.json` i
 | Dimension | Status |
 | --- | --- |
 | Source implemented | Accepted through AR-11 |
+| Pre-PF-1 foundation | F1/F2 accepted |
+| Pre-PF-1 normalization | N1 accepted; **N2 NEXT** |
+| PF-1 | BLOCKED on N5 + fresh entry reread |
 | AR-12 | Derived current / NOT STARTED |
 | Staging | Partial non-production foundations only |
 | Production authorized | NO |
 | Production enabled | NO |
 | Current umbrella | Post-AR-11 Functional Closure #399 |
-| Current next work | F1/F2, then N1…N5 |
+| Current live execution tracker | #441 |
 
 ## Historical/evidence context
 
