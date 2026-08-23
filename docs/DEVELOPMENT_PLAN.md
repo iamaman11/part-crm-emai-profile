@@ -4,38 +4,41 @@
 **Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
 **Mandatory requirements:** `APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`  
 **Quality contract:** `ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
-**Tracking:** #266  
+**Tracking:** #266 / live pre-PF-1 tracker #441  
 **Accepted product phase:** Phase 2I  
 **Accepted architecture checkpoint:** AR-11  
 **Derived current architecture slice:** AR-12 — NOT STARTED  
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `false`
 
-This file is a projection of the canonical program. It is not a second roadmap or lifecycle authority.
+This file is a projection of the canonical program. It is not a second roadmap or lifecycle authority. Current moving execution state must be read from protected `main` + #441/#399; stale projection text never overrides them.
 
 ## 1. Current state
 
 - AR-0…AR-11: accepted.
 - AR-12: derived current in the static sequence, implementation NOT STARTED.
 - Post-AR-11 Functional Closure #399 blocks AR-12 entry.
+- F1/F2 and N1 are accepted; **N2 is NEXT**.
+- N3/N4/N5 remain sequentially blocked; PF-1 #430 remains blocked until N5 acceptance and a fresh PF-1 entry reread.
+- Closed PR #428 is a superseded pre-normalization PF-2 checkpoint; PF-2 later starts from a fresh branch based on accepted PF-1 `main`.
 - Production remains disabled/fail-closed.
 - `source_present != production_enabled` is binding.
 
 ## 2. Current implementation order
 
 ```text
-F1  Release Set breaking-contract version discipline
+F1  Release Set breaking-contract version discipline                  ACCEPTED
 +
-F2  permanent architecture foundations
+F2  permanent architecture foundations                               ACCEPTED
     - application mandatory requirements
     - opsctl pure-core / adapter boundary
     - opsctl doctor diagnostic boundary
     - canonical JSON/digest discipline
     - Python role/effect boundary
  ->
-N1  AR-2 runtime/resource topology current-authority retirement
+N1  AR-2 runtime/resource topology current-authority retirement      ACCEPTED
  ->
-N2  AR-6 Python-estate authority retirement + role/effect normalization
+N2  AR-6 Python-estate authority retirement + role/effect norm.      NEXT
  ->
 N3  AR-7 current GitHub-governance normalization
  ->
@@ -45,7 +48,7 @@ N5  AR-10 runtime semantic-authority retirement
  ->
 PF-1 #430 typed lifecycle + deterministic bounded-projection inventory cutover
  ->
-PF-2 Hosted Operational Evidence / Draft #428
+PF-2 Hosted Operational Evidence from a fresh accepted PF-1 base
  ->
 PF-3 #431 typed Architecture Fitness Baseline
  ->
@@ -85,6 +88,8 @@ natural owner proved
 -> DEAD predecessor deleted/demoted
 -> history preserved in Git/evidence
 ```
+
+The exact N2→N5 handoff conditions live in #441. N2–N5 prepare unambiguous natural owners and retire predecessors; they do not pre-build a generic PF-1 projection/compiler framework.
 
 ## 4. Permanent application architecture rules
 
@@ -184,6 +189,8 @@ The AR-6/AR-10/AR-11 Python estate overlay chain is retired by N2. No successor 
 
 ## 8. PF-1 target
 
+PF-1 starts only after N5 acceptance and a fresh #430 entry reread against then-current protected `main`.
+
 ```text
 outer Git/GitHub raw observations
 -> typed LifecycleEvaluator
@@ -206,6 +213,8 @@ PF-1 must not build `GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet`.
 Legacy Node lifecycle and Python architecture inventory/projection current owners are deleted after parity + zero-caller/zero-unique-invariant proof.
 
 ## 9. PF-2 target
+
+PF-2 starts from a new clean branch based only on accepted PF-1 protected `main`; closed PR #428 is historical/selective-salvage material only.
 
 ```text
 outer GitHub/provider observation
