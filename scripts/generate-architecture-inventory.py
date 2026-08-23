@@ -37,7 +37,6 @@ LIFECYCLE_PROJECTION_POLICY = "architecture/lifecycle-projection-policy.json"
 SUBJECTS = {
     "credential_authority": "architecture/credential-authority.json",
     "credential_lifecycle": "architecture/credential-lifecycle.json",
-    "operator_contract": "architecture/operator-contract.json",
     "profile_security": "architecture/profile-security.json",
 }
 
@@ -332,14 +331,11 @@ def file_sha256(relative: str) -> str:
 def subject_projection() -> dict[str, object]:
     authority = load_json(SUBJECTS["credential_authority"])
     lifecycle = load_json(SUBJECTS["credential_lifecycle"])
-    operator = load_json(SUBJECTS["operator_contract"])
     profile = load_json(SUBJECTS["profile_security"])
     if authority.get("kind") != "CURRENT_CREDENTIAL_AUTHORITY" or authority.get("status") != "current":
         raise ValueError("current credential authority composition root is invalid")
     if lifecycle.get("kind") != "CREDENTIAL_LIFECYCLE_AUTHORITY" or lifecycle.get("status") != "current":
         raise ValueError("current credential lifecycle authority is invalid")
-    if operator.get("kind") != "OPERATOR_CONTRACT_AUTHORITY" or operator.get("mode") != "READ_ONLY_METADATA_ONLY":
-        raise ValueError("current operator authority is invalid")
     if profile.get("kind") != "PROFILE_SECURITY_AUTHORITY" or profile.get("status") != "current":
         raise ValueError("current profile security authority is invalid")
     domains = [entry.get("id") for entry in profile.get("security_domains", [])]
@@ -353,10 +349,8 @@ def subject_projection() -> dict[str, object]:
         "sources": {name: {"path": path, "sha256": file_sha256(path)} for name, path in SUBJECTS.items()},
         "credential_lifecycle_concern_ids": [entry.get("id") for entry in lifecycle.get("concerns", [])],
         "profile_security_domain_ids": domains,
-        "operator_mode": operator.get("mode"),
         "completion_provenance": {
             "lifecycle_candidate": "docs/evidence/ar8-completion-lifecycle-candidate.json",
-            "operator_rehearsal_candidate": "docs/evidence/ar8-operator-rehearsal-candidate.json",
             "secret_transport_successor_candidate": "docs/evidence/ar8-d-secret-transport-successor-candidate.json",
         },
         "source_completion": {
@@ -502,7 +496,6 @@ def build_inventory() -> dict[str, object]:
     documentation["current_credential_authority"] = SUBJECTS["credential_authority"]
     documentation["credential_registry_provenance"] = "architecture/credential-authority-ar8b.json"
     documentation["credential_lifecycle"] = SUBJECTS["credential_lifecycle"]
-    documentation["operator_contract"] = SUBJECTS["operator_contract"]
     documentation["profile_security"] = SUBJECTS["profile_security"]
     documentation["ar8_completion_tracking_issue"] = 361
     documentation["ar8_completion_pr"] = 362
