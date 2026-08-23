@@ -1,9 +1,4 @@
 use crate::canonical::{DEFAULT_MAX_JSON_DEPTH, parse_strict_json_with_limits};
-use crate::release::historical_v2::{
-    RELEASE_SET_ID_PREFIX as HISTORICAL_V2_ID_PREFIX,
-    ReleaseSetManifest as HistoricalReleaseSetV2,
-    SchemaCompatibilityWindow as HistoricalSchemaCompatibilityWindow,
-};
 use crate::release::model::ReleaseModelError;
 use crate::release::v3_dto::{MAX_RELEASE_SET_V3_BYTES, decode_release_set_v3};
 use crate::release::v3_output::{RELEASE_SET_V3_ID_PREFIX, render_release_set_v3};
@@ -12,6 +7,13 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+
+#[allow(dead_code)]
+mod historical_v2;
+use historical_v2::{
+    RELEASE_SET_ID_PREFIX as HISTORICAL_V2_ID_PREFIX, ReleaseSetManifest as HistoricalReleaseSetV2,
+    SchemaCompatibilityWindow as HistoricalSchemaCompatibilityWindow,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseSetDocumentVersion {
@@ -409,15 +411,27 @@ mod tests {
         let mut components = BTreeMap::new();
         components.insert(
             "control_plane".to_owned(),
-            component("control_plane", "components/control-plane.tar", &"1".repeat(64)),
+            component(
+                "control_plane",
+                "components/control-plane.tar",
+                &"1".repeat(64),
+            ),
         );
         components.insert(
             "secret_resolver".to_owned(),
-            component("secret_resolver", "components/secret-resolver.tar", &"2".repeat(64)),
+            component(
+                "secret_resolver",
+                "components/secret-resolver.tar",
+                &"2".repeat(64),
+            ),
         );
         components.insert(
             "runtime_bundle".to_owned(),
-            component("runtime_bundle", "components/runtime-bundle.tar", &"3".repeat(64)),
+            component(
+                "runtime_bundle",
+                "components/runtime-bundle.tar",
+                &"3".repeat(64),
+            ),
         );
         let schema = |component: &str| SchemaCompatibilityWindowDto {
             database_component: component.to_owned(),
@@ -532,7 +546,11 @@ mod tests {
         let error = LoadedReleaseSet::parse(&serde_json::to_vec(&value)?)
             .err()
             .ok_or("v2 document with v3-only D1 field unexpectedly accepted")?;
-        assert!(error.to_string().contains("historical Release Set v2 decoder rejected"));
+        assert!(
+            error
+                .to_string()
+                .contains("historical Release Set v2 decoder rejected")
+        );
         Ok(())
     }
 
@@ -555,7 +573,7 @@ mod tests {
 
     #[test]
     fn unknown_release_schema_is_rejected() {
-        let result = LoadedReleaseSet::parse(br#"{\"schema_version\":4}"#);
+        let result = LoadedReleaseSet::parse(br#"{"schema_version":4}"#);
         assert!(matches!(
             result,
             Err(error) if error

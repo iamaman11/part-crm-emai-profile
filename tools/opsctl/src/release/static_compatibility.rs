@@ -124,7 +124,10 @@ fn protocols_match(
     Ok(true)
 }
 
-fn schemas_match(root: &Path, manifest: &ReleaseCompatibilityView) -> Result<bool, ReleaseModelError> {
+fn schemas_match(
+    root: &Path,
+    manifest: &ReleaseCompatibilityView,
+) -> Result<bool, ReleaseModelError> {
     let expected_repository_identity = match &manifest.schemas.d1_identity {
         D1SchemaIdentity::CurrentV3RepositoryIdentitySha256(value) => value,
         D1SchemaIdentity::HistoricalV2EvolutionAuthoritySha256(_) => return Ok(false),
@@ -211,7 +214,10 @@ fn build_provenance_matches(
     Ok(true)
 }
 
-fn profiles_match(root: &Path, manifest: &ReleaseCompatibilityView) -> Result<bool, ReleaseModelError> {
+fn profiles_match(
+    root: &Path,
+    manifest: &ReleaseCompatibilityView,
+) -> Result<bool, ReleaseModelError> {
     let authority = ReleaseArchitecture::load(root)
         .map_err(|error| ReleaseModelError::new(format!("release authority invalid: {error}")))?;
     Ok(manifest

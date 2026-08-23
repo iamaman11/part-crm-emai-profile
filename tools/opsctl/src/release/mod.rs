@@ -12,7 +12,6 @@ pub mod component_manifest;
 pub mod digest;
 pub mod document;
 pub mod finalize;
-mod historical_v2;
 pub mod input_topology;
 pub mod model;
 pub mod source;
