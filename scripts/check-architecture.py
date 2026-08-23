@@ -9,7 +9,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from accepted_phase_provenance import load_ledger, provenance_self_test, validate_plan_provenance
+from accepted_phase_provenance import load_ledger, provenance_self_test
 
 PURE_CRATE_ALLOWLISTS: dict[str, set[str]] = {
     "profile-platform-primitives": set(),
@@ -187,11 +187,9 @@ def check(root: Path) -> list[str]:
             errors.append(f"missing governed pure crates: {sorted(missing)}")
         try:
             ledger = load_ledger(root / "architecture" / "accepted-phases.json")
-            plan = (root / "docs" / "DEVELOPMENT_PLAN.md").read_text(encoding="utf-8")
-            errors.extend(validate_plan_provenance(plan, ledger))
-            provenance_self_test(plan, ledger)
+            provenance_self_test(ledger)
         except (OSError, ValueError) as error:
-            errors.append(f"accepted phase provenance validation failed: {error}")
+            errors.append(f"accepted phase ledger validation failed: {error}")
         policies = (
             (PHASE2G_POLICY, "Phase 2G realtime"),
             (PHASE2H_POLICY, "Phase 2H UI"),
@@ -227,7 +225,7 @@ def main() -> int:
         for error in errors:
             print(error, file=sys.stderr)
         return 1
-    print("Architecture dependency boundaries and accepted phase provenance are valid.")
+    print("Architecture dependency boundaries and accepted phase ledger are valid.")
     return 0
 
 

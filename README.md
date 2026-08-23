@@ -1,147 +1,85 @@
 # Browser Profile Platform
 
-Browser Profile Platform is a standalone, provider-neutral control plane for governed browser-profile, client, mailbox, device and notification workflows. The Rust control plane, Cloudflare adapters, Windows Profile Bridge, Camouhost runtime boundary and React operator UI are developed as one product with explicit authority, privacy and production-capability boundaries.
-
-## Current state
-
-- **Accepted repository-local product phase:** Phase 2I. Immutable provenance: [`architecture/accepted-phases.json`](architecture/accepted-phases.json).
-- **Architecture Re-baseline v3:** active, tracked by issue #266.
-- **Accepted top-level architecture slices:** AR-0 through AR-11; AR-8A…AR-8F accepted subslices.
-- **Current accepted checkpoint:** AR-11 — Release-set / Promotion Architecture.
-- **Current architecture slice:** AR-12 — Fresh Rehearsal Environment, **DERIVED CURRENT / NOT STARTED**.
-- **Current execution umbrella:** Post-AR-11 Functional Closure #399.
-- **Current next work:** **F1/F2**, followed by **N1…N5**. PF-1 #430 is blocked until those normalization transactions are accepted.
-- Issue #375 is closed historical hardening; it is not a current blocker or execution authority.
-- **Architecture complete:** `false`.
-- **Production Core gate:** `BLOCKED`.
-- **Production readiness:** `production_ready=false`.
-
-The binding pre-AR-12 execution path is:
+Browser Profile Platform is one modular product for governed users, clients/customer cards, browser profiles, mailbox capabilities, devices and notifications. Rust control-plane code, Cloudflare adapters, Windows Profile Bridge, Camouhost and the React operator UI share one source/data/compatibility lineage while production exposure is controlled independently by Release / Capability Profiles.
 
 ```text
-F1 Release Set breaking-contract version discipline
-+
-F2 permanent application/opsctl/doctor/canonical-JSON/Python foundations
- ->
-N1 AR-2 runtime/resource-topology authority retirement
- ->
-N2 AR-6 Python-estate authority retirement + role/effect normalization
- ->
-N3 AR-7 current GitHub-governance normalization
- ->
-N4 bounded AR-8 operator/provenance cleanup
- ->
-N5 AR-10 runtime semantic-authority retirement
- ->
-PF-1 #430 typed lifecycle + deterministic bounded-projection inventory cutover
- ->
-PF-2 Universal Hosted Operational Evidence / Draft PR #428
- ->
-PF-3 #431 typed Rust Architecture Fitness Baseline
- ->
-fresh #399/#421 re-baseline
- ->
-FC-6
- ->
-FC-7
- ->
-AR-12 implementation entry
+source_present != production_enabled
 ```
 
-F1/F2/N1…N5 are foundation/normalization transactions, not new AR/PF lifecycle slices. `source_present != production_enabled` remains binding.
-
-## Documentation and authority
-
-Start with [`docs/INDEX.md`](docs/INDEX.md).
-
-The single current program authority is [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md). Prospective development must satisfy [`docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md), [`docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`](docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md), [`docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`](docs/OPSCTL_ARCHITECTURE_BOUNDARY.md), [`docs/OPSCTL_DOCTOR_CONTRACT.md`](docs/OPSCTL_DOCTOR_CONTRACT.md) and [`docs/PYTHON_USAGE_BOUNDARY.md`](docs/PYTHON_USAGE_BOUNDARY.md).
-
-Current prerequisite/closure execution is specified by:
-
-- [`docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — F1/F2 + N1…N5;
-- [`docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md) — PF/FC execution umbrella;
-- [`docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) — PF-1 contract;
-- [`docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`](docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md) — PF-3 typed fitness contract.
-
-`docs/status.json`, `architecture/inventory.json`, `docs/DEVELOPMENT_PLAN.md` and README/index surfaces are projections/navigation, never independent semantic or lifecycle authority. Transitional projection lag must not be interpreted as permission to skip F/N/PF/FC prerequisites.
-
-## Target architecture
+## Current execution state
 
 ```text
-canonical natural owner
--> typed policy/contracts
--> bounded-context domain + application
--> explicit ports/adapters/effect capabilities
--> composition roots
--> Release / Capability Profile admission
--> production exposure
+F1/F2 ACCEPTED
+-> N1 ACCEPTED
+-> #454 NEXT — sole actual pre-N2 implementation transaction
+-> N2 -> N3 -> N4 -> N5 authority retirement
+-> PF-1 lifecycle + bounded inventory cutover
+-> PF-2 minimal hosted evidence pipeline
+-> PF-3 Architecture Fitness + architecture-forming freeze
+-> FC-6 preflight (fresh #399/#421 live re-baseline) + staging proof
+-> FC-7 closeout
+-> AR-12 fresh-environment rehearsal
+-> AR-13 rotation rehearsal
+-> AR-14 remote-recovery rehearsal
+-> AR-15 Windows updater/delivery implementation + proof
+-> AR-16 final whole-project audit only
+-> AR-17 qualification / Production Core gate decision only
+-> PC-1 Production Core v1
 ```
 
-Permanent themes: one semantic authority, bounded-context ownership, inward dependencies, provider-free domain/application core, typed critical IDs/state/contracts, explicit effects, context-owned persistence, typed configuration, versioned durable/integration contracts, frontend projection only, touch-to-converge and cutover-to-deletion.
-
-`one main` means one product architecture/source/data lineage and one capability-authority model; it does not require the Worker, Profile Bridge, Camouhost and `opsctl` to be one OS executable.
-
-## `opsctl` and `doctor`
-
-`opsctl` is standalone offline operator/policy/planning/verification/projection tooling with a strict Pure Core / Effect Shell boundary:
+AR-12 is **NOT STARTED**. Production remains fail-closed:
 
 ```text
-filesystem / JSON / explicit observations
--> adapters + versioned DTOs
--> typed semantic inputs
--> PURE CORE
--> typed results
--> output adapters
+architecture_complete=false
+production_core_gate=BLOCKED
+production_ready=false
+production_mutation=false
 ```
 
-Required zero budgets include:
+N2–N5 are sequential normalization transactions, not new architecture programs. Their initial repository-wide predecessor discovery may be shared as one read-only ephemeral pass after accepted #454. The mandatory post-PF-3 #399/#421 re-baseline executes as FC-6 preflight, not another implementation phase. FC-7 is a closeout checkpoint unless proof exposes a concrete defect.
+
+## Documentation authority
+
+Start with [`docs/INDEX.md`](docs/INDEX.md). Canonical program authority is [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md); mutable pre-PF-1 state is #441.
+
+Key references:
+
+- [`docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) — permanent architecture rules;
+- [`docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — #454/N2–N5 retirement contract;
+- #454 — sole current pre-N2 implementation transaction;
+- [`docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) / #430 — PF-1;
+- [`docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`](docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md) / #431 — PF-3;
+- [`docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md), #399, #421 — Functional Closure;
+- [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — compact developer projection and efficiency rules;
+- [`docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md`](docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md) — shared exact-head/guarded-merge acceptance;
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contributor workflow and GitHub-plugin/no-local-`gh` environment guidance.
+
+Generated status/inventory/README/developer-plan surfaces are projections, not semantic/lifecycle authority.
+
+## Architecture direction
 
 ```text
-serde_json::Value crossing adapter -> pure core = 0
-filesystem/process/network/provider effects in pure core = 0
-Product Runtime -> opsctl/opsctl-core = 0
-opsctl provider/network/process authority = 0
-opsctl -> Python semantic child process = 0
-global authority bag = 0
+one semantic fact -> one natural owner
+bounded contexts + inward dependencies
+Pure Core / Effect Shell
+observation != policy decision
+explicit typed effects/contracts
+context-owned persistence
+generated projection != semantic source
+no current consumer + no durable obligation -> no compatibility bridge
+cutover -> zero callers -> zero unique current invariants -> delete DEAD predecessor
+Release / Capability Profile = sole production-enable authority
 ```
 
-`opsctl doctor` remains read-only local diagnostic composition only. It must not execute Python/Node/Git/GitHub/provider subprocess/API calls, use network/provider/secrets/runtime, mutate state, duplicate lifecycle/release/evidence/domain policy, or become a global authority catalog.
+PF-1 compiler composes validated bounded projections; it does not become a global authority brain. PF-2 stays a minimal evidence pipeline rather than a provider/plugin platform. PF-3 reuses specialized checkers through a small typed enforcement index rather than building a generic linter framework.
 
-## PF-1 / PF-3 direction
-
-PF-1 uses a typed `LifecycleEvaluator` plus bounded minimal inventory projections. It must not introduce `GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet`, and `architecture/inventory.json` remains generated output rather than compiler input.
-
-PF-3 semantic authority belongs to typed Rust, for example:
-
-```text
-FitnessRuleRegistry
--> evaluator / enforcement mapping
--> positive + negative fixtures
--> Architecture Fitness Gate
--> optional generated report/index projection
-```
-
-A manually maintained semantic `architecture/architecture-fitness-policy.json` is explicitly **not** the target owner.
+Historical AR artifacts preserve evidence, not a permanent right for old JSON/Python/Node implementation shape to remain current architecture.
 
 ## Production capability model
 
-Production enablement is owned only by the accepted Release / Capability Profile path. Environment flags or UI visibility cannot independently authorize a capability.
+PC-1 is the first production release and is bounded to identity/users, clients/customer cards, browser profiles and bulk operations, client↔profile binding, grants/access, generations/sessions/devices, required encrypted profile persistence/restore, real Camoufox, Windows Profile Bridge + AR-15 production-grade updater/delivery, and Core-required audit/health/readiness/observability/recovery foundations.
 
-Current intended Production Core includes foundation, identity/users, clients/customer cards, browser profiles, profile runtime, Camoufox, Windows Profile Bridge delivery/runtime and required notification/audit/health/readiness/observability foundations. Mailbox administration/read/bindings/jobs/outbound code may remain present and tested in the same `main` while production-disabled; later PC profiles enable them progressively.
-
-After Functional Closure the fail-closed program continues:
-
-```text
-AR-12 -> AR-13 -> AR-14 -> AR-15
--> AR-16 final whole-project convergence audit
--> AR-17 architecture closeout / Production Core gate authorization
--> PC-1 Production Core v1
--> PC-2 Mailbox Administration
--> PC-3 Mailbox Jobs / Automation
--> PC-4 Outbound / later capabilities
-```
-
-No production provisioning or promotion is authorized in AR-0…AR-17. AR-17 may set `architecture_complete=true` and `production_core_gate=AUTHORIZED`, while `production_ready=false`; PC-1 owns first Production Core enablement.
+Mailbox administration, mailbox jobs/automation and outbound mail may remain implemented/tested on the same protected `main` while production-disabled. Later PC profiles enable them through the same architecture and Release / Capability Profile authority.
 
 ## Fast local verification
 
@@ -150,13 +88,4 @@ python scripts/verify-fast.py
 python scripts/verify-fast.py --with-compile
 ```
 
-Full acceptance requires all applicable permanent GitHub workflows and protected required contexts to pass on one unchanged exact PR head, zero blocking reviews/unresolved threads, `behind_by=0`, guarded merge bound to the expected head and accepted-main reread.
-
-## Development and security
-
-- Contributor workflow: [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- Security policy: [`SECURITY.md`](SECURITY.md)
-- Product intent: [`docs/PRODUCT.md`](docs/PRODUCT.md)
-- Future CRM boundary: [`docs/FUTURE_DEVELOPMENT.md`](docs/FUTURE_DEVELOPMENT.md)
-
-Do not infer production authorization or current execution order from source presence, UI visibility, generated projections, an open PR, a historical plan or synthetic evidence.
+Permanent acceptance still requires one unchanged exact PR head under current protected governance. Stage documents do not clone that checklist; `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md` owns it.

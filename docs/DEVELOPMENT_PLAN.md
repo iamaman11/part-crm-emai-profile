@@ -1,251 +1,282 @@
 # Browser Profile Platform — Development Plan
 
 **Document status:** GENERATED_PROJECTION  
-**Current architecture/program authority:** `ARCHITECTURE_REBASELINE_V3_PLAN.md`  
-**Mandatory requirements:** `APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`  
-**Quality contract:** `ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`  
-**Tracking:** #266  
-**Accepted product phase:** Phase 2I  
-**Accepted architecture checkpoint:** AR-11  
-**Derived current architecture slice:** AR-12 — NOT STARTED  
+**Canonical program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
+**Live execution tracker:** #441  
+**Functional Closure umbrella:** #399  
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `false`
 
-This file is a projection of the canonical program. It is not a second roadmap or lifecycle authority.
+This is a compact developer-facing execution projection, not a second roadmap or semantic authority. Protected `main`, the canonical plan and the live tracker win over stale prose. Exact moving SHAs belong in GitHub state, not in this file.
+
+```text
+source_present != production_enabled
+```
 
 ## 1. Current state
 
-- AR-0…AR-11: accepted.
-- AR-12: derived current in the static sequence, implementation NOT STARTED.
-- Post-AR-11 Functional Closure #399 blocks AR-12 entry.
-- Production remains disabled/fail-closed.
-- `source_present != production_enabled` is binding.
+```text
+F1/F2  ACCEPTED
+N1     ACCEPTED
+#454   NEXT — sole actual pre-N2 implementation transaction
+N2     BLOCKED on #454
+N3     BLOCKED on N2
+N4     BLOCKED on N3
+N5     BLOCKED on N4
+PF-1   BLOCKED on N5 + fresh #430 entry reread
+AR-12  NOT STARTED
+production_mutation = false
+```
 
-## 2. Current implementation order
+#399/#421 preserve later Functional Closure obligations. They do not create another pre-N2 phase.
+
+## 2. One execution discipline, not one ceremony per issue
+
+Quality comes from strong, reusable machine proofs and clear semantic ownership, not from repeating large acceptance matrices in every issue.
+
+For every bounded authority cutover:
 
 ```text
-F1  Release Set breaking-contract version discipline
+fresh protected main
+-> discover current consumers/callers + natural owner
+-> preserve still-valid product/security/durable invariants
+-> switch current callers
+-> old_current_callers = 0
+-> old_unique_current_invariants = 0
+-> delete/demote DEAD predecessor
+-> targeted fast/local proof
+-> one unchanged exact head through applicable permanent CI/governance
+-> guarded merge bound to expected head
+-> accepted-main reread
+```
+
+The shared merge/governance protocol is owned by `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md`; stage documents should describe only their stage-specific semantic DoD instead of cloning the same CI/review checklist.
+
+Rules:
+
+- small reviewable PRs are preferred; PR count must not create new roadmap phases;
+- no compatibility bridge without a named current consumer or durable/persisted/migration obligation;
+- no 1:1 successor registry for a retired JSON/Python/Node/table authority;
+- no new plan document when an existing canonical owner/tracker can express the requirement;
+- use `python scripts/verify-fast.py` and targeted tests during iteration; permanent CI is the acceptance proof, not the edit/compile loop;
+- observations may be ephemeral PR/CI artifacts; do not commit a new authority file merely to record a one-time caller audit;
+- uncertainty fails closed.
+
+## 3. #454 — Release Set v2 bounded correction
+
+F1 already made Release Set v3 the current writer/model. #454 answers one question: **does executable historical-v2 compatibility have a real current consumer or durable obligation?**
+
+Rediscover on the exact execution baseline:
+
+- `architecture/release-set-v2.json` callers/references;
+- historical-v2 decode/verification callers;
+- promotion, rollback, deployment-snapshot and expected-current paths;
+- actual current staging Release Set identity;
+- actual current known-good rollback identity;
+- any explicit current #399/#421/FC-6 durable v2 input;
+- hosted workflows/releases/evidence that are real current inputs rather than provenance.
+
+Then choose exactly one outcome:
+
+```text
+A. current v2 consumer exists
+   -> name exact consumer + exact identity/version
+   -> keep only minimum isolated historical-v2 read/verify path
+   -> current writer/model remains v3-only
+   -> v2 -> v3 semantic coercion = 0
+   -> explicit retirement condition
+
+B. current v2 consumer = NONE
+   -> retire executable v2 compatibility/current-v2 authority
+   -> remove compatibility-only code/workflows/tests/fixtures after caller/invariant proof
+   -> preserve history in Git/releases/evidence only
+```
+
+#454 stage-specific DoD is intentionally small:
+
+```text
+current_writer = v3
+current_v2_semantic_authority = 0
+v2_consumer = EXACT_ID | NONE
+v2_executable = MINIMUM_ISOLATED | RETIRED
+v2_to_v3_semantic_coercion = 0
+production_mutation = false
+```
+
+The shared transaction protocol supplies the zero-caller, exact-head, review and merge proofs. Only accepted #454 protected `main` may become the N2 base.
+
+## 4. N2–N5 — canonical-authority cutover group
+
+N2–N5 remain separate sequential transactions because they retire different semantic owners, but they are **one normalization group**, not four new architecture programs.
+
+After #454 acceptance, perform one read-only discovery pass across the N2–N5 predecessor estate to map current callers, current invariants and likely natural owners. Keep this map ephemeral (working notes / PR discussion / CI artifact), not as a new checked-in authority registry. Before each N2/N3/N4/N5 PR, refresh only the affected reachability plus deltas since the common discovery.
+
+### N2 — Python estate
+
+Target:
+
+```text
+Python file existence != Python semantic authority
+```
+
+- retire AR-6/AR-10/AR-11 per-file Python-estate authority and `scripts/python-estate-ar6.py` when dead;
+- govern Python by source-derived role/effects; do not create a successor file registry;
+- remove retiring Python/AR sentinels from `opsctl doctor` and repository-root detection;
+- keep `runtime/camouhost/real.py` as the real Camoufox outer-runtime adapter behind Profile Bridge + versioned IPC + `runtime-lock.json`;
+- keep `runtime/camouhost/main.py` synthetic/test-only;
+- do not rewrite legitimate Python tests/generators/adapters to Rust merely for symmetry;
+- for obsolete helpers: caller=0 -> delete; caller>0 -> move only the still-valid responsibility to its natural owner.
+
+### N3 — GitHub governance
+
+Replace historical overlay reconstruction with:
+
+```text
+current desired governance configuration
 +
-F2  permanent architecture foundations
-    - application mandatory requirements
-    - opsctl pure-core / adapter boundary
-    - opsctl doctor diagnostic boundary
-    - canonical JSON/digest discipline
-    - Python role/effect boundary
- ->
-N1  AR-2 runtime/resource topology current-authority retirement
- ->
-N2  AR-6 Python-estate authority retirement + role/effect normalization
- ->
-N3  AR-7 current GitHub-governance normalization
- ->
-N4  bounded AR-8 operator/provenance cleanup
- ->
-N5  AR-10 runtime semantic-authority retirement
- ->
-PF-1 #430 typed lifecycle + deterministic bounded-projection inventory cutover
- ->
-PF-2 Hosted Operational Evidence / Draft #428
- ->
-PF-3 #431 typed Architecture Fitness Baseline
- ->
-fresh #399/#421 re-baseline
- ->
-FC-6
- ->
-FC-7
- ->
-AR-12 implementation entry
+live GitHub observation
+-> typed governance evaluation
 ```
 
-F1/F2/N1…N5 are foundation/normalization transactions, not new AR/PF lifecycle slices. `architecture/architecture-program-sequence.json` remains unchanged.
+Declarative desired configuration for an external system is legitimate data. N3 does not move GitHub/network authority into `opsctl` and does not require rewriting all GitHub automation in Rust.
 
-## 3. Why this normalization exists
+### N4 — operator/provenance
 
-The accepted historical AR work is not being reopened. The cleanup removes transitional current semantic intermediaries so PF-1 does not become a mechanical Rust port of old JSON/Python/Node authority machinery.
+Typed Rust command/effect metadata becomes the semantic owner. Prefer metadata colocated with existing command definitions and aggregate it through the existing parser/composition root; do not build a second generic command framework.
 
-Target examples:
+`architecture/operator-contract.json` must not authorize Rust behavior. If no current external consumer requires a JSON view, delete it after caller proof; otherwise it is generated projection only. AR-8 provenance leaves normal current semantic paths.
+
+### N5 — runtime cutover authority
+
+For each still-current field in `architecture/runtime-cutover-ar10.json`:
 
 ```text
-AR-2 topology -> Wrangler/provider config + Product ownership
-AR-6 Python estate -> repository/source role/effect policy
-AR-7 governance -> current desired governance data + live observation
-AR-8 operator contract -> Rust CommandRegistry/effect registry
-AR-9 D1 -> SQL + typed Rust policy                 [already cut over]
-AR-10 runtime -> Product Rust + runtime-lock + Camouhost adapter + tests
+not current -> retire with predecessor
+current -> Product Rust | runtime-lock | Bridge/IPC | governance | release/lifecycle natural owner
 ```
 
-For every cutover:
+N5 is field disposition + caller cutover + deletion, not a new runtime framework. Do not create `RuntimeCutoverRegistryV2` or an equivalent successor authority.
+
+## 5. PF-1 → PF-3 — final architecture-forming work
+
+### PF-1 — lifecycle + bounded inventory
+
+PF-1 replaces the legacy Node lifecycle and Python inventory/projection cluster with typed lifecycle evaluation and bounded owner projections.
+
+Hard rule:
 
 ```text
-natural owner proved
--> callers switched
--> old callers = 0
--> old unique current invariants = 0
--> DEAD predecessor deleted/demoted
--> history preserved in Git/evidence
+PF-1 compiler may COMPOSE facts
+PF-1 compiler may NOT DISCOVER domain semantics
+PF-1 compiler may NOT DECIDE bounded-subject policy
 ```
 
-## 4. Permanent application architecture rules
+Target shape:
 
 ```text
-one semantic fact -> one natural owner
-bounded contexts own business semantics
-inward dependency direction
-Pure Core / Effect Shell
-observation != policy decision
-explicit effect capabilities
-typed critical IDs/states/contracts
-context-owned persistence
-Release Profile = sole production-enable authority
-frontend = projection, not security boundary
-generated projection != semantic source
+natural owner -> validated narrow projection --\
+natural owner -> validated narrow projection ----> ArchitectureInventoryCompiler
+natural owner -> validated narrow projection --/
 ```
 
-Do not create global authority bags, universal business repositories, generic plugin/DI/service-locator frameworks or second production feature-flag systems.
+No `GlobalRepositoryAuthorityLoader`, `GlobalAuthoritySet`, giant policy compiler or 1:1 port of historical AR-qualified tables.
 
-## 5. `opsctl` development boundary
+Before preserving a tracked `architecture/inventory.json` write path as a permanent developer contract, PF-1 must identify its concrete current consumer. If no durable/current consumer requires checked-in bytes, an on-demand generated projection is preferred; if a real consumer exists, keep the minimum deterministic generated projection. In either case it remains output, never semantic input.
 
-`tools/opsctl` is standalone offline operator/policy/planning/verification/projection tooling.
+Similarly, command surface should stay minimal: do not keep `render/check/write/inspect` as four permanent commands unless each has a distinct proved consumer/value.
 
-```text
-JSON/filesystem/local artifacts
-        ↓
-adapters + versioned DTOs
-        ↓
-typed semantic inputs
-        ↓
-PURE CORE
-        ↓
-typed results
-        ↓
-output adapter
-```
+### PF-2 — minimal hosted evidence pipeline
 
-Hard zero requirements:
-
-```text
-serde_json::Value crossing adapter -> pure core = 0
-filesystem/process/network/provider effects in pure core = 0
-Product Runtime -> opsctl/opsctl-core = 0
-opsctl provider/network/process authority = 0
-opsctl -> Python semantic child process = 0
-global authority bag = 0
-```
-
-A small internal `opsctl-core` crate is preferred when it materially enforces this boundary at compile time.
-
-## 6. `opsctl doctor`
-
-`doctor` remains supported, but its permanent role is narrowed to **read-only local diagnostic composition**.
-
-It may:
-
-```text
-resolve repository root
-read local files/metadata
-strictly decode local contracts through owned adapters
-aggregate typed diagnostic results
-render machine/human report
-```
-
-It must not:
-
-```text
-call Python/Node/Git/GitHub/provider subprocess/API
-access network/providers/secrets
-launch runtime/browser
-perform mutation
-duplicate domain/release/lifecycle/evidence policy
-maintain a global authority list as semantic truth
-```
-
-Current dependencies on AR-6 Python estate, `operator-contract.json`, Python inventory generator and generated/retired root sentinels are transitional. N2/N4/PF-1 remove them. PF-3 prevents regression.
-
-## 7. Python boundary
-
-Python is allowed by role/effects, not by a permanent file whitelist.
-
-Allowed examples:
-
-```text
-runtime/camouhost/real.py -> genuine Camoufox outer runtime adapter
-runtime/camouhost/main.py -> synthetic/test fixture
-repository/source validators/observers
-deterministic generators/renderers
-tests
-developer-local orchestration
-outer observation adapters where justified
-```
-
-Forbidden permanent roles include duplicate Product/release/D1/lifecycle/evidence/fitness semantic authority, Profile Bridge runtime bypass, hidden provider mutation and secret readback.
-
-The AR-6/AR-10/AR-11 Python estate overlay chain is retired by N2. No successor JSON/TOML/YAML/Rust list of every Python file is allowed.
-
-## 8. PF-1 target
-
-```text
-outer Git/GitHub raw observations
--> typed LifecycleEvaluator
--> DerivedLifecycleStateV1
-
-D1InventoryProjection
-RuntimeTopologyProjection
-ApplicationInventoryProjection
-OperatorInventoryProjection
-GovernanceInventoryProjection
-RuntimeInventoryProjection
-CredentialInventoryProjection
-ReleaseInventoryProjection
--> pure ArchitectureInventoryCompiler
--> architecture/inventory.json
-```
-
-PF-1 must not build `GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet`.
-
-Legacy Node lifecycle and Python architecture inventory/projection current owners are deleted after parity + zero-caller/zero-unique-invariant proof.
-
-## 9. PF-2 target
+PF-2 is an evidence pipeline, not a universal provider/plugin framework:
 
 ```text
 outer GitHub/provider observation
--> strict versioned DTO
--> typed Rust EvidencePolicy
+-> strict secret-free versioned DTO
+-> typed pure EvidencePolicy
 -> HostedEvidenceEnvelopeV1
--> canonical durable JSON
+-> canonical bytes/digest
 -> immutable artifact/attestation
 ```
 
-Network/provider reads and clocks remain outside `opsctl` pure policy.
+Add abstraction only after multiple concrete consumers prove the need. Network/provider reads and publication stay outside pure policy.
 
-## 10. PF-3 target
+### PF-3 — small enforcement index + freeze
 
-Fitness semantics are typed Rust:
-
-```text
-FitnessRuleRegistry
--> evaluator/enforcement mapping
--> positive/negative fixtures
--> Architecture Fitness Gate
--> optional generated report/index
-```
-
-A manually maintained semantic `architecture/architecture-fitness-policy.json` is not the target.
-
-PF-3 permanently enforces authority uniqueness, dependency/effect boundaries, `opsctl`/doctor restrictions, Python role/effect rules, versioned external contracts, cutover-to-deletion and Release Profile admission.
-
-## 11. AR sequence after Functional Closure
+PF-3 makes already-selected architecture guarantees permanent and machine-enforced. `FitnessRuleRegistry` (or equivalent) should be a small typed index such as:
 
 ```text
-AR-12 Fresh Rehearsal Environment
-AR-13 Rotation Rehearsal
-AR-14 Remote Recovery Rehearsal
-AR-15 Windows Delivery Program / inherited Batch E
-AR-16 Final Whole-project 10/10 Audit
-AR-17 Architecture Closeout + Production Core Gate
+RuleId
+requiredness
+scope
+primary enforcement owner
+negative fixture
 ```
 
-Only after AR-17:
+Reuse specialized validators/checkers as enforcement owners. Do not build a generic linter/plugin/DI platform. Machine checks enforce objective properties (dependency/effect/authority/compatibility/projection rules); PR Architecture Impact + protected review handles genuinely semantic questions that cannot be reliably inferred by a universal checker.
+
+PF-3 remains the architecture-forming freeze. After it, ordinary FC/AR/PC work does not invent new generic architecture mechanisms.
+
+## 6. Functional Closure — proof, not another architecture program
+
+The logical `fresh #399/#421 re-baseline` remains mandatory but should execute as the **FC-6 preflight observation**, not as a separate implementation transaction or PR.
+
+```text
+PF-3 accepted
+-> FC-6 preflight
+   - current accepted main
+   - live workflows / protected contexts
+   - credential readiness
+   - current staging identity
+   - current known-good identity
+   - Release Set identities
+   - live provider/GitHub observations
+-> READY | typed BLOCKED
+-> FC-6 same-bits staging / verify / rollback-or-NO_CHANGE ceremony
+-> machine-readable terminal evidence
+-> FC-7 closeout evaluation
+```
+
+FC-7 remains a logical acceptance checkpoint for traceability, but it should not create a second implementation project. If FC-6 evidence plus repository/Linux/Windows/hosted proofs establish `P0=0`, `P1=0`, `P2=0`, FC-7 is a closeout decision. New source work occurs only for an actual defect discovered by the proof.
+
+## 7. AR-12…AR-17 — qualification semantics
+
+After PF-3 the architecture is frozen; later AR stages prove/deliver the product inside it.
+
+- **AR-12 — Fresh Rehearsal Environment:** operational proof that a clean environment can be bootstrapped from canonical inputs, deployed, smoke-tested, torn down and recreated without hidden manual state. Write source only for real gaps discovered by the rehearsal.
+- **AR-13 — Rotation Rehearsal:** prove real key/secret/credential rotation using existing mechanisms. It is primarily an operational test, not a new subsystem.
+- **AR-14 — Remote Recovery Rehearsal:** prove recovery on a clean/remote side from durable state/artifacts using existing backup/restore/release mechanisms. Fix only real gaps.
+- **AR-15 — Windows Delivery Program:** the substantive late implementation stage. It owns the production-grade Profile Bridge/Camoufox updater/delivery chain: signed update contract, signature verification/key rotation, side-by-side staging, safe activation, health/LKG rollback, publisher integration, Windows negative matrix and production-equivalent rehearsal. It may use several bounded implementation PRs, but only the final governed AR-15 candidate accepts the slice.
+- **AR-16 — Final Whole-project Audit:** audit-only. It must not become a cleanup/refactor bucket. A finding blocks -> small defect PR -> audit again.
+- **AR-17 — Qualification / Production Core gate:** decision-only as far as practical. It consumes accepted evidence/state and may authorize `architecture_complete=true`, `production_core_gate=AUTHORIZED`, while `production_ready=false` and `production_mutation=false`. It must not invent another closeout engine.
+
+## 8. CI efficiency without lowering assurance
+
+Do not weaken protected branch requirements. Future CI optimization may make permanent required contexts applicability-aware only if it is fail-closed:
+
+```text
+definitely affected -> full proof
+definitely irrelevant -> required context returns explicit fast-success reason
+uncertain -> full proof
+architecture/security/release acceptance candidate -> force full proof
+```
+
+An impact classifier must consider more than filename globs when dependency/contracts/effects/workflow/governance surfaces can change. This is an optimization mechanism, not permission to skip proof by default.
+
+Repeated proof concepts such as predecessor reachability, caller=0, unique-current-invariant=0, generated-projection-not-authority and DEAD-predecessor absence should become reusable CI checks rather than new Markdown ownership/acceptance matrices per transaction.
+
+## 9. Current interactive development environment
+
+The current agent environment has the connected **GitHub plugin** and does not assume local `gh`.
+
+Use the plugin for hosted GitHub reads/writes: branches, PRs, issues, reviews, required contexts, workflow/status observations, repository files and other hosted GitHub state. Do not block work on missing `gh`, shell-scrape GitHub, or move GitHub/network authority into `opsctl` as a workaround.
+
+Repository-local verification remains local (`python scripts/verify-fast.py`, targeted Cargo/tests). GitHub Actions/provider workflows may use their own pinned hosted tooling. If an old runbook is touched and prescribes `gh`, update the runbook to describe the operation rather than making `gh` an architectural requirement.
+
+## 10. Production roadmap
+
+PC-1 is the first production release, not another architecture design stage. It promotes exact accepted bits under the Release / Capability Profile and enables only the Production Core: identity/users, clients/customer cards, browser profiles and bulk operations, client↔profile bindings, grants/access, generations/sessions/devices, required encrypted persistence/restore, real Camoufox, Windows Profile Bridge + AR-15 delivery/updater, and Core-required audit/health/readiness/observability/recovery foundations.
+
+Mailbox administration, mailbox jobs/automation and outbound mail may remain source-present and tested on the same protected `main` while production-disabled.
 
 ```text
 PC-1 Production Core v1
@@ -254,75 +285,15 @@ PC-3 Mailbox Jobs / Automation
 PC-4 Outbound / later capabilities
 ```
 
-Only PC-1 may make `production_ready=true` for the accepted core Release Profile.
+## 11. Canonical references
 
-## 12. Windows delivery requirement
-
-The current Production Core scope includes Camoufox/profile runtime through Windows Profile Bridge. Therefore AR-15 remains mandatory before AR-16/AR-17 closeout and must cover the inherited Batch E concerns: signed/versioned update manifest, trust/key rotation, side-by-side staging, safe activation, health/Last Known Good rollback, immutable publisher integration, permanent failure tests and production-equivalent Windows rehearsal.
-
-## 13. Acceptance discipline
-
-Every bounded F/N/PF/FC/AR/PC candidate requires:
-
-```text
-fresh protected-main baseline
--> natural owner/effect/contract analysis
--> positive + negative tests
--> exact-head permanent CI green
--> protected required contexts green
--> behind_by=0
--> blocking reviews=0
--> unresolved threads=0
--> guarded merge bound to exact head
--> post-merge accepted-main reread
-```
-
-Historical required-context names/counts are observations and must be re-read live at merge time.
-
-## 14. Immutable Accepted Phase Provenance
-
-These records are a compact immutable projection of `architecture/accepted-phases.json`. They are historical provenance, not a competing forward roadmap. The permanent architecture gate verifies them so accepted product history cannot be silently rewritten while the current execution plan evolves.
-
-Phase 1A was accepted through issue #114 / implementation PR #115; exact proven source head
-`21b4bc65cd1bb117504c0a0cfe18c8c11e411f25`; guarded squash merge
-`0186b780f7fed4b7c5e7f212c2fe437cbc46a5e5`.
-
-Phase 1B was accepted through issue #120 / implementation PR #135; exact proven source head
-`22b2ef36a943d07d22755bf467ec6e7c27ef081d`; guarded squash merge
-`f081e0709481d6bbaa150f5518ec8552124c78de`.
-
-Phase 2A was accepted through issue #118 / implementation PR #137; exact proven source head
-`2d80ee74bc8d05657414ea4e75dcf6f41c723926`; guarded squash merge
-`a1eb2833a74d9156bce8f4b1c6e92815cc0d55bc`.
-
-Phase 2B was accepted through issue #138 / implementation PR #140; exact proven source head
-`895594e35b77ddd86395300b1644e9df6a712123`; guarded squash merge
-`298062ea443c31c69212cb03b3988265b6bbcd48`.
-
-Phase 2C was accepted through issue #142 / implementation PR #143; exact proven source head
-`d3ad2e774a98ad5fed2565ba410ba9923062d170`; guarded squash merge
-`042d0dc72fa37e99f971d61d21544609a69c6e31`.
-
-Phase 2D was accepted through issue #144 / implementation PR #147; exact proven source head
-`ad491e2f0c9ba9f79130923fdde6fe1407af4dc5`; guarded squash merge
-`26f8fa82bdad02a5a0867b0d36748b915579ef1c`.
-
-Phase 2E was accepted through issue #148 / implementation PR #152; exact proven source head
-`0cefa67abe810db079102462f33ec28fcfc73f69`; guarded squash merge
-`6c6ba4564de88b40d282081e701a2d24f1611cc2`.
-
-Phase 2F was accepted through issue #154 / implementation PR #155; exact proven source head
-`c36df418f9fa877c5143327e97b60087c33ffd02`; guarded squash merge
-`42b26dc0c78c0c65dcea2bc90bb5ce6a3bd4b02b`.
-
-Phase 2G was accepted through issue #159 / implementation PR #160; exact proven source head
-`85ca77b430e7d184204082aea7d51a08fdd72cf9`; guarded squash merge
-`48e24f1f365d87a07bf97322c81099dd6a89f046`.
-
-Phase 2H was accepted through issue #163 / implementation PR #164; exact proven source head
-`9add9b94d0de255b93e5a7c24584fcf6756462a7`; guarded squash merge
-`a32768feddb3da69b872e701bc529aad3521e1b0`.
-
-Phase 2I was accepted through issue #167 / implementation PR #168; exact proven source head
-`c1075337cfc582d0f4c00ec34b1aa7cda9ac1101`; guarded squash merge
-`800c634147d6300ea3989ff0cf87ade6e2387ee9`.
+- `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` — current program authority and immutable execution order;
+- `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md` — permanent architecture contract;
+- `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md` — detailed #454/N2–N5 ownership retirement contract;
+- #441 — live mutable execution state;
+- #454 — sole current pre-N2 implementation transaction;
+- `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` / #430 — PF-1;
+- `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` / #431 — PF-3;
+- #399 / #421 — Functional Closure obligations;
+- `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md` — shared exact-head/merge acceptance discipline;
+- `architecture/accepted-phases.json` + Git history — immutable accepted product-phase provenance.

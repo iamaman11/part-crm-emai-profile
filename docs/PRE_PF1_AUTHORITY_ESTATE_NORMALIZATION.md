@@ -2,55 +2,28 @@
 
 **Document status:** SUBORDINATE_PREREQUISITE_SPEC  
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
-**Functional Closure:** `docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`  
-**Mandatory requirements:** `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`  
-**opsctl boundary:** `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`  
-**opsctl doctor:** `docs/OPSCTL_DOCTOR_CONTRACT.md`  
-**Python boundary:** `docs/PYTHON_USAGE_BOUNDARY.md`  
-**PF-1:** `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`  
-**Tracking umbrella:** #399  
-**Production authorization:** NONE  
-**AR-12 implementation:** NOT AUTHORIZED
+**Live tracker:** #441  
+**PF-1:** `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` / #430  
+**Production authorization:** NONE
 
-This document defines mandatory foundation and authority-estate normalization before PF-1. It does not reopen accepted AR history, add a new AR/PF slice or change `architecture/architecture-program-sequence.json`.
+This document owns the detailed #454/N2–N5 authority-retirement contract. It does not create new lifecycle slices or change `architecture/architecture-program-sequence.json`.
 
 ## 1. Binding order
 
 ```text
-F1  Release Set breaking-contract version discipline
-+
-F2  permanent architecture foundations
-    - application mandatory requirements
-    - opsctl pure-core / adapter boundary
-    - opsctl doctor diagnostic boundary
-    - canonical external JSON / digest discipline
-    - Python role/effect boundary
- ->
-N1  AR-2 runtime/resource topology authority retirement
- ->
-bounded pre-N2 F1 compatibility/current-v2 cleanup gate
-    (correction transaction only; not a new F/N/AR/PF slice)
- ->
-N2  AR-6 Python-estate authority retirement + role/effect normalization
- ->
-N3  AR-7 current GitHub-governance normalization
- ->
-N4  bounded AR-8 operator/provenance cleanup
- ->
-N5  AR-10 runtime semantic-authority retirement
- ->
-PF-1
- -> PF-2
- -> PF-3
- -> fresh #399/#421 re-baseline
- -> FC-6
- -> FC-7
- -> AR-12 implementation entry
+F1/F2 ACCEPTED
+-> N1 ACCEPTED
+-> #454 bounded Release Set v2 correction
+-> N2 Python-estate authority retirement
+-> N3 current GitHub-governance normalization
+-> N4 operator/provenance cleanup
+-> N5 runtime semantic-authority retirement
+-> PF-1
 ```
 
-F1/F2/N1…N5 are foundation/normalization transactions, not lifecycle slices. The pre-N2 cleanup gate is a bounded correction discovered by fresh live audit; it does not create F3, N1.5, PF-0 or any lifecycle state.
+#454 and N2–N5 are bounded normalization transactions, not F3/N1.5/AR-* or PF-0.
 
-## 2. Mandatory artifact-role vocabulary
+## 2. One retirement rule
 
 Every touched machine artifact is classified as:
 
@@ -63,226 +36,96 @@ HISTORICAL_EVIDENCE
 TRANSITIONAL_SEMANTIC_SOURCE
 ```
 
-A transitional semantic source retires only after:
+A transitional semantic source retires through one reusable rule:
 
 ```text
-natural owner identified/proved
--> accepted behavior preserved
--> current consumers switched
--> old caller_count = 0
--> old unique_current_invariant_count = 0
+natural owner identified
+-> still-valid product/security/durable invariants preserved
+-> current callers switched
+-> old_current_callers = 0
+-> old_unique_current_invariants = 0
 -> physical delete/demotion
--> provenance preserved in Git/evidence
+-> history preserved in Git/evidence
 ```
 
-Do not replace a retired semantic JSON with an equivalent successor JSON/TOML/YAML or giant Rust table.
+Do not replace a retired JSON/Python/Node/table authority with an equivalent successor registry in another language/format.
 
-## 3. F1 — Release Set version discipline
+Shared exact-head CI/review/merge acceptance is owned by `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md`, not repeated per N-step.
 
-The change from:
+## 3. Efficiency rule for N2–N5
+
+After accepted #454, perform one read-only discovery pass across all remaining predecessor estates to identify callers, unique current invariants and likely natural owners. Keep this discovery **ephemeral** (working notes / PR discussion / CI artifact), not as a new checked-in authority file.
+
+Before each sequential N2/N3/N4/N5 transaction, refresh only:
 
 ```text
-schemas.d1_evolution_authority_sha256
+that transaction's affected reachability
++ changes since the common discovery
 ```
 
-to:
+Separate merge boundaries remain because the semantic owners are different; repeated repository-wide archaeology is not required.
+
+## 4. #454 — Release Set v2
+
+F1 already established v3 as the current Release Set writer/model.
+
+Prove exactly one outcome:
 
 ```text
-schemas.d1_repository_identity_sha256
+A. current v2 consumer exists
+   -> exact consumer + identity/version
+   -> minimum isolated historical-v2 read/verify only
+   -> current writer remains v3-only
+   -> no v2 -> v3 semantic coercion
+   -> explicit retirement condition
+
+B. current v2 consumer = NONE
+   -> executable v2 compatibility/current-v2 authority retires
+   -> compatibility-only code/workflows/tests/fixtures retire after caller/invariant proof
+   -> history remains in Git/releases/evidence
 ```
 
-is a breaking external-contract semantic change and must not remain under one current Release Set v2 meaning.
+Stage result:
+
+```text
+current_writer = v3
+current_v2_semantic_authority = 0
+v2_consumer = EXACT_ID | NONE
+v2_executable = MINIMUM_ISOLATED | RETIRED
+v2_to_v3_semantic_coercion = 0
+production_mutation = false
+```
+
+## 5. N2 — Python estate
+
+Historical AR-6/AR-10/AR-11 per-file census/overlay data is provenance, not permanent current authority.
+
+Target:
+
+```text
+repository/source observation
++
+role/effect policy
+-> classified Python usage
+```
 
 Requirements:
 
-- new current writer/model version, target v3 unless exact evidence proves another bounded version choice;
-- historical immutable v2 assets are never rewritten;
-- a historical-v2 decoder/verifier exists only if #399/#421 proves a current need;
-- historical decoder is isolated from current writer/model;
-- content-address prefix/fixtures/workflows agree with the new version;
-- PF-3 permanently rejects breaking durable-contract changes without version bump.
+- retire `architecture/python-estate-ar6.json`, overlays and `scripts/python-estate-ar6.py` from current authority paths after caller/invariant proof;
+- no successor 1:1 Python file registry;
+- remove retiring Python/AR sentinels from `opsctl doctor` and repository-root detection;
+- preserve `runtime/camouhost/real.py` as the genuine Camoufox outer-runtime adapter behind Profile Bridge + versioned IPC + `runtime-lock.json`;
+- preserve `runtime/camouhost/main.py` synthetic/test-only;
+- prove retired direct Python browser/profile executables remain absent/unreferenced;
+- keep legitimate Python tests/generators/adapters/orchestration instead of rewriting them to Rust for symmetry;
+- obsolete helper with caller=0 -> delete; helper with caller>0 -> move only its still-current responsibility to the natural owner;
+- unclassified Python production/network/provider effects fail closed.
 
-### 3.1 Bounded pre-N2 Release Set compatibility/current-v2 cleanup gate
+Python may adapt/observe/generate/test/host a genuine cross-language runtime. It must not become a second Product/release/lifecycle/evidence/fitness semantic owner or ungoverned provider mutation authority.
 
-The accepted F1 implementation correctly moved the current writer/model to Release Set v3, but fresh live audit found one remaining ambiguity that must be resolved before N2 starts. `architecture/release-set-v2.json` still presents v2 as `CURRENT_PRE_PRODUCTION`, while current writer/model semantics are v3; executable promotion/rollback paths can also still recognize historical v2 identities.
+## 6. N3 — GitHub governance
 
-This is not a new architecture phase. It is a bounded F1 correction transaction with the following required decision:
-
-```text
-prove a concrete current v2 consumer
-    = current staging deployment
-      OR current known-good rollback Release Set
-      OR explicit current FC-6/#399/#421 durable input
-
-if proved:
-    keep only the minimum isolated historical-v2 reader/verification path
-    identify exact v2 artifact/version/consumer
-    current writer remains v3-only
-    no v2 -> v3 semantic coercion
-    define explicit retirement condition
-
-if not proved:
-    historical evidence remains immutable in Git/artifacts
-    executable v2 compatibility machinery retires
-    workflow branches/tests that exist only to serve speculative v2 compatibility retire
-```
-
-`architecture/release-set-v2.json` must not remain a second **current** semantic authority after this gate. It is either deleted from the current tree after zero-caller/zero-unique-invariant proof, or explicitly demoted to a bounded historical/durable contract only when a concrete current consumer requires it.
-
-Required proof before N2 entry:
-
-```text
-current Release Set writer/model version = v3
-current semantic owner count for Release Set shape = 1
-historical v2 current consumer = named OR NONE
-historical v2 executable compatibility = justified-and-isolated OR retired
-architecture/release-set-v2.json current-authority role = 0
-breaking v2/v3 semantic coercion = 0
-production mutation = false
-```
-
-## 4. F2 — permanent architecture/effect foundations
-
-Binding contracts:
-
-- `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`;
-- `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`;
-- `docs/OPSCTL_DOCTOR_CONTRACT.md`;
-- `docs/PYTHON_USAGE_BOUNDARY.md`.
-
-### 4.1 `opsctl`
-
-```text
-JSON/filesystem/explicit local artifacts
-        ↓
-adapters + versioned DTOs
-        ↓
-typed semantic input
-        ↓
-PURE CORE
-        ↓
-typed semantic result
-        ↓
-output adapter
-```
-
-Permanent zero budgets:
-
-```text
-serde_json::Value crossing adapter -> pure core = 0
-filesystem/process/network/provider effects in pure core = 0
-runtime Product -> opsctl/opsctl-core = 0
-opsctl provider/network/process authority = 0
-opsctl runtime service endpoint = 0
-opsctl -> Python semantic child process = 0
-global authority bag = 0
-```
-
-A small internal `opsctl-core` is preferred when it materially makes these constraints compile-time enforceable.
-
-### 4.2 `opsctl doctor`
-
-`doctor` is read-only local diagnostic composition only.
-
-Current implementation debt includes a generic JSON `AUTHORITIES` list plus dependencies on AR-6/operator/Python inventory sentinels. Target:
-
-```text
-local filesystem observations
--> strict typed adapters
--> bounded owner diagnostics
--> DoctorReport
--> rendering
-```
-
-Forbidden:
-
-```text
-Python/Node/process execution
-network/GitHub/provider access
-secret resolution
-runtime/browser execution
-provider/database mutation
-generic semantic authority bag
-generated projection as semantic root sentinel
-```
-
-N2/N4/PF-1 remove retiring sentinel dependencies. PF-3 prevents regression.
-
-### 4.3 canonical JSON/digest
-
-Before PF-2 attestable evidence relies on this layer:
-
-- reviewed/pinned SHA-256 implementation;
-- one explicit canonical external JSON contract, preferably RFC 8785 JCS where compatible;
-- duplicate JSON member rejection before canonicalization for release/security/evidence-critical documents;
-- bounded bytes/depth/complexity;
-- strict UTF-8 and explicit `kind`/`schema_version`;
-- independent canonicalization/hash vectors;
-- canonical identity bytes separate from pretty rendering;
-- explicit digest scope: semantic canonical bytes vs exact artifact bytes.
-
-### 4.4 Python
-
-```text
-Python may adapt, observe, generate, test or host a genuine cross-language runtime.
-Python must not become a second semantic owner or an ungoverned provider mutation authority.
-```
-
-The permanent Python policy is role/effect based and source-derived, not a per-file whitelist.
-
-## 5. N1 — AR-2 runtime/resource topology retirement
-
-Historical AR-2 decisions remain evidence. Current topology ownership becomes:
-
-```text
-Cloudflare deployment/resource topology -> Wrangler/provider-native config
-runtime/workload ownership             -> Product Rust
-production admission                   -> Release / Capability Profile
-anti-regression                         -> bounded fitness/checker rules
-AR-2 provenance                         -> Git/evidence
-```
-
-Required:
-
-- stop using `architecture/runtime-topology-ar2.json` as current semantic input;
-- remove inventory/checker dependency on duplicated resource-decision tables;
-- audit Python deployment/config renderers for unique duplicated topology semantics;
-- preserve negative invariants such as no dead `GENERATION_VERIFICATION` path and resolver isolation;
-- delete the AR-2 JSON after zero callers/zero unique current invariants.
-
-No hosted provider mutation is authorized by N1.
-
-## 6. N2 — AR-6 Python-estate retirement
-
-Historical census remains provenance. Current Python estate is derived from repository/source observations + role/effect policy.
-
-No successor 1:1 Python file registry is allowed.
-
-Mandatory N2 work:
-
-1. remove `architecture/python-estate-ar6.json` and AR-10/AR-11 estate overlays from current semantic/inventory/doctor authority paths;
-2. remove `scripts/python-estate-ar6.py` from current authority/callers and delete after zero callers/unique invariants;
-3. update `opsctl` repository-root detection away from AR-6/operator/Python inventory sentinels;
-4. preserve `runtime/camouhost/real.py` as legitimate Product Runtime adapter behind Profile Bridge/IPC/runtime-lock;
-5. preserve `runtime/camouhost/main.py` only as synthetic/test fixture;
-6. prove retired direct Python browser/profile executables remain absent/unreferenced;
-7. inspect validators/generators for duplicated semantic tables and reassign unique facts to N1/N4/N5/PF-1/PF-3 natural owners;
-8. keep developer orchestration such as `verify-fast.py` non-authoritative and update its caller list as predecessors retire;
-9. classify GitHub/provider-read Python as outer observation or transitional observer+policy; PF-2 owns the evidence-policy split;
-10. replace bespoke Python provider-mutating helpers such as the R2 SigV4 canary with protected pinned official provider tooling where exact evidence shows parity, then delete old path after zero callers;
-11. add negative tests for unclassified Python production/network/provider effects.
-
-N2 does not globally rewrite legitimate Python tests/generators/adapters to Rust.
-
-## 7. N3 — AR-7 current GitHub governance normalization
-
-Historical AR-7 baseline remains evidence.
-
-Current required-check/governance state must not be reconstructed as:
-
-```text
-AR-7 baseline + AR-10 overlay + future historical overlays
-```
+Historical AR-7/AR-10 overlay reconstruction retires.
 
 Target:
 
@@ -290,190 +133,89 @@ Target:
 current desired governance configuration
 +
 live GitHub observation
-        ↓
-typed governance policy evaluation
+-> typed governance evaluation
 ```
 
-Desired external-system configuration may legitimately remain versioned declarative data. GitHub/API reads stay outside `opsctl` pure policy.
+Desired configuration for an external system may legitimately remain versioned declarative data. Live GitHub/provider reads remain outer observations; they do not move into `opsctl` pure policy.
 
-## 8. N4 — bounded AR-8 operator/provenance cleanup
+No historical baseline+overlay stack remains the evolving current governance model after cutover.
 
-This is not a full credential-lifecycle rewrite.
+## 7. N4 — operator/provenance
 
-Required:
+Typed Rust command/effect metadata becomes the operator semantic owner.
 
-- typed Rust CommandRegistry/effect registry becomes operator semantic owner;
-- CLI parser/help/machine projection derive/validate against that owner;
-- `architecture/operator-contract.json` does not authorize Rust behavior;
-- retained operator JSON, if any, is generated projection only;
-- AR-8 phase/provenance artifacts leave normal current semantic paths;
-- `credential-lifecycle.json` / `profile-security.json` may remain bounded transitional subject contracts until their owning future cutover;
-- PF-1 consumes only a narrow `CredentialInventoryProjection`.
+Prefer metadata colocated with existing command definitions and aggregation through the current parser/composition root. Do not create a second generic command framework.
 
-`opsctl doctor`/repository-root detection must stop requiring `operator-contract.json` as CLI semantic sentinel after this cutover.
+`architecture/operator-contract.json`:
 
-## 9. N5 — AR-10 runtime semantic-authority retirement
+```text
+no real current external consumer -> delete after caller proof
+real consumer exists -> generated projection only
+```
 
-Historical AR-10 acceptance remains evidence. Current ownership:
+It must never authorize Rust behavior. AR-8 provenance leaves normal semantic paths. Credential/security subject contracts outside this bounded operator concern may remain until their natural owning cutover.
+
+## 8. N5 — runtime semantic authority
+
+For every still-current field in `architecture/runtime-cutover-ar10.json`:
+
+```text
+not current -> retire
+current -> Product Rust | runtime-lock | Bridge/IPC | governance | release/lifecycle owner
+```
+
+Current runtime ownership:
 
 ```text
 runtime behavior/safety/launch -> Product Rust
 runtime dependency tuple       -> runtime/camouhost/runtime-lock.json
 real Camoufox adapter          -> runtime/camouhost/real.py
 synthetic fixture              -> runtime/camouhost/main.py test-only
-IPC semantic contract          -> bridge-domain + cross-language validation
+IPC contract                   -> Bridge/domain + cross-language validation
 runtime failure guarantees     -> implementation + tests
-required hosted contexts       -> current GitHub governance
-production/lifecycle state     -> lifecycle/release owner
+hosted required checks         -> current governance
+lifecycle/release state        -> lifecycle/release owner
 ```
 
-`runtime-lock.json` remains a legitimate versioned cross-language manifest.
+`runtime-lock.json` remains a legitimate versioned cross-language manifest. Do not move runtime execution into `opsctl` and do not create `RuntimeCutoverRegistryV2`.
 
-Required:
-
-- reassign every unique current field in `architecture/runtime-cutover-ar10.json`;
-- remove inventory/acceptance/governance/release/doctor dependencies;
-- preserve real Camoufox and Windows/Profile Bridge regressions;
-- do not move runtime execution into `opsctl`;
-- delete `runtime-cutover-ar10.json` after zero callers/unique current invariants.
-
-## 10. PF-1 entry contract
-
-PF-1 begins only from protected `main` where F1/F2/N1…N5 are accepted and the bounded pre-N2 F1 compatibility/current-v2 cleanup gate is closed.
-
-Target inputs:
+## 9. Permanent `opsctl` budgets
 
 ```text
-ValidatedProgramSequence
-RawArchitectureAcceptanceEvidenceV1
-D1InventoryProjection
-RuntimeTopologyProjection
-ApplicationInventoryProjection
-OperatorInventoryProjection
-GovernanceInventoryProjection
-RuntimeInventoryProjection
-CredentialInventoryProjection
-ReleaseInventoryProjection
+serde_json::Value crossing adapter -> pure core = 0
+filesystem/process/network/provider effects in pure core = 0
+Product Runtime -> opsctl/opsctl-core = 0
+opsctl provider/network/process authority = 0
+opsctl -> Python semantic child process = 0
+global authority bag = 0
 ```
 
-Forbidden:
+`opsctl doctor` remains local read-only diagnostic composition only.
+
+## 10. PF-1 entry
+
+PF-1 begins only when accepted protected `main` proves:
 
 ```text
-GlobalRepositoryAuthorityLoader -> GlobalAuthoritySet
-raw serde_json::Value authority bag
-architecture/inventory.json as semantic input
-```
-
-Target:
-
-```text
-outer Git/GitHub raw observations
--> typed LifecycleEvaluator
--> DerivedLifecycleStateV1
--> bounded typed inventory projections
--> pure ArchitectureInventoryCompiler
--> canonical render/check/inspect/write
--> delete legacy Node lifecycle engine
--> delete legacy Python inventory/projection cluster
-```
-
-`opsctl doctor` and repository-root detection are mandatory current callers in the cutover.
-
-## 11. PF-2 entry contract
-
-PF-2 consumes accepted F2/PF-1 foundations:
-
-```text
-outer provider/GitHub observation
--> strict versioned DTO
--> typed normalized observation
--> pure EvidencePolicy
--> typed decision/envelope
--> canonical JSON + digest
--> immutable hosted artifact/attestation
-```
-
-Network/provider reads, clocks and artifact publication stay outside pure core.
-
-Current Python that combines GitHub API acquisition with semantic evidence decision is transitional; PF-2 splits acquisition from Rust evidence policy.
-
-## 12. PF-3 entry contract
-
-PF-3 fitness semantics are typed Rust:
-
-```text
-FitnessRuleRegistry
--> evaluator/enforcement mapping
--> positive/negative fixtures
--> Architecture Fitness Gate
--> optional generated report/index
-```
-
-A hand-maintained semantic `architecture/architecture-fitness-policy.json` is forbidden.
-
-Minimum permanent zero/one budgets include:
-
-```text
-semantic_owner_count_per_fact = 1
-serde_json_value_crossing_into_opsctl_pure_core = 0
-filesystem/process/network/provider_in_opsctl_pure_core = 0
-runtime_dependency_on_opsctl = 0
-global_authority_bag = 0
-generated_projection_used_as_semantic_input = 0
-opsctl_doctor_process_network_provider_python_child_process = 0
-legacy_doctor_sentinel_dependency = 0
-unclassified_python_production_or_provider_effect = 0
-python_duplicate_semantic_authority = 0
-breaking_external_contract_without_version_bump = 0
-duplicate_json_member_accepted_in_attestable_contract = 0
-```
-
-## 13. Transaction discipline
-
-Each F/N correction/normalization step starts from accepted protected `main` and proves on one exact head:
-
-```text
-fresh baseline
-complete caller discovery
-field/invariant ownership matrix
-positive parity
-negative anti-regression
-old callers = 0
-old unique current invariants = 0
-exact-head CI/governance green
-physical retirement/demotion
-post-merge accepted-main reread
-```
-
-Do not force all F/N implementation into one giant PR. Order is binding; transaction size remains bounded.
-
-## 14. Non-goals
-
-This normalization does not globally ban Python/JSON, rewrite correct product code for symmetry, move Camoufox into `opsctl`, create Product Runtime↔opsctl RPC, create generic DI/plugin framework, rewrite full credential lifecycle early, enable production or start AR-12.
-
-## 15. PF-1 entry DoD
-
-PF-1 remains blocked until accepted `main` proves:
-
-```text
-Release Set breaking shape correctly versioned = true
-Release Set current writer/model version = v3
-architecture/release-set-v2.json current semantic authority = 0
-historical v2 executable compatibility = justified_and_isolated OR retired
-opsctl adapter/pure-core contract = established
-opsctl doctor contract = established
-canonical JSON/digest foundation = established
-runtime-topology-ar2 current semantic authority = 0
+#454 accepted
+N2 accepted
+N3 accepted
+N4 accepted
+N5 accepted
+current Release Set writer/model = v3
+current v2 semantic authority = 0
 Python estate overlay current authority = 0
-Python estate generator current authority = 0
-historical AR-7 overlays used as evolving governance = 0
-operator-contract JSON used as CLI authorization = 0
-AR-8 provenance used as normal semantic input = 0
+historical governance overlay stack current authority = 0
+operator JSON used as CLI authorization = 0
 runtime-cutover-ar10 current semantic authority = 0
-runtime Product dependency on opsctl = 0
-opsctl runtime/provider/network/process authority = 0
-generated projection used as semantic source = 0
-unclassified high-risk Python provider/runtime path = 0
+retired direct Python browser/profile executables = 0
+production_mutation = false
 ```
 
-Accepted functionality/security behavior remains unchanged and production remains fail-closed.
+N2–N5 leave natural owners unambiguous; they do not pre-build PF-1's generic projection/compiler machinery.
+
+## 11. Interactive environment
+
+The current agent environment uses the connected GitHub plugin and does not assume local `gh`. Use the plugin for hosted GitHub reads/writes; keep repository-local checks local. Do not shell-scrape GitHub or move GitHub/network authority into `opsctl` as a workaround.
+
+Canonical references: `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`, `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`, `docs/OPSCTL_DOCTOR_CONTRACT.md`, `docs/PYTHON_USAGE_BOUNDARY.md`, #441, #454.
