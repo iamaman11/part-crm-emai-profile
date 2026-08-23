@@ -57,6 +57,10 @@ fn release_source_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/release")
 }
 
+fn repository_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
 #[test]
 fn historical_v2_wire_semantics_are_isolated_from_current_release_code()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -82,6 +86,14 @@ fn historical_v2_wire_semantics_are_isolated_from_current_release_code()
         }
     }
     Ok(())
+}
+
+#[test]
+fn historical_v2_has_no_tracked_current_contract_authority() {
+    assert!(
+        !repository_root().join("architecture/release-set-v2.json").exists(),
+        "historical v2 wire semantics must live only in the isolated decoder, not a mutable current architecture contract"
+    );
 }
 
 #[test]
