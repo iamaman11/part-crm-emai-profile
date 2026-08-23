@@ -225,7 +225,7 @@ This is touch-to-converge debt, not authorization for an unrelated repository-wi
 
 ### Repository root discovery — convergence debt
 
-Current N2 work on `main` removed AR-6 Python-estate sentinels from repository-root discovery. Current discovery still depends on tracked inventory/generator and AR-8 operator sentinels. N4/PF-1 must remove those remaining dependencies so repository identity uses minimal durable workspace markers rather than files scheduled for retirement or generated projections.
+N2 removed AR-6 Python-estate sentinels from repository-root discovery, and N4 removed the AR-8 operator predecessor from current operator semantics/diagnostics. Repository discovery still depends on the retained tracked inventory/generator while its non-N4 lifecycle compatibility consumer exists. Its later owning cutover must resolve that dependency so repository identity uses minimal durable workspace markers rather than generated projections.
 
 ## 7. Command pipeline
 
