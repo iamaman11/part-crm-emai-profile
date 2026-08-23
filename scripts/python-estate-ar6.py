@@ -69,6 +69,23 @@ PROVIDER_MUTATION_TERMS = (
     "r2 object put",
     "secret put",
 )
+REMOTE_MUTATION_METHODS = {"DELETE", "PATCH", "POST", "PUT"}
+PROVIDER_SOURCE_MARKERS = (
+    "cloudflare",
+    "d1",
+    "kv",
+    "queue",
+    "r2",
+    "s3",
+    "wrangler",
+    "workers",
+)
+SOURCE_DANGEROUS_EFFECTS = {
+    "browser_runtime",
+    "network_io",
+    "provider_mutation",
+    "secret_environment_access",
+}
 GENERIC_KEEP_ROLES = {"validator", "generator", "test", "test_or_fixture"}
 AR10_ADDITION_DECISIONS: dict[str, dict[str, str]] = {
     "runtime/camouhost/real.py": {
@@ -397,6 +414,22 @@ def _string_literals(node: ast.AST) -> set[str]:
     }
 
 
+def _has_main_guard(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare) or len(test.ops) != 1 or len(test.comparators) != 1:
+            continue
+        left, right = test.left, test.comparators[0]
+        values = (left, right)
+        if any(isinstance(value, ast.Name) and value.id == "__name__" for value in values) and any(
+            isinstance(value, ast.Constant) and value.value == "__main__" for value in values
+        ):
+            return True
+    return False
+
+
 def semantic_capabilities(source: str, *, label: str) -> tuple[set[str], set[str]]:
     try:
         tree = ast.parse(source, filename=label)
@@ -474,7 +507,102 @@ def semantic_capabilities(source: str, *, label: str) -> tuple[set[str], set[str
             }
         ):
             capabilities.add("filesystem_mutation")
+
+    all_literals = _string_literals(tree)
+    upper_literals = {value.upper() for value in all_literals}
+    lowered_literals = " ".join(sorted(value.lower() for value in all_literals))
+    if "network_io" in capabilities and REMOTE_MUTATION_METHODS & upper_literals:
+        capabilities.add("remote_mutation")
+    if "provider_mutation_subprocess" in capabilities or (
+        "remote_mutation" in capabilities
+        and any(marker in lowered_literals for marker in PROVIDER_SOURCE_MARKERS)
+    ):
+        capabilities.add("provider_mutation")
     return capabilities, imported_modules
+
+
+def source_role(path: str, source: str, capabilities: set[str]) -> str:
+    try:
+        tree = ast.parse(source, filename=path)
+    except SyntaxError as error:
+        fail(f"tracked Python must parse as Python: {path}: {error}")
+    relative = Path(path)
+    name = relative.name.lower()
+    parts = {part.lower() for part in relative.parts}
+    doc = (ast.get_docstring(tree) or "").lower()
+
+    if (
+        "tests" in parts
+        or "fixtures" in parts
+        or name.startswith("test_")
+        or name.startswith("test-")
+    ):
+        return "test_or_fixture"
+    if "runtime" in parts and ("synthetic" in doc or "fake" in doc):
+        return "synthetic_runtime_fixture"
+    if "runtime" in parts or "browser_runtime" in capabilities:
+        return "runtime_adapter"
+    if name.startswith("check_") or name.startswith("check-"):
+        return "validator"
+    if name.startswith("generate_") or name.startswith("generate-") or "generator" in name:
+        return "generator"
+    if relative.parts and relative.parts[0] == "tools" and _has_main_guard(tree):
+        return "operational_tool"
+    if relative.parts and relative.parts[0] == "scripts" and _has_main_guard(tree):
+        return "repository_script"
+    if _has_main_guard(tree):
+        return "entrypoint"
+    return "library_module"
+
+
+def observe_python_source(path: str, source: str) -> dict[str, Any]:
+    capabilities, _ = semantic_capabilities(source, label=path)
+    role = source_role(path, source, capabilities)
+    effects = sorted(capabilities)
+    return {
+        "path": path,
+        "role": role,
+        "effects": effects,
+        "dangerous_effects": sorted(set(effects) & SOURCE_DANGEROUS_EFFECTS),
+    }
+
+
+def build_source_observation(root: Path = ROOT) -> dict[str, Any]:
+    observations: list[dict[str, Any]] = []
+    for path in tracked_python(root):
+        source_path = root / path
+        if source_path.is_symlink() or not source_path.is_file():
+            fail(f"tracked Python source must be a regular file: {path}")
+        try:
+            source = source_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            fail(f"cannot read tracked Python as UTF-8 for source observation: {path}: {error}")
+        observations.append(observe_python_source(path, source))
+
+    effect_counts: dict[str, int] = {}
+    role_counts: dict[str, int] = {}
+    dangerous_files = 0
+    for observation in observations:
+        role = observation["role"]
+        role_counts[role] = role_counts.get(role, 0) + 1
+        if observation["dangerous_effects"]:
+            dangerous_files += 1
+        for effect in observation["effects"]:
+            effect_counts[effect] = effect_counts.get(effect, 0) + 1
+
+    return {
+        "schema_version": 1,
+        "kind": "PYTHON_ROLE_EFFECT_OBSERVATION",
+        "authority": "OBSERVATION_ONLY",
+        "source": "GIT_TRACKED_PYTHON_SOURCE",
+        "summary": {
+            "tracked_python_files": len(observations),
+            "dangerous_effect_files": dangerous_files,
+            "roles": dict(sorted(role_counts.items())),
+            "effects": dict(sorted(effect_counts.items())),
+        },
+        "observations": observations,
+    }
 
 
 def semantic_validate_all(rows: list[dict[str, Any]], root: Path = ROOT) -> None:
@@ -597,11 +725,49 @@ def self_test() -> None:
         "import subprocess\nsubprocess.run(['npx', 'wrangler', 'deploy'], check=True)\n",
         label="scripts/check-future-provider.py",
     )
-    if "provider_mutation_subprocess" not in provider_capabilities:
+    if not {"provider_mutation_subprocess", "provider_mutation"} <= provider_capabilities:
         fail("semantic capability detector lost provider-mutation negative fixture")
 
+    direct_provider = observe_python_source(
+        "tools/r2_canary.py",
+        "\"\"\"R2 S3 operational canary.\"\"\"\n"
+        "import urllib.request\n"
+        "request = urllib.request.Request('https://example.invalid', method='DELETE')\n",
+    )
+    if direct_provider["role"] != "library_module":
+        fail("source-derived role detector returned an unexpected direct-provider role")
+    if not {"network_io", "provider_mutation"} <= set(direct_provider["effects"]):
+        fail("source-derived effect detector lost direct provider mutation")
+
+    try:
+        observe_python_source("scripts/broken.py", "def broken(:\n")
+    except EstateError:
+        pass
+    else:
+        fail("source-derived observation accepted malformed Python")
+
+    r2_source = (ROOT / "tools" / "r2_s3_canary.py").read_text(encoding="utf-8")
+    r2_observation = observe_python_source("tools/r2_s3_canary.py", r2_source)
+    if r2_observation["role"] != "operational_tool":
+        fail(f"R2 canary role drifted: {r2_observation['role']!r}")
+    if not {"network_io", "provider_mutation"} <= set(r2_observation["effects"]):
+        fail(f"R2 canary effects drifted: {r2_observation['effects']}")
+
+    real_source = (ROOT / "runtime" / "camouhost" / "real.py").read_text(encoding="utf-8")
+    real_observation = observe_python_source("runtime/camouhost/real.py", real_source)
+    if real_observation["role"] != "runtime_adapter" or "browser_runtime" not in real_observation["effects"]:
+        fail(f"real Camouhost source-derived role/effects drifted: {real_observation}")
+
+    synthetic_source = (ROOT / "runtime" / "camouhost" / "main.py").read_text(encoding="utf-8")
+    synthetic_observation = observe_python_source("runtime/camouhost/main.py", synthetic_source)
+    if synthetic_observation["role"] != "synthetic_runtime_fixture":
+        fail(f"synthetic Camouhost role drifted: {synthetic_observation['role']!r}")
+    if "browser_runtime" in synthetic_observation["effects"]:
+        fail("synthetic Camouhost unexpectedly acquired browser-runtime effects")
+
     print(
-        "Frozen AR-6 Python estate, bounded AR-10 overlay and semantic capability negative fixtures rejected as expected."
+        "Frozen AR-6 Python estate compatibility plus source-derived N2 role/effect "
+        "negative fixtures passed."
     )
 
 
@@ -611,9 +777,13 @@ def main() -> int:
     group.add_argument("--write", action="store_true")
     group.add_argument("--check", action="store_true")
     group.add_argument("--self-test", action="store_true")
+    group.add_argument("--observe", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         self_test()
+        return 0
+    if args.observe:
+        print(serialized(build_source_observation()), end="")
         return 0
     if args.write:
         fail(
