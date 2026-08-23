@@ -7,14 +7,11 @@
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `false`
 
-This document is the compact developer-facing execution map. It is not a second roadmap or semantic authority. When moving state differs, protected `main` + the canonical plan + #441 win.
+This document is the compact developer-facing execution map. It is not a second roadmap or semantic authority. When moving state differs, protected `main` + the canonical plan + #441 win. Exact moving SHAs belong in the live tracker, not this tracked projection.
 
 ## 1. Current snapshot
 
-Fresh audited protected baseline:
-
 ```text
-main@e7e065655d42d9f2b40b7c2ac7a1c2c14f117d2e
 F1/F2  ACCEPTED
 N1     ACCEPTED
 #454   NEXT — sole pre-N2 implementation blocker
@@ -26,8 +23,6 @@ PF-1   BLOCKED on N5 + fresh #430 entry reread
 AR-12  NOT STARTED
 production_mutation = false
 ```
-
-Draft PR #452 is documentation/navigation synchronization only. It should be finished and merged or closed before the #454 implementation branch when practical so developer navigation stays aligned, but it is **not** a new lifecycle gate.
 
 `source_present != production_enabled` remains binding.
 
@@ -209,7 +204,7 @@ Use these instead of duplicating their detail here:
 - `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` — current program authority;
 - `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md` — permanent architecture rules;
 - `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md` — detailed #454/N2–N5 ownership/retirement contract;
-- #441 — live mutable execution tracker;
+- #441 — live mutable execution tracker and exact current baseline;
 - #454 — sole current pre-N2 implementation transaction;
 - `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` / #430 — PF-1;
 - `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` / #431 — PF-3;
