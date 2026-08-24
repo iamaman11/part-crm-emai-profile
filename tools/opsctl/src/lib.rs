@@ -256,6 +256,7 @@ fn read_hosted_evidence_input(path: &std::path::Path) -> Result<String, OpsctlEr
 #[cfg(test)]
 mod tests {
     use super::{CredentialsAction, OperatorEffect, OpsctlError, execute, parse_invocation};
+    use serde_json::json;
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -322,6 +323,37 @@ mod tests {
         );
         assert_read_only_effect(OperatorEffect::ReadOnlyMetadata);
         Ok(())
+    }
+
+    #[test]
+    fn external_review_attestation_rejects_duplicate_evidence_ids() {
+        let duplicate = json!({
+            "schema_version": 1,
+            "kind": "EXTERNAL_REVIEW_ATTESTATION_OBSERVATION",
+            "repository": "iamaman11/part-crm-emai-profile",
+            "records": [
+                {
+                    "record": {"evidence_id": "ev-20260806-duplicate"},
+                    "review_repository": null,
+                    "review_reference": null,
+                    "provider_object": null
+                },
+                {
+                    "record": {"evidence_id": "ev-20260806-duplicate"},
+                    "review_repository": null,
+                    "review_reference": null,
+                    "provider_object": null
+                }
+            ]
+        });
+        let result = super::hosted_evidence::verify_external_review_attestations_json(
+            &duplicate.to_string(),
+        );
+        assert!(result.err().is_some_and(|error| {
+            error
+                .to_string()
+                .contains("HOSTED_REVIEW_ATTESTATION_DUPLICATE_EVIDENCE_ID")
+        }));
     }
 
     #[test]
