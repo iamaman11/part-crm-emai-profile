@@ -31,7 +31,7 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python -c "import os, subprocess; actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(); expected = os.environ['EXPECTED_SOURCE_SHA']; assert actual == expected, f'expected {expected}, got {actual}'"
 
-      - name: Compile attestation policy and offline fixtures
+      - name: Compile observation shell and offline fixtures
         run: |
           python -m py_compile scripts/check-external-review-attestations.py
           python -m py_compile tests/external-review-attestations/test-attestations.py
@@ -42,11 +42,26 @@ jobs:
           python scripts/check-external-evidence-scope.py
           python scripts/check-external-readiness-summary.py
 
-      - name: Run offline GitHub API attestation fixtures
+      - name: Run observer-only GitHub API fixtures
         run: python tests/external-review-attestations/test-attestations.py
 
-      - name: Verify active terminal records against GitHub
+      - name: Run typed hosted-evidence policy tests
+        run: cargo test --manifest-path tools/opsctl/Cargo.toml --locked hosted_evidence
+
+      - name: Observe repository review objects from GitHub
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: python scripts/check-external-review-attestations.py
+          REVIEW_OBSERVATION: ${{ runner.temp }}/external-review-attestation-observation.json
+        run: |
+          python scripts/check-external-review-attestations.py \
+            --output-observation-json "$REVIEW_OBSERVATION"
+
+      - name: Verify active terminal reviews with typed Rust policy
+        env:
+          REVIEW_OBSERVATION: ${{ runner.temp }}/external-review-attestation-observation.json
+        run: |
+          cargo run --quiet --manifest-path tools/opsctl/Cargo.toml --locked -- \
+            --root . \
+            hosted-evidence external-review-attestation verify \
+            --observation-json "$REVIEW_OBSERVATION"

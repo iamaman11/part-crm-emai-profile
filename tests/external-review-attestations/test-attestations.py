@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline HTTP fixtures for external GitHub review attestation verification."""
+"""Offline fixtures proving the GitHub review shell only acquires observations."""
 
 from __future__ import annotations
 
@@ -21,14 +21,16 @@ MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
-AttestationError = MODULE.AttestationError
 claim_body = MODULE.claim_body
+claim_sha256 = MODULE.claim_sha256
 load_active_terminal_records = MODULE.load_active_terminal_records
-verify_tree = MODULE.verify_tree
+observe_tree = MODULE.observe_tree
+parse_record = MODULE.parse_record
 
 REPOSITORY = "acme/profile-platform"
 REVIEWER = "reviewer-one"
 TIMESTAMP = "2026-08-06T14:40:00Z"
+CLAIM_GOLDEN_SHA256 = "567d13f69124f651b797b3a77dfdf954caf67cff7695432a15277dc50ed98147"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -126,15 +128,24 @@ def response_for(record: object, kind: str) -> dict[str, Any]:
     return payload
 
 
-def expect_failure(callable_value: object, label: str) -> None:
-    try:
-        callable_value()  # type: ignore[operator]
-    except AttestationError:
-        return
-    raise AssertionError(f"negative attestation scenario unexpectedly passed: {label}")
+def record_observation(observation: dict[str, Any], evidence_id: str) -> dict[str, Any]:
+    for item in observation["records"]:
+        if item["record"].get("evidence_id") == evidence_id:
+            return item
+    raise AssertionError(f"missing observed record {evidence_id}")
 
 
 def main() -> int:
+    golden = terminal_data(
+        "ev-20260806-claim-golden",
+        "product_license",
+        "passed",
+        "https://github.com/acme/profile-platform/issues/9#issuecomment-101",
+    )
+    golden_record = parse_record(Path("claim-golden.json"), golden)
+    assert golden_record is not None
+    assert claim_sha256(golden_record) == CLAIM_GOLDEN_SHA256
+
     Handler.responses = {}
     Handler.requests_seen = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -182,50 +193,67 @@ def main() -> int:
                     response_for(by_id["ev-20260806-review-comment"], "review_comment"),
                 ),
             }
-            verify_tree(root, REPOSITORY, api_base, None, False)
+            observation = observe_tree(root, REPOSITORY, api_base, None)
+            assert observation["kind"] == "EXTERNAL_REVIEW_ATTESTATION_OBSERVATION"
+            assert observation["repository"] == REPOSITORY
+            assert len(observation["records"]) == 3
             assert len(Handler.requests_seen) == 3
 
             issue_path = "/repos/acme/profile-platform/issues/comments/101"
-            issue_payload = Handler.responses[issue_path][1]
-            original_issue_payload = json.loads(json.dumps(issue_payload))
+            original_issue_payload = json.loads(json.dumps(Handler.responses[issue_path][1]))
 
-            issue_payload["body"] = "external-evidence-review-v1\nwrong=true"
-            expect_failure(
-                lambda: verify_tree(root, REPOSITORY, api_base, None, False),
-                "wrong claim body",
+            # The shell must capture semantic drift without deciding whether it is valid.
+            Handler.responses[issue_path][1]["body"] = "external-evidence-review-v1\nwrong=true"
+            mutated = observe_tree(root, REPOSITORY, api_base, None)
+            assert (
+                record_observation(mutated, "ev-20260806-issue-comment")["provider_object"]["body"]
+                == "external-evidence-review-v1\nwrong=true"
             )
+
             Handler.responses[issue_path] = (
                 200,
                 json.loads(json.dumps(original_issue_payload)),
             )
-
             Handler.responses[issue_path][1]["user"]["login"] = "another-reviewer"
-            expect_failure(
-                lambda: verify_tree(root, REPOSITORY, api_base, None, False),
-                "wrong author",
+            mutated = observe_tree(root, REPOSITORY, api_base, None)
+            assert (
+                record_observation(mutated, "ev-20260806-issue-comment")["provider_object"]["login"]
+                == "another-reviewer"
             )
+
             Handler.responses[issue_path] = (
                 200,
                 json.loads(json.dumps(original_issue_payload)),
             )
-
             Handler.responses[issue_path][1]["updated_at"] = "2026-08-06T14:41:00Z"
-            expect_failure(
-                lambda: verify_tree(root, REPOSITORY, api_base, None, False),
-                "edited timestamp",
+            mutated = observe_tree(root, REPOSITORY, api_base, None)
+            assert (
+                record_observation(mutated, "ev-20260806-issue-comment")["provider_object"]["effective_timestamp"]
+                == "2026-08-06T14:41:00Z"
             )
+
             Handler.responses[issue_path] = (404, {"message": "Not Found"})
-            expect_failure(
-                lambda: verify_tree(root, REPOSITORY, api_base, None, False),
-                "deleted review",
-            )
+            missing = observe_tree(root, REPOSITORY, api_base, None)
+            missing_provider = record_observation(
+                missing, "ev-20260806-issue-comment"
+            )["provider_object"]
+            assert missing_provider == {
+                "available": False,
+                "login": None,
+                "body": None,
+                "effective_timestamp": None,
+            }
 
         with tempfile.TemporaryDirectory() as temp_dir:
             pending_root = Path(temp_dir)
             write_records(pending_root, [pending_data()])
             before = len(Handler.requests_seen)
-            verify_tree(pending_root, None, api_base, None, False)
+            observation = observe_tree(pending_root, REPOSITORY, api_base, None)
             assert len(Handler.requests_seen) == before
+            pending = observation["records"][0]
+            assert pending["provider_object"] is None
+            assert pending["review_repository"] is None
+            assert pending["review_reference"] is None
 
         with tempfile.TemporaryDirectory() as temp_dir:
             recovery_root = Path(temp_dir)
@@ -250,39 +278,52 @@ def main() -> int:
                 "ev-20260806-active-replacement"
             ]
             Handler.responses = {
+                "/repos/acme/profile-platform/issues/comments/404": (404, {"message": "Not Found"}),
                 "/repos/acme/profile-platform/issues/comments/505": (
                     200,
                     response_for(active[0], "issue_comment"),
-                )
+                ),
             }
             before = len(Handler.requests_seen)
-            verify_tree(recovery_root, REPOSITORY, api_base, None, False)
+            observation = observe_tree(recovery_root, REPOSITORY, api_base, None)
             requested = Handler.requests_seen[before:]
             assert requested == ["/repos/acme/profile-platform/issues/comments/505"]
+            assert len(observation["records"]) == 2
+            historical = record_observation(observation, old_id)
+            assert historical["provider_object"] is None
+            assert historical["review_repository"] is None
+            assert historical["review_reference"] is None
+            assert (
+                record_observation(observation, "ev-20260806-active-replacement")["provider_object"]["available"]
+                is True
+            )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             foreign_root = Path(temp_dir)
-            write_records(
-                foreign_root,
-                [
-                    terminal_data(
-                        "ev-20260806-foreign-review",
-                        "product_license",
-                        "passed",
-                        "https://github.com/other/repository/issues/1#issuecomment-1",
-                    )
-                ],
+            foreign = terminal_data(
+                "ev-20260806-foreign-review",
+                "product_license",
+                "passed",
+                "https://github.com/other/repository/issues/1#issuecomment-1",
             )
-            expect_failure(
-                lambda: verify_tree(foreign_root, REPOSITORY, api_base, None, False),
-                "foreign repository",
-            )
+            write_records(foreign_root, [foreign])
+            foreign_record = load_active_terminal_records(foreign_root)[0]
+            Handler.responses = {
+                "/repos/other/repository/issues/comments/1": (
+                    200,
+                    response_for(foreign_record, "issue_comment"),
+                )
+            }
+            observation = observe_tree(foreign_root, REPOSITORY, api_base, None)
+            observed = record_observation(observation, "ev-20260806-foreign-review")
+            assert observed["review_repository"] == "other/repository"
+            assert observed["provider_object"]["available"] is True
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
-    print("external review attestation offline fixtures passed")
+    print("external review observation offline fixtures passed")
     return 0
 
 

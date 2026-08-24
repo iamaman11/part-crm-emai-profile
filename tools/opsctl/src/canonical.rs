@@ -222,6 +222,9 @@ mod tests {
     use serde_json::json;
     use std::io::Cursor;
 
+    const REVIEW_CLAIM_GOLDEN_SHA256: &str =
+        "567d13f69124f651b797b3a77dfdf954caf67cff7695432a15277dc50ed98147";
+
     #[test]
     fn sha256_matches_standard_vectors() {
         assert_eq!(
@@ -253,6 +256,31 @@ mod tests {
             canonical_json(&value)?,
             r#"{"literals":[null,true,false],"numbers":[333333333.3333333,1e+30,4.5,0.002,1e-27]}"#
         );
+        Ok(())
+    }
+
+    #[test]
+    fn review_claim_golden_matches_bounded_python_renderer() -> Result<(), String> {
+        let payload = json!({
+            "domain": "external-evidence-review-v1",
+            "record": {
+                "artifact_digests_sha256": ["11".repeat(32)],
+                "checks": [{"code": "synthetic_check", "outcome": "pass"}],
+                "evidence_id": "ev-20260806-claim-golden",
+                "gate": "product_license",
+                "limitations": ["synthetic_fixture_only"],
+                "observed_at": "2026-08-06T14:39:00Z",
+                "references": ["review-report:sha256:".to_owned() + &"22".repeat(32)],
+                "schema_version": 1,
+                "scope": {
+                    "environment": "none",
+                    "subject_id": "synthetic-attestation-fixture"
+                },
+                "status": "passed"
+            }
+        });
+        let canonical = canonical_json(&payload)?;
+        assert_eq!(sha256_hex(canonical.as_bytes()), REVIEW_CLAIM_GOLDEN_SHA256);
         Ok(())
     }
 

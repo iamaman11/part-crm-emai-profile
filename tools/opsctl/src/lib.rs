@@ -65,6 +65,7 @@ impl Invocation {
             | Self::Status { .. }
             | Self::Credentials { .. }
             | Self::HostedEvidence { .. }
+            | Self::ExternalReviewAttestations { .. }
             | Self::D1 { .. }
             | Self::D1Repository { .. }
             | Self::ReleaseFinalize { .. }
@@ -111,15 +112,7 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             expected_subject,
         } => {
             let _repo_root = resolve_repo_root(root.as_deref(), "hosted-evidence")?;
-            let input = std::fs::read_to_string(&input_json).map_err(|error| {
-                OpsctlError::new(
-                    "hosted-evidence",
-                    format!(
-                        "HOSTED_EVIDENCE_INPUT_UNAVAILABLE: {}: {error}",
-                        input_json.display()
-                    ),
-                )
-            })?;
+            let input = read_hosted_evidence_input(&input_json)?;
             match action {
                 HostedEvidenceAction::SealOperationalCredential => {
                     hosted_evidence::seal_operational_credential_json(
@@ -137,6 +130,15 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                 }
             }
             .map_err(|error| OpsctlError::new("hosted-evidence", error.to_string()))
+        }
+        Invocation::ExternalReviewAttestations {
+            root,
+            observation_json,
+        } => {
+            let _repo_root = resolve_repo_root(root.as_deref(), "hosted-evidence")?;
+            let input = read_hosted_evidence_input(&observation_json)?;
+            hosted_evidence::verify_external_review_attestations_json(&input)
+                .map_err(|error| OpsctlError::new("hosted-evidence", error.to_string()))
         }
         Invocation::D1 {
             root,
@@ -239,9 +241,22 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
     }
 }
 
+fn read_hosted_evidence_input(path: &std::path::Path) -> Result<String, OpsctlError> {
+    std::fs::read_to_string(path).map_err(|error| {
+        OpsctlError::new(
+            "hosted-evidence",
+            format!(
+                "HOSTED_EVIDENCE_INPUT_UNAVAILABLE: {}: {error}",
+                path.display()
+            ),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CredentialsAction, OperatorEffect, OpsctlError, execute, parse_invocation};
+    use serde_json::json;
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -289,6 +304,56 @@ mod tests {
         );
         assert_read_only_effect(OperatorEffect::ReadOnlyMetadata);
         Ok(())
+    }
+
+    #[test]
+    fn external_review_attestation_surface_preserves_zero_effect_authority()
+    -> Result<(), OpsctlError> {
+        let invocation = parse_invocation([
+            OsString::from("opsctl"),
+            OsString::from("hosted-evidence"),
+            OsString::from("external-review-attestation"),
+            OsString::from("verify"),
+            OsString::from("--observation-json"),
+            OsString::from("review-observation.json"),
+        ])?;
+        assert_eq!(
+            invocation.operator_effect(),
+            Some(OperatorEffect::ReadOnlyMetadata)
+        );
+        assert_read_only_effect(OperatorEffect::ReadOnlyMetadata);
+        Ok(())
+    }
+
+    #[test]
+    fn external_review_attestation_rejects_duplicate_evidence_ids() {
+        let duplicate = json!({
+            "schema_version": 1,
+            "kind": "EXTERNAL_REVIEW_ATTESTATION_OBSERVATION",
+            "repository": "iamaman11/part-crm-emai-profile",
+            "records": [
+                {
+                    "record": {"evidence_id": "ev-20260806-duplicate"},
+                    "review_repository": null,
+                    "review_reference": null,
+                    "provider_object": null
+                },
+                {
+                    "record": {"evidence_id": "ev-20260806-duplicate"},
+                    "review_repository": null,
+                    "review_reference": null,
+                    "provider_object": null
+                }
+            ]
+        });
+        let result = super::hosted_evidence::verify_external_review_attestations_json(
+            &duplicate.to_string(),
+        );
+        assert!(result.err().is_some_and(|error| {
+            error
+                .to_string()
+                .contains("HOSTED_REVIEW_ATTESTATION_DUPLICATE_EVIDENCE_ID")
+        }));
     }
 
     #[test]
