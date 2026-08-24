@@ -32,6 +32,8 @@ def strings(value: Any) -> Iterable[str]:
 
 
 def extract_identity(value: Any) -> tuple[str | None, str | None]:
+    if not isinstance(value, dict):
+        raise ValueError("deployment observation must be one object")
     found: set[tuple[str, str]] = set()
     for text in strings(value):
         release_tokens = RELEASE_TOKEN.findall(text)
@@ -46,7 +48,11 @@ def extract_identity(value: Any) -> tuple[str | None, str | None]:
             found.add((release_id, profile_id))
     if len(found) > 1:
         raise ValueError(f"ambiguous deployment identity: {sorted(found)}")
-    return next(iter(found)) if found else (None, None)
+    if found:
+        return next(iter(found))
+    if value:
+        raise ValueError("live deployment has no supported Release Set identity")
+    return None, None
 
 
 def self_test() -> None:
@@ -57,6 +63,14 @@ def self_test() -> None:
         raise ValueError("historical Release Set v2 identity was not observed")
     if extract_identity({"message": f"release_set={v3} profile={profile}"}) != (v3, profile):
         raise ValueError("current Release Set v3 identity was not observed")
+    if extract_identity({}) != (None, None):
+        raise ValueError("an absent deployment did not remain NONE")
+    try:
+        extract_identity({"id": "live-deployment", "annotations": {"workers/triggered_by": "secret"}})
+    except ValueError:
+        pass
+    else:
+        raise ValueError("an unidentified live deployment was confused with NONE")
     for invalid in (
         "release-set-v1-sha256-" + "a" * 64,
         "release-set-v4-sha256-" + "a" * 64,
@@ -69,10 +83,12 @@ def self_test() -> None:
         raise ValueError(f"unsupported/malformed Release Set identity unexpectedly accepted: {invalid}")
     try:
         extract_identity(
-            [
+            {
+                "deployments": [
                 {"message": f"release_set={v2} profile={profile}"},
                 {"message": f"release_set={v3} profile={profile}"},
-            ]
+                ]
+            }
         )
     except ValueError:
         print("AR-11 deployment identity adapter self-test passed.")
