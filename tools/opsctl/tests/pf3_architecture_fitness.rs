@@ -32,13 +32,11 @@ fn retired_semantic_inputs_stay_absent() {
 }
 
 #[test]
-fn doctor_semantic_composition_stays_bounded() {
-    let source = fs::read_to_string(repository_root().join("tools/opsctl/src/doctor.rs"))
-        .expect("doctor source must remain readable");
+fn doctor_semantic_composition_stays_bounded() -> Result<(), Box<dyn std::error::Error>> {
+    let source = fs::read_to_string(repository_root().join("tools/opsctl/src/doctor.rs"))?;
     let production = source
-        .split("#[cfg(test)]")
-        .next()
-        .expect("doctor production source must be present");
+        .split_once("#[cfg(test)]")
+        .map_or(source.as_str(), |(production, _)| production);
 
     for forbidden in DOCTOR_FORBIDDEN_SEMANTIC_MARKERS {
         assert!(
@@ -46,4 +44,5 @@ fn doctor_semantic_composition_stays_bounded() {
             "doctor production source restored retired/generic semantic authority marker: {forbidden}"
         );
     }
+    Ok(())
 }
