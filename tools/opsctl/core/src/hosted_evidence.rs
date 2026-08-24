@@ -352,10 +352,8 @@ impl ReviewAttestationPolicyV1 {
                 "the observed reviewer does not match the terminal evidence record",
             ));
         }
-        let observed_reviewed_at = observation
-            .observed_reviewed_at
-            .as_deref()
-            .ok_or_else(|| {
+        let observed_reviewed_at =
+            observation.observed_reviewed_at.as_deref().ok_or_else(|| {
                 EvidencePolicyError::new(
                     "HOSTED_REVIEW_ATTESTATION_TIMESTAMP_MISSING",
                     "the observed provider object has no effective review timestamp",
@@ -440,8 +438,7 @@ mod tests {
         )?)
     }
 
-    fn review_observation()
-    -> Result<ReviewAttestationObservationV1, Box<dyn std::error::Error>> {
+    fn review_observation() -> Result<ReviewAttestationObservationV1, Box<dyn std::error::Error>> {
         let digest = "11".repeat(32);
         Ok(ReviewAttestationObservationV1 {
             expected_repository: EvidenceTarget::new("acme/profile-platform")?,
@@ -600,8 +597,8 @@ mod tests {
     }
 
     #[test]
-    fn review_attestation_rejects_provider_binding_drift()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn review_attestation_rejects_provider_binding_drift() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut foreign_repository = review_observation()?;
         foreign_repository.observed_repository = EvidenceTarget::new("other/repository")?;
         assert_eq!(
