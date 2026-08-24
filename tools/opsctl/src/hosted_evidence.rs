@@ -944,18 +944,18 @@ mod tests {
         attempt["source_run_attempt"] = json!(0);
         assert_rejected(&attempt);
 
-        assert!(seal_operational_credential_json(
-            &observation().to_string(),
-            OBSERVED_AT + 3600,
-            SUBJECT
-        )
-        .is_err());
-        assert!(seal_operational_credential_json(
-            &observation().to_string(),
-            OBSERVED_AT - 1,
-            SUBJECT
-        )
-        .is_err());
+        assert!(
+            seal_operational_credential_json(
+                &observation().to_string(),
+                OBSERVED_AT + 3600,
+                SUBJECT
+            )
+            .is_err()
+        );
+        assert!(
+            seal_operational_credential_json(&observation().to_string(), OBSERVED_AT - 1, SUBJECT)
+                .is_err()
+        );
     }
 
     #[test]
@@ -974,7 +974,10 @@ mod tests {
     #[test]
     fn production_path_rejects_missing_results_invalid_digests_and_account_drift() {
         let mut missing = observation();
-        missing["reads"].as_object_mut().expect("reads object").remove("workers_deployments_success");
+        missing["reads"]
+            .as_object_mut()
+            .expect("reads object")
+            .remove("workers_deployments_success");
         assert_rejected(&missing);
 
         let mut invalid_digest = observation();
@@ -998,11 +1001,8 @@ mod tests {
     #[test]
     fn production_path_rejects_permission_token_and_mutation_authority_drift() {
         let mut missing_permission = observation();
-        missing_permission["attestation"]["permission_names"] = json!([
-            "D1 Read",
-            "Queues Read",
-            "Workers R2 Storage Read"
-        ]);
+        missing_permission["attestation"]["permission_names"] =
+            json!(["D1 Read", "Queues Read", "Workers R2 Storage Read"]);
         assert_rejected(&missing_permission);
 
         let mut forbidden_permission = observation();
