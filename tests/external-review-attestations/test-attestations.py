@@ -274,15 +274,12 @@ def main() -> int:
             before = len(Handler.requests_seen)
             observation = observe_tree(recovery_root, REPOSITORY, api_base, None)
             requested = Handler.requests_seen[before:]
-            assert requested == [
-                "/repos/acme/profile-platform/issues/comments/505",
-                "/repos/acme/profile-platform/issues/comments/404",
-            ] or requested == [
-                "/repos/acme/profile-platform/issues/comments/404",
-                "/repos/acme/profile-platform/issues/comments/505",
-            ]
+            assert requested == ["/repos/acme/profile-platform/issues/comments/505"]
             assert len(observation["records"]) == 2
-            assert record_observation(observation, old_id)["provider_object"]["available"] is False
+            historical = record_observation(observation, old_id)
+            assert historical["provider_object"] is None
+            assert historical["review_repository"] is None
+            assert historical["review_reference"] is None
             assert (
                 record_observation(observation, "ev-20260806-active-replacement")["provider_object"]["available"]
                 is True
