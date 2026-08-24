@@ -104,9 +104,14 @@ Typed Rust verifier требует для каждого **active terminal leaf*
 - observed API body совпадает с canonical claim;
 - `claim_sha256` является ровно 64 lowercase hexadecimal characters.
 
-Rust adapter также единолично определяет active terminal leaves по `evidence_id`,
-`status` и `supersedes`. Python observer намеренно не решает, какой terminal record
-должен считаться active.
+Rust adapter единолично определяет acceptance-active terminal leaves по
+`evidence_id`, `status` и `supersedes`. Python observer может использовать только
+fail-closed **network prefilter** для уже superseded IDs, чтобы historical mutable
+GitHub objects не оставались сетевой зависимостью. При этом DTO всегда переносит
+полный repository record set, включая superseded records, а Rust независимо заново
+вычисляет active leaves. Ошибка prefilter не может дать false PASS: если observer
+не получит provider facts для record, который Rust считает active terminal,
+verification fail closed.
 
 Если active issue или inline review comment изменён после commit record, GitHub
 `updated_at` меняется и active record перестаёт проходить. Recovery не редактирует
@@ -115,9 +120,8 @@ accepted JSON in place:
 1. создать новый immutable record, который `supersedes` invalidated active record;
 2. получить новый exact GitHub review claim;
 3. regenerated readiness projection делает новый record active leaf;
-4. старый record остаётся в audit history; его provider observation может быть
-   недоступным или изменённым, но Rust не использует superseded record как current
-   acceptance dependency.
+4. старый record остаётся в audit history, но его mutable GitHub object больше не
+   запрашивается и не является current acceptance dependency.
 
 Такой порядок предотвращает необратимый CI denial-of-service от исторического
 comment и одновременно запрещает тихо продолжать использовать изменённый active
@@ -173,15 +177,14 @@ Workflow:
 1. повторно запускает intake, scope и readiness validators;
 2. выполняет offline observer fixtures;
 3. запускает typed Rust hosted-evidence policy tests;
-4. Python shell делает GitHub GETs и пишет strict
-   `EXTERNAL_REVIEW_ATTESTATION_OBSERVATION` DTO;
+4. Python shell делает только необходимые GitHub GETs и пишет strict
+   `EXTERNAL_REVIEW_ATTESTATION_OBSERVATION` DTO со всеми repository records;
 5. `opsctl hosted-evidence external-review-attestation verify` выполняет финальный
-   semantic verdict через typed Rust policy.
+   semantic verdict через typed Rust policy и самостоятельно вычисляет active set.
 
-Pending records без review не требуют network observation. Observer может получить
-provider facts и для superseded historical records, но active/superseded semantics
-решает только Rust. Пустой production record set проходит с zero active terminal
-records и не создаёт readiness claim.
+Pending records без review и superseded historical records не требуют network
+observation. Пустой production record set проходит с zero active terminal records
+и не создаёт readiness claim.
 
 ## 7. Offline Evidence
 
@@ -190,10 +193,11 @@ Observer fixtures доказывают:
 - issue comment, PR review и inline review comment observations;
 - pending record performs no request;
 - wrong body, author и timestamp успешно наблюдаются как facts, а не Python verdict;
-- deleted/404 object наблюдается как `available=false`;
+- deleted/404 active object наблюдается как `available=false`;
 - foreign repository наблюдается без Python semantic rejection;
-- superseded и replacement records оба могут быть наблюдены без выбора active leaf
-  в Python.
+- superseded historical review не запрашивается после появления replacement record;
+- superseded record при этом остаётся в полном observation DTO для независимого
+  Rust active-leaf решения.
 
 Typed Rust tests отдельно доказывают fail-closed rejection для:
 
