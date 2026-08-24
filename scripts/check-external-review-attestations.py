@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify active terminal external evidence against exact GitHub attestations."""
+"""Observe external-evidence GitHub review objects for typed Rust verification."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 CLAIM_DOMAIN = "external-evidence-review-v1"
+OBSERVATION_KIND = "EXTERNAL_REVIEW_ATTESTATION_OBSERVATION"
 MAX_API_RESPONSE_BYTES = 256 * 1024
 ISSUE_COMMENT_RE = re.compile(r"issuecomment-([0-9]+)\Z")
 PULL_REVIEW_RE = re.compile(r"pullrequestreview-([0-9]+)\Z")
@@ -59,6 +60,7 @@ def parse_args() -> argparse.Namespace:
         "--token",
         default=os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"),
     )
+    parser.add_argument("--output-observation-json", type=Path)
     parser.add_argument("--print-claims", action="store_true")
     return parser.parse_args()
 
@@ -80,6 +82,7 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def parse_record(path: Path, data: dict[str, Any] | None = None) -> TerminalRecord | None:
+    """Parse one terminal record for deterministic operator claim rendering only."""
     if data is None:
         data = load_json(path)
     status = require_string(data.get("status"), f"{path}.status")
@@ -109,6 +112,7 @@ def parse_record(path: Path, data: dict[str, Any] | None = None) -> TerminalReco
 
 
 def canonical_claim_payload(record: TerminalRecord) -> bytes:
+    """Legacy-compatible bounded renderer; Rust owns acceptance semantics."""
     bound_record = {key: value for key, value in record.data.items() if key != "review"}
     payload = {"domain": CLAIM_DOMAIN, "record": bound_record}
     return json.dumps(
@@ -137,14 +141,15 @@ def claim_body(record: TerminalRecord) -> str:
 
 def parse_repository(value: str | None) -> tuple[str, str]:
     if value is None:
-        raise AttestationError("repository is required when active terminal records exist")
+        raise AttestationError("repository is required to acquire GitHub review observations")
     match = REPOSITORY_RE.fullmatch(value)
     if match is None:
         raise AttestationError("repository must use owner/name form")
     return match.group(1), match.group(2)
 
 
-def parse_review_target(reference: str, expected_repository: tuple[str, str]) -> ReviewTarget:
+def parse_review_target(reference: str) -> ReviewTarget:
+    """Parse only enough provider addressing data to perform the GET observation."""
     parsed = urlsplit(reference)
     if parsed.scheme != "https" or parsed.netloc != "github.com" or parsed.query:
         raise AttestationError(f"invalid GitHub review reference: {reference}")
@@ -154,11 +159,6 @@ def parse_review_target(reference: str, expected_repository: tuple[str, str]) ->
             f"review reference must identify one issue or pull request: {reference}"
         )
     owner, repository = parts[0], parts[1]
-    if (owner.lower(), repository.lower()) != (
-        expected_repository[0].lower(),
-        expected_repository[1].lower(),
-    ):
-        raise AttestationError(f"review reference belongs to another repository: {reference}")
 
     issue_match = ISSUE_COMMENT_RE.fullmatch(parsed.fragment)
     if issue_match is not None:
@@ -205,7 +205,7 @@ def api_url(api_base: str, target: ReviewTarget) -> str:
     raise AttestationError(f"unsupported review target kind: {target.kind}")
 
 
-def fetch_json(url: str, token: str | None) -> dict[str, Any]:
+def fetch_json(url: str, token: str | None) -> tuple[bool, dict[str, Any] | None]:
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "part-crm-email-profile-external-evidence",
@@ -217,8 +217,9 @@ def fetch_json(url: str, token: str | None) -> dict[str, Any]:
     try:
         with urlopen(request, timeout=20) as response:
             raw = response.read(MAX_API_RESPONSE_BYTES + 1)
-    except HTTPError as exc:
-        raise AttestationError(f"GitHub API returned HTTP {exc.code} for {url}") from exc
+    except HTTPError:
+        # Availability is an observed provider fact. Rust decides whether absence is valid.
+        return False, None
     except URLError as exc:
         raise AttestationError(f"GitHub API request failed for {url}: {exc.reason}") from exc
     if len(raw) > MAX_API_RESPONSE_BYTES:
@@ -229,66 +230,105 @@ def fetch_json(url: str, token: str | None) -> dict[str, Any]:
         raise AttestationError(f"GitHub API returned invalid JSON for {url}") from exc
     if not isinstance(value, dict):
         raise AttestationError(f"GitHub API returned a non-object for {url}")
-    return value
+    return True, value
 
 
-def normalize_body(value: Any, where: str) -> str:
-    body = require_string(value, where).replace("\r\n", "\n")
-    if body.endswith("\n"):
-        body = body[:-1]
-    if body.endswith("\n"):
-        raise AttestationError(f"{where}: review body has extra trailing lines")
-    return body
+def optional_string(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
 
 
-def response_identity(target: ReviewTarget, payload: dict[str, Any]) -> tuple[str, str, str]:
+def provider_observation(
+    target: ReviewTarget,
+    available: bool,
+    payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not available or payload is None:
+        return {
+            "available": False,
+            "login": None,
+            "body": None,
+            "effective_timestamp": None,
+        }
     user = payload.get("user")
-    if not isinstance(user, dict):
-        raise AttestationError("GitHub review response has no user object")
-    login = require_string(user.get("login"), "GitHub review user.login")
-    body = normalize_body(payload.get("body"), "GitHub review body")
+    login = optional_string(user.get("login")) if isinstance(user, dict) else None
     if target.kind in {"issue_comment", "review_comment"}:
-        timestamp = require_string(payload.get("updated_at"), "GitHub review updated_at")
+        timestamp = optional_string(payload.get("updated_at"))
     else:
-        timestamp = require_string(payload.get("submitted_at"), "GitHub review submitted_at")
-    return login, body, timestamp
+        timestamp = optional_string(payload.get("submitted_at"))
+    return {
+        "available": True,
+        "login": login,
+        "body": optional_string(payload.get("body")),
+        "effective_timestamp": timestamp,
+    }
 
 
-def verify_record(
-    record: TerminalRecord,
-    repository: tuple[str, str],
-    api_base: str,
-    token: str | None,
-) -> None:
-    target = parse_review_target(record.review_reference, repository)
-    payload = fetch_json(api_url(api_base, target), token)
-    login, body, timestamp = response_identity(target, payload)
-    if login.lower() != record.github_login.lower():
-        raise AttestationError(
-            f"{record.path}: reviewer mismatch, record={record.github_login}, GitHub={login}"
-        )
-    if timestamp != record.reviewed_at:
-        raise AttestationError(
-            f"{record.path}: review timestamp mismatch, record={record.reviewed_at}, "
-            f"GitHub={timestamp}"
-        )
-    expected_body = claim_body(record)
-    if body != expected_body:
-        raise AttestationError(
-            f"{record.path}: GitHub review body is not the exact canonical claim "
-            f"for {record.evidence_id} ({claim_sha256(record)})"
-        )
-
-
-def load_active_terminal_records(root: Path) -> list[TerminalRecord]:
+def load_all_records(root: Path) -> list[tuple[Path, dict[str, Any]]]:
     records_dir = root / "evidence" / "external" / "records"
     if not records_dir.is_dir():
         raise AttestationError(f"missing records directory: {records_dir}")
+    return [(path, load_json(path)) for path in sorted(records_dir.glob("*.json"))]
 
+
+def review_reference_from_record(data: dict[str, Any]) -> str | None:
+    review = data.get("review")
+    if not isinstance(review, dict):
+        return None
+    reference = review.get("review_reference")
+    return reference if isinstance(reference, str) and reference else None
+
+
+def observe_tree(
+    root: Path,
+    repository_value: str | None,
+    api_base: str,
+    token: str | None,
+) -> dict[str, Any]:
+    repository = parse_repository(repository_value)
+    observed_records: list[dict[str, Any]] = []
+    for _path, data in load_all_records(root):
+        reference = review_reference_from_record(data)
+        if reference is None:
+            observed_records.append(
+                {
+                    "record": data,
+                    "review_repository": None,
+                    "review_reference": None,
+                    "provider_object": None,
+                }
+            )
+            continue
+        target = parse_review_target(reference)
+        available, payload = fetch_json(api_url(api_base, target), token)
+        observed_records.append(
+            {
+                "record": data,
+                "review_repository": f"{target.owner}/{target.repository}",
+                "review_reference": reference,
+                "provider_object": provider_observation(target, available, payload),
+            }
+        )
+    return {
+        "schema_version": 1,
+        "kind": OBSERVATION_KIND,
+        "repository": f"{repository[0]}/{repository[1]}",
+        "records": observed_records,
+    }
+
+
+def write_observation(path: Path, observation: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(observation, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def load_active_terminal_records(root: Path) -> list[TerminalRecord]:
+    """Retained only for non-authoritative operator claim rendering."""
     entries: list[tuple[Path, dict[str, Any], str]] = []
     superseded: set[str] = set()
-    for path in sorted(records_dir.glob("*.json")):
-        data = load_json(path)
+    for path, data in load_all_records(root):
         evidence_id = require_string(data.get("evidence_id"), f"{path}.evidence_id")
         entries.append((path, data, evidence_id))
         supersedes = data.get("supersedes")
@@ -305,46 +345,44 @@ def load_active_terminal_records(root: Path) -> list[TerminalRecord]:
     return terminal
 
 
-def verify_tree(
-    root: Path,
-    repository_value: str | None,
-    api_base: str,
-    token: str | None,
-    print_claims: bool,
-) -> int:
+def print_claims(root: Path) -> int:
     records = load_active_terminal_records(root)
-    if print_claims:
-        for record in records:
-            print(f"# {record.path}")
-            print(claim_body(record))
-            print()
-        print(f"printed {len(records)} active terminal review claim(s)")
-        return 0
-    if not records:
-        print("external review attestation gate passed: 0 active terminal record(s)")
-        return 0
-    repository = parse_repository(repository_value)
     for record in records:
-        verify_record(record, repository, api_base, token)
-    print(
-        "external review attestation gate passed: "
-        f"{len(records)} active terminal record(s)"
-    )
+        print(f"# {record.path}")
+        print(claim_body(record))
+        print()
+    print(f"printed {len(records)} active terminal review claim(s)")
     return 0
 
 
 def main() -> int:
     args = parse_args()
     try:
-        return verify_tree(
-            args.root.resolve(),
+        root = args.root.resolve()
+        if args.print_claims:
+            if args.output_observation_json is not None:
+                raise AttestationError(
+                    "--print-claims and --output-observation-json are mutually exclusive"
+                )
+            return print_claims(root)
+        if args.output_observation_json is None:
+            raise AttestationError(
+                "--output-observation-json is required for the observer path"
+            )
+        observation = observe_tree(
+            root,
             args.repository,
             args.api_base,
             args.token,
-            args.print_claims,
         )
+        write_observation(args.output_observation_json, observation)
+        print(
+            "external review observation captured: "
+            f"{len(observation['records'])} repository record(s)"
+        )
+        return 0
     except (OSError, AttestationError) as exc:
-        print(f"external review attestation gate failed: {exc}", file=sys.stderr)
+        print(f"external review observation failed: {exc}", file=sys.stderr)
         return 1
 
 
