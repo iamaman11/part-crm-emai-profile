@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod architecture;
 pub mod canonical;
 mod cli;
 pub mod credentials;
