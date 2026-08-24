@@ -5,9 +5,9 @@
 **Tracking issue:** #266  
 **Post-AR-11 Functional Closure:** #399  
 **FC-6 execution tracker:** #421  
-**Accepted PF-2 correction:** #477 / #471  
+**Accepted PF-2 corrections:** #480 / #477 / #471  
 **Accepted PF-3 truthfulness correction:** #478 / #431  
-**Accepted code checkpoint before this documentation-only convergence:** `81fba31e7c78966ec57e098d400d895d26e64dbf`  
+**Accepted code checkpoint before this documentation-only convergence:** `a8af2120255f117a7cf58ab86ff79963005f58a0`  
 **Next permitted stage:** FC-6 — READY TO BEGIN ONLY AFTER FINAL READ-ONLY AUDIT AND A SEPARATE EXPLICIT INSTRUCTION  
 **FC-6 execution in this transaction:** NOT STARTED  
 **Next AR slice:** AR-12 — Fresh Rehearsal Environment — BLOCKED / NOT STARTED  
@@ -166,14 +166,14 @@ F1/F2 ACCEPTED
 -> N4 ACCEPTED
 -> N5 ACCEPTED
 -> PF-1 ACCEPTED (#466)
--> PF-2 ACCEPTED + authority correction ACCEPTED (#477 / #471)
+-> PF-2 ACCEPTED + semantic-authority correction #477 + raw-provider-observation correction #480 ACCEPTED (#471 provenance)
 -> PF-3 ACCEPTED provisional + truthfulness correction ACCEPTED (#478 / #431)
 -> documentation convergence
 -> final read-only readiness audit
 -> FC-6 next permitted stage
 ```
 
-A historical read-only FC-6 re-baseline and the repository-only rehearsal-verifier correction #476 occurred before #477/#478. #476 removed a Release Set v2/v3 verifier mismatch and performed no staging mutation. That history does not authorize resuming FC-6 inside the current correction/documentation work.
+A historical read-only FC-6 re-baseline and the repository-only rehearsal-verifier correction #476 occurred before the later PF corrections. #476 removed a Release Set v2/v3 verifier mismatch and performed no staging mutation. #480 subsequently completed PF-2 raw-provider-observation convergence. That history does not authorize resuming FC-6 inside the current correction/documentation work.
 
 FC-6 may begin only after a fresh explicit user instruction following readiness acceptance.
 
@@ -234,20 +234,22 @@ explicit semantic-vs-exact-byte digest scope
 
 ## 9. PF-2 accepted boundary
 
-PF-2 and its #477 authority correction are accepted.
+PF-2, semantic-authority correction #477 and raw-provider-observation correction #480 are accepted.
 
 Current flow:
 
 ```text
 GitHub / provider read-only effects
--> raw secret-free observation
--> strict versioned DTO
+-> raw secret-free HTTP/provider/process observations
+-> strict Hosted Evidence v3 DTO
 -> typed Rust EvidencePolicy / external-evidence policy
 -> Rust-derived trust/readiness/outcome
 -> deterministic durable evidence/artifact projection
 ```
 
-Workflow/Python/Node effects do not supply READY/PASS/TRUSTED as semantic inputs. The remaining external-review Python acquisition path produces raw GitHub observations; typed Rust owns repository binding, lineage/review validity and acceptance.
+Workflow/Python/Node effects do not supply READY/PASS/TRUSTED or provider-read success booleans as semantic inputs. #480 removed the remaining workflow-side `workers_deployments_read`, `d1_catalog_read`, `r2_bucket_read`, `queue_read` and `worker_secret_names_read` verdict authority. Rust alone classifies allowed HTTP/provider/process results, freshness/credential/mutation constraints and the exact staging account binding (`a94259ab73151da7058613fe8ec17b4d` / `pvisakp`). Legacy Hosted Evidence v2/read-verdict shape, unknown critical fields and wrong account identity fail closed.
+
+The remaining external-review Python acquisition path produces raw GitHub observations; typed Rust owns repository binding, lineage/review validity and acceptance.
 
 ## 10. PF-3 accepted provisional boundary
 
@@ -390,7 +392,7 @@ Historical workflow counts/names/SHAs are observations, never timeless constants
 For the current prerequisite closeout, the required checkpoint is:
 
 ```text
-PF-2 correction accepted
+PF-2 semantic-authority + raw-provider-observation corrections accepted
 + PF-3 truthfulness correction accepted
 + current documentation converged
 + protected-main acceptance evidence read fresh
