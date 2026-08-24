@@ -660,7 +660,10 @@ fn empty_readiness_projection_matches_existing_contract() -> Result<(), Box<dyn 
         expected.as_str(),
         normalize_repository_text(&committed).as_ref()
     );
-    validate_status_path(&root.join("status.json"), summary.eligible_for_production_review)?;
+    validate_status_path(
+        &root.join("status.json"),
+        summary.eligible_for_production_review,
+    )?;
     Ok(())
 }
 
