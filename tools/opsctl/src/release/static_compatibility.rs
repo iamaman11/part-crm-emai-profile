@@ -96,12 +96,19 @@ fn contracts_match(
     Ok(manifest.contracts.sha256 == sha256_hex(canonical.as_bytes()))
 }
 
+fn public_api_contract_matches(
+    resolved: &[ResolvedReleaseInput],
+    observed_sha256: &str,
+) -> Result<bool, ReleaseModelError> {
+    Ok(resolved_input(resolved, "public_api_root")?.sha256.as_str() == observed_sha256)
+}
+
 fn protocols_match(
     resolved: &[ResolvedReleaseInput],
     manifest: &ReleaseCompatibilityView,
     mailbox_admin: bool,
 ) -> Result<bool, ReleaseModelError> {
-    if manifest.protocols.public_api_contract_sha256 != manifest.contracts.sha256 {
+    if !public_api_contract_matches(resolved, &manifest.protocols.public_api_contract_sha256)? {
         return Ok(false);
     }
     let runtime_lock = resolved_input(resolved, "camouhost_runtime_lock")?;
@@ -242,7 +249,12 @@ fn resolved_input<'a>(
 
 #[cfg(test)]
 mod tests {
+    use super::{public_api_contract_matches, resolved_input};
+    use crate::release::digest::{canonical_json, sha256_hex};
     use crate::release::input_topology::ReleaseInputTopology;
+    use crate::release::model::ReleaseModelError;
+    use serde_json::{Value, json};
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     fn root() -> PathBuf {
@@ -265,6 +277,45 @@ mod tests {
                 .iter()
                 .all(|input| input.release_identity_source != "openapi/v1/control-plane.yaml")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn public_api_protocol_digest_uses_root_contract_not_contract_inventory()
+    -> Result<(), ReleaseModelError> {
+        let repository_root = root();
+        let topology = ReleaseInputTopology::load(&repository_root)?;
+        let resolved = topology.resolve(&repository_root)?;
+        let public_api_root = resolved_input(&resolved, "public_api_root")?;
+
+        let contracts = resolved
+            .iter()
+            .filter(|input| input.input.consumed_by("release_set.contracts"))
+            .map(|input| (input.input.release_identity_source.as_str(), input))
+            .collect::<BTreeMap<_, _>>();
+        let canonical_entries = contracts
+            .values()
+            .map(|entry| {
+                json!({
+                    "path": entry.input.release_identity_source,
+                    "sha256": entry.sha256,
+                    "size_bytes": entry.size_bytes,
+                })
+            })
+            .collect::<Vec<_>>();
+        let canonical =
+            canonical_json(&Value::Array(canonical_entries)).map_err(ReleaseModelError::new)?;
+        let aggregate_contracts_sha256 = sha256_hex(canonical.as_bytes());
+
+        assert_ne!(public_api_root.sha256, aggregate_contracts_sha256);
+        assert!(public_api_contract_matches(
+            &resolved,
+            &public_api_root.sha256
+        )?);
+        assert!(!public_api_contract_matches(
+            &resolved,
+            &aggregate_contracts_sha256
+        )?);
         Ok(())
     }
 }

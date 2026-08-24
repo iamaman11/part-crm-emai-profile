@@ -95,6 +95,7 @@ fn static_compatibility_fields() -> Result<StaticCompatibilityFields, Box<dyn st
         "sha256": contract_sha,
     });
 
+    let public_api_root = resolved_input(&resolved, "public_api_root")?;
     let runtime_input = resolved_input(&resolved, "camouhost_runtime_lock")?;
     let runtime_lock_bytes = fs::read(&runtime_input.absolute_path)?;
     let runtime_lock: Value = serde_json::from_slice(&runtime_lock_bytes)?;
@@ -102,7 +103,7 @@ fn static_compatibility_fields() -> Result<StaticCompatibilityFields, Box<dyn st
         .as_u64()
         .ok_or_else(|| io::Error::other("canonical runtime IPC version missing"))?;
     let protocols = json!({
-        "public_api_contract_sha256": contract_sha,
+        "public_api_contract_sha256": public_api_root.sha256,
         "camouhost_ipc_version": ipc_version,
         "profile_bridge_protocol_version": ipc_version,
         "resolver_protocol": "mailbox-secret-resolver-v1",
