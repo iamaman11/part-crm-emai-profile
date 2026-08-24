@@ -247,7 +247,7 @@ GitHub / provider read-only effects
 -> deterministic durable evidence/artifact projection
 ```
 
-Workflow/Python/Node effects do not supply READY/PASS/TRUSTED or provider-read success booleans as semantic inputs. #480 removed the remaining workflow-side `workers_deployments_read`, `d1_catalog_read`, `r2_bucket_read`, `queue_read` and `worker_secret_names_read` verdict authority. Rust alone classifies allowed HTTP/provider/process results, freshness/credential/mutation constraints and the exact staging account binding (`a94259ab73151da7058613fe8ec17b4d` / `pvisakp`). Legacy Hosted Evidence v2/read-verdict shape, unknown critical fields and wrong account identity fail closed.
+Workflow/Python/Node effects do not supply READY/PASS/TRUSTED or provider-read success booleans as semantic inputs. #480 removed the remaining workflow-side `workers_deployments_read`, `d1_catalog_read`, `r2_bucket_read`, `queue_read` and `worker_secret_names_read` verdict authority. Rust alone classifies allowed HTTP/provider/process results, freshness/credential/mutation constraints and the exact staging account binding (`4426df1449e417511bc7697d60b7f62f` / `Pvisakp@gmail.com's Account`). Legacy Hosted Evidence v2/read-verdict shape, unknown critical fields and wrong account identity fail closed.
 
 The remaining external-review Python acquisition path produces raw GitHub observations; typed Rust owns repository binding, lineage/review validity and acceptance.
 
