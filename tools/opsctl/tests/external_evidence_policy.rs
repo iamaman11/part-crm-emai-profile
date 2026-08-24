@@ -586,8 +586,8 @@ fn format_date(value: u32) -> String {
 }
 
 #[test]
-fn current_repository_external_evidence_uses_typed_rust_authority(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn current_repository_external_evidence_uses_typed_rust_authority()
+-> Result<(), Box<dyn std::error::Error>> {
     let root = repository_root();
     let summary = validate_tree(&root)?;
     validate_projection(&root, &summary)?;
@@ -605,14 +605,17 @@ fn positive_external_evidence_fixtures_pass() -> Result<(), Box<dyn std::error::
 }
 
 #[test]
-fn repository_line_endings_normalize_without_weakening_canonical_text(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn repository_line_endings_normalize_without_weakening_canonical_text()
+-> Result<(), Box<dyn std::error::Error>> {
     let root = repository_root().join("tests/external-readiness/fixtures/empty");
     let summary = validate_tree(&root)?;
     let canonical = render_summary(&summary)?;
     let crlf = canonical.replace('\n', "\r\n");
     let cr = canonical.replace('\n', "\r");
-    assert_eq!(normalize_repository_text(&crlf).as_ref(), canonical.as_str());
+    assert_eq!(
+        normalize_repository_text(&crlf).as_ref(),
+        canonical.as_str()
+    );
     assert_eq!(normalize_repository_text(&cr).as_ref(), canonical.as_str());
 
     let noncanonical = canonical.replacen("\"active_records\":", "\"active_records\" :", 1);
