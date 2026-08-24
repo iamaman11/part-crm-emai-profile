@@ -274,8 +274,11 @@ fn validate_projection(
 }
 
 fn validate_status(root: &Path, eligible: bool) -> Result<(), AdapterError> {
-    let path = root.join("docs/status.json");
-    let raw = fs::read_to_string(&path)
+    validate_status_path(&root.join("docs/status.json"), eligible)
+}
+
+fn validate_status_path(path: &Path, eligible: bool) -> Result<(), AdapterError> {
+    let raw = fs::read_to_string(path)
         .map_err(|error| AdapterError::new(format!("cannot read {}: {error}", path.display())))?;
     let value = parse_strict_json_with_limits(&raw, 256 * 1024, 32)
         .map_err(|error| AdapterError::new(format!("{}: {error}", path.display())))?;
@@ -657,12 +660,7 @@ fn empty_readiness_projection_matches_existing_contract() -> Result<(), Box<dyn 
         expected.as_str(),
         normalize_repository_text(&committed).as_ref()
     );
-    let status = fs::read_to_string(root.join("status.json"))?;
-    let status_path = root.join("docs/status.json");
-    fs::create_dir_all(root.join("docs"))?;
-    fs::write(&status_path, status)?;
-    validate_status(&root, summary.eligible_for_production_review)?;
-    fs::remove_file(status_path)?;
+    validate_status_path(&root.join("status.json"), summary.eligible_for_production_review)?;
     Ok(())
 }
 
@@ -670,12 +668,10 @@ fn empty_readiness_projection_matches_existing_contract() -> Result<(), Box<dyn 
 fn false_production_readiness_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
     let root = repository_root().join("tests/external-readiness/fixtures/empty");
     let summary = validate_tree(&root)?;
-    let status = fs::read_to_string(root.join("status-production-ready.json"))?;
-    let status_path = root.join("docs/status.json");
-    fs::create_dir_all(root.join("docs"))?;
-    fs::write(&status_path, status)?;
-    let result = validate_status(&root, summary.eligible_for_production_review);
-    fs::remove_file(status_path)?;
+    let result = validate_status_path(
+        &root.join("status-production-ready.json"),
+        summary.eligible_for_production_review,
+    );
     assert!(result.is_err());
     Ok(())
 }
