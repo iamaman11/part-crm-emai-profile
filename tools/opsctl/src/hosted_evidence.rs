@@ -396,9 +396,7 @@ pub fn verify_external_review_attestations_json(
         verified_records,
     };
     let value = serde_json::to_value(result).map_err(|error| {
-        HostedEvidenceAdapterError::new(format!(
-            "HOSTED_REVIEW_ATTESTATION_RESULT_SCHEMA: {error}"
-        ))
+        HostedEvidenceAdapterError::new(format!("HOSTED_REVIEW_ATTESTATION_RESULT_SCHEMA: {error}"))
     })?;
     canonical_pretty_json(&value).map_err(|error| {
         HostedEvidenceAdapterError::new(format!(
@@ -426,7 +424,10 @@ fn claim_sha256_for_record(record: &Value) -> Result<String, HostedEvidenceAdapt
     Ok(sha256_hex(canonical.as_bytes()))
 }
 
-fn record_string<'a>(record: &'a Value, field: &str) -> Result<&'a str, HostedEvidenceAdapterError> {
+fn record_string<'a>(
+    record: &'a Value,
+    field: &str,
+) -> Result<&'a str, HostedEvidenceAdapterError> {
     let object = record.as_object().ok_or_else(|| {
         HostedEvidenceAdapterError::new(
             "HOSTED_REVIEW_ATTESTATION_RECORD_INVALID: record must be a JSON object",
@@ -842,8 +843,7 @@ mod tests {
         assert!(verify_external_review_attestations_json(&deleted.to_string()).is_err());
 
         let mut foreign = review_batch(vec![observed]);
-        foreign["records"][0]["review_repository"] =
-            Value::String("other/repository".to_owned());
+        foreign["records"][0]["review_repository"] = Value::String("other/repository".to_owned());
         assert!(verify_external_review_attestations_json(&foreign.to_string()).is_err());
     }
 
@@ -890,9 +890,8 @@ mod tests {
             "review_reference": null,
             "provider_object": null
         });
-        let result = verify_external_review_attestations_json(
-            &review_batch(vec![pending]).to_string(),
-        )?;
+        let result =
+            verify_external_review_attestations_json(&review_batch(vec![pending]).to_string())?;
         assert!(result.contains("\"verified_records\": 0"));
         Ok(())
     }
