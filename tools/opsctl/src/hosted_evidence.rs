@@ -78,6 +78,7 @@ struct ObservationDto {
     valid_until_unix_seconds: i64,
     trust_state: TrustStateDto,
     outcome: OutcomeDto,
+    production_mutation: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -149,6 +150,7 @@ struct EnvelopeDto {
     valid_until_unix_seconds: i64,
     trust_state: TrustStateDto,
     outcome: OutcomeDto,
+    production_mutation: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -312,6 +314,7 @@ fn observation_from_dto(
         valid_until_unix_seconds: dto.valid_until_unix_seconds,
         trust_state: dto.trust_state.into(),
         outcome: dto.outcome.into(),
+        production_mutation: dto.production_mutation,
     })
 }
 
@@ -337,6 +340,7 @@ fn envelope_from_dto(
         valid_until_unix_seconds: dto.valid_until_unix_seconds,
         trust_state: dto.trust_state.into(),
         outcome: dto.outcome.into(),
+        production_mutation: dto.production_mutation,
     })
 }
 
@@ -355,6 +359,7 @@ fn envelope_to_dto(envelope: &HostedEvidenceEnvelopeV1) -> EnvelopeDto {
         valid_until_unix_seconds: envelope.valid_until_unix_seconds,
         trust_state: envelope.trust_state.into(),
         outcome: envelope.outcome.into(),
+        production_mutation: envelope.production_mutation,
     }
 }
 
@@ -409,7 +414,8 @@ mod tests {
             "observed_at_unix_seconds": OBSERVED_AT,
             "valid_until_unix_seconds": OBSERVED_AT + 3600,
             "trust_state": "TRUSTED",
-            "outcome": "PASS"
+            "outcome": "PASS",
+            "production_mutation": false
         })
     }
 
@@ -424,6 +430,7 @@ mod tests {
         assert_eq!(artifact, verified);
         assert!(artifact.contains("\"algorithm\": \"SHA-256\""));
         assert!(artifact.contains("\"scope\": \"RFC8785_CANONICAL_ENVELOPE_BYTES\""));
+        assert!(artifact.contains("\"production_mutation\": false"));
         Ok(())
     }
 
@@ -458,10 +465,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_untrusted_and_impossible_freshness() {
+    fn rejects_untrusted_mutating_and_impossible_freshness() {
         let mut untrusted = observation();
         untrusted["trust_state"] = Value::String("UNTRUSTED".to_owned());
         assert!(seal(&untrusted).is_err());
+
+        let mut mutating = observation();
+        mutating["production_mutation"] = Value::Bool(true);
+        assert!(seal(&mutating).is_err());
 
         let mut impossible = observation();
         impossible["valid_until_unix_seconds"] = Value::from(OBSERVED_AT);
