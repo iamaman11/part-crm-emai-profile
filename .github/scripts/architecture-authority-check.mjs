@@ -88,7 +88,11 @@ function validate(subjects, sources) {
       || lifecycle.credential_authority !== PATHS.authority
       || lifecycle.production_mutation !== false
       || lifecycle.routine_release_rotates_runtime_secrets !== false
-      || lifecycle.routine_release_secret_transport !== false) {
+      || lifecycle.routine_release_secret_transport !== false
+      || lifecycle.global_invariants?.exportable_static_credential_max_lifetime !== 'P6M'
+      || lifecycle.global_invariants?.non_expiring_exportable_static_credentials !== 'FORBIDDEN'
+      || lifecycle.global_invariants?.short_lived_or_federated_identity_preferred !== true
+      || lifecycle.global_invariants?.retained_decryption_only_material_may_outlive_active_use_until_dependency_zero !== true) {
     errors.push('credential lifecycle root/invariants drifted');
   }
   const lifecycleIds = lifecycle.concerns?.map((entry) => entry.id);
