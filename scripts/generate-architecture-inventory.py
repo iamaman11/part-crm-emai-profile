@@ -26,7 +26,6 @@ import d1_repository_projection as d1_repository
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE_PATH = ROOT / "scripts/generate-architecture-inventory-engine.py"
 INVENTORY_PATH = ROOT / "architecture/inventory.json"
-RUNTIME_CUTOVER_SOURCE = "architecture/runtime-cutover-ar10.json"
 RELEASE_ARCHITECTURE_SOURCE = "architecture/release-architecture-ar11.json"
 AR9_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-19-ar9-final-acceptance.json"
 AR10_ACCEPTANCE_EVIDENCE = "docs/evidence/2026-08-19-ar10-final-acceptance.json"
@@ -374,65 +373,6 @@ def d1_evolution_projection() -> dict[str, object]:
     return d1_repository.load(ROOT)
 
 
-def runtime_cutover_projection() -> dict[str, object]:
-    authority = load_json(RUNTIME_CUTOVER_SOURCE)
-    if authority.get("kind") != "RUNTIME_CUTOVER_AUTHORITY" or authority.get("schema_version") != 1:
-        raise ValueError("AR-10 runtime cutover authority identity/version is invalid")
-    if authority.get("owning_slice") != "AR-10" or authority.get("owning_issue") != 368:
-        raise ValueError("AR-10 runtime cutover ownership drifted")
-    if authority.get("status") != "accepted":
-        raise ValueError("AR-10 runtime cutover authority must be accepted after accepted main")
-    if authority.get("production_mutation") is not False:
-        raise ValueError("AR-10 runtime cutover must remain non-production-mutating")
-    if authority.get("architecture_complete") is not False or authority.get("production_ready") is not False:
-        raise ValueError("AR-10 runtime cutover may not advance production architecture state")
-    if authority.get("production_core_gate") != "BLOCKED":
-        raise ValueError("AR-10 runtime cutover must keep Production Core blocked")
-    real_runtime = authority.get("real_runtime")
-    identity = authority.get("generation_identity")
-    opsctl = authority.get("opsctl")
-    if not isinstance(real_runtime, dict) or not isinstance(identity, dict) or not isinstance(opsctl, dict):
-        raise ValueError("AR-10 runtime cutover authority is incomplete")
-    return {
-        "schema_version": 1,
-        "role": "ACCEPTED_AR10_RUNTIME_CUTOVER_PROJECTION",
-        "acceptance_evidence": AR10_ACCEPTANCE_EVIDENCE,
-        "source_authority": RUNTIME_CUTOVER_SOURCE,
-        "source_status": authority.get("status"),
-        "tracking_issue": authority.get("owning_issue"),
-        "completion_pr": authority.get("completion_pr"),
-        "start_base": authority.get("exact_start_base"),
-        "real_runtime": {
-            "repository_integrated": real_runtime.get("repository_integrated"),
-            "production_certified": real_runtime.get("production_certified"),
-            "entrypoint": real_runtime.get("entrypoint"),
-            "runtime_lock": real_runtime.get("runtime_lock"),
-            "python": real_runtime.get("python"),
-            "camoufox_python": real_runtime.get("camoufox_python"),
-            "camoufox_browser": real_runtime.get("camoufox_browser"),
-            "browserforge": real_runtime.get("browserforge"),
-            "playwright": real_runtime.get("playwright"),
-            "persistent_context_required": real_runtime.get("persistent_context_required"),
-            "stable_generation_user_data_dir": real_runtime.get("stable_generation_user_data_dir"),
-        },
-        "generation_identity": {
-            "compatibility_version": identity.get("compatibility_version"),
-            "fingerprint_policy_version": identity.get("fingerprint_policy_version"),
-            "normal_launch_may_regenerate_browserforge_identity": identity.get("normal_launch_may_regenerate_browserforge_identity"),
-            "incompatible_change_requires_candidate_generation": identity.get("incompatible_change_requires_candidate_generation"),
-        },
-        "opsctl": {
-            "production_child_process_spawn_sites": opsctl.get("production_child_process_spawn_sites"),
-            "provider_mutation_authority": opsctl.get("provider_mutation_authority"),
-        },
-        "legacy_executables_remaining": authority.get("legacy_executables_remaining"),
-        "architecture_complete": False,
-        "production_core_gate": "BLOCKED",
-        "production_ready": False,
-        "production_mutation": False,
-    }
-
-
 def release_architecture_projection() -> dict[str, object]:
     authority = load_json(RELEASE_ARCHITECTURE_SOURCE)
     if authority.get("schema_version") != 1 or authority.get("kind") != "AR11_RELEASE_ARCHITECTURE_SOURCE":
@@ -487,7 +427,6 @@ def build_inventory() -> dict[str, object]:
     expected["current_delivery_map"] = delivery
     expected["subject_domain_authorities"] = subject_projection()
     expected["d1_evolution"] = d1_evolution_projection()
-    expected["runtime_cutover"] = runtime_cutover_projection()
     expected["release_architecture"] = release_architecture_projection()
     documentation = expected.setdefault("documentation_authority", {})
     documentation["current_slice"] = sequence_state["current_slice"]
@@ -508,8 +447,6 @@ def build_inventory() -> dict[str, object]:
         "migrations/d1",
         "migrations/resolver-d1",
     ]
-    documentation["runtime_cutover"] = "architecture/inventory.json::runtime_cutover"
-    documentation["runtime_cutover_source"] = RUNTIME_CUTOVER_SOURCE
     documentation["release_architecture"] = "architecture/inventory.json::release_architecture"
     documentation["release_architecture_source"] = RELEASE_ARCHITECTURE_SOURCE
     program = expected.setdefault("program_state", {})
@@ -533,9 +470,17 @@ def serialized(payload: object) -> str:
 def strip_lifecycle_snapshot_fields(payload: dict[str, Any]) -> dict[str, Any]:
     value = copy.deepcopy(payload)
     value.pop("current_delivery_map", None)
+    value.pop("runtime_cutover", None)
     documentation = value.get("documentation_authority")
     if isinstance(documentation, dict):
-        for key in ("current_slice", "current_delivery_map", "lifecycle_projection_role", "lifecycle_authority"):
+        for key in (
+            "current_slice",
+            "current_delivery_map",
+            "lifecycle_projection_role",
+            "lifecycle_authority",
+            "runtime_cutover",
+            "runtime_cutover_source",
+        ):
             documentation.pop(key, None)
     program = value.get("program_state")
     if isinstance(program, dict):
@@ -671,10 +616,6 @@ def main() -> int:
             raise ValueError("lifecycle delivery projection lost non-authoritative classification")
         engine.self_test(expected)
         run([sys.executable, "scripts/credential_authority.py", "--self-test"])
-        mutated = json.loads(serialized(expected))
-        mutated.pop("runtime_cutover", None)
-        if mutated == expected or mutated == build_inventory():
-            raise ValueError("missing AR-10 runtime cutover projection negative fixture unexpectedly matched")
         release_mutated = json.loads(serialized(expected))
         release_mutated.pop("release_architecture", None)
         if release_mutated == expected or release_mutated == build_inventory():
