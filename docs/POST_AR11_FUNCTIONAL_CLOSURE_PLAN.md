@@ -19,7 +19,7 @@ production_mutation = false
 F1/F2 ACCEPTED
 -> N1 / #454 / N2 / N3 / N4 / N5 ACCEPTED
 -> PF-1 ACCEPTED (#466)
--> PF-2 ACCEPTED + correction ACCEPTED (#477 / #471)
+-> PF-2 ACCEPTED + semantic-authority correction #477 + raw-provider-observation correction #480 ACCEPTED (#471 provenance)
 -> PF-3 ACCEPTED provisional + truthfulness correction ACCEPTED (#478 / #431)
 -> current-state documentation convergence
 -> final read-only readiness audit
@@ -28,7 +28,7 @@ F1/F2 ACCEPTED
 -> AR-12 implementation entry
 ```
 
-A historical read-only FC-6 re-baseline found a Release Set v2/v3 rehearsal-verifier mismatch; #476 corrected that repository-only verifier and performed no staging mutation. Because PF-2/PF-3 were subsequently corrected, FC-6 may not simply resume from that historical observation. A new FC-6 execution begins only after a separate explicit instruction and a fresh read-only re-baseline.
+A historical read-only FC-6 re-baseline found a Release Set v2/v3 rehearsal-verifier mismatch; #476 corrected that repository-only verifier and performed no staging mutation. PF-2/PF-3 were subsequently corrected, with #480 completing PF-2 raw-provider-observation convergence. FC-6 may not resume from historical observations or prerequisite proof. A new FC-6 execution begins only after a separate explicit instruction and a fresh read-only re-baseline.
 
 ## 2. Functional Closure guarantees
 
@@ -70,6 +70,8 @@ accepted protected main
 -> observe required hosted evidence/attestations
 -> typed READY | BLOCKED
 ```
+
+The PF-2 hosted-evidence prerequisite now requires raw secret-free provider/process observations in strict Hosted Evidence v3. Typed Rust alone derives trust/readiness/outcome and enforces the exact staging account binding; workflow/shell code must not pre-classify provider reads into semantic booleans.
 
 Only `READY` may cross into deploy-capable credential exposure or mutation.
 
@@ -118,4 +120,4 @@ PC-1  = first Production Core release
 
 Production remains fail-closed until its owning gates explicitly authorize it.
 
-Canonical references: `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`, #399, #421, #431/#478, #471/#477.
+Canonical references: `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md`, #399, #421, #431/#478, #471/#477/#480.
