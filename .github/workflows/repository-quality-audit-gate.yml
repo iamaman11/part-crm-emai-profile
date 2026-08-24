@@ -213,6 +213,12 @@ jobs:
           python scripts/check-opsctl-readonly.py --self-test
           cargo test --locked --manifest-path tools/opsctl/Cargo.toml
 
+      - name: Validate AR-11 release admission architecture
+        run: node .github/scripts/release-architecture-ar11.mjs
+
+      - name: Prove AR-11 release admission weakening fails closed
+        run: node .github/scripts/release-architecture-ar11.mjs --self-test
+
       - name: Enforce Phase 1A event/outbox ownership and scope
         run: python scripts/check-phase1a-event-boundaries.py
 
