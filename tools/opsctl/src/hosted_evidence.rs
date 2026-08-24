@@ -4,7 +4,7 @@ use opsctl_core::hosted_evidence::{
     EvidencePolicyV3, EvidenceSource, EvidenceSubject, EvidenceTarget, EvidenceTrustState,
     HostedEvidenceEnvelopeV3, HostedEvidenceObservationV3,
     OperationalCredentialAccountObservationV1, OperationalCredentialAttestationObservationV1,
-    OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV2,
+    OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV3,
     OperationalCredentialTokenVerifyObservationV1, ReviewAttestationObservationV1,
     ReviewAttestationPolicyV1, ReviewAttestationStatus,
 };
@@ -101,6 +101,7 @@ struct OperationalCredentialAttestationDto {
     environment: String,
     token_id: String,
     account_id: String,
+    account_name: String,
     permission_names: Vec<String>,
     production_scope: bool,
     mutation_capability: bool,
@@ -112,34 +113,37 @@ struct OperationalCredentialAttestationDto {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct TokenVerifyDto {
-    http_status: u16,
-    success: bool,
-    error_count: usize,
-    token_id: String,
-    status: String,
+    http_status: Option<u16>,
+    success: Option<bool>,
+    error_count: Option<usize>,
+    token_id: Option<String>,
+    status: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AccountObservationDto {
-    http_status: u16,
-    success: bool,
-    error_count: usize,
-    account_id: String,
-    account_name: String,
+    http_status: Option<u16>,
+    success: Option<bool>,
+    error_count: Option<usize>,
+    account_id: Option<String>,
+    account_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ReadObservationsDto {
-    workers_deployments_http_status: u16,
-    workers_deployments_success: bool,
-    workers_deployments_error_count: usize,
-    d1_catalog_exit_code: i32,
-    r2_bucket_exit_code: i32,
-    queue_exit_code: i32,
-    worker_secret_names_exit_code: i32,
-    mutation_probe: String,
+    workers_deployments_http_status: Option<u16>,
+    workers_deployments_success: Option<bool>,
+    workers_deployments_error_count: Option<usize>,
+    workers_deployments_response_digest_sha256: Option<String>,
+    d1_catalog_exit_code: Option<i32>,
+    d1_catalog_output_digest_sha256: Option<String>,
+    r2_bucket_exit_code: Option<i32>,
+    r2_bucket_output_digest_sha256: Option<String>,
+    queue_exit_code: Option<i32>,
+    worker_secret_names_exit_code: Option<i32>,
+    mutation_probe: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -420,6 +424,7 @@ fn observation_from_dto(
             environment: dto.attestation.environment.clone(),
             token_id: dto.attestation.token_id.clone(),
             account_id: dto.attestation.account_id.clone(),
+            account_name: dto.attestation.account_name.clone(),
             permission_names: dto.attestation.permission_names.clone(),
             production_scope: dto.attestation.production_scope,
             mutation_capability: dto.attestation.mutation_capability,
@@ -442,12 +447,18 @@ fn observation_from_dto(
             account_name: dto.account.account_name.clone(),
         },
         deployment_account_id: dto.deployment_account_id.clone(),
-        reads: OperationalCredentialReadObservationV2 {
+        reads: OperationalCredentialReadObservationV3 {
             workers_deployments_http_status: dto.reads.workers_deployments_http_status,
             workers_deployments_success: dto.reads.workers_deployments_success,
             workers_deployments_error_count: dto.reads.workers_deployments_error_count,
+            workers_deployments_response_digest_sha256: dto
+                .reads
+                .workers_deployments_response_digest_sha256
+                .clone(),
             d1_catalog_exit_code: dto.reads.d1_catalog_exit_code,
+            d1_catalog_output_digest_sha256: dto.reads.d1_catalog_output_digest_sha256.clone(),
             r2_bucket_exit_code: dto.reads.r2_bucket_exit_code,
+            r2_bucket_output_digest_sha256: dto.reads.r2_bucket_output_digest_sha256.clone(),
             queue_exit_code: dto.reads.queue_exit_code,
             worker_secret_names_exit_code: dto.reads.worker_secret_names_exit_code,
             mutation_probe: dto.reads.mutation_probe.clone(),
@@ -785,12 +796,6 @@ mod tests {
     const REVIEW_REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
 
     fn observation() -> Value {
-        let required = json!([
-            "D1 Read",
-            "Queues Read",
-            "Workers R2 Storage Read",
-            "Workers Scripts Read"
-        ]);
         json!({
             "schema_version": 3,
             "kind": "HOSTED_EVIDENCE_RAW_OBSERVATION",
@@ -810,7 +815,12 @@ mod tests {
                 "allowed_mutator": "NONE",
                 "mutation_allowed": false,
                 "provider_mutation_forbidden": true,
-                "required_provider_permissions": required,
+                "required_provider_permissions": [
+                    "D1 Read",
+                    "Queues Read",
+                    "Workers R2 Storage Read",
+                    "Workers Scripts Read"
+                ],
                 "forbidden_provider_permission_classes": [
                     "API Tokens Write",
                     "D1 Write",
@@ -825,6 +835,7 @@ mod tests {
                 "environment": "staging",
                 "token_id": "observe-token-id-1234",
                 "account_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "account_name": "pvisakp",
                 "permission_names": [
                     "D1 Read",
                     "Queues Read",
@@ -856,8 +867,11 @@ mod tests {
                 "workers_deployments_http_status": 200,
                 "workers_deployments_success": true,
                 "workers_deployments_error_count": 0,
+                "workers_deployments_response_digest_sha256": "11".repeat(32),
                 "d1_catalog_exit_code": 0,
+                "d1_catalog_output_digest_sha256": "22".repeat(32),
                 "r2_bucket_exit_code": 0,
+                "r2_bucket_output_digest_sha256": "33".repeat(32),
                 "queue_exit_code": 0,
                 "worker_secret_names_exit_code": 0,
                 "mutation_probe": "FORBIDDEN_NOT_EXECUTED"
@@ -866,8 +880,12 @@ mod tests {
         })
     }
 
-    fn seal(value: &Value) -> Result<String, super::HostedEvidenceAdapterError> {
+    fn seal(value: &Value) -> Result<String, HostedEvidenceAdapterError> {
         seal_operational_credential_json(&value.to_string(), EVALUATED_AT, SUBJECT)
+    }
+
+    fn assert_rejected(value: &Value) {
+        assert!(seal(value).is_err());
     }
 
     #[test]
@@ -878,15 +896,16 @@ mod tests {
         assert!(artifact.contains("\"trust_state\": \"TRUSTED\""));
         assert!(artifact.contains("\"outcome\": \"PASS\""));
         assert!(artifact.contains("\"account_name\": \"pvisakp\""));
+        assert!(artifact.contains("\"workers_deployments_response_digest_sha256\""));
         Ok(())
     }
 
     #[test]
-    fn raw_v3_rejects_injected_verdict_legacy_shape_and_unknown_fields() {
+    fn raw_v3_rejects_injected_verdict_legacy_shapes_unknown_fields_and_malformed_json() {
         let mut verdict = observation();
         verdict["trust_state"] = Value::String("TRUSTED".to_owned());
         verdict["outcome"] = Value::String("PASS".to_owned());
-        assert!(seal(&verdict).is_err());
+        assert_rejected(&verdict);
 
         let mut legacy = observation();
         legacy["schema_version"] = json!(2);
@@ -898,36 +917,144 @@ mod tests {
             "worker_secret_names_read": true,
             "mutation_probe": "FORBIDDEN_NOT_EXECUTED"
         });
-        assert!(seal(&legacy).is_err());
+        assert_rejected(&legacy);
 
         let mut secret = observation();
         secret["token"] = Value::String("must-not-cross-boundary".to_owned());
-        assert!(seal(&secret).is_err());
+        assert_rejected(&secret);
+
+        assert!(seal_operational_credential_json("{not-json", EVALUATED_AT, SUBJECT).is_err());
     }
 
     #[test]
-    fn raw_v3_fails_closed_on_account_http_and_exit_drift() {
-        let mut account = observation();
-        account["account"]["account_name"] = json!("wrong-account");
-        assert!(seal(&account).is_err());
+    fn production_path_rejects_binding_run_and_freshness_drift() {
+        let mut repository = observation();
+        repository["target"] = json!("other/repository");
+        assert_rejected(&repository);
 
-        let mut deployment = observation();
-        deployment["reads"]["workers_deployments_http_status"] = json!(404);
-        deployment["reads"]["workers_deployments_success"] = json!(false);
-        assert!(seal(&deployment).is_err());
+        let mut subject = observation();
+        subject["subject"] = json!("b".repeat(40));
+        assert_rejected(&subject);
+
+        let mut environment = observation();
+        environment["environment"] = json!("production");
+        assert_rejected(&environment);
+
+        let mut attempt = observation();
+        attempt["source_run_attempt"] = json!(0);
+        assert_rejected(&attempt);
+
+        assert!(seal_operational_credential_json(
+            &observation().to_string(),
+            OBSERVED_AT + 3600,
+            SUBJECT
+        )
+        .is_err());
+        assert!(seal_operational_credential_json(
+            &observation().to_string(),
+            OBSERVED_AT - 1,
+            SUBJECT
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn production_path_rejects_http_failure_classes_and_nonzero_wrangler_exit() {
+        for status in [401, 403, 404, 429, 500, 503] {
+            let mut value = observation();
+            value["reads"]["workers_deployments_http_status"] = json!(status);
+            assert_rejected(&value);
+        }
 
         let mut wrangler = observation();
         wrangler["reads"]["r2_bucket_exit_code"] = json!(1);
-        assert!(seal(&wrangler).is_err());
+        assert_rejected(&wrangler);
     }
 
     #[test]
-    fn artifact_digest_and_semantic_verdict_remain_tamper_evident()
+    fn production_path_rejects_missing_results_invalid_digests_and_account_drift() {
+        let mut missing = observation();
+        missing["reads"].as_object_mut().expect("reads object").remove("workers_deployments_success");
+        assert_rejected(&missing);
+
+        let mut invalid_digest = observation();
+        invalid_digest["reads"]["d1_catalog_output_digest_sha256"] = json!("ABC");
+        assert_rejected(&invalid_digest);
+
+        let mut wrong_live_account = observation();
+        wrong_live_account["account"]["account_name"] = json!("majakojh");
+        assert_rejected(&wrong_live_account);
+
+        let mut wrong_mapping = observation();
+        wrong_mapping["attestation"]["account_name"] = json!("majakojh");
+        wrong_mapping["account"]["account_name"] = json!("majakojh");
+        assert_rejected(&wrong_mapping);
+
+        let mut wrong_account_id = observation();
+        wrong_account_id["account"]["account_id"] = json!("b".repeat(32));
+        assert_rejected(&wrong_account_id);
+    }
+
+    #[test]
+    fn production_path_rejects_permission_token_and_mutation_authority_drift() {
+        let mut missing_permission = observation();
+        missing_permission["attestation"]["permission_names"] = json!([
+            "D1 Read",
+            "Queues Read",
+            "Workers R2 Storage Read"
+        ]);
+        assert_rejected(&missing_permission);
+
+        let mut forbidden_permission = observation();
+        forbidden_permission["attestation"]["permission_names"]
+            .as_array_mut()
+            .expect("permission array")
+            .push(json!("Workers Scripts Write"));
+        assert_rejected(&forbidden_permission);
+
+        let mut disabled = observation();
+        disabled["token_verify"]["status"] = json!("disabled");
+        assert_rejected(&disabled);
+
+        let mut token_mismatch = observation();
+        token_mismatch["token_verify"]["token_id"] = json!("different-token-id-1234");
+        assert_rejected(&token_mismatch);
+
+        let mut mutation_probe = observation();
+        mutation_probe["reads"]["mutation_probe"] = json!("EXECUTED");
+        assert_rejected(&mutation_probe);
+
+        let mut production_mutation = observation();
+        production_mutation["production_mutation"] = json!(true);
+        assert_rejected(&production_mutation);
+
+        let mut credential_mutation = observation();
+        credential_mutation["credential_policy"]["mutation_allowed"] = json!(true);
+        assert_rejected(&credential_mutation);
+
+        let mut token_management = observation();
+        token_management["attestation"]["token_management_capability"] = json!(true);
+        assert_rejected(&token_management);
+
+        let mut plaintext_token = observation();
+        plaintext_token["attestation"]["plaintext_token_included"] = json!(true);
+        assert_rejected(&plaintext_token);
+    }
+
+    #[test]
+    fn artifact_digest_and_observed_safe_digest_are_tamper_evident()
     -> Result<(), Box<dyn std::error::Error>> {
         let artifact = seal(&observation())?;
-        let mut value: Value = serde_json::from_str(&artifact)?;
-        value["digest"]["value"] = Value::String("0".repeat(64));
-        let tampered = serde_json::to_string_pretty(&value)? + "\n";
+
+        let mut artifact_digest_tamper: Value = serde_json::from_str(&artifact)?;
+        artifact_digest_tamper["digest"]["value"] = Value::String("0".repeat(64));
+        let tampered = serde_json::to_string_pretty(&artifact_digest_tamper)? + "\n";
+        assert!(verify_operational_credential_json(&tampered, EVALUATED_AT, SUBJECT).is_err());
+
+        let mut observed_digest_tamper: Value = serde_json::from_str(&artifact)?;
+        observed_digest_tamper["observation"]["reads"]["d1_catalog_output_digest_sha256"] =
+            Value::String("4".repeat(64));
+        let tampered = serde_json::to_string_pretty(&observed_digest_tamper)? + "\n";
         assert!(verify_operational_credential_json(&tampered, EVALUATED_AT, SUBJECT).is_err());
         Ok(())
     }
