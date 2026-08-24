@@ -242,7 +242,10 @@ where
 
     while let Some(argument) = iterator.next() {
         let flag = argument.to_str().ok_or_else(|| {
-            OpsctlError::new("hosted-evidence", "hosted evidence flags must be valid UTF-8")
+            OpsctlError::new(
+                "hosted-evidence",
+                "hosted evidence flags must be valid UTF-8",
+            )
         })?;
         match flag {
             "--observation-json" => {
