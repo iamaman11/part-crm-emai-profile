@@ -69,7 +69,9 @@ pub(crate) fn resolve_d1_repository_root(explicit: Option<&Path>) -> Result<Path
 
 fn is_repo_root(path: &Path) -> bool {
     path.join("Cargo.toml").is_file()
-        && path.join("architecture/inventory.json").is_file()
+        && path
+            .join("architecture/architecture-program-sequence.json")
+            .is_file()
         && path
             .join("architecture/credential-authority.json")
             .is_file()
@@ -77,9 +79,6 @@ fn is_repo_root(path: &Path) -> bool {
             .join("architecture/credential-lifecycle.json")
             .is_file()
         && path.join("architecture/profile-security.json").is_file()
-        && path
-            .join("scripts/generate-architecture-inventory.py")
-            .is_file()
 }
 
 pub(crate) fn canonical_json_document(
@@ -117,14 +116,12 @@ mod tests {
             std::process::id()
         ));
         fs::create_dir_all(root.join("architecture"))?;
-        fs::create_dir_all(root.join("scripts"))?;
         for relative in [
             "Cargo.toml",
-            "architecture/inventory.json",
+            "architecture/architecture-program-sequence.json",
             "architecture/credential-authority.json",
             "architecture/credential-lifecycle.json",
             "architecture/profile-security.json",
-            "scripts/generate-architecture-inventory.py",
         ] {
             fs::write(root.join(relative), b"sentinel\n")?;
         }

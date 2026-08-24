@@ -78,7 +78,10 @@ jobs:
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
           git for-each-ref "refs/tags/$TAG" --format='%(contents)' > acceptance-record.json
-          node .github/scripts/architecture-acceptance.mjs contract
+          node .github/scripts/architecture-acceptance-observer.mjs evidence > acceptance-evidence.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . status --acceptance-evidence-json acceptance-evidence.json \
+            > lifecycle-state.json
           python - <<'PY'
           import json, os, subprocess
           record = json.load(open('acceptance-record.json', encoding='utf-8'))
@@ -116,14 +119,24 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
-          node .github/scripts/architecture-acceptance.mjs contract
-          node .github/scripts/architecture-acceptance.mjs premerge \
+          node .github/scripts/architecture-acceptance-observer.mjs evidence > acceptance-evidence.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . status --acceptance-evidence-json acceptance-evidence.json \
+            > lifecycle-state.json
+          node .github/scripts/architecture-acceptance-observer.mjs premerge \
             --title "$PR_TITLE" \
             --head-ref "$PR_HEAD_REF" \
             --base-ref "$PR_BASE_REF" \
             --base "$PR_BASE_SHA" \
             --head "$PR_HEAD_SHA" \
-            | python -m json.tool
+            > premerge-observation.json
+          python - <<'PY'
+          import json
+          premerge = json.load(open('premerge-observation.json', encoding='utf-8'))
+          state = json.load(open('lifecycle-state.json', encoding='utf-8'))
+          if not premerge['architecture_slice'] or premerge['slice'] != state['current_slice']:
+              raise SystemExit('accepted architecture PR is not the typed current slice')
+          PY
           test "$(git rev-parse "$PR_HEAD_SHA^{tree}")" = "$(git rev-parse "$MERGE_SHA^{tree}")"
           test "$(git rev-parse "$MERGE_SHA^1")" = "$PR_BASE_SHA"
           git merge-base --is-ancestor "$MERGE_SHA" origin/main
@@ -228,7 +241,10 @@ jobs:
           if candidate_tree != merge_tree:
               raise SystemExit('candidate tree differs from accepted merge tree')
 
-          state = policy['acceptance_state']['ar17' if os.environ['SLICE'] == 'AR-17' else 'before_ar17']
+          lifecycle = json.loads(Path('lifecycle-state.json').read_text(encoding='utf-8'))
+          state = lifecycle.get('current_slice_acceptance')
+          if not isinstance(state, dict) or state.get('slice') != os.environ['SLICE']:
+              raise SystemExit('typed lifecycle does not expose this slice as current acceptance')
           record = {
               'schema_version': policy['acceptance_metadata']['record_schema_version'],
               'slice': os.environ['SLICE'],
@@ -253,8 +269,17 @@ jobs:
           }
           Path('acceptance-record.json').write_text(json.dumps(record, sort_keys=True, separators=(',', ':')) + '\n', encoding='utf-8')
           PY
-          node .github/scripts/architecture-acceptance.mjs record --file acceptance-record.json > validated-record.json
-          python -m json.tool validated-record.json >/dev/null
+          node .github/scripts/architecture-acceptance-observer.mjs evidence \
+            --append acceptance-record.json > acceptance-evidence.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . status --acceptance-evidence-json acceptance-evidence.json \
+            > lifecycle-state.json
+          python - <<'PY'
+          import json, os
+          state = json.load(open('lifecycle-state.json', encoding='utf-8'))
+          if state['accepted_checkpoint'] != os.environ['SLICE']:
+              raise SystemExit('candidate acceptance record did not advance typed lifecycle')
+          PY
 
       - name: Create append-only annotated acceptance tag
         if: steps.identity.outputs.existing != 'true'
@@ -286,4 +311,7 @@ jobs:
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" --input tag-ref.json >/dev/null
           git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
           test "$(git rev-list -n 1 "$TAG")" = "$MERGE_SHA"
-          node .github/scripts/architecture-acceptance.mjs contract
+          node .github/scripts/architecture-acceptance-observer.mjs evidence > acceptance-evidence.json
+          cargo run --locked --quiet --manifest-path tools/opsctl/Cargo.toml -- \
+            --root . status --acceptance-evidence-json acceptance-evidence.json \
+            > lifecycle-state.json

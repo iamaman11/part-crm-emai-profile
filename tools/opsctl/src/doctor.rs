@@ -5,14 +5,13 @@ use std::fs;
 use std::path::Path;
 
 const AUTHORITIES: [&str; 5] = [
-    "architecture/inventory.json",
+    "architecture/architecture-program-sequence.json",
     "architecture/credential-authority.json",
     "architecture/credential-lifecycle.json",
     "architecture/profile-security.json",
     "docs/status.json",
 ];
 
-const RETAINED_VALIDATORS: [&str; 1] = ["scripts/generate-architecture-inventory.py"];
 const INTERNAL_NATIVE_IMPLEMENTATION_CONTRACT: &str =
     "{\"mode\":\"native-read-only\",\"child_processes\":0}";
 
@@ -33,7 +32,7 @@ pub(crate) fn run(root: &Path) -> Result<String, OpsctlError> {
         ));
     }
 
-    for relative in AUTHORITIES.into_iter().chain(RETAINED_VALIDATORS) {
+    for relative in AUTHORITIES {
         require_regular_file(root, relative)?;
     }
 
@@ -41,7 +40,7 @@ pub(crate) fn run(root: &Path) -> Result<String, OpsctlError> {
         validate_json_authority(root, relative)?;
     }
 
-    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/inventory.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"docs/status.json\"]}\n".to_owned())
+    Ok("{\"schema_version\":1,\"command\":\"doctor\",\"status\":\"ok\",\"mode\":\"read-only\",\"mutation_executed\":false,\"authorities\":[\"architecture/architecture-program-sequence.json\",\"architecture/credential-authority.json\",\"architecture/credential-lifecycle.json\",\"architecture/profile-security.json\",\"docs/status.json\"]}\n".to_owned())
 }
 
 fn require_regular_file(root: &Path, relative: &str) -> Result<(), OpsctlError> {
@@ -105,11 +104,11 @@ mod tests {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let root =
             std::env::temp_dir().join(format!("opsctl-n4-doctor-{}-{nonce}", std::process::id()));
-        for directory in ["architecture", "docs", "scripts"] {
+        for directory in ["architecture", "docs"] {
             fs::create_dir_all(root.join(directory))?;
         }
         for relative in [
-            "architecture/inventory.json",
+            "architecture/architecture-program-sequence.json",
             "architecture/credential-authority.json",
             "architecture/credential-lifecycle.json",
             "architecture/profile-security.json",
@@ -117,10 +116,6 @@ mod tests {
         ] {
             fs::write(root.join(relative), b"{\"schema_version\":1}\n")?;
         }
-        fs::write(
-            root.join("scripts/generate-architecture-inventory.py"),
-            b"# retained\n",
-        )?;
         Ok(root)
     }
 
@@ -148,7 +143,10 @@ mod tests {
     #[test]
     fn malformed_authority_fails_closed() -> Result<(), Box<dyn std::error::Error>> {
         let root = root()?;
-        fs::write(root.join("architecture/inventory.json"), b"{not-json}\n")?;
+        fs::write(
+            root.join("architecture/architecture-program-sequence.json"),
+            b"{not-json}\n",
+        )?;
         assert!(run(&root).is_err());
         fs::remove_dir_all(root)?;
         Ok(())

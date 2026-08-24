@@ -66,7 +66,7 @@ N2–N5 are sequential delete/simplify transactions, not new architecture progra
 
 These are projections/navigation, never independent semantic inputs:
 
-- `architecture/inventory.json` when retained;
+- `architecture/architecture-program-sequence.json` for static program order;
 - `docs/status.json`;
 - `docs/DEVELOPMENT_PLAN.md`;
 - README/index surfaces.

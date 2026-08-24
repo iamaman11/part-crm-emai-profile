@@ -1,7 +1,8 @@
 use crate::canonical::{canonical_pretty_json, parse_strict_json};
 use opsctl_core::architecture::{
     AcceptanceObservationV1, DerivedLifecycleStateV1, LifecycleEvaluationError, LifecycleEvaluator,
-    ProductionCoreGate, ProgramSlice, RawArchitectureAcceptanceEvidenceV1, ValidatedProgramSequence,
+    ProductionCoreGate, ProgramSlice, RawArchitectureAcceptanceEvidenceV1,
+    ValidatedProgramSequence,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -137,6 +138,16 @@ struct DerivedLifecycleStateDto {
     kind: &'static str,
     accepted_checkpoint: String,
     current_slice: Option<String>,
+    current_slice_acceptance: Option<AcceptanceStateDto>,
+    architecture_complete: bool,
+    production_core_gate: ProductionCoreGateDto,
+    production_ready: bool,
+    production_mutation: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct AcceptanceStateDto {
+    slice: String,
     architecture_complete: bool,
     production_core_gate: ProductionCoreGateDto,
     production_ready: bool,
@@ -156,8 +167,9 @@ pub(crate) fn evaluate_lifecycle_json(
 fn decode_program_sequence(
     input: &str,
 ) -> Result<ValidatedProgramSequence, ArchitectureAdapterError> {
-    let value = parse_strict_json(input)
-        .map_err(|error| ArchitectureAdapterError::new(format!("PROGRAM_SEQUENCE_JSON: {error}")))?;
+    let value = parse_strict_json(input).map_err(|error| {
+        ArchitectureAdapterError::new(format!("PROGRAM_SEQUENCE_JSON: {error}"))
+    })?;
     let dto: ProgramSequenceDto = serde_json::from_value(value).map_err(|error| {
         ArchitectureAdapterError::new(format!("PROGRAM_SEQUENCE_SCHEMA: {error}"))
     })?;
@@ -270,6 +282,15 @@ fn render_lifecycle_state(
         kind: "DERIVED_LIFECYCLE_STATE",
         accepted_checkpoint: state.accepted_checkpoint,
         current_slice: state.current_slice,
+        current_slice_acceptance: state.current_slice_acceptance.map(|acceptance| {
+            AcceptanceStateDto {
+                slice: acceptance.slice,
+                architecture_complete: acceptance.architecture_complete,
+                production_core_gate: acceptance.production_core_gate.into(),
+                production_ready: acceptance.production_ready,
+                production_mutation: acceptance.production_mutation,
+            }
+        }),
         architecture_complete: state.architecture_complete,
         production_core_gate: state.production_core_gate.into(),
         production_ready: state.production_ready,
@@ -366,6 +387,11 @@ mod tests {
         assert_eq!(value["kind"], "DERIVED_LIFECYCLE_STATE");
         assert_eq!(value["accepted_checkpoint"], "AR-11");
         assert_eq!(value["current_slice"], "AR-12");
+        assert_eq!(value["current_slice_acceptance"]["slice"], "AR-12");
+        assert_eq!(
+            value["current_slice_acceptance"]["production_core_gate"],
+            "BLOCKED"
+        );
         assert_eq!(value["production_core_gate"], "BLOCKED");
         Ok(())
     }

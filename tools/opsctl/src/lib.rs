@@ -7,7 +7,6 @@ pub mod credentials;
 pub mod d1;
 mod doctor;
 mod error;
-mod inventory;
 pub mod promotion;
 pub mod readiness;
 pub mod recovery;
@@ -61,6 +60,7 @@ impl Invocation {
         match self {
             Self::Help | Self::Version => None,
             Self::Run { .. }
+            | Self::Status { .. }
             | Self::Credentials { .. }
             | Self::D1 { .. }
             | Self::D1Repository { .. }
@@ -84,9 +84,14 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             let repo_root = resolve_repo_root(root.as_deref(), command.name())?;
             match command {
                 ReadCommand::Doctor => doctor::run(&repo_root),
-                ReadCommand::Status => status::run(&repo_root),
-                ReadCommand::Inventory => inventory::run(&repo_root),
             }
+        }
+        Invocation::Status {
+            root,
+            acceptance_evidence_json,
+        } => {
+            let repo_root = resolve_repo_root(root.as_deref(), "status")?;
+            status::run(&repo_root, &acceptance_evidence_json)
         }
         Invocation::Credentials { root, action } => {
             let repo_root = resolve_repo_root(root.as_deref(), "credentials")?;

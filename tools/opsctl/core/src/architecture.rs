@@ -80,6 +80,16 @@ pub struct DerivedLifecycleStateV1 {
     pub schema_version: u64,
     pub accepted_checkpoint: String,
     pub current_slice: Option<String>,
+    pub current_slice_acceptance: Option<AcceptanceStateV1>,
+    pub architecture_complete: bool,
+    pub production_core_gate: ProductionCoreGate,
+    pub production_ready: bool,
+    pub production_mutation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceptanceStateV1 {
+    pub slice: String,
     pub architecture_complete: bool,
     pub production_core_gate: ProductionCoreGate,
     pub production_ready: bool,
@@ -185,10 +195,22 @@ impl LifecycleEvaluator {
 
         let accepted = &sequence.slices[accepted_index];
         let expected = expected_state(&accepted.id);
+        let current_slice = accepted.successor.clone();
+        let current_slice_acceptance = current_slice.as_ref().map(|slice| {
+            let expected = expected_state(slice);
+            AcceptanceStateV1 {
+                slice: slice.clone(),
+                architecture_complete: expected.architecture_complete,
+                production_core_gate: expected.production_core_gate,
+                production_ready: expected.production_ready,
+                production_mutation: expected.production_mutation,
+            }
+        });
         Ok(DerivedLifecycleStateV1 {
             schema_version: 1,
             accepted_checkpoint: accepted.id.clone(),
-            current_slice: accepted.successor.clone(),
+            current_slice,
+            current_slice_acceptance,
             architecture_complete: expected.architecture_complete,
             production_core_gate: expected.production_core_gate,
             production_ready: expected.production_ready,
@@ -495,6 +517,13 @@ mod tests {
                 schema_version: 1,
                 accepted_checkpoint: "AR-11".to_owned(),
                 current_slice: Some("AR-12".to_owned()),
+                current_slice_acceptance: Some(super::AcceptanceStateV1 {
+                    slice: "AR-12".to_owned(),
+                    architecture_complete: false,
+                    production_core_gate: ProductionCoreGate::Blocked,
+                    production_ready: false,
+                    production_mutation: false,
+                }),
                 architecture_complete: false,
                 production_core_gate: ProductionCoreGate::Blocked,
                 production_ready: false,
@@ -595,6 +624,29 @@ mod tests {
         assert_eq!(state.production_core_gate, ProductionCoreGate::Authorized);
         assert!(!state.production_ready);
         assert!(!state.production_mutation);
+        Ok(())
+    }
+
+    #[test]
+    fn ar17_acceptance_template_is_derived_by_the_same_policy_owner(
+    ) -> Result<(), LifecycleEvaluationError> {
+        let sequence = sequence()?;
+        let observations = ["AR-12", "AR-13", "AR-14", "AR-15", "AR-16"]
+            .into_iter()
+            .map(observation)
+            .collect();
+        let state = LifecycleEvaluator::evaluate(&sequence, &evidence(observations))?;
+        let acceptance = state.current_slice_acceptance.ok_or_else(|| {
+            LifecycleEvaluationError::new("expected AR-17 acceptance template")
+        })?;
+        assert_eq!(acceptance.slice, "AR-17");
+        assert!(acceptance.architecture_complete);
+        assert_eq!(
+            acceptance.production_core_gate,
+            ProductionCoreGate::Authorized
+        );
+        assert!(!acceptance.production_ready);
+        assert!(!acceptance.production_mutation);
         Ok(())
     }
 }

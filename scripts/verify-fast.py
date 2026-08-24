@@ -43,7 +43,6 @@ def main() -> int:
         "check-step5-profile-coordinator.py",
         "check-step6-windows-bridge.py",
         "check-frontend-feature-boundaries.py",
-        "check-documentation-authority.py",
         "check-phase1a-event-boundaries.py",
         "check-phase2e-mailbox-boundaries.py",
         "check-pre2j-d3-resolver-bootstrap-implementation.py",
@@ -52,16 +51,12 @@ def main() -> int:
         run(script, [sys.executable, str(ROOT / "scripts" / script)])
 
     run(
-        "one-merge architecture acceptance contract",
-        ["node", str(ROOT / ".github" / "scripts" / "architecture-acceptance.mjs"), "contract"],
+        "architecture acceptance observation",
+        ["node", str(ROOT / ".github" / "scripts" / "architecture-acceptance-observer.mjs"), "evidence"],
     )
     run(
-        "derived architecture acceptance state",
-        ["node", str(ROOT / ".github" / "scripts" / "architecture-acceptance.mjs"), "derive"],
-    )
-    run(
-        "architecture acceptance negative matrix",
-        ["node", str(ROOT / ".github" / "scripts" / "architecture-acceptance.mjs"), "self-test"],
+        "typed architecture lifecycle matrix",
+        ["cargo", "test", "--locked", "--manifest-path", str(ROOT / "tools" / "opsctl" / "Cargo.toml"), "architecture"],
     )
     run(
         "static D3 transition provenance negative matrix",
@@ -78,14 +73,6 @@ def main() -> int:
     run(
         "generated frontend contract drift",
         [sys.executable, str(ROOT / "scripts" / "generate-frontend-contracts.py"), "--check"],
-    )
-    run(
-        "architecture inventory and docs consistency",
-        [sys.executable, str(ROOT / "scripts" / "generate-architecture-inventory.py"), "--check"],
-    )
-    run(
-        "architecture inventory negative proof",
-        [sys.executable, str(ROOT / "scripts" / "test-architecture-inventory-negative.py")],
     )
     run(
         "resolver release negative provenance",

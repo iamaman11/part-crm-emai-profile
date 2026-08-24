@@ -5,10 +5,7 @@ use std::path::{Path, PathBuf};
 
 const PROGRAM_SEQUENCE: &str = "architecture/architecture-program-sequence.json";
 
-pub(crate) fn run(
-    root: &Path,
-    acceptance_evidence_json: &Path,
-) -> Result<String, OpsctlError> {
+pub(crate) fn run(root: &Path, acceptance_evidence_json: &Path) -> Result<String, OpsctlError> {
     let sequence = read_regular_file(&root.join(PROGRAM_SEQUENCE), PROGRAM_SEQUENCE)?;
     let evidence_path = resolve_observation_path(root, acceptance_evidence_json);
     let evidence_label = acceptance_evidence_json.display().to_string();

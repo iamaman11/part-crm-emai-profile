@@ -19,9 +19,8 @@ elif [[ $status -ne 1 ]]; then
   exit "$status"
 fi
 
-# The canonical AR-8B implementation is portable Python in the accepted inventory
-# generator. This Unix entrypoint adds an independent high-confidence git-grep pass
-# but never becomes an authority that opsctl or the generator must shell into.
-python scripts/generate-architecture-inventory.py --credential-self-test
+# Credential semantics stay with their bounded owner; this shell only adds an
+# independent high-confidence tracked-byte scan.
+python scripts/credential_authority.py --self-test
 
 echo 'No high-confidence tracked credential patterns found; AR-8B portable credential authority and negative matrix are consistent.'
