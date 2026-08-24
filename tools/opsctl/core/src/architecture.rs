@@ -394,9 +394,7 @@ fn validate_observation(
         ));
     }
     if observation.behind_by != 0 {
-        return Err(LifecycleEvaluationError::new(
-            "ACCEPTANCE_HEAD_BEHIND_MAIN",
-        ));
+        return Err(LifecycleEvaluationError::new("ACCEPTANCE_HEAD_BEHIND_MAIN"));
     }
     if observation.blocking_reviews != 0 {
         return Err(LifecycleEvaluationError::new(
@@ -457,7 +455,9 @@ mod tests {
             .enumerate()
             .map(|(index, id)| ProgramSlice {
                 id: (*id).to_owned(),
-                predecessor: index.checked_sub(1).map(|previous| ids[previous].to_owned()),
+                predecessor: index
+                    .checked_sub(1)
+                    .map(|previous| ids[previous].to_owned()),
                 successor: ids.get(index + 1).map(|next| (*next).to_owned()),
             })
             .collect();
@@ -507,8 +507,8 @@ mod tests {
     }
 
     #[test]
-    fn baseline_without_new_acceptance_derives_ar12_current(
-    ) -> Result<(), LifecycleEvaluationError> {
+    fn baseline_without_new_acceptance_derives_ar12_current() -> Result<(), LifecycleEvaluationError>
+    {
         let sequence = sequence()?;
         let state = LifecycleEvaluator::evaluate(&sequence, &evidence(Vec::new()))?;
         assert_eq!(
@@ -545,7 +545,9 @@ mod tests {
     #[test]
     fn gap_before_later_acceptance_fails_closed() -> Result<(), LifecycleEvaluationError> {
         let sequence = sequence()?;
-        let Err(error) = LifecycleEvaluator::evaluate(&sequence, &evidence(vec![observation("AR-13")])) else {
+        let Err(error) =
+            LifecycleEvaluator::evaluate(&sequence, &evidence(vec![observation("AR-13")]))
+        else {
             return Err(LifecycleEvaluationError::new(
                 "expected non-contiguous acceptance rejection",
             ));
@@ -558,12 +560,18 @@ mod tests {
     fn duplicate_acceptance_fails_closed() -> Result<(), LifecycleEvaluationError> {
         let sequence = sequence()?;
         let ar12 = observation("AR-12");
-        let Err(error) = LifecycleEvaluator::evaluate(&sequence, &evidence(vec![ar12.clone(), ar12])) else {
+        let Err(error) =
+            LifecycleEvaluator::evaluate(&sequence, &evidence(vec![ar12.clone(), ar12]))
+        else {
             return Err(LifecycleEvaluationError::new(
                 "expected duplicate acceptance rejection",
             ));
         };
-        assert!(error.to_string().contains("DUPLICATE_ACCEPTANCE_OBSERVATION"));
+        assert!(
+            error
+                .to_string()
+                .contains("DUPLICATE_ACCEPTANCE_OBSERVATION")
+        );
         Ok(())
     }
 
@@ -577,7 +585,11 @@ mod tests {
                 "expected incomplete hosted verification rejection",
             ));
         };
-        assert!(error.to_string().contains("INCOMPLETE_REQUIRED_STATUS_CONTEXTS"));
+        assert!(
+            error
+                .to_string()
+                .contains("INCOMPLETE_REQUIRED_STATUS_CONTEXTS")
+        );
         Ok(())
     }
 
@@ -591,7 +603,11 @@ mod tests {
                 "expected candidate tree rejection",
             ));
         };
-        assert!(error.to_string().contains("CANDIDATE_TREE_IDENTITY_MISMATCH"));
+        assert!(
+            error
+                .to_string()
+                .contains("CANDIDATE_TREE_IDENTITY_MISMATCH")
+        );
         Ok(())
     }
 
@@ -610,8 +626,8 @@ mod tests {
     }
 
     #[test]
-    fn ar17_is_the_only_architecture_authorization_boundary(
-    ) -> Result<(), LifecycleEvaluationError> {
+    fn ar17_is_the_only_architecture_authorization_boundary() -> Result<(), LifecycleEvaluationError>
+    {
         let sequence = sequence()?;
         let observations = ["AR-12", "AR-13", "AR-14", "AR-15", "AR-16", "AR-17"]
             .into_iter()
@@ -628,17 +644,17 @@ mod tests {
     }
 
     #[test]
-    fn ar17_acceptance_template_is_derived_by_the_same_policy_owner(
-    ) -> Result<(), LifecycleEvaluationError> {
+    fn ar17_acceptance_template_is_derived_by_the_same_policy_owner()
+    -> Result<(), LifecycleEvaluationError> {
         let sequence = sequence()?;
         let observations = ["AR-12", "AR-13", "AR-14", "AR-15", "AR-16"]
             .into_iter()
             .map(observation)
             .collect();
         let state = LifecycleEvaluator::evaluate(&sequence, &evidence(observations))?;
-        let acceptance = state.current_slice_acceptance.ok_or_else(|| {
-            LifecycleEvaluationError::new("expected AR-17 acceptance template")
-        })?;
+        let acceptance = state
+            .current_slice_acceptance
+            .ok_or_else(|| LifecycleEvaluationError::new("expected AR-17 acceptance template"))?;
         assert_eq!(acceptance.slice, "AR-17");
         assert!(acceptance.architecture_complete);
         assert_eq!(
