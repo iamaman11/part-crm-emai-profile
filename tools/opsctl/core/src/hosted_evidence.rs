@@ -118,6 +118,7 @@ pub struct HostedEvidenceObservationV1 {
     pub valid_until_unix_seconds: i64,
     pub trust_state: EvidenceTrustState,
     pub outcome: EvidenceOutcome,
+    pub production_mutation: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +130,7 @@ pub struct HostedEvidenceEnvelopeV1 {
     pub valid_until_unix_seconds: i64,
     pub trust_state: EvidenceTrustState,
     pub outcome: EvidenceOutcome,
+    pub production_mutation: bool,
 }
 
 impl HostedEvidenceEnvelopeV1 {
@@ -142,6 +144,7 @@ impl HostedEvidenceEnvelopeV1 {
             valid_until_unix_seconds: self.valid_until_unix_seconds,
             trust_state: self.trust_state,
             outcome: self.outcome,
+            production_mutation: self.production_mutation,
         }
     }
 }
@@ -184,6 +187,12 @@ impl EvidencePolicyV1 {
             return Err(EvidencePolicyError::new(
                 "HOSTED_EVIDENCE_BINDING_MISMATCH",
                 "issuer/source/target/environment/subject binding does not match the expected consumer",
+            ));
+        }
+        if observation.production_mutation {
+            return Err(EvidencePolicyError::new(
+                "HOSTED_EVIDENCE_PRODUCTION_MUTATION_FORBIDDEN",
+                "PF-2 hosted evidence must prove production_mutation=false",
             ));
         }
         if observation.source_run_id == 0 || observation.source_run_attempt == 0 {
@@ -258,6 +267,7 @@ impl EvidencePolicyV1 {
             valid_until_unix_seconds: observation.valid_until_unix_seconds,
             trust_state: observation.trust_state,
             outcome: observation.outcome,
+            production_mutation: observation.production_mutation,
         })
     }
 }
@@ -289,6 +299,7 @@ mod tests {
             valid_until_unix_seconds: 1_700_003_600,
             trust_state: EvidenceTrustState::Trusted,
             outcome: EvidenceOutcome::Passed,
+            production_mutation: false,
         })
     }
 
@@ -321,6 +332,17 @@ mod tests {
         assert_eq!(
             policy()?.evaluate(target_drift, 1_700_000_010).err().map(|error| error.code()),
             Some("HOSTED_EVIDENCE_BINDING_MISMATCH")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_production_mutation() -> Result<(), Box<dyn std::error::Error>> {
+        let mut mutated = observation()?;
+        mutated.production_mutation = true;
+        assert_eq!(
+            policy()?.evaluate(mutated, 1_700_000_010).err().map(|error| error.code()),
+            Some("HOSTED_EVIDENCE_PRODUCTION_MUTATION_FORBIDDEN")
         );
         Ok(())
     }
