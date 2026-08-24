@@ -282,19 +282,29 @@ jobs:
             npx --yes wrangler@4.94.0 secret list --name "$worker_name" --format json \
               > "$RUNNER_TEMP/ar11-observe-secret-list.json" || worker_secret_names_exit_code=$?
 
+          workers_deployments_response_digest_sha256="$(sha256sum "$RUNNER_TEMP/ar11-observe-deployments.json" | awk '{print $1}')"
+          d1_catalog_output_digest_sha256="$(sha256sum "$RUNNER_TEMP/ar11-observe-d1.json" | awk '{print $1}')"
+          r2_bucket_output_digest_sha256="$(sha256sum "$RUNNER_TEMP/ar11-observe-r2.json" | awk '{print $1}')"
+
           jq -n \
             --argjson workers_deployments_http_status "$deployments_code" \
             --slurpfile deployments "$RUNNER_TEMP/ar11-observe-deployments.json" \
+            --arg workers_deployments_response_digest_sha256 "$workers_deployments_response_digest_sha256" \
             --argjson d1_catalog_exit_code "$d1_catalog_exit_code" \
+            --arg d1_catalog_output_digest_sha256 "$d1_catalog_output_digest_sha256" \
             --argjson r2_bucket_exit_code "$r2_bucket_exit_code" \
+            --arg r2_bucket_output_digest_sha256 "$r2_bucket_output_digest_sha256" \
             --argjson queue_exit_code "$queue_exit_code" \
             --argjson worker_secret_names_exit_code "$worker_secret_names_exit_code" \
             '{
               workers_deployments_http_status: $workers_deployments_http_status,
               workers_deployments_success: $deployments[0].success,
               workers_deployments_error_count: ($deployments[0].errors | length),
+              workers_deployments_response_digest_sha256: $workers_deployments_response_digest_sha256,
               d1_catalog_exit_code: $d1_catalog_exit_code,
+              d1_catalog_output_digest_sha256: $d1_catalog_output_digest_sha256,
               r2_bucket_exit_code: $r2_bucket_exit_code,
+              r2_bucket_output_digest_sha256: $r2_bucket_output_digest_sha256,
               queue_exit_code: $queue_exit_code,
               worker_secret_names_exit_code: $worker_secret_names_exit_code,
               mutation_probe: "FORBIDDEN_NOT_EXECUTED"
@@ -455,3 +465,19 @@ jobs:
           path: artifacts/pf2-operational-credential-hosted-evidence
           if-no-files-found: error
           retention-days: 90
+
+      - name: Remove raw provider observations from runner temp
+        if: always()
+        run: |
+          rm -f \
+            "$RUNNER_TEMP/ar11-observe-deploy-manifest.json" \
+            "$RUNNER_TEMP/ar11-observe-token-verify.json" \
+            "$RUNNER_TEMP/ar11-observe-account.json" \
+            "$RUNNER_TEMP/ar11-observe-deployments.json" \
+            "$RUNNER_TEMP/ar11-observe-d1.json" \
+            "$RUNNER_TEMP/ar11-observe-r2.json" \
+            "$RUNNER_TEMP/ar11-observe-queue.txt" \
+            "$RUNNER_TEMP/ar11-observe-secret-list.json" \
+            "$RUNNER_TEMP/ar11-observe-read-observations.json" \
+            "$RUNNER_TEMP/pf2-operational-credential-observation.json" \
+            "$RUNNER_TEMP/pf2-operational-credential-evidence-replay.json"
