@@ -944,8 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn external_review_adapter_still_uses_typed_policy()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn external_review_adapter_still_uses_typed_policy() -> Result<(), Box<dyn std::error::Error>> {
         let record = terminal_record(
             "ev-20260806-terminal",
             "https://github.com/iamaman11/part-crm-emai-profile/issues/9#issuecomment-101",
