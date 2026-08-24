@@ -222,14 +222,38 @@ pub struct HostedEvidenceEnvelopeV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedAccountBindingV1 {
+    account_id: String,
+    account_name: String,
+}
+
+impl ExpectedAccountBindingV1 {
+    pub fn new(
+        account_id: impl Into<String>,
+        account_name: impl Into<String>,
+    ) -> Result<Self, EvidencePolicyError> {
+        let account_id = validate_identifier("expected_account_id", account_id.into())?;
+        if !is_lower_hex(&account_id, 32) {
+            return Err(EvidencePolicyError::new(
+                "HOSTED_EVIDENCE_POLICY_INVALID",
+                "expected account id must be exactly 32 lowercase hexadecimal characters",
+            ));
+        }
+        Ok(Self {
+            account_id,
+            account_name: validate_identifier("expected_account_name", account_name.into())?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidencePolicyV3 {
     expected_binding: EvidenceBindingV1,
     max_validity_seconds: i64,
     expected_credential_id: String,
     expected_attestation_kind: String,
     expected_attestation_source: String,
-    expected_account_id: String,
-    expected_account_name: String,
+    expected_account: ExpectedAccountBindingV1,
     expected_mutation_probe: String,
 }
 
@@ -240,8 +264,7 @@ impl EvidencePolicyV3 {
         expected_credential_id: impl Into<String>,
         expected_attestation_kind: impl Into<String>,
         expected_attestation_source: impl Into<String>,
-        expected_account_id: impl Into<String>,
-        expected_account_name: impl Into<String>,
+        expected_account: ExpectedAccountBindingV1,
         expected_mutation_probe: impl Into<String>,
     ) -> Result<Self, EvidencePolicyError> {
         let max_validity_seconds = i64::try_from(max_validity_seconds).map_err(|_| {
@@ -254,16 +277,6 @@ impl EvidencePolicyV3 {
             return Err(EvidencePolicyError::new(
                 "HOSTED_EVIDENCE_POLICY_INVALID",
                 "max validity must be greater than zero",
-            ));
-        }
-        let expected_account_id = validate_identifier(
-            "expected_account_id",
-            expected_account_id.into(),
-        )?;
-        if !is_lower_hex(&expected_account_id, 32) {
-            return Err(EvidencePolicyError::new(
-                "HOSTED_EVIDENCE_POLICY_INVALID",
-                "expected account id must be exactly 32 lowercase hexadecimal characters",
             ));
         }
         Ok(Self {
@@ -281,11 +294,7 @@ impl EvidencePolicyV3 {
                 "expected_attestation_source",
                 expected_attestation_source.into(),
             )?,
-            expected_account_id,
-            expected_account_name: validate_identifier(
-                "expected_account_name",
-                expected_account_name.into(),
-            )?,
+            expected_account,
             expected_mutation_probe: validate_identifier(
                 "expected_mutation_probe",
                 expected_mutation_probe.into(),
@@ -488,7 +497,7 @@ fn validate_attestation(
     }
     if !is_lower_hex(&attestation.account_id, 32)
         || !is_lower_hex(&observation.deployment_account_id, 32)
-        || attestation.account_id != policy.expected_account_id
+        || attestation.account_id != policy.expected_account.account_id
         || attestation.account_id != observation.deployment_account_id
     {
         return Err(EvidencePolicyError::new(
@@ -496,12 +505,12 @@ fn validate_attestation(
             "attested and deployment account ids must exactly match the expected staging account id",
         ));
     }
-    if attestation.account_name != policy.expected_account_name {
+    if attestation.account_name != policy.expected_account.account_name {
         return Err(EvidencePolicyError::new(
             "HOSTED_EVIDENCE_ACCOUNT_NAME_MISMATCH",
             format!(
                 "accepted credential attestation account name must exactly match expected staging account {}",
-                policy.expected_account_name
+                policy.expected_account.account_name
             ),
         ));
     }
@@ -591,7 +600,7 @@ fn validate_account_observation(
         )
     })?;
     if !is_lower_hex(account_id, 32)
-        || account_id != policy.expected_account_id
+        || account_id != policy.expected_account.account_id
         || account_id != observation.deployment_account_id
         || account_id != observation.attestation.account_id
     {
@@ -606,14 +615,14 @@ fn validate_account_observation(
             "Cloudflare account result.name is required after HTTP 200",
         )
     })?;
-    if account_name != policy.expected_account_name
+    if account_name != policy.expected_account.account_name
         || account_name != observation.attestation.account_name
     {
         return Err(EvidencePolicyError::new(
             "HOSTED_EVIDENCE_ACCOUNT_NAME_MISMATCH",
             format!(
                 "live Cloudflare account name must exactly match expected and attested staging account {}",
-                policy.expected_account_name
+                policy.expected_account.account_name
             ),
         ));
     }
@@ -889,11 +898,12 @@ mod tests {
     use super::{
         EvidenceBindingV1, EvidenceEnvironment, EvidenceIssuer, EvidenceOutcome,
         EvidencePolicyDisposition, EvidencePolicyError, EvidencePolicyV3, EvidenceSource,
-        EvidenceSubject, EvidenceTarget, EvidenceTrustState, HostedEvidenceEnvelopeV3,
-        HostedEvidenceObservationV3, OperationalCredentialAccountObservationV1,
-        OperationalCredentialAttestationObservationV1, OperationalCredentialPolicyObservationV1,
-        OperationalCredentialReadObservationV3, OperationalCredentialTokenVerifyObservationV1,
-        ReviewAttestationObservationV1, ReviewAttestationPolicyV1, ReviewAttestationStatus,
+        EvidenceSubject, EvidenceTarget, EvidenceTrustState, ExpectedAccountBindingV1,
+        HostedEvidenceEnvelopeV3, HostedEvidenceObservationV3,
+        OperationalCredentialAccountObservationV1, OperationalCredentialAttestationObservationV1,
+        OperationalCredentialPolicyObservationV1, OperationalCredentialReadObservationV3,
+        OperationalCredentialTokenVerifyObservationV1, ReviewAttestationObservationV1,
+        ReviewAttestationPolicyV1, ReviewAttestationStatus,
     };
 
     type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
@@ -999,8 +1009,7 @@ mod tests {
             "cloudflare.staging-observation-api",
             "AR11_CLOUDFLARE_OBSERVE_TOKEN_POLICY_ATTESTATION",
             "CLOUDFLARE_TOKEN_ISSUANCE_POLICY",
-            "a".repeat(32),
-            "pvisakp",
+            ExpectedAccountBindingV1::new("a".repeat(32), "pvisakp")?,
             "FORBIDDEN_NOT_EXECUTED",
         )?)
     }
