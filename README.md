@@ -11,9 +11,9 @@ source_present != production_enabled
 Current accepted code checkpoint before this documentation-only convergence:
 
 ```text
-protected main = 81fba31e7c78966ec57e098d400d895d26e64dbf
+protected main = a8af2120255f117a7cf58ab86ff79963005f58a0
 PF-1              ACCEPTED (#466)
-PF-2              ACCEPTED; authority correction ACCEPTED (#477 / #471)
+PF-2              ACCEPTED; semantic-authority correction #477 and raw-provider-observation correction #480 ACCEPTED (#471 provenance)
 PF-3              ACCEPTED provisional baseline; truthfulness correction ACCEPTED (#478 / #431)
 FC-6              NEXT PERMITTED STAGE / NOT STARTED BY THIS TRANSACTION
 AR-12             NOT STARTED
@@ -26,7 +26,7 @@ production_mutation = false
 
 The authoritative moving SHA is always fresh protected `main`; a stale prose SHA never overrides GitHub. PF-2 and PF-3 are accepted prerequisites, not current implementation work. Their historical trackers remain #471 and #431. The live Functional Closure trackers are #399 and #421.
 
-A historical read-only FC-6 re-baseline and the repository-only Release Set v3 verifier correction #476 occurred before the current PF-2/PF-3 corrections. That history does **not** authorize continuation here: this transaction performs no FC-6 preflight execution, staging mutation, promotion, deployment or rollback.
+A historical read-only FC-6 re-baseline and the repository-only Release Set v3 verifier correction #476 occurred before the later PF corrections. #480 subsequently completed PF-2 raw-provider-observation convergence. None of that history authorizes continuation here: this documentation transaction performs no FC-6 preflight execution, staging mutation, promotion, deployment or rollback.
 
 ## Documentation authority
 
@@ -62,7 +62,7 @@ no decorative registry as a second source of truth
 Release / Capability Profile = sole production-enable authority
 ```
 
-PF-2 now consumes raw secret-free observations and derives trust/readiness/outcome in typed Rust. PF-3 no longer carries the decorative free-text fitness registry removed by #478: actual specialized production checkers, their executable negative fixtures/self-tests and required CI callers are the truthful enforcement surface.
+PF-2 now consumes raw secret-free provider observations through Hosted Evidence v3 and derives trust/readiness/outcome in typed Rust, including exact staging-account binding. PF-3 no longer carries the decorative free-text fitness registry removed by #478: actual specialized production checkers, their executable negative fixtures/self-tests and required CI callers are the truthful enforcement surface.
 
 PF-3 remains provisional. Final architecture-form freeze follows accepted AR-15 real Windows delivery/updater/LKG proof; AR-16 audits and AR-17 qualifies/authorizes.
 
