@@ -195,21 +195,31 @@ Rust pure policy / evidence / lifecycle evaluation
 
 The observer must not combine external acquisition with the semantic decision when the target architecture has a typed policy owner.
 
-### Current convergence target
+### Current PF-2 boundary
 
-`scripts/check-external-review-attestations.py` currently performs both GitHub API GETs and semantic verification of claim identity/body/timestamp. This is acceptable transitional current behavior but is **not** the PF-2 target boundary.
-
-PF-2 must split it conceptually into:
+The PF-2 external-review cutover uses the existing outer script only for acquisition:
 
 ```text
-outer GitHub review observation
+GitHub review/comment GET
         ↓
-versioned HostedEvidence/ReviewObservation DTO
+scripts/check-external-review-attestations.py
         ↓
-pure Rust EvidencePolicy / attestation verification
+strict EXTERNAL_REVIEW_ATTESTATION_OBSERVATION v1
+        ↓
+existing opsctl hosted-evidence adapter
+        ↓
+typed Rust ReviewAttestationPolicyV1
+        ↓
+semantic accept / fail closed
 ```
 
-After PF-2 cutover, any retained Python/network component is observation acquisition only unless a narrower justified adapter role is explicitly documented.
+`scripts/check-external-review-attestations.py` may parse enough GitHub URL/provider shape to address the exact GET and may capture object availability, repository/reference, reviewer, body and effective timestamp. On the acceptance path it does **not** decide whether repository/reference/reviewer/timestamp/body is semantically valid and does not select active terminal evidence. HTTP 404/mutation/foreign-repository facts are observations; the typed Rust path decides whether they invalidate an active terminal record.
+
+The existing `opsctl` adapter owns strict schema/version/unknown-field rejection and canonical record digest derivation. `ReviewAttestationPolicyV1` owns the bounded semantic decision. Provider DTO/`serde_json::Value` does not cross into pure core.
+
+`--print-claims` remains only a non-authoritative operator renderer. Acceptance recomputes the RFC8785 canonical claim digest in Rust and fails closed on renderer/provider drift; therefore the renderer is not a second evidence-validity authority.
+
+Network, GitHub token use and provider reads remain outside `opsctl`. `opsctl` receives only explicit secret-free observation bytes and has zero process/network/provider/credential/production-mutation authority.
 
 ## 10. Provider mutation: default forbidden for Python
 
@@ -255,7 +265,7 @@ second Product business/domain authority
 second release/capability admission authority
 second D1 compatibility/rollout authority
 second lifecycle/acceptance authority
-second evidence-validity policy authority after PF-2 cutover
+second evidence-validity policy authority
 second fitness-rule semantic registry after PF-3 cutover
 hidden production mutation executor
 secret readback/reporting tool
@@ -364,7 +374,7 @@ PF-1 deletes the legacy Python architecture inventory/projection cluster after p
 
 ### PF-2
 
-PF-2 may reuse Python/workflow outer observation acquisition, but evidence normalization/validity/freshness/trust decisions live in typed Rust pure policy. Hosted evidence publication/attestation remains workflow/GitHub infrastructure responsibility.
+PF-2 reuses Python/workflow only for outer observation acquisition. Evidence normalization/validity/freshness/trust and external-review attestation decisions live in typed Rust policy/adapter owners. Hosted evidence publication/attestation remains workflow/GitHub infrastructure responsibility. A retained Python claim renderer is presentation only and cannot become an acceptance authority.
 
 ### PF-3
 
