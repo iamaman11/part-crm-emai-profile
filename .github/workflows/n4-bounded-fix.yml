@@ -322,7 +322,10 @@ jobs:
           cargo clippy --locked --manifest-path tools/opsctl/Cargo.toml --all-targets -- -D warnings
           cargo test --locked --manifest-path tools/opsctl/Cargo.toml --lib
           cargo test --locked --manifest-path tools/opsctl/Cargo.toml --test d1_post_epoch_authoring
-          if git grep -n 'architecture/operator-contract.json' -- tools scripts .github/scripts architecture/credential-authority.json architecture/inventory.json docs/status.json; then
+          remaining="$(git grep -n 'architecture/operator-contract.json' -- tools scripts .github/scripts architecture/credential-authority.json architecture/inventory.json docs/status.json || true)"
+          meaningful="$(printf '%s\n' "$remaining" | grep -v 'assert!(!root.join("architecture/operator-contract.json").exists())' || true)"
+          if [[ -n "$meaningful" ]]; then
+            printf '%s\n' "$meaningful" >&2
             echo 'current executable/projection caller of operator-contract remains' >&2
             exit 1
           fi
