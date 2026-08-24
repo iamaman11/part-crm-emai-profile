@@ -61,6 +61,10 @@ pub enum Invocation {
         evaluated_at_unix_seconds: i64,
         expected_subject: String,
     },
+    ExternalReviewAttestations {
+        root: Option<PathBuf>,
+        observation_json: PathBuf,
+    },
     D1 {
         root: Option<PathBuf>,
         action: d1::D1Action,
@@ -211,6 +215,9 @@ where
         .ok_or_else(|| OpsctlError::new("hosted-evidence", "missing hosted evidence consumer"))?
         .into_string()
         .map_err(|_| OpsctlError::new("hosted-evidence", "consumer must be valid UTF-8"))?;
+    if consumer == "external-review-attestation" {
+        return parse_external_review_attestation_invocation(root, iterator);
+    }
     if consumer != "operational-credential" {
         return Err(OpsctlError::new(
             "hosted-evidence",
@@ -362,6 +369,53 @@ where
         input_json,
         evaluated_at_unix_seconds,
         expected_subject,
+    })
+}
+
+fn parse_external_review_attestation_invocation<I>(
+    root: Option<PathBuf>,
+    mut iterator: I,
+) -> Result<Invocation, OpsctlError>
+where
+    I: Iterator<Item = OsString>,
+{
+    let action = iterator
+        .next()
+        .ok_or_else(|| OpsctlError::new("hosted-evidence", "missing external review attestation action"))?
+        .into_string()
+        .map_err(|_| OpsctlError::new("hosted-evidence", "external review attestation action must be valid UTF-8"))?;
+    if action != "verify" {
+        return Err(OpsctlError::new(
+            "hosted-evidence",
+            format!("unsupported external review attestation action: {action}"),
+        ));
+    }
+    let flag = iterator
+        .next()
+        .ok_or_else(|| OpsctlError::new("hosted-evidence", "external review attestation verify requires --observation-json"))?
+        .into_string()
+        .map_err(|_| OpsctlError::new("hosted-evidence", "external review attestation flag must be valid UTF-8"))?;
+    if flag != "--observation-json" {
+        return Err(OpsctlError::new(
+            "hosted-evidence",
+            format!("unsupported external review attestation argument: {flag}"),
+        ));
+    }
+    let observation_json = iterator
+        .next()
+        .ok_or_else(|| OpsctlError::new("hosted-evidence", "--observation-json requires a path"))?;
+    if let Some(extra) = iterator.next() {
+        return Err(OpsctlError::new(
+            "hosted-evidence",
+            format!(
+                "unexpected external review attestation argument: {}",
+                extra.to_string_lossy()
+            ),
+        ));
+    }
+    Ok(Invocation::ExternalReviewAttestations {
+        root,
+        observation_json: PathBuf::from(observation_json),
     })
 }
 
@@ -1081,6 +1135,37 @@ mod tests {
                 "hosted-evidence",
                 "generic-provider",
                 "seal",
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_bounded_external_review_attestation_surface() {
+        assert_eq!(
+            parse_invocation(args(&[
+                "opsctl",
+                "--root",
+                "/repo",
+                "hosted-evidence",
+                "external-review-attestation",
+                "verify",
+                "--observation-json",
+                "review-observation.json",
+            ])),
+            Ok(Invocation::ExternalReviewAttestations {
+                root: Some(PathBuf::from("/repo")),
+                observation_json: PathBuf::from("review-observation.json"),
+            })
+        );
+        assert!(
+            parse_invocation(args(&[
+                "opsctl",
+                "hosted-evidence",
+                "external-review-attestation",
+                "seal",
+                "--observation-json",
+                "review-observation.json",
             ]))
             .is_err()
         );
