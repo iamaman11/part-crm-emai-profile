@@ -12,7 +12,7 @@ Before planning or changing anything:
 4. read relevant bounded contracts such as `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`, `docs/OPSCTL_DOCTOR_CONTRACT.md`, `docs/PYTHON_USAGE_BOUNDARY.md`, PF-3 or Functional Closure plans;
 5. treat fresh Git/GitHub facts as higher authority than memory, chat history, handoff text, stale prose or an old SHA.
 
-Current historical prerequisite trackers #441, #471 and #431 are provenance, not live execution state. Functional Closure uses #399 and #421.
+Current historical prerequisite trackers #441, #471 and #431 are provenance, not live execution state. PF-2 raw-provider-observation correction #480 is accepted source history; Functional Closure uses #399 and #421.
 
 Do not begin implementation until the current checkpoint and exactly one next permitted bounded concern are identified.
 
@@ -67,7 +67,7 @@ An internal caller, validator, generator, drift gate, self-test or documentation
 
 ## 5. Current stage and freeze discipline
 
-PF-1, PF-2 and PF-3 are accepted prerequisites. PF-2 authority convergence #477 and PF-3 truthfulness correction #478 are accepted. PF-3 remains provisional.
+PF-1, PF-2 and PF-3 are accepted prerequisites. PF-2 semantic-authority convergence #477 and raw-provider-observation correction #480 are accepted; PF-3 truthfulness correction #478 is accepted. PF-3 remains provisional.
 
 FC-6 is the next permitted stage only after final readiness audit and a **separate explicit user instruction**. Historical read-only FC-6 work/#476 does not authorize continuation during prerequisite/documentation closeout.
 
