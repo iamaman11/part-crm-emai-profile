@@ -877,8 +877,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_deployments_404_and_nonzero_wrangler_exit()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_deployments_404_and_nonzero_wrangler_exit() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut not_found = observation()?;
         not_found.reads.workers_deployments_http_status = 404;
         not_found.reads.workers_deployments_success = false;
