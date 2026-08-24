@@ -144,9 +144,9 @@ AR-9   D1 Evolution / Schema Compatibility                       DONE / ACCEPTED
 AR-10  Runtime and Historical Executable Simplification          DONE / ACCEPTED
 AR-11  Release-set / Promotion Architecture                      DONE / ACCEPTED
 AR-12  Fresh Rehearsal Environment                               NOT STARTED
-AR-13  Rotation Rehearsal
-AR-14  Remote Recovery Rehearsal
-AR-15  Windows Delivery Program — inherited Batch E
+AR-13  Rotation Rehearsal + static credential convergence
+AR-14  Remote Recovery + break-glass rehearsal
+AR-15  Windows Delivery + signing-key lifecycle — inherited Batch E
 AR-16  Final Whole-project 10/10 Audit
 AR-17  Architecture Closeout + Production Core Gate
 ```
@@ -277,6 +277,8 @@ Live trackers: #399 and #421.
 
 The next FC-6 run begins with a fresh read-only observation of accepted protected `main`, governance, workflows, credential scope/readiness, current staging identity, known-good identity, current Release Sets and hosted evidence.
 
+Credential readiness means provider-verified status, exact account/resource scope, expected permission set, protected binding names and a sufficient validity window for the complete ceremony. Exportable static credentials are bounded to a maximum provider lifetime of six calendar months; non-expiring exportable static credentials fail readiness. Short-lived or federated identity is preferred where the provider supports it. Secret value readback and production credential reuse remain forbidden.
+
 ```text
 fresh read-only #399/#421 re-baseline
 -> typed READY | BLOCKED
@@ -303,12 +305,12 @@ Current documentation/PF corrections perform none of those operations.
 
 ```text
 FC-6 / FC-7     functional closure + staging proof; bounded scenario correction only
-AR-12           fresh-environment rehearsal
-AR-13           rotation rehearsal
-AR-14           remote-recovery rehearsal
-AR-15           Windows updater/delivery/LKG proof + final architecture-form freeze
+AR-12           fresh-environment rehearsal from canonical inputs; prove no hidden credential/config state and no legacy JSON bundle consumer
+AR-13           rotation rehearsal for every active exportable secret: issue -> validate -> bind -> switch -> verify -> retire; six-calendar-month maximum; account/service-owned Cloudflare automation and GitHub App short-lived identity where supported; atomic Access/R2/OAuth/runtime-key overlap and rollback; retire obsolete bootstraps/bundle bindings only after verified successors
+AR-14           remote-recovery rehearsal: encrypted escrow, break-glass issuance, Vault backup/restore and compromise recovery without value readback
+AR-15           Windows updater/delivery/LKG proof plus hardware-backed code/update-signing key issue/rotation/revocation and final architecture-form freeze
 AR-16           final whole-project audit only
-AR-17           qualification/authorization decision only
+AR-17           production qualification only: independently issued production credentials, no staging reuse, protected reviewer separation and fail-closed expiry/account/resource checks
 PC-1            first Production Core release
 ```
 

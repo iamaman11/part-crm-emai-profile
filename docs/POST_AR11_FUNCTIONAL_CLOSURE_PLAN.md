@@ -73,6 +73,15 @@ accepted protected main
 
 The PF-2 hosted-evidence prerequisite now requires raw secret-free provider/process observations in strict Hosted Evidence v3. Typed Rust alone derives trust/readiness/outcome and enforces the exact staging account binding; workflow/shell code must not pre-classify provider reads into semantic booleans.
 
+The FC-6 credential entry gate is concrete and fail-closed:
+
+- the observation token is active, read-only, bound to the exact staging account, carries only Workers/D1/R2/Queues read permissions and has a provider expiry no later than six calendar months after issuance;
+- the deploy token is active, staging-account/zone scoped, contains only the permissions already required by the guarded mutation executor, has the same six-calendar-month maximum lifetime and is not exposed before typed `READY`;
+- the protected staging bindings contain the observation token, deploy token, deploy manifest and Access service-auth pair; secret values are never read back;
+- every credential consumed by FC-6 is remotely valid and has enough remaining lifetime for the whole ceremony; an invalid, expired, non-expiring exportable static credential or wrong account/resource identity yields `BLOCKED`;
+- a replacement is issued and validated before binding, and the predecessor is revoked only after the replacement binding and accepted-main/read-only proof succeed;
+- FC-6 does not rotate Worker runtime keys, R2 S3 pairs, OAuth client secrets or Access service-auth. Those effectful overlap/rollback rehearsals remain owned by AR-13.
+
 Only `READY` may cross into deploy-capable credential exposure or mutation.
 
 Forbidden before READY:
@@ -110,11 +119,11 @@ Exact-head CI/review/guarded-merge rules are owned by `docs/ARCHITECTURE_ACCEPTA
 ```text
 FC-6 / FC-7 = proof and closeout; no generic redesign
 AR-12 = fresh-environment rehearsal
-AR-13 = rotation rehearsal
-AR-14 = remote-recovery rehearsal
-AR-15 = Windows updater/delivery + LKG proof + final architecture-form freeze
+AR-13 = rotation rehearsal: account/service-owned short-lived automation identity where supported; GitHub App short-lived tokens instead of durable PAT authority; observation/deploy, Access, R2, OAuth and runtime-key overlap/cutover/retirement; remove obsolete bundle/bootstrap bindings only after verified successors
+AR-14 = remote-recovery rehearsal: encrypted escrow, break-glass issuance, Vault loss/restore and credential-compromise recovery without secret readback
+AR-15 = Windows updater/delivery + LKG proof + hardware-backed code/update-signing key lifecycle + final architecture-form freeze
 AR-16 = final audit only
-AR-17 = Production Core qualification/authorization only
+AR-17 = Production Core qualification/authorization only: independently issued production credentials, protected reviewers, no staging reuse and fail-closed expiry/resource checks
 PC-1  = first Production Core release
 ```
 

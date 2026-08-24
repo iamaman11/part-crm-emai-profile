@@ -169,6 +169,10 @@ def validate_lifecycle(value: dict[str, Any]) -> None:
         "one_legitimate_mutable_authority_per_concern": True,
         "secret_readback": False,
         "routine_deployment_is_not_rotation_authority": True,
+        "exportable_static_credential_max_lifetime": "P6M",
+        "non_expiring_exportable_static_credentials": "FORBIDDEN",
+        "short_lived_or_federated_identity_preferred": True,
+        "retained_decryption_only_material_may_outlive_active_use_until_dependency_zero": True,
         "legacy_bundle_transport_is_steady_state_authority": False,
     }
     if not isinstance(invariants, dict) or any(
