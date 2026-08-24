@@ -23,7 +23,6 @@ EXPECTED_REGISTRY = "architecture/credential-authority-ar8b.json"
 EXPECTED_REGISTRY_OVERLAY = "architecture/credential-authority-ar11.json"
 EXPECTED_LIFECYCLE = "architecture/credential-lifecycle.json"
 EXPECTED_PROFILE_SECURITY = "architecture/profile-security.json"
-EXPECTED_OPERATOR_CONTRACT = "architecture/operator-contract.json"
 EXPECTED_SECRET_TRANSPORT_SUCCESSOR = "architecture/ar8-d-secret-transport-successor.json"
 
 CANONICAL_ENVIRONMENTS = {"rehearsal", "staging", "production"}
@@ -105,11 +104,12 @@ def validate_composition(root: Path, value: dict[str, Any]) -> tuple[str, str, s
         "registry_source": EXPECTED_REGISTRY,
         "credential_lifecycle_source": EXPECTED_LIFECYCLE,
         "profile_security_source": EXPECTED_PROFILE_SECURITY,
-        "operator_contract_source": EXPECTED_OPERATOR_CONTRACT,
     }
     for field, expected in sources.items():
         if repo_path(value.get(field), field) != expected:
             raise ValueError(f"current credential authority source ownership drifted: {field}")
+    if "operator_contract_source" in value:
+        raise ValueError("retired operator-contract predecessor may not remain a credential composition source")
     if value.get("registry_source_role") != "IMMUTABLE_ACCEPTED_PROVENANCE_DATASET":
         raise ValueError("accepted credential registry provenance role drifted")
     overlays = value.get("registry_overlay_sources")
@@ -142,11 +142,8 @@ def validate_composition(root: Path, value: dict[str, Any]) -> tuple[str, str, s
     ):
         raise ValueError("current credential authority fail-closed invariants drifted")
     profile = read_json(root, EXPECTED_PROFILE_SECURITY)
-    operator = read_json(root, EXPECTED_OPERATOR_CONTRACT)
     if profile.get("kind") != "PROFILE_SECURITY_AUTHORITY" or profile.get("status") != "current":
         raise ValueError("current profile-security authority identity/status drifted")
-    if operator.get("kind") != "OPERATOR_CONTRACT_AUTHORITY" or operator.get("mode") != "READ_ONLY_METADATA_ONLY":
-        raise ValueError("current operator-contract authority identity/mode drifted")
     return EXPECTED_REGISTRY, overlay_path, EXPECTED_LIFECYCLE
 
 

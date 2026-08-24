@@ -29,7 +29,7 @@ The following artifacts may still be reachable on the current pre-PF-1 branch of
 
 - `python-estate-ar6.json` and AR-10/AR-11 Python-estate overlays — retired by N2. There will be no successor 1:1 Python file registry.
 - `github-governance-ar7.json` and historical governance overlays — normalized by N3 so current desired governance + live observation + typed policy replace historical overlay reconstruction.
-- `operator-contract.json` — N4 makes typed Rust `CommandRegistry`/effect ownership authoritative; retained JSON, if any, is projection only.
+- `operator-contract.json` — retired by N4; typed Rust `Invocation`/`OperatorEffect` metadata and the existing parser/composition root own current operator semantics.
 - `runtime-cutover-ar10.json` — N5 reassigns every still-current fact to Product Rust, `runtime-lock.json`, Camouhost/Bridge contracts, current governance or lifecycle/release owners, then retires the transitional document.
 
 These artifacts must not be copied into successor JSON/TOML/YAML or a giant Rust registry merely to preserve their historical shape.
@@ -48,7 +48,7 @@ AR numbers identify **how a contract was accepted**, not the current system doma
 - `ar8-staging-provider-bootstrap-contract.json` — accepted AR-8C staging bootstrap/provider execution provenance and protected execution prerequisite. It is not a competing credential registry.
 - `ar8-d-secret-transport-successor.json` — AR-8D transition provenance from Pre-2J D3 bundle transport to metadata-only steady-state Worker secret binding verification. Its durable steady-state rules are represented by current bounded credential lifecycle ownership.
 - `ar8-completion-lifecycle.json` — completion-candidate provenance. Durable credential lifecycle/profile-security requirements are represented by their current subject owners.
-- `ar8-operator-rehearsal.json` — AR-8F rehearsal/candidate provenance. Operator behavior is moving to typed Rust ownership under N4.
+- `ar8-operator-rehearsal.json` — AR-8F rehearsal/candidate provenance only. Current operator behavior is owned by typed Rust invocation/effect metadata.
 
 Full candidate snapshots are preserved under `docs/evidence/`:
 

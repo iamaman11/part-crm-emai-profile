@@ -257,7 +257,6 @@
         "credential_authority": "architecture/credential-authority.json",
         "credential_registry_provenance": "architecture/credential-authority-ar8b.json",
         "credential_lifecycle": "architecture/credential-lifecycle.json",
-        "operator_contract": "architecture/operator-contract.json",
         "profile_security": "architecture/profile-security.json",
         "architecture_map": "architecture/README.md"
       },

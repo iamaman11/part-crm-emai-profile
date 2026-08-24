@@ -22,7 +22,6 @@ const CANONICAL_ROOT_SENTINELS: &[&str] = &[
     "architecture/credential-authority.json",
     "architecture/credential-lifecycle.json",
     "architecture/profile-security.json",
-    "architecture/operator-contract.json",
     "scripts/generate-architecture-inventory.py",
 ];
 

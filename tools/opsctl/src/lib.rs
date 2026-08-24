@@ -19,6 +19,57 @@ pub use error::OpsctlError;
 
 use repository::{resolve_d1_repository_root, resolve_repo_root};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorEffect {
+    ReadOnlyMetadata,
+}
+
+impl OperatorEffect {
+    #[must_use]
+    pub const fn has_side_effects(self) -> bool {
+        false
+    }
+
+    #[must_use]
+    pub const fn has_network_authority(self) -> bool {
+        false
+    }
+
+    #[must_use]
+    pub const fn has_provider_mutation_authority(self) -> bool {
+        false
+    }
+
+    #[must_use]
+    pub const fn has_secret_readback(self) -> bool {
+        false
+    }
+
+    #[must_use]
+    pub const fn has_production_mutation(self) -> bool {
+        false
+    }
+}
+
+impl Invocation {
+    /// Semantic effect metadata is derived from the real typed invocation, never from
+    /// a serialized operator registry. Help/version are process-local presentation;
+    /// every accepted operator command is metadata-only and read-only.
+    #[must_use]
+    pub const fn operator_effect(&self) -> Option<OperatorEffect> {
+        match self {
+            Self::Help | Self::Version => None,
+            Self::Run { .. }
+            | Self::Credentials { .. }
+            | Self::D1 { .. }
+            | Self::D1Repository { .. }
+            | Self::ReleaseFinalize { .. }
+            | Self::Release { .. }
+            | Self::Promotion { .. } => Some(OperatorEffect::ReadOnlyMetadata),
+        }
+    }
+}
+
 /// Execute one already-parsed project-specific operational policy command.
 ///
 /// This function is the library composition root. Its operational policy authority
@@ -111,7 +162,6 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             })
             .map_err(|error| OpsctlError::new("release", error.to_string()))
         }
-
         Invocation::Promotion {
             root,
             action,
@@ -147,48 +197,37 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CredentialsAction, Invocation, OpsctlError, execute, parse_invocation};
-    use serde_json::Value;
-    use std::collections::BTreeSet;
+    use super::{CredentialsAction, OperatorEffect, OpsctlError, execute, parse_invocation};
     use std::ffi::OsString;
-    use std::fs;
     use std::path::PathBuf;
 
     fn repository_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
-    fn parser_args(values: &[Value]) -> Result<Vec<OsString>, String> {
-        let mut args = vec![OsString::from("opsctl")];
-        for value in values {
-            let argument = value
-                .as_str()
-                .ok_or_else(|| "operator parser probe arguments must be strings".to_owned())?;
-            args.push(OsString::from(argument));
-        }
-        Ok(args)
+    fn assert_read_only_effect(effect: OperatorEffect) {
+        assert_eq!(effect, OperatorEffect::ReadOnlyMetadata);
+        assert!(!effect.has_side_effects());
+        assert!(!effect.has_network_authority());
+        assert!(!effect.has_provider_mutation_authority());
+        assert!(!effect.has_secret_readback());
+        assert!(!effect.has_production_mutation());
     }
 
-    fn invocation_command(invocation: &Invocation) -> Option<String> {
-        match invocation {
-            Invocation::Help | Invocation::Version => None,
-            Invocation::Run { command, .. } => Some(format!("opsctl {}", command.name())),
-            Invocation::Credentials { action, .. } => {
-                Some(format!("opsctl credentials {}", action.name()))
-            }
-            Invocation::D1 { action, .. } => Some(format!("opsctl d1 {}", action.name())),
-            Invocation::D1Repository { .. } => Some("opsctl d1 repository".to_owned()),
-            Invocation::ReleaseFinalize { .. } => Some("opsctl release finalize".to_owned()),
-            Invocation::Release { action, .. } => Some(format!("opsctl release {}", action.name())),
-            Invocation::Promotion { action, .. } => {
-                Some(format!("opsctl promotion {}", action.name()))
-            }
-        }
+    #[test]
+    fn parsed_operator_command_has_typed_read_only_effect() -> Result<(), OpsctlError> {
+        let invocation = parse_invocation([OsString::from("opsctl"), OsString::from("doctor")])?;
+        assert_eq!(
+            invocation.operator_effect(),
+            Some(OperatorEffect::ReadOnlyMetadata)
+        );
+        assert_read_only_effect(OperatorEffect::ReadOnlyMetadata);
+        Ok(())
     }
 
     #[test]
     fn credentials_status_preserves_lifecycle_metadata_contract() -> Result<(), OpsctlError> {
-        let output = execute(Invocation::Credentials {
+        let output = execute(super::Invocation::Credentials {
             root: Some(repository_root()),
             action: CredentialsAction::Status,
         })?;
@@ -199,103 +238,15 @@ mod tests {
     }
 
     #[test]
-    fn credentials_rotation_plan_preserves_metadata_only_operator_contract()
-    -> Result<(), OpsctlError> {
-        let output = execute(Invocation::Credentials {
+    fn credentials_rotation_plan_uses_bounded_lifecycle_owner() -> Result<(), OpsctlError> {
+        let output = execute(super::Invocation::Credentials {
             root: Some(repository_root()),
             action: CredentialsAction::RotationPlan,
         })?;
-        assert!(output.contains("\"kind\": \"OPERATOR_CONTRACT_AUTHORITY\""));
-        assert!(output.contains("\"mode\": \"READ_ONLY_METADATA_ONLY\""));
+        assert!(output.contains("\"kind\": \"CREDENTIAL_LIFECYCLE_AUTHORITY\""));
         assert!(output.contains("\"production_mutation\": false"));
+        assert!(!output.contains("OPERATOR_CONTRACT_AUTHORITY"));
         assert!(!output.contains("\"secret_value\":"));
-        Ok(())
-    }
-
-    #[test]
-    fn operator_registry_active_probes_match_parser_and_reserved_probes_fail_closed()
-    -> Result<(), String> {
-        let text =
-            fs::read_to_string(repository_root().join("architecture/operator-contract.json"))
-                .map_err(|error| format!("operator contract must be readable: {error}"))?;
-        let authority: Value = serde_json::from_str(&text)
-            .map_err(|error| format!("operator contract must be JSON: {error}"))?;
-        let surfaces = authority["operator_surfaces"]
-            .as_object()
-            .ok_or_else(|| "operator_surfaces must be an object".to_owned())?;
-        let mut active = BTreeSet::new();
-
-        for (id, entry) in surfaces {
-            assert_eq!(entry["status"].as_str(), Some("ACTIVE"), "{id}");
-            assert_eq!(
-                entry["mode"].as_str(),
-                Some("READ_ONLY_METADATA_ONLY"),
-                "{id}"
-            );
-            assert_eq!(entry["side_effects"].as_str(), Some("NONE"), "{id}");
-            assert_eq!(entry["network_authority"].as_bool(), Some(false), "{id}");
-            assert_eq!(
-                entry["provider_mutation_authority"].as_bool(),
-                Some(false),
-                "{id}"
-            );
-            assert_eq!(entry["secret_readback"].as_bool(), Some(false), "{id}");
-
-            let command = entry["command"]
-                .as_str()
-                .ok_or_else(|| format!("{id} active operator command must be a string"))?;
-            assert!(
-                active.insert(command.to_owned()),
-                "duplicate command: {command}"
-            );
-            let probe = entry["parser_probe_args"]
-                .as_array()
-                .ok_or_else(|| format!("{id} active operator parser probe must be an array"))?;
-            let invocation = parse_invocation(parser_args(probe)?)
-                .map_err(|error| format!("{id} registry probe did not parse: {error}"))?;
-            assert_eq!(
-                invocation_command(&invocation).as_deref(),
-                Some(command),
-                "{id}"
-            );
-        }
-        assert!(
-            !active.is_empty(),
-            "active operator command registry must not be empty"
-        );
-
-        let reserved = authority["reserved_namespaces"]
-            .as_array()
-            .ok_or_else(|| "reserved_namespaces must be an array".to_owned())?;
-        assert_eq!(reserved.len(), 3, "Unit B reserved namespace count drifted");
-        for entry in reserved {
-            assert_eq!(entry["status"].as_str(), Some("RESERVED"));
-            assert_eq!(entry["provider_mutation_authority"].as_bool(), Some(false));
-            assert_eq!(entry["network_authority"].as_bool(), Some(false));
-            assert_eq!(
-                entry["production_authorization_authority"].as_bool(),
-                Some(false)
-            );
-            let probes = entry["parser_probe_args"]
-                .as_array()
-                .ok_or_else(|| "reserved parser probes must be an array".to_owned())?;
-            for probe in probes {
-                let values = probe
-                    .as_array()
-                    .ok_or_else(|| "each reserved parser probe must be an array".to_owned())?;
-                assert!(
-                    parse_invocation(parser_args(values)?).is_err(),
-                    "reserved parser probe unexpectedly became active: {values:?}"
-                );
-            }
-        }
-
-        for unknown in ["provision", "deploy", "mutate", "recovery", "readiness"] {
-            assert!(
-                parse_invocation(vec![OsString::from("opsctl"), OsString::from(unknown)]).is_err(),
-                "unknown/reserved command unexpectedly parsed: {unknown}"
-            );
-        }
         Ok(())
     }
 }

@@ -77,7 +77,6 @@ fn is_repo_root(path: &Path) -> bool {
             .join("architecture/credential-lifecycle.json")
             .is_file()
         && path.join("architecture/profile-security.json").is_file()
-        && path.join("architecture/operator-contract.json").is_file()
         && path
             .join("scripts/generate-architecture-inventory.py")
             .is_file()
@@ -114,7 +113,7 @@ mod tests {
     fn root() -> Result<PathBuf, Box<dyn std::error::Error>> {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "opsctl-n2-repository-root-{}-{nonce}",
+            "opsctl-n4-repository-root-{}-{nonce}",
             std::process::id()
         ));
         fs::create_dir_all(root.join("architecture"))?;
@@ -125,7 +124,6 @@ mod tests {
             "architecture/credential-authority.json",
             "architecture/credential-lifecycle.json",
             "architecture/profile-security.json",
-            "architecture/operator-contract.json",
             "scripts/generate-architecture-inventory.py",
         ] {
             fs::write(root.join(relative), b"sentinel\n")?;
@@ -134,11 +132,12 @@ mod tests {
     }
 
     #[test]
-    fn repository_root_does_not_require_retired_python_estate_sentinels()
+    fn repository_root_does_not_require_retired_authority_sentinels()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = root()?;
         assert!(!root.join("architecture/python-estate-ar6.json").exists());
         assert!(!root.join("scripts/python-estate-ar6.py").exists());
+        assert!(!root.join("architecture/operator-contract.json").exists());
         assert!(is_repo_root(&root));
         fs::remove_dir_all(root)?;
         Ok(())
