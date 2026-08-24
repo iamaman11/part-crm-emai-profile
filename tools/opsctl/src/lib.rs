@@ -65,6 +65,7 @@ impl Invocation {
             | Self::Status { .. }
             | Self::Credentials { .. }
             | Self::HostedEvidence { .. }
+            | Self::ExternalReviewAttestations { .. }
             | Self::D1 { .. }
             | Self::D1Repository { .. }
             | Self::ReleaseFinalize { .. }
@@ -111,15 +112,7 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
             expected_subject,
         } => {
             let _repo_root = resolve_repo_root(root.as_deref(), "hosted-evidence")?;
-            let input = std::fs::read_to_string(&input_json).map_err(|error| {
-                OpsctlError::new(
-                    "hosted-evidence",
-                    format!(
-                        "HOSTED_EVIDENCE_INPUT_UNAVAILABLE: {}: {error}",
-                        input_json.display()
-                    ),
-                )
-            })?;
+            let input = read_hosted_evidence_input(&input_json)?;
             match action {
                 HostedEvidenceAction::SealOperationalCredential => {
                     hosted_evidence::seal_operational_credential_json(
@@ -137,6 +130,15 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
                 }
             }
             .map_err(|error| OpsctlError::new("hosted-evidence", error.to_string()))
+        }
+        Invocation::ExternalReviewAttestations {
+            root,
+            observation_json,
+        } => {
+            let _repo_root = resolve_repo_root(root.as_deref(), "hosted-evidence")?;
+            let input = read_hosted_evidence_input(&observation_json)?;
+            hosted_evidence::verify_external_review_attestations_json(&input)
+                .map_err(|error| OpsctlError::new("hosted-evidence", error.to_string()))
         }
         Invocation::D1 {
             root,
@@ -239,6 +241,18 @@ pub fn execute(invocation: Invocation) -> Result<String, OpsctlError> {
     }
 }
 
+fn read_hosted_evidence_input(path: &std::path::Path) -> Result<String, OpsctlError> {
+    std::fs::read_to_string(path).map_err(|error| {
+        OpsctlError::new(
+            "hosted-evidence",
+            format!(
+                "HOSTED_EVIDENCE_INPUT_UNAVAILABLE: {}: {error}",
+                path.display()
+            ),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CredentialsAction, OperatorEffect, OpsctlError, execute, parse_invocation};
@@ -282,6 +296,25 @@ mod tests {
             OsString::from("1700000010"),
             OsString::from("--expected-subject"),
             OsString::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ])?;
+        assert_eq!(
+            invocation.operator_effect(),
+            Some(OperatorEffect::ReadOnlyMetadata)
+        );
+        assert_read_only_effect(OperatorEffect::ReadOnlyMetadata);
+        Ok(())
+    }
+
+    #[test]
+    fn external_review_attestation_surface_preserves_zero_effect_authority()
+    -> Result<(), OpsctlError> {
+        let invocation = parse_invocation([
+            OsString::from("opsctl"),
+            OsString::from("hosted-evidence"),
+            OsString::from("external-review-attestation"),
+            OsString::from("verify"),
+            OsString::from("--observation-json"),
+            OsString::from("review-observation.json"),
         ])?;
         assert_eq!(
             invocation.operator_effect(),
