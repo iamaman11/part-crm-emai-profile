@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "kind": "AR11_CLOUDFLARE_OBSERVE_TOKEN_POLICY_ATTESTATION",
+  "environment": "staging",
+  "token_id": "eefb89bf6a7e1a098465741c1b5824b3",
+  "account_id": "4426df1449e417511bc7697d60b7f62f",
+  "permission_names": [
+    "D1 Read",
+    "Queues Read",
+    "Workers R2 Storage Read",
+    "Workers Scripts Read"
+  ],
+  "production_scope": false,
+  "mutation_capability": false,
+  "token_management_capability": false,
+  "plaintext_token_included": false,
+  "attestation_source": "CLOUDFLARE_TOKEN_ISSUANCE_POLICY"
+}
