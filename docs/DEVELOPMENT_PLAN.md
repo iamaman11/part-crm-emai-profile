@@ -2,7 +2,7 @@
 
 **Document status:** GENERATED_PROJECTION  
 **Canonical program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
-**Live execution tracker:** #441  
+**Live execution tracker:** #471
 **Functional Closure umbrella:** #399  
 **Production Core gate:** `BLOCKED`  
 **Production readiness:** `false`
@@ -19,11 +19,10 @@ source_present != production_enabled
 F1/F2  ACCEPTED
 N1     ACCEPTED
 #454   ACCEPTED
-N2     CURRENT / IN PROGRESS
-N3     BLOCKED on N2
-N4     BLOCKED on N3
-N5     BLOCKED on N4
-PF-1   BLOCKED on N5 + fresh #430 entry reread
+N2–N5  ACCEPTED
+PF-1   ACCEPTED (#466)
+PF-2   CURRENT (#471)
+PF-3   BLOCKED on PF-2
 AR-12  NOT STARTED
 production_mutation = false
 ```
@@ -62,122 +61,21 @@ Rules:
 - observations may be ephemeral PR/CI artifacts; do not commit a new authority file merely to record a one-time caller audit;
 - uncertainty fails closed.
 
-## 3. #454 — Release Set v2 bounded correction — ACCEPTED
+## 3–4. Accepted cutover history
 
-#454 removed the tracked v2 current authority and made v3 the only current writer/target model. Minimum historical v2 source/artifact integrity verification remains isolated behind the version-aware document boundary; it cannot become a promotion/rollback target or coerce v2 semantics into v3.
+#454, N2–N5 and PF-1 are accepted and closed. They retired current Release Set v2 semantics and the Python-estate, governance-overlay, operator-JSON, runtime-cutover, legacy lifecycle and tracked-inventory predecessor authorities without successor registries. Exact detail and provenance remain in #441, #430, #466 and their historical contracts; this current developer projection does not repeat or reopen them.
 
-```text
-current_writer = v3
-current_v2_semantic_authority = 0
-historical_v2_executable = MINIMUM_ISOLATED_VERIFY_ONLY
-v2_to_v3_semantic_coercion = 0
-production_mutation = false
-```
-
-The shared transaction protocol supplied the zero-caller, exact-head, review and merge proofs. Accepted #454 protected `main` is the N2 base.
-
-## 4. N2–N5 — canonical-authority cutover group
-
-N2–N5 remain separate sequential transactions because they retire different semantic owners, but they are **one normalization group**, not four new architecture programs.
-
-After #454 acceptance, perform one read-only discovery pass across the N2–N5 predecessor estate to map current callers, current invariants and likely natural owners. In that same pass, audit concrete current/durable consumers of the **exact tracked bytes** of `architecture/inventory.json` and resolve `JUSTIFIED_MINIMUM | NOT_RETAINED` before PF-1. Keep this map ephemeral (working notes / PR discussion / CI artifact), not as a new checked-in authority registry. Before each N2/N3/N4/N5 PR, refresh only the affected reachability plus deltas since the common discovery.
-
-The inventory retention audit is intentionally narrow:
-
-```text
-real durable exact-byte consumer exists
--> keep only the minimum deterministic GENERATED_PROJECTION it requires
-
-consumer = NONE
--> retire tracked architecture/inventory.json after its remaining callers are naturally cut over
--> retire compatibility-only --write / tracked-byte drift ceremony
--> keep useful deterministic on-demand render/check only
-```
-
-A generator checking the file because it exists, documentation references, historical evidence, and CI drift tests that exist solely for the tracked projection are not consumer proof. This is not an early PF-1 compiler implementation and does not create another phase.
-
-Internal workflows/checkers/self-tests that call a predecessor only because it exists are deleted or redirected with that predecessor; they are not durable consumers. One discovery pass plus affected deltas is enough. Do not add meta-checkers or repeat unchanged discovery in a cycle.
-
-Every N2…PF-3 PR includes a compact before/after ledger for current authorities, transitional sources, callers, tracked projections, compatibility commands and current plan/validator/projection LOC. N2…N5 strictly shrink their predecessor estate; the cumulative N2…PF-3 governance/authority surface must be net smaller. A green but larger duplicate estate is failure.
-
-### N2 — Python estate
-
-Target:
-
-```text
-Python file existence != Python semantic authority
-```
-
-- retire AR-6/AR-10/AR-11 per-file Python-estate authority and `scripts/python-estate-ar6.py` when dead;
-- remove the internal quality/repository-audit/Camoufox workflow calls, compile checks, overlays and inventory/runtime-cutover references in the same deletion transaction; they do not justify retention;
-- govern Python by source-derived role/effects; do not create a successor file registry;
-- remove retiring Python/AR sentinels from `opsctl doctor` and repository-root detection;
-- keep `runtime/camouhost/real.py` as the real Camoufox outer-runtime adapter behind Profile Bridge + versioned IPC + `runtime-lock.json`;
-- keep `runtime/camouhost/main.py` synthetic/test-only;
-- do not rewrite legitimate Python tests/generators/adapters to Rust merely for symmetry;
-- for obsolete helpers: caller=0 -> delete; caller>0 -> move only the still-valid responsibility to its natural owner.
-
-### N3 — GitHub governance
-
-Replace historical overlay reconstruction with:
-
-```text
-current desired governance configuration
-+
-live GitHub observation
--> typed governance evaluation
-```
-
-Declarative desired configuration for an external system is legitimate data. N3 does not move GitHub/network authority into `opsctl` and does not require rewriting all GitHub automation in Rust.
-
-### N4 — operator/provenance
-
-Typed Rust command/effect metadata becomes the semantic owner. Prefer metadata colocated with existing command definitions and aggregate it through the existing parser/composition root; do not build a second generic command framework.
-
-`architecture/operator-contract.json` must not authorize Rust behavior. If no current external consumer requires a JSON view, delete it after caller proof; otherwise it is generated projection only. AR-8 provenance leaves normal current semantic paths.
-
-### N5 — runtime cutover authority
-
-For each still-current field in `architecture/runtime-cutover-ar10.json`:
-
-```text
-not current -> retire with predecessor
-current -> Product Rust | runtime-lock | Bridge/IPC | governance | release/lifecycle natural owner
-```
-
-N5 is field disposition + caller cutover + deletion, not a new runtime framework. Do not create `RuntimeCutoverRegistryV2` or an equivalent successor authority.
+Their permanent anti-regression rule remains: one natural semantic owner; internal validators/workflows are cutover callers rather than durable-consumer proof; no tracked JSON projection as semantic input; no Python/Node compatibility tail; no provider/network/process authority in `opsctl`; no Product Runtime dependency on `opsctl`.
 
 ## 5. PF-1 → PF-3 — bounded replacement + provisional fitness
 
 ### PF-1 — lifecycle + bounded inventory
 
-PF-1 replaces the legacy Node lifecycle and Python inventory/projection cluster with typed lifecycle evaluation and bounded owner projections.
-
-Hard rule:
-
-```text
-PF-1 compiler may COMPOSE facts
-PF-1 compiler may NOT DISCOVER domain semantics
-PF-1 compiler may NOT DECIDE bounded-subject policy
-```
-
-Target shape:
-
-```text
-natural owner -> validated narrow projection --\
-natural owner -> validated narrow projection ----> ArchitectureInventoryCompiler
-natural owner -> validated narrow projection --/
-```
-
-No `GlobalRepositoryAuthorityLoader`, `GlobalAuthoritySet`, giant policy compiler or 1:1 port of historical AR-qualified tables.
-
-PF-1 consumes the pre-PF-1 tracked-inventory retention result instead of deciding it for the first time. If the result is `NOT_RETAINED`, PF-1 must not resurrect checked-in `architecture/inventory.json` or compatibility-only `--write`/drift ceremony; useful deterministic on-demand rendering/checking may remain. If the result is `JUSTIFIED_MINIMUM`, PF-1 emits only the minimum deterministic generated projection required by the proved exact-byte consumer. In either case generated output is never semantic input.
-
-Similarly, command surface should stay minimal: do not keep `render/check/write/inspect` as four permanent commands unless each has a distinct proved consumer/value.
+PF-1 is accepted via #466. Its permanent result is a typed pure lifecycle evaluator plus bounded natural-owner projections and a composition-only inventory compiler. `architecture/inventory.json`, legacy Node/Python policy and compatibility-only write/drift commands remain retired; generated output is never semantic input.
 
 ### PF-2 — minimal hosted evidence pipeline
 
-PF-2 is an evidence pipeline, not a universal provider/plugin framework:
+PF-2 is CURRENT under #471. It is an evidence pipeline, not a universal provider/plugin framework:
 
 ```text
 outer GitHub/provider observation
@@ -188,7 +86,7 @@ outer GitHub/provider observation
 -> immutable artifact/attestation
 ```
 
-Add abstraction only after multiple concrete consumers prove the need. Network/provider reads and publication stay outside pure policy.
+Add abstraction only after at least two concrete current consumers prove shared semantics. Network/provider/clock/credential reads and publication stay in GitHub Actions or official provider tooling, outside `opsctl`. `opsctl` accepts only strict secret-free observations; its pure `EvidencePolicy` must contain no provider-specific policy. Replace and delete any predecessor evidence-validity authority in the same transaction.
 
 ### PF-3 — small provisional enforcement baseline
 
@@ -286,13 +184,11 @@ An impact classifier must consider more than filename globs when dependency/cont
 
 Repeated proof concepts such as predecessor reachability, caller=0, unique-current-invariant=0, generated-projection-not-authority and DEAD-predecessor absence should become reusable CI checks rather than new Markdown ownership/acceptance matrices per transaction.
 
-## 9. Current interactive development environment
+## 9. Hosted tooling boundary
 
-The current agent environment has the connected **GitHub plugin** and does not assume local `gh`.
+Use an authenticated supported GitHub client available in the execution environment (`gh` or the connected GitHub API surface). Before mutation, verify viewer identity, repository, branch and exact head; fresh Git/GitHub state wins over prose. Do not shell-scrape GitHub or move GitHub/network authority into `opsctl` as a workaround.
 
-Use the plugin for hosted GitHub reads/writes: branches, PRs, issues, reviews, required contexts, workflow/status observations, repository files and other hosted GitHub state. Do not block work on missing `gh`, shell-scrape GitHub, or move GitHub/network authority into `opsctl` as a workaround.
-
-Repository-local verification remains local (`python scripts/verify-fast.py`, targeted Cargo/tests). GitHub Actions/provider workflows may use their own pinned hosted tooling. If an old runbook is touched and prescribes `gh`, update the runbook to describe the operation rather than making `gh` an architectural requirement.
+Repository-local verification remains local (`python scripts/verify-fast.py`, targeted Cargo/tests). GitHub Actions/provider workflows use their pinned hosted tooling. Runbooks specify the operation and required authority, not one mandatory interactive client.
 
 ## 10. Production roadmap
 
@@ -312,9 +208,10 @@ PC-4 Outbound / later capabilities
 - `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md` — current program authority and immutable execution order;
 - `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md` — permanent architecture contract;
 - `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md` — detailed #454/N2–N5 ownership retirement contract;
-- #441 — live mutable execution state;
+- #471 — live PF-2 execution state;
+- #441 / #430 / #466 — accepted historical pre-PF-1 and PF-1 provenance;
 - #454 — accepted Release Set v2 correction;
-- `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` / #430 — PF-1;
+- `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` / #430 / #466 — accepted PF-1;
 - `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` / #431 — PF-3;
 - #399 / #421 — Functional Closure obligations;
 - `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md` — shared exact-head/merge acceptance discipline;

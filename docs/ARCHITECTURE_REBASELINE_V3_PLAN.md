@@ -4,9 +4,9 @@
 **Program:** Architecture Re-baseline v3  
 **Tracking issue:** #266  
 **Post-AR-11 Functional Closure:** #399  
-**Accepted checkpoint:** AR-11 — Release-set / Promotion Architecture  
-**Derived current AR slice:** AR-12 — Fresh Rehearsal Environment — NOT STARTED  
-**Current prerequisite transaction:** N2 — Python-estate authority retirement — IN PROGRESS
+**Accepted checkpoint:** PF-1 — typed lifecycle/inventory authority cutover — #466
+**Current transaction:** PF-2 — minimal typed hosted evidence — #471
+**Next AR slice:** AR-12 — Fresh Rehearsal Environment — BLOCKED / NOT STARTED
 **Production authorization:** NONE  
 **Architecture complete:** `false`  
 **Production Core gate:** `BLOCKED`  
@@ -30,7 +30,7 @@ All future PF/FC/AR/PC work is governed by this document together with:
 - `docs/OPSCTL_DOCTOR_CONTRACT.md`;
 - `docs/PYTHON_USAGE_BOUNDARY.md`.
 
-Detailed pre-PF-1 normalization is owned by `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`.
+Accepted pre-PF-1/PF-1 history is preserved by `docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`, `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`, #441, #430 and #466. It is not mutable current execution authority.
 
 Permanent architecture shape:
 
@@ -234,7 +234,7 @@ N5  AR-10 runtime semantic-authority retirement
  ->
 PF-1  typed lifecycle evaluator + deterministic inventory compiler + Node/Python predecessor deletion
  ->
-PF-2  Universal Hosted Operational Evidence
+PF-2  minimal typed Hosted Operational Evidence (#471 CURRENT)
  ->
 PF-3  provisional typed Architecture Fitness Baseline
  ->
@@ -438,7 +438,9 @@ explicit digest scope: semantic canonical bytes OR exact artifact bytes
 
 ## 11. PF-2 boundary
 
-PF-2 target:
+PF-2 is the current bounded concern. #471 is its only live execution tracker; do not add another PF-2 plan, provider registry or compatibility layer.
+
+Target:
 
 ```text
 GitHub Actions / official provider tools
@@ -457,6 +459,22 @@ immutable Actions Artifact / GitHub Artifact Attestation
 ```
 
 Observation acquisition is not evidence-validity policy. Network/provider reads remain outside `opsctl` pure core. Freshness/replay decisions receive explicit typed observations.
+
+Hard boundary and stop conditions:
+
+```text
+GitHub/provider/network/clock/credential/publication effects in workflows or official tooling
+opsctl provider/network/process/credential authority = 0
+strict secret-free versioned DTO at the adapter boundary
+serde_json::Value crossing adapter -> pure core = 0
+typed EvidencePolicy owns only provider-neutral validity/freshness/trust semantics
+generic provider/plugin/evidence framework = 0
+second lifecycle/fitness/evidence engine = 0
+new tracked projection without durable exact-byte consumer = 0
+production_mutation = false
+```
+
+PF-2 implements one thin vertical path for evidence already required by protected workflows and PAS-1…PAS-7. Shared abstraction is added only after at least two concrete current consumers prove common semantics. Any replaced predecessor policy/caller is deleted in the same accepted transaction; dual evidence-validity authority is failure even when CI is green.
 
 ## 12. PF-3 boundary
 

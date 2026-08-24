@@ -1,12 +1,12 @@
 # Pre-PF-1 Authority Estate Normalization
 
-**Document status:** SUBORDINATE_PREREQUISITE_SPEC  
+**Document status:** ACCEPTED_HISTORICAL_PREREQUISITE
 **Program authority:** `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`  
-**Live tracker:** #441  
-**PF-1:** `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` / #430  
+**Completed tracker:** #441
+**Accepted PF-1:** `docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md` / #430 / #466
 **Production authorization:** NONE
 
-This document owns the detailed #454/N2–N5 authority-retirement contract. It does not create new lifecycle slices or change `architecture/architecture-program-sequence.json`.
+This document preserves the accepted #454/N2–N5 authority-retirement contract. It is historical anti-regression context, not mutable current execution authority, and does not create new lifecycle slices or change `architecture/architecture-program-sequence.json`.
 
 ## 1. Binding order
 
@@ -14,11 +14,11 @@ This document owns the detailed #454/N2–N5 authority-retirement contract. It d
 F1/F2 ACCEPTED
 -> N1 ACCEPTED
 -> #454 bounded Release Set v2 correction ACCEPTED
--> N2 Python-estate authority retirement CURRENT / IN PROGRESS
--> N3 current GitHub-governance normalization
--> N4 operator/provenance cleanup
--> N5 runtime semantic-authority retirement
--> PF-1
+-> N2 ACCEPTED
+-> N3 ACCEPTED
+-> N4 ACCEPTED
+-> N5 ACCEPTED
+-> PF-1 ACCEPTED (#466)
 ```
 
 #454 and N2–N5 are bounded normalization transactions, not F3/N1.5/AR-* or PF-0.
@@ -228,8 +228,8 @@ production_mutation = false
 
 N2–N5 leave natural owners unambiguous and resolve whether tracked inventory bytes have a real durable consumer. They do not pre-build PF-1's generic lifecycle/projection/compiler machinery.
 
-## 11. Interactive environment
+## 11. Hosted tooling boundary
 
-The current agent environment uses the connected GitHub plugin and does not assume local `gh`. Use the plugin for hosted GitHub reads/writes; keep repository-local checks local. Do not shell-scrape GitHub or move GitHub/network authority into `opsctl` as a workaround.
+Use an authenticated supported GitHub client available in the execution environment. Verify viewer identity, repository and exact head before mutation; keep repository-local checks local. Do not shell-scrape GitHub or move GitHub/network authority into `opsctl` as a workaround.
 
 Canonical references: `docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`, `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`, `docs/OPSCTL_ARCHITECTURE_BOUNDARY.md`, `docs/OPSCTL_DOCTOR_CONTRACT.md`, `docs/PYTHON_USAGE_BOUNDARY.md`, #441, #454.

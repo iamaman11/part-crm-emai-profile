@@ -12,9 +12,9 @@ source_present != production_enabled
 F1/F2 ACCEPTED
 -> N1 ACCEPTED
 -> #454 ACCEPTED
--> N2 CURRENT -> N3 -> N4 -> N5 authority retirement
--> PF-1 lifecycle + bounded inventory cutover
--> PF-2 minimal hosted evidence pipeline
+-> N2 -> N3 -> N4 -> N5 ACCEPTED
+-> PF-1 lifecycle + bounded inventory cutover ACCEPTED (#466)
+-> PF-2 minimal typed hosted evidence CURRENT (#471)
 -> PF-3 provisional Architecture Fitness baseline
 -> FC-6 preflight (fresh #399/#421 live re-baseline) + staging proof
 -> FC-7 closeout
@@ -36,18 +36,19 @@ production_ready=false
 production_mutation=false
 ```
 
-N2–N5 are sequential delete/simplify transactions, not new architecture programs. Their initial repository-wide predecessor discovery is one read-only ephemeral pass; internal CI/checker callers are deletion scope, not durable consumers. The mandatory post-PF-3 #399/#421 re-baseline executes as FC-6 preflight, not another implementation phase. PF-3 is provisional; final architecture-form freeze follows accepted AR-15 real Windows delivery/recovery proof.
+N2–N5 and PF-1 are accepted historical cutovers. PF-2 must remain a thin typed evidence path: GitHub/provider effects stay in workflows or official provider tooling, while `opsctl` receives only strict secret-free observations and owns pure evidence policy. The mandatory post-PF-3 #399/#421 re-baseline executes as FC-6 preflight, not another implementation phase. PF-3 is provisional; final architecture-form freeze follows accepted AR-15 real Windows delivery/recovery proof.
 
 ## Documentation authority
 
-Start with [`docs/INDEX.md`](docs/INDEX.md). Canonical program authority is [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md); mutable pre-PF-1 state is #441.
+Start with [`docs/INDEX.md`](docs/INDEX.md). Canonical program authority is [`docs/ARCHITECTURE_REBASELINE_V3_PLAN.md`](docs/ARCHITECTURE_REBASELINE_V3_PLAN.md); the one live phase tracker is PF-2 #471.
 
 Key references:
 
 - [`docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md`](docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md) — permanent architecture rules;
-- [`docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) — #454/N2–N5 retirement contract;
+- [`docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md`](docs/PRE_PF1_AUTHORITY_ESTATE_NORMALIZATION.md) / #441 — accepted historical #454/N2–N5 retirement contract;
 - #454 — accepted Release Set v2 correction;
-- [`docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) / #430 — PF-1;
+- [`docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md`](docs/PF1_CANONICAL_ARCHITECTURE_INVENTORY_CUTOVER.md) / #430 / #466 — accepted PF-1;
+- #471 — current PF-2 execution tracker; no duplicate PF-2 plan document;
 - [`docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md`](docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md) / #431 — PF-3;
 - [`docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md`](docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md), #399, #421 — Functional Closure;
 - [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md) — compact developer projection and efficiency rules;
