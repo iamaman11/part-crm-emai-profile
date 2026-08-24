@@ -1018,7 +1018,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_provider_result_invalid_digest_and_nonzero_wrangler_exit() -> TestResult<()> {
+    fn rejects_missing_provider_result_invalid_digest_and_nonzero_wrangler_exit() -> TestResult<()>
+    {
         let mut missing = observation()?;
         missing.reads.workers_deployments_success = None;
         let error = policy_error(policy()?.evaluate(missing, 1_700_000_010))?;
