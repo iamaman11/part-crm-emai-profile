@@ -191,11 +191,8 @@ pub fn seal_operational_credential_json(
     let policy = operational_credential_policy(expected_subject)?;
     let envelope = policy.evaluate(observation, evaluated_at_unix_seconds)?;
     let rendered = render_artifact(&envelope)?;
-    let verified = verify_operational_credential_json(
-        &rendered,
-        evaluated_at_unix_seconds,
-        expected_subject,
-    )?;
+    let verified =
+        verify_operational_credential_json(&rendered, evaluated_at_unix_seconds, expected_subject)?;
     if rendered != verified {
         return Err(HostedEvidenceAdapterError::new(
             "HOSTED_EVIDENCE_ROUNDTRIP_MISMATCH: seal/verify changed canonical evidence bytes",
@@ -293,8 +290,7 @@ fn operational_credential_policy(
         environment: EvidenceEnvironment::new(OPERATIONAL_CREDENTIAL_ENVIRONMENT)?,
         subject: EvidenceSubject::new(expected_subject)?,
     };
-    EvidencePolicyV1::new(binding, OPERATIONAL_CREDENTIAL_MAX_VALIDITY_SECONDS)
-        .map_err(Into::into)
+    EvidencePolicyV1::new(binding, OPERATIONAL_CREDENTIAL_MAX_VALIDITY_SECONDS).map_err(Into::into)
 }
 
 fn observation_from_dto(
@@ -424,7 +420,8 @@ mod tests {
     }
 
     #[test]
-    fn strict_adapter_roundtrips_semantically_and_byte_stably() -> Result<(), Box<dyn std::error::Error>> {
+    fn strict_adapter_roundtrips_semantically_and_byte_stably()
+    -> Result<(), Box<dyn std::error::Error>> {
         let artifact = seal(&observation())?;
         let verified = verify_operational_credential_json(&artifact, EVALUATED_AT, SUBJECT)?;
         assert_eq!(artifact, verified);
@@ -484,7 +481,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_digest_and_noncanonical_artifact_bytes() -> Result<(), Box<dyn std::error::Error>> {
+    fn rejects_bad_digest_and_noncanonical_artifact_bytes() -> Result<(), Box<dyn std::error::Error>>
+    {
         let artifact = seal(&observation())?;
         let mut value: Value = serde_json::from_str(&artifact)?;
         value["digest"]["value"] = Value::String("0".repeat(64));
