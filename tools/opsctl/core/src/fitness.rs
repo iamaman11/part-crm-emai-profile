@@ -50,7 +50,7 @@ const BASELINE_V1_RULES: [FitnessRule; 14] = [
         scope: "bounded-context dependency direction",
         statement: "Pure application/domain crates keep dependencies inward and exclude provider/runtime dependencies.",
         enforcement_owner: "scripts/check-architecture.py",
-        negative_proof: "tests/architecture/fixtures/forbidden-domain and tests/architecture/fixtures/forbidden-query",
+        negative_proof: "tests/architecture/fixtures/forbidden-domain",
     },
     FitnessRule {
         id: FitnessRuleId::Af002OpsctlEffectBoundary,
@@ -65,8 +65,8 @@ const BASELINE_V1_RULES: [FitnessRule; 14] = [
         requiredness: FitnessRequiredness::Required,
         scope: "accepted OpenAPI/protobuf v1 contracts",
         statement: "Accepted public API v1 baselines are immutable and breaking OpenAPI/protobuf compatibility changes fail closed.",
-        enforcement_owner: "scripts/check-contract-baseline-immutable.sh",
-        negative_proof: "scripts/check-contract-compatibility.py --self-test and tests/contracts/fixtures/breaking",
+        enforcement_owner: "scripts/check-contract-compatibility.py + scripts/check-contract-baseline-immutable.sh",
+        negative_proof: "tests/contracts/fixtures/breaking via scripts/check-contract-compatibility.py --current-root",
     },
     FitnessRule {
         id: FitnessRuleId::Af004ExactSourceWorkflowGovernance,
@@ -74,7 +74,7 @@ const BASELINE_V1_RULES: [FitnessRule; 14] = [
         scope: "GitHub Actions source-integrity boundary",
         statement: "Governed workflows use exact candidate source, immutable actions, non-persistent checkout credentials and no branch-push mutation authority.",
         enforcement_owner: "scripts/check-github-actions-runtime.py",
-        negative_proof: "scripts/check-github-actions-runtime.py::post_merge_negative_self_test",
+        negative_proof: "tests/github-actions-runtime/fixtures plus embedded post_merge_negative_self_test",
     },
     FitnessRule {
         id: FitnessRuleId::Af005CredentialProfileAuthorityUniqueness,
@@ -114,7 +114,7 @@ const BASELINE_V1_RULES: [FitnessRule; 14] = [
         scope: "workflow secret authority",
         statement: "Workflow secret transport/mutation authority remains bounded to its canonical owner and competing secret authority is rejected.",
         enforcement_owner: "scripts/check-workflow-secret-authority.py",
-        negative_proof: "scripts/check-workflow-secret-authority.py::run_self_test",
+        negative_proof: "scripts/check-workflow-secret-authority.py --self-test",
     },
     FitnessRule {
         id: FitnessRuleId::Af010TypedLifecycleAuthority,
@@ -138,7 +138,7 @@ const BASELINE_V1_RULES: [FitnessRule; 14] = [
         scope: "opsctl doctor local diagnostics",
         statement: "doctor remains local read-only typed structural diagnostics without a global authority bag, generic JSON policy aggregation, generated inventory input or runtime self-description.",
         enforcement_owner: "tools/opsctl/src/doctor.rs",
-        negative_proof: "tools/opsctl/src/doctor.rs #[cfg(test)] doctor_has_no_semantic_authority_catalog",
+        negative_proof: "tools/opsctl/tests/pf3_architecture_fitness.rs::doctor_semantic_composition_stays_bounded",
     },
     FitnessRule {
         id: FitnessRuleId::Af013RetiredArchitectureSemanticInputs,
@@ -335,8 +335,45 @@ mod tests {
         assert!(validate_candidate_registry(&rules, &[supersession]).is_err());
 
         let (rules, mut supersession) = valid_supersession();
+        supersession.accepted_source_sha = "";
+        assert!(validate_candidate_registry(&rules, &[supersession]).is_err());
+
+        let (rules, mut supersession) = valid_supersession();
         supersession.accepted_source_sha = "deadbeef";
         assert!(validate_candidate_registry(&rules, &[supersession]).is_err());
+    }
+
+    #[test]
+    fn supersession_same_predecessor_and_successor_fails() {
+        let (rules, mut supersession) = valid_supersession();
+        supersession.successor = supersession.predecessor;
+        assert!(validate_candidate_registry(&rules, &[supersession]).is_err());
+    }
+
+    #[test]
+    fn supersession_missing_successor_fails() {
+        let (mut rules, supersession) = valid_supersession();
+        rules.retain(|rule| rule.id != supersession.successor);
+        assert!(validate_candidate_registry(&rules, &[supersession]).is_err());
+    }
+
+    #[test]
+    fn required_predecessor_cannot_be_superseded_by_advisory_rule() {
+        let (mut rules, supersession) = valid_supersession();
+        let successor = rules
+            .iter_mut()
+            .find(|rule| rule.id == supersession.successor)
+            .expect("successor must exist in valid fixture");
+        successor.requiredness = FitnessRequiredness::Advisory;
+        assert!(validate_candidate_registry(&rules, &[supersession]).is_err());
+    }
+
+    #[test]
+    fn duplicate_supersession_predecessor_fails() {
+        let (rules, supersession) = valid_supersession();
+        assert!(
+            validate_candidate_registry(&rules, &[supersession, supersession]).is_err()
+        );
     }
 
     #[test]
