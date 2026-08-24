@@ -34,6 +34,7 @@ const OPERATIONAL_CREDENTIAL_ID: &str = "cloudflare.staging-observation-api";
 const OPERATIONAL_CREDENTIAL_ATTESTATION_KIND: &str =
     "AR11_CLOUDFLARE_OBSERVE_TOKEN_POLICY_ATTESTATION";
 const OPERATIONAL_CREDENTIAL_ATTESTATION_SOURCE: &str = "CLOUDFLARE_TOKEN_ISSUANCE_POLICY";
+const OPERATIONAL_CREDENTIAL_ACCOUNT_ID: &str = "a94259ab73151da7058613fe8ec17b4d";
 const OPERATIONAL_CREDENTIAL_ACCOUNT_NAME: &str = "pvisakp";
 const OPERATIONAL_CREDENTIAL_MUTATION_PROBE: &str = "FORBIDDEN_NOT_EXECUTED";
 
@@ -566,6 +567,7 @@ fn operational_credential_policy(
         OPERATIONAL_CREDENTIAL_ID,
         OPERATIONAL_CREDENTIAL_ATTESTATION_KIND,
         OPERATIONAL_CREDENTIAL_ATTESTATION_SOURCE,
+        OPERATIONAL_CREDENTIAL_ACCOUNT_ID,
         OPERATIONAL_CREDENTIAL_ACCOUNT_NAME,
         OPERATIONAL_CREDENTIAL_MUTATION_PROBE,
     )
@@ -794,6 +796,7 @@ mod tests {
     const OBSERVED_AT: i64 = 1_700_000_000;
     const EVALUATED_AT: i64 = 1_700_000_010;
     const REVIEW_REPOSITORY: &str = "iamaman11/part-crm-emai-profile";
+    const ACCOUNT_ID: &str = "a94259ab73151da7058613fe8ec17b4d";
 
     fn observation() -> Value {
         json!({
@@ -834,7 +837,7 @@ mod tests {
                 "kind": "AR11_CLOUDFLARE_OBSERVE_TOKEN_POLICY_ATTESTATION",
                 "environment": "staging",
                 "token_id": "observe-token-id-1234",
-                "account_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "account_id": ACCOUNT_ID,
                 "account_name": "pvisakp",
                 "permission_names": [
                     "D1 Read",
@@ -859,10 +862,10 @@ mod tests {
                 "http_status": 200,
                 "success": true,
                 "error_count": 0,
-                "account_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "account_id": ACCOUNT_ID,
                 "account_name": "pvisakp"
             },
-            "deployment_account_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "deployment_account_id": ACCOUNT_ID,
             "reads": {
                 "workers_deployments_http_status": 200,
                 "workers_deployments_success": true,
@@ -993,6 +996,12 @@ mod tests {
         let mut wrong_account_id = observation();
         wrong_account_id["account"]["account_id"] = json!("b".repeat(32));
         assert_rejected(&wrong_account_id);
+
+        let mut coordinated_wrong_account_id = observation();
+        coordinated_wrong_account_id["attestation"]["account_id"] = json!("b".repeat(32));
+        coordinated_wrong_account_id["deployment_account_id"] = json!("b".repeat(32));
+        coordinated_wrong_account_id["account"]["account_id"] = json!("b".repeat(32));
+        assert_rejected(&coordinated_wrong_account_id);
     }
 
     #[test]
