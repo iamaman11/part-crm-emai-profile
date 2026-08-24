@@ -51,8 +51,6 @@ cargo run --quiet --manifest-path tools/opsctl/Cargo.toml --locked -- \
 
 The Python step owns GitHub GET acquisition only. It does not decide active lineage, repository binding, reviewer identity, timestamps, canonical claim validity or readiness. `opsctl` itself performs no provider/GitHub network access and reads no provider credentials.
 
-`--print-claims` on the observer may be used only as a non-authoritative renderer before posting a review. Acceptance recomputes and verifies the claim in typed Rust.
-
 ## Safety properties
 
 The permanent checks reject unknown fields/duplicate JSON keys, noncanonical records, unsafe/sensitive identifiers and references, unsupported gates/statuses/environments/checks, evidence-ID/UTC-date mismatch, invalid terminal state, incomplete passed evidence, unsafe supersession lineage, false readiness projection and `production_ready=true` when mandatory external evidence is incomplete.
