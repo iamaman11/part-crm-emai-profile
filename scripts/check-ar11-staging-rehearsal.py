@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-RELEASE_ID = re.compile(r"^release-set-v2-sha256-[0-9a-f]{64}$")
+RELEASE_ID = re.compile(r"^release-set-v3-sha256-[0-9a-f]{64}$")
 PROFILE = "rehearsal-core-v1"
 ENVIRONMENT = "staging"
 
@@ -33,27 +33,6 @@ def load_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def canonical_bytes(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-
-
-def content_address(payload: dict[str, Any]) -> str:
-    return "release-set-v2-sha256-" + hashlib.sha256(canonical_bytes(payload)).hexdigest()
-
-
-def release_identity(document: dict[str, Any]) -> tuple[str, str]:
-    release_set_id = document.get("release_set_id")
-    if not isinstance(release_set_id, str) or not RELEASE_ID.fullmatch(release_set_id):
-        fail("release-set.json has invalid v2 release_set_id")
-    payload = dict(document)
-    payload.pop("release_set_id", None)
-    payload.pop("display_version", None)
-    expected = content_address(payload)
-    if release_set_id != expected:
-        fail(f"release-set.json content address mismatch: expected {expected}, observed {release_set_id}")
-    return release_set_id, hashlib.sha256(canonical_bytes(document)).hexdigest()
-
-
 def require_equal(value: dict[str, Any], key: str, expected: Any, label: str) -> None:
     if value.get(key) != expected:
         fail(f"{label} requires {key}={expected!r}, observed={value.get(key)!r}")
@@ -64,16 +43,36 @@ def require_bool(value: dict[str, Any], key: str, expected: bool, label: str) ->
         fail(f"{label} requires {key}={expected!r}")
 
 
+def release_bytes_digest(path: Path, target: str, label: str) -> str:
+    release = load_json(path)
+    require_equal(release, "schema_version", 3, label)
+    require_equal(release, "release_set_id", target, label)
+    try:
+        payload = path.read_bytes()
+    except OSError as error:
+        fail(f"cannot read {path}: {error}")
+    if not payload:
+        fail(f"{label} release-set.json must not be empty")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def verify_release_result(value: dict[str, Any], target: str, label: str) -> None:
     require_equal(value, "command", "release.verify", label)
     require_equal(value, "decision", "VALID", label)
+    require_equal(value, "release_set_schema_version", 3, label)
     require_equal(value, "release_set_id", target, label)
+    require_equal(value, "verification_scope", "CURRENT_V3_FULL_RELEASE_VERIFICATION", label)
+    require_bool(value, "historical_compatibility_only", False, label)
     require_bool(value, "source_accepted", True, label)
     require_bool(value, "mutation_executed", False, label)
     if not isinstance(value.get("verified_files"), int) or value["verified_files"] <= 0:
         fail(f"{label} must prove durable verified files")
     if not isinstance(value.get("verified_components"), list) or not value["verified_components"]:
         fail(f"{label} must prove verified components")
+    if not isinstance(value.get("verified_provenance_dimensions"), list) or not value[
+        "verified_provenance_dimensions"
+    ]:
+        fail(f"{label} must prove current v3 provenance dimensions")
 
 
 def verify_plan(
@@ -130,26 +129,19 @@ def verify_post(value: dict[str, Any], target: str, label: str) -> None:
 def verify_bundle(
     root: Path, *, current: str, target: str, decision: str, label: str
 ) -> str:
-    release = load_json(root / "release-set.json")
-    observed_id, document_digest = release_identity(release)
-    if observed_id != target:
-        fail(f"{label} release-set.json targets {observed_id}, expected {target}")
-
-    release_verify = load_json(root / "release-verify.json")
+    digest = release_bytes_digest(root / "release-set.json", target, label)
+    verify_release_result(load_json(root / "release-verify.json"), target, f"{label}:release.verify")
     plan = load_json(root / "promotion-plan.json")
     preflight = load_json(root / "promotion-preflight.json")
-    post = load_json(root / "promotion-verify.json")
-    verify_release_result(release_verify, target, f"{label}:release.verify")
     verify_plan(plan, current=current, target=target, decision=decision, label=f"{label}:plan")
     verify_preflight(preflight, target, f"{label}:preflight")
-    verify_post(post, target, f"{label}:post")
-
+    verify_post(load_json(root / "promotion-verify.json"), target, f"{label}:post")
     promotion_id = plan.get("promotion_id")
     if not isinstance(promotion_id, str) or not promotion_id:
         fail(f"{label} plan promotion_id missing")
     if preflight.get("promotion_id") != promotion_id:
         fail(f"{label} plan/preflight promotion_id mismatch")
-    return document_digest
+    return digest
 
 
 def verify_blocked_preflight(path: Path, older: str) -> None:
@@ -166,40 +158,30 @@ def verify_blocked_preflight(path: Path, older: str) -> None:
     require_bool(value, "mutation_executed", False, label)
     blockers = value.get("blockers")
     allowed = {"ROLLBACK_INCOMPATIBLE", "ROLLBACK_COMPATIBILITY_UNKNOWN"}
-    if not isinstance(blockers, list) or not any(blocker in allowed for blocker in blockers):
+    if not isinstance(blockers, list) or not any(item in allowed for item in blockers):
         fail("blocked rollback fixture must contain a typed rollback compatibility blocker")
 
 
 def verify_scenario(args: argparse.Namespace) -> dict[str, Any]:
-    older = args.older
-    newer = args.newer
+    older, newer = args.older, args.newer
     if not isinstance(older, str) or not isinstance(newer, str):
         fail("older/newer Release Set IDs are required")
     if not RELEASE_ID.fullmatch(older) or not RELEASE_ID.fullmatch(newer) or older == newer:
-        fail("older/newer must be two distinct Release Set v2 IDs")
+        fail("older/newer must be two distinct current Release Set v3 IDs")
 
     b_first = verify_bundle(args.a_to_b, current=older, target=newer, decision="PLAN", label="A_TO_B")
     b_second = verify_bundle(
-        args.b_no_change,
-        current=newer,
-        target=newer,
-        decision="NO_CHANGE",
-        label="B_NO_CHANGE",
+        args.b_no_change, current=newer, target=newer, decision="NO_CHANGE", label="B_NO_CHANGE"
     )
     a_first = verify_bundle(args.b_to_a, current=newer, target=older, decision="PLAN", label="B_TO_A")
     a_second = verify_bundle(
-        args.a_no_change,
-        current=older,
-        target=older,
-        decision="NO_CHANGE",
-        label="A_NO_CHANGE",
+        args.a_no_change, current=older, target=older, decision="NO_CHANGE", label="A_NO_CHANGE"
     )
     if b_first != b_second:
-        fail("B durable release-set document changed between deployment and NO_CHANGE proof")
+        fail("B durable release-set bytes changed between deployment and NO_CHANGE proof")
     if a_first != a_second:
-        fail("A durable release-set document changed between rollback and NO_CHANGE proof")
+        fail("A durable release-set bytes changed between rollback and NO_CHANGE proof")
     verify_blocked_preflight(args.blocked_preflight, older)
-
     return {
         "schema_version": 1,
         "kind": "AR11_STAGING_REHEARSAL_EVIDENCE",
@@ -216,40 +198,47 @@ def verify_scenario(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def fixture_release_id(label: str) -> str:
+    # Shape-only fixture ID; semantic Release Set identity remains owned by typed Rust.
+    return "release-set-v3-sha256-" + hashlib.sha256(f"fixture:{label}".encode()).hexdigest()
+
+
 def write_fixture_bundle(
-    root: Path,
-    payload: dict[str, Any],
-    *,
-    current: str,
-    target: str,
-    decision: str,
+    root: Path, *, marker: str, current: str, target: str, decision: str
 ) -> None:
-    if content_address(payload) != target:
-        fail("self-test payload does not match target content address")
-    release = dict(payload)
-    release["release_set_id"] = target
     root.mkdir(parents=True, exist_ok=True)
-    (root / "release-set.json").write_text(json.dumps(release), encoding="utf-8")
+    (root / "release-set.json").write_text(
+        json.dumps(
+            {"schema_version": 3, "release_set_id": target, "fixture": marker},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (root / "release-verify.json").write_text(
         json.dumps(
             {
                 "command": "release.verify",
                 "decision": "VALID",
+                "release_set_schema_version": 3,
                 "release_set_id": target,
+                "verification_scope": "CURRENT_V3_FULL_RELEASE_VERIFICATION",
+                "historical_compatibility_only": False,
                 "source_accepted": True,
-                "verified_files": 4,
+                "verified_files": 5,
                 "verified_components": ["control_plane"],
+                "verified_provenance_dimensions": ["contracts"],
                 "mutation_executed": False,
             }
         ),
         encoding="utf-8",
     )
     promotion_id = hashlib.sha256(f"{current}:{target}".encode()).hexdigest()
-    actions: list[dict[str, Any]] = []
+    actions = []
     if decision == "PLAN":
         actions = [
             {
-                "authority": "WRANGLER_DEPLOY",
                 "operation": "DEPLOY_EXACT_RELEASE_SET_ARTIFACTS",
                 "release_set_id": target,
             }
@@ -305,34 +294,23 @@ def write_fixture_bundle(
     )
 
 
+def expect_rejected(args: argparse.Namespace, message: str) -> None:
+    try:
+        verify_scenario(args)
+    except EvidenceError:
+        return
+    fail(message)
+
+
 def self_test() -> None:
     with tempfile.TemporaryDirectory(prefix="ar11-fc6-") as temporary:
         root = Path(temporary)
-        a_payload = {"schema_version": 2, "fixture": "A"}
-        b_payload = {"schema_version": 2, "fixture": "B"}
-        older = content_address(a_payload)
-        newer = content_address(b_payload)
-
-        a_to_b = root / "a-to-b"
-        b_no_change = root / "b-no-change"
-        b_to_a = root / "b-to-a"
-        a_no_change = root / "a-no-change"
-        write_fixture_bundle(a_to_b, b_payload, current=older, target=newer, decision="PLAN")
-        write_fixture_bundle(
-            b_no_change,
-            b_payload,
-            current=newer,
-            target=newer,
-            decision="NO_CHANGE",
-        )
-        write_fixture_bundle(b_to_a, a_payload, current=newer, target=older, decision="PLAN")
-        write_fixture_bundle(
-            a_no_change,
-            a_payload,
-            current=older,
-            target=older,
-            decision="NO_CHANGE",
-        )
+        older, newer = fixture_release_id("A"), fixture_release_id("B")
+        paths = [root / name for name in ("a-to-b", "b-no-change", "b-to-a", "a-no-change")]
+        write_fixture_bundle(paths[0], marker="B", current=older, target=newer, decision="PLAN")
+        write_fixture_bundle(paths[1], marker="B", current=newer, target=newer, decision="NO_CHANGE")
+        write_fixture_bundle(paths[2], marker="A", current=newer, target=older, decision="PLAN")
+        write_fixture_bundle(paths[3], marker="A", current=older, target=older, decision="NO_CHANGE")
         blocked = root / "blocked.json"
         blocked.write_text(
             json.dumps(
@@ -354,25 +332,46 @@ def self_test() -> None:
         args = argparse.Namespace(
             older=older,
             newer=newer,
-            a_to_b=a_to_b,
-            b_no_change=b_no_change,
-            b_to_a=b_to_a,
-            a_no_change=a_no_change,
+            a_to_b=paths[0],
+            b_no_change=paths[1],
+            b_to_a=paths[2],
+            a_no_change=paths[3],
             blocked_preflight=blocked,
         )
-        result = verify_scenario(args)
-        if result["rollback_negative"] != "BLOCKED_BEFORE_MUTATION":
-            fail("positive rehearsal self-test did not converge")
+        verify_scenario(args)
 
-        tampered = load_json(a_to_b / "promotion-plan.json")
-        tampered["mutation_executed"] = True
-        (a_to_b / "promotion-plan.json").write_text(json.dumps(tampered), encoding="utf-8")
-        try:
-            verify_scenario(args)
-        except EvidenceError:
-            pass
-        else:
-            fail("mutation-executed rehearsal fixture unexpectedly passed")
+        plan = paths[0] / "promotion-plan.json"
+        original = plan.read_bytes()
+        value = load_json(plan)
+        value["mutation_executed"] = True
+        plan.write_text(json.dumps(value), encoding="utf-8")
+        expect_rejected(args, "mutation-executed evidence unexpectedly passed")
+        plan.write_bytes(original)
+
+        release = paths[1] / "release-set.json"
+        original = release.read_bytes()
+        release.write_bytes(original + b" ")
+        expect_rejected(args, "changed durable Release Set bytes unexpectedly passed")
+        release.write_bytes(original)
+
+        result = paths[0] / "release-verify.json"
+        original = result.read_bytes()
+        value = load_json(result)
+        value.update(
+            {
+                "release_set_schema_version": 2,
+                "verification_scope": "HISTORICAL_V2_SOURCE_AND_ARTIFACT_INTEGRITY",
+                "historical_compatibility_only": True,
+            }
+        )
+        result.write_text(json.dumps(value), encoding="utf-8")
+        expect_rejected(args, "historical v2 verification unexpectedly passed current ceremony")
+        result.write_bytes(original)
+
+        v2_args = argparse.Namespace(**vars(args))
+        v2_args.older = "release-set-v2-sha256-" + "d" * 64
+        expect_rejected(v2_args, "historical v2 ID unexpectedly passed current ceremony")
+
     print("AR-11 FC-6 staging rehearsal evidence verifier negative self-test passed.")
 
 
@@ -407,8 +406,7 @@ def main() -> int:
         ]
         if any(value is None for value in required):
             fail("real rehearsal verification requires all A/B bundles and blocked preflight evidence")
-        result = verify_scenario(args)
-        text = json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n"
+        text = json.dumps(verify_scenario(args), sort_keys=True, separators=(",", ":")) + "\n"
         if args.output is None:
             print(text, end="")
         else:
