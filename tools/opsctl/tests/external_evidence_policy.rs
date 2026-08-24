@@ -430,15 +430,15 @@ fn validate_reference(value: &str, terminal_review: bool) -> Result<(), AdapterE
             "terminal evidence review must use a GitHub reference",
         ));
     }
-    if let Some(token) = value.strip_prefix("provider-case:") {
-        if is_token(token) {
-            return Ok(());
-        }
+    if let Some(token) = value.strip_prefix("provider-case:")
+        && is_token(token)
+    {
+        return Ok(());
     }
-    if let Some(digest) = value.strip_prefix("review-report:sha256:") {
-        if is_lower_hex(digest, 64) {
-            return Ok(());
-        }
+    if let Some(digest) = value.strip_prefix("review-report:sha256:")
+        && is_lower_hex(digest, 64)
+    {
+        return Ok(());
     }
     Err(AdapterError::new("unsupported external evidence reference"))
 }
