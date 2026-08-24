@@ -16,7 +16,7 @@ source_present != production_enabled
 
 ```text
 PF-1   ACCEPTED (#466)
-PF-2   ACCEPTED; authority correction ACCEPTED (#477 / #471)
+PF-2   ACCEPTED; semantic-authority correction #477 + raw-provider-observation correction #480 ACCEPTED (#471 provenance)
 PF-3   ACCEPTED provisional; truthfulness correction ACCEPTED (#478 / #431)
 FC-6   NEXT PERMITTED / NOT STARTED BY THIS TRANSACTION
 AR-12  NOT STARTED
@@ -25,7 +25,7 @@ architecture_complete = false
 production_mutation = false
 ```
 
-Accepted code checkpoint before this documentation-only convergence: `81fba31e7c78966ec57e098d400d895d26e64dbf`. Re-read protected `main` before every transaction; do not copy this SHA forward as an execution assumption.
+Accepted code checkpoint before this documentation-only convergence: `a8af2120255f117a7cf58ab86ff79963005f58a0`. Re-read protected `main` before every transaction; do not copy this SHA forward as an execution assumption.
 
 ## 2. One bounded transaction discipline
 
@@ -84,18 +84,18 @@ Accepted through #466. Typed Rust owns lifecycle semantics; historical Node/Pyth
 
 ### PF-2
 
-Accepted through #472/#474 and corrected through #477. The live path is:
+Accepted through #472/#474, semantic-authority-corrected through #477, and raw-provider-observation-corrected through #480. The live path is:
 
 ```text
 GitHub/provider read-only effects
--> raw secret-free observation
--> strict versioned DTO
+-> raw secret-free HTTP/provider/process observations
+-> strict Hosted Evidence v3 DTO
 -> typed Rust policy
 -> Rust-derived trust/readiness/outcome
 -> deterministic evidence/artifact projection
 ```
 
-Node/Python/workflow layers do not supply READY/PASS/TRUSTED as semantic inputs. The remaining external-review Python utility is observation acquisition only.
+Workflow/shell/Python/Node layers do not supply READY/PASS/TRUSTED or provider-read success booleans as semantic inputs. Rust owns acceptable HTTP/status/result classes, process-exit interpretation, credential/freshness/mutation boundaries and exact staging-account binding. The remaining external-review Python utility is observation acquisition only.
 
 ### PF-3
 
@@ -116,7 +116,7 @@ Do not rebuild a generic rule engine, metadata registry, DSL, plugin/DI/linter f
 
 FC-6 is the next permitted stage after final readiness audit, but this transaction does not start it.
 
-A historical read-only FC-6 re-baseline already found and fixed the Release Set v2/v3 rehearsal-verifier defect in #476. It did not perform staging mutation. Current FC-6 execution still requires a fresh read-only re-baseline of accepted `main`, governance, credentials, provider state, staging identity, known-good identity and Release Sets, producing typed `READY | BLOCKED` before any mutation.
+A historical read-only FC-6 re-baseline already found and fixed the Release Set v2/v3 rehearsal-verifier defect in #476. It did not perform staging mutation. Current FC-6 execution still requires a fresh read-only re-baseline of accepted `main`, governance, credentials, provider state, staging identity, known-good identity and Release Sets, producing typed `READY | BLOCKED` before any mutation. The hosted-evidence prerequisite consumed by that re-baseline is the strict raw-observation/Rust-policy path accepted through #480; historical or pre-classified read verdicts are not valid substitutes.
 
 ```text
 fresh #399/#421 re-baseline
@@ -171,7 +171,7 @@ PC-1 enables only accepted Production Core capabilities through Release / Capabi
 - `docs/APPLICATION_ARCHITECTURE_MANDATORY_REQUIREMENTS.md` — permanent architecture contract;
 - `docs/ARCHITECTURE_EVOLUTION_QUALITY_CONTRACT.md` — quality/anti-weakening contract;
 - `docs/PF3_ARCHITECTURE_FITNESS_BASELINE.md` / #431 / #478 — PF-3;
-- #471 / #477 — accepted PF-2 provenance;
+- #471 / #477 / #480 — accepted PF-2 provenance;
 - `docs/POST_AR11_FUNCTIONAL_CLOSURE_PLAN.md` / #399 / #421 — Functional Closure;
 - `docs/ARCHITECTURE_ACCEPTANCE_PROTOCOL.md` — exact-head/merge discipline;
 - #441 / #430 / #466 — accepted historical pre-PF-1/PF-1 provenance.
